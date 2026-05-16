@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import importlib
+import ipaddress
 import os
 import re
+import urllib.error
+import urllib.request
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from functools import lru_cache
@@ -31,11 +34,12 @@ SUPPORTED_PROVIDER_OPTION_SOURCES = frozenset(
         "compute_platforms",
         "compute_platform_presets",
         "compute_public_image_families",
+        "compute_boot_disk_types",
+        "operator_public_ip_cidr",
         "project_subnets",
         "project_networks",
         "tenant_projects",
         "mk8s_control_plane_versions",
-        "mk8s_boot_disk_types",
         "soperator_nodesets_profiles",
         "soperator_partition_profiles",
     }
@@ -43,6 +47,7 @@ SUPPORTED_PROVIDER_OPTION_SOURCES = frozenset(
 
 ProviderOptionPlugin = Callable[..., Iterable[object] | None]
 _OPTION_PLUGIN_ENV = "NEBIUS_CXCLI_PROVIDER_OPTION_PLUGINS"
+_NEBIUS_LIST_PAGE_SIZE = 999
 
 
 @dataclass(frozen=True)
@@ -281,18 +286,6 @@ def _mk8s_gpu_preference_lists() -> tuple[tuple[str, ...], tuple[str, ...]]:
     return preferences.preferred_gpu_stack_presets, preferences.preferred_os
 
 
-def _vm_image_preference_lists() -> tuple[tuple[str, ...], tuple[str, ...]]:
-    try:
-        from .component_sources import load_component_sources, tf_module_source_by_id
-    except Exception:
-        return (), ()
-    settings = tf_module_source_by_id("vm", sources=load_component_sources())
-    if settings is None:
-        return (), ()
-    preferences = settings.vm_images
-    return preferences.preferred_cpu_image_families, preferences.preferred_gpu_image_families
-
-
 def _sort_choices_by_preference(
     choices: Iterable[OptionChoice],
     *,
@@ -444,12 +437,13 @@ class ProviderOptionLookup:
                 "mk8s_gpu_stack_presets": self._resolve_mk8s_gpu_stack_presets,
                 "mk8s_node_group_os_values": self._resolve_mk8s_node_group_os_values,
                 "mk8s_infiniband_fabrics": self._resolve_mk8s_infiniband_fabrics,
-                "mk8s_boot_disk_types": self._resolve_mk8s_boot_disk_types,
+                "compute_boot_disk_types": self._resolve_compute_boot_disk_types,
                 "compute_platforms": self._resolve_compute_platforms,
                 "compute_platform_presets": self._resolve_compute_platform_presets,
                 "compute_public_image_families": self._resolve_compute_public_image_families,
                 "project_subnets": self._resolve_project_subnets,
                 "project_networks": self._resolve_project_networks,
+                "operator_public_ip_cidr": self._resolve_operator_public_ip_cidr,
                 "tenant_projects": self._resolve_tenant_projects,
                 "mk8s_control_plane_versions": self._resolve_mk8s_control_plane_versions,
                 "soperator_nodesets_profiles": self._resolve_soperator_nodesets_profiles,
@@ -817,7 +811,7 @@ class ProviderOptionLookup:
         items = self._paged_list(
             request_factory=lambda page_token: ListPlatformsRequest(
                 parent_id=project_id,
-                page_size=1000,
+                page_size=_NEBIUS_LIST_PAGE_SIZE,
                 page_token=page_token,
             ),
             request_call=client.list,
@@ -839,7 +833,7 @@ class ProviderOptionLookup:
         self._cache[cache_key] = resolved
         return resolved
 
-    def _resolve_mk8s_boot_disk_types(
+    def _resolve_compute_boot_disk_types(
         self,
         *,
         args: dict[str, Any],
@@ -847,29 +841,52 @@ class ProviderOptionLookup:
         field_path: str,
     ) -> tuple[OptionChoice, ...]:
         del args, payload, field_path
-        return (
+        from .compute_boot_disks import compute_boot_disk_type_choices
+
+        return tuple(
+            OptionChoice(value=item.value, label=item.label or item.value)
+            for item in compute_boot_disk_type_choices()
+        )
+
+    def _resolve_operator_public_ip_cidr(
+        self,
+        *,
+        args: dict[str, Any],
+        payload: dict[str, Any],
+        field_path: str,
+    ) -> tuple[OptionChoice, ...]:
+        del payload, field_path
+        endpoint = _as_str(args.get("endpoint")) or "https://api.ipify.org"
+        timeout = 5
+        timeout_raw = args.get("timeout")
+        if isinstance(timeout_raw, int | float) and timeout_raw > 0:
+            timeout = int(timeout_raw)
+        cache_key = ("operator_public_ip_cidr", endpoint, timeout)
+        if cache_key in self._cache:
+            return self._cache[cache_key]
+        try:
+            with urllib.request.urlopen(endpoint, timeout=timeout) as response:
+                raw_ip = response.read().decode("utf-8").strip()
+        except (TimeoutError, urllib.error.URLError, UnicodeDecodeError) as exc:
+            raise RuntimeError(f"operator public IP lookup failed: {exc}") from exc
+        try:
+            public_ip = ipaddress.ip_address(raw_ip)
+        except ValueError as exc:
+            raise RuntimeError(f"operator public IP lookup returned invalid IP: {raw_ip}") from exc
+        if public_ip.version != 4:
+            raise RuntimeError(
+                f"operator public IP lookup returned IPv{public_ip.version}; expected IPv4"
+            )
+        value = f"{public_ip}/32"
+        resolved = (
             OptionChoice(
-                value="NETWORK_SSD",
-                label=(
-                    "NETWORK_SSD  (1-8192 GiB, 450 MiB/s, 20k/40k IOPS, "
-                    "erasure-coded, tolerates 2 hardware failures, encryption always on)"
-                ),
-            ),
-            OptionChoice(
-                value="NETWORK_SSD_NON_REPLICATED",
-                label=(
-                    "NETWORK_SSD_NON_REPLICATED  (93 GiB units, 1 GiB/s, "
-                    "75k/75k IOPS, lowest-cost high-performance, no redundancy)"
-                ),
-            ),
-            OptionChoice(
-                value="NETWORK_SSD_IO_M3",
-                label=(
-                    "NETWORK_SSD_IO_M3  (93 GiB units, 1 GiB/s, 75k/75k IOPS, "
-                    "replicated, mirrored to 3 drives, most expensive)"
-                ),
+                value=value,
+                label=f"{value}  (detected operator public IP)",
+                recommended=True,
             ),
         )
+        self._cache[cache_key] = resolved
+        return resolved
 
     def _soperator_nodesets_profile_catalog(
         self,
@@ -1437,24 +1454,9 @@ class ProviderOptionLookup:
         if not platform_name:
             return ()
 
-        is_gpu_platform = platform_name.startswith("gpu-")
-        preferred_cpu_image_families, preferred_gpu_image_families = _vm_image_preference_lists()
-        preferred_families = (
-            preferred_gpu_image_families if is_gpu_platform else preferred_cpu_image_families
-        )
-        preferred_index = {value: index for index, value in enumerate(preferred_families)}
-        ranked = tuple(
-            sorted(
-                self._resolve_compute_public_image_family_inventory(
-                    region_id=region_id,
-                    platform_name=platform_name,
-                ),
-                key=lambda item: (
-                    0 if item.compatibility == "recommended" else 1,
-                    preferred_index.get(item.family, len(preferred_index)),
-                    item.family,
-                ),
-            )
+        ranked = self._resolve_compute_public_image_family_inventory(
+            region_id=region_id,
+            platform_name=platform_name,
         )
         return tuple(
             OptionChoice(
@@ -1464,6 +1466,7 @@ class ProviderOptionLookup:
                     if item.human_name
                     else f"{item.family}  ({item.compatibility})"
                 ),
+                recommended=item.compatibility == "recommended",
             )
             for item in ranked
         )
@@ -1487,7 +1490,7 @@ class ProviderOptionLookup:
         items = self._paged_list(
             request_factory=lambda page_token: ListPublicRequest(
                 region=region_id,
-                page_size=1000,
+                page_size=_NEBIUS_LIST_PAGE_SIZE,
                 page_token=page_token,
             ),
             request_call=client.list_public,
@@ -1596,7 +1599,7 @@ class ProviderOptionLookup:
         items = self._paged_list(
             request_factory=lambda page_token: ListSubnetsRequest(
                 parent_id=project_id,
-                page_size=1000,
+                page_size=_NEBIUS_LIST_PAGE_SIZE,
                 page_token=page_token,
             ),
             request_call=client.list,
@@ -1643,7 +1646,7 @@ class ProviderOptionLookup:
         items = self._paged_list(
             request_factory=lambda page_token: ListNetworksRequest(
                 parent_id=project_id,
-                page_size=1000,
+                page_size=_NEBIUS_LIST_PAGE_SIZE,
                 page_token=page_token,
             ),
             request_call=client.list,
@@ -1687,7 +1690,7 @@ class ProviderOptionLookup:
         items = self._paged_list(
             request_factory=lambda page_token: ListProjectsRequest(
                 parent_id=tenant_id,
-                page_size=1000,
+                page_size=_NEBIUS_LIST_PAGE_SIZE,
                 page_token=page_token,
             ),
             request_call=client.list,
@@ -1770,6 +1773,7 @@ class ProviderOptionLookup:
                 endpoint=sdk_endpoint or None,
                 config_file=Path(sdk_config_file) if sdk_config_file else None,
                 context="provider option lookup",
+                prefer_operator_auth=True,
             )
             self._last_error = None
             return self._sdk

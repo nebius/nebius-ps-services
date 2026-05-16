@@ -3,14 +3,14 @@
   "title": "Nebius Kubernetes Logs",
   "tags": [
     "nebius",
-    "cxcli",
     "kubernetes",
-    "logs"
+    "logs",
+    "cxcli"
   ],
   "timezone": "browser",
-  "schemaVersion": 41,
-  "version": 1,
-  "refresh": "10s",
+  "schemaVersion": 39,
+  "version": 2,
+  "refresh": "30s",
   "time": {
     "from": "now-6h",
     "to": "now"
@@ -21,103 +21,265 @@
         "name": "Cluster",
         "label": "Cluster",
         "type": "query",
+        "hide": 0,
+        "query": "label_values({__bucket__=\"default\"}, k8s_cluster_id)",
         "datasource": {
           "type": "loki",
           "uid": "nebius-logs"
         },
-        "query": "label_values({__bucket__=\"default\"}, k8s_cluster_id)",
         "refresh": 1,
-        "includeAll": true,
-        "multi": true,
-        "allValue": ".+",
+        "sort": 1,
+        "multi": false,
+        "includeAll": false,
         "current": {
-          "selected": true,
           "text": "All",
-          "value": "$__all"
-        }
+          "value": ".*"
+        },
+        "options": []
       },
       {
-        "name": "namespace",
+        "name": "Namespace",
         "label": "Namespace",
         "type": "query",
+        "hide": 0,
+        "query": "label_values({__bucket__=\"default\", k8s_cluster_id=~\"$Cluster\"}, k8s_namespace_name)",
         "datasource": {
           "type": "loki",
           "uid": "nebius-logs"
         },
-        "query": "label_values({__bucket__=\"default\", k8s_cluster_id=~\"$Cluster\"}, k8s_namespace_name)",
         "refresh": 1,
+        "sort": 1,
+        "multi": false,
         "includeAll": true,
-        "multi": true,
-        "allValue": ".+",
         "current": {
-          "selected": true,
           "text": "All",
-          "value": "$__all"
-        }
+          "value": ".*"
+        },
+        "options": [],
+        "allValue": ".*"
       },
       {
-        "name": "pod",
+        "name": "Pod",
         "label": "Pod",
         "type": "query",
+        "hide": 0,
+        "query": "label_values({__bucket__=\"default\", k8s_cluster_id=~\"$Cluster\", k8s_namespace_name=~\"$Namespace\"}, k8s_pod_name)",
         "datasource": {
           "type": "loki",
           "uid": "nebius-logs"
         },
-        "query": "label_values({__bucket__=\"default\", k8s_cluster_id=~\"$Cluster\", k8s_namespace_name=~\"$namespace\"}, k8s_pod_name)",
         "refresh": 1,
+        "sort": 1,
+        "multi": false,
         "includeAll": true,
-        "multi": true,
-        "allValue": ".+",
         "current": {
-          "selected": true,
           "text": "All",
-          "value": "$__all"
-        }
+          "value": ".*"
+        },
+        "options": [],
+        "allValue": ".*"
       },
       {
         "name": "search",
         "label": "Search",
         "type": "textbox",
-        "query": ".*",
+        "hide": 0,
+        "query": "",
         "current": {
-          "selected": false,
           "text": ".*",
           "value": ".*"
-        }
+        },
+        "options": []
       }
     ]
   },
   "panels": [
     {
       "id": 1,
-      "type": "logs",
-      "title": "Pod Logs",
+      "type": "timeseries",
+      "title": "Log Volume by Namespace",
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 12,
+        "h": 8
+      },
       "datasource": {
         "type": "loki",
         "uid": "nebius-logs"
       },
-      "gridPos": {
-        "h": 18,
-        "w": 24,
-        "x": 0,
-        "y": 0
+      "targets": [
+        {
+          "expr": "sum by (k8s_namespace_name) (count_over_time({__bucket__=\"default\", k8s_cluster_id=~\"$Cluster\", k8s_namespace_name=~\"$Namespace\", k8s_pod_name=~\"$Pod\"}[$__interval]))",
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "nebius-logs"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "logs"
+        },
+        "overrides": []
       },
       "options": {
-        "dedupStrategy": "none",
-        "enableLogDetails": true,
-        "prettifyLogMessage": false,
-        "showCommonLabels": false,
-        "showLabels": true,
-        "showTime": true,
-        "sortOrder": "Descending"
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Warning and Error Logs",
+      "gridPos": {
+        "x": 12,
+        "y": 0,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "loki",
+        "uid": "nebius-logs"
       },
       "targets": [
         {
+          "expr": "sum(count_over_time({__bucket__=\"default\", k8s_cluster_id=~\"$Cluster\", k8s_namespace_name=~\"$Namespace\", k8s_pod_name=~\"$Pod\"} |~ \"(?i)(error|warn|fatal|panic|exception|timeout|oom|evict)\" [$__interval]))",
           "refId": "A",
-          "expr": "{__bucket__=\"default\", k8s_cluster_id=~\"$Cluster\", k8s_namespace_name=~\"$namespace\", k8s_pod_name=~\"$pod\"} |~ \"$search\"",
-          "queryType": "range"
+          "datasource": {
+            "type": "loki",
+            "uid": "nebius-logs"
+          }
         }
-      ]
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "logs"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 3,
+      "type": "table",
+      "title": "Log Volume by Pod",
+      "gridPos": {
+        "x": 0,
+        "y": 8,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "loki",
+        "uid": "nebius-logs"
+      },
+      "targets": [
+        {
+          "expr": "sum by (k8s_namespace_name, k8s_pod_name) (count_over_time({__bucket__=\"default\", k8s_cluster_id=~\"$Cluster\", k8s_namespace_name=~\"$Namespace\", k8s_pod_name=~\"$Pod\"}[$__interval]))",
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "nebius-logs"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm"
+      }
+    },
+    {
+      "id": 4,
+      "type": "logs",
+      "title": "Warning and Error Log Stream",
+      "gridPos": {
+        "x": 12,
+        "y": 8,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "loki",
+        "uid": "nebius-logs"
+      },
+      "targets": [
+        {
+          "expr": "{__bucket__=\"default\", k8s_cluster_id=~\"$Cluster\", k8s_namespace_name=~\"$Namespace\", k8s_pod_name=~\"$Pod\"} |~ \"(?i)(error|warn|fatal|panic|exception|timeout|oom|evict)\" |~ \"$search\"",
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "nebius-logs"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {
+        "showTime": true,
+        "showLabels": false,
+        "wrapLogMessage": true,
+        "dedupStrategy": "none",
+        "enableLogDetails": true
+      }
+    },
+    {
+      "id": 5,
+      "type": "logs",
+      "title": "Pod Logs",
+      "gridPos": {
+        "x": 0,
+        "y": 16,
+        "w": 24,
+        "h": 12
+      },
+      "datasource": {
+        "type": "loki",
+        "uid": "nebius-logs"
+      },
+      "targets": [
+        {
+          "expr": "{__bucket__=\"default\", k8s_cluster_id=~\"$Cluster\", k8s_namespace_name=~\"$Namespace\", k8s_pod_name=~\"$Pod\"} |~ \"$search\"",
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "nebius-logs"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {
+        "showTime": true,
+        "showLabels": false,
+        "wrapLogMessage": true,
+        "dedupStrategy": "none",
+        "enableLogDetails": true
+      }
     }
   ]
 }

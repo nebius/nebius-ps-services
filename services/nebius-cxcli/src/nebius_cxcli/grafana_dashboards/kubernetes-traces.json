@@ -3,13 +3,14 @@
   "title": "Nebius Kubernetes Traces",
   "tags": [
     "nebius",
-    "cxcli",
     "kubernetes",
-    "traces"
+    "traces",
+    "cxcli"
   ],
   "timezone": "browser",
-  "schemaVersion": 41,
-  "version": 1,
+  "schemaVersion": 39,
+  "version": 2,
+  "refresh": "30s",
   "time": {
     "from": "now-6h",
     "to": "now"
@@ -20,42 +21,120 @@
       "type": "text",
       "title": "Trace Ingestion",
       "gridPos": {
-        "h": 4,
-        "w": 24,
         "x": 0,
-        "y": 0
+        "y": 0,
+        "w": 24,
+        "h": 4
       },
       "options": {
         "mode": "markdown",
-        "content": "Trace data appears here after workloads send OTLP traces to the Nebius Observability Agent in the target cluster."
+        "content": "Trace panels use generic TraceQL so the dashboard works across workloads. Data appears after applications emit OTLP traces through the Nebius Observability Agent."
       }
     },
     {
       "id": 2,
       "type": "table",
       "title": "Recent Traces",
+      "gridPos": {
+        "x": 0,
+        "y": 4,
+        "w": 24,
+        "h": 8
+      },
       "datasource": {
         "type": "tempo",
         "uid": "nebius-traces"
-      },
-      "gridPos": {
-        "h": 12,
-        "w": 24,
-        "x": 0,
-        "y": 4
       },
       "targets": [
         {
           "refId": "A",
           "queryType": "traceql",
           "query": "{}",
+          "limit": 50,
+          "datasource": {
+            "type": "tempo",
+            "uid": "nebius-traces"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm"
+      }
+    },
+    {
+      "id": 3,
+      "type": "table",
+      "title": "Slow Traces (>1s)",
+      "gridPos": {
+        "x": 0,
+        "y": 12,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "tempo",
+        "uid": "nebius-traces"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "traceql",
+          "query": "{ duration > 1s }",
           "limit": 20,
           "datasource": {
             "type": "tempo",
             "uid": "nebius-traces"
           }
         }
-      ]
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm"
+      }
+    },
+    {
+      "id": 4,
+      "type": "table",
+      "title": "Error Traces",
+      "gridPos": {
+        "x": 12,
+        "y": 12,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "tempo",
+        "uid": "nebius-traces"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "traceql",
+          "query": "{ status = error }",
+          "limit": 20,
+          "datasource": {
+            "type": "tempo",
+            "uid": "nebius-traces"
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm"
+      }
     }
   ]
 }

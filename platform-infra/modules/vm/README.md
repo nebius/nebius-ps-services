@@ -12,6 +12,8 @@ Resources managed:
 Out of scope:
 
 - application orchestration beyond a single optional bootstrap container
+- observability agents, collectors, service accounts, or write endpoints;
+  Nebius installs the built-in VM Monitoring agent outside this module
 - auto-mounting and filesystem configuration inside the guest OS
 - image-family discovery and platform/preset availability checks beyond the
   validation exposed directly by the Terraform provider
@@ -94,13 +96,14 @@ module "vm" {
   - `hostname`
   - `service_account_id`
   - `stopped`
-  - `observability_collector_*` when using the standalone VM observability collector
 - Boot/data storage:
   - set exactly one boot source: `source_image_family`, `source_image_id`, or `boot_disk_existing_id`
   - `boot_disk_existing_id`
   - `source_image_id`
-  - `boot_disk_size_gib`
+  - `boot_disk_size_gib` is required when the module creates the boot disk
   - `boot_disk_type`
+  - `boot_disk_encryption_enabled`
+  - `boot_disk_deletion_protection`
   - `data_disks`
   - `existing_data_disks`
   - `filesystems`
@@ -138,6 +141,20 @@ Direct callers should use the current Nebius platform and preset names from:
 - <https://docs.nebius.com/compute/virtual-machines/types>
 - the current Nebius compute platform inventory for the target project
 
+The module does not calculate a boot-disk size from `preset`. Direct Terraform
+callers set `boot_disk_size_gib` explicitly; `nebius-cxcli` resolves the live
+platform/preset metadata, applies its shared `compute.boot_disk_defaults`
+policy, and renders the recommended value into generated Terraform.
+
+Disk security controls map directly to the Nebius disk API fields. Set
+`boot_disk_encryption_enabled=true` only for module-created
+`NETWORK_SSD_NON_REPLICATED` or `NETWORK_SSD_IO_M3` boot disks; `NETWORK_SSD`
+is encrypted by the platform. Set `boot_disk_deletion_protection=true` to
+enable provider-side deletion protection on the module-created boot disk. Both
+controls are invalid with `boot_disk_existing_id` because the module is not
+creating that disk. Managed `data_disks` support the same per-disk
+`encryption_enabled` and `deletion_protection` fields.
+
 ## VM Type Semantics
 
 - Regular VMs: supported for CPU and GPU platforms.
@@ -173,55 +190,6 @@ Operational notes:
 - Containerized VMs stay regular. The module does not combine
   `container_enabled=true` with `preemptible_enabled=true`.
 
-## Standalone VM Observability Collector
-
-This module now has an optional standalone VM observability collector path for
-customers who want VM host metrics and journald logs pushed through the Nebius
-public write endpoints instead of relying only on the built-in Monitoring
-agent path.
-
-What it does:
-
-- installs a pinned public collector deb package on first boot
-- pulls that package from the configured APT repo/key/suite/component inputs
-- configures journald log forwarding through the public Logging gRPC endpoint
-- configures host metrics export plus a Prometheus agent companion for
-  Monitoring Prometheus remote_write
-- authenticates with the VM metadata token at `/mnt/cloud-metadata/token`
-
-Important constraints:
-
-- `observability_collector_enabled=true` requires `service_account_id`
-- at least one of:
-  - `observability_collector_metrics_enabled=true`
-  - `observability_collector_logs_enabled=true`
-- currently supported only on module-managed Ubuntu-family boot disks
-- `observability_collector_metrics_export_port` and
-  `observability_collector_prometheus_agent_port` must differ
-
-Key inputs:
-
-- `observability_collector_enabled`
-- `observability_collector_region_id`
-- `observability_collector_package_name`
-- `observability_collector_package_version`
-- `observability_collector_apt_repository`
-- `observability_collector_apt_key_url`
-- `observability_collector_apt_suite`
-- `observability_collector_apt_component`
-- `observability_collector_apt_origin`
-- `observability_collector_prometheus_package_name`
-- `observability_collector_iam_token_file`
-- `observability_collector_logs_enabled`
-- `observability_collector_logs_systemd_units`
-- `observability_collector_metrics_enabled`
-- `observability_collector_metrics_export_port`
-- `observability_collector_prometheus_agent_port`
-
-The bundled `nebius-cxcli` `vm` component materializes these automatically from
-`observability.vm.collector.*`. Direct Terraform callers can set them
-explicitly when they need the same behavior outside cxcli.
-
 ## `nebius-cxcli` Usage
 
 - The bundled `vm` component is intended to map directly into
@@ -229,20 +197,33 @@ explicitly when they need the same behavior outside cxcli.
 - `platform` and `preset` can be driven by live Nebius project inventory in the
   `nebius-cxcli` wizard.
 - `source_image_family` is explicit in the module contract. The bundled
-  `nebius-cxcli` VM wizard auto-materializes it from the live Nebius public
-  image inventory for the selected platform and region, ordered by catalog
-  preferences.
+  `nebius-cxcli` VM and public-access wrapper wizards auto-materialize it from
+  the live Nebius public image inventory for the selected platform and region,
+  ranking families marked by Nebius as recommended ahead of other compatible
+  families.
 - The shared admin SSH username is materialized into
   `infra.components[].inputs.ssh_user_name` the same way the bundled
-  jump-host modules do.
+  public-access wrappers do.
+- `inputs.ssh_public_key` may be entered as inline public key text or a readable
+  local `.pub` path when using `nebius-cxcli`; direct Terraform module callers
+  must pass inline OpenSSH public key text.
+- `cloud_init_user_data_override` is intended for wrapper modules such as
+  `ssh-jumphost` and `wireguard-gw` that should reuse this module's VM
+  resource model while owning a specialized cloud-init payload.
+- Nebius does not allow `cloud_init_user_data` to be updated on a running VM.
+  The module ignores in-place `cloud_init_user_data` diffs and uses a separate
+  cloud-init hash trigger so future rendered cloud-init changes replace the
+  module-created boot disk and instance instead of attempting a rejected update
+  or reusing old cloud-init state.
 - Advanced disk/filesystem/container attachment shapes remain Terraform-native
   object/list inputs so they can still be edited as YAML/JSON in `config.yaml`
   when needed.
-- When `observability.enabled=true` and
-  `observability.vm.collector.enabled=true`, cxcli materializes the standalone
-  collector inputs automatically and requires `inputs.service_account_id` on
-  the VM component so the metadata token can authenticate public observability
-  writes.
+- VM observability in `nebius-cxcli` uses Nebius' built-in VM Monitoring agent:
+  service-provider metrics are collected automatically by Nebius, and journald
+  logs are enabled by cxcli-managed VM labels when
+  `deploy.observability.vm.logs.enabled=true`. This module does not install a
+  collector, create observability service accounts, or configure public write
+  endpoints.
 
 ## Outputs Summary
 
@@ -253,6 +234,7 @@ explicitly when they need the same behavior outside cxcli.
 - `private_ip`
 - `public_ip`
 - `public_ip_allocation_id`
+- `service_account_id`
 - `ssh_connect_command`
 
 ## Validation Commands

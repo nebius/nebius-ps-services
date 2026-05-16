@@ -952,18 +952,22 @@ class _ComputeInstanceStatusPoller:
         state = _enum_field_name(status, "state")
         network_interfaces = tuple(getattr(status, "network_interfaces", []) or [])
         public_ip_ready = False
+        private_ip_ready = False
         for interface in network_interfaces:
             public_ip = getattr(interface, "public_ip_address", None)
             if _as_text(getattr(public_ip, "address", None)):
                 public_ip_ready = True
-                break
-        network_summary = (
-            "public IP ready"
-            if public_ip_ready
-            else "network pending"
-            if network_interfaces
-            else "interfaces pending"
-        )
+            private_ip = getattr(interface, "ip_address", None)
+            if _as_text(getattr(private_ip, "address", None)):
+                private_ip_ready = True
+        if public_ip_ready:
+            network_summary = "public IP ready"
+        elif private_ip_ready:
+            network_summary = "private IP ready"
+        elif not network_interfaces:
+            network_summary = "interfaces pending"
+        else:
+            network_summary = "network pending"
         if bool(getattr(status, "reconciling", False)):
             network_summary = f"{network_summary}; reconciling"
 

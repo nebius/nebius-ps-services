@@ -279,7 +279,7 @@ def test_init_nebius_sdk_prefer_operator_auth_falls_back_to_service_account(
     assert sdk.kwargs["parent_id"] == "project-1"
 
 
-def test_init_nebius_sdk_logs_config_auth_failure_at_debug(
+def test_init_nebius_sdk_prefer_operator_auth_uses_cli_token_before_service_account_when_config_fails(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
@@ -302,7 +302,7 @@ def test_init_nebius_sdk_logs_config_auth_failure_at_debug(
     monkeypatch.setattr(
         sdk_auth.subprocess,
         "run",
-        lambda *args, **kwargs: pytest.fail("service account fallback should win"),
+        lambda *args, **kwargs: type("CP", (), {"stdout": "cli-token-789\n"})(),
     )
 
     with caplog.at_level(logging.DEBUG, logger="nebius_cxcli.sdk_auth"):
@@ -312,8 +312,8 @@ def test_init_nebius_sdk_logs_config_auth_failure_at_debug(
             prefer_operator_auth=True,
         )
 
-    assert sdk.kwargs["service_account_id"] == "sa-1"
-    assert sdk.kwargs["service_account_public_key_id"] == "pub-1"
+    assert sdk.kwargs["credentials"] == "cli-token-789"
+    assert "service_account_id" not in sdk.kwargs
     assert (
         "Nebius SDK config auth attempt failed for quota assessment: config boom"
         in caplog.text

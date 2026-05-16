@@ -94,19 +94,24 @@ components:
       defaults:
         # Materialize the shared admin SSH username into customer config.yaml.
         inputs.ssh_user_name: shared.admin_ssh.user_name
-    wireguard-jumphost:
+    wireguard-gw:
       source:
-        portable: git::https://github.com/nebius/nebius-ps-services.git//platform-infra/modules/wireguard-jumphost?ref=main
-        local: ../../platform-infra/modules/wireguard-jumphost
+        portable: git::https://github.com/nebius/nebius-ps-services.git//platform-infra/modules/wireguard-gw?ref=main
+        local: ../../platform-infra/modules/wireguard-gw
       ui:
-        title: WireGuard jump host
+        title: WireGuard VPN gateway
         group: Network
         enabled: false
       status:
         kind: nebius.compute.instance
-      wizard_profile: wireguard-jumphost
+      wizard_profile: wireguard-gw
       defaults:
         inputs.ssh_user_name: shared.admin_ssh.user_name
+        inputs.wireguard_tunnel_cidr: 10.8.0.1/22
+        inputs.wireguard_listen_port: 51820
+        inputs.client_default_dns:
+          - 1.1.1.1
+          - 1.0.0.1
     ssh-jumphost:
       source:
         portable: git::https://github.com/nebius/nebius-ps-services.git//platform-infra/modules/ssh-jumphost?ref=main
@@ -569,6 +574,15 @@ components:
                 allowUiUpdates: true
                 options:
                   path: /var/lib/grafana/dashboards/nebius-kubernetes
+              - name: nebius-vm
+                orgId: 1
+                folder: Nebius VMs
+                folderUid: nebius-vm
+                type: file
+                disableDeletion: false
+                allowUiUpdates: true
+                options:
+                  path: /var/lib/grafana/dashboards/nebius-vm
         values.dashboards:
           # Nebius service dashboards use the service-provider Monitoring
           # service-metrics datasource name. Keep one imported example here;
@@ -592,6 +606,13 @@ components:
             kubernetes-traces:
               datasource: Nebius Traces
               json_file: grafana_dashboards/kubernetes-traces.json
+          nebius-vm:
+            vm-metrics:
+              datasource: Nebius Services
+              json_file: grafana_dashboards/vm-metrics.json
+            vm-logs:
+              datasource: Nebius Logs
+              json_file: grafana_dashboards/vm-logs.json
     gateway-helm:
       source:
         portable:

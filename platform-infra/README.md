@@ -18,7 +18,7 @@ Reusable modules under `modules/`:
 - [`object-storage`](modules/object-storage/README.md): Nebius Object Storage buckets.
 - [`mysterybox`](modules/mysterybox/README.md): Nebius MysteryBox secrets and versioned payloads.
 - [`vm`](modules/vm/README.md): General Nebius Compute virtual machine provisioning.
-- [`wireguard-jumphost`](modules/wireguard-jumphost/README.md): WireGuard VPN jump host VM.
+- [`wireguard-gw`](modules/wireguard-gw/README.md): WireGuard VPN gateway VM.
 - [`ssh-jumphost`](modules/ssh-jumphost/README.md): SSH bastion/jump host VM.
 
 Each module has its own README and one or more runnable example roots under
@@ -225,6 +225,8 @@ to help users choose the right module quickly.
 - Key optional capabilities:
   - regular or preemptible GPU VMs
   - managed boot/data disks and attached filesystems
+  - boot/data disk managed encryption for supported SSD NRD / SSD IO M3 disks
+    and disk deletion protection
   - optional GPU cluster creation or attachment
   - optional Docker-based container bootstrap on the VM
 - Examples:
@@ -237,25 +239,29 @@ to help users choose the right module quickly.
 - Creates an SSH jump host VM
 - Required inputs:
   - `parent_id`
-  - `region`
   - `subnet_id`
   - `name`
+  - `platform`
+  - `preset`
+  - `source_image_family`
   - `ssh_public_key`
   - `allowed_cidrs`
 - Example:
   - `modules/ssh-jumphost/examples/minimal`
 
-### [`wireguard-jumphost`](modules/wireguard-jumphost/README.md)
+### [`wireguard-gw`](modules/wireguard-gw/README.md)
 
-- Creates a WireGuard VPN jump host VM
+- Creates a WireGuard VPN gateway VM
 - Required inputs:
   - `parent_id`
-  - `region`
   - `subnet_id`
   - `name`
+  - `platform`
+  - `preset`
+  - `source_image_family`
   - `ssh_public_key`
 - Example:
-  - `modules/wireguard-jumphost/examples/minimal`
+  - `modules/wireguard-gw/examples/minimal`
 
 ## Running Examples
 
@@ -325,7 +331,7 @@ platform-infra/
         minimal/
         gpu-preemptible/
         containerized/
-    wireguard-jumphost/
+    wireguard-gw/
       README.md
       examples/
         minimal/

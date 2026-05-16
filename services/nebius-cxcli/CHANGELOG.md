@@ -6,6 +6,163 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- `deploy` now ends with a compact `Deployment summary` footer that separates
+  validation PASS/FAIL, copy-paste commands such as WireGuard `wg-quick`,
+  SSH `ProxyJump`, and GitOps bootstrap follow-ups, and important generated
+  paths including `deploy-report.md` and validation JSON detail files.
+- WireGuard deploy footer/report generation now omits `--component` for the
+  common single-gateway case, keeps day-2 subnet add/remove examples in
+  README/help instead of the generated handoff report, and shows enabled-only
+  app handoff sections after `App Component Status`.
+- Deploy reports now use distinct `Infra Component Status` and
+  `App Component Status` headings so customer-repo Markdown linting does not
+  trip MD024 duplicate-heading checks.
+- Renamed the bundled WireGuard component/module contract to `wireguard-gw`
+  because it is a point-to-site VPN gateway, not a jump host. The catalog,
+  wizard profile, validation profile, Terraform module source path, render
+  output names, help text, docs, and deploy report wording now use the gateway
+  name with no legacy component-id compatibility shim.
+- `create` and `render` no longer create `generated/inventory/deploy-report.md`;
+  the Markdown handoff report is now created/refreshed only by deployment/apply
+  paths after live state can be read, while render keeps quota and runtime
+  metadata in `generated/nebius-cxcli-manifest.json`.
+- Moved Compute boot-disk recommendation policy into shared
+  `compute.boot_disk_defaults`, and now materialize explicit recommended disk
+  size/type values for MK8s, VM, SSH jump host, and WireGuard VPN gateway
+  components from the selected live platform/preset.
+- Simplified the WireGuard VPN gateway wizard by hiding advanced
+  `endpoint_host`, first-boot `clients`, and raw `labels` prompts while keeping
+  them available for direct config/module users; new WireGuard clients now pick
+  up practical default DNS values from the module contract.
+- Materialized `wireguard-gw` `inputs.wireguard_tunnel_cidr` in
+  wizard-created configs so operators can see and edit the WireGuard server
+  tunnel address and client allocation pool before render/deploy.
+- Added `nebius-cxcli wireguard --gen-client-conf <config.yaml>` for deployed
+  `wireguard-gw` components. The command asks the VPN gateway to allocate
+  the next free WireGuard tunnel address, generate a unique client config, save
+  server-side allocation metadata, and download the client `.conf` file into the
+  project-local ignored `wireguard-clients/` directory.
+- The WireGuard client generation command now prints the complete local
+  `wg-quick up <client.conf>` and `wg-quick down <client.conf>` commands after
+  writing the client config.
+- The WireGuard client generation command no longer prints the internal
+  `.gitignore` path after writing a client config; cxcli still keeps generated
+  client config files ignored.
+- The WireGuard client generation command now checks for the local `wg-quick`
+  tool and prints an OS-specific install hint when it is missing.
+- The WireGuard client generation command now uses short wg-quick-safe client
+  names by default and rejects explicit `--client-name` values longer than the
+  15-character interface-name limit.
+- VM observability now uses the built-in Nebius VM Monitoring agent path only:
+  cxcli materializes Compute journald labels for VM logs, does not install a
+  standalone VM collector, and does not create VM collector service accounts or
+  public write-endpoint configuration.
+- The built-in VM journald prompt now states that answering yes applies the
+  supported Nebius Compute labels to the VM; regression coverage now verifies
+  both explicit systemd-unit allowlists and the default all-units label shape.
+- Updated the cxcli-owned `Nebius VM Metrics` dashboard to query the
+  `Nebius Services` datasource with built-in VM agent labels, and kept the
+  `Nebius VM Logs` dashboard on the project Loki read path for journald logs.
+- Expanded the cxcli-owned Kubernetes Grafana dashboards with production
+  cluster signals: cAdvisor/API-server CPU, memory, throttling, filesystem,
+  network, and API panels; Loki log-volume and warning/error panels; generic
+  recent/slow/error TraceQL panels; and additional DCGM GPU health panels.
+- The cxcli-owned `Nebius VM Logs` dashboard now defaults to the `sp_serial`
+  Loki bucket used by Compute VM serial/journald logs, and `validate-dashboards`
+  now reuses dashboard variable defaults for live Loki query checks.
+- The SSH jump-host wizard now defaults `inputs.allowed_cidrs` from the
+  detected operator public IPv4 address as a `/32` CIDR when that lookup is
+  available, and documents that the field is the internet source allowlist for
+  first-boot SSH reachability.
+- Compute instance deploy status now reports private IP readiness for
+  private-only VMs instead of leaving them as `network pending` after they are
+  running without a public IP.
+- Fixed `create` wizard `q` backtracking so revisiting a field and pressing
+  `q` again goes to the previous distinct prompt instead of repeating the
+  current prompt.
+- Interactive `create` and `component add` now abort without writing when the
+  wizard is stopped while selected components still have unresolved required
+  fields, preserving existing project folders and config files.
+- Aligned the root `nebius-cxcli` CI and release workflows so they prepare the
+  cxcli-configured Terraform binary before running `make all`, matching the
+  platform module template tests that invoke `terraform console`.
+- Fixed the VM-style boot-disk wizard refresh so `inputs.boot_disk_size_gib`
+  shows the shared Compute recommendation after platform/preset selection
+  instead of the raw nullable Terraform default.
+- Hid the low-level VM-style `inputs.boot_disk_block_size_bytes` field from the
+  guided wizard while keeping it available for direct config/module users.
+- Clarified guided Compute boot-disk type labels so Network SSD shows encryption
+  always on, while SSD NRD and SSD IO M3 show encryption as opt-in.
+- Added VM-style boot-disk deletion-protection prompts and opt-in managed
+  encryption prompts for SSD NRD / SSD IO M3 disks, with strict validation and
+  Terraform module wiring for VM, SSH jump host, and WireGuard VPN gateway.
+- Added `nebius-cxcli wireguard --add-local-subnets <config.yaml>` and
+  `--remove-local-subnets <config.yaml>` so operators can update VM-local
+  default private destination CIDRs for future generated WireGuard clients.
+- Aligned `nebius-cxcli --help` and `nebius-cxcli wireguard --help` with the
+  WireGuard generation/add/remove mode contract and mode-specific flags.
+- Added `nebius-cxcli ssh-jumphost --add-allowed-cidrs <config.yaml>`,
+  `--remove-allowed-cidrs <config.yaml>`, and
+  `--list-allowed-cidrs <config.yaml>` so operators can update deployed SSH
+  jump-host source CIDRs through the VM-local helper instead of replacing the
+  VM for day-2 firewall changes.
+- Deploy reports and successful deploy terminal output now include concrete
+  SSH ProxyJump commands for enabled `ssh-jumphost` + private `vm` pairs when
+  Terraform outputs expose both addresses.
+- Deploy reports now include a WireGuard VPN gateway handoff section with the
+  deployed endpoint, tunnel CIDR, routed local subnets, default client DNS,
+  client-generation command, and `wg-quick up/down` commands for existing local
+  client config files.
+- Documented the tightened WireGuard VPN gateway security posture in cxcli docs:
+  SSH remains an admin-only key-based path with forwarding disabled, while
+  ProxyJump use cases stay on the dedicated `ssh-jumphost` component.
+- Deploy reports now include catalog-driven `Infra Component Reports` and
+  `App Component Reports` sections so every enabled component from
+  `component_sources.yaml` has a concise handoff entry without component-specific
+  Python report code.
+- Tightened `wireguard` and `ssh-jumphost` day-2 commands so the current
+  `config.yaml` must still enable the same component instance present in the
+  rendered/deployed generated bundle before cxcli reads Terraform outputs or
+  SSHes to the VM.
+- Tightened app target handling: enabled Helm app rows now require an enabled
+  MK8s target in the same project, and `create` / `component add` reject
+  app-only selections before writing `config.yaml`. The docs now distinguish
+  the Kubernetes `nebius-observability-agent` Helm chart from the VM Monitoring
+  agent path.
+- Renamed the WireGuard VPN gateway default private destination input from
+  `client_default_local_subnets` to `local_subnets` without a compatibility
+  shim.
+- Clarified the WireGuard macOS connection docs around the Homebrew
+  `wireguard-tools` CLI workflow.
+- Kept the bundled source catalog free of `shared.admin_ssh.public_key` entries
+  while documenting the still-supported private/customer-local bootstrap seed,
+  and added regression coverage that `validate` fails when an enabled
+  SSH-bearing module is missing `inputs.ssh_public_key`.
+- Added guided SSH public-key selection in the create/component-add wizard:
+  required `inputs.ssh_public_key` prompts now list supported `~/.ssh/*.pub`
+  files, accept manual paths or inline keys, and persist normalized inline key
+  content. SSH key validation now also accepts ECDSA public keys.
+- Fixed live provider option lookups for VM image families and other Nebius
+  list-backed wizard fields by using a Nebius-valid page size, so
+  `inputs.source_image_family` can be selected from the live public image
+  inventory instead of falling back to manual entry.
+- Fixed live provider option lookups for `create` and `component add` so wizard
+  discovery prefers operator SDK auth before Terraform runtime service-account
+  env vars, avoiding stale runtime credentials causing `UNAUTHENTICATED`
+  subnet/platform/image lookups.
+- Removed bundled VM image-family preference lists from
+  `component_cli_settings.yaml`; VM `source_image_family` selection now uses
+  Nebius live public-image compatibility metadata only, ranking
+  `recommended_platforms` matches ahead of other compatible image families.
+- Aligned the bundled `wireguard-gw` and `ssh-jumphost` wizard profiles
+  with the generic VM flow: both now source `inputs.source_image_family` from
+  the live Nebius public image inventory, and the platform-infra public-access
+  VM wrappers now wrap the shared `modules/vm` Terraform module for VM
+  resources.
+- Aligned strict validation for `wireguard-gw` and `ssh-jumphost` public
+  IP allocation inputs with their Terraform module contract: cxcli now requires
+  `inputs.public_ip_allocation_id` when `create_public_ip_allocation=false` and
+  rejects setting an allocation ID while also creating a new allocation.
 - Made the bundled `mk8s` baseline CPU node count explicit in
   `component_sources.yaml` and generated `config.yaml` files via
   `inputs.cpu_nodes_count: 2`, instead of relying on a hidden Terraform module
@@ -269,7 +426,7 @@ All notable changes to this project are tracked here. This changelog follows
   Terraform runtime auth cache updates do not leave a partially written
   `runtime-auth.json`.
 - Changed `prefer_operator_auth=True` Nebius SDK auth ordering so CLI token auth
-  is tried last after SDK config and service-account credentials.
+  is tried after SDK config and before service-account credentials.
 - Made app `release.install_after` prerequisites participate in component
   auto-selection before Flux `dependsOn` ordering is rendered.
 - Aligned bundled MysteryBox runtime validation with the Terraform module's
@@ -470,8 +627,8 @@ All notable changes to this project are tracked here. This changelog follows
   that target metadata, so the Grafana admin-password command is copy-pasteable
   with `kubectl --context=...` for each cluster.
 - Reorganized `generated/inventory/deploy-report.md` into smaller subsections:
-  infra component status and MK8s cluster details are separated, app status is
-  grouped by platform/observability/workloads, and Grafana links plus
+  `Infra Component Status` and MK8s cluster details are separated, app handoff
+  details are grouped by platform/observability/workloads, and Grafana links plus
   credentials are grouped under one subsection per target with shared notes
   separated from target-specific links.
 - Scoped deploy validation summaries and deploy-report validation sections to
@@ -524,11 +681,6 @@ All notable changes to this project are tracked here. This changelog follows
 - Added settings-owned Grafana datasource descriptions to the generated
   `deploy-report.md` so the Grafana section explains the difference between the
   `Nebius Services` and `Nebius User Metrics` Prometheus datasources.
-- Moved the VM standalone collector package source out of the VM cloud-init
-  template and into `component_sources.yaml`. The catalog now owns the
-  `nebius-o11y-agent` package name/version, APT repo/key/suite/component/origin,
-  and Prometheus companion package name; cxcli materializes those as hidden VM
-  module inputs.
 - Clarified the quota workflow across `create`, `quota-check`, and
   `quota-request`: create-time quota/capacity assessment is warning-only and
   does not reserve capacity, `quota-check` reruns against current live Nebius
@@ -627,13 +779,12 @@ All notable changes to this project are tracked here. This changelog follows
   rendered-bundle gate; docs now list generated-bundle backend auth before the
   state-aware live quota/capacity phase, matching the implementation.
 - Removed the standalone `report` command. Deploy reports are generated as part
-  of the lifecycle commands that actually render or apply state (`render`,
-  `deploy`, `terraform apply`, `flux apply`, and `flux bootstrap`), while
+  of the lifecycle commands that actually apply state (`deploy`,
+  `terraform apply`, `flux apply`, and `flux bootstrap`), while
   `email` now only sends the existing `generated/inventory/deploy-report.md`
   artifact instead of pointing operators at a separate manual rewrite command.
-  The render overwrite detector now recognizes only the current
-  `nebius-cxcli render` starter report scaffold, and report refresh no longer
-  carries cleanup logic for removed inventory sidecar formats.
+  Report refresh no longer carries cleanup logic for removed inventory sidecar
+  formats.
 - Tightened generated-bundle target validation for the lower-level runtime
   commands. `terraform *` now accepts only the project `generated/` root or
   paths under `generated/infra/`, while `flux *` accepts only `generated/` or
@@ -764,19 +915,11 @@ All notable changes to this project are tracked here. This changelog follows
 - Refactored the source-owned observability catalog structure for clarity. The
   external `component_sources.yaml` contract now keeps built-in observability
   signals under `primary_agent.{logs,metrics,traces}`, nested
-  `endpoints.{write,read}.*`, `public_ingest.*` for the VM standalone
-  collector path, and nested DCGM metric-target discovery/GPU-policy metadata.
+  `endpoints.{write,read}.*`, and nested DCGM metric-target discovery/GPU-policy
+  metadata.
   Parser/runtime wiring now maps that clearer external structure into the same
   runtime behavior, while README and design docs now also make the
   project-switch-versus-service-endpoint boundary explicit.
-- Added a separate default-off standalone VM observability collector contract.
-  `deploy.observability.vm.collector.*` now lets cxcli bootstrap a pinned public
-  `nebius-o11y-agent` package plus a Prometheus agent companion on supported
-  Ubuntu-family VMs, using the VM metadata token and attached service account
-  to push journald logs and host metrics through Nebius public write endpoints
-  without conflating that path with the built-in Monitoring agent. The VM
-  bootstrap now uses the catalog-provided public Artifactory APT repo rather
-  than the older mirror redirect.
 - Corrected the VM observability contract to match the built-in Nebius
   Monitoring agent behavior. VM service metrics are now treated as always-on
   for enabled `vm` components even when `deploy.observability.enabled=false`, and the
@@ -1036,8 +1179,8 @@ All notable changes to this project are tracked here. This changelog follows
   immediately on stale old node-group error events from a previous failed run
   when Terraform is about to replace that failed group. Fresh terminal API
   errors from the current run still abort early.
-- Fixed `generated/inventory/deploy-report.md` formatting so render/report
-  output no longer ends with duplicate blank lines when deploy validations are
+- Fixed `generated/inventory/deploy-report.md` formatting so report output no
+  longer ends with duplicate blank lines when deploy validations are
   present, keeping the generated Markdown clean for linting in customer repos.
 - Changed interactive `create` so `tenant_id` / `project_id` no longer
   default from an existing project under the deployments root. `create`
@@ -1196,15 +1339,14 @@ All notable changes to this project are tracked here. This changelog follows
   Limits → Quotas follow-up when Nebius denies the direct API write, now also
   prints coverage-gap detail when nothing can be submitted, and points
   operators to the web console for submission or status tracking.
-- Refactored bundled MK8s boot-disk defaulting so the catalog now owns
-  ordered cxcli boot-disk rules under
-  `components.infra.mk8s.cli.boot_disk_defaults.<cpu|gpu>`, keyed by resolved
-  preset resources such as vCPU, RAM, and GPU count. `create`, `component
-  add`, and runtime config loading now materialize explicit
-  `cpu_nodes_boot_disk_*` / `gpu_nodes_boot_disk_*` values from the first
-  matching rule for the selected shape, while unmodeled shapes still fall back
-  to the heuristic. Guided disk-type prompts now show consistent Nebius
-  price/performance labels for all three recommended SSD-backed choices and
+- Refactored bundled Compute boot-disk defaulting so the catalog now owns
+  ordered shared cxcli boot-disk rules under `compute.boot_disk_defaults`,
+  keyed by resolved preset resources such as vCPU, RAM, and GPU count.
+  `create`, `component add`, and runtime config loading now materialize
+  explicit MK8s and VM-style boot-disk values from the first matching rule for
+  the selected shape, while unmodeled shapes fail fast so maintainers update
+  the shared policy. Guided disk-type prompts now show consistent settings-owned
+  Nebius price/performance labels for all recommended SSD-backed choices and
   clarify that MK8s boot-disk encryption is not configurable from cxcli.
   High-performance SSD types still round to required 93 GiB multiples, regular
   `NETWORK_SSD` values stay exact GiB sizes, explicit first-class inputs or
@@ -1270,14 +1412,14 @@ All notable changes to this project are tracked here. This changelog follows
 - Fixed the remaining `nebius-cxcli-ci` wheel gate for local-only charts: branch CI now verifies that the built wheel bundles `component_sources.yaml` without forcing release-grade portable chart sources, while the tag/release workflow still runs the stricter portable `verify-wheel` / `verify-catalog` checks.
 - Fixed `nebius-cxcli-ci` catalog validation for branch work: the normal CI workflow now runs `validate-sources component_sources.yaml` with source profile `local` so new in-repo Terraform modules and local-only Helm charts are validated against the checked-out branch, while the release workflow keeps the portable-profile validation for published wheel/catalog verification.
 - Aligned the remaining strict-validation and docs surfaces with the current Helm/source contract: the MK8s GPU strict-validation coverage now enables `nvidia-gpu-operator` before asserting missing GPU shape fields, and the README/design examples now consistently show app charts under `source.portable` instead of the removed top-level `source.repo/chart/version` layout.
-- Added a bundled `vm` infra component backed by `platform-infra/modules/vm`: the catalog now exposes guided project-subnet and live compute platform/preset selection, resolves `source_image_family` from the live Nebius public image inventory using component-local image preference ordering under `components.infra.vm.cli.image_preferences`, keeps the module boot-image contract explicit instead of hiding a hardcoded family default, preserves static public-IP mode choices plus optional GPU-cluster fabric guidance, and includes runtime validation/quota estimation for standalone Nebius VMs so the new module behaves like a first-class `nebius-cxcli` component instead of a raw custom Terraform source.
+- Added a bundled `vm` infra component backed by `platform-infra/modules/vm`: the catalog now exposes guided project-subnet and live compute platform/preset selection, resolves `source_image_family` from the live Nebius public image inventory without a bundled hardcoded family default, preserves static public-IP mode choices plus optional GPU-cluster fabric guidance, and includes runtime validation/quota estimation for standalone Nebius VMs so the new module behaves like a first-class `nebius-cxcli` component instead of a raw custom Terraform source.
 - Refactored the bundled MK8s GPU contract around the actual Nebius node-group model: `inputs.gpu_stack_source` and `inputs.gpu_stack_preset` now replace the earlier driver-centric terminology in the customer- and catalog-facing contracts, the MK8s module/docs now describe Nebius-managed `gpu_settings.drivers_preset` vs operator-managed GPU stacks explicitly, and the NCCL path now renders a first-party `helm-charts/nccl-test` chart selected through the same Helm `source.portable` / `source.local` contract used by other bundled charts instead of assembling the raw `MPIJob` manifest in Python.
 - Replaced the old MK8s GPU hardcoded profile split with component-local settings policy: `component_cli_settings.yaml` now keeps MK8s GPU image preferences and validations under `components.infra.mk8s.cli.gpu`, keeps GPU operator/network operator auto-enable rules and Helm value overrides on the operator app entries under `components.apps.<id>.cli.mk8s_gpu_policy`, while `component_sources.yaml` keeps the reusable Terraform/Helm source and release metadata. The catalog pair removes the unused standalone `nvidia-device-plugin` entry, still materializes Nebius-image vs operator-managed MK8s defaults from the live Nebius compatibility matrix, keeps the GPU Operator B300 driver pin out of Python, and still persists deploy-time GPU readiness/visibility/NCCL reports under `generated/inventory/`.
 - Changed interactive `create` overwrite UX so it now resolves `tenant_id` / `project_id` before showing any overwrite warning: existing deployments roots no longer emit a root-wide pre-warning, and confirmation appears only when the chosen resolved project folder already exists.
 - Changed the canonical project layout to match the two-level project hierarchy under the deployments root: project configs now live at `<deployments-root>/<tenant-folder>/<project-folder>/config.yaml`, and `create <deployments-root>` is a bootstrap/overwrite command instead of an existing-config reconcile path. Once that resolved project folder already exists, interactive reruns now require explicit overwrite confirmation, non-interactive reruns require `--force`, overwrite recreates only that one resolved project folder from scratch, client-info prompts restart from the normal create defaults, and infra/apps selections plus component values are rebuilt from the current create inputs instead of being merged from the old config; docs/help/tests were realigned to make `component list/add/remove` the default day-2 editing surface.
 - Tightened the remaining help/docs wording around the project-folder layout so `create --help`, README, and the design doc consistently describe the canonical overwrite target and the generated customer workflow's canonical `<tenant-folder>/<project-folder>/generated/**` watch scope.
 - Tightened the generated customer GitHub workflow trigger to the canonical two-level deployment layout under the deployments root: it now watches only `.../<tenant-folder>/<project-folder>/generated/**` paths instead of a broader recursive `generated/**` glob that could still match stale pre-refactor layouts.
-- Extended catalog-driven Nebius fail-fast status monitoring beyond MK8s: bundled jump-host modules now declare live `nebius.compute.instance` watchers, bundled `mysterybox` now declares `nebius.mysterybox.secret` watchers that expand one component row into one watcher per configured secret name, supported watcher kinds now include compute instances and MysteryBox secrets, and the MSP PostgreSQL/SFS/object-storage/compute-instance/MysteryBox pollers now abort long-running apply/destroy waits from terminal Nebius SDK operation failures instead of only printing progress summaries.
+- Extended catalog-driven Nebius fail-fast status monitoring beyond MK8s: bundled SSH jump-host and WireGuard gateway modules now declare live `nebius.compute.instance` watchers, bundled `mysterybox` now declares `nebius.mysterybox.secret` watchers that expand one component row into one watcher per configured secret name, supported watcher kinds now include compute instances and MysteryBox secrets, and the MSP PostgreSQL/SFS/object-storage/compute-instance/MysteryBox pollers now abort long-running apply/destroy waits from terminal Nebius SDK operation failures instead of only printing progress summaries.
 - Changed explicit `quota-check` output to also print both confirmed checked quota names and coverage-gap reasons as vertical lists under each component, including partial-coverage components such as MK8s when the checked dimensions are sufficient but other dimensions still remain coverage gaps.
 - Added guarded built-in destroy recovery for generated Terraform bundles: `destroy` / `terraform destroy` now auto-clear a stale backend lock when the existing local-owner safety checks already pass, retry Terraform destroy once, and if destroy is still blocked by a live MK8s node-group create stuck in terminal-error provisioning, they can delete that stuck node group through the Nebius SDK and retry destroy again inside the same confirmed teardown flow.
 - Changed `render <config.yaml>` to always run pre-render runtime validation before writing artifacts, so active-source drift, unresolved component dependencies, and Terraform module schema/input mismatches fail before any generated bundle side effects.
@@ -1305,13 +1447,13 @@ All notable changes to this project are tracked here. This changelog follows
 - Fixed `create` wizard prompt helper late-binding closures in `cli.py` so Ruff no longer flags `B023` on the deferred module-prompt builders, and tightened the runtime-shape unit coverage to skip post-write validation in the test that only asserts generated config structure.
 - Added a central Codex skill at `../../skills/onboard-nebius-cxcli/` for onboarding Nebius Terraform modules into `nebius-cxcli`; it documents the catalog-first onboarding flow, the code-owned layers (`wizard_profiles.py`, `provider_options.py`, `validation_profiles.py`, `runtime_component_validation.py`, `cluster_handoffs.py`, `deployment_status.py`), and the focused test/doc updates expected for each change shape.
 - Refined MK8s wizard platform discovery to use live Nebius platform inventory at runtime: CPU/GPU platform prompts now intersect the MK8s compatibility matrix with the selected project's compute-platform list, so the wizard only shows currently available supported platforms while preset choices remain live per selected platform.
-- Extended the built-in `ssh-jumphost` and `wireguard-jumphost` wizard profiles to use the live compute platform inventory plus preset chaining, so those VM modules no longer rely on manual `platform` / `preset` entry when project-scoped Nebius choices are available.
+- Extended the built-in `ssh-jumphost` and `wireguard-gw` wizard profiles to use the live compute platform inventory plus preset chaining, so those VM modules no longer rely on manual `platform` / `preset` entry when project-scoped Nebius choices are available.
 - Moved bundled infra runtime validation-profile selection out of the public `component_sources.yaml` catalog and into code-owned defaults in `src/nebius_cxcli/validation_profiles.py`; bundled components now omit repeated internal `validation` markers, and the catalog loader rejects that field instead of carrying a compatibility path.
 - Removed the public infra `runtime` block from `component_sources.yaml` and moved the bundled MK8s kubeconfig/bootstrap handoff into code-owned built-ins in `src/nebius_cxcli/cluster_handoffs.py`; auto-discovered Terraform outputs remain the only catalog-facing producer contract, docs/tests were realigned, and inventory/deployment-status helpers now key off `status.kind` instead of old handoff/kind shortcuts.
 - Fixed create/component-add wizard handling for declared `component_sources.yaml` `wizard` paths: provider-backed or catalog-declared `inputs.*` / `values.*` fields that are not yet materialized in the payload are now prompted normally instead of emitting a misleading “path not found in config payload” warning, and nested missing containers are created when those prompts are answered.
 - Added built-in infra `wizard_profile` support so common Nebius component types can expand to tested wizard wiring from a short profile name, while explicit `wizard` entries remain available as overrides.
 - Clarified the docs for `wizard_profile` versus `wizard`: built-in profiles are centralized today in `src/nebius_cxcli/wizard_profiles.py`, and ordinary inputs with no guided choices should omit both fields.
-- Removed the generic `vpc` wizard profile and replaced it with component-scoped jump-host profiles so built-in `wizard_profile` names stay aligned with actual TF modules/components rather than a shared service-domain label.
+- Removed the generic `vpc` wizard profile and replaced it with component-scoped public-access VM profiles so built-in `wizard_profile` names stay aligned with actual TF modules/components rather than a shared service-domain label.
 - Tightened the `wizard_profile` contract to a one-to-one component mapping: built-in profile names now match infra component ids exactly, the loader rejects mismatched profile names, and the bundled catalog dropped no-op `shared_file_system` / `mysterybox` profiles instead of carrying empty shorthands.
 - Applied the repo Python-project workflow baseline more explicitly: Make now exposes `test-unit`, `test-integration`, `coverage`, and `clean`, `pytest-cov` is available in the dev extras, and the default unit lane blocks live network access unless a test is explicitly marked `integration`.
 - Fixed `provider_options.py` type-checker issues in the plugin loader and MK8s version option builder so static analysis no longer reports a callable-signature narrowing error or `OptionChoice` construction from `str | None`.

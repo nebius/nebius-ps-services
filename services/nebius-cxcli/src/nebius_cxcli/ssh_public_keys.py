@@ -6,13 +6,35 @@ import base64
 import binascii
 import re
 from collections.abc import Mapping
+from contextlib import suppress
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-_SUPPORTED_SSH_KEY_TYPES = ("ssh-rsa", "ssh-ed25519")
-_INLINE_SSH_PUBLIC_KEY_RE = re.compile(
-    r"^(ssh-(?:rsa|ed25519))\s+([A-Za-z0-9+/]+={0,3})(?:\s+(.+))?$"
+_SUPPORTED_SSH_KEY_TYPES = (
+    "ssh-rsa",
+    "ssh-ed25519",
+    "ecdsa-sha2-nistp256",
+    "ecdsa-sha2-nistp384",
+    "ecdsa-sha2-nistp521",
 )
+_INLINE_SSH_PUBLIC_KEY_RE = re.compile(
+    r"^((?:ssh-(?:rsa|ed25519))|(?:ecdsa-sha2-nistp(?:256|384|521)))\s+([A-Za-z0-9+/]+={0,3})(?:\s+(.+))?$"
+)
+_ECDSA_CURVE_KEY_LENGTHS = {
+    "nistp256": 65,
+    "nistp384": 97,
+    "nistp521": 133,
+}
+
+
+@dataclass(frozen=True)
+class SSHPublicKeyFile:
+    path: Path
+    display_path: str
+    public_key: str
+    key_type: str
+    comment: str
 
 
 def _looks_like_path(value: str) -> bool:
@@ -76,6 +98,26 @@ def _matches_ssh_public_key_wire_format(payload: bytes, key_type: str) -> bool:
             return False
         modulus_bytes, offset = modulus
         return bool(exponent_bytes) and bool(modulus_bytes) and offset == len(payload)
+    if key_type.startswith("ecdsa-sha2-"):
+        expected_curve = key_type.removeprefix("ecdsa-sha2-")
+        curve = _read_ssh_wire_field(payload, offset)
+        if curve is None:
+            return False
+        curve_bytes, offset = curve
+        curve_name = curve_bytes.decode("ascii", errors="ignore")
+        if curve_name != expected_curve:
+            return False
+        public_key = _read_ssh_wire_field(payload, offset)
+        if public_key is None:
+            return False
+        key_bytes, offset = public_key
+        expected_len = _ECDSA_CURVE_KEY_LENGTHS.get(curve_name)
+        return (
+            expected_len is not None
+            and len(key_bytes) == expected_len
+            and key_bytes.startswith(b"\x04")
+            and offset == len(payload)
+        )
     return False
 
 
@@ -132,7 +174,7 @@ def normalize_ssh_public_key_value(
 
     try:
         text = key_path.read_text(encoding="utf-8")
-    except OSError as exc:
+    except (OSError, UnicodeDecodeError) as exc:
         raise ValueError(f"{field_label} could not be read from {key_path}: {exc}") from exc
 
     lines = [line.strip() for line in text.splitlines() if line.strip()]
@@ -146,6 +188,68 @@ def normalize_ssh_public_key_value(
             f"{field_label} file must contain one supported SSH public key ({allowed})"
         )
     return inline
+
+
+def _display_path(path: Path) -> str:
+    expanded = path.expanduser()
+    home = Path.home().expanduser()
+    with suppress(ValueError):
+        relative = expanded.relative_to(home)
+        return f"~/{relative.as_posix()}"
+    return str(expanded)
+
+
+def _key_file_sort_key(candidate: SSHPublicKeyFile) -> tuple[int, str]:
+    preferred = {
+        "id_ed25519.pub": 0,
+        "id_ecdsa.pub": 1,
+        "id_rsa.pub": 2,
+    }
+    return (preferred.get(candidate.path.name, 10), candidate.display_path)
+
+
+def _public_key_parts(public_key: str) -> tuple[str, str]:
+    parts = public_key.split(None, 2)
+    key_type = parts[0] if parts else ""
+    comment = parts[2].strip() if len(parts) > 2 else ""
+    return key_type, comment
+
+
+def discover_ssh_public_key_files(
+    *,
+    ssh_dir: Path | None = None,
+) -> tuple[SSHPublicKeyFile, ...]:
+    """Return readable supported public keys from one local .ssh directory."""
+    directory = (ssh_dir if ssh_dir is not None else Path.home() / ".ssh").expanduser()
+    if not directory.is_dir():
+        return ()
+
+    candidates: list[SSHPublicKeyFile] = []
+    try:
+        entries = sorted(directory.iterdir(), key=lambda item: item.name)
+    except OSError:
+        return ()
+    for path in entries:
+        if not path.is_file() or path.suffix != ".pub":
+            continue
+        try:
+            public_key = normalize_ssh_public_key_value(
+                str(path),
+                field_label=f"SSH public key file {path}",
+            )
+        except ValueError:
+            continue
+        key_type, comment = _public_key_parts(public_key)
+        candidates.append(
+            SSHPublicKeyFile(
+                path=path,
+                display_path=_display_path(path),
+                public_key=public_key,
+                key_type=key_type,
+                comment=comment,
+            )
+        )
+    return tuple(sorted(candidates, key=_key_file_sort_key))
 
 
 def normalize_runtime_ssh_public_key_inputs(
@@ -184,6 +288,8 @@ def normalize_runtime_ssh_public_key_inputs(
 
 
 __all__ = [
+    "SSHPublicKeyFile",
+    "discover_ssh_public_key_files",
     "normalize_runtime_ssh_public_key_inputs",
     "normalize_ssh_public_key_value",
 ]

@@ -83,3 +83,6 @@ All notable changes to the reusable Codex skills are tracked here.
   prerequisites those skills expect before they can act.
 - Updated the shared `python-project` skill to explain when a minimal
   compatibility `setup.py` shim still makes sense alongside `pyproject.toml`.
+- Updated `create-pr` so local-work PR creation explicitly stages the complete
+  monorepo diff with `git add -A` before committing, unless the user requests a
+  narrower PR scope.

@@ -65,6 +65,21 @@ def _chart_row(payload: dict, chart_id: str) -> dict:
     raise KeyError(chart_id)
 
 
+def _markdown_headings(markdown: str) -> list[str]:
+    headings: list[str] = []
+    in_fenced_block = False
+    for line in markdown.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("```"):
+            in_fenced_block = not in_fenced_block
+            continue
+        if in_fenced_block:
+            continue
+        if stripped.startswith("#"):
+            headings.append(stripped)
+    return headings
+
+
 def _enable_mk8s_observability(payload: dict, *, target_ref: str = "mk8s") -> None:
     deploy = payload.setdefault("deploy", {})
     assert isinstance(deploy, dict)
@@ -95,6 +110,7 @@ def test_write_inventory_handles_dynamic_component_model(tmp_path: Path) -> None
     mk8s = _infra_component_row(payload, "mk8s")
     mk8s_inputs = mk8s.setdefault("inputs", {})
     assert isinstance(mk8s_inputs, dict)
+    mk8s_inputs["cluster_name"] = "vm-observability"
     mk8s_inputs["cpu_nodes_count"] = 1
     mk8s_inputs["cpu_nodes_platform"] = "cpu-d3"
     mk8s_inputs["cpu_nodes_preset"] = "4vcpu-16gb"
@@ -117,15 +133,26 @@ def test_write_inventory_handles_dynamic_component_model(tmp_path: Path) -> None
     assert artifacts.markdown.name == "deploy-report.md"
     markdown = artifacts.markdown.read_text(encoding="utf-8")
     assert "## Client\n\n- Client:" in markdown
-    assert "## Infra\n\n### Component Status\n\n- `mk8s`" in markdown
+    assert "## Infra\n\n### Infra Component Status\n\n- `mk8s`" in markdown
     assert "- `mk8s` (Managed Kubernetes baseline cluster): `enabled`" in markdown
     assert "- `vm` (Compute virtual machine): `disabled`" in markdown
+    assert "### Infra Component Reports" in markdown
+    assert "- `mk8s` (Managed Kubernetes baseline cluster)" in markdown
+    assert "  - Resource: `nebius.mk8s.cluster` with `cluster_name` = `vm-observability`" in markdown
+    assert "  - Inputs: `cluster_name=vm-observability`" in markdown
     assert "### MK8s Clusters" in markdown
-    assert "## Apps\n\n### Platform Apps\n\n- Envoy Gateway:" in markdown
-    assert "### Observability Apps" in markdown
+    assert "## Apps\n\n### App Component Status" in markdown
+    assert "### App Component Reports" in markdown
+    assert "- `n8n@mk8s` (n8n workflow automation)" in markdown
+    assert "  - Release: `n8n/n8n`" in markdown
+    assert "  - Target: `mk8s`" in markdown
+    assert "### Platform Apps" not in markdown
+    assert "### Observability Apps" not in markdown
     assert "### Workloads" in markdown
     assert "## Validations\n\n- No deploy-time validations configured." in markdown
     assert "- n8n: `enabled`; hostname `n8n.example.com`" in markdown
+    headings = _markdown_headings(markdown)
+    assert len(headings) == len(set(headings))
 
 
 def test_write_inventory_lists_selected_security_and_platform_components(
@@ -378,6 +405,8 @@ def test_write_inventory_includes_observability_endpoint_contract(tmp_path: Path
         "(`nebius-kubernetes/kubernetes-logs-from-loki`)"
     ) in markdown
     assert "  - Nebius Kubernetes Traces: `pending` (`nebius-kubernetes/kubernetes-traces`)" in markdown
+    assert "  - Nebius VM Metrics: `pending` (`nebius-vm/vm-metrics`)" in markdown
+    assert "  - Nebius VM Logs: `pending` (`nebius-vm/vm-logs`)" in markdown
     assert "### Notes" in markdown
     assert (
         "- Pending Grafana links are populated after `deploy` or `flux apply` can "
@@ -461,6 +490,16 @@ def test_write_inventory_includes_live_grafana_urls_when_status_exists(tmp_path:
         "(http://203.0.113.10/d/cxcli-kubernetes-gpu?orgId=1&var-Cluster=mk8scluster-123) "
         "(`nebius-kubernetes/kubernetes-gpu`)"
     ) in markdown
+    assert (
+        "  - [Nebius VM Metrics]"
+        "(http://203.0.113.10/d/cxcli-vm-metrics?orgId=1) "
+        "(`nebius-vm/vm-metrics`)"
+    ) in markdown
+    assert (
+        "  - [Nebius VM Logs]"
+        "(http://203.0.113.10/d/cxcli-vm-logs?orgId=1) "
+        "(`nebius-vm/vm-logs`)"
+    ) in markdown
     assert "- Credentials: user `admin`; password command:" in markdown
     assert (
         "- Credentials: user `admin`; password command:\n\n"
@@ -530,6 +569,20 @@ def test_bundled_grafana_dashboard_report_links_track_package_assets() -> None:
             "uid": "cxcli-kubernetes-traces",
             "title": "Nebius Kubernetes Traces",
             "datasource": "Nebius Traces",
+        },
+            {
+                "folder": "nebius-vm",
+                "dashboard": "vm-metrics",
+                "uid": "cxcli-vm-metrics",
+                "title": "Nebius VM Metrics",
+                "datasource": "Nebius Services",
+            },
+        {
+            "folder": "nebius-vm",
+            "dashboard": "vm-logs",
+            "uid": "cxcli-vm-logs",
+            "title": "Nebius VM Logs",
+            "datasource": "Nebius Logs",
         },
     ]
 
@@ -770,8 +823,7 @@ def test_write_inventory_includes_vm_observability_read_paths_and_managed_write_
     assert "VM journald logs (systemd services): `enabled`" in markdown
     assert "Metrics read (Prometheus, Nebius service metrics)" in markdown
     assert "Logs read (Loki)" in markdown
-    assert "Metrics write (VM monitoring agent)" in markdown
-    assert "Logs write (VM monitoring agent)" in markdown
+    assert "## Observability Write Endpoints" not in markdown
     assert "Logs write (bundled agent gRPC)" not in markdown
 
 
@@ -808,11 +860,218 @@ def test_write_inventory_includes_vm_metrics_even_when_project_observability_is_
     markdown = artifacts.markdown.read_text(encoding="utf-8")
 
     assert "VM monitoring agent: `enabled`" in markdown
-    assert "## Observability Write Endpoints" in markdown
+    assert "## Observability Write Endpoints" not in markdown
     assert "## Observability Read Endpoints" in markdown
     assert "Metrics read (Prometheus, Nebius service metrics)" in markdown
-    assert "Metrics write (VM monitoring agent)" in markdown
-    assert "VM journald logs (systemd services): `disabled`" in markdown
+    assert "VM journald logs (systemd services): `disabled`" not in markdown
+
+
+def test_write_inventory_includes_ssh_jumphost_proxyjump_command(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    reset_component_entry_cache()
+    config_path = _project_config_path(tmp_path)
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+
+    payload = _starter_payload(selected_infra={"vm", "ssh-jumphost"}, selected_apps=set())
+    vm = _infra_component_row(payload, "vm")
+    vm_inputs = vm.setdefault("inputs", {})
+    assert isinstance(vm_inputs, dict)
+    vm_inputs.update(
+        {
+            "parent_id": "project-456",
+            "subnet_id": "subnet-123",
+            "platform": "cpu-d3",
+            "preset": "2vcpu-8gb",
+            "source_image_family": "ubuntu24.04-driverless",
+            "ssh_user_name": "ubuntu",
+            "ssh_public_key": _VALID_ED25519_PUBLIC_KEY,
+            "public_ip_mode": "none",
+        }
+    )
+    jumphost = _infra_component_row(payload, "ssh-jumphost")
+    jumphost_inputs = jumphost.setdefault("inputs", {})
+    assert isinstance(jumphost_inputs, dict)
+    jumphost_inputs.update(
+        {
+            "parent_id": "project-456",
+            "subnet_id": "subnet-123",
+            "platform": "cpu-d3",
+            "preset": "2vcpu-8gb",
+            "source_image_family": "ubuntu24.04-driverless",
+            "ssh_user_name": "admin",
+            "ssh_public_key": _VALID_ED25519_PUBLIC_KEY,
+            "allowed_cidrs": ["203.0.113.10/32"],
+        }
+    )
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    config = load_config(config_path)
+    paths = resolve_project_paths(config_path)
+    validate_path_alignment(config, paths)
+    (paths.infra_dir / ".terraform").mkdir(parents=True, exist_ok=True)
+
+    monkeypatch.setattr(
+        inventory_ops,
+        "terraform_output_json",
+        lambda *_args, **_kwargs: {
+            "ssh_jumphost_public_ip": {"value": "198.51.100.20"},
+            "vm_private_ip": {"value": "10.0.0.15"},
+        },
+    )
+
+    artifacts = write_inventory(config, paths)
+    markdown = artifacts.markdown.read_text(encoding="utf-8")
+
+    assert "### SSH Jump Host Access" in markdown
+    assert "# `vm` via `ssh-jumphost`" not in markdown
+    assert "# vm via ssh-jumphost" in markdown
+    assert "ssh -J admin@198.51.100.20 ubuntu@10.0.0.15" in markdown
+    assert "`-i /path/to/private_key`" in markdown
+
+
+def test_write_inventory_includes_wireguard_handoff(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    reset_component_entry_cache()
+    config_path = _project_config_path(tmp_path)
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+
+    payload = _starter_payload(selected_infra={"wireguard-gw"}, selected_apps=set())
+    wireguard = _infra_component_row(payload, "wireguard-gw")
+    wireguard_inputs = wireguard.setdefault("inputs", {})
+    assert isinstance(wireguard_inputs, dict)
+    wireguard_inputs.update(
+        {
+            "parent_id": "project-456",
+            "subnet_id": "subnet-123",
+            "name": "wg-gw",
+            "platform": "cpu-d3",
+            "preset": "2vcpu-8gb",
+            "source_image_family": "ubuntu24.04-driverless",
+            "ssh_user_name": "ubuntu",
+            "ssh_public_key": _VALID_ED25519_PUBLIC_KEY,
+            "local_subnets": ["10.20.0.0/16", "10.30.0.0/16"],
+            "wireguard_tunnel_cidr": "10.8.0.1/22",
+            "wireguard_listen_port": 51820,
+        }
+    )
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    config = load_config(config_path)
+    paths = resolve_project_paths(config_path)
+    validate_path_alignment(config, paths)
+    (paths.infra_dir / ".terraform").mkdir(parents=True, exist_ok=True)
+    client_dir = paths.project_dir / "wireguard-clients"
+    client_dir.mkdir()
+    (client_dir / "laptop.conf").write_text("[Interface]\nPrivateKey = redacted\n", encoding="utf-8")
+
+    monkeypatch.setattr(
+        inventory_ops,
+        "terraform_output_json",
+        lambda *_args, **_kwargs: {
+            "wireguard_gw_public_ip": {"value": "198.51.100.30"},
+            "wireguard_gw_private_ip": {"value": "10.0.0.30"},
+            "wireguard_gw_wireguard_listen_port": {"value": 51820},
+        },
+    )
+
+    artifacts = write_inventory(config, paths)
+    markdown = artifacts.markdown.read_text(encoding="utf-8")
+
+    assert "### WireGuard VPN Gateway Access" in markdown
+    assert "- Component: `wireguard-gw`" in markdown
+    assert "  - Public endpoint: `198.51.100.30:51820`" in markdown
+    assert "  - Private IP: `10.0.0.30`" in markdown
+    assert "  - WireGuard tunnel CIDR: `10.8.0.1/22`" in markdown
+    assert "  - Default routed local subnets: `10.20.0.0/16`, `10.30.0.0/16`" in markdown
+    assert "  - Default client DNS: `1.1.1.1`, `1.0.0.1`" in markdown
+    assert f"nebius-cxcli wireguard --gen-client-conf {config_path}" in markdown
+    assert "--component wireguard-gw" not in markdown
+    assert "--add-local-subnets" not in markdown
+    assert "--remove-local-subnets" not in markdown
+    assert f"wg-quick up {client_dir / 'laptop.conf'}" in markdown
+    assert f"wg-quick down {client_dir / 'laptop.conf'}" in markdown
+
+    command_hints = inventory_ops.wireguard_access_command_hints(config, paths)
+    assert command_hints == [
+        {
+            "label": "WireGuard connect laptop",
+            "command": f"wg-quick up {client_dir / 'laptop.conf'}",
+        },
+        {
+            "label": "WireGuard disconnect laptop",
+            "command": f"wg-quick down {client_dir / 'laptop.conf'}",
+        },
+    ]
+
+
+def test_write_inventory_wireguard_handoff_without_local_client_configs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    reset_component_entry_cache()
+    config_path = _project_config_path(tmp_path)
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+
+    payload = _starter_payload(selected_infra={"wireguard-gw"}, selected_apps=set())
+    wireguard = _infra_component_row(payload, "wireguard-gw")
+    wireguard_inputs = wireguard.setdefault("inputs", {})
+    assert isinstance(wireguard_inputs, dict)
+    wireguard_inputs.update(
+        {
+            "parent_id": "project-456",
+            "subnet_id": "subnet-123",
+            "name": "wg-gw",
+            "platform": "cpu-d3",
+            "preset": "2vcpu-8gb",
+            "source_image_family": "ubuntu24.04-driverless",
+            "ssh_user_name": "ubuntu",
+            "ssh_public_key": _VALID_ED25519_PUBLIC_KEY,
+            "local_subnets": ["10.20.0.0/16"],
+            "wireguard_tunnel_cidr": "10.8.0.1/22",
+            "wireguard_listen_port": 51820,
+        }
+    )
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    config = load_config(config_path)
+    paths = resolve_project_paths(config_path)
+    validate_path_alignment(config, paths)
+    (paths.infra_dir / ".terraform").mkdir(parents=True, exist_ok=True)
+
+    monkeypatch.setattr(
+        inventory_ops,
+        "terraform_output_json",
+        lambda *_args, **_kwargs: {
+            "wireguard_gw_public_ip": {"value": "198.51.100.30"},
+            "wireguard_gw_private_ip": {"value": "10.0.0.30"},
+            "wireguard_gw_wireguard_listen_port": {"value": 51820},
+        },
+    )
+
+    artifacts = write_inventory(config, paths)
+    markdown = artifacts.markdown.read_text(encoding="utf-8")
+
+    assert f"nebius-cxcli wireguard --gen-client-conf {config_path}" in markdown
+    assert "--component wireguard-gw" not in markdown
+    assert "Generate a WireGuard client config with the command above" in markdown
+    assert "# Connect to WireGuard" in markdown
+    assert "# Disconnect from WireGuard" in markdown
+    assert "wg-quick up" in markdown
+    assert "wg-quick down" in markdown
+    assert "--add-local-subnets" not in markdown
+    assert "--remove-local-subnets" not in markdown
+
+    command_hints = inventory_ops.wireguard_access_command_hints(config, paths)
+    assert command_hints == [
+        {
+            "label": "Generate WireGuard client config for wireguard-gw",
+            "command": f"nebius-cxcli wireguard --gen-client-conf {config_path}",
+        }
+    ]
 
 
 def test_write_inventory_merges_validation_status_into_deploy_report(tmp_path: Path) -> None:
@@ -861,3 +1120,63 @@ def test_write_inventory_merges_validation_status_into_deploy_report(tmp_path: P
     assert "### GPU Visibility test" in markdown
     assert "- Detail report: `gpu-visibility-report.json`" in markdown
     assert not markdown.endswith("\n\n")
+
+
+def test_write_inventory_reports_enabled_catalog_components_without_custom_sections(
+    tmp_path: Path,
+) -> None:
+    reset_component_entry_cache()
+    config_path = _project_config_path(tmp_path)
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+
+    payload = _starter_payload(
+        selected_infra={"mk8s", "object-storage", "vm"},
+        selected_apps={"cert-manager"},
+    )
+    mk8s = _infra_component_row(payload, "mk8s")
+    mk8s_inputs = mk8s.setdefault("inputs", {})
+    assert isinstance(mk8s_inputs, dict)
+    mk8s_inputs["cluster_name"] = "mk8s"
+    object_storage = _infra_component_row(payload, "object-storage")
+    object_storage["inputs"] = {
+        "parent_id": "project-456",
+        "name": "training-artifacts",
+        "versioning_enabled": True,
+    }
+    vm = _infra_component_row(payload, "vm")
+    vm["inputs"] = {
+        "parent_id": "project-456",
+        "name": "private-vm",
+        "platform": "cpu-d3",
+        "preset": "4vcpu-16gb",
+        "subnet_id": "subnet-123",
+        "ssh_user_name": "ubuntu",
+        "ssh_public_key": _VALID_ED25519_PUBLIC_KEY,
+        "public_ip_mode": "none",
+    }
+    cert_manager = _chart_row(payload, "cert-manager")
+    cert_manager["enabled"] = True
+    cert_manager["instance_id"] = "mk8s"
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    config = load_config(config_path)
+    paths = resolve_project_paths(config_path)
+    validate_path_alignment(config, paths)
+
+    artifacts = write_inventory(config, paths)
+    markdown = artifacts.markdown.read_text(encoding="utf-8")
+
+    assert "### Infra Component Reports" in markdown
+    assert "- `object-storage` (Object storage bucket)" in markdown
+    assert "  - Resource: `nebius.storage.bucket` with `name` = `training-artifacts`" in markdown
+    assert "  - Inputs: `name=training-artifacts`" in markdown
+    assert "- `vm` (Compute virtual machine)" in markdown
+    assert "  - Resource: `nebius.compute.instance` with `name` = `private-vm`" in markdown
+    assert "ssh_public_key" not in markdown
+    assert _VALID_ED25519_PUBLIC_KEY not in markdown
+
+    assert "### App Component Reports" in markdown
+    assert "- `cert-manager@mk8s` (cert-manager for certificate automation)" in markdown
+    assert "  - Release: `cert-manager/cert-manager`" in markdown
+    assert "  - Target: `mk8s`" in markdown
+    assert "  - Chart: `cert-manager`" in markdown

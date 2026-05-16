@@ -103,7 +103,8 @@ testing on macOS with Docker Desktop and the Dev Containers extension.
 `create-pr` turns local work or named branches into GitHub pull requests
 without leaving new work on the default branch. It can prepare conflict-free
 PRs, avoid duplicate PRs for the same head branch, preserve one PR per branch,
-and report readiness plus manual merge order.
+stage complete monorepo local work with `git add -A` when committing current
+dirty changes, and report readiness plus manual merge order.
 
 ### `github-workflows`
 

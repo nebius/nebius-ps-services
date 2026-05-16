@@ -942,6 +942,43 @@ def test_compute_instance_status_poller_reads_instance_state(monkeypatch) -> Non
     assert captured["resource_id"] == "instance-u123"
 
 
+def test_compute_instance_status_poller_reports_private_ip_ready(monkeypatch) -> None:
+    poller = deployment_status_module._ComputeInstanceStatusPoller.__new__(
+        deployment_status_module._ComputeInstanceStatusPoller
+    )
+    poller._target = StatusWatcherTarget(
+        component_id="vm",
+        kind="nebius.compute.instance",
+        parent_id="project-u123",
+        resource_name="private-vm",
+    )
+    poller._find_instance = lambda: SimpleNamespace(
+        metadata=SimpleNamespace(name="private-vm", id="instance-u123"),
+        status=SimpleNamespace(
+            state="RUNNING",
+            reconciling=False,
+            network_interfaces=[
+                SimpleNamespace(
+                    ip_address=SimpleNamespace(address="10.0.0.117/32"),
+                    public_ip_address=SimpleNamespace(address=""),
+                )
+            ],
+        ),
+    )
+    poller._instance_client = SimpleNamespace(operation_service=lambda: object())
+    monkeypatch.setattr(
+        deployment_status_module,
+        "_latest_operation_summary",
+        lambda operation_service, resource_id: None,
+    )
+
+    summary = poller.summary()
+
+    assert "compute instance private-vm (instance-u123): RUNNING" in summary
+    assert "private IP ready" in summary
+    assert "network pending" not in summary
+
+
 def test_compute_instance_status_poller_exposes_terminal_operation_failure(
     monkeypatch,
 ) -> None:

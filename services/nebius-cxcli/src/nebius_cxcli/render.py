@@ -12,16 +12,11 @@ from uuid import uuid4
 from .component_sources import SourceProfile
 from .flux_render import render_flux
 from .infra_render import render_terraform_artifacts
-from .inventory_ops import write_inventory
-from .mk8s_gpu import materialize_mk8s_gpu_app_values, mk8s_gpu_validation_specs
-from .mysterybox_eso import (
-    materialize_mysterybox_eso_app_values,
-    mysterybox_eso_validation_specs,
-)
+from .mk8s_gpu import materialize_mk8s_gpu_app_values
+from .mysterybox_eso import materialize_mysterybox_eso_app_values
 from .observability import (
     materialize_observability_app_values,
     materialize_observability_infra_values,
-    observability_validation_specs,
 )
 from .paths import ProjectPaths
 from .soperator_companions import materialize_soperator_companion_app_values
@@ -104,15 +99,6 @@ def _render_project_to_paths(
     written: list[Path] = []
     written.extend(render_terraform_artifacts(config, paths, source_profile=source_profile))
     written.extend(render_flux(config, paths, component_output_values=component_output_values))
-    write_inventory(
-        config,
-        paths,
-        validations=[
-            *mk8s_gpu_validation_specs(config),
-            *observability_validation_specs(config),
-            *mysterybox_eso_validation_specs(config),
-        ],
-    )
     return RenderResult(files_written=sorted(written))
 
 

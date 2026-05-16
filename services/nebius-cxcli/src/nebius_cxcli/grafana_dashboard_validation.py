@@ -91,7 +91,7 @@ _LABEL_VALUES_RE = re.compile(
 _SELECTOR_RE = re.compile(r"(?P<metric>[A-Za-z_:][A-Za-z0-9_:]*)?\{(?P<labels>[^{}]*)\}")
 _LABEL_MATCHER_RE = re.compile(
     r'(?:"(?P<quoted_label>(?:[^"\\]|\\.)+)"|(?P<label>[A-Za-z_][A-Za-z0-9_]*))'
-    r"\s*(?:!?=~?|=)"
+    r"\s*(?:=~|!~|!=|=)"
 )
 _TRACE_ATTRIBUTE_RE = re.compile(
     r"\b(?:resource|span|event|link|instrumentation)\.(?:\"[^\"]+\"|[A-Za-z0-9_:.])+"
@@ -421,8 +421,35 @@ def _replace_grafana_variables(
     return _GRAFANA_VARIABLE_RE.sub(replace, query)
 
 
-def _dashboard_variable_values(*, target_cluster_id: str = "") -> dict[str, str]:
+def _dashboard_variable_values(
+    dashboard: Mapping[str, Any] | None = None,
+    *,
+    target_cluster_id: str = "",
+) -> dict[str, str]:
     values: dict[str, str] = {}
+    templating = _mapping(_mapping(dashboard).get("templating"))
+    variables = templating.get("list")
+    if isinstance(variables, list):
+        for item in variables:
+            if not isinstance(item, Mapping):
+                continue
+            name = str(item.get("name") or "").strip()
+            if not name:
+                continue
+            current = _mapping(item.get("current"))
+            value = current.get("value")
+            if isinstance(value, list):
+                text = "|".join(str(part).strip() for part in value if str(part).strip())
+            else:
+                text = str(value or "").strip()
+            if text in {"$__all", "__all", "All"}:
+                text = str(item.get("allValue") or "").strip()
+            if not text:
+                text = str(current.get("text") or "").strip()
+            if text in {"$__all", "__all", "All"}:
+                text = str(item.get("allValue") or "").strip()
+            if text:
+                values[name] = text
     if target_cluster_id:
         values["Cluster"] = _regex_literal(target_cluster_id)
     return values
@@ -452,6 +479,10 @@ def _prometheus_query_for_validation(query: str, variable_values: Mapping[str, s
 
 
 def _loki_query_for_validation(query: str, variable_values: Mapping[str, str]) -> str:
+    query = query.replace("$__interval", "5m")
+    query = query.replace("${__interval}", "5m")
+    query = query.replace("$__range", "5m")
+    query = query.replace("${__range}", "5m")
     return _replace_grafana_variables(
         query,
         variable_values,
@@ -488,7 +519,10 @@ def _validate_prometheus(
         datasource_name=datasource_name,
         datasource_uid=datasource_uid,
     )
-    variable_values = _dashboard_variable_values(target_cluster_id=target_cluster_id)
+    variable_values = _dashboard_variable_values(
+        dashboard,
+        target_cluster_id=target_cluster_id,
+    )
     for metric, labels in sorted(contract.labels_by_metric.items()):
         series_matcher = _prometheus_series_matcher(
             metric,
@@ -665,6 +699,7 @@ def _validate_loki(
     now: int,
     start: int,
     target_cluster_id: str = "",
+    missing_label_is_error: bool = True,
 ) -> tuple[list[str], list[str]]:
     errors: list[str] = []
     warnings: list[str] = []
@@ -675,7 +710,10 @@ def _validate_loki(
     )
     nanos_start = str(start * 1_000_000_000)
     nanos_end = str(now * 1_000_000_000)
-    variable_values = _dashboard_variable_values(target_cluster_id=target_cluster_id)
+    variable_values = _dashboard_variable_values(
+        dashboard,
+        target_cluster_id=target_cluster_id,
+    )
     label_query = '{__bucket__="default"}'
     if target_cluster_id:
         label_query = (
@@ -722,7 +760,11 @@ def _validate_loki(
         available_labels.update(str(label) for label in labels)
     missing_labels = sorted(label for label in contract.labels if label not in available_labels)
     if missing_labels:
-        errors.append("Loki datasource is missing required label(s): " + ", ".join(missing_labels))
+        message = "Loki datasource is missing required label(s): " + ", ".join(missing_labels)
+        if missing_label_is_error:
+            errors.append(message)
+        else:
+            warnings.append(message)
     for query in contract.queries:
         if query.startswith("label_values("):
             continue
@@ -742,7 +784,11 @@ def _validate_loki(
                 },
             )
         except RuntimeError as exc:
-            errors.append(f"Loki query failed: {query}: {exc}")
+            message = f"Loki query failed: {query}: {exc}"
+            if missing_label_is_error:
+                errors.append(message)
+            else:
+                warnings.append(message)
             continue
         result = _mapping(_mapping(payload).get("data")).get("result")
         if isinstance(result, list) and not result:
@@ -1110,6 +1156,7 @@ def validate_grafana_dashboard_fits(
                         now=now,
                         start=start,
                         target_cluster_id=target_cluster_id,
+                        missing_label_is_error=contract.signal != "dashboard",
                     )
                     next_checks = []
                 elif datasource.datasource_type == "tempo":

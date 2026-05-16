@@ -238,9 +238,7 @@ def test_bundled_catalog_exposes_soperator_and_nfs_local_sources() -> None:
     assert soperator.wizard_fields is not None
     assert soperator.wizard_fields["profile"]["default"] == "nebius-gpu-v1"
     assert soperator.wizard_fields["profile"]["materialize_default"] is True
-    assert soperator.wizard_fields["profile"]["options"] == {
-        "from": "soperator_nodesets_profiles"
-    }
+    assert soperator.wizard_fields["profile"]["options"] == {"from": "soperator_nodesets_profiles"}
     assert soperator.wizard_fields["values.partitionProfile"]["default"] == "shape-default"
     assert soperator.wizard_fields["values.partitionProfile"]["materialize_default"] is True
     assert soperator.wizard_fields["values.partitionProfile"]["options"] == {
@@ -446,16 +444,16 @@ def test_load_component_sources_reads_tf_modules_and_helm_entries(
                 },
             },
             infra={
-                "wireguard-jumphost": {
+                "wireguard-gw": {
                     "source": {
                         "portable": (
                             "git::https://github.com/example/infra.git//modules/"
-                            "wireguard-jumphost?ref=v1.2.3"
+                            "wireguard-gw?ref=v1.2.3"
                         ),
-                        "local": "platform-infra/modules/wireguard-jumphost",
+                        "local": "platform-infra/modules/wireguard-gw",
                     },
                     "ui": {
-                        "title": "WireGuard jump host",
+                        "title": "WireGuard VPN gateway",
                         "group": "Network",
                         "enabled": True,
                     },
@@ -510,24 +508,24 @@ def test_load_component_sources_reads_tf_modules_and_helm_entries(
     assert loaded.cli.flux.version == "v2.8.0"
     assert loaded.cli.flux.release_timeout == "5m"
     assert loaded.cli.terraform.version == "1.14.1"
-    assert loaded.tf_modules[0].module == "wireguard-jumphost"
+    assert loaded.tf_modules[0].module == "wireguard-gw"
     assert (
         loaded.tf_modules[0].source
-        == "git::https://github.com/example/infra.git//modules/wireguard-jumphost?ref=v1.2.3"
+        == "git::https://github.com/example/infra.git//modules/wireguard-gw?ref=v1.2.3"
     )
     assert (
         loaded.tf_modules[0].portable_source
-        == "git::https://github.com/example/infra.git//modules/wireguard-jumphost?ref=v1.2.3"
+        == "git::https://github.com/example/infra.git//modules/wireguard-gw?ref=v1.2.3"
     )
-    assert loaded.tf_modules[0].local_source == "platform-infra/modules/wireguard-jumphost"
+    assert loaded.tf_modules[0].local_source == "platform-infra/modules/wireguard-gw"
     assert (
         loaded.tf_modules[0].metadata_source
-        == "git::https://github.com/example/infra.git//modules/wireguard-jumphost?ref=v1.2.3"
+        == "git::https://github.com/example/infra.git//modules/wireguard-gw?ref=v1.2.3"
     )
-    assert loaded.tf_modules[0].description == "WireGuard jump host"
+    assert loaded.tf_modules[0].description == "WireGuard VPN gateway"
     assert loaded.tf_modules[0].group == "Network"
     assert loaded.tf_modules[0].enable is True
-    assert loaded.tf_modules[0].validation_profile == "wireguard_jumphost"
+    assert loaded.tf_modules[0].validation_profile == "wireguard_gw"
     assert loaded.tf_modules[0].wizard_fields == {
         "inputs.subnet_id": {
             "options": {
@@ -1905,7 +1903,7 @@ def test_bundled_vm_like_modules_declare_compute_instance_status_watchers() -> N
         explicit=Path(__file__).resolve().parents[1] / "component_sources.yaml"
     )
     vm = next(item for item in loaded.tf_modules if item.module == "vm")
-    wireguard = next(item for item in loaded.tf_modules if item.module == "wireguard-jumphost")
+    wireguard = next(item for item in loaded.tf_modules if item.module == "wireguard-gw")
     ssh = next(item for item in loaded.tf_modules if item.module == "ssh-jumphost")
 
     assert vm.validation_profile == "vm_instance"
@@ -1923,6 +1921,35 @@ def test_bundled_vm_like_modules_declare_compute_instance_status_watchers() -> N
     assert ssh.status.kind == "nebius.compute.instance"
     assert ssh.status.parent_input == "parent_id"
     assert ssh.status.name_input == "name"
+
+
+def test_bundled_wireguard_gw_declares_runtime_defaults_in_catalog() -> None:
+    loaded = load_component_sources(
+        explicit=Path(__file__).resolve().parents[1] / "component_sources.yaml"
+    )
+    wireguard = next(item for item in loaded.tf_modules if item.module == "wireguard-gw")
+    defaults = {
+        default.target_path: default.value
+        for default in wireguard.defaults
+        if default.kind == "literal"
+    }
+
+    assert defaults["inputs.wireguard_tunnel_cidr"] == "10.8.0.1/22"
+    assert defaults["inputs.wireguard_listen_port"] == 51820
+    assert defaults["inputs.client_default_dns"] == ["1.1.1.1", "1.0.0.1"]
+
+
+def test_bundled_wireguard_uses_gateway_id_without_legacy_jumphost_id() -> None:
+    loaded = load_component_sources(
+        explicit=Path(__file__).resolve().parents[1] / "component_sources.yaml"
+    )
+    modules = {item.module: item for item in loaded.tf_modules}
+    legacy_id = "wireguard-" + "jumphost"
+
+    assert "wireguard-gw" in modules
+    assert legacy_id not in modules
+    assert legacy_id not in modules["wireguard-gw"].portable_source
+    assert legacy_id not in str(modules["wireguard-gw"].local_source)
 
 
 def test_bundled_global_observability_declares_public_endpoint_templates() -> None:
@@ -1944,7 +1971,6 @@ def test_bundled_global_observability_declares_public_endpoint_templates() -> No
     )
     assert write["metrics_prometheus_remote_write"].include_when == (
         "kubernetes_metrics",
-        "vm_standalone_metrics",
     )
     assert write["logs_otlp_write"].template == ("https://write.logging.{region}.nebius.cloud")
     assert write["logs_agent_grpc_write"].template == (
@@ -1952,12 +1978,7 @@ def test_bundled_global_observability_declares_public_endpoint_templates() -> No
     )
     assert write["logs_agent_grpc_write"].include_when == (
         "kubernetes_logs",
-        "vm_standalone_logs",
     )
-    assert "platform-managed regional endpoints" in (
-        write["metrics_platform_managed_write"].template
-    )
-    assert "platform-managed Logging ingest path" in (write["logs_platform_managed_write"].template)
     assert read["metrics_service_provider_read"].template == (
         "https://read.monitoring.api.nebius.cloud/projects/{project_id}/service-provider/prometheus"
     )
@@ -1976,19 +1997,8 @@ def test_bundled_vm_observability_declares_service_buckets() -> None:
     )
     vm = next(item for item in loaded.tf_modules if item.module == "vm")
 
-    collector = vm.observability.standalone_collector
-    assert collector.package.name == "nebius-o11y-agent"
-    assert collector.package.version == "0.2.130"
-    assert collector.package.apt_repository == (
-        "https://artifactory.nebius.dev/artifactory/nebius-o11y-agent"
-    )
-    assert collector.package.apt_key_url == (
-        "https://artifactory.nebius.dev/artifactory/nebius-o11y-agent/key.gpg"
-    )
-    assert collector.package.apt_suite == "stable"
-    assert collector.package.apt_component == "main"
-    assert collector.package.apt_origin == "artifactory.nebius.dev"
-    assert collector.prometheus.package_name == "prometheus"
+    assert vm.observability.mode == "monitoring_agent"
+    assert not hasattr(vm.observability, "standalone_collector")
     assert [bucket.name for bucket in vm.observability.service_metrics] == ["compute", "nbs"]
     assert [bucket.name for bucket in vm.observability.service_logs] == ["sp_serial"]
 
@@ -2254,13 +2264,13 @@ def test_bundled_mk8s_declares_optional_wizard_field_override() -> None:
         },
         "inputs.cpu_nodes_boot_disk_type": {
             "options": {
-                "from": "mk8s_boot_disk_types",
+                "from": "compute_boot_disk_types",
                 "auto_select_first": True,
             },
         },
         "inputs.gpu_nodes_boot_disk_type": {
             "options": {
-                "from": "mk8s_boot_disk_types",
+                "from": "compute_boot_disk_types",
                 "auto_select_first": True,
             },
         },
@@ -2371,10 +2381,22 @@ def test_bundled_mk8s_declares_optional_wizard_field_override() -> None:
             "prompt": False,
         },
     }
-    assert mk8s.mk8s_boot_disks.cpu.default_type == "NETWORK_SSD"
-    assert mk8s.mk8s_boot_disks.gpu.default_type == "NETWORK_SSD"
-    assert tuple(rule.size_gib for rule in mk8s.mk8s_boot_disks.cpu.rules) == (64, 93, 128, 186)
-    assert tuple(rule.size_gib for rule in mk8s.mk8s_boot_disks.gpu.rules) == (256, 512, 1023)
+    boot_disks = loaded.compute.boot_disk_defaults
+    assert tuple(choice.value for choice in boot_disks.disk_types) == (
+        "NETWORK_SSD",
+        "NETWORK_SSD_NON_REPLICATED",
+        "NETWORK_SSD_IO_M3",
+    )
+    assert tuple(choice.allocation_unit_gib for choice in boot_disks.disk_types) == (1, 93, 93)
+    assert tuple(choice.explicit_encryption_supported for choice in boot_disks.disk_types) == (
+        False,
+        True,
+        True,
+    )
+    assert boot_disks.cpu.default_type == "NETWORK_SSD"
+    assert boot_disks.gpu.default_type == "NETWORK_SSD"
+    assert tuple(rule.size_gib for rule in boot_disks.cpu.rules) == (64, 93, 128, 186)
+    assert tuple(rule.size_gib for rule in boot_disks.gpu.rules) == (256, 512, 1023)
 
 
 def test_bundled_cert_manager_enables_chart_crds_by_default() -> None:
@@ -2538,6 +2560,7 @@ def test_bundled_cpu_only_charts_avoid_nebius_gpu_nodes_by_default() -> None:
     }
     grafana_service_dashboards = grafana_defaults["values.dashboards"]["nebius"]
     grafana_dashboards = grafana_defaults["values.dashboards"]["nebius-kubernetes"]
+    grafana_vm_dashboards = grafana_defaults["values.dashboards"]["nebius-vm"]
     for binding in dashboard_signals.values():
         assert binding.folder == "nebius-kubernetes"
         dashboard = grafana_dashboards[binding.dashboard]
@@ -2550,10 +2573,23 @@ def test_bundled_cpu_only_charts_avoid_nebius_gpu_nodes_by_default() -> None:
         '(container_cpu_usage_seconds_total{\\"k8s.cluster.id\\"=~\\"$Cluster\\",pod!=\\"\\"}))'
         in grafana_dashboards["kubernetes-cluster-monitoring"]["json"]
     )
+    assert "container_cpu_cfs_throttled_periods_total" in grafana_dashboards[
+        "kubernetes-cluster-monitoring"
+    ]["json"]
+    assert "container_memory_failures_total" in grafana_dashboards[
+        "kubernetes-cluster-monitoring"
+    ]["json"]
+    assert "container_fs_reads_bytes_total" in grafana_dashboards[
+        "kubernetes-cluster-monitoring"
+    ]["json"]
+    assert "apiserver_request_total" in grafana_dashboards["kubernetes-cluster-monitoring"][
+        "json"
+    ]
     assert (
-        'DCGM_FI_DEV_GPU_UTIL{mk8s_cluster_id=~\\"$Cluster\\",instance_id=~\\"$GpuNode\\"'
+        'DCGM_FI_DEV_GPU_UTIL{job=\\"nebius-observability-agent\\",mk8s_cluster_id=~\\"$Cluster\\",instance_id=~\\"$GpuNode\\"'
         in grafana_dashboards["kubernetes-gpu"]["json"]
     )
+    assert "DCGM_FI_DEV_XID_ERRORS" in grafana_dashboards["kubernetes-gpu"]["json"]
     assert grafana_dashboards["kubernetes-gpu"]["datasource"] == "Nebius Services"
     assert "kube_pod_info" not in grafana_dashboards["kubernetes-cluster-monitoring"]["json"]
     assert (
@@ -2561,6 +2597,14 @@ def test_bundled_cpu_only_charts_avoid_nebius_gpu_nodes_by_default() -> None:
         in grafana_dashboards["kubernetes-logs-from-loki"]["json"]
     )
     assert "{}" in grafana_dashboards["kubernetes-traces"]["json"]
+    assert "{ duration > 1s }" in grafana_dashboards["kubernetes-traces"]["json"]
+    assert json.loads(grafana_vm_dashboards["vm-metrics"]["json"])["uid"] == "cxcli-vm-metrics"
+    assert json.loads(grafana_vm_dashboards["vm-logs"]["json"])["uid"] == "cxcli-vm-logs"
+    assert grafana_vm_dashboards["vm-metrics"]["datasource"] == "Nebius Services"
+    assert grafana_vm_dashboards["vm-logs"]["datasource"] == "Nebius Logs"
+    assert "node_cpu_seconds_total" in grafana_vm_dashboards["vm-metrics"]["json"]
+    assert "cxcli-vm-collector" not in grafana_vm_dashboards["vm-logs"]["json"]
+    assert "__bucket__=~\\\"$Bucket\\\"" in grafana_vm_dashboards["vm-logs"]["json"]
     assert {
         dashboard["datasource"]
         for key, dashboard in grafana_service_dashboards.items()
@@ -2624,7 +2668,7 @@ def test_bundled_vm_and_jump_hosts_use_component_scoped_wizard_profiles() -> Non
     )
 
     vm = next(item for item in loaded.tf_modules if item.module == "vm")
-    wireguard = next(item for item in loaded.tf_modules if item.module == "wireguard-jumphost")
+    wireguard = next(item for item in loaded.tf_modules if item.module == "wireguard-gw")
     ssh = next(item for item in loaded.tf_modules if item.module == "ssh-jumphost")
 
     assert vm.wizard_fields == {
@@ -2651,6 +2695,12 @@ def test_bundled_vm_and_jump_hosts_use_component_scoped_wizard_profiles() -> Non
                 "auto_select_first": True,
             }
         },
+        "inputs.boot_disk_type": {
+            "options": {
+                "from": "compute_boot_disk_types",
+                "auto_select_first": True,
+            }
+        },
         "inputs.public_ip_mode": {
             "sources": [
                 {
@@ -2672,18 +2722,6 @@ def test_bundled_vm_and_jump_hosts_use_component_scoped_wizard_profiles() -> Non
         "deploy.observability.enabled": {
             "default": False,
         },
-        "deploy.observability.vm.collector.enabled": {
-            "default": False,
-        },
-        "deploy.observability.vm.collector.metrics.enabled": {
-            "default": True,
-        },
-        "deploy.observability.vm.collector.logs.enabled": {
-            "default": True,
-        },
-        "deploy.observability.vm.collector.logs.systemd_units": {
-            "default": [],
-        },
         "deploy.observability.vm.logs.enabled": {
             "default": True,
         },
@@ -2691,6 +2729,9 @@ def test_bundled_vm_and_jump_hosts_use_component_scoped_wizard_profiles() -> Non
             "default": [],
         },
         "inputs.boot_disk_existing_id": {
+            "prompt": False,
+        },
+        "inputs.boot_disk_block_size_bytes": {
             "prompt": False,
         },
         "inputs.source_image_id": {
@@ -2711,6 +2752,9 @@ def test_bundled_vm_and_jump_hosts_use_component_scoped_wizard_profiles() -> Non
         "inputs.hostname": {
             "prompt": False,
         },
+        "inputs.cloud_init_user_data_override": {
+            "prompt": False,
+        },
         "inputs.stopped": {
             "prompt": False,
         },
@@ -2724,54 +2768,6 @@ def test_bundled_vm_and_jump_hosts_use_component_scoped_wizard_profiles() -> Non
             "prompt": False,
         },
         "inputs.filesystems": {
-            "prompt": False,
-        },
-        "inputs.observability_collector_enabled": {
-            "prompt": False,
-        },
-        "inputs.observability_collector_region_id": {
-            "prompt": False,
-        },
-        "inputs.observability_collector_package_name": {
-            "prompt": False,
-        },
-        "inputs.observability_collector_package_version": {
-            "prompt": False,
-        },
-        "inputs.observability_collector_apt_repository": {
-            "prompt": False,
-        },
-        "inputs.observability_collector_apt_key_url": {
-            "prompt": False,
-        },
-        "inputs.observability_collector_apt_suite": {
-            "prompt": False,
-        },
-        "inputs.observability_collector_apt_component": {
-            "prompt": False,
-        },
-        "inputs.observability_collector_apt_origin": {
-            "prompt": False,
-        },
-        "inputs.observability_collector_prometheus_package_name": {
-            "prompt": False,
-        },
-        "inputs.observability_collector_iam_token_file": {
-            "prompt": False,
-        },
-        "inputs.observability_collector_logs_enabled": {
-            "prompt": False,
-        },
-        "inputs.observability_collector_logs_systemd_units": {
-            "prompt": False,
-        },
-        "inputs.observability_collector_metrics_enabled": {
-            "prompt": False,
-        },
-        "inputs.observability_collector_metrics_export_port": {
-            "prompt": False,
-        },
-        "inputs.observability_collector_prometheus_agent_port": {
             "prompt": False,
         },
         "inputs.recovery_policy": {
@@ -2816,6 +2812,34 @@ def test_bundled_vm_and_jump_hosts_use_component_scoped_wizard_profiles() -> Non
                 "args": {"platform_path": "inputs.platform"},
             }
         },
+        "inputs.source_image_family": {
+            "options": {
+                "from": "compute_public_image_families",
+                "args": {"platform_path": "inputs.platform"},
+                "auto_select_first": True,
+            }
+        },
+        "inputs.boot_disk_type": {
+            "options": {
+                "from": "compute_boot_disk_types",
+                "auto_select_first": True,
+            }
+        },
+        "inputs.wireguard_tunnel_cidr": {
+            "materialize_default": True,
+        },
+        "inputs.boot_disk_block_size_bytes": {
+            "prompt": False,
+        },
+        "inputs.endpoint_host": {
+            "prompt": False,
+        },
+        "inputs.clients": {
+            "prompt": False,
+        },
+        "inputs.labels": {
+            "prompt": False,
+        },
     }
     assert ssh.wizard_fields == {
         "inputs.subnet_id": {
@@ -2833,6 +2857,32 @@ def test_bundled_vm_and_jump_hosts_use_component_scoped_wizard_profiles() -> Non
                 "from": "compute_platform_presets",
                 "args": {"platform_path": "inputs.platform"},
             }
+        },
+        "inputs.source_image_family": {
+            "options": {
+                "from": "compute_public_image_families",
+                "args": {"platform_path": "inputs.platform"},
+                "auto_select_first": True,
+            }
+        },
+        "inputs.boot_disk_type": {
+            "options": {
+                "from": "compute_boot_disk_types",
+                "auto_select_first": True,
+            }
+        },
+        "inputs.allowed_cidrs": {
+            "default_from": {
+                "from": "operator_public_ip_cidr",
+            },
+            "type_hint": "list(string)",
+            "materialize_default": True,
+        },
+        "inputs.boot_disk_block_size_bytes": {
+            "prompt": False,
+        },
+        "inputs.labels": {
+            "prompt": False,
         },
     }
 
@@ -2884,6 +2934,19 @@ def test_local_profile_uses_local_source_when_available() -> None:
     assert mk8s.metadata_source == str(
         (Path(__file__).resolve().parents[3] / "platform-infra/modules/mk8s").resolve()
     )
+    wireguard = next(item for item in loaded.tf_modules if item.module == "wireguard-gw")
+    ssh = next(item for item in loaded.tf_modules if item.module == "ssh-jumphost")
+    assert wireguard.source == "../../platform-infra/modules/wireguard-gw"
+    assert ssh.source == "../../platform-infra/modules/ssh-jumphost"
+    assert wireguard.metadata_source == str(
+        (
+            Path(__file__).resolve().parents[3]
+            / "platform-infra/modules/wireguard-gw"
+        ).resolve()
+    )
+    assert ssh.metadata_source == str(
+        (Path(__file__).resolve().parents[3] / "platform-infra/modules/ssh-jumphost").resolve()
+    )
 
 
 def test_local_profile_falls_back_to_portable_source_when_local_source_is_missing(
@@ -2928,11 +2991,34 @@ def test_shipped_catalogs_do_not_embed_jump_host_public_key_defaults() -> None:
     loaded = load_component_sources(
         explicit=Path(__file__).resolve().parents[1] / "component_sources.yaml"
     )
-    for module_id in ("vm", "wireguard-jumphost", "ssh-jumphost"):
+    admin_ssh = loaded.shared.get("admin_ssh")
+    assert isinstance(admin_ssh, dict)
+    assert "public_key" not in admin_ssh
+    for module_id in ("vm", "wireguard-gw", "ssh-jumphost"):
         module = next(item for item in loaded.tf_modules if item.module == module_id)
         default_targets = {default.target_path for default in module.defaults}
         assert "inputs.ssh_user_name" in default_targets
         assert "inputs.ssh_public_key" not in default_targets
+
+
+def test_wireguard_gw_cloud_init_enforces_key_only_admin_access() -> None:
+    template_path = (
+        Path(__file__).resolve().parents[3]
+        / "platform-infra"
+        / "modules"
+        / "wireguard-gw"
+        / "wireguard-cloud-init.tftpl"
+    )
+    template = template_path.read_text(encoding="utf-8")
+
+    assert "sudo: ALL=(ALL) NOPASSWD:ALL" not in template
+    assert "/etc/sudoers.d/90-${ssh_user_name}" in template
+    assert "${ssh_user_name} ALL=(ALL) NOPASSWD:ALL" in template
+    assert "PasswordAuthentication no" in template
+    assert "AuthenticationMethods publickey" in template
+    assert "AllowTcpForwarding no" in template
+    assert "fail2ban" in template
+    assert 'run(["sshd", "-t"])' in template
 
 
 def test_load_component_sources_explicit_missing_file_raises(tmp_path: Path) -> None:
@@ -2955,13 +3041,13 @@ def test_load_component_sources_rejects_unsupported_config_bindings_field(
                 }
             },
             infra={
-                "wireguard-jumphost": {
+                "wireguard-gw": {
                     "source": {
                         "portable": (
                             "git::https://github.com/example/infra.git//modules/"
-                            "wireguard-jumphost?ref=v1.2.3"
+                            "wireguard-gw?ref=v1.2.3"
                         ),
-                        "local": "platform-infra/modules/wireguard-jumphost",
+                        "local": "platform-infra/modules/wireguard-gw",
                     },
                     "config_bindings": {
                         "inputs.ssh_user_name": "shared.admin_ssh.user_name",
@@ -3432,16 +3518,6 @@ def test_load_component_sources_parses_vm_cli_settings(tmp_path: Path) -> None:
                     },
                     "ui": {"enabled": False},
                     "cli": {
-                        "image_preferences": {
-                            "preferred_cpu_image_families": [
-                                "ubuntu24.04-driverless",
-                                "ubuntu22.04-driverless",
-                            ],
-                            "preferred_gpu_image_families": [
-                                "ubuntu24.04-cuda13.0",
-                                "ubuntu24.04-cuda12",
-                            ],
-                        },
                         "observability": {
                             "primary_agent": {
                                 "kind": "monitoring_agent",
@@ -3463,21 +3539,41 @@ def test_load_component_sources_parses_vm_cli_settings(tmp_path: Path) -> None:
     loaded = load_component_sources(explicit=sources_file)
     vm = next(module for module in loaded.tf_modules if module.module == "vm")
 
-    assert vm.vm_images.preferred_cpu_image_families == (
-        "ubuntu24.04-driverless",
-        "ubuntu22.04-driverless",
-    )
-    assert vm.vm_images.preferred_gpu_image_families == (
-        "ubuntu24.04-cuda13.0",
-        "ubuntu24.04-cuda12",
-    )
     assert vm.observability.mode == "monitoring_agent"
     assert vm.observability.metrics.enabled_by_default is True
     assert vm.observability.logs.enabled_by_default is False
     assert vm.observability.logs.systemd_units == ("sshd.service",)
 
 
-def test_load_component_sources_parses_vm_public_ingest_package_source(
+def test_load_component_sources_rejects_vm_image_preferences(tmp_path: Path) -> None:
+    sources_file = tmp_path / "component_sources.yaml"
+    _write_catalog_file(
+        sources_file,
+        _catalog(
+            infra={
+                "vm": {
+                    "source": {
+                        "portable": "git::https://example.invalid/modules/vm?ref=main",
+                        "local": "../../platform-infra/modules/vm",
+                    },
+                    "cli": {
+                        "image_preferences": {
+                            "preferred_cpu_image_families": ["ubuntu24.04-driverless"],
+                        },
+                    },
+                }
+            },
+        ),
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=r"components\.infra\.vm\.cli has unsupported field\(s\): image_preferences",
+    ):
+        load_component_sources(explicit=sources_file)
+
+
+def test_load_component_sources_rejects_vm_public_ingest_observability_settings(
     tmp_path: Path,
 ) -> None:
     sources_file = tmp_path / "component_sources.yaml"
@@ -3498,21 +3594,6 @@ def test_load_component_sources_parses_vm_public_ingest_package_source(
                             },
                             "public_ingest": {
                                 "default_enabled": True,
-                                "package": {
-                                    "name": "custom-o11y-agent",
-                                    "version": "1.2.3",
-                                    "apt_repository": "https://repo.example.invalid/o11y",
-                                    "apt_key_url": "https://repo.example.invalid/key.gpg",
-                                    "apt_suite": "stable",
-                                    "apt_component": "main",
-                                    "apt_origin": "repo.example.invalid",
-                                },
-                                "prometheus": {
-                                    "package_name": "prometheus-agent",
-                                },
-                                "metadata_token_file": "/metadata/token",
-                                "metrics_export_port": 19190,
-                                "prometheus_agent_port": 19191,
                             },
                         },
                     },
@@ -3521,88 +3602,11 @@ def test_load_component_sources_parses_vm_public_ingest_package_source(
         ),
     )
 
-    loaded = load_component_sources(explicit=sources_file)
-    vm = next(module for module in loaded.tf_modules if module.module == "vm")
-    collector = vm.observability.standalone_collector
-
-    assert collector.enabled_by_default is True
-    assert collector.package.name == "custom-o11y-agent"
-    assert collector.package.version == "1.2.3"
-    assert collector.package.apt_repository == "https://repo.example.invalid/o11y"
-    assert collector.package.apt_key_url == "https://repo.example.invalid/key.gpg"
-    assert collector.package.apt_suite == "stable"
-    assert collector.package.apt_component == "main"
-    assert collector.package.apt_origin == "repo.example.invalid"
-    assert collector.prometheus.package_name == "prometheus-agent"
-    assert collector.iam_token_file == "/metadata/token"
-    assert collector.metrics_export_port == 19190
-    assert collector.prometheus_agent_port == 19191
-
-
-@pytest.mark.parametrize(
-    ("public_ingest", "message"),
-    (
-        (
-            {
-                "package_version": "0.2.130",
-                "metadata_token_file": "/mnt/cloud-metadata/token",
-            },
-            r"components\.infra\.vm\.cli\.observability\.public_ingest "
-            r"has unsupported field\(s\): package_version",
-        ),
-        (
-            {
-                "prometheus": {"package_name": "prometheus"},
-            },
-            r"components\.infra\.vm\.cli\.observability\.public_ingest\.package is required",
-        ),
-        (
-            {
-                "package": {
-                    "name": "nebius-o11y-agent",
-                    "version": "0.2.130",
-                    "apt_repository": "https://repo.example.invalid/o11y",
-                    "apt_key_url": "https://repo.example.invalid/key.gpg",
-                    "apt_suite": "stable",
-                    "apt_component": "main",
-                    "apt_origin": "repo.example.invalid",
-                },
-            },
-            r"components\.infra\.vm\.cli\.observability\.public_ingest\.prometheus "
-            r"is required",
-        ),
-    ),
-)
-def test_load_component_sources_rejects_incomplete_vm_public_ingest(
-    tmp_path: Path,
-    public_ingest: dict[str, object],
-    message: str,
-) -> None:
-    sources_file = tmp_path / "component_sources.yaml"
-    _write_catalog_file(
-        sources_file,
-        _catalog(
-            infra={
-                "vm": {
-                    "source": {
-                        "portable": "git::https://example.invalid/modules/vm?ref=main",
-                        "local": "../../platform-infra/modules/vm",
-                    },
-                    "ui": {"enabled": False},
-                    "cli": {
-                        "observability": {
-                            "primary_agent": {
-                                "kind": "monitoring_agent",
-                            },
-                            "public_ingest": public_ingest,
-                        },
-                    },
-                }
-            },
-        ),
-    )
-
-    with pytest.raises(ValueError, match=message):
+    with pytest.raises(
+        ValueError,
+        match=r"components\.infra\.vm\.cli\.observability has unsupported field\(s\): "
+        r"public_ingest",
+    ):
         load_component_sources(explicit=sources_file)
 
 

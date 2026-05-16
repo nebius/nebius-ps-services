@@ -26,6 +26,19 @@ from .managed_tools import resolve_terraform_binary
 _MODULE_PROBE_ROOTS: set[Path] = set()
 
 
+def _split_local_package_source(source: str) -> tuple[str, str] | None:
+    if "://" in source or source.startswith("//"):
+        return None
+    marker = source.find("//")
+    if marker <= 0:
+        return None
+    package_source = source[:marker].strip()
+    module_subdir = source[marker + 2 :].strip("/")
+    if not package_source or not module_subdir:
+        return None
+    return package_source, module_subdir
+
+
 def _deep_copy(value: Any) -> Any:
     if isinstance(value, list):
         return [_deep_copy(item) for item in value]
@@ -58,9 +71,16 @@ def resolve_module_source_path(module_source: str) -> Path | None:
             if candidate.is_absolute() and candidate.exists() and candidate.is_dir():
                 return candidate
         return None
-    candidate = Path(source)
-    if candidate.is_absolute() and candidate.exists() and candidate.is_dir():
-        return candidate
+
+    split_source = _split_local_package_source(source)
+    package_source = split_source[0] if split_source is not None else source
+    module_subdir = split_source[1] if split_source is not None else ""
+
+    candidate = Path(package_source)
+    if candidate.is_absolute():
+        module_path = (candidate / module_subdir).resolve() if module_subdir else candidate
+        if module_path.exists() and module_path.is_dir():
+            return module_path
 
     roots: list[Path] = []
     with contextlib.suppress(ValueError):
@@ -74,10 +94,30 @@ def resolve_module_source_path(module_source: str) -> Path | None:
         ]
     )
     for root in roots:
-        resolved = (root / source).resolve()
-        if resolved.exists() and resolved.is_dir():
-            return resolved
+        resolved_package = (root / package_source).resolve()
+        resolved_module = (
+            (resolved_package / module_subdir).resolve() if module_subdir else resolved_package
+        )
+        if resolved_module.exists() and resolved_module.is_dir():
+            return resolved_module
     return None
+
+
+def canonical_local_module_source(module_source: str) -> str | None:
+    source = module_source.strip()
+    split_source = _split_local_package_source(source)
+    if split_source is None:
+        path = resolve_module_source_path(source)
+        return str(path) if path is not None else None
+
+    package_source, module_subdir = split_source
+    package_path = resolve_module_source_path(package_source)
+    if package_path is None:
+        return None
+    module_path = (package_path / module_subdir).resolve()
+    if not module_path.exists() or not module_path.is_dir():
+        return None
+    return f"{package_path}//{module_subdir}"
 
 
 def _supported_git_module_source_example() -> str:

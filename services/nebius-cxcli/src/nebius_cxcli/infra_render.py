@@ -33,7 +33,11 @@ from .components import ComponentEntry, component_entries
 from .deploy_targets import app_chart_target_ref
 from .paths import ProjectPaths
 from .runtime_config import to_plain_data
-from .runtime_introspection import module_variables, resolve_module_source_path
+from .runtime_introspection import (
+    canonical_local_module_source,
+    module_variables,
+    resolve_module_source_path,
+)
 from .templates import NEBIUS_PROVIDER_SOURCE, NEBIUS_PROVIDER_VERSION
 from .terraform_backend import backend_settings_from_config, render_backend_tf
 from .terraform_provider import DEFAULT_PROVIDER_MODULE_NAME, build_provider_module_name
@@ -305,8 +309,8 @@ def _canonical_module_source(
         return _module_source_with_ref(source, explicit_ref)
     if source.startswith(("http://", "https://", "oci://")):
         return source
-    local_path = resolve_module_source_path(source)
-    if local_path is not None:
+    local_source = canonical_local_module_source(source)
+    if local_source is not None:
         if explicit_ref:
             raise ValueError(
                 f"module source '{module_source}' resolves to a local directory, so version/ref "
@@ -314,7 +318,7 @@ def _canonical_module_source(
                 "'git::https://github.com/org/repo.git//modules/mk8s?ref=v1.2.3' if you need "
                 "a pinned remote ref."
             )
-        return str(local_path)
+        return local_source
 
     return source
 

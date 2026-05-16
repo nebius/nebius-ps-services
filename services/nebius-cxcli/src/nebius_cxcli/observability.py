@@ -59,25 +59,6 @@ class VmObservabilityConfig:
 
 
 @dataclass(frozen=True)
-class VmStandaloneCollectorConfig:
-    enabled: bool
-    metrics_enabled: bool
-    logs_enabled: bool
-    logs_systemd_units: tuple[str, ...]
-    package_name: str
-    package_version: str
-    apt_repository: str
-    apt_key_url: str
-    apt_suite: str
-    apt_component: str
-    apt_origin: str
-    prometheus_package_name: str
-    iam_token_file: str
-    metrics_export_port: int
-    prometheus_agent_port: int
-
-
-@dataclass(frozen=True)
 class ObservabilityAppSelection:
     selected_app_ids: tuple[str, ...]
     auto_enabled_app_ids: tuple[str, ...]
@@ -101,40 +82,6 @@ class ObservabilityGpuNodeLabelReconciliation:
 
 _VM_JOURNALD_LOGS_ENABLED_LABEL = "nebius.o11y.systemd-logs-collection.enabled"
 _VM_JOURNALD_LOGS_UNITS_LABEL = "nebius.o11y.systemd-logs-collection.units"
-_VM_COLLECTOR_ENABLED_INPUT = "observability_collector_enabled"
-_VM_COLLECTOR_REGION_INPUT = "observability_collector_region_id"
-_VM_COLLECTOR_PACKAGE_NAME_INPUT = "observability_collector_package_name"
-_VM_COLLECTOR_PACKAGE_VERSION_INPUT = "observability_collector_package_version"
-_VM_COLLECTOR_APT_REPOSITORY_INPUT = "observability_collector_apt_repository"
-_VM_COLLECTOR_APT_KEY_URL_INPUT = "observability_collector_apt_key_url"
-_VM_COLLECTOR_APT_SUITE_INPUT = "observability_collector_apt_suite"
-_VM_COLLECTOR_APT_COMPONENT_INPUT = "observability_collector_apt_component"
-_VM_COLLECTOR_APT_ORIGIN_INPUT = "observability_collector_apt_origin"
-_VM_COLLECTOR_PROMETHEUS_PACKAGE_INPUT = "observability_collector_prometheus_package_name"
-_VM_COLLECTOR_IAM_TOKEN_FILE_INPUT = "observability_collector_iam_token_file"
-_VM_COLLECTOR_LOGS_ENABLED_INPUT = "observability_collector_logs_enabled"
-_VM_COLLECTOR_LOGS_SYSTEMD_UNITS_INPUT = "observability_collector_logs_systemd_units"
-_VM_COLLECTOR_METRICS_ENABLED_INPUT = "observability_collector_metrics_enabled"
-_VM_COLLECTOR_METRICS_EXPORT_PORT_INPUT = "observability_collector_metrics_export_port"
-_VM_COLLECTOR_PROMETHEUS_AGENT_PORT_INPUT = "observability_collector_prometheus_agent_port"
-_VM_COLLECTOR_MANAGED_INPUTS = (
-    _VM_COLLECTOR_ENABLED_INPUT,
-    _VM_COLLECTOR_REGION_INPUT,
-    _VM_COLLECTOR_PACKAGE_NAME_INPUT,
-    _VM_COLLECTOR_PACKAGE_VERSION_INPUT,
-    _VM_COLLECTOR_APT_REPOSITORY_INPUT,
-    _VM_COLLECTOR_APT_KEY_URL_INPUT,
-    _VM_COLLECTOR_APT_SUITE_INPUT,
-    _VM_COLLECTOR_APT_COMPONENT_INPUT,
-    _VM_COLLECTOR_APT_ORIGIN_INPUT,
-    _VM_COLLECTOR_PROMETHEUS_PACKAGE_INPUT,
-    _VM_COLLECTOR_IAM_TOKEN_FILE_INPUT,
-    _VM_COLLECTOR_LOGS_ENABLED_INPUT,
-    _VM_COLLECTOR_LOGS_SYSTEMD_UNITS_INPUT,
-    _VM_COLLECTOR_METRICS_ENABLED_INPUT,
-    _VM_COLLECTOR_METRICS_EXPORT_PORT_INPUT,
-    _VM_COLLECTOR_PROMETHEUS_AGENT_PORT_INPUT,
-)
 
 
 def _as_text(value: Any) -> str:
@@ -607,16 +554,6 @@ def observability_project_defaults(
         }
     if include_vm and vm_observability.mode == "monitoring_agent":
         defaults["vm"] = {
-            "collector": {
-                "enabled": vm_observability.standalone_collector.enabled_by_default,
-                "metrics": {
-                    "enabled": vm_observability.standalone_collector.metrics.enabled_by_default,
-                },
-                "logs": {
-                    "enabled": vm_observability.standalone_collector.logs.enabled_by_default,
-                    "systemd_units": list(vm_observability.standalone_collector.logs.systemd_units),
-                },
-            },
             "logs": {
                 "enabled": vm_observability.logs.enabled_by_default,
                 "systemd_units": list(vm_observability.logs.systemd_units),
@@ -870,72 +807,6 @@ def _effective_vm_observability_config(
     )
 
 
-def _effective_vm_standalone_collector_config(
-    payload: dict[str, Any],
-    *,
-    vm_settings: InfraObservabilitySettings | None = None,
-) -> VmStandaloneCollectorConfig:
-    settings = vm_settings or _vm_observability_settings()
-    defaults = observability_project_defaults(vm_settings=settings).get("vm", {})
-    project = _project_observability_config(payload)
-    vm = _mapping(project.get("vm"))
-    collector = _mapping(vm.get("collector"))
-    logs = _mapping(collector.get("logs"))
-    metrics = _mapping(collector.get("metrics"))
-    default_collector = _mapping(_mapping(defaults).get("collector"))
-    default_logs = _mapping(default_collector.get("logs"))
-    default_metrics = _mapping(default_collector.get("metrics"))
-
-    def _resolve_bool(
-        value: Any,
-        *,
-        default: bool,
-    ) -> bool:
-        coerced = _coerce_optional_bool(value)
-        return default if coerced is None else coerced
-
-    def _resolve_list(
-        value: Any,
-        *,
-        default: tuple[str, ...],
-    ) -> tuple[str, ...]:
-        coerced = _coerce_optional_string_list(value)
-        return default if coerced is None else coerced
-
-    return VmStandaloneCollectorConfig(
-        enabled=_resolve_bool(
-            collector.get("enabled"),
-            default=bool(default_collector.get("enabled", False)),
-        ),
-        metrics_enabled=_resolve_bool(
-            metrics.get("enabled"),
-            default=bool(default_metrics.get("enabled", True)),
-        ),
-        logs_enabled=_resolve_bool(
-            logs.get("enabled"),
-            default=bool(default_logs.get("enabled", True)),
-        ),
-        logs_systemd_units=_resolve_list(
-            logs.get("systemd_units"),
-            default=tuple(default_logs.get("systemd_units", [])),
-        ),
-        package_name=_as_text(settings.standalone_collector.package.name),
-        package_version=_as_text(settings.standalone_collector.package.version),
-        apt_repository=_as_text(settings.standalone_collector.package.apt_repository),
-        apt_key_url=_as_text(settings.standalone_collector.package.apt_key_url),
-        apt_suite=_as_text(settings.standalone_collector.package.apt_suite),
-        apt_component=_as_text(settings.standalone_collector.package.apt_component),
-        apt_origin=_as_text(settings.standalone_collector.package.apt_origin),
-        prometheus_package_name=_as_text(
-            settings.standalone_collector.prometheus.package_name
-        ),
-        iam_token_file=_as_text(settings.standalone_collector.iam_token_file)
-        or "/mnt/cloud-metadata/token",
-        metrics_export_port=settings.standalone_collector.metrics_export_port,
-        prometheus_agent_port=settings.standalone_collector.prometheus_agent_port,
-    )
-
-
 def _observability_enabled(payload: dict[str, Any], *, target_ref: str = "") -> bool:
     normalized_target_ref = normalize_component_token(target_ref)
     if not normalized_target_ref:
@@ -995,18 +866,6 @@ def _vm_monitoring_agent_enabled(payload: dict[str, Any]) -> bool:
     return _vm_observability_settings().mode == "monitoring_agent"
 
 
-def _enabled_vm_rows(payload: dict[str, Any]) -> tuple[dict[str, Any], ...]:
-    rows: list[dict[str, Any]] = []
-    for row in _infra_component_rows(payload):
-        if (
-            isinstance(row, dict)
-            and component_type_id(row) == "vm"
-            and bool(row.get("enabled", False))
-        ):
-            rows.append(row)
-    return tuple(rows)
-
-
 def _vm_journald_logs_enabled(
     payload: dict[str, Any],
     *,
@@ -1018,59 +877,6 @@ def _vm_journald_logs_enabled(
         return False
     effective = vm_settings or _effective_vm_observability_config(payload)
     return effective.logs_enabled
-
-
-def _vm_standalone_collector_enabled(
-    payload: dict[str, Any],
-    *,
-    collector_settings: VmStandaloneCollectorConfig | None = None,
-) -> bool:
-    if not _root_observability_enabled(payload):
-        return False
-    if not _vm_monitoring_agent_enabled(payload):
-        return False
-    effective = collector_settings or _effective_vm_standalone_collector_config(payload)
-    return effective.enabled
-
-
-def _vm_standalone_collector_metrics_enabled(
-    payload: dict[str, Any],
-    *,
-    collector_settings: VmStandaloneCollectorConfig | None = None,
-) -> bool:
-    effective = collector_settings or _effective_vm_standalone_collector_config(payload)
-    return _vm_standalone_collector_enabled(payload, collector_settings=effective) and bool(
-        effective.metrics_enabled
-    )
-
-
-def _vm_standalone_collector_logs_enabled(
-    payload: dict[str, Any],
-    *,
-    collector_settings: VmStandaloneCollectorConfig | None = None,
-) -> bool:
-    effective = collector_settings or _effective_vm_standalone_collector_config(payload)
-    return _vm_standalone_collector_enabled(payload, collector_settings=effective) and bool(
-        effective.logs_enabled
-    )
-
-
-def _vm_standalone_collector_missing_catalog_fields(
-    collector_settings: VmStandaloneCollectorConfig,
-) -> tuple[str, ...]:
-    required_fields = {
-        "public_ingest.package.name": collector_settings.package_name,
-        "public_ingest.package.version": collector_settings.package_version,
-        "public_ingest.package.apt_repository": collector_settings.apt_repository,
-        "public_ingest.package.apt_key_url": collector_settings.apt_key_url,
-        "public_ingest.package.apt_suite": collector_settings.apt_suite,
-        "public_ingest.package.apt_component": collector_settings.apt_component,
-        "public_ingest.package.apt_origin": collector_settings.apt_origin,
-        "public_ingest.prometheus.package_name": collector_settings.prometheus_package_name,
-    }
-    return tuple(
-        field_name for field_name, value in required_fields.items() if not _as_text(value)
-    )
 
 
 def _selected_app_metric_targets(
@@ -1524,58 +1330,6 @@ def observability_dependency_issues(
     for app_id in missing:
         issues.append(
             f"Observability-enabled MK8s deployment requires 'apps:{app_id}' to be enabled"
-        )
-    vm_settings = _effective_vm_observability_config(payload)
-    collector_settings = _effective_vm_standalone_collector_config(payload)
-    collector_requested = bool(collector_settings.enabled)
-    if collector_requested and not _root_observability_enabled(payload):
-        issues.append(
-            "deploy.observability.vm.collector.enabled=true requires "
-            "deploy.observability.enabled=true"
-        )
-    if collector_requested and not _enabled_vm_rows(payload):
-        issues.append(
-            "deploy.observability.vm.collector.enabled=true requires one enabled infra:vm component"
-        )
-    if collector_requested and not (
-        collector_settings.metrics_enabled or collector_settings.logs_enabled
-    ):
-        issues.append(
-            "deploy.observability.vm.collector.enabled=true requires "
-            "deploy.observability.vm.collector.metrics.enabled or "
-            "deploy.observability.vm.collector.logs.enabled to stay true"
-        )
-    if collector_requested:
-        missing_catalog_fields = _vm_standalone_collector_missing_catalog_fields(
-            collector_settings
-        )
-        if missing_catalog_fields:
-            issues.append(
-                "VM standalone collector requires catalog fields under "
-                "components.infra.vm.cli.observability: "
-                + ", ".join(missing_catalog_fields)
-            )
-    if collector_requested:
-        missing_service_accounts = [
-            component_instance_label(component_type_id(row), component_instance_id(row))
-            for row in _enabled_vm_rows(payload)
-            if not _as_text(_mapping(row.get("inputs")).get("service_account_id"))
-        ]
-        if missing_service_accounts:
-            issues.append(
-                "VM standalone collector requires inputs.service_account_id on enabled vm component(s): "
-                + ", ".join(sorted(missing_service_accounts))
-            )
-    if (
-        collector_requested
-        and collector_settings.logs_enabled
-        and _vm_journald_logs_enabled(payload, vm_settings=vm_settings)
-    ):
-        issues.append(
-            "deploy.observability.vm.logs.enabled and "
-            "deploy.observability.vm.collector.logs.enabled cannot both be true; choose "
-            "the built-in Monitoring-agent journald path or the cxcli-managed standalone "
-            "collector path"
         )
     return issues
 
@@ -2175,8 +1929,6 @@ def materialize_observability_infra_values(payload_or_config: Any) -> bool:
 
     changed = False
     vm_settings = _effective_vm_observability_config(payload)
-    collector_settings = _effective_vm_standalone_collector_config(payload)
-    collector_region = _payload_region_id(payload)
     managed_label_values = _catalog_observability_gpu_node_label_values()
     for row in _infra_component_rows(payload):
         if not isinstance(row, dict):
@@ -2241,42 +1993,6 @@ def materialize_observability_infra_values(payload_or_config: Any) -> bool:
                 changed = True
             if not labels:
                 inputs.pop("labels", None)
-
-        collector_enabled = _vm_standalone_collector_enabled(
-            payload,
-            collector_settings=collector_settings,
-        ) and bool(row.get("enabled", False))
-        if collector_enabled:
-            managed_inputs: dict[str, Any] = {
-                _VM_COLLECTOR_ENABLED_INPUT: True,
-                _VM_COLLECTOR_REGION_INPUT: collector_region,
-                _VM_COLLECTOR_PACKAGE_NAME_INPUT: collector_settings.package_name,
-                _VM_COLLECTOR_PACKAGE_VERSION_INPUT: collector_settings.package_version,
-                _VM_COLLECTOR_APT_REPOSITORY_INPUT: collector_settings.apt_repository,
-                _VM_COLLECTOR_APT_KEY_URL_INPUT: collector_settings.apt_key_url,
-                _VM_COLLECTOR_APT_SUITE_INPUT: collector_settings.apt_suite,
-                _VM_COLLECTOR_APT_COMPONENT_INPUT: collector_settings.apt_component,
-                _VM_COLLECTOR_APT_ORIGIN_INPUT: collector_settings.apt_origin,
-                _VM_COLLECTOR_PROMETHEUS_PACKAGE_INPUT: (
-                    collector_settings.prometheus_package_name
-                ),
-                _VM_COLLECTOR_IAM_TOKEN_FILE_INPUT: collector_settings.iam_token_file,
-                _VM_COLLECTOR_LOGS_ENABLED_INPUT: bool(collector_settings.logs_enabled),
-                _VM_COLLECTOR_LOGS_SYSTEMD_UNITS_INPUT: list(collector_settings.logs_systemd_units),
-                _VM_COLLECTOR_METRICS_ENABLED_INPUT: bool(collector_settings.metrics_enabled),
-                _VM_COLLECTOR_METRICS_EXPORT_PORT_INPUT: collector_settings.metrics_export_port,
-                _VM_COLLECTOR_PROMETHEUS_AGENT_PORT_INPUT: collector_settings.prometheus_agent_port,
-            }
-            for key, value in managed_inputs.items():
-                if inputs.get(key) != value:
-                    inputs[key] = copy.deepcopy(value)
-                    changed = True
-            continue
-
-        for key in _VM_COLLECTOR_MANAGED_INPUTS:
-            if key in inputs:
-                del inputs[key]
-                changed = True
     return changed
 
 
@@ -2449,7 +2165,6 @@ def observability_endpoint_summary(
     if not kubernetes_settings_by_target and _observability_enabled(payload):
         kubernetes_settings_by_target = (_effective_kubernetes_observability_config(payload),)
     vm_settings = _effective_vm_observability_config(payload)
-    collector_settings = _effective_vm_standalone_collector_config(payload)
     observability_enabled = _observability_enabled(payload)
     enabled_infra = _enabled_component_ids(payload, scope="infra")
     kubernetes_enabled = bool(observability_enabled and "mk8s" in enabled_infra)
@@ -2464,14 +2179,6 @@ def observability_endpoint_summary(
     )
     vm_service_metrics_enabled = _vm_monitoring_agent_enabled(payload)
     vm_logs_enabled = _vm_journald_logs_enabled(payload, vm_settings=vm_settings)
-    vm_standalone_metrics_enabled = _vm_standalone_collector_metrics_enabled(
-        payload,
-        collector_settings=collector_settings,
-    )
-    vm_standalone_logs_enabled = _vm_standalone_collector_logs_enabled(
-        payload,
-        collector_settings=collector_settings,
-    )
     service_metric_buckets = _observability_service_buckets(payload, signal="metrics")
     service_log_buckets = _observability_service_buckets(payload, signal="logs")
     service_metrics_enabled = bool(service_metric_buckets)
@@ -2479,14 +2186,12 @@ def observability_endpoint_summary(
     metrics_enabled = bool(
         kubernetes_metrics_enabled
         or vm_service_metrics_enabled
-        or vm_standalone_metrics_enabled
         or service_metrics_enabled
     )
     signals = {
         "logs": bool(
             kubernetes_logs_enabled
             or vm_logs_enabled
-            or vm_standalone_logs_enabled
             or service_logs_enabled
         ),
         "metrics": metrics_enabled,
@@ -2498,12 +2203,6 @@ def observability_endpoint_summary(
         "kubernetes_traces": kubernetes_traces_enabled,
         "vm_service_metrics": vm_service_metrics_enabled,
         "vm_logs": vm_logs_enabled,
-        "vm_standalone_collector": _vm_standalone_collector_enabled(
-            payload,
-            collector_settings=collector_settings,
-        ),
-        "vm_standalone_metrics": vm_standalone_metrics_enabled,
-        "vm_standalone_logs": vm_standalone_logs_enabled,
     }
     read_templates, write_templates = _global_endpoint_templates()
     if not configured:
@@ -2549,10 +2248,8 @@ def observability_endpoint_summary(
             ),
             "write": (
                 "Nebius-managed MK8s and built-in VM Monitoring agents use platform-managed auth. "
-                "The cxcli-managed VM standalone collector uses the VM-attached service account "
-                "metadata token. External collectors use Authorization: Bearer <observability "
-                "static token or IAM token>; editor or signal-specific writer access is required "
-                "for ingest."
+                "External collectors use Authorization: Bearer <observability static token or "
+                "IAM token>; editor or signal-specific writer access is required for ingest."
             ),
         },
         "service_provider_metric_buckets": list(service_metric_buckets),
@@ -2582,7 +2279,6 @@ def observability_status_summary(
             payload
         ).metrics_enabled
     vm_logs_enabled = _vm_journald_logs_enabled(payload)
-    vm_collector = _effective_vm_standalone_collector_config(payload)
     collector_enabled = bool(
         selection.collector_app_id
         and selection.collector_app_id in _enabled_component_ids(payload, scope="apps")
@@ -2617,18 +2313,6 @@ def observability_status_summary(
         "grafana": grafana_enabled,
         "vm_monitoring_agent": selection.vm_monitoring_agent_enabled,
         "vm_journald_logs": vm_logs_enabled,
-        "vm_standalone_collector": _vm_standalone_collector_enabled(
-            payload,
-            collector_settings=vm_collector,
-        ),
-        "vm_standalone_metrics": _vm_standalone_collector_metrics_enabled(
-            payload,
-            collector_settings=vm_collector,
-        ),
-        "vm_standalone_logs": _vm_standalone_collector_logs_enabled(
-            payload,
-            collector_settings=vm_collector,
-        ),
         "service_provider_metric_buckets": list(service_metric_buckets),
         "service_log_buckets": list(service_log_buckets),
         "gpu_dcgm_metric_source": dcgm_metric_source
@@ -2745,7 +2429,6 @@ def observability_validation_specs(payload_or_config: Any) -> list[dict[str, Any
 __all__ = [
     "KubernetesObservabilityConfig",
     "VmObservabilityConfig",
-    "VmStandaloneCollectorConfig",
     "ObservabilityAppSelection",
     "ObservabilityGpuNodeLabelReconciliation",
     "ensure_observability_app_rows",

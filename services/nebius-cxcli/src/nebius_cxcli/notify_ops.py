@@ -84,7 +84,7 @@ def send_deploy_report_email(
     *,
     smtp_settings: Mapping[str, Any] | None = None,
 ) -> DeployReportEmailResult:
-    """Send the rendered deploy report email when notifications are enabled."""
+    """Send the existing deploy report email when notifications are enabled."""
     if not bool(config.client_info.notifications.email_enabled):
         return DeployReportEmailResult(
             sent=False,

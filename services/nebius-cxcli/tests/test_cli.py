@@ -137,6 +137,11 @@ def _reset_runtime_state(monkeypatch: pytest.MonkeyPatch) -> None:
     set_component_sources_profile_override(None)
     reset_component_sources_cache()
     reset_component_entry_cache()
+    yield
+    set_component_sources_file_override(None)
+    set_component_sources_profile_override(None)
+    reset_component_sources_cache()
+    reset_component_entry_cache()
 
 
 def _git_init(repo_root: Path) -> None:
@@ -211,13 +216,25 @@ def _catalog(
     }
 
 
-def _write_mk8s_boot_disk_sources_file(path: Path, *, module_dir: Path) -> None:
+def _write_compute_boot_disk_sources_file(path: Path, *, module_dir: Path) -> None:
     module_dir.mkdir(parents=True, exist_ok=True)
     (module_dir / "main.tf").write_text("terraform {}\n", encoding="utf-8")
     (module_dir / "variables.tf").write_text(
         'variable "cpu_nodes_count" { type = number }\n', encoding="utf-8"
     )
     boot_disk_defaults = {
+        "disk_types": [
+            {
+                "value": "NETWORK_SSD",
+                "allocation_unit_gib": 1,
+                "label": "NETWORK_SSD",
+            },
+            {
+                "value": "NETWORK_SSD_NON_REPLICATED",
+                "allocation_unit_gib": 93,
+                "label": "NETWORK_SSD_NON_REPLICATED",
+            },
+        ],
         "cpu": {
             "default_type": "NETWORK_SSD",
             "rules": [
@@ -270,15 +287,9 @@ def _write_mk8s_boot_disk_sources_file(path: Path, *, module_dir: Path) -> None:
     path.with_name("component_cli_settings.yaml").write_text(
         yaml.safe_dump(
             {
-                "components": {
-                    "infra": {
-                        "mk8s": {
-                            "cli": {
-                                "boot_disk_defaults": boot_disk_defaults,
-                            }
-                        }
-                    }
-                }
+                "compute": {
+                    "boot_disk_defaults": boot_disk_defaults,
+                },
             },
             sort_keys=False,
         ),
@@ -482,6 +493,10 @@ def test_create_reprompts_invalid_interactive_client_name(tmp_path: Path) -> Non
             "tenant-123",
             "--project-id",
             "project-456",
+            "--infra",
+            "none",
+            "--app",
+            "none",
             "--no-validate-sources",
         ],
         input="Test\nclient-a\n\n\nn\n",
@@ -864,6 +879,10 @@ def test_create_interactive_existing_root_new_project_skips_overwrite_warning(
         [
             "create",
             str(deployments_root),
+            "--infra",
+            "none",
+            "--app",
+            "none",
             "--no-validate-sources",
         ],
         input="tenant-123\nproject-789\nclient-b\n\n\nn\n",
@@ -987,6 +1006,7 @@ def test_create_writes_deployments_gitignore_when_target_is_in_git_repo(tmp_path
     assert "Managed by `nebius-cxcli`" in content
     assert "Keep config.yaml and generated/nebius-cxcli-manifest.json versioned" in content
     assert "tfvars duplicates recreated from the generated manifest" in content
+    assert "*/*/wireguard-clients/" in content
     assert "*/*/generated/infra/.terraform/" in content
     assert "*/*/generated/infra/crash.*.log" in content
     assert "*/*/generated/infra/terraform.auto.tfvars.json" in content
@@ -1061,6 +1081,7 @@ def test_render_recreates_deployments_gitignore_in_git_repo(tmp_path: Path) -> N
     assert "Managed by `nebius-cxcli`" in content
     assert "Keep config.yaml and generated/nebius-cxcli-manifest.json versioned" in content
     assert "tfvars duplicates recreated from the generated manifest" in content
+    assert "*/*/wireguard-clients/" in content
     assert "*/*/generated/infra/.terraform/" in content
     assert "*/*/generated/infra/crash.*.log" in content
     assert "*/*/generated/infra/terraform.auto.tfvars.json" in content
@@ -1089,18 +1110,27 @@ def test_render_rejects_config_under_nested_deployments_root_with_managed_parent
     result = runner.invoke(app, ["render", "--force", str(config_path)])
 
     assert result.exit_code == 1, result.output
-    assert "nested under existing cxcli-managed deployments root" in " ".join(
-        result.output.split()
-    )
+    assert "nested under existing cxcli-managed deployments root" in " ".join(result.output.split())
 
 
+@pytest.mark.parametrize(
+    ("component_id", "instance_name", "extra_inputs"),
+    [
+        ("wireguard-gw", "wg-gw", {"local_subnets": ["10.0.0.0/8"]}),
+        ("ssh-jumphost", "ssh-jumphost", {"allowed_cidrs": ["203.0.113.10/32"]}),
+    ],
+)
 def test_render_normalizes_ssh_public_key_file_path_into_config(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    component_id: str,
+    instance_name: str,
+    extra_inputs: dict[str, object],
 ) -> None:
     deployments_root = tmp_path / "deployments"
     deployments_root.mkdir(parents=True, exist_ok=True)
 
-    create_result = _create_non_interactive(deployments_root, "--infra", "wireguard-jumphost")
+    create_result = _create_non_interactive(deployments_root, "--infra", component_id)
     assert create_result.exit_code == 0, create_result.output
 
     key_path = tmp_path / "id_ed25519.pub"
@@ -1111,15 +1141,18 @@ def test_render_normalizes_ssh_public_key_file_path_into_config(
     jumphost = next(
         item
         for item in payload["infra"]["components"]
-        if isinstance(item, dict) and item.get("id") == "wireguard-jumphost"
+        if isinstance(item, dict) and item.get("id") == component_id
     )
     jumphost["inputs"] = {
         "parent_id": "project-456",
-        "region": "eu-north1",
         "subnet_id": "subnet-123",
-        "name": "wg-jumphost",
+        "name": instance_name,
+        "platform": "cpu-d3",
+        "preset": "4vcpu-16gb",
+        "source_image_family": "ubuntu24.04-driverless",
         "ssh_user_name": "ubuntu",
         "ssh_public_key": str(key_path),
+        **extra_inputs,
     }
     config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
 
@@ -1141,7 +1174,6 @@ def test_render_normalizes_ssh_public_key_file_path_into_config(
         "render_flux",
         lambda _config, _paths, *, component_output_values=None: [],
     )
-    monkeypatch.setattr(cli_module, "write_inventory", lambda _config, _paths, **_kwargs: None)
     monkeypatch.setattr(
         cli_module,
         "_write_generated_runtime_manifest",
@@ -1160,7 +1192,7 @@ def test_render_normalizes_ssh_public_key_file_path_into_config(
     refreshed_jumphost = next(
         item
         for item in refreshed["infra"]["components"]
-        if isinstance(item, dict) and item.get("id") == "wireguard-jumphost"
+        if isinstance(item, dict) and item.get("id") == component_id
     )
     assert refreshed_jumphost["inputs"]["ssh_public_key"] == _VALID_ED25519_PUBLIC_KEY
 
@@ -1194,6 +1226,68 @@ def test_load_context_rejects_missing_materialized_shared_admin_ssh_username(
         ),
     ):
         _load_context(config_path)
+
+
+def test_validate_rejects_enabled_ssh_component_missing_public_key(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    deployments_root = tmp_path / "deployments"
+    deployments_root.mkdir(parents=True, exist_ok=True)
+
+    created = _create_non_interactive(deployments_root, "--infra", "ssh-jumphost")
+    assert created.exit_code == 0, created.output
+
+    config_path = _project_config_path(deployments_root)
+    payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    ssh_jumphost = next(
+        item
+        for item in payload["infra"]["components"]
+        if isinstance(item, dict) and item.get("id") == "ssh-jumphost"
+    )
+    ssh_jumphost["inputs"] = {
+        "parent_id": "project-456",
+        "subnet_id": "subnet-123",
+        "name": "ssh-jumphost",
+        "platform": "cpu-d3",
+        "preset": "4vcpu-16gb",
+        "source_image_family": "ubuntu24.04-driverless",
+        "ssh_user_name": "ubuntu",
+    }
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    monkeypatch.setattr(
+        "nebius_cxcli.cli.module_required_variables",
+        lambda _source: (
+            "parent_id",
+            "subnet_id",
+            "name",
+            "platform",
+            "preset",
+            "source_image_family",
+            "ssh_public_key",
+        ),
+    )
+    monkeypatch.setattr(
+        "nebius_cxcli.cli.module_variable_names",
+        lambda _source: (
+            "parent_id",
+            "subnet_id",
+            "name",
+            "platform",
+            "preset",
+            "source_image_family",
+            "ssh_user_name",
+            "ssh_public_key",
+        ),
+    )
+
+    result = runner.invoke(app, ["validate", str(config_path)])
+
+    assert result.exit_code == 1, result.output
+    normalized = _normalized_cli_output(result.output)
+    assert "Strict validation failed" in normalized
+    assert "infra.components[ssh-jumphost].inputs.ssh_public_key is required" in normalized
 
 
 def test_first_render_from_create_scaffold_does_not_require_force(tmp_path: Path) -> None:
@@ -1323,7 +1417,7 @@ def test_create_force_overwrite_recreates_project_folder_and_removes_stale_files
     assert (project_dir / "config.yaml").exists()
     assert (project_dir / "generated" / "infra").is_dir()
     assert (project_dir / "generated" / "flux").is_dir()
-    assert (project_dir / "generated" / "inventory" / "deploy-report.md").exists()
+    assert not (project_dir / "generated" / "inventory" / "deploy-report.md").exists()
 
 
 def test_create_force_overwrite_does_not_touch_other_projects(tmp_path: Path) -> None:
@@ -1417,6 +1511,10 @@ def test_create_interactive_overwrite_restarts_client_info_prompts_from_fresh_de
         [
             "create",
             str(deployments_root),
+            "--infra",
+            "none",
+            "--app",
+            "none",
             "--no-validate-sources",
         ],
         input="tenant-123\nproject-456\ny\nclient-b\n\n\nn\n",
@@ -1460,7 +1558,7 @@ def test_create_component_flags_override_defaults(tmp_path: Path) -> None:
         "--infra",
         "none",
         "--app",
-        "n8n",
+        "none",
     )
     assert result.exit_code == 0, result.output
 
@@ -1468,7 +1566,7 @@ def test_create_component_flags_override_defaults(tmp_path: Path) -> None:
     infra_enabled = _infra_enabled_map(payload)
     apps_enabled = _apps_enabled_map(payload)
     assert infra_enabled == {}
-    assert apps_enabled["n8n"] is True
+    assert apps_enabled == {}
 
 
 def test_create_auto_enables_gpu_operator_when_wizard_turns_on_mk8s_gpu(
@@ -1536,9 +1634,7 @@ def test_create_mysterybox_with_mk8s_surfaces_external_secrets_dependency(
         payload = yaml.safe_load(config_yaml) or {}
         charts = payload.get("apps", {}).get("charts", [])
         external_secrets = next(
-            row
-            for row in charts
-            if isinstance(row, dict) and row.get("id") == "external-secrets"
+            row for row in charts if isinstance(row, dict) and row.get("id") == "external-secrets"
         )
         assert external_secrets["instance_id"] == "mk8s"
         return config_yaml, True
@@ -1764,7 +1860,13 @@ def test_create_prunes_redundant_live_chart_default_values_from_existing_config(
         },
     )
 
-    created = _create_non_interactive(deployments_root, "--app", "gateway-helm")
+    created = _create_non_interactive(
+        deployments_root,
+        "--infra",
+        "mk8s",
+        "--app",
+        "gateway-helm",
+    )
     assert created.exit_code == 0, created.output
 
     config_path = _project_config_path(deployments_root)
@@ -1786,6 +1888,8 @@ def test_create_prunes_redundant_live_chart_default_values_from_existing_config(
     refreshed = _create_non_interactive(
         deployments_root,
         "--force",
+        "--infra",
+        "mk8s",
         "--app",
         "gateway-helm",
     )
@@ -1804,7 +1908,7 @@ def test_create_prunes_redundant_live_chart_default_values_from_existing_config(
     assert cleaned_gateway["values"]["config"]["envoyGateway"]["provider"]["type"] == "Kubernetes"
 
 
-def test_create_warns_when_early_exit_leaves_required_fields_missing(
+def test_create_does_not_write_when_early_exit_leaves_required_fields_missing(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1827,13 +1931,67 @@ def test_create_warns_when_early_exit_leaves_required_fields_missing(
             "none",
             "--no-validate-sources",
         ],
-        input="tenant-123\nproject-456\nclient-a\n\n\nq\n",
+        input="tenant-123\nproject-456\nclient-a\n\n\nqq\n",
     )
 
-    assert result.exit_code == 0, result.output
-    assert "Wizard stopped before all required fields were filled." in result.output
+    assert result.exit_code == 1, result.output
+    normalized = _normalized_cli_output(result.output)
+    assert "Wizard stopped before all required fields were filled." in normalized
+    assert "No project config or generated output was written." in normalized
     assert "infra.components[managed-postgresql].inputs.name is required" in result.output
     assert "infra.components[managed-postgresql].inputs.network_id is required" in result.output
+    assert "Ensured generated skeleton:" not in result.output
+    assert not _project_config_path(deployments_root).exists()
+    assert not (_project_dir(deployments_root) / "generated").exists()
+
+
+def test_create_preserves_existing_project_when_quit_leaves_required_fields_missing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    deployments_root = tmp_path / "deployments"
+    deployments_root.mkdir(parents=True, exist_ok=True)
+
+    created = _create_non_interactive(deployments_root, "--infra", "none", "--app", "none")
+    assert created.exit_code == 0, created.output
+
+    config_path = _project_config_path(deployments_root)
+    original_config = config_path.read_text(encoding="utf-8")
+    stale_note = config_path.parent / "generated" / "keep.txt"
+    stale_note.write_text("preserve me", encoding="utf-8")
+
+    monkeypatch.setattr(
+        "nebius_cxcli.cli.module_required_variables",
+        lambda _source: ("name",),
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "create",
+            str(deployments_root),
+            "--tenant-id",
+            "tenant-123",
+            "--project-id",
+            "project-456",
+            "--client-name",
+            "client-b",
+            "--region-id",
+            "eu-north1",
+            "--infra",
+            "managed-postgresql",
+            "--app",
+            "none",
+            "--no-validate-sources",
+        ],
+        input="y\nops@example.com\n\nqq\n",
+    )
+
+    assert result.exit_code == 1, result.output
+    assert "Existing project preserved:" in result.output
+    assert "Overwritten project:" not in result.output
+    assert config_path.read_text(encoding="utf-8") == original_config
+    assert stale_note.read_text(encoding="utf-8") == "preserve me"
 
 
 def test_create_does_not_warn_when_early_exit_leaves_only_optional_fields(
@@ -1850,7 +2008,7 @@ def test_create_does_not_warn_when_early_exit_leaves_only_optional_fields(
             "--infra",
             "none",
             "--app",
-            "gateway-helm",
+            "none",
             "--no-validate-sources",
         ],
         input="tenant-123\nproject-456\nclient-a\n\n\nq\n",
@@ -1862,7 +2020,7 @@ def test_create_does_not_warn_when_early_exit_leaves_only_optional_fields(
 
     payload = yaml.safe_load(_project_config_path(deployments_root).read_text(encoding="utf-8"))
     apps_enabled = _apps_enabled_map(payload)
-    assert apps_enabled["gateway-helm"] is True
+    assert apps_enabled == {}
 
 
 def test_create_non_interactive_no_subnet_option(tmp_path: Path) -> None:
@@ -1984,11 +2142,11 @@ def test_load_context_does_not_require_embedded_component_sources(tmp_path: Path
     _config, _paths = _load_context(config_path)
 
 
-def test_load_context_materializes_mk8s_boot_disk_defaults_for_existing_config(
+def test_load_context_materializes_compute_boot_disk_defaults_for_existing_config(
     tmp_path: Path,
 ) -> None:
     sources_file = tmp_path / "component_sources.yaml"
-    _write_mk8s_boot_disk_sources_file(
+    _write_compute_boot_disk_sources_file(
         sources_file,
         module_dir=tmp_path / "modules" / "mk8s",
     )
@@ -2082,6 +2240,9 @@ def test_load_context_materializes_mk8s_boot_disk_defaults_for_existing_config(
 
 
 def test_load_context_rejects_missing_materialized_shared_app_defaults(tmp_path: Path) -> None:
+    mk8s_module_dir = tmp_path / "modules" / "mk8s"
+    mk8s_module_dir.mkdir(parents=True, exist_ok=True)
+    (mk8s_module_dir / "main.tf").write_text("terraform {}\n", encoding="utf-8")
     sources_file = tmp_path / "component_sources.yaml"
     sources_file.write_text(
         yaml.safe_dump(
@@ -2092,7 +2253,17 @@ def test_load_context_rejects_missing_materialized_shared_app_defaults(tmp_path:
                     }
                 },
                 "components": {
-                    "infra": {},
+                    "infra": {
+                        "mk8s": {
+                            "source": {
+                                "portable": "git::https://github.com/example/infra.git//modules/mk8s?ref=v1.2.3",
+                                "local": str(mk8s_module_dir),
+                            },
+                            "ui": {
+                                "enabled": True,
+                            },
+                        }
+                    },
                     "apps": {
                         "demo-app": {
                             "source": _portable_chart_source(
@@ -2137,12 +2308,21 @@ def test_load_context_rejects_missing_materialized_shared_app_defaults(tmp_path:
             },
             "notifications": {"email_enabled": False, "email": None},
         },
-        "infra": {"components": []},
-        "apps": {
-            "charts": [
+        "infra": {
+            "components": [
                 {
-                    "id": "demo-app",
-                    "instance_id": "demo-app",
+                    "id": "mk8s",
+                    "instance_id": "mk8s",
+                    "enabled": True,
+                    "inputs": {},
+                }
+            ]
+        },
+        "apps": {
+                "charts": [
+                    {
+                        "id": "demo-app",
+                        "instance_id": "mk8s",
                     "group": "workloads",
                     "enabled": True,
                     "repo": "https://example.invalid/charts",
@@ -2159,8 +2339,9 @@ def test_load_context_rejects_missing_materialized_shared_app_defaults(tmp_path:
     with pytest.raises(
         ValueError,
         match=(
-            r"apps\.charts\[id=demo-app\]\.values\.admin\.sshUser is required; "
-            r"shared-derived defaults must be materialized into config\.yaml"
+            r"apps\.charts\[id=demo-app,instance_id=mk8s\]\.values\.admin\.sshUser "
+            r"is required; shared-derived defaults must be materialized into config\.yaml "
+            r"during create/component add"
         ),
     ):
         _load_context(config_path)
@@ -2267,7 +2448,7 @@ def test_create_does_not_embed_component_sources_block(tmp_path: Path) -> None:
 
 
 def test_create_seeds_component_source_defaults_into_config(tmp_path: Path) -> None:
-    module_dir = tmp_path / "modules" / "demo-module"
+    module_dir = tmp_path / "modules" / "mk8s"
     module_dir.mkdir(parents=True, exist_ok=True)
     (module_dir / "main.tf").write_text("terraform {}\n", encoding="utf-8")
     (module_dir / "variables.tf").write_text(
@@ -2277,12 +2458,12 @@ def test_create_seeds_component_source_defaults_into_config(tmp_path: Path) -> N
     sources_file = tmp_path / "component_sources.yaml"
     sources_file.write_text(
         yaml.safe_dump(
-            _catalog(
-                infra={
-                    "demo-module": {
-                        "source": {
-                            "portable": "git::https://github.com/example/infra.git//modules/demo-module?ref=v1.2.3",
-                            "local": str(module_dir),
+                _catalog(
+                    infra={
+                        "mk8s": {
+                            "source": {
+                                "portable": "git::https://github.com/example/infra.git//modules/demo-module?ref=v1.2.3",
+                                "local": str(module_dir),
                         },
                         "ui": {
                             "enabled": True,
@@ -2345,7 +2526,7 @@ def test_create_seeds_component_source_defaults_into_config(tmp_path: Path) -> N
     demo_module = next(
         item
         for item in payload["infra"]["components"]
-        if isinstance(item, dict) and item.get("id") == "demo-module"
+        if isinstance(item, dict) and item.get("id") == "mk8s"
     )
     assert demo_module["inputs"]["cluster_name"] == "demo-cluster"
     assert demo_module["inputs"]["cpu_nodes_count"] == 3
@@ -2375,11 +2556,11 @@ def test_create_seeds_mk8s_cpu_node_count_into_config(tmp_path: Path) -> None:
     assert mk8s["inputs"]["cpu_nodes_count"] == 2
 
 
-def test_create_materializes_catalog_owned_mk8s_boot_disk_defaults_into_config(
+def test_create_materializes_catalog_owned_compute_boot_disk_defaults_into_config(
     tmp_path: Path,
 ) -> None:
     sources_file = tmp_path / "component_sources.yaml"
-    _write_mk8s_boot_disk_sources_file(
+    _write_compute_boot_disk_sources_file(
         sources_file,
         module_dir=tmp_path / "modules" / "mk8s",
     )
@@ -2424,24 +2605,27 @@ def test_create_materializes_shared_admin_ssh_username_into_config(tmp_path: Pat
     result = _create_non_interactive(
         deployments_root,
         "--infra",
-        "wireguard-jumphost",
+        "wireguard-gw",
         "--infra",
         "ssh-jumphost",
     )
     assert result.exit_code == 0, result.output
 
     payload = yaml.safe_load(_project_config_path(deployments_root).read_text(encoding="utf-8"))
-    jump_hosts = {
+    public_access_components = {
         item["id"]: item
         for item in payload["infra"]["components"]
-        if isinstance(item, dict) and item.get("id") in {"wireguard-jumphost", "ssh-jumphost"}
+        if isinstance(item, dict) and item.get("id") in {"wireguard-gw", "ssh-jumphost"}
     }
 
-    assert jump_hosts["wireguard-jumphost"]["inputs"]["ssh_user_name"] == "ubuntu"
-    assert jump_hosts["ssh-jumphost"]["inputs"]["ssh_user_name"] == "ubuntu"
+    assert public_access_components["wireguard-gw"]["inputs"]["ssh_user_name"] == "ubuntu"
+    assert public_access_components["ssh-jumphost"]["inputs"]["ssh_user_name"] == "ubuntu"
 
 
 def test_create_materializes_shared_app_defaults_into_config(tmp_path: Path) -> None:
+    mk8s_module_dir = tmp_path / "modules" / "mk8s"
+    mk8s_module_dir.mkdir(parents=True, exist_ok=True)
+    (mk8s_module_dir / "main.tf").write_text("terraform {}\n", encoding="utf-8")
     sources_file = tmp_path / "component_sources.yaml"
     sources_file.write_text(
         yaml.safe_dump(
@@ -2452,7 +2636,17 @@ def test_create_materializes_shared_app_defaults_into_config(tmp_path: Path) -> 
                     }
                 },
                 "components": {
-                    "infra": {},
+                    "infra": {
+                        "mk8s": {
+                            "source": {
+                                "portable": "git::https://github.com/example/infra.git//modules/mk8s?ref=v1.2.3",
+                                "local": str(mk8s_module_dir),
+                            },
+                            "ui": {
+                                "enabled": True,
+                            },
+                        }
+                    },
                     "apps": {
                         "demo-app": {
                             "source": _portable_chart_source(
@@ -2498,6 +2692,8 @@ def test_create_materializes_shared_app_defaults_into_config(tmp_path: Path) -> 
             "--project-id",
             "project-456",
             "--no-validate-sources",
+            "--infra",
+            "mk8s",
             "--app",
             "demo-app",
         ],
@@ -2692,6 +2888,8 @@ def test_create_app_namespace_and_releasename_overrides(tmp_path: Path) -> None:
     deployments_root.mkdir(parents=True, exist_ok=True)
     result = _create_non_interactive(
         deployments_root,
+        "--infra",
+        "mk8s",
         "--app",
         "n8n",
         "--app-namespace",
@@ -2714,6 +2912,17 @@ def test_create_app_namespace_and_releasename_overrides(tmp_path: Path) -> None:
     assert isinstance(n8n_row, dict)
     assert n8n_row.get("namespace") == "automation"
     assert n8n_row.get("release-name") == "workflow-core"
+
+
+def test_create_rejects_enabled_app_without_mk8s_target(tmp_path: Path) -> None:
+    deployments_root = tmp_path / "deployments"
+    deployments_root.mkdir(parents=True, exist_ok=True)
+
+    result = _create_non_interactive(deployments_root, "--infra", "none", "--app", "n8n")
+
+    assert result.exit_code == 1, result.output
+    assert "Apps are Helm charts and require an enabled MK8s target" in result.output
+    assert not _project_config_path(deployments_root).exists()
 
 
 def test_create_force_treats_components_as_new_selection(tmp_path: Path) -> None:
@@ -2747,7 +2956,7 @@ def test_create_force_treats_components_as_new_selection(tmp_path: Path) -> None
         deployments_root,
         "--force",
         "--infra",
-        "none",
+        "mk8s",
         "--app",
         "n8n",
     )
@@ -2759,7 +2968,8 @@ def test_create_force_treats_components_as_new_selection(tmp_path: Path) -> None
     apps_enabled = _apps_enabled_map(refreshed)
     refreshed_components = refreshed.get("infra", {}).get("components", [])
     assert isinstance(refreshed_components, list)
-    assert refreshed_components == []
+    assert len(refreshed_components) == 1
+    assert refreshed_components[0]["id"] == "mk8s"
     assert "object-storage" not in infra_enabled
     assert apps_enabled["n8n"] is True
     assert "component_sources" not in refreshed
@@ -2991,17 +3201,32 @@ def test_component_add_list_remove_bind_app_instance_to_explicit_mk8s_target(
     assert "Removed apps components: n8n@mk8s-2" in removed.output
 
 
-def test_component_add_first_cluster_target_rebinds_existing_app_only_rows(
+def test_component_add_rejects_app_without_mk8s_target(
     tmp_path: Path,
 ) -> None:
     deployments_root = tmp_path / "deployments"
     deployments_root.mkdir(parents=True, exist_ok=True)
 
-    created = _create_non_interactive(deployments_root, "--app", "n8n")
+    created = _create_non_interactive(deployments_root, "--infra", "none", "--app", "none")
     assert created.exit_code == 0, created.output
 
     config_path = _project_config_path(deployments_root)
-    result = _component_add(config_path, "mk8s", "--no-interactive")
+    result = _component_add(config_path, "n8n", "--no-interactive")
+    assert result.exit_code == 1, result.output
+    assert "Apps are Helm charts and require an enabled MK8s target" in result.output
+
+
+def test_component_add_can_add_first_mk8s_target_and_app_together(
+    tmp_path: Path,
+) -> None:
+    deployments_root = tmp_path / "deployments"
+    deployments_root.mkdir(parents=True, exist_ok=True)
+
+    created = _create_non_interactive(deployments_root, "--infra", "none", "--app", "none")
+    assert created.exit_code == 0, created.output
+
+    config_path = _project_config_path(deployments_root)
+    result = _component_add(config_path, "mk8s", "n8n", "--no-interactive")
     assert result.exit_code == 0, result.output
 
     payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
@@ -3128,7 +3353,7 @@ def test_component_add_interactive_prompts_for_new_component_fields(
     deployments_root = tmp_path / "deployments"
     deployments_root.mkdir(parents=True, exist_ok=True)
 
-    created = _create_non_interactive(deployments_root, "--infra", "mk8s")
+    created = _create_non_interactive(deployments_root, "--infra", "none")
     assert created.exit_code == 0, created.output
 
     monkeypatch.setattr(
@@ -3137,7 +3362,7 @@ def test_component_add_interactive_prompts_for_new_component_fields(
     )
     monkeypatch.setattr(
         "nebius_cxcli.cli.module_required_variables",
-        lambda _source: ("name", "parent_id", "network_id"),
+        lambda _source: ("name",),
     )
 
     config_path = _project_config_path(deployments_root)
@@ -3158,6 +3383,140 @@ def test_component_add_interactive_prompts_for_new_component_fields(
         if isinstance(row, dict) and str(row.get("id", "")).strip() == "managed-postgresql"
     )
     assert managed_pg["inputs"]["name"] == "demo-pg"
+
+
+def test_component_add_does_not_write_when_quit_leaves_required_fields_missing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    deployments_root = tmp_path / "deployments"
+    deployments_root.mkdir(parents=True, exist_ok=True)
+
+    created = _create_non_interactive(deployments_root, "--infra", "none", "--app", "none")
+    assert created.exit_code == 0, created.output
+
+    monkeypatch.setattr(
+        "nebius_cxcli.cli.module_required_variables",
+        lambda _source: ("name", "parent_id", "network_id"),
+    )
+
+    def _fake_run_component_field_wizard(**kwargs):  # type: ignore[no-untyped-def]
+        return kwargs["config_yaml"], False
+
+    monkeypatch.setattr(
+        cli_module,
+        "_run_component_field_wizard",
+        _fake_run_component_field_wizard,
+    )
+
+    config_path = _project_config_path(deployments_root)
+    original_config = config_path.read_text(encoding="utf-8")
+    result = _component_add(config_path, "managed-postgresql", input_text="y\n")
+
+    assert result.exit_code == 1, result.output
+    normalized = _normalized_cli_output(result.output)
+    assert "Wizard stopped before all required fields were filled." in normalized
+    assert "No config.yaml changes were written." in normalized
+    assert "Existing project preserved:" in result.output
+    assert config_path.read_text(encoding="utf-8") == original_config
+
+
+def test_component_add_requeues_provider_dependent_module_fields(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    deployments_root = tmp_path / "deployments"
+    deployments_root.mkdir(parents=True, exist_ok=True)
+    config_path = deployments_root / "tenant-123" / "project-456" / "config.yaml"
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    config_path.write_text(_discover_config_payload(), encoding="utf-8")
+
+    module_specs = (
+        SimpleNamespace(
+            name="name",
+            required=True,
+            type_hint="string",
+            has_default=False,
+            default=None,
+        ),
+        SimpleNamespace(
+            name="parent_id",
+            required=True,
+            type_hint="string",
+            has_default=False,
+            default=None,
+        ),
+        SimpleNamespace(
+            name="platform",
+            required=True,
+            type_hint="string",
+            has_default=False,
+            default=None,
+        ),
+        SimpleNamespace(
+            name="preset",
+            required=True,
+            type_hint="string",
+            has_default=False,
+            default=None,
+        ),
+    )
+    monkeypatch.setattr("nebius_cxcli.cli.module_variables", lambda _source: module_specs)
+    monkeypatch.setattr(
+        "nebius_cxcli.cli.module_required_variables",
+        lambda _source: tuple(item.name for item in module_specs),
+    )
+
+    def _fake_dynamic_choices(
+        *,
+        payload,
+        entry,
+        full_path_label,
+        provider_lookup,
+    ):
+        _ = entry, provider_lookup
+        if full_path_label.endswith(".inputs.platform"):
+            return [cli_module.OptionChoice(value="cpu-d3", label="cpu-d3")]
+        if full_path_label.endswith(".inputs.preset"):
+            assert cli_module._read_payload_field(payload, "infra.components[0].inputs.platform")
+            return [cli_module.OptionChoice(value="4vcpu-16gb", label="4vcpu-16gb")]
+        return []
+
+    def _fake_allowed_values(
+        *,
+        payload,
+        entry,
+        full_path_label,
+        provider_lookup,
+    ):
+        _ = payload, entry, provider_lookup
+        if full_path_label.endswith(".inputs.platform"):
+            return {"cpu-d3"}, ("compute_platforms",)
+        if full_path_label.endswith(".inputs.preset"):
+            return {"4vcpu-16gb"}, ("compute_platform_presets",)
+        return set(), ()
+
+    monkeypatch.setattr(cli_module, "_resolve_dynamic_field_choices", _fake_dynamic_choices)
+    monkeypatch.setattr(cli_module, "_provider_allowed_values_for_field", _fake_allowed_values)
+
+    result = _component_add(
+        config_path,
+        "wireguard-gw",
+        input_text="y\ny\n\n\ndemo-wg\n",
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "infra.components[0].inputs.preset" in result.output
+    refreshed = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    components = refreshed.get("infra", {}).get("components", [])
+    assert isinstance(components, list)
+    wireguard = next(
+        item
+        for item in components
+        if isinstance(item, dict) and item.get("id") == "wireguard-gw"
+    )
+    assert wireguard["inputs"]["platform"] == "cpu-d3"
+    assert wireguard["inputs"]["preset"] == "4vcpu-16gb"
 
 
 def test_component_add_mysterybox_interactive_preserves_existing_mk8s_target(
@@ -3226,7 +3585,13 @@ def test_component_add_noninteractive_adds_app_chart_and_preserves_existing_valu
     deployments_root = tmp_path / "deployments"
     deployments_root.mkdir(parents=True, exist_ok=True)
 
-    created = _create_non_interactive(deployments_root, "--app", "gateway-helm")
+    created = _create_non_interactive(
+        deployments_root,
+        "--infra",
+        "mk8s",
+        "--app",
+        "gateway-helm",
+    )
     assert created.exit_code == 0, created.output
 
     config_path = _project_config_path(deployments_root)
@@ -3244,7 +3609,7 @@ def test_component_add_noninteractive_adds_app_chart_and_preserves_existing_valu
 
     result = _component_add(config_path, "n8n", "--no-interactive")
     assert result.exit_code == 0, result.output
-    assert "Added apps components: n8n" in result.output
+    assert "Added apps components: n8n@mk8s" in result.output
 
     refreshed = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     refreshed_charts = refreshed.get("apps", {}).get("charts", [])
@@ -3307,6 +3672,8 @@ def test_component_remove_blocks_chart_dependency_breakage(
 
     created = _create_non_interactive(
         deployments_root,
+        "--infra",
+        "mk8s",
         "--app",
         "gateway-helm",
         "--app",
@@ -3340,13 +3707,19 @@ def test_component_remove_noninteractive_removes_app_chart_when_no_dependency_br
     deployments_root = tmp_path / "deployments"
     deployments_root.mkdir(parents=True, exist_ok=True)
 
-    created = _create_non_interactive(deployments_root, "--app", "gateway-helm")
+    created = _create_non_interactive(
+        deployments_root,
+        "--infra",
+        "mk8s",
+        "--app",
+        "gateway-helm",
+    )
     assert created.exit_code == 0, created.output
 
     config_path = _project_config_path(deployments_root)
     result = _component_remove(config_path, "gateway-helm", "--no-interactive")
     assert result.exit_code == 0, result.output
-    assert "Removed apps components: gateway-helm" in result.output
+    assert "Removed apps components: gateway-helm@mk8s" in result.output
     normalized_output = " ".join(result.output.split())
     assert (
         "Only config.yaml was updated. Existing generated/ artifacts and live resources are "
@@ -3417,7 +3790,7 @@ def test_create_force_does_not_reuse_existing_chart_overrides(tmp_path: Path) ->
     deployments_root = tmp_path / "deployments"
     deployments_root.mkdir(parents=True, exist_ok=True)
 
-    first = _create_non_interactive(deployments_root, "--app", "n8n")
+    first = _create_non_interactive(deployments_root, "--infra", "mk8s", "--app", "n8n")
     assert first.exit_code == 0, first.output
 
     config_path = _project_config_path(deployments_root)
@@ -3436,7 +3809,14 @@ def test_create_force_does_not_reuse_existing_chart_overrides(tmp_path: Path) ->
     assert original_repo
     config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
 
-    second = _create_non_interactive(deployments_root, "--force", "--app", "n8n")
+    second = _create_non_interactive(
+        deployments_root,
+        "--force",
+        "--infra",
+        "mk8s",
+        "--app",
+        "n8n",
+    )
     assert second.exit_code == 0, second.output
 
     refreshed = yaml.safe_load(config_path.read_text(encoding="utf-8"))
@@ -3622,6 +4002,7 @@ def test_bootstrap_ci_recreates_deployments_gitignore_in_git_repo(
     assert "Managed by `nebius-cxcli`" in content
     assert "Keep config.yaml and generated/nebius-cxcli-manifest.json versioned" in content
     assert "tfvars duplicates recreated from the generated manifest" in content
+    assert "*/*/wireguard-clients/" in content
     assert "*/*/generated/infra/.terraform/" in content
     assert "*/*/generated/infra/crash.*.log" in content
     assert "*/*/generated/infra/terraform.auto.tfvars.json" in content
@@ -3651,9 +4032,7 @@ def test_bootstrap_ci_rejects_config_under_nested_deployments_root_with_managed_
     result = runner.invoke(app, ["bootstrap-ci", str(config_path), "--no-auth-bootstrap"])
 
     assert result.exit_code == 1, result.output
-    assert "nested under existing cxcli-managed deployments root" in " ".join(
-        result.output.split()
-    )
+    assert "nested under existing cxcli-managed deployments root" in " ".join(result.output.split())
     assert not (repo_root / ".github" / "workflows" / "nebius-deployments.yml").exists()
 
 

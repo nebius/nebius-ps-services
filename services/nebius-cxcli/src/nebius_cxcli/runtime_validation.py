@@ -381,7 +381,7 @@ def _validate_observability(
         return
     if not isinstance(vm, Mapping):
         raise ValueError(f"{field_label}.vm must be a mapping")
-    supported_vm_keys = {"logs", "collector"}
+    supported_vm_keys = {"logs"}
     unknown_vm_keys = sorted(str(key) for key in vm if str(key) not in supported_vm_keys)
     if unknown_vm_keys:
         raise ValueError(
@@ -408,68 +408,6 @@ def _validate_observability(
         or any(not isinstance(item, str) for item in systemd_units)
     ):
         raise ValueError(f"{field_label}.vm.logs.systemd_units must be a list of strings")
-
-    collector = vm.get("collector")
-    if collector is None:
-        return
-    if not isinstance(collector, Mapping):
-        raise ValueError(f"{field_label}.vm.collector must be a mapping")
-    supported_collector_keys = {"enabled", "logs", "metrics"}
-    unknown_collector_keys = sorted(
-        str(key) for key in collector if str(key) not in supported_collector_keys
-    )
-    if unknown_collector_keys:
-        raise ValueError(
-            f"{field_label}.vm.collector has unsupported field(s): "
-            + ", ".join(unknown_collector_keys)
-        )
-    collector_enabled = collector.get("enabled")
-    if collector_enabled is not None and not isinstance(collector_enabled, bool):
-        raise ValueError(f"{field_label}.vm.collector.enabled must be true or false")
-
-    collector_logs = collector.get("logs")
-    if collector_logs is not None:
-        if not isinstance(collector_logs, Mapping):
-            raise ValueError(f"{field_label}.vm.collector.logs must be a mapping")
-        supported_collector_log_keys = {"enabled", "systemd_units"}
-        unknown_collector_log_keys = sorted(
-            str(key) for key in collector_logs if str(key) not in supported_collector_log_keys
-        )
-        if unknown_collector_log_keys:
-            raise ValueError(
-                f"{field_label}.vm.collector.logs has unsupported field(s): "
-                + ", ".join(unknown_collector_log_keys)
-            )
-        collector_logs_enabled = collector_logs.get("enabled")
-        if collector_logs_enabled is not None and not isinstance(collector_logs_enabled, bool):
-            raise ValueError(f"{field_label}.vm.collector.logs.enabled must be true or false")
-        collector_units = collector_logs.get("systemd_units")
-        if collector_units is not None and (
-            not isinstance(collector_units, list)
-            or any(not isinstance(item, str) for item in collector_units)
-        ):
-            raise ValueError(
-                f"{field_label}.vm.collector.logs.systemd_units must be a list of strings"
-            )
-
-    collector_metrics = collector.get("metrics")
-    if collector_metrics is not None:
-        if not isinstance(collector_metrics, Mapping):
-            raise ValueError(f"{field_label}.vm.collector.metrics must be a mapping")
-        supported_collector_metric_keys = {"enabled"}
-        unknown_collector_metric_keys = sorted(
-            str(key) for key in collector_metrics if str(key) not in supported_collector_metric_keys
-        )
-        if unknown_collector_metric_keys:
-            raise ValueError(
-                f"{field_label}.vm.collector.metrics has unsupported field(s): "
-                + ", ".join(unknown_collector_metric_keys)
-            )
-        collector_metrics_enabled = collector_metrics.get("enabled")
-        if collector_metrics_enabled is not None and not isinstance(
-            collector_metrics_enabled, bool
-        ):
-            raise ValueError(f"{field_label}.vm.collector.metrics.enabled must be true or false")
 
 
 def _enabled_component_ids(payload: Mapping[str, Any], *, scope: ComponentScope) -> set[str]:
@@ -674,6 +612,17 @@ def validate_dynamic_payload_structure(payload: Mapping[str, Any]) -> None:
             "use deploy.targets[].observability for MK8s targets"
         )
 
+    has_enabled_app_charts = any(
+        isinstance(raw_chart, Mapping) and bool(raw_chart.get("enabled", False))
+        for raw_chart in apps_charts
+    )
+    if has_enabled_app_charts and not cluster_target_refs:
+        raise ValueError(
+            "apps.charts requires at least one enabled MK8s target because cxcli apps "
+            "are Helm charts installed into Kubernetes. Add an enabled infra:mk8s "
+            "component in the same config or remove/disable apps.charts."
+        )
+
     seen_app_instance_keys: set[tuple[str, str]] = set()
     for index, raw_chart in enumerate(apps_charts):
         if not isinstance(raw_chart, Mapping):
@@ -779,7 +728,7 @@ def validate_runtime_payload(payload: Mapping[str, Any]) -> None:
             raise ValueError(
                 "infra.ssh_user_name and infra.ssh_public_key are no longer root infra fields. "
                 "Set ssh_user_name/ssh_public_key on the selected jump-host component inputs instead "
-                "(for example infra.components[id=wireguard-jumphost].inputs.ssh_public_key). "
+                "(for example infra.components[id=wireguard-gw].inputs.ssh_public_key). "
                 "component_sources.yaml shared.admin_ssh.user_name remains available as a "
                 "catalog-level seed that create/component add materialize into jump-host "
                 "component inputs."

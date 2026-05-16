@@ -4,6 +4,7 @@ import sys
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 
+import nebius_cxcli.provider_options as provider_options
 from nebius_cxcli.provider_options import OptionChoice, ProviderOptionLookup
 
 
@@ -106,7 +107,7 @@ def _install_fake_compute_module(
             self.sdk = sdk
 
         def list(self, request: object) -> SimpleNamespace:
-            _ = request
+            assert 1 <= request.page_size <= 999
             response = SimpleNamespace(
                 items=[
                     SimpleNamespace(
@@ -145,7 +146,7 @@ def _install_fake_compute_module(
             self.sdk = sdk
 
         def list_public(self, request: object) -> SimpleNamespace:
-            _ = request
+            assert 1 <= request.page_size <= 999
             response = SimpleNamespace(
                 items=[
                     SimpleNamespace(
@@ -360,13 +361,14 @@ def test_provider_option_lookup_sdk_uses_shared_sdk_auth(monkeypatch) -> None:
     monkeypatch.setenv("NEBIUS_CXCLI_PROVIDER_AUTH_ENDPOINT", "api.example.invalid")
     monkeypatch.setattr(
         "nebius_cxcli.provider_options.init_nebius_sdk",
-        lambda *, profile, endpoint, config_file, context: (
+        lambda *, profile, endpoint, config_file, context, prefer_operator_auth: (
             captured.update(
                 {
                     "profile": profile,
                     "endpoint": endpoint,
                     "config_file": config_file,
                     "context": context,
+                    "prefer_operator_auth": prefer_operator_auth,
                 }
             )
             or sdk
@@ -379,6 +381,7 @@ def test_provider_option_lookup_sdk_uses_shared_sdk_auth(monkeypatch) -> None:
         "endpoint": "api.example.invalid",
         "config_file": Path("/tmp/provider-sdk-config.yaml"),
         "context": "provider option lookup",
+        "prefer_operator_auth": True,
     }
 
 
@@ -408,7 +411,7 @@ def test_compute_platforms_use_live_project_inventory(monkeypatch) -> None:
     ]
 
 
-def test_compute_public_image_families_follow_platform_and_catalog_preferences(
+def test_compute_public_image_families_follow_live_platform_recommendations(
     monkeypatch,
 ) -> None:
     _install_fake_compute_module(
@@ -418,7 +421,6 @@ def test_compute_public_image_families_follow_platform_and_catalog_preferences(
             {
                 "image_family": "ubuntu24.04-cuda12",
                 "image_family_human_readable": "Ubuntu 24.04 CUDA 12",
-                "recommended_platforms": ["gpu-h100-sxm"],
             },
             {
                 "image_family": "ubuntu24.04-cuda13.0",
@@ -433,13 +435,6 @@ def test_compute_public_image_families_follow_platform_and_catalog_preferences(
         ],
     )
 
-    monkeypatch.setattr(
-        "nebius_cxcli.provider_options._vm_image_preference_lists",
-        lambda: (
-            ("ubuntu24.04-driverless",),
-            ("ubuntu24.04-cuda13.0", "ubuntu24.04-cuda12"),
-        ),
-    )
     lookup = ProviderOptionLookup()
     monkeypatch.setattr(lookup, "_sdk_or_none", lambda: object())
 
@@ -453,18 +448,21 @@ def test_compute_public_image_families_follow_platform_and_catalog_preferences(
         field_path="infra.components[0].inputs.source_image_family",
     )
 
-    assert [(choice.value, choice.label) for choice in resolved] == [
+    assert [(choice.value, choice.label, choice.recommended) for choice in resolved] == [
         (
             "ubuntu24.04-cuda13.0",
             "ubuntu24.04-cuda13.0  (Ubuntu 24.04 CUDA 13, recommended)",
+            True,
         ),
         (
             "ubuntu24.04-cuda12",
-            "ubuntu24.04-cuda12  (Ubuntu 24.04 CUDA 12, recommended)",
+            "ubuntu24.04-cuda12  (Ubuntu 24.04 CUDA 12, compatible)",
+            False,
         ),
         (
             "ubuntu24.04-driverless",
             "ubuntu24.04-driverless  (Ubuntu 24.04 Driverless, compatible)",
+            False,
         ),
     ]
 
@@ -862,11 +860,11 @@ def test_compute_platform_presets_summarize_reserved_capacity_for_selected_platf
     ]
 
 
-def test_mk8s_boot_disk_types_labels_match_guided_contract() -> None:
+def test_compute_boot_disk_types_labels_match_guided_contract() -> None:
     lookup = ProviderOptionLookup()
 
     resolved = lookup.resolve(
-        provider="mk8s_boot_disk_types",
+        provider="compute_boot_disk_types",
         args={},
         payload={},
         field_path="infra.components[0].inputs.cpu_nodes_boot_disk_type",
@@ -879,12 +877,48 @@ def test_mk8s_boot_disk_types_labels_match_guided_contract() -> None:
         ),
         (
             "NETWORK_SSD_NON_REPLICATED",
-            "NETWORK_SSD_NON_REPLICATED  (93 GiB units, 1 GiB/s, 75k/75k IOPS, lowest-cost high-performance, no redundancy)",
+            "NETWORK_SSD_NON_REPLICATED  (93 GiB units, 1 GiB/s, 75k/75k IOPS, lowest-cost high-performance, no redundancy, encryption only when explicitly configured)",
         ),
         (
             "NETWORK_SSD_IO_M3",
-            "NETWORK_SSD_IO_M3  (93 GiB units, 1 GiB/s, 75k/75k IOPS, replicated, mirrored to 3 drives, most expensive)",
+            "NETWORK_SSD_IO_M3  (93 GiB units, 1 GiB/s, 75k/75k IOPS, replicated, mirrored to 3 drives, most expensive, encryption only when explicitly configured)",
         ),
+    ]
+
+
+def test_operator_public_ip_cidr_provider_returns_detected_ipv4_cidr(monkeypatch) -> None:
+    class _Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self) -> bytes:
+            return b"203.0.113.10\n"
+
+    def fake_urlopen(url: str, *, timeout: int):
+        assert url == "https://api.ipify.org"
+        assert timeout == 5
+        return _Response()
+
+    monkeypatch.setattr(provider_options.urllib.request, "urlopen", fake_urlopen)
+
+    lookup = ProviderOptionLookup()
+
+    resolved = lookup.resolve(
+        provider="operator_public_ip_cidr",
+        args={},
+        payload={},
+        field_path="infra.components[0].inputs.allowed_cidrs",
+    )
+
+    assert resolved == [
+        OptionChoice(
+            value="203.0.113.10/32",
+            label="203.0.113.10/32  (detected operator public IP)",
+            recommended=True,
+        )
     ]
 
 

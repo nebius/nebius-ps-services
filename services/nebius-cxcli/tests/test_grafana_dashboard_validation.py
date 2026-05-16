@@ -17,29 +17,87 @@ def test_bundled_metrics_dashboard_contract_matches_nebius_user_metrics_labels()
     contract = dashboard_validation._prometheus_contract(_dashboard("kubernetes-metrics.json"))
 
     assert contract.labels_by_metric["container_cpu_usage_seconds_total"] == {
-        "id",
         "k8s.cluster.id",
         "kubernetes_io_hostname",
+        "namespace",
+        "pod",
+    }
+    assert contract.labels_by_metric["container_cpu_cfs_periods_total"] == {
+        "k8s.cluster.id",
+        "kubernetes_io_hostname",
+        "namespace",
+        "pod",
+    }
+    assert contract.labels_by_metric["container_cpu_cfs_throttled_periods_total"] == {
+        "k8s.cluster.id",
+        "kubernetes_io_hostname",
+        "namespace",
         "pod",
     }
     assert contract.labels_by_metric["container_memory_working_set_bytes"] == {
         "k8s.cluster.id",
         "kubernetes_io_hostname",
+        "namespace",
+        "pod",
+    }
+    assert contract.labels_by_metric["container_memory_failures_total"] == {
+        "k8s.cluster.id",
+        "kubernetes_io_hostname",
+        "namespace",
         "pod",
     }
     assert contract.labels_by_metric["container_network_receive_bytes_total"] == {
-        "interface",
+        "k8s.cluster.id",
+        "kubernetes_io_hostname",
+        "namespace",
+        "pod",
+    }
+    assert contract.labels_by_metric["container_network_transmit_bytes_total"] == {
+        "k8s.cluster.id",
+        "kubernetes_io_hostname",
+        "namespace",
+        "pod",
+    }
+    assert contract.labels_by_metric["container_network_receive_errors_total"] == {
+        "k8s.cluster.id",
+        "kubernetes_io_hostname",
+        "namespace",
+        "pod",
+    }
+    assert contract.labels_by_metric["container_network_transmit_errors_total"] == {
+        "k8s.cluster.id",
+        "kubernetes_io_hostname",
+        "namespace",
+        "pod",
+    }
+    assert contract.labels_by_metric["container_fs_usage_bytes"] == {
+        "device",
         "k8s.cluster.id",
         "kubernetes_io_hostname",
     }
-    assert contract.labels_by_metric["container_network_transmit_bytes_total"] == {
-        "interface",
+    assert contract.labels_by_metric["container_fs_reads_bytes_total"] == {
+        "device",
         "k8s.cluster.id",
         "kubernetes_io_hostname",
+    }
+    assert contract.labels_by_metric["container_fs_writes_bytes_total"] == {
+        "device",
+        "k8s.cluster.id",
+        "kubernetes_io_hostname",
+    }
+    assert contract.labels_by_metric["apiserver_request_total"] == {
+        "k8s.cluster.id",
+    }
+    assert contract.labels_by_metric["apiserver_current_inflight_requests"] == {
+        "k8s.cluster.id",
     }
     assert 'query_result(count by ("k8s.cluster.id") (container_cpu_usage_seconds_total))' in (
         contract.queries
     )
+    assert any("container_cpu_cfs_throttled_periods_total" in query for query in contract.queries)
+    assert any("container_memory_failures_total" in query for query in contract.queries)
+    assert any("container_fs_reads_bytes_total" in query for query in contract.queries)
+    assert any("apiserver_request_total" in query for query in contract.queries)
     assert any("$__rate_interval" in query for query in contract.queries)
 
 
@@ -53,8 +111,12 @@ def test_bundled_gpu_dashboard_contract_matches_nebius_service_metrics_labels() 
         "DCGM_FI_DEV_GPU_TEMP",
         "DCGM_FI_DEV_GPU_UTIL",
         "DCGM_FI_DEV_MEM_CLOCK",
+        "DCGM_FI_DEV_ECC_DBE_VOL_TOTAL",
+        "DCGM_FI_DEV_NVLINK_BANDWIDTH_TOTAL",
+        "DCGM_FI_DEV_PCIE_REPLAY_COUNTER",
         "DCGM_FI_DEV_POWER_USAGE",
         "DCGM_FI_DEV_SM_CLOCK",
+        "DCGM_FI_DEV_XID_ERRORS",
     ):
         assert contract.labels_by_metric[metric] == {
             "instance_id",
@@ -78,6 +140,8 @@ def test_bundled_gpu_dashboard_contract_matches_nebius_service_metrics_labels() 
         "avg by (instance_id, uuid) (DCGM_FI_DEV_GPU_TEMP" in query
         for query in contract.queries
     )
+    assert any("DCGM_FI_DEV_XID_ERRORS" in query for query in contract.queries)
+    assert any("DCGM_FI_DEV_ECC_DBE_VOL_TOTAL" in query for query in contract.queries)
     timeseries_legends = [
         target.get("legendFormat", "")
         for panel in dashboard["panels"]
@@ -97,13 +161,58 @@ def test_bundled_logs_dashboard_contract_matches_nebius_loki_labels() -> None:
     assert any('__bucket__="default"' in query for query in contract.queries)
 
 
+def test_bundled_vm_metrics_dashboard_contract_matches_built_in_agent_labels() -> None:
+    contract = dashboard_validation._prometheus_contract(_dashboard("vm-metrics.json"))
+
+    assert contract.labels_by_metric["node_cpu_seconds_total"] == {
+        "instance_id",
+        "job",
+        "mode",
+    }
+    assert contract.labels_by_metric["node_memory_MemAvailable_bytes"] == {
+        "instance_id",
+        "job",
+    }
+    assert contract.labels_by_metric["node_disk_read_bytes_total"] == {
+        "device",
+        "instance_id",
+        "job",
+    }
+    assert contract.labels_by_metric["node_network_receive_bytes_total"] == {
+        "device",
+        "instance_id",
+        "job",
+    }
+    assert contract.labels_by_metric["DCGM_FI_DEV_GPU_UTIL"] == {
+        "instance_id",
+        "job",
+    }
+    assert any('job="nebius-observability-agent"' in query for query in contract.queries)
+    assert all("cxcli-vm-collector" not in query for query in contract.queries)
+    assert any("$__rate_interval" in query for query in contract.queries)
+
+
+def test_bundled_vm_logs_dashboard_contract_uses_nebius_loki_buckets() -> None:
+    dashboard = _dashboard("vm-logs.json")
+    contract = dashboard_validation._loki_contract(dashboard)
+    bucket_variable = next(
+        item for item in dashboard["templating"]["list"] if item["name"] == "Bucket"
+    )
+
+    assert "__bucket__" in contract.labels
+    assert bucket_variable["query"] == "sp_serial,default"
+    assert bucket_variable["current"]["value"] == "sp_serial"
+    assert all('collector="cxcli-vm-collector"' not in query for query in contract.queries)
+    assert any("|~ \"$search\"" in query for query in contract.queries)
+
+
 def test_bundled_traces_dashboard_contract_uses_traceql_search() -> None:
     contract = dashboard_validation._tempo_contract(
         _dashboard("kubernetes-traces.json"),
         datasource_uid="nebius-traces",
     )
 
-    assert contract.queries == ("{}",)
+    assert contract.queries == ("{}", "{ duration > 1s }", "{ status = error }")
     assert contract.attributes == set()
 
 
@@ -119,6 +228,8 @@ def test_bundled_grafana_contracts_cover_all_catalog_dashboards() -> None:
         "nebius-kubernetes/kubernetes-gpu",
         "nebius-kubernetes/kubernetes-logs-from-loki",
         "nebius-kubernetes/kubernetes-traces",
+        "nebius-vm/vm-metrics",
+        "nebius-vm/vm-logs",
     }
     assert contracts["nebius-kubernetes/kubernetes-cluster-monitoring"].signal == "metrics"
     assert contracts["nebius-kubernetes/kubernetes-logs-from-loki"].signal == "logs"
@@ -129,6 +240,12 @@ def test_bundled_grafana_contracts_cover_all_catalog_dashboards() -> None:
     assert contracts["nebius-kubernetes/kubernetes-gpu"].signal == "dashboard"
     assert contracts["nebius-kubernetes/kubernetes-gpu"].dashboard_uid == "cxcli-kubernetes-gpu"
     assert contracts["nebius-kubernetes/kubernetes-gpu"].datasource.name == "Nebius Services"
+    assert contracts["nebius-vm/vm-metrics"].signal == "dashboard"
+    assert contracts["nebius-vm/vm-metrics"].dashboard_uid == "cxcli-vm-metrics"
+    assert contracts["nebius-vm/vm-metrics"].datasource.name == "Nebius Services"
+    assert contracts["nebius-vm/vm-logs"].signal == "dashboard"
+    assert contracts["nebius-vm/vm-logs"].dashboard_uid == "cxcli-vm-logs"
+    assert contracts["nebius-vm/vm-logs"].datasource.name == "Nebius Logs"
 
 
 def test_dashboard_import_warning_reports_missing_live_uid(
@@ -425,3 +542,37 @@ def test_loki_validation_scopes_label_discovery_to_target_cluster(monkeypatch) -
     assert any('k8s_cluster_id=~"mk8scluster-222"' in query for query in captured_log_queries)
     assert errors == []
     assert warnings == []
+
+
+def test_loki_validation_accepts_vm_logs_bucket_only_dashboard(monkeypatch) -> None:
+    dashboard = _dashboard("vm-logs.json")
+    captured_queries: list[str] = []
+
+    def fake_proxy_get_json(*args, **kwargs):
+        path = args[2]
+        if path == "/loki/api/v1/labels":
+            return {"data": ["__bucket__"]}
+        if path == "/loki/api/v1/query_range":
+            captured_queries.append(kwargs["params"]["query"])
+            return {"data": {"result": []}}
+        raise AssertionError(path)
+
+    monkeypatch.setattr(dashboard_validation, "_proxy_get_json", fake_proxy_get_json)
+
+    errors, warnings = dashboard_validation._validate_loki(
+        base_url="http://grafana.example",
+        datasource_uid="nebius-logs",
+        datasource_name="Nebius Logs",
+        username="admin",
+        password="secret",
+        dashboard=dashboard,
+        now=1000,
+        start=0,
+        missing_label_is_error=False,
+    )
+
+    assert errors == []
+    assert not any("missing required label(s)" in warning for warning in warnings)
+    assert any('__bucket__=~"sp_serial"' in query for query in captured_queries)
+    assert all("$__interval" not in query for query in captured_queries)
+    assert any("[5m]" in query for query in captured_queries)

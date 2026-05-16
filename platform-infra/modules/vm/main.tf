@@ -7,12 +7,35 @@ resource "nebius_compute_v1_disk" "boot" {
   block_size_bytes = var.boot_disk_block_size_bytes
   size_gibibytes   = var.boot_disk_size_gib
   type             = var.boot_disk_type
-  source_image_id  = var.source_image_id
+  disk_encryption = var.boot_disk_encryption_enabled ? {
+    type = "DISK_ENCRYPTION_MANAGED"
+  } : null
+  forbid_deletion = var.boot_disk_deletion_protection
+  source_image_id = var.source_image_id
   source_image_family = var.source_image_id == null ? {
     image_family = var.source_image_family
   } : null
 
   labels = merge(var.labels, { role = "boot" })
+
+  lifecycle {
+    precondition {
+      condition     = var.boot_disk_size_gib != null
+      error_message = "boot_disk_size_gib must be set when the module creates the boot disk."
+    }
+
+    precondition {
+      condition = (
+        !var.boot_disk_encryption_enabled ||
+        contains(["NETWORK_SSD_NON_REPLICATED", "NETWORK_SSD_IO_M3"], upper(var.boot_disk_type))
+      )
+      error_message = "boot_disk_encryption_enabled can be true only for NETWORK_SSD_NON_REPLICATED or NETWORK_SSD_IO_M3 disks."
+    }
+
+    replace_triggered_by = [
+      terraform_data.cloud_init_user_data_revision,
+    ]
+  }
 }
 
 resource "nebius_compute_v1_disk" "data" {
@@ -24,8 +47,22 @@ resource "nebius_compute_v1_disk" "data" {
   block_size_bytes = each.value.block_size_bytes
   size_gibibytes   = each.value.size_gib
   type             = each.value.type
+  disk_encryption = each.value.encryption_enabled ? {
+    type = "DISK_ENCRYPTION_MANAGED"
+  } : null
+  forbid_deletion = each.value.deletion_protection
 
   labels = each.value.labels
+
+  lifecycle {
+    precondition {
+      condition = (
+        !each.value.encryption_enabled ||
+        contains(["NETWORK_SSD_NON_REPLICATED", "NETWORK_SSD_IO_M3"], each.value.type)
+      )
+      error_message = "data_disks encryption_enabled can be true only for NETWORK_SSD_NON_REPLICATED or NETWORK_SSD_IO_M3 disks."
+    }
+  }
 }
 
 resource "nebius_compute_v1_gpu_cluster" "vm" {
@@ -36,6 +73,10 @@ resource "nebius_compute_v1_gpu_cluster" "vm" {
   infiniband_fabric = var.gpu_cluster_infiniband_fabric
 
   labels = var.labels
+}
+
+resource "terraform_data" "cloud_init_user_data_revision" {
+  input = sha256(local.cloud_init_user_data)
 }
 
 resource "nebius_compute_v1_instance" "vm" {
@@ -88,6 +129,14 @@ resource "nebius_compute_v1_instance" "vm" {
   labels = var.labels
 
   lifecycle {
+    ignore_changes = [
+      cloud_init_user_data,
+    ]
+
+    replace_triggered_by = [
+      terraform_data.cloud_init_user_data_revision,
+    ]
+
     precondition {
       condition = !(
         var.boot_disk_existing_id == null &&
@@ -114,6 +163,17 @@ resource "nebius_compute_v1_instance" "vm" {
         )
       )
       error_message = "boot_disk_existing_id cannot be combined with source_image_id or source_image_family."
+    }
+
+    precondition {
+      condition = !(
+        var.boot_disk_existing_id != null &&
+        (
+          var.boot_disk_encryption_enabled ||
+          var.boot_disk_deletion_protection
+        )
+      )
+      error_message = "boot_disk_encryption_enabled and boot_disk_deletion_protection apply only when this module creates the boot disk."
     }
 
     precondition {
@@ -185,47 +245,6 @@ resource "nebius_compute_v1_instance" "vm" {
         )
       )
       error_message = "Set gpu_cluster_enabled=true before configuring GPU cluster inputs."
-    }
-
-    precondition {
-      condition = !(
-        var.observability_collector_enabled &&
-        var.service_account_id == null
-      )
-      error_message = "observability_collector_enabled=true requires service_account_id so the VM metadata token can authenticate writes."
-    }
-
-    precondition {
-      condition = !(
-        var.observability_collector_enabled &&
-        !(
-          var.observability_collector_metrics_enabled ||
-          var.observability_collector_logs_enabled
-        )
-      )
-      error_message = "observability_collector_enabled=true requires observability_collector_metrics_enabled or observability_collector_logs_enabled."
-    }
-
-    precondition {
-      condition = !(
-        var.observability_collector_enabled &&
-        (
-          var.boot_disk_existing_id != null ||
-          var.source_image_id != null ||
-          var.source_image_family == null ||
-          !strcontains(lower(var.source_image_family), "ubuntu")
-        )
-      )
-      error_message = "observability_collector_enabled=true currently supports module-managed Ubuntu image-family boot disks only."
-    }
-
-    precondition {
-      condition = !(
-        var.observability_collector_enabled &&
-        var.observability_collector_metrics_enabled &&
-        var.observability_collector_metrics_export_port == var.observability_collector_prometheus_agent_port
-      )
-      error_message = "observability_collector_metrics_export_port and observability_collector_prometheus_agent_port must differ."
     }
 
     precondition {

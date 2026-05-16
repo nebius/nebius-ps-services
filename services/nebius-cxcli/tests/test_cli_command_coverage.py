@@ -205,7 +205,7 @@ def test_render_overwrite_warning_never_mentions_flux_system(tmp_path: Path) -> 
     assert "generated/flux/flux-system" not in warning_with_bootstrap
 
 
-def test_render_overwrite_warning_treats_removed_inventory_scaffold_as_meaningful(
+def test_render_overwrite_warning_treats_inventory_files_as_meaningful(
     tmp_path: Path,
 ) -> None:
     fake_paths = _fake_paths(tmp_path)
@@ -1502,14 +1502,6 @@ def test_render_command_invokes_renderer(tmp_path: Path, monkeypatch: pytest.Mon
     )
     monkeypatch.setattr(
         cli,
-        "write_inventory",
-        lambda config, paths, **kwargs: (
-            calls.update({"inventory_config": config, "inventory_paths": paths})
-            or SimpleNamespace(markdown=paths.inventory_dir / "deploy-report.md")
-        ),
-    )
-    monkeypatch.setattr(
-        cli,
         "_write_generated_runtime_manifest",
         lambda config, paths, *, source_profile, **kwargs: (
             calls.update(
@@ -1534,7 +1526,6 @@ def test_render_command_invokes_renderer(tmp_path: Path, monkeypatch: pytest.Mon
     assert calls["outputs_paths"] == fake_paths
     assert calls["flux_config"] == "cfg"
     assert calls["flux_outputs"] == {}
-    assert calls["inventory_config"] == "cfg"
     assert calls["manifest_config"] == "cfg"
     assert calls["manifest_profile"] == SourceProfile.PORTABLE
     assert calls["lock_config"] == "cfg"
@@ -1544,7 +1535,6 @@ def test_render_command_invokes_renderer(tmp_path: Path, monkeypatch: pytest.Mon
     assert isinstance(staged_paths, ProjectPaths)
     assert staged_paths.generated_dir.name.startswith(".generated-staging-")
     assert calls["flux_paths"] == staged_paths
-    assert calls["inventory_paths"] == staged_paths
     assert calls["manifest_paths"] == staged_paths
     assert calls["manifest_kwargs"]["manifest_paths"] == fake_paths
     assert calls["manifest_kwargs"]["output_path"] == (
@@ -1610,7 +1600,6 @@ def test_render_command_persists_quota_report_and_warns(
     monkeypatch.setattr(cli, "render_terraform_artifacts", lambda *_args, **_kwargs: [])
     monkeypatch.setattr(cli, "_runtime_component_output_values", lambda *_args, **_kwargs: {})
     monkeypatch.setattr(cli, "render_flux", lambda *_args, **_kwargs: [])
-    monkeypatch.setattr(cli, "write_inventory", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(cli, "_try_generate_terraform_lock_file", lambda *_args, **_kwargs: False)
 
     def fake_warn_on_config_live_quota_issues(
@@ -1694,7 +1683,6 @@ def test_render_command_accepts_local_source_profile(
     monkeypatch.setattr(
         cli, "render_flux", lambda config, paths, *, component_output_values=None: []
     )
-    monkeypatch.setattr(cli, "write_inventory", lambda config, paths, **kwargs: None)
     monkeypatch.setattr(
         cli,
         "_write_generated_runtime_manifest",
@@ -2275,13 +2263,6 @@ def test_render_command_force_allows_noninteractive_overwrite(
     monkeypatch.setattr(cli, "render_flux", lambda *_args, **_kwargs: [])
     monkeypatch.setattr(
         cli,
-        "write_inventory",
-        lambda *_args, **_kwargs: SimpleNamespace(
-            markdown=fake_paths.inventory_dir / "deploy-report.md"
-        ),
-    )
-    monkeypatch.setattr(
-        cli,
         "_write_generated_runtime_manifest",
         lambda *_args, **_kwargs: fake_paths.generated_dir / "nebius-cxcli-manifest.json",
     )
@@ -2310,13 +2291,6 @@ def test_render_command_prompts_before_overwrite_when_interactive(
     )
     monkeypatch.setattr(cli, "_runtime_component_output_values", lambda *_args, **_kwargs: {})
     monkeypatch.setattr(cli, "render_flux", lambda *_args, **_kwargs: [])
-    monkeypatch.setattr(
-        cli,
-        "write_inventory",
-        lambda *_args, **_kwargs: SimpleNamespace(
-            markdown=fake_paths.inventory_dir / "deploy-report.md"
-        ),
-    )
     monkeypatch.setattr(
         cli,
         "_write_generated_runtime_manifest",
@@ -2421,7 +2395,7 @@ def test_deploy_command_passes_auto_auth_flag(
         skip_validation_kinds: set[str],
         requested_target_ref: str | None = None,
         all_targets: bool = False,
-    ) -> None:
+    ) -> cli.DeployRunSummary:
         captured["config"] = config
         captured["paths"] = paths
         captured["manifest"] = loaded_manifest
@@ -2430,6 +2404,7 @@ def test_deploy_command_passes_auto_auth_flag(
         captured["skip_validation_kinds"] = skip_validation_kinds
         captured["requested_target_ref"] = requested_target_ref
         captured["all_targets"] = all_targets
+        return cli.DeployRunSummary()
 
     monkeypatch.setattr(cli, "_deploy_generated_artifacts", _fake_deploy_generated_artifacts)
 
@@ -2440,12 +2415,13 @@ def test_deploy_command_passes_auto_auth_flag(
 
     assert result.exit_code == 0, result.output
     output = _plain_output(result.output)
-    assert "Local deploy completed from" in output
-    unwrapped_output = output.replace("\n", "")
-    assert (
-        f"Complete deploy report: {fake_paths.inventory_dir / 'deploy-report.md'}"
-        in unwrapped_output
-    )
+    assert "Deployment summary" in output
+    assert "Validation:" in output
+    assert "Copy/paste commands:" in output
+    assert "Important paths:" in output
+    assert "No deploy-time validations were configured for this run." in output
+    assert f"Deploy report: {fake_paths.inventory_dir / 'deploy-report.md'}" in output
+    assert f"Deploy completed from {fake_paths.generated_dir}" in output
     assert captured == {
         "config": "cfg",
         "paths": fake_paths,
@@ -2456,6 +2432,102 @@ def test_deploy_command_passes_auto_auth_flag(
         "requested_target_ref": None,
         "all_targets": False,
     }
+
+
+def test_deploy_command_prints_ssh_jumphost_access_hint(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_paths = _fake_paths(tmp_path)
+    manifest = {"schema": "nebius-cxcli-generated/v1"}
+
+    monkeypatch.setattr(cli, "_load_deploy_context", lambda _path: ("cfg", fake_paths, manifest))
+    monkeypatch.setattr(
+        cli, "_deploy_generated_artifacts", lambda *args, **kwargs: cli.DeployRunSummary()
+    )
+    monkeypatch.setattr(
+        cli,
+        "ssh_jump_access_hints",
+        lambda _config, _paths: [
+            {
+                "target_label": "vm",
+                "jump_host_label": "ssh-jumphost",
+                "command": "ssh -J admin@198.51.100.20 ubuntu@10.0.0.15",
+            }
+        ],
+    )
+
+    result = runner.invoke(cli.app, ["deploy", str(fake_paths.config_path)])
+
+    assert result.exit_code == 0, result.output
+    output = _plain_output(result.output)
+    assert "Copy/paste commands:" in output
+    assert "# SSH vm via ssh-jumphost" in output
+    assert "ssh -J admin@198.51.100.20 ubuntu@10.0.0.15" in output
+
+
+def test_deploy_command_prints_wireguard_access_commands(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_paths = _fake_paths(tmp_path)
+    manifest = {"schema": "nebius-cxcli-generated/v1"}
+
+    monkeypatch.setattr(cli, "_load_deploy_context", lambda _path: ("cfg", fake_paths, manifest))
+    monkeypatch.setattr(
+        cli, "_deploy_generated_artifacts", lambda *args, **kwargs: cli.DeployRunSummary()
+    )
+    monkeypatch.setattr(
+        cli,
+        "wireguard_access_command_hints",
+        lambda _config, _paths: [
+            {
+                "label": "WireGuard connect laptop",
+                "command": "wg-quick up /tmp/laptop.conf",
+            },
+            {
+                "label": "WireGuard disconnect laptop",
+                "command": "wg-quick down /tmp/laptop.conf",
+            },
+        ],
+    )
+
+    result = runner.invoke(cli.app, ["deploy", str(fake_paths.config_path)])
+
+    assert result.exit_code == 0, result.output
+    output = _plain_output(result.output)
+    assert "# WireGuard connect laptop" in output
+    assert "wg-quick up /tmp/laptop.conf" in output
+    assert "# WireGuard disconnect laptop" in output
+    assert "wg-quick down /tmp/laptop.conf" in output
+
+
+def test_deploy_command_prints_wireguard_generation_command(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_paths = _fake_paths(tmp_path)
+    manifest = {"schema": "nebius-cxcli-generated/v1"}
+
+    monkeypatch.setattr(cli, "_load_deploy_context", lambda _path: ("cfg", fake_paths, manifest))
+    monkeypatch.setattr(
+        cli, "_deploy_generated_artifacts", lambda *args, **kwargs: cli.DeployRunSummary()
+    )
+    monkeypatch.setattr(
+        cli,
+        "wireguard_access_command_hints",
+        lambda _config, _paths: [
+            {
+                "label": "Generate WireGuard client config for wireguard-gw",
+                "command": f"nebius-cxcli wireguard --gen-client-conf {fake_paths.config_path}",
+            },
+        ],
+    )
+
+    result = runner.invoke(cli.app, ["deploy", str(fake_paths.config_path)])
+
+    assert result.exit_code == 0, result.output
+    output = _plain_output(result.output)
+    assert "# Generate WireGuard client config for wireguard-gw" in output
+    assert f"nebius-cxcli wireguard --gen-client-conf {fake_paths.config_path}" in output
+    assert "--component wireguard-gw" not in output
 
 
 def test_deploy_command_passes_one_run_validation_skip_flags(
@@ -2509,7 +2581,9 @@ def test_deploy_command_rejects_unknown_one_run_validation_skip_value(
     manifest = {"schema": "nebius-cxcli-generated/v1"}
 
     monkeypatch.setattr(cli, "_load_deploy_context", lambda _path: ("cfg", fake_paths, manifest))
-    monkeypatch.setattr(cli, "_deploy_generated_artifacts", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        cli, "_deploy_generated_artifacts", lambda *args, **kwargs: cli.DeployRunSummary()
+    )
 
     result = runner.invoke(
         cli.app,
@@ -2537,18 +2611,17 @@ def test_deploy_command_accepts_config_yaml_target(
         return "cfg", fake_paths, manifest
 
     monkeypatch.setattr(cli, "_load_deploy_context", _fake_load)
-    monkeypatch.setattr(cli, "_deploy_generated_artifacts", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        cli, "_deploy_generated_artifacts", lambda *args, **kwargs: cli.DeployRunSummary()
+    )
 
     result = runner.invoke(cli.app, ["deploy", str(fake_paths.config_path)])
 
     assert result.exit_code == 0, result.output
     assert captured["target"] == fake_paths.config_path
     output = _plain_output(result.output)
-    unwrapped_output = output.replace("\n", "")
-    assert f"Local deploy completed from {fake_paths.generated_dir}" in unwrapped_output
-    assert unwrapped_output.endswith(
-        f"Complete deploy report: {fake_paths.inventory_dir / 'deploy-report.md'}"
-    )
+    assert f"Deploy completed from {fake_paths.generated_dir}" in output
+    assert f"Deploy report: {fake_paths.inventory_dir / 'deploy-report.md'}" in output
 
 
 def test_deploy_command_rejects_generated_target_with_guidance(
@@ -3618,7 +3691,7 @@ def test_deploy_generated_artifacts_validates_before_apply_and_prepares_kube_env
     monkeypatch.setattr(
         cli,
         "_warn_if_flux_gitops_not_bootstrapped",
-        lambda config, paths, *, extra_env=None, target_ref=None: calls.append(
+        lambda config, paths, *, extra_env=None, target_ref=None, **_kwargs: calls.append(
             ("warn_bootstrap", config, paths, extra_env, target_ref)
         ),
     )
@@ -3851,7 +3924,7 @@ def test_deploy_generated_artifacts_without_apps_still_prepares_kube_env(
     monkeypatch.setattr(
         cli,
         "_warn_if_flux_gitops_not_bootstrapped",
-        lambda config, paths, *, extra_env=None: calls.append(
+        lambda config, paths, *, extra_env=None, **_kwargs: calls.append(
             ("warn_bootstrap", config, paths, extra_env)
         ),
     )
@@ -4307,15 +4380,7 @@ def test_deploy_generated_artifacts_updates_validation_spinner_when_terminal(
         "Starting validation 2/2: GPU Visibility test.",
         "[bold white]GPU Visibility[/bold white] [dim][9s][/dim] pods 3/3 Succeeded",
     ]
-    assert printed == [
-        "Deploy validation summary:",
-        "  Overall: PASS (2/2 completed, 0 not run)",
-        "  PASS GPU stack readiness: GPU Operator ready on 1 Ready GPU node(s).",
-        "  PASS GPU Visibility test: 3/3 selected node(s) passed; total Ready GPU nodes 3.",
-        f"  Combined report: {fake_paths.inventory_dir / 'deploy-report.md'}",
-        f"  JSON detail: {fake_paths.inventory_dir / 'gpu-stack-readiness-report.json'}",
-        f"  JSON detail: {fake_paths.inventory_dir / 'gpu-visibility-report.json'}",
-    ]
+    assert printed == []
 
 
 def test_deploy_generated_artifacts_target_report_excludes_unselected_validations(
@@ -4427,13 +4492,7 @@ def test_deploy_generated_artifacts_target_report_excludes_unselected_validation
     assert "GPU Visibility test (cluster2)" in markdown
     assert "GPU Visibility test (cluster1)" not in markdown
     assert not stale_cluster1_report.exists()
-    assert printed == [
-        "Deploy validation summary:",
-        "  Overall: PASS (1/1 completed, 0 not run)",
-        "  PASS GPU Visibility test (cluster2): 4/4 selected node(s) passed; total Ready GPU nodes 4.",
-        f"  Combined report: {fake_paths.inventory_dir / 'deploy-report.md'}",
-        f"  JSON detail: {fake_paths.inventory_dir / 'gpu-visibility-report-cluster2.json'}",
-    ]
+    assert printed == []
 
 
 def test_deploy_generated_artifacts_keeps_required_mysterybox_validation_when_skipping_optional(
@@ -4555,18 +4614,6 @@ def test_deploy_generated_artifacts_keeps_required_mysterybox_validation_when_sk
             "Skipping optional deploy-time validations for this run (--skip-validations); "
             "required validations still run."
         ),
-        "Deploy validation summary:",
-        "  Overall: INCOMPLETE (1/2 completed, 1 not run)",
-        "  NOT RUN GPU Visibility test: No deploy validation results recorded yet.",
-        (
-            "  PASS ESO MysteryBox connectivity (mk8s): 2/2 check(s) passed; TLS ok; "
-            "ClusterSecretStore/nebius-mysterybox-shared Ready=True."
-        ),
-        f"  Combined report: {fake_paths.inventory_dir / 'deploy-report.md'}",
-        (
-            "  JSON detail: "
-            f"{fake_paths.inventory_dir / 'mysterybox-eso-connectivity-report-mk8s.json'}"
-        ),
     ]
 
 
@@ -4674,11 +4721,6 @@ def test_deploy_generated_artifacts_prints_validation_phase_lines_when_console_i
     assert printed == [
         "Starting validation 1/1: GPU Visibility test.",
         "[bold white]GPU Visibility[/bold white] [dim][7s][/dim] pods 3/3 Succeeded",
-        "Deploy validation summary:",
-        "  Overall: PASS (1/1 completed, 0 not run)",
-        "  PASS GPU Visibility test: 3/3 selected node(s) passed; total Ready GPU nodes 3.",
-        f"  Combined report: {fake_paths.inventory_dir / 'deploy-report.md'}",
-        f"  JSON detail: {fake_paths.inventory_dir / 'gpu-visibility-report.json'}",
     ]
 
 
@@ -4782,12 +4824,20 @@ def test_deploy_generated_artifacts_writes_summary_even_when_validation_fails(
     assert "### GPU Visibility test" in markdown
     assert "No deploy validation results recorded yet." in markdown
     assert printed == [
-        "Deploy validation summary:",
+        "",
+        "[bold]Deployment summary[/bold]",
+        "Validation:",
         "  Overall: FAIL (1/2 completed, 1 not run)",
         "  FAIL GPU stack readiness: GPU Operator ready on 0 Ready GPU node(s).",
         "  NOT RUN GPU Visibility test: No deploy validation results recorded yet.",
-        f"  Combined report: {fake_paths.inventory_dir / 'deploy-report.md'}",
-        f"  JSON detail: {fake_paths.inventory_dir / 'gpu-stack-readiness-report.json'}",
+        "Copy/paste commands:",
+        "  No immediate access or follow-up commands were derived.",
+        "Important paths:",
+        f"  Generated bundle: {fake_paths.generated_dir}",
+        f"  Deploy report: {fake_paths.inventory_dir / 'deploy-report.md'}",
+        f"  Generated manifest: {fake_paths.generated_dir / 'nebius-cxcli-manifest.json'}",
+        f"  Validation JSON: {fake_paths.inventory_dir / 'gpu-stack-readiness-report.json'}",
+        f"Deploy failed from {fake_paths.generated_dir}",
     ]
 
 
@@ -8800,7 +8850,7 @@ def test_flux_apply_command_applies_rendered_flux_with_cluster_handoff(
     monkeypatch.setattr(
         cli,
         "_warn_if_flux_gitops_not_bootstrapped",
-        lambda config, paths, *, extra_env=None, target_ref=None: captured.update(
+        lambda config, paths, *, extra_env=None, target_ref=None, **_kwargs: captured.update(
             {"warn_bootstrap": (config, paths, extra_env, target_ref)}
         ),
     )
@@ -8918,7 +8968,7 @@ def test_flux_apply_command_all_targets_persists_contexts_without_switching_curr
     monkeypatch.setattr(
         cli,
         "_warn_if_flux_gitops_not_bootstrapped",
-        lambda config, paths, *, extra_env=None, target_ref=None: cast(
+        lambda config, paths, *, extra_env=None, target_ref=None, **_kwargs: cast(
             list[tuple[object, ...]], captured["warn_bootstrap"]
         ).append((config, paths, extra_env, target_ref)),
     )
@@ -9087,7 +9137,7 @@ def test_warn_if_flux_gitops_not_bootstrapped_prints_guidance(
         lambda message, *args, **kwargs: messages.append(str(message)),
     )
 
-    cli._warn_if_flux_gitops_not_bootstrapped(
+    command = cli._warn_if_flux_gitops_not_bootstrapped(
         {"apps": {"charts": [{"id": "gateway-helm", "enabled": True}]}},
         fake_paths,
         extra_env={"KUBECONFIG": "/tmp/kubeconfig"},
@@ -9100,6 +9150,21 @@ def test_warn_if_flux_gitops_not_bootstrapped_prints_guidance(
     assert "Commit and push the rendered generated/flux path" in messages[2]
     assert "Run to enable GitOps sync:" in messages[3]
     assert f"nebius-cxcli flux bootstrap {fake_paths.generated_dir}" == messages[4]
+    assert command == f"nebius-cxcli flux bootstrap {fake_paths.generated_dir}"
+
+    messages.clear()
+    command = cli._warn_if_flux_gitops_not_bootstrapped(
+        {"apps": {"charts": [{"id": "gateway-helm", "enabled": True}]}},
+        fake_paths,
+        extra_env={"KUBECONFIG": "/tmp/kubeconfig"},
+        print_command=False,
+    )
+
+    assert len(messages) == 3
+    assert "Flux GitOps bootstrap is not configured" in messages[0]
+    assert "final Deployment summary" in messages[1]
+    assert "Run to enable GitOps sync:" not in "\n".join(messages)
+    assert command == f"nebius-cxcli flux bootstrap {fake_paths.generated_dir}"
 
 
 def test_help_text_aligns_render_and_apply_surfaces() -> None:
@@ -9159,6 +9224,9 @@ def test_help_text_aligns_render_and_apply_surfaces() -> None:
     assert "does not create or update github workflows" in deploy_help
     assert "for a single-target run, the refreshed validation summary" in deploy_help
     assert "include only validations for that selected target" in deploy_help
+    assert "validation pass/fail" in deploy_help
+    assert "copy-paste commands" in deploy_help
+    assert "important generated paths" in deploy_help
     assert "destroy all rendered project resources" in destroy_help
     assert "destructive inverse of `deploy`" in destroy_help
     assert "whole rendered project" in destroy_help
@@ -9197,6 +9265,14 @@ def test_help_text_maps_commands_to_target_types() -> None:
         in output
     )
     assert "email also uses config.yaml and resolves sibling generated/ automatically" in output
+    assert (
+        "wireguard uses config.yaml to generate client configs and manage VM-local "
+        "WireGuard route defaults from a deployed VPN gateway"
+    ) in output
+    assert (
+        "ssh-jumphost uses config.yaml to manage VM-local SSH source CIDR allowlists"
+        in output
+    )
     assert "validate-generated uses generated/" in output
     assert "terraform uses generated/infra" in output
     assert "flux uses generated/flux" in output
@@ -9230,6 +9306,8 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     validate_sources_result = runner.invoke(cli.app, ["validate-sources", "--help"])
     validate_generated_result = runner.invoke(cli.app, ["validate-generated", "--help"])
     quota_request_result = runner.invoke(cli.app, ["quota-request", "--help"])
+    wireguard_result = runner.invoke(cli.app, ["wireguard", "--help"])
+    ssh_jumphost_result = runner.invoke(cli.app, ["ssh-jumphost", "--help"])
     deploy_result = runner.invoke(cli.app, ["deploy", "--help"])
     destroy_result = runner.invoke(cli.app, ["destroy", "--help"])
     tf_destroy_result = runner.invoke(cli.app, ["terraform", "destroy", "--help"])
@@ -9246,6 +9324,8 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert validate_sources_result.exit_code == 0, validate_sources_result.output
     assert validate_generated_result.exit_code == 0, validate_generated_result.output
     assert quota_request_result.exit_code == 0, quota_request_result.output
+    assert wireguard_result.exit_code == 0, wireguard_result.output
+    assert ssh_jumphost_result.exit_code == 0, ssh_jumphost_result.output
     assert deploy_result.exit_code == 0, deploy_result.output
     assert destroy_result.exit_code == 0, destroy_result.output
     assert tf_destroy_result.exit_code == 0, tf_destroy_result.output
@@ -9262,6 +9342,8 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     validate_sources_help = _plain_output(validate_sources_result.output)
     validate_generated_help = _plain_output(validate_generated_result.output)
     quota_request_help = _plain_output(quota_request_result.output)
+    wireguard_help = _plain_output(wireguard_result.output)
+    ssh_jumphost_help = _plain_output(ssh_jumphost_result.output)
     deploy_help = _plain_output(deploy_result.output)
     destroy_help = _plain_output(destroy_result.output)
     tf_destroy_help = _plain_output(tf_destroy_result.output)
@@ -9270,6 +9352,8 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     normalized_email_help = " ".join(email_help.split())
     normalized_component_add_help = " ".join(component_add_help.split())
     normalized_component_remove_help = " ".join(component_remove_help.split())
+    normalized_wireguard_help = " ".join(wireguard_help.split())
+    normalized_ssh_jumphost_help = " ".join(ssh_jumphost_help.split())
 
     assert "create [OPTIONS] DEPLOYMENTS_ROOT" in create_help
     assert "--validate-config --no-validate-config" in " ".join(create_help.split())
@@ -9315,6 +9399,11 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "catalog and source settings" in normalized_component_add_help
     assert "before component add" in normalized_component_add_help
     assert "day-2 additive" in normalized_component_add_help
+    assert "Apps are" in normalized_component_add_help
+    assert "Helm charts" in normalized_component_add_help
+    assert "enabled MK8s target" in normalized_component_add_help
+    assert "requires an enabled" in normalized_create_help
+    assert "MK8s infra target" in normalized_create_help
     assert "remove [OPTIONS] CONFIG_YAML [COMPONENT_SELECTOR]..." in component_remove_help
     assert "<id>@<instance-id>" in normalized_component_remove_help
     assert "infra:<id>" in normalized_component_remove_help
@@ -9323,6 +9412,50 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "Omit" in normalized_component_remove_help
     assert "prompt" in normalized_component_remove_help
     assert "interactively" in normalized_component_remove_help
+    assert "wireguard [OPTIONS]" in wireguard_help
+    assert "Use exactly one mode per invocation" in normalized_wireguard_help
+    assert "--gen-client-conf CONFIG_YAML generates and downloads one client .conf" in normalized_wireguard_help
+    assert "prints the local wg-quick up/down commands" in normalized_wireguard_help
+    assert "OS-specific install hint when wg-quick is missing" in normalized_wireguard_help
+    assert "wg-quick-safe filename/interface name" in normalized_wireguard_help
+    assert "max 15" in normalized_wireguard_help
+    assert "unique" in normalized_wireguard_help
+    assert "short" in normalized_wireguard_help
+    assert "--add-local-subnets CONFIG_YAML adds future-client route defaults" in normalized_wireguard_help
+    assert "--remove-local-subnets CONFIG_YAML removes future-client route defaults" in normalized_wireguard_help
+    assert "Add/remove subnet modes require one comma-separated --local-subnet value" in normalized_wireguard_help
+    assert "Generation mode" in normalized_wireguard_help
+    assert "All modes" in normalized_wireguard_help
+    assert "pass exactly one" in normalized_wireguard_help
+    assert "comma-separated" in normalized_wireguard_help
+    assert "same selected component instance" in normalized_wireguard_help
+    assert "Examples" in normalized_wireguard_help
+    assert "nebius-cxcli wireguard --gen-client-conf <config.yaml>" in normalized_wireguard_help
+    assert (
+        "nebius-cxcli wireguard --add-local-subnets <config.yaml> --local-subnet "
+        "10.20.0.0/16,10.30.0.0/16"
+    ) in normalized_wireguard_help
+    assert (
+        "nebius-cxcli wireguard --remove-local-subnets <config.yaml> --local-subnet "
+        "10.20.0.0/16,10.30.0.0/16"
+    ) in normalized_wireguard_help
+    assert "ssh-jumphost [OPTIONS]" in ssh_jumphost_help
+    assert "Use exactly one mode per invocation" in normalized_ssh_jumphost_help
+    assert (
+        "--add-allowed-cidrs CONFIG_YAML adds source CIDRs to the VM-local allowlist"
+        in normalized_ssh_jumphost_help
+    )
+    assert (
+        "--remove-allowed-cidrs CONFIG_YAML removes source CIDRs from the VM-local allowlist"
+        in normalized_ssh_jumphost_help
+    )
+    assert (
+        "--list-allowed-cidrs CONFIG_YAML lists the VM-local allowlist"
+        in normalized_ssh_jumphost_help
+    )
+    assert "one comma-separated --allowed-cidr value" in normalized_ssh_jumphost_help
+    assert "refuses to apply an empty allowlist" in normalized_ssh_jumphost_help
+    assert "same selected component instance" in normalized_ssh_jumphost_help
     assert "config.yaml row" in normalized_component_remove_help
     assert "Already-absent selectors" in normalized_component_remove_help
     assert "are skipped" in normalized_component_remove_help
