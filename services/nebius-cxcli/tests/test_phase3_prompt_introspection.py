@@ -127,16 +127,16 @@ def test_required_leaf_names_for_custom_component(monkeypatch) -> None:
         lambda _source: ("platform", "preset"),
     )
     entry = ComponentEntry(
-        id="wireguard-jumphost",
+        id="wireguard-gw",
         scope="infra",
-        config_path="infra.wireguard-jumphost",
+        config_path="infra.wireguard-gw",
         description="wg",
-        source="platform-infra/modules/wireguard-jumphost",
+        source="platform-infra/modules/wireguard-gw",
     )
     required = _required_leaf_names_for_entry(entry)
     assert required == {"platform", "preset"}
     sort_key = _prompt_path_sort_key(
-        ("infra", "wireguard-jumphost", "platform"),
+        ("infra", "wireguard-gw", "platform"),
         required_leaf_names=required,
     )
     assert sort_key[0] == 0

@@ -49,8 +49,8 @@ def test_schema_accepts_ssh_public_key_local_file_path(tmp_path: Path) -> None:
     payload = _dynamic_payload()
     payload["infra"]["components"] = [
         {
-            "id": "wireguard-jumphost",
-            "instance_id": "wireguard-jumphost",
+            "id": "wireguard-gw",
+            "instance_id": "wireguard-gw",
             "enabled": True,
             "inputs": {
                 "ssh_user_name": "ubuntu",
@@ -326,6 +326,34 @@ def test_schema_rejects_app_chart_target_ref(tmp_path: Path) -> None:
     assert "apps.charts[0] has unsupported field(s): target_ref" in str(exc_info.value)
 
 
+def test_schema_rejects_enabled_app_without_mk8s_target(tmp_path: Path) -> None:
+    payload = _dynamic_payload()
+    payload["infra"]["components"] = [
+        {
+            "id": "vm",
+            "instance_id": "vm",
+            "enabled": True,
+            "inputs": {},
+        }
+    ]
+    payload["deploy"] = {"observability": {"enabled": False}}
+    payload["apps"]["charts"] = [
+        {
+            "id": "nvidia-gpu-operator",
+            "instance_id": "nvidia-gpu-operator",
+            "enabled": True,
+            "values": {},
+        }
+    ]
+
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    with pytest.raises(ValueError) as exc_info:
+        load_config(config_path)
+    assert "apps.charts requires at least one enabled MK8s target" in str(exc_info.value)
+
+
 def test_schema_rejects_target_bound_app_instance_id_mismatch(tmp_path: Path) -> None:
     payload = _dynamic_payload()
     payload["infra"]["components"] = [
@@ -398,3 +426,31 @@ def test_schema_rejects_root_kubernetes_observability_with_vm(tmp_path: Path) ->
     with pytest.raises(ValueError) as exc_info:
         load_config(config_path)
     assert "deploy.observability has unsupported field(s): kubernetes" in str(exc_info.value)
+
+
+def test_schema_rejects_vm_observability_collector_branch(tmp_path: Path) -> None:
+    payload = _dynamic_payload()
+    payload["infra"]["components"] = [
+        {
+            "id": "vm",
+            "instance_id": "vm",
+            "enabled": True,
+            "inputs": {},
+        }
+    ]
+    payload["deploy"] = {
+        "observability": {
+            "enabled": True,
+            "vm": {
+                "logs": {"enabled": True, "systemd_units": []},
+                "collector": {"enabled": False},
+            },
+        }
+    }
+
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    with pytest.raises(ValueError) as exc_info:
+        load_config(config_path)
+    assert "deploy.observability.vm has unsupported field(s): collector" in str(exc_info.value)

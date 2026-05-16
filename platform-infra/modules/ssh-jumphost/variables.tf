@@ -8,16 +8,6 @@ variable "parent_id" {
   }
 }
 
-variable "region" {
-  description = "Nebius region ID used for defaults and metadata."
-  type        = string
-  nullable    = false
-  validation {
-    condition     = length(trimspace(var.region)) > 0
-    error_message = "region cannot be empty."
-  }
-}
-
 variable "subnet_id" {
   description = "Subnet ID where the jump-host VM interface is attached."
   type        = string
@@ -39,17 +29,23 @@ variable "name" {
 }
 
 variable "platform" {
-  description = "Compute platform for jump-host VM. If null, region defaults are used."
+  description = "Nebius compute platform ID for the jump-host VM, for example cpu-d3."
   type        = string
-  default     = null
-  nullable    = true
+  nullable    = false
+  validation {
+    condition     = length(trimspace(var.platform)) > 0
+    error_message = "platform cannot be empty."
+  }
 }
 
 variable "preset" {
-  description = "Compute preset for jump-host VM. If null, region defaults are used."
+  description = "Nebius compute preset name for the selected platform."
   type        = string
-  default     = null
-  nullable    = true
+  nullable    = false
+  validation {
+    condition     = length(trimspace(var.preset)) > 0
+    error_message = "preset cannot be empty."
+  }
 }
 
 variable "ssh_user_name" {
@@ -60,9 +56,10 @@ variable "ssh_user_name" {
   validation {
     condition = (
       length(trimspace(var.ssh_user_name)) > 0 &&
-      can(regex("^[a-z_][a-z0-9_-]{0,31}$", var.ssh_user_name))
+      can(regex("^[a-z_][a-z0-9_-]{0,31}$", var.ssh_user_name)) &&
+      !contains(["root", "admin"], lower(var.ssh_user_name))
     )
-    error_message = "ssh_user_name must match Linux username format (for example ubuntu, admin_user)."
+    error_message = "ssh_user_name must match Linux username format and must not be root or admin."
   }
 }
 
@@ -71,15 +68,17 @@ variable "ssh_public_key" {
   type        = string
   nullable    = false
   validation {
-    condition     = length(trimspace(var.ssh_public_key)) >= 20
-    error_message = "ssh_public_key must be a valid inline public key string."
+    condition = can(regex(
+      "^(ssh-rsa|ssh-ed25519|ecdsa-sha2-nistp(256|384|521))[[:space:]]+[^[:space:]]+([[:space:]]+.*)?$",
+      trimspace(var.ssh_public_key),
+    ))
+    error_message = "ssh_public_key must be an inline OpenSSH public key string using ssh-rsa, ssh-ed25519, or ECDSA."
   }
 }
 
 variable "allowed_cidrs" {
-  description = "Allowed source CIDRs for inbound SSH on the jump-host VM."
+  description = "Initial source IPv4 CIDRs allowed to SSH to the jump-host VM. Day-2 changes are managed by the VM-local helper or nebius-cxcli without editing cloud-init."
   type        = list(string)
-  default     = []
   nullable    = false
   validation {
     condition = alltrue([
@@ -141,7 +140,6 @@ variable "public_ip_allocation_name" {
 variable "boot_disk_size_gib" {
   description = "Boot disk size in GiB."
   type        = number
-  default     = 60
   nullable    = false
   validation {
     condition = (
@@ -182,10 +180,23 @@ variable "boot_disk_type" {
   }
 }
 
+variable "boot_disk_encryption_enabled" {
+  description = "Enable provider-managed data encryption on the boot disk. Nebius supports explicit disk_encryption only for NETWORK_SSD_NON_REPLICATED and NETWORK_SSD_IO_M3; NETWORK_SSD is always encrypted by the platform."
+  type        = bool
+  default     = false
+  nullable    = false
+}
+
+variable "boot_disk_deletion_protection" {
+  description = "Enable deletion protection on the jump-host boot disk."
+  type        = bool
+  default     = false
+  nullable    = false
+}
+
 variable "source_image_family" {
   description = "Image family used for the jump-host VM boot disk."
   type        = string
-  default     = "ubuntu22.04-driverless"
   nullable    = false
   validation {
     condition     = length(trimspace(var.source_image_family)) > 0
@@ -194,7 +205,7 @@ variable "source_image_family" {
 }
 
 variable "labels" {
-  description = "Optional labels applied to created resources."
+  description = "Additional labels applied to created resources. The module also applies component and name labels."
   type        = map(string)
   default     = {}
   nullable    = false

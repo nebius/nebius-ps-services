@@ -1,5 +1,5 @@
 variable "parent_id" {
-  description = "Nebius project ID where the WireGuard VM and related resources are created."
+  description = "Nebius project ID where the WireGuard VPN gateway VM and related resources are created."
   type        = string
   nullable    = false
   validation {
@@ -8,18 +8,8 @@ variable "parent_id" {
   }
 }
 
-variable "region" {
-  description = "Nebius region ID used for defaults and metadata."
-  type        = string
-  nullable    = false
-  validation {
-    condition     = length(trimspace(var.region)) > 0
-    error_message = "region cannot be empty."
-  }
-}
-
 variable "subnet_id" {
-  description = "Subnet ID where the WireGuard VM network interface is attached."
+  description = "Subnet ID where the WireGuard VPN gateway VM network interface is attached."
   type        = string
   nullable    = false
   validation {
@@ -29,7 +19,7 @@ variable "subnet_id" {
 }
 
 variable "name" {
-  description = "WireGuard VM name."
+  description = "WireGuard VPN gateway VM name."
   type        = string
   nullable    = false
   validation {
@@ -39,30 +29,37 @@ variable "name" {
 }
 
 variable "platform" {
-  description = "Compute platform for WireGuard VM. If null, region defaults are used."
+  description = "Nebius compute platform ID for the WireGuard VPN gateway VM, for example cpu-d3."
   type        = string
-  default     = null
-  nullable    = true
+  nullable    = false
+  validation {
+    condition     = length(trimspace(var.platform)) > 0
+    error_message = "platform cannot be empty."
+  }
 }
 
 variable "preset" {
-  description = "Compute preset for WireGuard VM. If null, region defaults are used."
+  description = "Nebius compute preset name for the selected platform."
   type        = string
-  default     = null
-  nullable    = true
+  nullable    = false
+  validation {
+    condition     = length(trimspace(var.preset)) > 0
+    error_message = "preset cannot be empty."
+  }
 }
 
 variable "ssh_user_name" {
-  description = "SSH username created on the WireGuard VM."
+  description = "SSH username created on the WireGuard VPN gateway VM."
   type        = string
   default     = "ubuntu"
   nullable    = false
   validation {
     condition = (
       length(trimspace(var.ssh_user_name)) > 0 &&
-      can(regex("^[a-z_][a-z0-9_-]{0,31}$", var.ssh_user_name))
+      can(regex("^[a-z_][a-z0-9_-]{0,31}$", var.ssh_user_name)) &&
+      !contains(["root", "admin"], lower(var.ssh_user_name))
     )
-    error_message = "ssh_user_name must match Linux username format (for example ubuntu, admin_user)."
+    error_message = "ssh_user_name must match Linux username format and must not be root or admin."
   }
 }
 
@@ -71,8 +68,11 @@ variable "ssh_public_key" {
   type        = string
   nullable    = false
   validation {
-    condition     = length(trimspace(var.ssh_public_key)) >= 20
-    error_message = "ssh_public_key must be a valid inline public key string."
+    condition = can(regex(
+      "^(ssh-rsa|ssh-ed25519|ecdsa-sha2-nistp(256|384|521))[[:space:]]+[^[:space:]]+([[:space:]]+.*)?$",
+      trimspace(var.ssh_public_key),
+    ))
+    error_message = "ssh_public_key must be an inline OpenSSH public key string using ssh-rsa, ssh-ed25519, or ECDSA."
   }
 }
 
@@ -124,7 +124,6 @@ variable "public_ip_allocation_name" {
 variable "boot_disk_size_gib" {
   description = "Boot disk size in GiB."
   type        = number
-  default     = 60
   nullable    = false
   validation {
     condition = (
@@ -165,10 +164,23 @@ variable "boot_disk_type" {
   }
 }
 
+variable "boot_disk_encryption_enabled" {
+  description = "Enable provider-managed data encryption on the boot disk. Nebius supports explicit disk_encryption only for NETWORK_SSD_NON_REPLICATED and NETWORK_SSD_IO_M3; NETWORK_SSD is always encrypted by the platform."
+  type        = bool
+  default     = false
+  nullable    = false
+}
+
+variable "boot_disk_deletion_protection" {
+  description = "Enable deletion protection on the WireGuard VPN gateway boot disk."
+  type        = bool
+  default     = false
+  nullable    = false
+}
+
 variable "source_image_family" {
-  description = "Image family used for the WireGuard VM boot disk."
+  description = "Image family used for the WireGuard VPN gateway VM boot disk."
   type        = string
-  default     = "ubuntu22.04-driverless"
   nullable    = false
   validation {
     condition     = length(trimspace(var.source_image_family)) > 0
@@ -177,16 +189,16 @@ variable "source_image_family" {
 }
 
 variable "wireguard_tunnel_cidr" {
-  description = "WireGuard server interface CIDR (for example 10.8.0.1/24)."
+  description = "WireGuard server interface CIDR (for example 10.8.0.1/22)."
   type        = string
-  default     = "10.8.0.1/24"
+  default     = "10.8.0.1/22"
   nullable    = false
   validation {
     condition = (
       can(regex("^([0-9]{1,3}\\.){3}[0-9]{1,3}/([0-9]|[12][0-9]|3[0-2])$", var.wireguard_tunnel_cidr)) &&
       try(cidrhost(var.wireguard_tunnel_cidr, 0), null) != null
     )
-    error_message = "wireguard_tunnel_cidr must be a valid IPv4 interface CIDR (example: 10.8.0.1/24)."
+    error_message = "wireguard_tunnel_cidr must be a valid IPv4 interface CIDR (example: 10.8.0.1/22)."
   }
 }
 
@@ -206,7 +218,7 @@ variable "wireguard_listen_port" {
 }
 
 variable "nat_mode" {
-  description = "Enable NAT masquerade mode for point-to-site VPN egress to VPC."
+  description = "Enable source NAT/MASQUERADE for WireGuard client traffic egressing from the VPN gateway into the Nebius VPC."
   type        = bool
   default     = true
   nullable    = false
@@ -226,15 +238,54 @@ variable "endpoint_host" {
   }
 }
 
+variable "local_subnets" {
+  description = "Default private destination CIDRs routed by generated WireGuard client configs when a client does not set per-client local_subnets."
+  type        = list(string)
+  nullable    = false
+  validation {
+    condition = alltrue([
+      for cidr in var.local_subnets : can(cidrnetmask(cidr))
+    ])
+    error_message = "local_subnets must contain valid IPv4 CIDRs."
+  }
+}
+
+variable "client_default_dns" {
+  description = "Default DNS server IPv4 addresses written to generated WireGuard client configs when a client does not set dns."
+  type        = list(string)
+  default     = ["1.1.1.1", "1.0.0.1"]
+  nullable    = false
+  validation {
+    condition = alltrue([
+      for dns in var.client_default_dns : try(cidrhost("${dns}/32", 0), null) == dns
+    ])
+    error_message = "client_default_dns entries must be IPv4 addresses."
+  }
+}
+
+variable "client_default_persistent_keepalive" {
+  description = "Default WireGuard PersistentKeepalive interval, in seconds, for generated clients."
+  type        = number
+  default     = 25
+  nullable    = false
+  validation {
+    condition = (
+      floor(var.client_default_persistent_keepalive) == var.client_default_persistent_keepalive &&
+      var.client_default_persistent_keepalive >= 0 &&
+      var.client_default_persistent_keepalive <= 65535
+    )
+    error_message = "client_default_persistent_keepalive must be an integer between 0 and 65535."
+  }
+}
+
 variable "clients" {
-  description = "List of WireGuard clients to provision automatically."
+  description = "Initial WireGuard clients to generate during first boot. Day-2 clients should be created with the gateway-local generator."
   type = list(object({
-    name                 = string
-    address              = string
-    allowed_ips          = optional(list(string), [])
-    dns                  = optional(list(string), ["1.1.1.1"])
-    persistent_keepalive = optional(number, 25)
-    write_ssh_config     = optional(bool, true)
+    name                     = string
+    client_wg_tunnel_address = optional(string)
+    local_subnets            = optional(list(string), [])
+    dns                      = optional(list(string), [])
+    persistent_keepalive     = optional(number, 25)
   }))
   default  = []
   nullable = false
@@ -257,26 +308,29 @@ variable "clients" {
   validation {
     condition = alltrue([
       for c in var.clients :
-      try(cidrhost(c.address, 0), null) != null
+      c.client_wg_tunnel_address == null || (
+        can(cidrnetmask(c.client_wg_tunnel_address)) &&
+        try(tonumber(split("/", c.client_wg_tunnel_address)[1]), null) == 32
+      )
     ])
-    error_message = "each wireguard client address must be a valid CIDR (for example 10.8.0.2/32)."
+    error_message = "each wireguard client client_wg_tunnel_address must be null or a valid IPv4 /32 CIDR (for example 10.8.0.2/32)."
   }
 
   validation {
     condition = alltrue([
       for c in var.clients :
       alltrue([
-        for ip in c.allowed_ips : try(cidrhost(ip, 0), null) != null
+        for cidr in c.local_subnets : can(cidrnetmask(cidr))
       ])
     ])
-    error_message = "each wireguard client allowed_ips entry must be a valid CIDR."
+    error_message = "each wireguard client local_subnets entry must be a valid IPv4 CIDR."
   }
 
   validation {
     condition = alltrue([
       for c in var.clients :
       alltrue([
-        for dns in c.dns : can(regex("^([0-9]{1,3}\\.){3}[0-9]{1,3}$", dns))
+        for dns in c.dns : try(cidrhost("${dns}/32", 0), null) == dns
       ])
     ])
     error_message = "each wireguard client dns entry must be an IPv4 address."
@@ -292,7 +346,7 @@ variable "clients" {
 }
 
 variable "labels" {
-  description = "Optional labels applied to created resources."
+  description = "Additional labels applied to created resources. The module also applies component and name labels."
   type        = map(string)
   default     = {}
   nullable    = false

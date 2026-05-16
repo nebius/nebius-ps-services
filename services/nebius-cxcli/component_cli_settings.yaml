@@ -5,17 +5,61 @@ cli:
     version: v2.8.0
     release_timeout: 5m
 
+compute:
+  # Shared cxcli-owned boot-disk recommendations for Compute-backed
+  # components. cxcli resolves live preset resources (vCPU, RAM, GPU count),
+  # matches the first ordered rule, rounds by the selected disk type allocation
+  # unit, and materializes explicit disk inputs before render/quota/deploy.
+  boot_disk_defaults:
+    disk_types:
+      - value: NETWORK_SSD
+        allocation_unit_gib: 1
+        explicit_encryption_supported: false
+        label: NETWORK_SSD  (1-8192 GiB, 450 MiB/s, 20k/40k IOPS, erasure-coded, tolerates 2 hardware failures, encryption always on)
+      - value: NETWORK_SSD_NON_REPLICATED
+        allocation_unit_gib: 93
+        explicit_encryption_supported: true
+        label: NETWORK_SSD_NON_REPLICATED  (93 GiB units, 1 GiB/s, 75k/75k IOPS, lowest-cost high-performance, no redundancy, encryption only when explicitly configured)
+      - value: NETWORK_SSD_IO_M3
+        allocation_unit_gib: 93
+        explicit_encryption_supported: true
+        label: NETWORK_SSD_IO_M3  (93 GiB units, 1 GiB/s, 75k/75k IOPS, replicated, mirrored to 3 drives, most expensive, encryption only when explicitly configured)
+    cpu:
+      default_type: NETWORK_SSD
+      rules:
+        - max_vcpu: 8
+          max_memory_gib: 32
+          size_gib: 64
+        - max_vcpu: 32
+          max_memory_gib: 128
+          size_gib: 93
+        - max_vcpu: 64
+          max_memory_gib: 256
+          size_gib: 128
+        - min_vcpu: 65
+          size_gib: 186
+    gpu:
+      default_type: NETWORK_SSD
+      rules:
+        - max_gpu: 1
+          max_vcpu: 32
+          max_memory_gib: 384
+          size_gib: 256
+        - min_gpu: 2
+          max_gpu: 4
+          max_vcpu: 96
+          max_memory_gib: 768
+          size_gib: 512
+        - min_gpu: 8
+          max_gpu: 8
+          size_gib: 1023
+
 observability:
   # Project-scoped Nebius Observability endpoint templates. These Read/Write
   # APIs are not owned by a single component; all Nebius resources in the
   # tenant/project can use the matching read or ingest surface.
   endpoints:
     write:
-      metrics_platform_managed_write:
-        label: Metrics write (VM monitoring agent)
-        template: Nebius-managed Monitoring agent metrics ingest is automatic for Compute VMs and uses platform-managed regional endpoints; cxcli does not configure a public customer write endpoint for this path.
-        include_when:
-          - vm_service_metrics
       metrics_otlp_write:
         label: Metrics write (OTLP HTTP/protobuf)
         template: https://write.monitoring.{region}.nebius.cloud/projects/{project_id}/opentelemetry/v1/metrics
@@ -26,12 +70,6 @@ observability:
         template: https://write.monitoring.{region}.nebius.cloud/projects/{project_id}/prometheus/api/v1/write
         include_when:
           - kubernetes_metrics
-          - vm_standalone_metrics
-      logs_platform_managed_write:
-        label: Logs write (VM monitoring agent)
-        template: When journald collection is enabled, the Nebius-managed Monitoring agent forwards VM logs through the platform-managed Logging ingest path; cxcli does not configure a public customer write endpoint for this path.
-        include_when:
-          - vm_logs
       logs_otlp_write:
         label: Logs write (direct/self-managed)
         template: https://write.logging.{region}.nebius.cloud
@@ -42,7 +80,6 @@ observability:
         template: dns:///write.logging.{region}.nebius.cloud:443
         include_when:
           - kubernetes_logs
-          - vm_standalone_logs
       traces_otlp_grpc_write:
         label: Traces write (OTLP gRPC)
         template: dns:///write.tracing.{region}.nebius.cloud:443
@@ -59,7 +96,6 @@ observability:
         template: https://read.monitoring.api.nebius.cloud/projects/{project_id}/prometheus
         include_when:
           - kubernetes_metrics
-          - vm_standalone_metrics
       metrics_federate_read:
         label: Metrics read (federate)
         template: https://read.monitoring.api.nebius.cloud/projects/{project_id}/buckets/<service-provider>/prometheus/federate
@@ -148,42 +184,6 @@ components:
               rdma_mpi_extra_args:
                 - -x
                 - NCCL_DMABUF_ENABLE=1
-        boot_disk_defaults:
-          # Materialize cxcli-owned explicit MK8s boot disks into config and
-          # rendered Terraform so quota checks and deploys do not depend on
-          # hidden service defaults.
-          # cxcli resolves live preset resources (vCPU, RAM, GPU count), then
-          # prefers these explicit ordered size rules before falling back to a
-          # heuristic for shapes we do not model yet.
-          cpu:
-            default_type: NETWORK_SSD
-            rules:
-              - max_vcpu: 8
-                max_memory_gib: 32
-                size_gib: 64
-              - max_vcpu: 32
-                max_memory_gib: 128
-                size_gib: 93
-              - max_vcpu: 64
-                max_memory_gib: 256
-                size_gib: 128
-              - min_vcpu: 65
-                size_gib: 186
-          gpu:
-            default_type: NETWORK_SSD
-            rules:
-              - max_gpu: 1
-                max_vcpu: 32
-                max_memory_gib: 384
-                size_gib: 256
-              - min_gpu: 2
-                max_gpu: 4
-                max_vcpu: 96
-                max_memory_gib: 768
-                size_gib: 512
-              - min_gpu: 8
-                max_gpu: 8
-                size_gib: 1023
         observability:
           # Settings-owned MK8s observability contract. The `config.yaml`
           # `deploy.targets[].observability` rows decide whether cxcli deploys
@@ -261,22 +261,9 @@ components:
           # through the Loki-compatible Logging read endpoint.
     vm:
       cli:
-        image_preferences:
-          # Preference order only. cxcli resolves the live Nebius public image
-          # inventory through the SDK and keeps only families compatible with
-          # the selected VM platform and region.
-          preferred_cpu_image_families:
-            - ubuntu24.04-driverless
-            - ubuntu22.04-driverless
-          # GPU VMs prefer Nebius GPU images first. Driverless families remain
-          # compatible for operator-managed stacks, but they sort after the recommended
-          # GPU image families returned by the live Nebius inventory.
-          preferred_gpu_image_families:
-            - ubuntu24.04-cuda13.0
-            - ubuntu24.04-cuda12
         observability:
-          # VM observability has two paths: the built-in Monitoring agent and
-          # an optional cxcli-managed public-ingest collector.
+          # VM observability uses the built-in Nebius Monitoring agent. cxcli
+          # only materializes supported VM labels for journald logs.
           primary_agent:
             kind: monitoring_agent
             metrics:
@@ -284,29 +271,6 @@ components:
             logs:
               default_enabled: true
               systemd_units: []
-          public_ingest:
-            # Default-off public-ingest collector. It installs the public
-            # `nebius-o11y-agent` package plus a Prometheus agent companion.
-            default_enabled: false
-            package:
-              name: nebius-o11y-agent
-              version: 0.2.130
-              apt_repository: https://artifactory.nebius.dev/artifactory/nebius-o11y-agent
-              apt_key_url: https://artifactory.nebius.dev/artifactory/nebius-o11y-agent/key.gpg
-              apt_suite: stable
-              apt_component: main
-              apt_origin: artifactory.nebius.dev
-            prometheus:
-              package_name: prometheus
-            # Metadata token for the VM-attached service account.
-            metadata_token_file: /mnt/cloud-metadata/token
-            metrics_export_port: 19090
-            prometheus_agent_port: 19091
-            logs:
-              default_enabled: true
-              systemd_units: []
-            metrics:
-              default_enabled: true
           service_metrics:
             buckets:
               compute:

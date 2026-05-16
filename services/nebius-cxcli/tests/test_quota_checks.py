@@ -1323,6 +1323,42 @@ def test_estimate_vm_requirements_cover_regular_gpu_and_boot_disk() -> None:
     assert gaps == []
 
 
+def test_estimate_vm_requirements_reports_missing_boot_disk_without_size_fallback() -> None:
+    class _Session:
+        def preset_resources(self, *, project_id: str, platform: str, preset: str):
+            assert project_id == "project-1"
+            return _resources(
+                platform=platform,
+                preset=preset,
+                vcpu_count=4,
+                memory_gibibytes=16,
+                gpu_count=0,
+            )
+
+    requirements: list[QuotaRequirement] = []
+    gaps: list[QuotaCoverageGap] = []
+
+    _estimate_vm_requirements(
+        session=_Session(),
+        project_id="project-1",
+        region="eu-north1",
+        component_id="vm",
+        instance_id="vm",
+        inputs={
+            "platform": "cpu-d3",
+            "preset": "4vcpu-16gb",
+            "public_ip_mode": "none",
+        },
+        requirements=requirements,
+        gaps=gaps,
+    )
+
+    assert "compute.disk.count" in [item.quota_name for item in requirements]
+    assert "compute.disk.size.network-ssd" not in [item.quota_name for item in requirements]
+    assert len(gaps) == 1
+    assert "Compute VM boot-disk quota could not be fully evaluated" in gaps[0].message
+
+
 def test_estimate_vm_requirements_cover_preemptible_gpu_capacity() -> None:
     class _Session:
         def preset_resources(self, *, project_id: str, platform: str, preset: str):

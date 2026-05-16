@@ -5,6 +5,7 @@ from nebius_cxcli.cli import (
     _provider_source_specs_for_field,
     _resolve_dynamic_field_choices,
     _resolve_wizard_field_spec,
+    _wizard_field_provider_default_value,
 )
 from nebius_cxcli.components import ComponentEntry
 from nebius_cxcli.provider_options import OptionChoice, _payload_value
@@ -228,3 +229,40 @@ def test_provider_allowed_values_reuse_filter_regex_from_wizard_metadata() -> No
 
     assert allowed == {"vpcnetwork-prod-a"}
     assert providers == ("project_networks",)
+
+
+def test_provider_default_for_string_list_field_materializes_choice_values() -> None:
+    entry = _infra_entry(
+        "ssh-jumphost",
+        wizard_fields={
+            "inputs.allowed_cidrs": {
+                "default_from": {"from": "operator_public_ip_cidr"},
+                "type_hint": "list(string)",
+            }
+        },
+    )
+
+    class _DefaultLookup:
+        def resolve(
+            self,
+            *,
+            provider: str,
+            args: dict[str, str],
+            payload: dict[str, object],
+            field_path: str,
+        ) -> list[OptionChoice]:
+            assert provider == "operator_public_ip_cidr"
+            assert args == {}
+            assert payload == {"infra": {"components": [{"inputs": {}}]}}
+            assert field_path == "infra.components[0].inputs.allowed_cidrs"
+            return [OptionChoice(value="203.0.113.10/32", label="detected")]
+
+    default = _wizard_field_provider_default_value(
+        payload={"infra": {"components": [{"inputs": {}}]}},
+        entry=entry,
+        full_path_label="infra.components[0].inputs.allowed_cidrs",
+        provider_lookup=_DefaultLookup(),
+        type_hint="list(string)",
+    )
+
+    assert default == ["203.0.113.10/32"]

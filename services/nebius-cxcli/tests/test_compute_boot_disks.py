@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 import yaml
 
 import nebius_cxcli.component_sources as component_sources
@@ -9,9 +10,10 @@ from nebius_cxcli.component_sources import (
     reset_component_sources_cache,
     set_component_sources_file_override,
 )
-from nebius_cxcli.mk8s_boot_disks import (
-    materialize_mk8s_boot_disk_defaults,
-    refresh_mk8s_boot_disk_defaults,
+from nebius_cxcli.compute_boot_disks import (
+    ComputeBootDiskRecommendationError,
+    materialize_compute_boot_disk_defaults,
+    refresh_compute_boot_disk_defaults,
 )
 
 
@@ -25,6 +27,11 @@ def _write_sources_file(path: Path) -> None:
                             "source": {
                                 "portable": "../../platform-infra/modules/mk8s",
                             },
+                        },
+                        "vm": {
+                            "source": {
+                                "portable": "../../platform-infra/modules/vm",
+                            },
                         }
                     }
                 }
@@ -36,61 +43,72 @@ def _write_sources_file(path: Path) -> None:
     path.with_name("component_cli_settings.yaml").write_text(
         yaml.safe_dump(
             {
-                "components": {
-                    "infra": {
-                        "mk8s": {
-                            "cli": {
-                                "boot_disk_defaults": {
-                                    "cpu": {
-                                        "default_type": "NETWORK_SSD",
-                                        "rules": [
-                                            {
-                                                "max_vcpu": 8,
-                                                "max_memory_gib": 32,
-                                                "size_gib": 64,
-                                            },
-                                            {
-                                                "max_vcpu": 32,
-                                                "max_memory_gib": 128,
-                                                "size_gib": 93,
-                                            },
-                                            {
-                                                "max_vcpu": 64,
-                                                "max_memory_gib": 256,
-                                                "size_gib": 128,
-                                            },
-                                            {
-                                                "min_vcpu": 65,
-                                                "size_gib": 186,
-                                            },
-                                        ],
-                                    },
-                                    "gpu": {
-                                        "default_type": "NETWORK_SSD",
-                                        "rules": [
-                                            {
-                                                "max_gpu": 1,
-                                                "max_vcpu": 32,
-                                                "max_memory_gib": 384,
-                                                "size_gib": 256,
-                                            },
-                                            {
-                                                "min_gpu": 2,
-                                                "max_gpu": 4,
-                                                "max_vcpu": 96,
-                                                "max_memory_gib": 768,
-                                                "size_gib": 512,
-                                            },
-                                            {
-                                                "min_gpu": 8,
-                                                "max_gpu": 8,
-                                                "size_gib": 1023,
-                                            },
-                                        ],
-                                    },
-                                }
+                "compute": {
+                    "boot_disk_defaults": {
+                        "disk_types": [
+                            {
+                                "value": "NETWORK_SSD",
+                                "allocation_unit_gib": 1,
+                                "label": "NETWORK_SSD",
                             },
-                        }
+                            {
+                                "value": "NETWORK_SSD_NON_REPLICATED",
+                                "allocation_unit_gib": 93,
+                                "label": "NETWORK_SSD_NON_REPLICATED",
+                            },
+                            {
+                                "value": "NETWORK_SSD_IO_M3",
+                                "allocation_unit_gib": 93,
+                                "label": "NETWORK_SSD_IO_M3",
+                            },
+                        ],
+                        "cpu": {
+                            "default_type": "NETWORK_SSD",
+                            "rules": [
+                                {
+                                    "max_vcpu": 8,
+                                    "max_memory_gib": 32,
+                                    "size_gib": 64,
+                                },
+                                {
+                                    "max_vcpu": 32,
+                                    "max_memory_gib": 128,
+                                    "size_gib": 93,
+                                },
+                                {
+                                    "max_vcpu": 64,
+                                    "max_memory_gib": 256,
+                                    "size_gib": 128,
+                                },
+                                {
+                                    "min_vcpu": 65,
+                                    "size_gib": 186,
+                                },
+                            ],
+                        },
+                        "gpu": {
+                            "default_type": "NETWORK_SSD",
+                            "rules": [
+                                {
+                                    "max_gpu": 1,
+                                    "max_vcpu": 32,
+                                    "max_memory_gib": 384,
+                                    "size_gib": 256,
+                                },
+                                {
+                                    "min_gpu": 2,
+                                    "max_gpu": 4,
+                                    "max_vcpu": 96,
+                                    "max_memory_gib": 768,
+                                    "size_gib": 512,
+                                },
+                                {
+                                    "min_gpu": 8,
+                                    "max_gpu": 8,
+                                    "size_gib": 1023,
+                                },
+                            ],
+                        },
                     }
                 }
             },
@@ -110,7 +128,7 @@ def teardown_function() -> None:
     reset_component_sources_cache()
 
 
-def test_materialize_mk8s_boot_disk_defaults_from_preset_names(
+def test_materialize_compute_boot_disk_defaults_from_preset_names(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -153,7 +171,7 @@ def test_materialize_mk8s_boot_disk_defaults_from_preset_names(
         "apps": {"charts": []},
     }
 
-    changed = materialize_mk8s_boot_disk_defaults(payload)
+    changed = materialize_compute_boot_disk_defaults(payload)
 
     assert changed is True
     inputs = payload["infra"]["components"][0]["inputs"]
@@ -163,7 +181,7 @@ def test_materialize_mk8s_boot_disk_defaults_from_preset_names(
     assert inputs["gpu_nodes_boot_disk_type"] == "NETWORK_SSD"
 
 
-def test_materialize_mk8s_boot_disk_defaults_from_provider_resources(
+def test_materialize_compute_boot_disk_defaults_from_provider_resources(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -215,7 +233,7 @@ def test_materialize_mk8s_boot_disk_defaults_from_provider_resources(
                 return (192, 2768, 8)
             return None
 
-    changed = materialize_mk8s_boot_disk_defaults(payload, provider_lookup=_Lookup())
+    changed = materialize_compute_boot_disk_defaults(payload, provider_lookup=_Lookup())
 
     assert changed is True
     inputs = payload["infra"]["components"][0]["inputs"]
@@ -223,7 +241,98 @@ def test_materialize_mk8s_boot_disk_defaults_from_provider_resources(
     assert inputs["gpu_nodes_boot_disk_size_gib"] == 1023
 
 
-def test_materialize_mk8s_boot_disk_defaults_falls_back_to_heuristic_for_unmatched_shape(
+def test_materialize_compute_boot_disk_defaults_for_vm_uses_shared_policy(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    sources_file = tmp_path / "component_sources.yaml"
+    _write_sources_file(sources_file)
+    monkeypatch.setattr(component_sources, "_discover_terraform_outputs", lambda _source: ())
+    set_component_sources_file_override(sources_file)
+    reset_component_sources_cache()
+
+    payload = {
+        "version": "v1",
+        "client_info": {
+            "client_name": "demo",
+            "nebius": {
+                "tenant_id": "tenant-1",
+                "project_id": "project-1",
+                "region_id": "us-central1",
+            },
+            "notifications": {"email_enabled": False, "email": None},
+        },
+        "infra": {
+            "components": [
+                {
+                    "id": "vm",
+                    "instance_id": "vm",
+                    "enabled": True,
+                    "inputs": {
+                        "platform": "gpu-l40s-a",
+                        "preset": "1gpu-16vcpu-200gb",
+                    },
+                }
+            ]
+        },
+        "apps": {"charts": []},
+    }
+
+    changed = materialize_compute_boot_disk_defaults(payload)
+
+    assert changed is True
+    inputs = payload["infra"]["components"][0]["inputs"]
+    assert inputs["boot_disk_size_gib"] == 256
+    assert inputs["boot_disk_type"] == "NETWORK_SSD"
+
+
+def test_materialize_compute_boot_disk_defaults_skips_vm_existing_boot_disk(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    sources_file = tmp_path / "component_sources.yaml"
+    _write_sources_file(sources_file)
+    monkeypatch.setattr(component_sources, "_discover_terraform_outputs", lambda _source: ())
+    set_component_sources_file_override(sources_file)
+    reset_component_sources_cache()
+
+    payload = {
+        "version": "v1",
+        "client_info": {
+            "client_name": "demo",
+            "nebius": {
+                "tenant_id": "tenant-1",
+                "project_id": "project-1",
+                "region_id": "us-central1",
+            },
+            "notifications": {"email_enabled": False, "email": None},
+        },
+        "infra": {
+            "components": [
+                {
+                    "id": "vm",
+                    "instance_id": "vm",
+                    "enabled": True,
+                    "inputs": {
+                        "platform": "cpu-d3",
+                        "preset": "4vcpu-16gb",
+                        "boot_disk_existing_id": "compute-disk-1",
+                    },
+                }
+            ]
+        },
+        "apps": {"charts": []},
+    }
+
+    changed = materialize_compute_boot_disk_defaults(payload)
+
+    assert changed is False
+    inputs = payload["infra"]["components"][0]["inputs"]
+    assert "boot_disk_size_gib" not in inputs
+    assert "boot_disk_type" not in inputs
+
+
+def test_materialize_compute_boot_disk_defaults_fails_for_unmatched_shape(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -268,15 +377,11 @@ def test_materialize_mk8s_boot_disk_defaults_falls_back_to_heuristic_for_unmatch
                 return (48, 288, 0)
             return None
 
-    changed = materialize_mk8s_boot_disk_defaults(payload, provider_lookup=_Lookup())
-
-    assert changed is True
-    inputs = payload["infra"]["components"][0]["inputs"]
-    assert inputs["cpu_nodes_boot_disk_size_gib"] == 190
-    assert inputs["cpu_nodes_boot_disk_type"] == "NETWORK_SSD"
+    with pytest.raises(ComputeBootDiskRecommendationError, match="No compute.boot_disk_defaults"):
+        materialize_compute_boot_disk_defaults(payload, provider_lookup=_Lookup())
 
 
-def test_materialize_mk8s_boot_disk_defaults_respects_existing_inputs_and_overrides(
+def test_materialize_compute_boot_disk_defaults_respects_existing_inputs_and_overrides(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -328,7 +433,7 @@ def test_materialize_mk8s_boot_disk_defaults_respects_existing_inputs_and_overri
         "apps": {"charts": []},
     }
 
-    changed = materialize_mk8s_boot_disk_defaults(payload)
+    changed = materialize_compute_boot_disk_defaults(payload)
 
     assert changed is True
     inputs = payload["infra"]["components"][0]["inputs"]
@@ -338,7 +443,7 @@ def test_materialize_mk8s_boot_disk_defaults_respects_existing_inputs_and_overri
     assert inputs["gpu_nodes_boot_disk_type"] == "NETWORK_SSD"
 
 
-def test_refresh_mk8s_boot_disk_defaults_updates_auto_derived_size_after_type_change(
+def test_refresh_compute_boot_disk_defaults_updates_auto_derived_size_after_type_change(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -358,7 +463,7 @@ def test_refresh_mk8s_boot_disk_defaults_updates_auto_derived_size_after_type_ch
     inputs = dict(previous_inputs)
     inputs["cpu_nodes_boot_disk_type"] = "NETWORK_SSD_NON_REPLICATED"
 
-    changed = refresh_mk8s_boot_disk_defaults(
+    changed = refresh_compute_boot_disk_defaults(
         inputs,
         previous_inputs,
         component_id="mk8s",
@@ -371,7 +476,41 @@ def test_refresh_mk8s_boot_disk_defaults_updates_auto_derived_size_after_type_ch
     assert inputs["cpu_nodes_boot_disk_size_gib"] == 93
 
 
-def test_refresh_mk8s_boot_disk_defaults_preserves_custom_size(
+def test_refresh_compute_boot_disk_defaults_updates_vm_after_shape_change(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    sources_file = tmp_path / "component_sources.yaml"
+    _write_sources_file(sources_file)
+    monkeypatch.setattr(component_sources, "_discover_terraform_outputs", lambda _source: ())
+    set_component_sources_file_override(sources_file)
+    reset_component_sources_cache()
+
+    previous_inputs = {
+        "platform": "cpu-d3",
+        "preset": "4vcpu-16gb",
+        "boot_disk_type": "NETWORK_SSD",
+        "boot_disk_size_gib": 64,
+    }
+    inputs = {
+        **previous_inputs,
+        "preset": "32vcpu-128gb",
+    }
+
+    changed = refresh_compute_boot_disk_defaults(
+        inputs,
+        previous_inputs,
+        component_id="vm",
+        instance_id="vm",
+        project_id="project-1",
+    )
+
+    assert changed is True
+    assert inputs["boot_disk_type"] == "NETWORK_SSD"
+    assert inputs["boot_disk_size_gib"] == 93
+
+
+def test_refresh_compute_boot_disk_defaults_preserves_custom_size(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -394,7 +533,7 @@ def test_refresh_mk8s_boot_disk_defaults_preserves_custom_size(
     inputs["gpu_nodes_boot_disk_type"] = "NETWORK_SSD_IO_M3"
     inputs["gpu_nodes_boot_disk_size_gib"] = 2048
 
-    changed = refresh_mk8s_boot_disk_defaults(
+    changed = refresh_compute_boot_disk_defaults(
         inputs,
         previous_inputs,
         component_id="mk8s",

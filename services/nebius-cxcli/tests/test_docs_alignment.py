@@ -26,7 +26,8 @@ def test_readme_supporting_commands_include_current_quota_and_target_flags() -> 
     assert "nebius-cxcli quota-request /path/to/config.yaml" in supporting
     assert (
         "`component`, `validate`, `validate-dashboards`, `quota-check`, "
-        "`quota-request`, `render`, `deploy`, `bootstrap-ci`, `destroy`, `email`"
+        "`quota-request`, `render`, `deploy`, `bootstrap-ci`, `wireguard`, "
+        "`ssh-jumphost`, `destroy`, `email`"
     ) in supporting
     assert "- `quota-request <config.yaml>`" in supporting
 
@@ -125,9 +126,10 @@ def test_docs_define_app_instance_id_as_cluster_binding() -> None:
     design = (REPO_ROOT / "docs" / "design.md").read_text(encoding="utf-8")
 
     assert (
-        "For app rows, `id` names the chart type and `instance_id` names the chart instance"
+        "For app rows, `id` names the chart type and `instance_id` names the MK8s target"
         in readme
     )
+    assert "Enabled `apps.charts[]` rows require at least one enabled MK8s target" in readme
     assert "`nvidia-gpu-operator@cluster2`" in readme
     assert (
         "Authored `config.yaml` does not use `apps.charts[].target_ref`; any internal generated "
@@ -277,6 +279,7 @@ def test_design_documents_grafana_dashboard_binding_workflow() -> None:
     assert "generated `deploy-report.md` bundled-dashboard list" in design
     assert "`kubernetes_io_hostname`" in design
     assert "`k8s_namespace_name` plus `k8s_pod_name`" in design
+    assert "VM Logs binds to `Nebius Logs`, defaults to the `sp_serial` Loki bucket" in design
     assert "Live fit validation rules:" in design
 
 
@@ -285,6 +288,7 @@ def test_design_supporting_commands_include_quota_request_and_flux_targets() -> 
     supporting = _section(design, "## Supporting Commands", "## Idempotency Rules")
 
     assert "- `quota-request <config.yaml>`" in supporting
+    assert "- `ssh-jumphost <config.yaml>`" in supporting
     assert "`QuotaAllowance` reads separate from `QuotaRequest` submission" in supporting
     assert "- `flux apply <generated-path>`" in supporting
     assert "- `flux destroy <generated-path>`" in supporting

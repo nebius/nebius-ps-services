@@ -108,6 +108,33 @@ jobs:
           fi
           echo "Verified source-checkout runtime version ${resolved_version}."
 
+      - name: Install service dependencies
+        if: steps.state.outputs.release_exists == 'false'
+        env:
+          SETUPTOOLS_SCM_PRETEND_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          make env
+
+      - name: Prepare Terraform CLI for service tests
+        if: steps.state.outputs.release_exists == 'false'
+        run: |
+          set -euo pipefail
+          terraform_output="$(
+            .venv/bin/python - <<'PY'
+          from nebius_cxcli.managed_tools import resolve_terraform_binary
+
+          print(resolve_terraform_binary())
+          PY
+          )"
+          terraform_bin="$(printf '%s\n' "${terraform_output}" | tail -n 1)"
+          if [[ ! -x "${terraform_bin}" ]]; then
+            echo "::error::Resolved Terraform binary is not executable: ${terraform_bin}"
+            exit 1
+          fi
+          dirname "${terraform_bin}" >> "${GITHUB_PATH}"
+          "${terraform_bin}" version
+
       - name: Verify service with local make contract
         if: steps.state.outputs.release_exists == 'false'
         env:
@@ -133,9 +160,7 @@ jobs:
           RELEASE_REF: ${{ steps.version.outputs.tag }}
         run: |
           set -euo pipefail
-          shopt -s nullglob
-          assets=( ${ASSET_GLOB} )
-          shopt -u nullglob
+          mapfile -t assets < <(compgen -G "${ASSET_GLOB}" | sort)
           if [[ "${#assets[@]}" -eq 0 ]]; then
             echo "::error::No release asset found with glob ${ASSET_GLOB}"
             exit 1

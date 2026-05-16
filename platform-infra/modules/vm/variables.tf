@@ -68,8 +68,25 @@ variable "ssh_public_key" {
   type        = string
   nullable    = false
   validation {
-    condition     = length(trimspace(var.ssh_public_key)) >= 20
-    error_message = "ssh_public_key must be a valid inline public key string."
+    condition = can(regex(
+      "^(ssh-rsa|ssh-ed25519|ecdsa-sha2-nistp(256|384|521))[[:space:]]+[^[:space:]]+([[:space:]]+.*)?$",
+      trimspace(var.ssh_public_key),
+    ))
+    error_message = "ssh_public_key must be an inline OpenSSH public key string using ssh-rsa, ssh-ed25519, or ECDSA."
+  }
+}
+
+variable "cloud_init_user_data_override" {
+  description = "Optional complete cloud-init user data override. When set, the module still owns VM/disk/network resources, but uses this rendered cloud-init payload instead of the built-in generic VM bootstrap template."
+  type        = string
+  default     = null
+  nullable    = true
+  validation {
+    condition = (
+      var.cloud_init_user_data_override == null ||
+      length(trimspace(var.cloud_init_user_data_override)) > 0
+    )
+    error_message = "cloud_init_user_data_override must be null or non-empty cloud-init user data."
   }
 }
 
@@ -118,14 +135,17 @@ variable "boot_disk_existing_id" {
 variable "boot_disk_size_gib" {
   description = "Boot disk size in GiB when the module creates the boot disk."
   type        = number
-  default     = 60
-  nullable    = false
+  default     = null
+  nullable    = true
   validation {
     condition = (
-      var.boot_disk_size_gib >= 20 &&
-      floor(var.boot_disk_size_gib) == var.boot_disk_size_gib
+      var.boot_disk_size_gib == null ||
+      (
+        var.boot_disk_size_gib >= 20 &&
+        floor(var.boot_disk_size_gib) == var.boot_disk_size_gib
+      )
     )
-    error_message = "boot_disk_size_gib must be an integer >= 20."
+    error_message = "boot_disk_size_gib must be null or an integer >= 20."
   }
 }
 
@@ -157,6 +177,20 @@ variable "boot_disk_type" {
     )
     error_message = "boot_disk_type must be one of NETWORK_SSD, NETWORK_HDD, NETWORK_SSD_NON_REPLICATED, NETWORK_SSD_IO_M3."
   }
+}
+
+variable "boot_disk_encryption_enabled" {
+  description = "Enable provider-managed data encryption on the boot disk. Nebius supports explicit disk_encryption only for NETWORK_SSD_NON_REPLICATED and NETWORK_SSD_IO_M3; NETWORK_SSD is always encrypted by the platform."
+  type        = bool
+  default     = false
+  nullable    = false
+}
+
+variable "boot_disk_deletion_protection" {
+  description = "Enable deletion protection on the module-managed boot disk."
+  type        = bool
+  default     = false
+  nullable    = false
 }
 
 variable "boot_disk_device_id" {
@@ -243,7 +277,7 @@ variable "hostname" {
 }
 
 variable "service_account_id" {
-  description = "Optional service account ID attached to the VM."
+  description = "Optional existing service account ID attached to the VM."
   type        = string
   default     = null
   nullable    = true
@@ -253,210 +287,6 @@ variable "service_account_id" {
       length(trimspace(var.service_account_id)) > 0
     )
     error_message = "service_account_id must be null or a non-empty service account ID."
-  }
-}
-
-variable "observability_collector_enabled" {
-  description = "Whether to install the cxcli-managed standalone Nebius VM collector stack."
-  type        = bool
-  default     = false
-  nullable    = false
-}
-
-variable "observability_collector_region_id" {
-  description = "Region ID used to build public observability write endpoints for the standalone collector."
-  type        = string
-  default     = ""
-  nullable    = false
-  validation {
-    condition = (
-      length(trimspace(var.observability_collector_region_id)) > 0 ||
-      !var.observability_collector_enabled
-    )
-    error_message = "observability_collector_region_id must be a non-empty region ID when observability_collector_enabled=true."
-  }
-}
-
-variable "observability_collector_package_version" {
-  description = "Pinned deb package version for the standalone collector."
-  type        = string
-  default     = ""
-  nullable    = false
-  validation {
-    condition = (
-      length(trimspace(var.observability_collector_package_version)) > 0 ||
-      !var.observability_collector_enabled
-    )
-    error_message = "observability_collector_package_version must be a non-empty package version when observability_collector_enabled=true."
-  }
-}
-
-variable "observability_collector_package_name" {
-  description = "Deb package name for the standalone collector."
-  type        = string
-  default     = ""
-  nullable    = false
-  validation {
-    condition = (
-      length(trimspace(var.observability_collector_package_name)) > 0 ||
-      !var.observability_collector_enabled
-    )
-    error_message = "observability_collector_package_name must be a non-empty package name when observability_collector_enabled=true."
-  }
-}
-
-variable "observability_collector_apt_repository" {
-  description = "APT repository URL for the standalone collector package."
-  type        = string
-  default     = ""
-  nullable    = false
-  validation {
-    condition = (
-      length(trimspace(var.observability_collector_apt_repository)) > 0 ||
-      !var.observability_collector_enabled
-    )
-    error_message = "observability_collector_apt_repository must be a non-empty URL when observability_collector_enabled=true."
-  }
-}
-
-variable "observability_collector_apt_key_url" {
-  description = "APT repository signing key URL for the standalone collector package."
-  type        = string
-  default     = ""
-  nullable    = false
-  validation {
-    condition = (
-      length(trimspace(var.observability_collector_apt_key_url)) > 0 ||
-      !var.observability_collector_enabled
-    )
-    error_message = "observability_collector_apt_key_url must be a non-empty URL when observability_collector_enabled=true."
-  }
-}
-
-variable "observability_collector_apt_suite" {
-  description = "APT suite for the standalone collector package repository."
-  type        = string
-  default     = ""
-  nullable    = false
-  validation {
-    condition = (
-      length(trimspace(var.observability_collector_apt_suite)) > 0 ||
-      !var.observability_collector_enabled
-    )
-    error_message = "observability_collector_apt_suite must be non-empty when observability_collector_enabled=true."
-  }
-}
-
-variable "observability_collector_apt_component" {
-  description = "APT component for the standalone collector package repository."
-  type        = string
-  default     = ""
-  nullable    = false
-  validation {
-    condition = (
-      length(trimspace(var.observability_collector_apt_component)) > 0 ||
-      !var.observability_collector_enabled
-    )
-    error_message = "observability_collector_apt_component must be non-empty when observability_collector_enabled=true."
-  }
-}
-
-variable "observability_collector_apt_origin" {
-  description = "APT origin host allowed for the standalone collector package."
-  type        = string
-  default     = ""
-  nullable    = false
-  validation {
-    condition = (
-      length(trimspace(var.observability_collector_apt_origin)) > 0 ||
-      !var.observability_collector_enabled
-    )
-    error_message = "observability_collector_apt_origin must be non-empty when observability_collector_enabled=true."
-  }
-}
-
-variable "observability_collector_prometheus_package_name" {
-  description = "Deb package name for the Prometheus agent companion."
-  type        = string
-  default     = ""
-  nullable    = false
-  validation {
-    condition = (
-      length(trimspace(var.observability_collector_prometheus_package_name)) > 0 ||
-      !(
-        var.observability_collector_enabled &&
-        var.observability_collector_metrics_enabled
-      )
-    )
-    error_message = "observability_collector_prometheus_package_name must be non-empty when observability_collector_enabled=true and observability_collector_metrics_enabled=true."
-  }
-}
-
-variable "observability_collector_iam_token_file" {
-  description = "IAM token file path used by the standalone collector."
-  type        = string
-  default     = "/mnt/cloud-metadata/token"
-  nullable    = false
-  validation {
-    condition     = length(trimspace(var.observability_collector_iam_token_file)) > 0
-    error_message = "observability_collector_iam_token_file must be a non-empty path."
-  }
-}
-
-variable "observability_collector_logs_enabled" {
-  description = "Whether the standalone collector should forward journald logs."
-  type        = bool
-  default     = false
-  nullable    = false
-}
-
-variable "observability_collector_logs_systemd_units" {
-  description = "Optional systemd unit allowlist for the standalone collector journald receiver."
-  type        = list(string)
-  default     = []
-  nullable    = false
-  validation {
-    condition = alltrue([
-      for unit_name in var.observability_collector_logs_systemd_units : length(trimspace(unit_name)) > 0
-    ])
-    error_message = "observability_collector_logs_systemd_units must contain non-empty systemd unit names."
-  }
-}
-
-variable "observability_collector_metrics_enabled" {
-  description = "Whether the standalone collector should export host metrics for Prometheus remote_write."
-  type        = bool
-  default     = false
-  nullable    = false
-}
-
-variable "observability_collector_metrics_export_port" {
-  description = "Loopback port where nebius-o11y-agent exposes host metrics for the Prometheus agent."
-  type        = number
-  default     = 19090
-  nullable    = false
-  validation {
-    condition = (
-      floor(var.observability_collector_metrics_export_port) == var.observability_collector_metrics_export_port &&
-      var.observability_collector_metrics_export_port >= 1 &&
-      var.observability_collector_metrics_export_port <= 65535
-    )
-    error_message = "observability_collector_metrics_export_port must be an integer between 1 and 65535."
-  }
-}
-
-variable "observability_collector_prometheus_agent_port" {
-  description = "Loopback status port for the Prometheus agent sidecar process."
-  type        = number
-  default     = 19091
-  nullable    = false
-  validation {
-    condition = (
-      floor(var.observability_collector_prometheus_agent_port) == var.observability_collector_prometheus_agent_port &&
-      var.observability_collector_prometheus_agent_port >= 1 &&
-      var.observability_collector_prometheus_agent_port <= 65535
-    )
-    error_message = "observability_collector_prometheus_agent_port must be an integer between 1 and 65535."
   }
 }
 
@@ -477,13 +307,15 @@ variable "labels" {
 variable "data_disks" {
   description = "Managed data disks to create and attach to the VM."
   type = list(object({
-    name             = string
-    size_gib         = number
-    type             = optional(string, "NETWORK_SSD")
-    block_size_bytes = optional(number, 4096)
-    attach_mode      = optional(string, "READ_WRITE")
-    device_id        = optional(string)
-    labels           = optional(map(string), {})
+    name                = string
+    size_gib            = number
+    type                = optional(string, "NETWORK_SSD")
+    block_size_bytes    = optional(number, 4096)
+    encryption_enabled  = optional(bool, false)
+    deletion_protection = optional(bool, false)
+    attach_mode         = optional(string, "READ_WRITE")
+    device_id           = optional(string)
+    labels              = optional(map(string), {})
   }))
   default  = []
   nullable = false
@@ -503,6 +335,13 @@ variable "data_disks" {
           ["NETWORK_SSD", "NETWORK_HDD", "NETWORK_SSD_NON_REPLICATED", "NETWORK_SSD_IO_M3"],
           upper(try(disk.type, "NETWORK_SSD"))
         ) &&
+        (
+          !try(disk.encryption_enabled, false) ||
+          contains(
+            ["NETWORK_SSD_NON_REPLICATED", "NETWORK_SSD_IO_M3"],
+            upper(try(disk.type, "NETWORK_SSD"))
+          )
+        ) &&
         contains(["READ_ONLY", "READ_WRITE"], upper(try(disk.attach_mode, "READ_WRITE"))) &&
         try(disk.block_size_bytes, 4096) >= 4096 &&
         try(disk.block_size_bytes, 4096) <= 131072 &&
@@ -510,7 +349,7 @@ variable "data_disks" {
         floor(log(try(disk.block_size_bytes, 4096), 2)) == ceil(log(try(disk.block_size_bytes, 4096), 2))
       )
     ])
-    error_message = "Each data_disks entry must have a valid name, integer size_gib >= 1, supported disk type, supported attach_mode, and a power-of-two block_size_bytes between 4096 and 131072."
+    error_message = "Each data_disks entry must have a valid name, integer size_gib >= 1, supported disk type, supported attach_mode, a power-of-two block_size_bytes between 4096 and 131072, and encryption_enabled only on NETWORK_SSD_NON_REPLICATED or NETWORK_SSD_IO_M3."
   }
 }
 

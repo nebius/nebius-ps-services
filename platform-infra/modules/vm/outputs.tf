@@ -41,6 +41,11 @@ output "public_ip_allocation_id" {
   value       = lower(var.public_ip_mode) == "allocation" ? var.public_ip_allocation_id : null
 }
 
+output "service_account_id" {
+  description = "Service account ID attached to the VM, if provided."
+  value       = var.service_account_id
+}
+
 output "ssh_connect_command" {
   description = "Convenience SSH command using the configured SSH username and public IP."
   value = try(

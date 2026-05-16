@@ -235,7 +235,15 @@ class Mk8sGpuAppPolicy:
 
 
 @dataclass(frozen=True)
-class Mk8sBootDiskRule:
+class ComputeBootDiskTypeChoice:
+    value: str
+    label: str = ""
+    allocation_unit_gib: int = 1
+    explicit_encryption_supported: bool = False
+
+
+@dataclass(frozen=True)
+class ComputeBootDiskRule:
     min_vcpu: int | None = None
     max_vcpu: int | None = None
     min_memory_gib: int | None = None
@@ -250,21 +258,21 @@ class Mk8sBootDiskRule:
 
 
 @dataclass(frozen=True)
-class Mk8sNodeBootDiskPolicy:
+class ComputeBootDiskPolicy:
     default_type: str = ""
-    rules: tuple[Mk8sBootDiskRule, ...] = ()
+    rules: tuple[ComputeBootDiskRule, ...] = ()
 
 
 @dataclass(frozen=True)
-class Mk8sBootDiskSettings:
-    cpu: Mk8sNodeBootDiskPolicy = Mk8sNodeBootDiskPolicy()
-    gpu: Mk8sNodeBootDiskPolicy = Mk8sNodeBootDiskPolicy()
+class ComputeBootDiskSettings:
+    disk_types: tuple[ComputeBootDiskTypeChoice, ...] = ()
+    cpu: ComputeBootDiskPolicy = ComputeBootDiskPolicy()
+    gpu: ComputeBootDiskPolicy = ComputeBootDiskPolicy()
 
 
 @dataclass(frozen=True)
-class VmImagePreferenceSettings:
-    preferred_cpu_image_families: tuple[str, ...] = ()
-    preferred_gpu_image_families: tuple[str, ...] = ()
+class ComputeSettings:
+    boot_disk_defaults: ComputeBootDiskSettings = ComputeBootDiskSettings()
 
 
 @dataclass(frozen=True)
@@ -355,47 +363,6 @@ class ObservabilityGrafanaSettings:
 
 
 @dataclass(frozen=True)
-class VmStandaloneCollectorLogsSettings:
-    enabled_by_default: bool = True
-    systemd_units: tuple[str, ...] = ()
-
-
-@dataclass(frozen=True)
-class VmStandaloneCollectorMetricsSettings:
-    enabled_by_default: bool = True
-
-
-@dataclass(frozen=True)
-class VmStandaloneCollectorPackageSettings:
-    name: str = ""
-    version: str = ""
-    apt_repository: str = ""
-    apt_key_url: str = ""
-    apt_suite: str = ""
-    apt_component: str = ""
-    apt_origin: str = ""
-
-
-@dataclass(frozen=True)
-class VmStandaloneCollectorPrometheusSettings:
-    package_name: str = ""
-
-
-@dataclass(frozen=True)
-class VmStandaloneCollectorSettings:
-    enabled_by_default: bool = False
-    package: VmStandaloneCollectorPackageSettings = VmStandaloneCollectorPackageSettings()
-    prometheus: VmStandaloneCollectorPrometheusSettings = (
-        VmStandaloneCollectorPrometheusSettings()
-    )
-    iam_token_file: str = "/mnt/cloud-metadata/token"
-    metrics_export_port: int = 19090
-    prometheus_agent_port: int = 19091
-    logs: VmStandaloneCollectorLogsSettings = VmStandaloneCollectorLogsSettings()
-    metrics: VmStandaloneCollectorMetricsSettings = VmStandaloneCollectorMetricsSettings()
-
-
-@dataclass(frozen=True)
 class InfraObservabilitySettings:
     mode: str = ""
     chart_component_id: str = ""
@@ -406,7 +373,6 @@ class InfraObservabilitySettings:
     service_metrics: tuple[ObservabilityServiceBucket, ...] = ()
     service_logs: tuple[ObservabilityServiceBucket, ...] = ()
     grafana: ObservabilityGrafanaSettings = ObservabilityGrafanaSettings()
-    standalone_collector: VmStandaloneCollectorSettings = VmStandaloneCollectorSettings()
 
 
 @dataclass(frozen=True)
@@ -498,6 +464,7 @@ class CliSettings:
 @dataclass(frozen=True)
 class ComponentCliSettingsPayload:
     cli: CliSettings = CliSettings()
+    compute: ComputeSettings = ComputeSettings()
     observability: GlobalObservabilitySettings = GlobalObservabilitySettings()
     infra: dict[str, Any] = field(default_factory=dict)
     apps: dict[str, Any] = field(default_factory=dict)
@@ -542,8 +509,6 @@ class TFModuleSource:
     handoff: Handoff | None = None
     status: StatusWatcher | None = None
     mk8s_gpu: Mk8sGpuSettings = Mk8sGpuSettings()
-    mk8s_boot_disks: Mk8sBootDiskSettings = Mk8sBootDiskSettings()
-    vm_images: VmImagePreferenceSettings = VmImagePreferenceSettings()
     observability: InfraObservabilitySettings = InfraObservabilitySettings()
 
 
@@ -606,6 +571,7 @@ class HelmChartSource:
 @dataclass(frozen=True)
 class ComponentSources:
     cli: CliSettings
+    compute: ComputeSettings
     shared: dict[str, Any]
     tf_modules: tuple[TFModuleSource, ...]
     helm_charts: tuple[HelmChartSource, ...]
@@ -1225,16 +1191,69 @@ def _parse_optional_disk_type(raw: Any, *, field_label: str) -> str:
     return value
 
 
-def _parse_mk8s_boot_disk_rules(
+def _parse_compute_boot_disk_type_choices(
     raw: Any,
     *,
     field_label: str,
-) -> tuple[Mk8sBootDiskRule, ...]:
+) -> tuple[ComputeBootDiskTypeChoice, ...]:
     if raw is None:
         return ()
     if not isinstance(raw, list):
         raise ValueError(f"{field_label} must be a list")
-    rules: list[Mk8sBootDiskRule] = []
+    choices: list[ComputeBootDiskTypeChoice] = []
+    seen: set[str] = set()
+    for index, item in enumerate(raw):
+        if not isinstance(item, dict):
+            raise ValueError(f"{field_label}[{index}] must be a mapping")
+        supported_keys = {
+            "value",
+            "label",
+            "allocation_unit_gib",
+            "explicit_encryption_supported",
+        }
+        unknown = sorted(str(key) for key in item if str(key) not in supported_keys)
+        if unknown:
+            raise ValueError(
+                f"{field_label}[{index}] has unsupported field(s): " + ", ".join(unknown)
+            )
+        value = _parse_optional_disk_type(
+            item.get("value"),
+            field_label=f"{field_label}[{index}].value",
+        )
+        if not value:
+            raise ValueError(f"{field_label}[{index}].value is required")
+        if value in seen:
+            raise ValueError(f"{field_label}[{index}].value duplicates {value}")
+        seen.add(value)
+        allocation_unit_gib = _parse_optional_positive_int(
+            item.get("allocation_unit_gib"),
+            field_label=f"{field_label}[{index}].allocation_unit_gib",
+        )
+        choices.append(
+            ComputeBootDiskTypeChoice(
+                value=value,
+                label=_as_text(item.get("label")) or value,
+                allocation_unit_gib=allocation_unit_gib or 1,
+                explicit_encryption_supported=_parse_optional_bool(
+                    item.get("explicit_encryption_supported"),
+                    field_label=f"{field_label}[{index}].explicit_encryption_supported",
+                )
+                or False,
+            )
+        )
+    return tuple(choices)
+
+
+def _parse_compute_boot_disk_rules(
+    raw: Any,
+    *,
+    field_label: str,
+) -> tuple[ComputeBootDiskRule, ...]:
+    if raw is None:
+        return ()
+    if not isinstance(raw, list):
+        raise ValueError(f"{field_label} must be a list")
+    rules: list[ComputeBootDiskRule] = []
     for index, item in enumerate(raw):
         if not isinstance(item, dict):
             raise ValueError(f"{field_label}[{index}] must be a mapping")
@@ -1301,7 +1320,7 @@ def _parse_mk8s_boot_disk_rules(
         if size_gib is None and not disk_type:
             raise ValueError(f"{field_label}[{index}] must set size_gib and/or type")
         rules.append(
-            Mk8sBootDiskRule(
+            ComputeBootDiskRule(
                 min_vcpu=min_vcpu,
                 max_vcpu=max_vcpu,
                 min_memory_gib=min_memory_gib,
@@ -1327,53 +1346,74 @@ def _parse_mk8s_boot_disk_rules(
     return tuple(rules)
 
 
-def _parse_mk8s_node_boot_disk_policy(
+def _parse_compute_boot_disk_policy(
     raw: Any,
     *,
     field_label: str,
-) -> Mk8sNodeBootDiskPolicy:
+) -> ComputeBootDiskPolicy:
     if raw is None:
-        return Mk8sNodeBootDiskPolicy()
+        return ComputeBootDiskPolicy()
     if not isinstance(raw, dict):
         raise ValueError(f"{field_label} must be a mapping")
     supported_keys = {"default_type", "rules"}
     unknown = sorted(str(key) for key in raw if str(key) not in supported_keys)
     if unknown:
         raise ValueError(f"{field_label} has unsupported field(s): " + ", ".join(unknown))
-    return Mk8sNodeBootDiskPolicy(
+    return ComputeBootDiskPolicy(
         default_type=_parse_optional_disk_type(
             raw.get("default_type"),
             field_label=f"{field_label}.default_type",
         ),
-        rules=_parse_mk8s_boot_disk_rules(
+        rules=_parse_compute_boot_disk_rules(
             raw.get("rules"),
             field_label=f"{field_label}.rules",
         ),
     )
 
 
-def _parse_mk8s_boot_disk_settings(
+def _parse_compute_boot_disk_settings(
     raw: Any,
     *,
     field_label: str,
-) -> Mk8sBootDiskSettings:
+) -> ComputeBootDiskSettings:
     if raw is None:
-        return Mk8sBootDiskSettings()
+        return ComputeBootDiskSettings()
     if not isinstance(raw, dict):
         raise ValueError(f"{field_label} must be a mapping")
-    supported_keys = {"cpu", "gpu"}
+    supported_keys = {"disk_types", "cpu", "gpu"}
     unknown = sorted(str(key) for key in raw if str(key) not in supported_keys)
     if unknown:
         raise ValueError(f"{field_label} has unsupported field(s): " + ", ".join(unknown))
-    return Mk8sBootDiskSettings(
-        cpu=_parse_mk8s_node_boot_disk_policy(
+    return ComputeBootDiskSettings(
+        disk_types=_parse_compute_boot_disk_type_choices(
+            raw.get("disk_types"),
+            field_label=f"{field_label}.disk_types",
+        ),
+        cpu=_parse_compute_boot_disk_policy(
             raw.get("cpu"),
             field_label=f"{field_label}.cpu",
         ),
-        gpu=_parse_mk8s_node_boot_disk_policy(
+        gpu=_parse_compute_boot_disk_policy(
             raw.get("gpu"),
             field_label=f"{field_label}.gpu",
         ),
+    )
+
+
+def _parse_compute_settings(raw: Any) -> ComputeSettings:
+    if raw is None:
+        return ComputeSettings()
+    if not isinstance(raw, dict):
+        raise ValueError("compute must be a mapping")
+    supported_keys = {"boot_disk_defaults"}
+    unknown = sorted(str(key) for key in raw if str(key) not in supported_keys)
+    if unknown:
+        raise ValueError("compute has unsupported field(s): " + ", ".join(unknown))
+    return ComputeSettings(
+        boot_disk_defaults=_parse_compute_boot_disk_settings(
+            raw.get("boot_disk_defaults"),
+            field_label="compute.boot_disk_defaults",
+        )
     )
 
 
@@ -1741,34 +1781,6 @@ def _parse_mk8s_gpu_app_policy(
     )
 
 
-def _parse_vm_image_preference_settings(
-    raw: Any,
-    *,
-    field_label: str,
-) -> VmImagePreferenceSettings:
-    if raw is None:
-        return VmImagePreferenceSettings()
-    if not isinstance(raw, dict):
-        raise ValueError(f"{field_label} must be a mapping")
-    supported_keys = {
-        "preferred_cpu_image_families",
-        "preferred_gpu_image_families",
-    }
-    unknown = sorted(str(key) for key in raw if str(key) not in supported_keys)
-    if unknown:
-        raise ValueError(f"{field_label} has unsupported field(s): " + ", ".join(unknown))
-    return VmImagePreferenceSettings(
-        preferred_cpu_image_families=_parse_string_list(
-            raw.get("preferred_cpu_image_families"),
-            field_label=f"{field_label}.preferred_cpu_image_families",
-        ),
-        preferred_gpu_image_families=_parse_string_list(
-            raw.get("preferred_gpu_image_families"),
-            field_label=f"{field_label}.preferred_gpu_image_families",
-        ),
-    )
-
-
 def _parse_observability_logs_settings(
     raw: Any,
     *,
@@ -2025,171 +2037,6 @@ def _parse_observability_grafana_settings(
     )
 
 
-def _parse_vm_standalone_collector_logs_settings(
-    raw: Any,
-    *,
-    field_label: str,
-) -> VmStandaloneCollectorLogsSettings:
-    if raw is None:
-        return VmStandaloneCollectorLogsSettings()
-    if not isinstance(raw, dict):
-        raise ValueError(f"{field_label} must be a mapping")
-    supported_keys = {"default_enabled", "systemd_units"}
-    unknown = sorted(str(key) for key in raw if str(key) not in supported_keys)
-    if unknown:
-        raise ValueError(f"{field_label} has unsupported field(s): " + ", ".join(unknown))
-    systemd_units = raw.get("systemd_units", ())
-    if systemd_units is None:
-        systemd_units = ()
-    if not isinstance(systemd_units, (list, tuple)):
-        raise ValueError(f"{field_label}.systemd_units must be a list of strings")
-    normalized_units = tuple(_as_text(item) for item in systemd_units if _as_text(item))
-    return VmStandaloneCollectorLogsSettings(
-        enabled_by_default=bool(raw.get("default_enabled", True)),
-        systemd_units=normalized_units,
-    )
-
-
-def _parse_vm_standalone_collector_metrics_settings(
-    raw: Any,
-    *,
-    field_label: str,
-) -> VmStandaloneCollectorMetricsSettings:
-    if raw is None:
-        return VmStandaloneCollectorMetricsSettings()
-    if not isinstance(raw, dict):
-        raise ValueError(f"{field_label} must be a mapping")
-    supported_keys = {"default_enabled"}
-    unknown = sorted(str(key) for key in raw if str(key) not in supported_keys)
-    if unknown:
-        raise ValueError(f"{field_label} has unsupported field(s): " + ", ".join(unknown))
-    return VmStandaloneCollectorMetricsSettings(
-        enabled_by_default=bool(raw.get("default_enabled", True))
-    )
-
-
-def _parse_vm_standalone_collector_package_settings(
-    raw: Any,
-    *,
-    field_label: str,
-) -> VmStandaloneCollectorPackageSettings:
-    if raw is None:
-        return VmStandaloneCollectorPackageSettings()
-    if not isinstance(raw, dict):
-        raise ValueError(f"{field_label} must be a mapping")
-    supported_keys = {
-        "name",
-        "version",
-        "apt_repository",
-        "apt_key_url",
-        "apt_suite",
-        "apt_component",
-        "apt_origin",
-    }
-    unknown = sorted(str(key) for key in raw if str(key) not in supported_keys)
-    if unknown:
-        raise ValueError(f"{field_label} has unsupported field(s): " + ", ".join(unknown))
-    package = VmStandaloneCollectorPackageSettings(
-        name=_as_text(raw.get("name")),
-        version=_as_text(raw.get("version")),
-        apt_repository=_as_text(raw.get("apt_repository")),
-        apt_key_url=_as_text(raw.get("apt_key_url")),
-        apt_suite=_as_text(raw.get("apt_suite")),
-        apt_component=_as_text(raw.get("apt_component")),
-        apt_origin=_as_text(raw.get("apt_origin")),
-    )
-    required = {
-        "name": package.name,
-        "version": package.version,
-        "apt_repository": package.apt_repository,
-        "apt_key_url": package.apt_key_url,
-        "apt_suite": package.apt_suite,
-        "apt_component": package.apt_component,
-        "apt_origin": package.apt_origin,
-    }
-    missing = [key for key, value in required.items() if not value]
-    if missing:
-        raise ValueError(
-            f"{field_label} is missing required field(s): " + ", ".join(sorted(missing))
-        )
-    return package
-
-
-def _parse_vm_standalone_collector_prometheus_settings(
-    raw: Any,
-    *,
-    field_label: str,
-) -> VmStandaloneCollectorPrometheusSettings:
-    if raw is None:
-        return VmStandaloneCollectorPrometheusSettings()
-    if not isinstance(raw, dict):
-        raise ValueError(f"{field_label} must be a mapping")
-    supported_keys = {"package_name"}
-    unknown = sorted(str(key) for key in raw if str(key) not in supported_keys)
-    if unknown:
-        raise ValueError(f"{field_label} has unsupported field(s): " + ", ".join(unknown))
-    package_name = _as_text(raw.get("package_name"))
-    if not package_name:
-        raise ValueError(f"{field_label}.package_name is required")
-    return VmStandaloneCollectorPrometheusSettings(package_name=package_name)
-
-
-def _parse_vm_standalone_collector_settings(
-    raw: Any,
-    *,
-    field_label: str,
-) -> VmStandaloneCollectorSettings:
-    if raw is None:
-        return VmStandaloneCollectorSettings()
-    if not isinstance(raw, dict):
-        raise ValueError(f"{field_label} must be a mapping")
-    supported_keys = {
-        "default_enabled",
-        "package",
-        "prometheus",
-        "metadata_token_file",
-        "metrics_export_port",
-        "prometheus_agent_port",
-        "logs",
-        "metrics",
-    }
-    unknown = sorted(str(key) for key in raw if str(key) not in supported_keys)
-    if unknown:
-        raise ValueError(f"{field_label} has unsupported field(s): " + ", ".join(unknown))
-    metrics_export_port = raw.get("metrics_export_port", 19090)
-    prometheus_agent_port = raw.get("prometheus_agent_port", 19091)
-    if not isinstance(metrics_export_port, int) or metrics_export_port <= 0:
-        raise ValueError(f"{field_label}.metrics_export_port must be a positive integer")
-    if not isinstance(prometheus_agent_port, int) or prometheus_agent_port <= 0:
-        raise ValueError(f"{field_label}.prometheus_agent_port must be a positive integer")
-    if raw.get("package") is None:
-        raise ValueError(f"{field_label}.package is required")
-    if raw.get("prometheus") is None:
-        raise ValueError(f"{field_label}.prometheus is required")
-    return VmStandaloneCollectorSettings(
-        enabled_by_default=bool(raw.get("default_enabled", False)),
-        package=_parse_vm_standalone_collector_package_settings(
-            raw.get("package"),
-            field_label=f"{field_label}.package",
-        ),
-        prometheus=_parse_vm_standalone_collector_prometheus_settings(
-            raw.get("prometheus"),
-            field_label=f"{field_label}.prometheus",
-        ),
-        iam_token_file=_as_text(raw.get("metadata_token_file")) or "/mnt/cloud-metadata/token",
-        metrics_export_port=metrics_export_port,
-        prometheus_agent_port=prometheus_agent_port,
-        logs=_parse_vm_standalone_collector_logs_settings(
-            raw.get("logs"),
-            field_label=f"{field_label}.logs",
-        ),
-        metrics=_parse_vm_standalone_collector_metrics_settings(
-            raw.get("metrics"),
-            field_label=f"{field_label}.metrics",
-        ),
-    )
-
-
 def _parse_infra_observability_settings(
     raw: Any,
     *,
@@ -2205,7 +2052,6 @@ def _parse_infra_observability_settings(
         "service_metrics",
         "service_logs",
         "grafana",
-        "public_ingest",
     }
     unknown = sorted(str(key) for key in raw if str(key) not in supported_keys)
     if unknown:
@@ -2276,12 +2122,6 @@ def _parse_infra_observability_settings(
         primary_metrics_raw = primary_agent_raw.get("metrics")
         primary_traces_raw = primary_agent_raw.get("traces")
         primary_validation_raw = primary_agent_raw.get("validation")
-    standalone_collector = _parse_vm_standalone_collector_settings(
-        raw.get("public_ingest"),
-        field_label=f"{field_label}.public_ingest",
-    )
-    if module_name != "vm" and standalone_collector != VmStandaloneCollectorSettings():
-        raise ValueError(f"{field_label}.public_ingest is only supported for the vm component")
     grafana_settings = _parse_observability_grafana_settings(
         raw.get("grafana"),
         field_label=f"{field_label}.grafana",
@@ -2316,7 +2156,6 @@ def _parse_infra_observability_settings(
             field_label=f"{field_label}.service_logs",
         ),
         grafana=grafana_settings,
-        standalone_collector=standalone_collector,
     )
 
 
@@ -3055,22 +2894,18 @@ def _parse_infra_component_cli(
     source_root: Path | None = None,
 ) -> tuple[
     Mk8sGpuSettings,
-    Mk8sBootDiskSettings,
-    VmImagePreferenceSettings,
     InfraObservabilitySettings,
 ]:
     if raw is None:
         return (
             Mk8sGpuSettings(),
-            Mk8sBootDiskSettings(),
-            VmImagePreferenceSettings(),
             InfraObservabilitySettings(),
         )
     if not isinstance(raw, dict):
         raise ValueError(f"{field_label} must be a mapping")
 
     if module_name == "mk8s":
-        supported_keys = {"gpu", "boot_disk_defaults", "observability"}
+        supported_keys = {"gpu", "observability"}
         unknown = sorted(str(key) for key in raw if str(key) not in supported_keys)
         if unknown:
             raise ValueError(f"{field_label} has unsupported field(s): " + ", ".join(unknown))
@@ -3081,11 +2916,6 @@ def _parse_infra_component_cli(
                 source_profile=source_profile,
                 source_root=source_root,
             ),
-            _parse_mk8s_boot_disk_settings(
-                raw.get("boot_disk_defaults"),
-                field_label=f"{field_label}.boot_disk_defaults",
-            ),
-            VmImagePreferenceSettings(),
             _parse_infra_observability_settings(
                 raw.get("observability"),
                 module_name=module_name,
@@ -3094,17 +2924,12 @@ def _parse_infra_component_cli(
         )
 
     if module_name == "vm":
-        supported_keys = {"image_preferences", "observability"}
+        supported_keys = {"observability"}
         unknown = sorted(str(key) for key in raw if str(key) not in supported_keys)
         if unknown:
             raise ValueError(f"{field_label} has unsupported field(s): " + ", ".join(unknown))
         return (
             Mk8sGpuSettings(),
-            Mk8sBootDiskSettings(),
-            _parse_vm_image_preference_settings(
-                raw.get("image_preferences"),
-                field_label=f"{field_label}.image_preferences",
-            ),
             _parse_infra_observability_settings(
                 raw.get("observability"),
                 module_name=module_name,
@@ -3118,8 +2943,6 @@ def _parse_infra_component_cli(
         raise ValueError(f"{field_label} has unsupported field(s): " + ", ".join(unknown))
     return (
         Mk8sGpuSettings(),
-        Mk8sBootDiskSettings(),
-        VmImagePreferenceSettings(),
         _parse_infra_observability_settings(
             raw.get("observability"),
             module_name=module_name,
@@ -3553,18 +3376,6 @@ def _derived_observability_wizard_fields(
             "deploy.observability.enabled": {
                 "default": False,
             },
-            "deploy.observability.vm.collector.enabled": {
-                "default": observability.standalone_collector.enabled_by_default,
-            },
-            "deploy.observability.vm.collector.metrics.enabled": {
-                "default": observability.standalone_collector.metrics.enabled_by_default,
-            },
-            "deploy.observability.vm.collector.logs.enabled": {
-                "default": observability.standalone_collector.logs.enabled_by_default,
-            },
-            "deploy.observability.vm.collector.logs.systemd_units": {
-                "default": list(observability.standalone_collector.logs.systemd_units),
-            },
             "deploy.observability.vm.logs.enabled": {
                 "default": observability.logs.enabled_by_default,
             },
@@ -3794,7 +3605,7 @@ def _parse_component_cli_settings_payload(payload: Any) -> ComponentCliSettingsP
         payload = {}
     if not isinstance(payload, dict):
         raise ValueError("component_cli_settings root must be a mapping")
-    supported_root_keys = {"cli", "observability", "components"}
+    supported_root_keys = {"cli", "compute", "observability", "components"}
     unknown_root = sorted(str(key) for key in payload if str(key) not in supported_root_keys)
     if unknown_root:
         raise ValueError(
@@ -3848,6 +3659,7 @@ def _parse_component_cli_settings_payload(payload: Any) -> ComponentCliSettingsP
 
     return ComponentCliSettingsPayload(
         cli=_parse_cli_settings(payload.get("cli")),
+        compute=_parse_compute_settings(payload.get("compute")),
         observability=_parse_global_observability_settings(payload.get("observability")),
         infra=component_cli["infra"],
         apps=component_cli["apps"],
@@ -3967,7 +3779,7 @@ def _parse_sources_payload(
         )
         validation_profile = resolve_builtin_validation_profile(module_name)
         raw_cli = cli_settings.infra.get(module_name)
-        mk8s_gpu, mk8s_boot_disks, vm_images, observability = _parse_infra_component_cli(
+        mk8s_gpu, observability = _parse_infra_component_cli(
             raw_cli,
             module_name=module_name,
             field_label=f"components.infra.{module_name}.cli",
@@ -4016,8 +3828,6 @@ def _parse_sources_payload(
                 handoff=handoff,
                 status=status,
                 mk8s_gpu=mk8s_gpu,
-                mk8s_boot_disks=mk8s_boot_disks,
-                vm_images=vm_images,
                 observability=observability,
             )
         )
@@ -4146,6 +3956,7 @@ def _parse_sources_payload(
     )
     return ComponentSources(
         cli=cli,
+        compute=cli_settings.compute,
         shared=shared,
         tf_modules=tf_module_tuple,
         helm_charts=helm_chart_tuple,

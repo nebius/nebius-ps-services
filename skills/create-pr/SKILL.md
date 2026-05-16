@@ -15,6 +15,8 @@ branch, and report the order the user should merge the PRs manually.
 - Opening a PR from local changes or local commits.
 - Opening or reusing PRs for one or more named branches.
 - Moving in-progress work off the default branch before publishing it.
+- Staging complete monorepo work with `git add -A` when the user wants the
+  current local changes submitted as one PR.
 - Reusing the current feature branch instead of creating extra branches.
 - Making each target branch conflict-free against the default branch, usually
   `main`, before returning the PR.
@@ -79,10 +81,15 @@ branch, and report the order the user should merge the PRs manually.
    A PR must come from committed changes, not only a dirty worktree.
    - If the worktree is dirty on the default branch, create the feature branch
      first so the in-progress work moves off the default branch safely.
-   - If the worktree is still dirty after branch selection, either help commit
-     the current diff when the user clearly wants to submit it, or stop and
-     explain that a PR cannot be created until the branch has reviewable
-     commits.
+   - If the worktree is still dirty after branch selection and the user clearly
+     wants to submit the current local work, stage the complete repository diff
+     from the repository root with `git add -A`, including modified, deleted,
+     and untracked files across monorepo projects. Then inspect the staged diff
+     and commit it with a concise message.
+   - Use path-limited staging only when the user explicitly requests a narrower
+     PR scope. Otherwise, do not leave related monorepo edits unstaged.
+   - If the user did not clearly ask to submit the dirty work, stop and explain
+     that a PR cannot be created until the branch has reviewable commits.
 5. Confirm there is something to review for every target.
    Compare each target branch with `origin/<base>`. If a branch has no diff and
    no unpublished commits, do not open an empty PR for that branch.
@@ -163,6 +170,11 @@ branch, and report the order the user should merge the PRs manually.
   - `git switch <branch>`
   - `git merge --no-edit origin/<base>`
   - `git push origin <branch>`
+- Complete local-work staging:
+  - `git status --short`
+  - `git add -A`
+  - `git diff --cached --stat`
+  - `git commit -m "<concise message>"`
 - Ordered merge simulation:
   - `git switch --detach origin/<base>`
   - `git switch -c tmp/pr-order-check-<short-id>`
@@ -190,6 +202,10 @@ branch, and report the order the user should merge the PRs manually.
 - Do not merge the PRs into the default branch unless the user explicitly asks.
   This skill prepares PRs so the user can merge them manually.
 - Do not open a PR from uncommitted changes alone. Commit first or stop.
+- For local-work PRs, do not stage only a subset of the worktree unless the
+  user explicitly asks for a narrower PR. The default staging command is
+  `git add -A` from the repository root so monorepo-wide related changes stay
+  together.
 - Do not open an empty PR with no branch diff against the base branch.
 - Do not combine multiple requested branches into one PR.
 - Do not rewrite published branch history unless the user explicitly asks and

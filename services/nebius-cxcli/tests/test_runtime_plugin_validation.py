@@ -94,6 +94,36 @@ def test_runtime_validation_plugins_reject_invalid_component_ssh_user_name(
         )
 
 
+def test_runtime_validation_plugins_reject_invalid_wireguard_default_dns(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(
+        "NEBIUS_CXCLI_RUNTIME_VALIDATION_PLUGINS",
+        "nebius_cxcli.runtime_component_validation:validate_component_runtime_rules",
+    )
+    payload = {
+        "__shared_admin_ssh_user_name__": "ubuntu",
+        "infra": {
+            "wireguard_gw": {
+                "enabled": True,
+                "ssh_user_name": "ubuntu",
+                "name": "wg-gw",
+                "local_subnets": ["10.0.0.0/8"],
+                "client_default_dns": ["1.1.1.1", "2001:4860:4860::8888"],
+            }
+        },
+    }
+
+    with pytest.raises(ValueError, match=r"client_default_dns.*IPv4"):
+        run_runtime_validation_plugins(
+            payload=payload,
+            get_path=_get_path,
+            as_text=_as_text,
+            id_pattern=re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"),
+            env_var_pattern=re.compile(r"^[A-Z_][A-Z0-9_]*$"),
+        )
+
+
 def test_runtime_validation_plugins_accept_mysterybox_payload_list(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

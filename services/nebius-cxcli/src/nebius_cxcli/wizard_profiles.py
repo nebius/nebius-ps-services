@@ -36,6 +36,22 @@ def _compute_platform_and_preset_fields(
     }
 
 
+def _compute_public_image_family_field(
+    *,
+    image_field: str,
+    platform_field: str,
+) -> dict[str, dict[str, Any]]:
+    return {
+        image_field: {
+            "options": {
+                "from": "compute_public_image_families",
+                "depends_on": platform_field,
+                "auto_select_first": True,
+            }
+        }
+    }
+
+
 def _static_sources(*values: str | tuple[str, str]) -> dict[str, Any]:
     normalized: list[str | dict[str, str]] = []
     for item in values:
@@ -143,13 +159,13 @@ BUILTIN_WIZARD_PROFILES: dict[str, dict[str, dict[str, Any]]] = {
         },
         "inputs.cpu_nodes_boot_disk_type": {
             "options": {
-                "from": "mk8s_boot_disk_types",
+                "from": "compute_boot_disk_types",
                 "auto_select_first": True,
             }
         },
         "inputs.gpu_nodes_boot_disk_type": {
             "options": {
-                "from": "mk8s_boot_disk_types",
+                "from": "compute_boot_disk_types",
                 "auto_select_first": True,
             }
         },
@@ -208,11 +224,30 @@ BUILTIN_WIZARD_PROFILES: dict[str, dict[str, dict[str, Any]]] = {
         },
         "inputs.tier": _static_sources("small", "medium", "large"),
     },
-    "wireguard-jumphost": {
+    "wireguard-gw": {
         **_project_subnets_field(),
         **_compute_platform_and_preset_fields(
             platform_field="inputs.platform",
             preset_field="inputs.preset",
+        ),
+        **_compute_public_image_family_field(
+            image_field="inputs.source_image_family",
+            platform_field="inputs.platform",
+        ),
+        "inputs.boot_disk_type": {
+            "options": {
+                "from": "compute_boot_disk_types",
+                "auto_select_first": True,
+            }
+        },
+        "inputs.wireguard_tunnel_cidr": {
+            "materialize_default": True,
+        },
+        **_suppressed_prompt_fields(
+            "inputs.boot_disk_block_size_bytes",
+            "inputs.endpoint_host",
+            "inputs.clients",
+            "inputs.labels",
         ),
     },
     "ssh-jumphost": {
@@ -221,6 +256,27 @@ BUILTIN_WIZARD_PROFILES: dict[str, dict[str, dict[str, Any]]] = {
             platform_field="inputs.platform",
             preset_field="inputs.preset",
         ),
+        **_compute_public_image_family_field(
+            image_field="inputs.source_image_family",
+            platform_field="inputs.platform",
+        ),
+        "inputs.boot_disk_type": {
+            "options": {
+                "from": "compute_boot_disk_types",
+                "auto_select_first": True,
+            }
+        },
+        "inputs.allowed_cidrs": {
+            "default_from": {
+                "from": "operator_public_ip_cidr",
+            },
+            "type_hint": "list(string)",
+            "materialize_default": True,
+        },
+        **_suppressed_prompt_fields(
+            "inputs.boot_disk_block_size_bytes",
+            "inputs.labels",
+        ),
     },
     "vm": {
         **_project_subnets_field(),
@@ -228,10 +284,13 @@ BUILTIN_WIZARD_PROFILES: dict[str, dict[str, dict[str, Any]]] = {
             platform_field="inputs.platform",
             preset_field="inputs.preset",
         ),
-        "inputs.source_image_family": {
+        **_compute_public_image_family_field(
+            image_field="inputs.source_image_family",
+            platform_field="inputs.platform",
+        ),
+        "inputs.boot_disk_type": {
             "options": {
-                "from": "compute_public_image_families",
-                "depends_on": "inputs.platform",
+                "from": "compute_boot_disk_types",
                 "auto_select_first": True,
             }
         },
@@ -246,33 +305,19 @@ BUILTIN_WIZARD_PROFILES: dict[str, dict[str, dict[str, Any]]] = {
         },
         **_suppressed_prompt_fields(
             "inputs.boot_disk_existing_id",
+            "inputs.boot_disk_block_size_bytes",
             "inputs.source_image_id",
             "inputs.boot_disk_device_id",
             "inputs.public_ip_allocation_id",
             "inputs.private_ip_allocation_id",
             "inputs.security_group_ids",
             "inputs.hostname",
+            "inputs.cloud_init_user_data_override",
             "inputs.stopped",
             "inputs.labels",
             "inputs.data_disks",
             "inputs.existing_data_disks",
             "inputs.filesystems",
-            "inputs.observability_collector_enabled",
-            "inputs.observability_collector_region_id",
-            "inputs.observability_collector_package_name",
-            "inputs.observability_collector_package_version",
-            "inputs.observability_collector_apt_repository",
-            "inputs.observability_collector_apt_key_url",
-            "inputs.observability_collector_apt_suite",
-            "inputs.observability_collector_apt_component",
-            "inputs.observability_collector_apt_origin",
-            "inputs.observability_collector_prometheus_package_name",
-            "inputs.observability_collector_iam_token_file",
-            "inputs.observability_collector_logs_enabled",
-            "inputs.observability_collector_logs_systemd_units",
-            "inputs.observability_collector_metrics_enabled",
-            "inputs.observability_collector_metrics_export_port",
-            "inputs.observability_collector_prometheus_agent_port",
             "inputs.recovery_policy",
             "inputs.gpu_cluster_id",
             "inputs.gpu_cluster_name",

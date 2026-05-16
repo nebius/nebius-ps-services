@@ -12,9 +12,10 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qsl, quote, urlencode, urljoin, urlparse, urlunparse
 
-from .component_instances import component_instance_id, component_type_id
+from .component_instances import component_instance_id, component_instance_label, component_type_id
 from .component_sources import component_output_root_name, load_component_sources
 from .component_wiring import resolved_component_row
+from .components import ComponentEntry, component_entries, component_lookup
 from .deploy_targets import enabled_cluster_target_refs
 from .deploy_validation_report import (
     DEPLOY_REPORT_FILENAME,
@@ -27,6 +28,7 @@ from .observability import observability_endpoint_summary, observability_status_
 from .paths import ProjectPaths
 from .runtime_config import to_plain_data
 from .terraform_ops import terraform_output_json
+from .wireguard_clients import default_wireguard_client_output_dir
 
 
 @dataclass(frozen=True)
@@ -219,6 +221,240 @@ def _component_status_line(item: Mapping[str, Any]) -> str:
     return _status_line(label or "Unknown component", enabled)
 
 
+def _enabled_status_report_lines(items: Sequence[tuple[str, Any]]) -> list[str]:
+    return [_status_line(label, value) for label, value in items if _enabled_label(value) == "enabled"]
+
+
+_REPORT_SENSITIVE_TOKENS = (
+    "password",
+    "passwd",
+    "private-key",
+    "private_key",
+    "public-key",
+    "public_key",
+    "secret",
+    "ssh-public-key",
+    "ssh_public_key",
+    "token",
+    "credential",
+    "payload",
+)
+_REPORT_PREFERRED_INPUT_PATHS = (
+    "name",
+    "cluster_name",
+    "subnet_id",
+    "platform",
+    "preset",
+    "cpu_nodes_count",
+    "cpu_nodes_platform",
+    "cpu_nodes_preset",
+    "gpu_enabled",
+    "gpu_nodes_count",
+    "gpu_nodes_platform",
+    "gpu_nodes_preset",
+    "boot_disk_type",
+    "boot_disk_size_gib",
+    "source_image_family",
+    "public_ip_mode",
+    "local_subnets",
+    "allowed_cidrs",
+)
+
+
+def _report_path_key(path: Sequence[str]) -> str:
+    return ".".join(str(part).strip() for part in path if str(part).strip())
+
+
+def _is_sensitive_report_path(path: Sequence[str]) -> bool:
+    normalized = _report_path_key(path).lower().replace("-", "_")
+    return any(token.replace("-", "_") in normalized for token in _REPORT_SENSITIVE_TOKENS)
+
+
+def _report_scalar_text(value: Any) -> str:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, int | float):
+        return str(value)
+    return str(value).strip()
+
+
+def _report_value_text(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, bool | int | float):
+        return _report_scalar_text(value)
+    if isinstance(value, Sequence) and not isinstance(value, bytes | bytearray):
+        scalar_items = [
+            _report_scalar_text(item)
+            for item in value
+            if isinstance(item, str | bool | int | float) and _report_scalar_text(item)
+        ]
+        if len(scalar_items) == len(value):
+            preview = ", ".join(scalar_items[:4])
+            suffix = f", +{len(scalar_items) - 4} more" if len(scalar_items) > 4 else ""
+            return f"[{preview}{suffix}]" if preview else ""
+        return f"{len(value)} item(s)"
+    if isinstance(value, Mapping):
+        return f"{len(value)} key(s)" if value else ""
+    return str(value).strip()
+
+
+def _collect_report_pairs(
+    value: Any,
+    *,
+    prefix: tuple[str, ...] = (),
+    depth: int = 0,
+    max_depth: int = 1,
+) -> list[tuple[str, str]]:
+    if _is_sensitive_report_path(prefix):
+        return []
+    if isinstance(value, Mapping) and depth < max_depth:
+        pairs: list[tuple[str, str]] = []
+        for key, item in value.items():
+            key_text = str(key).strip()
+            if not key_text:
+                continue
+            pairs.extend(
+                _collect_report_pairs(
+                    item,
+                    prefix=(*prefix, key_text),
+                    depth=depth + 1,
+                    max_depth=max_depth,
+                )
+            )
+        return pairs
+    text = _report_value_text(value)
+    if not text or not prefix:
+        return []
+    return [(_report_path_key(prefix), text)]
+
+
+def _ordered_report_pairs(
+    pairs: Sequence[tuple[str, str]],
+    *,
+    preferred_paths: Sequence[str] = (),
+    max_items: int = 8,
+) -> tuple[tuple[str, str], ...]:
+    remaining = list(pairs)
+    ordered: list[tuple[str, str]] = []
+    preferred = tuple(path.lower().replace("-", "_") for path in preferred_paths)
+    for preferred_path in preferred:
+        for index, (key, value) in enumerate(remaining):
+            if key.lower().replace("-", "_") != preferred_path:
+                continue
+            ordered.append((key, value))
+            remaining.pop(index)
+            break
+    ordered.extend(remaining)
+    return tuple(ordered[:max_items])
+
+
+def _format_report_pairs(pairs: Sequence[tuple[str, str]]) -> str:
+    return ", ".join(f"`{key}={value}`" for key, value in pairs)
+
+
+def _component_report_label(row: Mapping[str, Any]) -> str:
+    return component_instance_label(component_type_id(row), component_instance_id(row))
+
+
+def _component_status_report_line(entry: ComponentEntry, row: Mapping[str, Any]) -> str:
+    status = entry.status
+    if status is None:
+        return ""
+    inputs = _component_inputs(_mapping(row))
+    name_input = str(getattr(status, "name_input", "name") or "name").strip()
+    name_value = _lookup(inputs, name_input)
+    name_text = _report_value_text(name_value)
+    if name_text:
+        return (
+            f"  - Resource: `{status.kind}` with `{name_input}` = `{name_text}`"
+        )
+    return f"  - Resource: `{status.kind}`"
+
+
+def _infra_component_report_markdown_lines(config: Any) -> list[str]:
+    payload_data = to_plain_data(config)
+    if not isinstance(payload_data, dict):
+        return []
+    rows_by_id = _infra_component_rows(payload_data)
+    lines = ["### Infra Component Reports", ""]
+    rendered = False
+    for entry in component_entries("infra"):
+        for row in _enabled_component_rows(rows_by_id.get(entry.id, [])):
+            rendered = True
+            label = _component_report_label(row)
+            inputs = _component_inputs(row)
+            input_pairs = _ordered_report_pairs(
+                _collect_report_pairs(inputs, max_depth=1),
+                preferred_paths=_REPORT_PREFERRED_INPUT_PATHS,
+            )
+            lines.append(f"- `{label}` ({entry.description})")
+            lines.append(f"  - Group: `{entry.group or 'Ungrouped'}`")
+            lines.append(f"  - Engine: `{entry.engine_type}`")
+            status_line = _component_status_report_line(entry, row)
+            if status_line:
+                lines.append(status_line)
+            if input_pairs:
+                lines.append(f"  - Inputs: {_format_report_pairs(input_pairs)}")
+    if not rendered:
+        lines.append("- No enabled infra components.")
+    return lines
+
+
+def _app_value_key_summary(values: Mapping[str, Any], *, max_items: int = 8) -> str:
+    keys = [
+        str(key).strip()
+        for key in values
+        if str(key).strip() and not _is_sensitive_report_path((str(key).strip(),))
+    ]
+    if not keys:
+        return "`none`"
+    visible = keys[:max_items]
+    suffix = f", +{len(keys) - max_items} more" if len(keys) > max_items else ""
+    return f"{_format_backtick_list(visible)}{suffix}"
+
+
+def _app_component_report_markdown_lines(config: Any) -> list[str]:
+    payload_data = to_plain_data(config)
+    if not isinstance(payload_data, dict):
+        return []
+    rows_by_id = _app_chart_rows(payload_data)
+    lines = ["### App Component Reports", ""]
+    rendered = False
+    for entry in component_entries("apps"):
+        for row in _enabled_component_rows(rows_by_id.get(entry.id, [])):
+            rendered = True
+            label = _component_report_label(row)
+            namespace = _coalesce(_lookup(row, "namespace"), entry.default_namespace, "default")
+            release_name = _coalesce(
+                _lookup(row, "release_name"),
+                entry.default_release_name,
+                entry.name,
+                entry.id,
+            )
+            target = component_instance_id(row)
+            repo = _coalesce(_lookup(row, "repo"), entry.chart_repo, entry.source)
+            chart_name = _coalesce(_lookup(row, "chart"), entry.chart_name, entry.id)
+            version = _coalesce(_lookup(row, "version"), entry.version, "chart default")
+            install_after = _string_sequence(
+                _coalesce(_lookup(row, "install_after"), entry.default_release_install_after)
+            )
+            values = _mapping(_lookup(row, "values"))
+            lines.append(f"- `{label}` ({entry.description})")
+            lines.append(f"  - Group: `{entry.group or 'Ungrouped'}`")
+            lines.append(f"  - Release: `{namespace}/{release_name}`")
+            lines.append(f"  - Target: `{target}`")
+            lines.append(f"  - Chart: `{chart_name}` from `{repo}`; version `{version}`")
+            if install_after:
+                lines.append(f"  - Installs after: {_format_backtick_list(install_after)}")
+            lines.append(f"  - Value keys: {_app_value_key_summary(values)}")
+    if not rendered:
+        lines.append("- No enabled app components.")
+    return lines
+
+
 def _grafana_status_key(status: Mapping[str, Any]) -> tuple[str, str, str]:
     target_label = str(_lookup(status, "target_ref") or "current-cluster").strip()
     namespace = str(_lookup(status, "namespace") or "observability").strip()
@@ -357,12 +593,13 @@ def _bundled_dashboard_url(
     dashboard_uid: str,
     cluster_id: str,
     org_id: int,
+    cluster_variable: bool = True,
 ) -> str:
     if not base_url or not dashboard_uid:
         return ""
     url = urljoin(base_url.rstrip("/") + "/", f"d/{quote(dashboard_uid, safe='')}")
     params = {"orgId": str(org_id)}
-    if cluster_id:
+    if cluster_id and cluster_variable:
         params["var-Cluster"] = cluster_id
     return _url_with_query_params(url, params)
 
@@ -456,6 +693,281 @@ def _terraform_outputs_if_available(paths: ProjectPaths) -> dict[str, Any]:
         except Exception:
             continue
     return {}
+
+
+def _enabled_component_rows(rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    return [_mapping(row) for row in rows if bool(_lookup(row, "enabled"))]
+
+
+def _component_user_name(row: Mapping[str, Any], *, placeholder: str) -> str:
+    inputs = _component_inputs(_mapping(row))
+    return str(_coalesce(_lookup(inputs, "ssh_user_name"), placeholder)).strip()
+
+
+def _component_output_text(
+    outputs: Mapping[str, Any],
+    row: Mapping[str, Any],
+    output_name: str,
+) -> str:
+    instance_id = component_instance_id(row) or component_type_id(row)
+    if not instance_id:
+        return ""
+    return _output_value_text(outputs, component_output_root_name(instance_id, output_name))
+
+
+def _ssh_destination(user_name: str, host: str) -> str:
+    return f"{user_name}@{host}"
+
+
+def ssh_jump_access_hints(config: Any, paths: ProjectPaths) -> list[dict[str, str]]:
+    """Build concrete ProxyJump commands for private VMs when outputs exist."""
+    payload_data = to_plain_data(config)
+    if not isinstance(payload_data, dict):
+        return []
+    outputs = _terraform_outputs_if_available(paths)
+    if not outputs:
+        return []
+    infra_rows = _infra_component_rows(payload_data)
+    jump_hosts = _enabled_component_rows(infra_rows.get("ssh-jumphost", []))
+    target_vms = _enabled_component_rows(infra_rows.get("vm", []))
+    hints: list[dict[str, str]] = []
+    for jump_host in jump_hosts:
+        jump_public_ip = _component_output_text(outputs, jump_host, "public_ip")
+        if not jump_public_ip:
+            continue
+        jump_user = _component_user_name(jump_host, placeholder="<ssh-jump-user>")
+        jump_label = component_instance_label(
+            component_type_id(jump_host),
+            component_instance_id(jump_host),
+        )
+        for target_vm in target_vms:
+            target_private_ip = _component_output_text(outputs, target_vm, "private_ip")
+            if not target_private_ip:
+                continue
+            target_user = _component_user_name(target_vm, placeholder="<vm-user>")
+            target_label = component_instance_label(
+                component_type_id(target_vm),
+                component_instance_id(target_vm),
+            )
+            command = " ".join(
+                [
+                    "ssh",
+                    "-J",
+                    shlex.quote(_ssh_destination(jump_user, jump_public_ip)),
+                    shlex.quote(_ssh_destination(target_user, target_private_ip)),
+                ]
+            )
+            hints.append(
+                {
+                    "jump_host_label": jump_label,
+                    "target_label": target_label,
+                    "command": command,
+                }
+            )
+    return hints
+
+
+def wireguard_access_command_hints(config: Any, paths: ProjectPaths) -> list[dict[str, str]]:
+    payload_data = to_plain_data(config)
+    if not isinstance(payload_data, dict):
+        return []
+    infra_rows = _infra_component_rows(payload_data)
+    wireguard_rows = _enabled_component_rows(infra_rows.get("wireguard-gw", []))
+    if not wireguard_rows:
+        return []
+
+    client_output_dir = default_wireguard_client_output_dir(paths)
+    client_configs = (
+        tuple(sorted(client_output_dir.glob("*.conf"))) if client_output_dir.exists() else ()
+    )
+    hints: list[dict[str, str]] = []
+    if client_configs:
+        for client_config in client_configs:
+            config_path = shlex.quote(str(client_config))
+            hints.append(
+                {
+                    "label": f"WireGuard connect {client_config.stem}",
+                    "command": f"wg-quick up {config_path}",
+                }
+            )
+            hints.append(
+                {
+                    "label": f"WireGuard disconnect {client_config.stem}",
+                    "command": f"wg-quick down {config_path}",
+                }
+            )
+        return hints
+
+    include_component_selector = len(wireguard_rows) > 1
+    for row in wireguard_rows:
+        label = component_instance_label(component_type_id(row), component_instance_id(row))
+        hints.append(
+            {
+                "label": f"Generate WireGuard client config for {label}",
+                "command": _wireguard_generate_command(
+                    paths,
+                    label if include_component_selector else None,
+                ),
+            }
+        )
+    return hints
+
+
+def _ssh_jump_access_markdown_lines(config: Any, paths: ProjectPaths) -> list[str]:
+    payload_data = to_plain_data(config)
+    if not isinstance(payload_data, dict):
+        return []
+    infra_rows = _infra_component_rows(payload_data)
+    has_jump_host = bool(_enabled_component_rows(infra_rows.get("ssh-jumphost", [])))
+    has_target_vm = bool(_enabled_component_rows(infra_rows.get("vm", [])))
+    if not (has_jump_host and has_target_vm):
+        return []
+
+    hints = ssh_jump_access_hints(config, paths)
+    lines = [
+        "### SSH Jump Host Access",
+        "",
+        "- Use ProxyJump when the target VM has only a private IP and your source "
+        "CIDR is allowed by the SSH jump host.",
+    ]
+    if hints:
+        lines.extend(["", "```bash"])
+        for hint in hints:
+            lines.append(f"# {hint['target_label']} via {hint['jump_host_label']}")
+            lines.append(hint["command"])
+        lines.extend(["```", ""])
+        lines.append(
+            "- If your SSH key is not available through ssh-agent, add "
+            "`-i /path/to/private_key` to the command."
+        )
+    else:
+        lines.extend(
+            [
+                "- Concrete commands are added after deploy when Terraform outputs "
+                "for the jump-host public IP and VM private IP are available.",
+                "",
+                "```bash",
+                "ssh -J <ssh_user_name>@<ssh-jumphost-public-ip> "
+                "<vm_ssh_user_name>@<vm-private-ip>",
+                "```",
+            ]
+        )
+    return lines
+
+
+def _string_sequence(value: Any) -> tuple[str, ...]:
+    if isinstance(value, str):
+        text = value.strip()
+        return (text,) if text else ()
+    if not isinstance(value, Sequence) or isinstance(value, (bytes, bytearray)):
+        return ()
+    return tuple(str(item).strip() for item in value if str(item).strip())
+
+
+def _format_optional_values(values: Sequence[str]) -> str:
+    return _format_backtick_list(tuple(values)) if values else "`none`"
+
+
+def _wireguard_component_markdown_lines(config: Any, paths: ProjectPaths) -> list[str]:
+    payload_data = to_plain_data(config)
+    if not isinstance(payload_data, dict):
+        return []
+    infra_rows = _infra_component_rows(payload_data)
+    wireguard_rows = _enabled_component_rows(infra_rows.get("wireguard-gw", []))
+    if not wireguard_rows:
+        return []
+
+    outputs = _terraform_outputs_if_available(paths)
+    client_output_dir = default_wireguard_client_output_dir(paths)
+    client_configs = tuple(sorted(client_output_dir.glob("*.conf"))) if client_output_dir.exists() else ()
+    lines = ["### WireGuard VPN Gateway Access", ""]
+
+    for index, row in enumerate(wireguard_rows):
+        inputs = _component_inputs(row)
+        label = component_instance_label(component_type_id(row), component_instance_id(row))
+        public_ip = _component_output_text(outputs, row, "public_ip")
+        private_ip = _component_output_text(outputs, row, "private_ip")
+        listen_port = _coalesce(
+            _component_output_text(outputs, row, "wireguard_listen_port"),
+            _lookup(inputs, "wireguard_listen_port"),
+        )
+        tunnel_cidr = _lookup(inputs, "wireguard_tunnel_cidr")
+        local_subnets = _string_sequence(_lookup(inputs, "local_subnets"))
+        default_dns = _string_sequence(_lookup(inputs, "client_default_dns"))
+        endpoint = (
+            f"{public_ip}:{listen_port}"
+            if public_ip and listen_port
+            else "`pending until deploy outputs exist`"
+        )
+        generate_command = _wireguard_generate_command(
+            paths,
+            label if len(wireguard_rows) > 1 else None,
+        )
+
+        if index:
+            lines.append("")
+        lines.extend(
+            [
+                f"- Component: `{label}`",
+                f"  - VM name: `{_coalesce(_lookup(inputs, 'name'), 'n/a')}`",
+                f"  - Public endpoint: {endpoint if endpoint.startswith('`') else f'`{endpoint}`'}",
+                f"  - Public IP: `{public_ip or 'pending'}`",
+                f"  - Private IP: `{private_ip or 'pending'}`",
+                f"  - WireGuard tunnel CIDR: `{tunnel_cidr or 'pending'}`",
+                f"  - Default routed local subnets: {_format_optional_values(local_subnets)}",
+                f"  - Default client DNS: {_format_optional_values(default_dns)}",
+                f"  - Local client config directory: `{client_output_dir}`",
+                "  - Generate a new client config:",
+                "",
+                "```bash",
+                generate_command,
+                "```",
+            ]
+        )
+
+    if client_configs:
+        lines.extend(["", "- Existing local client configs:", ""])
+        for client_config in client_configs:
+            config_path = shlex.quote(str(client_config))
+            lines.extend(
+                [
+                    f"  - `{client_config.name}`",
+                    "",
+                    "```bash",
+                    f"wg-quick up {config_path}",
+                    f"wg-quick down {config_path}",
+                    "```",
+                ]
+            )
+    else:
+        lines.extend(
+            [
+                "",
+                "- Generate a WireGuard client config with the command above. After "
+                "the `.conf` file exists, connect and disconnect from the operator "
+                "machine as follows:",
+                "",
+                "```bash",
+                "# Connect to WireGuard",
+                f"wg-quick up {shlex.quote(str(client_output_dir / '<client-name>.conf'))}",
+                "# Disconnect from WireGuard",
+                f"wg-quick down {shlex.quote(str(client_output_dir / '<client-name>.conf'))}",
+                "```",
+            ]
+        )
+    return lines
+
+
+def _wireguard_generate_command(paths: ProjectPaths, label: str | None = None) -> str:
+    command = [
+        "nebius-cxcli",
+        "wireguard",
+        "--gen-client-conf",
+        shlex.quote(str(paths.config_path)),
+    ]
+    if label:
+        command.extend(["--component", shlex.quote(label)])
+    return " ".join(command)
 
 
 def _manifest_target_metadata(paths: ProjectPaths) -> dict[str, dict[str, Any]]:
@@ -702,18 +1214,23 @@ def _build_payload(config: Any, paths: ProjectPaths) -> dict[str, dict]:
 
     # Look up infra components by their declared status kind instead of
     # hard-coded component ids.
-    from .components import component_entries as _component_entries
-    from .components import component_lookup as _component_lookup
-
-    entry_by_id = _component_lookup("infra")
+    entry_by_id = component_lookup("infra")
     infra_component_statuses = [
         {
             "id": entry.id,
             "label": entry.description,
             "enabled": _rows_enabled(infra_rows.get(entry.id, [])),
         }
-        for entry in _component_entries("infra")
+        for entry in component_entries("infra")
         if entry.status is not None
+    ]
+    app_component_statuses = [
+        {
+            "id": entry.id,
+            "label": entry.description,
+            "enabled": _rows_enabled(app_rows.get(entry.id, [])),
+        }
+        for entry in component_entries("apps")
     ]
 
     def _rows_by_status_kind(kind: str) -> list[dict[str, Any]]:
@@ -865,6 +1382,7 @@ def _build_payload(config: Any, paths: ProjectPaths) -> dict[str, dict]:
             "block_size_kib": _lookup(sfs_inputs, "block_size_kib"),
         },
         "apps": {
+            "component_statuses": app_component_statuses,
             "envoy_gateway": _chart_enabled(
                 app_rows, "gateway-helm", "envoy-gateway", "envoy_gateway"
             ),
@@ -917,6 +1435,51 @@ def write_inventory(
     observability_read_metadata = _mapping(_lookup(observability_endpoints, "read_metadata"))
     observability_write_metadata = _mapping(_lookup(observability_endpoints, "write_metadata"))
     observability_auth = _mapping(_lookup(observability_endpoints, "auth"))
+    platform_app_lines = _enabled_status_report_lines(
+        (
+            ("Envoy Gateway", _lookup(app_summary, "envoy_gateway")),
+            ("External Secrets Operator", _lookup(app_summary, "external_secrets")),
+            ("NVIDIA GPU Operator", _lookup(app_summary, "nvidia_gpu_operator")),
+            ("NVIDIA Network Operator", _lookup(app_summary, "nvidia_network_operator")),
+            ("cert-manager", _lookup(app_summary, "cert_manager")),
+            ("ExternalDNS", _lookup(app_summary, "external_dns")),
+        )
+    )
+    observability_app_lines = _enabled_status_report_lines(
+        (
+            ("Observability", _coalesce(_lookup(observability_summary, "enabled"), False)),
+            (
+                "K8s o11y agent",
+                _coalesce(_lookup(observability_summary, "kubernetes_agent"), False),
+            ),
+            ("Grafana", _coalesce(_lookup(observability_summary, "grafana"), False)),
+            (
+                "VM monitoring agent",
+                _coalesce(_lookup(observability_summary, "vm_monitoring_agent"), False),
+            ),
+            (
+                "VM journald logs (systemd services)",
+                _coalesce(_lookup(observability_summary, "vm_journald_logs"), False),
+            ),
+        )
+    )
+    dcgm_metric_source = _coalesce(
+        _lookup(observability_summary, "gpu_dcgm_metric_source"),
+        "disabled",
+    )
+    if str(dcgm_metric_source).strip().lower() not in {"", "disabled"}:
+        observability_app_lines.extend(
+            [
+                f"- GPU DCGM metrics source: `{dcgm_metric_source}`",
+                f"- GPU DCGM node policy: `{_coalesce(_lookup(observability_summary, 'gpu_dcgm_node_policy'), 'not_managed')}`",
+                f"- GPU DCGM live readiness: `{_coalesce(_lookup(observability_summary, 'gpu_dcgm_live_readiness'), 'not_configured')}`",
+            ]
+        )
+    workload_lines: list[str] = []
+    if _enabled_label(_coalesce(_lookup(n8n_summary, "enabled"), False)) == "enabled":
+        workload_lines.append(
+            f"- n8n: `enabled`; hostname `{_coalesce(_lookup(n8n_summary, 'hostname'), 'n/a')}`"
+        )
 
     markdown_path = paths.inventory_dir / DEPLOY_REPORT_FILENAME
     validation_report = build_deploy_validation_report(
@@ -936,13 +1499,15 @@ def write_inventory(
         "",
         "## Infra",
         "",
-        "### Component Status",
+        "### Infra Component Status",
         "",
         *[
             _component_status_line(item)
             for item in payload["infra"].get("component_statuses", [])
             if isinstance(item, Mapping)
         ],
+        "",
+        *_infra_component_report_markdown_lines(config),
         "",
         "### MK8s Clusters",
         "",
@@ -953,6 +1518,12 @@ def write_inventory(
             lines.extend(_mk8s_cluster_markdown_lines(cluster))
     else:
         lines.append("- No MK8s clusters configured.")
+    ssh_jump_access_lines = _ssh_jump_access_markdown_lines(config, paths)
+    if ssh_jump_access_lines:
+        lines.extend(["", *ssh_jump_access_lines])
+    wireguard_lines = _wireguard_component_markdown_lines(config, paths)
+    if wireguard_lines:
+        lines.extend(["", *wireguard_lines])
     mysterybox_secrets = [
         item for item in payload["infra"].get("mysterybox_secrets", []) if isinstance(item, Mapping)
     ]
@@ -970,57 +1541,24 @@ def write_inventory(
             "",
             "## Apps",
             "",
-            "### Platform Apps",
+            "### App Component Status",
             "",
-            _status_line("Envoy Gateway", payload["apps"]["envoy_gateway"]),
-            _status_line("External Secrets Operator", payload["apps"]["external_secrets"]),
-            _status_line("NVIDIA GPU Operator", payload["apps"]["nvidia_gpu_operator"]),
-            _status_line(
-                "NVIDIA Network Operator",
-                payload["apps"]["nvidia_network_operator"],
-            ),
-            _status_line("cert-manager", payload["apps"]["cert_manager"]),
-            _status_line("ExternalDNS", payload["apps"]["external_dns"]),
+            *[
+                _component_status_line(item)
+                for item in app_summary.get("component_statuses", [])
+                if isinstance(item, Mapping)
+            ],
             "",
-            "### Observability Apps",
-            "",
-            _status_line("Observability", _coalesce(_lookup(observability_summary, "enabled"), False)),
-            _status_line(
-                "K8s o11y agent",
-                _coalesce(_lookup(observability_summary, "kubernetes_agent"), False),
-            ),
-            _status_line("Grafana", _coalesce(_lookup(observability_summary, "grafana"), False)),
-            _status_line(
-                "VM monitoring agent",
-                _coalesce(_lookup(observability_summary, "vm_monitoring_agent"), False),
-            ),
-            _status_line(
-                "VM journald logs (systemd services)",
-                _coalesce(_lookup(observability_summary, "vm_journald_logs"), False),
-            ),
-            _status_line(
-                "VM standalone collector",
-                _coalesce(_lookup(observability_summary, "vm_standalone_collector"), False),
-            ),
-            _status_line(
-                "VM standalone collector metrics",
-                _coalesce(_lookup(observability_summary, "vm_standalone_metrics"), False),
-            ),
-            _status_line(
-                "VM standalone collector logs",
-                _coalesce(_lookup(observability_summary, "vm_standalone_logs"), False),
-            ),
-            f"- GPU DCGM metrics source: `{_coalesce(_lookup(observability_summary, 'gpu_dcgm_metric_source'), 'disabled')}`",
-            f"- GPU DCGM node policy: `{_coalesce(_lookup(observability_summary, 'gpu_dcgm_node_policy'), 'not_managed')}`",
-            f"- GPU DCGM live readiness: `{_coalesce(_lookup(observability_summary, 'gpu_dcgm_live_readiness'), 'not_configured')}`",
-            "",
-            "### Workloads",
-            "",
-            f"- n8n: `{_enabled_label(_coalesce(_lookup(n8n_summary, 'enabled'), False))}`; "
-            f"hostname `{_coalesce(_lookup(n8n_summary, 'hostname'), 'n/a')}`",
+            *_app_component_report_markdown_lines(config),
             "",
         ]
     )
+    if platform_app_lines:
+        lines.extend(["### Platform Apps", "", *platform_app_lines, ""])
+    if observability_app_lines:
+        lines.extend(["### Observability Apps", "", *observability_app_lines, ""])
+    if workload_lines:
+        lines.extend(["### Workloads", "", *workload_lines, ""])
     if bool(_lookup(observability_endpoints, "configured")) and (
         bool(_lookup(observability_summary, "enabled"))
         or bool(_lookup(observability_summary, "vm_monitoring_agent"))
@@ -1134,6 +1672,7 @@ def write_inventory(
                         dashboard_uid=dashboard.uid,
                         cluster_id=cluster_id,
                         org_id=grafana_org_id,
+                        cluster_variable=dashboard.folder == "nebius-kubernetes",
                     )
                     dashboard_ref = f"`{dashboard.folder}/{dashboard.dashboard}`"
                     bundled_dashboard_lines.append(

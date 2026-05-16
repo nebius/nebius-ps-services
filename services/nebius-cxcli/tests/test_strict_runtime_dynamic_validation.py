@@ -50,6 +50,15 @@ def _starter_payload(*, selected_infra: set[str], selected_apps: set[str]) -> di
     return payload
 
 
+def _retarget_enabled_apps(payload: dict, target_ref: str = "mk8s") -> None:
+    charts = payload.get("apps", {}).get("charts", [])
+    if not isinstance(charts, list):
+        return
+    for chart in charts:
+        if isinstance(chart, dict) and chart.get("enabled") is True:
+            chart["instance_id"] = target_ref
+
+
 def _infra_component_row(payload: dict, component_id: str) -> dict:
     components = payload.get("infra", {}).get("components", [])
     if not isinstance(components, list):
@@ -79,6 +88,11 @@ def _catalog_with_shared_admin_ssh(
     admin_ssh["public_key"] = public_key
     override_path = tmp_path / "component_sources.yaml"
     override_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+    settings_path = Path(__file__).resolve().parents[1] / "component_cli_settings.yaml"
+    override_path.with_name("component_cli_settings.yaml").write_text(
+        settings_path.read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
     return override_path
 
 
@@ -284,18 +298,19 @@ def test_strict_validation_requires_object_storage_name_when_enabled(
     assert "infra.components[object-storage].inputs.name is required" in str(exc_info.value)
 
 
-def test_strict_validation_ssh_jumphost_allowed_cidrs_not_required_when_has_default(
+def test_strict_validation_ssh_jumphost_requires_allowed_cidrs(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """allowed_cidrs has default=[] in TF, so it is not auto-detected as required."""
     payload = _starter_payload(selected_infra={"ssh-jumphost"}, selected_apps=set())
     jumphost = _infra_component_row(payload, "ssh-jumphost")
     jumphost["inputs"] = {
         "parent_id": "project-456",
-        "region": "eu-north1",
         "subnet_id": "subnet-123",
         "name": "ssh-jh",
+        "platform": "cpu-d3",
+        "preset": "4vcpu-16gb",
+        "source_image_family": "ubuntu24.04-driverless",
         "ssh_user_name": "ubuntu",
         "ssh_public_key": _VALID_ED25519_PUBLIC_KEY,
     }
@@ -306,18 +321,24 @@ def test_strict_validation_ssh_jumphost_allowed_cidrs_not_required_when_has_defa
 
     monkeypatch.setattr(
         "nebius_cxcli.cli.module_required_variables",
-        lambda _source: ("parent_id", "region", "subnet_id", "name", "ssh_public_key"),
+        lambda _source: (
+            "parent_id",
+            "subnet_id",
+            "name",
+            "platform",
+            "preset",
+            "source_image_family",
+            "ssh_public_key",
+            "allowed_cidrs",
+        ),
     )
     monkeypatch.setattr(
         "nebius_cxcli.cli._validate_enabled_chart_sources", lambda _config, **_kw: []
     )
 
-    try:
+    with pytest.raises(RuntimeError) as exc_info:
         _validate_strict_config(config)
-        message = ""
-    except RuntimeError as exc:
-        message = str(exc)
-    assert "allowed_cidrs is required" not in message
+    assert "infra.components[ssh-jumphost].inputs.allowed_cidrs is required" in str(exc_info.value)
 
 
 def test_strict_validation_mysterybox_requires_secrets_when_enabled(
@@ -350,20 +371,35 @@ def test_strict_validation_mysterybox_requires_secrets_when_enabled(
     assert "infra.components[mysterybox].inputs.secrets is required" in message
 
 
-def test_strict_validation_allows_explicit_ssh_public_key_for_jumphost(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("component_id", "instance_name", "extra_inputs"),
+    [
+        ("wireguard-gw", "wg-gw", {"local_subnets": ["10.0.0.0/8"]}),
+        ("ssh-jumphost", "ssh-jh", {"allowed_cidrs": ["203.0.113.10/32"]}),
+    ],
+)
+def test_strict_validation_allows_explicit_ssh_public_key_for_jumphost(
+    tmp_path: Path,
+    component_id: str,
+    instance_name: str,
+    extra_inputs: dict[str, object],
+) -> None:
     set_component_sources_file_override(_catalog_with_shared_admin_ssh(tmp_path))
     reset_component_sources_cache()
     reset_runtime_introspection_cache()
     reset_component_entry_cache()
-    payload = _starter_payload(selected_infra={"wireguard-jumphost"}, selected_apps=set())
-    jumphost = _infra_component_row(payload, "wireguard-jumphost")
+    payload = _starter_payload(selected_infra={component_id}, selected_apps=set())
+    jumphost = _infra_component_row(payload, component_id)
     jumphost["inputs"] = {
         "parent_id": "project-456",
-        "region": "eu-north1",
         "subnet_id": "subnet-123",
-        "name": "wg-jumphost",
+        "name": instance_name,
+        "platform": "cpu-d3",
+        "preset": "4vcpu-16gb",
+        "source_image_family": "ubuntu24.04-driverless",
         "ssh_user_name": "ubuntu",
         "ssh_public_key": _VALID_ED25519_PUBLIC_KEY,
+        **extra_inputs,
     }
 
     config_path = tmp_path / "config.yaml"
@@ -371,6 +407,214 @@ def test_strict_validation_allows_explicit_ssh_public_key_for_jumphost(tmp_path:
     config = load_config(config_path)
 
     _validate_strict_config(config)
+
+
+@pytest.mark.parametrize(
+    ("component_id", "instance_name", "extra_inputs"),
+    [
+        ("wireguard-gw", "wg-gw", {"local_subnets": ["10.0.0.0/8"]}),
+        ("ssh-jumphost", "ssh-jh", {"allowed_cidrs": ["203.0.113.10/32"]}),
+    ],
+)
+def test_strict_validation_rejects_missing_ssh_public_key_for_jumphost(
+    tmp_path: Path,
+    component_id: str,
+    instance_name: str,
+    extra_inputs: dict[str, object],
+) -> None:
+    payload = _starter_payload(selected_infra={component_id}, selected_apps=set())
+    jumphost = _infra_component_row(payload, component_id)
+    jumphost["inputs"] = {
+        "parent_id": "project-456",
+        "subnet_id": "subnet-123",
+        "name": instance_name,
+        "platform": "cpu-d3",
+        "preset": "4vcpu-16gb",
+        "source_image_family": "ubuntu24.04-driverless",
+        "ssh_user_name": "ubuntu",
+        **extra_inputs,
+    }
+
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+    config = load_config(config_path)
+
+    with pytest.raises(RuntimeError) as exc_info:
+        _validate_strict_config(config)
+
+    assert f"infra.components[{component_id}].inputs.ssh_public_key is required" in str(
+        exc_info.value
+    )
+
+
+@pytest.mark.parametrize(
+    ("component_id", "instance_name", "extra_inputs"),
+    [
+        ("wireguard-gw", "wg-gw", {"local_subnets": ["10.0.0.0/8"]}),
+        ("ssh-jumphost", "ssh-jh", {"allowed_cidrs": ["203.0.113.10/32"]}),
+    ],
+)
+def test_strict_validation_requires_existing_public_ip_allocation_id_for_jump_host(
+    tmp_path: Path,
+    component_id: str,
+    instance_name: str,
+    extra_inputs: dict[str, object],
+) -> None:
+    payload = _starter_payload(selected_infra={component_id}, selected_apps=set())
+    jumphost = _infra_component_row(payload, component_id)
+    jumphost["inputs"] = {
+        "parent_id": "project-456",
+        "subnet_id": "subnet-123",
+        "name": instance_name,
+        "platform": "cpu-d3",
+        "preset": "4vcpu-16gb",
+        "source_image_family": "ubuntu24.04-driverless",
+        "ssh_user_name": "ubuntu",
+        "ssh_public_key": _VALID_ED25519_PUBLIC_KEY,
+        "create_public_ip_allocation": False,
+        **extra_inputs,
+    }
+
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+    config = load_config(config_path)
+
+    with pytest.raises(RuntimeError) as exc_info:
+        _validate_strict_config(config)
+
+    assert (
+        f"infra.components[{component_id}].inputs.public_ip_allocation_id is required"
+        in str(exc_info.value)
+    )
+
+
+@pytest.mark.parametrize(
+    ("component_id", "instance_name", "extra_inputs"),
+    [
+        ("wireguard-gw", "wg-gw", {"local_subnets": ["10.0.0.0/8"]}),
+        ("ssh-jumphost", "ssh-jh", {"allowed_cidrs": ["203.0.113.10/32"]}),
+    ],
+)
+def test_strict_validation_rejects_public_ip_allocation_id_when_jump_host_creates_one(
+    tmp_path: Path,
+    component_id: str,
+    instance_name: str,
+    extra_inputs: dict[str, object],
+) -> None:
+    payload = _starter_payload(selected_infra={component_id}, selected_apps=set())
+    jumphost = _infra_component_row(payload, component_id)
+    jumphost["inputs"] = {
+        "parent_id": "project-456",
+        "subnet_id": "subnet-123",
+        "name": instance_name,
+        "platform": "cpu-d3",
+        "preset": "4vcpu-16gb",
+        "source_image_family": "ubuntu24.04-driverless",
+        "ssh_user_name": "ubuntu",
+        "ssh_public_key": _VALID_ED25519_PUBLIC_KEY,
+        "create_public_ip_allocation": True,
+        "public_ip_allocation_id": "allocation-123",
+        **extra_inputs,
+    }
+
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+    config = load_config(config_path)
+
+    with pytest.raises(RuntimeError) as exc_info:
+        _validate_strict_config(config)
+
+    assert (
+        f"infra.components[{component_id}].inputs.create_public_ip_allocation must be false "
+        "when inputs.public_ip_allocation_id is set"
+    ) in str(exc_info.value)
+
+
+@pytest.mark.parametrize(
+    ("component_id", "instance_name", "extra_inputs"),
+    [
+        ("vm", "vm", {}),
+        ("wireguard-gw", "wg-gw", {"local_subnets": ["10.0.0.0/8"]}),
+        ("ssh-jumphost", "ssh-jh", {"allowed_cidrs": ["203.0.113.10/32"]}),
+    ],
+)
+def test_strict_validation_rejects_boot_disk_encryption_on_unsupported_disk_type(
+    tmp_path: Path,
+    component_id: str,
+    instance_name: str,
+    extra_inputs: dict[str, object],
+) -> None:
+    payload = _starter_payload(selected_infra={component_id}, selected_apps=set())
+    component = _infra_component_row(payload, component_id)
+    component["inputs"] = {
+        "parent_id": "project-456",
+        "subnet_id": "subnet-123",
+        "name": instance_name,
+        "platform": "cpu-d3",
+        "preset": "4vcpu-16gb",
+        "source_image_family": "ubuntu24.04-driverless",
+        "ssh_user_name": "ubuntu",
+        "ssh_public_key": _VALID_ED25519_PUBLIC_KEY,
+        "boot_disk_size_gib": 64,
+        "boot_disk_type": "NETWORK_SSD",
+        "boot_disk_encryption_enabled": True,
+        **extra_inputs,
+    }
+
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+    config = load_config(config_path)
+
+    with pytest.raises(RuntimeError) as exc_info:
+        _validate_strict_config(config)
+
+    assert (
+        f"infra.components[{component_id}].inputs.boot_disk_encryption_enabled can be true "
+        "only for boot disk types that support explicit encryption"
+    ) in str(exc_info.value)
+
+
+@pytest.mark.parametrize(
+    ("component_id", "instance_name", "extra_inputs"),
+    [
+        ("vm", "vm", {}),
+        ("wireguard-gw", "wg-gw", {"local_subnets": ["10.0.0.0/8"]}),
+        ("ssh-jumphost", "ssh-jh", {"allowed_cidrs": ["203.0.113.10/32"]}),
+    ],
+)
+def test_strict_validation_rejects_created_disk_security_flags_with_existing_boot_disk(
+    tmp_path: Path,
+    component_id: str,
+    instance_name: str,
+    extra_inputs: dict[str, object],
+) -> None:
+    payload = _starter_payload(selected_infra={component_id}, selected_apps=set())
+    component = _infra_component_row(payload, component_id)
+    component["inputs"] = {
+        "parent_id": "project-456",
+        "subnet_id": "subnet-123",
+        "name": instance_name,
+        "platform": "cpu-d3",
+        "preset": "4vcpu-16gb",
+        "boot_disk_existing_id": "disk-123",
+        "ssh_user_name": "ubuntu",
+        "ssh_public_key": _VALID_ED25519_PUBLIC_KEY,
+        "boot_disk_encryption_enabled": True,
+        "boot_disk_deletion_protection": True,
+        **extra_inputs,
+    }
+
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+    config = load_config(config_path)
+
+    with pytest.raises(RuntimeError) as exc_info:
+        _validate_strict_config(config)
+
+    assert (
+        f"infra.components[{component_id}].inputs.boot_disk_encryption_enabled and "
+        "inputs.boot_disk_deletion_protection apply only when cxcli creates the boot disk"
+    ) in str(exc_info.value)
 
 
 def test_strict_validation_rejects_missing_local_custom_module_source_dir(tmp_path: Path) -> None:
@@ -423,7 +667,8 @@ def test_strict_validation_rejects_local_custom_module_source_without_tf_files(
 def test_validate_enabled_chart_sources_reports_lookup_error(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    payload = _starter_payload(selected_infra=set(), selected_apps={"n8n"})
+    payload = _starter_payload(selected_infra={"mk8s"}, selected_apps={"n8n"})
+    _retarget_enabled_apps(payload)
 
     config_path = tmp_path / "config.yaml"
     config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
@@ -435,18 +680,18 @@ def test_validate_enabled_chart_sources_reports_lookup_error(
     )
 
     issues = _validate_enabled_chart_sources(config)
-    assert any("apps.charts[n8n]" in issue for issue in issues)
+    assert any("apps.charts[n8n@mk8s]" in issue for issue in issues)
     assert any("simulated lookup failure" in issue for issue in issues)
 
 
 def test_validate_enabled_chart_sources_uses_catalog_chart_name_for_oci_repo(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    payload = _starter_payload(selected_infra=set(), selected_apps=set())
+    payload = _starter_payload(selected_infra={"mk8s"}, selected_apps=set())
     payload["apps"]["charts"] = [
         {
             "id": "nvidia-network-operator",
-            "instance_id": "nvidia-network-operator",
+            "instance_id": "mk8s",
             "enabled": True,
             "group": "platform",
             "repo": "oci://cr.eu-north1.nebius.cloud/marketplace/nebius/nvidia-network-operator/chart/network-operator",

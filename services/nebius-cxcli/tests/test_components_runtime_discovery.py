@@ -49,10 +49,10 @@ def test_components_discovered_from_source_file(monkeypatch, tmp_path: Path) -> 
                             },
                             "wizard_profile": "mk8s",
                         },
-                        "wireguard-jumphost": {
+                        "wireguard-gw": {
                             "source": {
-                                "portable": "git::https://github.com/example/infra.git//modules/wireguard-jumphost?ref=v1.2.3",
-                                "local": "platform-infra/modules/wireguard-jumphost",
+                                "portable": "git::https://github.com/example/infra.git//modules/wireguard-gw?ref=v1.2.3",
+                                "local": "platform-infra/modules/wireguard-gw",
                             },
                             "ui": {
                                 "title": "WireGuard module",
@@ -90,7 +90,7 @@ def test_components_discovered_from_source_file(monkeypatch, tmp_path: Path) -> 
     reset_component_entry_cache()
 
     infra = {entry.id: entry for entry in component_entries("infra")}
-    assert set(infra) == {"mk8s", "wireguard-jumphost"}
+    assert set(infra) == {"mk8s", "wireguard-gw"}
     assert infra["mk8s"].engine_type == "terraform_module"
     assert infra["mk8s"].group == "Compute"
     assert infra["mk8s"].default_enabled is True
@@ -196,13 +196,13 @@ def test_components_discovered_from_source_file(monkeypatch, tmp_path: Path) -> 
         },
         "inputs.cpu_nodes_boot_disk_type": {
             "options": {
-                "from": "mk8s_boot_disk_types",
+                "from": "compute_boot_disk_types",
                 "auto_select_first": True,
             },
         },
         "inputs.gpu_nodes_boot_disk_type": {
             "options": {
-                "from": "mk8s_boot_disk_types",
+                "from": "compute_boot_disk_types",
                 "auto_select_first": True,
             },
         },

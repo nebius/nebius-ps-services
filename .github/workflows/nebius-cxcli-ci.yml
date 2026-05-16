@@ -43,6 +43,27 @@ jobs:
         with:
           python-version: "3.12"
       - uses: azure/setup-helm@v5
+      - name: Install service dependencies
+        run: |
+          set -euo pipefail
+          make env
+      - name: Prepare Terraform CLI for service tests
+        run: |
+          set -euo pipefail
+          terraform_output="$(
+            .venv/bin/python - <<'PY'
+          from nebius_cxcli.managed_tools import resolve_terraform_binary
+
+          print(resolve_terraform_binary())
+          PY
+          )"
+          terraform_bin="$(printf '%s\n' "${terraform_output}" | tail -n 1)"
+          if [[ ! -x "${terraform_bin}" ]]; then
+            echo "::error::Resolved Terraform binary is not executable: ${terraform_bin}"
+            exit 1
+          fi
+          dirname "${terraform_bin}" >> "${GITHUB_PATH}"
+          "${terraform_bin}" version
       - name: Verify service with local make contract
         env:
           RELEASE_REF: ${{ github.sha }}

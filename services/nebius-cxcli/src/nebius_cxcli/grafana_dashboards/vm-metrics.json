@@ -1,0 +1,357 @@
+{
+  "uid": "cxcli-vm-metrics",
+  "title": "Nebius VM Metrics",
+  "tags": [
+    "nebius",
+    "cxcli",
+    "vm",
+    "metrics"
+  ],
+  "timezone": "browser",
+  "schemaVersion": 41,
+  "version": 2,
+  "refresh": "10s",
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "templating": {
+    "list": [
+      {
+        "name": "Instance",
+        "label": "Instance",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "nebius-service-metrics"
+        },
+        "query": "query_result(count by (instance_id) (node_uname_info{job=\"nebius-observability-agent\"}))",
+        "definition": "query_result(count by (instance_id) (node_uname_info{job=\"nebius-observability-agent\"}))",
+        "regex": "/instance_id=\"([^\"]+)\"/",
+        "refresh": 1,
+        "includeAll": true,
+        "multi": true,
+        "allValue": ".+",
+        "current": {
+          "selected": true,
+          "text": "All",
+          "value": "$__all"
+        }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "VMs",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "nebius-service-metrics"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 0,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "count(count by (instance_id) (node_uname_info{job=\"nebius-observability-agent\",instance_id=~\"$Instance\"}))",
+          "legendFormat": "vms"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "CPU Busy",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "nebius-service-metrics"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 6,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "avg(100 * (1 - avg by (instance_id) (rate(node_cpu_seconds_total{job=\"nebius-observability-agent\",instance_id=~\"$Instance\",mode=\"idle\"}[$__rate_interval]))))",
+          "legendFormat": "cpu"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Memory Used",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "nebius-service-metrics"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 12,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "avg(100 * (1 - node_memory_MemAvailable_bytes{job=\"nebius-observability-agent\",instance_id=~\"$Instance\"} / node_memory_MemTotal_bytes{job=\"nebius-observability-agent\",instance_id=~\"$Instance\"}))",
+          "legendFormat": "memory"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Root Disk Used",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "nebius-service-metrics"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 18,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max(100 * (1 - node_filesystem_avail_bytes{job=\"nebius-observability-agent\",instance_id=~\"$Instance\",mountpoint=\"/\",fstype!~\"tmpfs|overlay|squashfs|ramfs\"} / node_filesystem_size_bytes{job=\"nebius-observability-agent\",instance_id=~\"$Instance\",mountpoint=\"/\",fstype!~\"tmpfs|overlay|squashfs|ramfs\"}))",
+          "legendFormat": "root"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "CPU Busy by VM",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "nebius-service-metrics"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 4
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "100 * (1 - avg by (instance_id) (rate(node_cpu_seconds_total{job=\"nebius-observability-agent\",instance_id=~\"$Instance\",mode=\"idle\"}[$__rate_interval])))",
+          "legendFormat": "{{instance_id}}"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Load Average",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "nebius-service-metrics"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 4
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "node_load1{job=\"nebius-observability-agent\",instance_id=~\"$Instance\"}",
+          "legendFormat": "{{instance_id}} load1"
+        },
+        {
+          "refId": "B",
+          "expr": "node_load5{job=\"nebius-observability-agent\",instance_id=~\"$Instance\"}",
+          "legendFormat": "{{instance_id}} load5"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "Memory Used by VM",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "nebius-service-metrics"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 12
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "100 * (1 - node_memory_MemAvailable_bytes{job=\"nebius-observability-agent\",instance_id=~\"$Instance\"} / node_memory_MemTotal_bytes{job=\"nebius-observability-agent\",instance_id=~\"$Instance\"})",
+          "legendFormat": "{{instance_id}}"
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "Disk IO",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "nebius-service-metrics"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 12
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "Bps"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (instance_id) (rate(node_disk_read_bytes_total{job=\"nebius-observability-agent\",instance_id=~\"$Instance\",device!~\"^(loop|ram|fd).*\"}[$__rate_interval]))",
+          "legendFormat": "{{instance_id}} read"
+        },
+        {
+          "refId": "B",
+          "expr": "sum by (instance_id) (rate(node_disk_written_bytes_total{job=\"nebius-observability-agent\",instance_id=~\"$Instance\",device!~\"^(loop|ram|fd).*\"}[$__rate_interval]))",
+          "legendFormat": "{{instance_id}} write"
+        }
+      ]
+    },
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "Network Throughput",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "nebius-service-metrics"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 20
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "Bps"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (instance_id) (rate(node_network_receive_bytes_total{job=\"nebius-observability-agent\",instance_id=~\"$Instance\",device!~\"lo|docker.*|veth.*|br.*\"}[$__rate_interval]))",
+          "legendFormat": "{{instance_id}} rx"
+        },
+        {
+          "refId": "B",
+          "expr": "sum by (instance_id) (rate(node_network_transmit_bytes_total{job=\"nebius-observability-agent\",instance_id=~\"$Instance\",device!~\"lo|docker.*|veth.*|br.*\"}[$__rate_interval]))",
+          "legendFormat": "{{instance_id}} tx"
+        }
+      ]
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "GPU Utilization",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "nebius-service-metrics"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 20
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "avg by (instance_id, uuid) (DCGM_FI_DEV_GPU_UTIL{job=\"nebius-observability-agent\",instance_id=~\"$Instance\"})",
+          "legendFormat": "{{uuid}} {{instance_id}}"
+        }
+      ]
+    },
+    {
+      "id": 11,
+      "type": "timeseries",
+      "title": "GPU Memory Used",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "nebius-service-metrics"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 28
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "avg by (instance_id, uuid) (100 * DCGM_FI_DEV_FB_USED{job=\"nebius-observability-agent\",instance_id=~\"$Instance\"} / (DCGM_FI_DEV_FB_USED{job=\"nebius-observability-agent\",instance_id=~\"$Instance\"} + DCGM_FI_DEV_FB_FREE{job=\"nebius-observability-agent\",instance_id=~\"$Instance\"}))",
+          "legendFormat": "{{uuid}} {{instance_id}}"
+        }
+      ]
+    }
+  ]
+}

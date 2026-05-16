@@ -18,17 +18,9 @@ packages:
   - auditd
   - ca-certificates
   - curl
+  - python3
 
 write_files:
-  - path: /etc/bastion_allowed_cidrs
-    owner: root:root
-    permissions: "0644"
-    content: |
-      # One CIDR per line to allow SSH (port 22) from those sources.
-      %{ for cidr in allowed_cidrs ~}
-      ${cidr}
-      %{ endfor ~}
-
   - path: /etc/ssh/sshd_config.d/50-bastion.conf
     owner: root:root
     permissions: "0644"
@@ -99,47 +91,243 @@ write_files:
     content: |
       ${ssh_user_name} ALL=(ALL) NOPASSWD:ALL
 
+  - path: /usr/local/sbin/nebius-ssh-jumphost
+    owner: root:root
+    permissions: "0755"
+    content: |
+      #!/usr/bin/env python3
+      from __future__ import annotations
+
+      import argparse
+      import fcntl
+      import ipaddress
+      import json
+      import os
+      import shutil
+      import subprocess
+      import sys
+      from pathlib import Path
+
+      STATE_DIR = Path("/var/lib/nebius-ssh-jumphost")
+      RUNTIME_CONFIG_PATH = STATE_DIR / "runtime.json"
+      LOCK_PATH = STATE_DIR / "runtime.lock"
+
+
+      def fail(message: str) -> None:
+        print(message, file=sys.stderr)
+        raise SystemExit(1)
+
+
+      def require_root() -> None:
+        if os.geteuid() != 0:
+          fail("nebius-ssh-jumphost must run as root")
+
+
+      def run(cmd: list[str], *, check: bool = True) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(cmd, check=check, capture_output=True, text=True)
+
+
+      def ensure_dirs() -> None:
+        STATE_DIR.mkdir(parents=True, exist_ok=True)
+        STATE_DIR.chmod(0o700)
+
+
+      def normalize_cidrs(values: list[str]) -> list[str]:
+        normalized = []
+        seen = set()
+        for raw_value in values:
+          for item in str(raw_value or "").split(","):
+            value = item.strip()
+            if not value:
+              fail("--allowed-cidr must be a comma-separated list of IPv4 CIDRs")
+            try:
+              network = ipaddress.ip_network(value, strict=False)
+            except ValueError:
+              fail(f"invalid IPv4 CIDR: {value}")
+            if network.version != 4:
+              fail("allowed CIDRs currently support IPv4 only")
+            cidr = network.with_prefixlen
+            if cidr not in seen:
+              normalized.append(cidr)
+              seen.add(cidr)
+        return normalized
+
+
+      def load_runtime_config() -> dict:
+        ensure_dirs()
+        if not RUNTIME_CONFIG_PATH.exists():
+          return {"version": 1, "allowed_cidrs": []}
+        payload = json.loads(RUNTIME_CONFIG_PATH.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+          fail(f"{RUNTIME_CONFIG_PATH} must contain a JSON object")
+        allowed_cidrs = payload.get("allowed_cidrs")
+        if not isinstance(allowed_cidrs, list):
+          fail(f"{RUNTIME_CONFIG_PATH} allowed_cidrs must be a list")
+        return {"version": 1, "allowed_cidrs": normalize_cidrs([str(item) for item in allowed_cidrs])}
+
+
+      def save_runtime_config(payload: dict) -> None:
+        ensure_dirs()
+        tmp_path = RUNTIME_CONFIG_PATH.with_suffix(".json.tmp")
+        tmp_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        tmp_path.chmod(0o600)
+        tmp_path.replace(RUNTIME_CONFIG_PATH)
+
+
+      def apply_firewall(allowed_cidrs: list[str]) -> None:
+        if not allowed_cidrs:
+          fail("refusing to apply an empty SSH source CIDR list")
+        for cmd in ("ufw", "sshd", "systemctl"):
+          if shutil.which(cmd) is None:
+            fail(f"required command not found: {cmd}")
+
+        run(["ufw", "--force", "reset"])
+        run(["ufw", "default", "deny", "incoming"])
+        run(["ufw", "default", "allow", "outgoing"])
+        run(["ufw", "logging", "on"])
+        run(["ufw", "allow", "from", "127.0.0.1", "to", "any", "port", "22", "proto", "tcp"])
+        for cidr in allowed_cidrs:
+          run(["ufw", "allow", "from", cidr, "to", "any", "port", "22", "proto", "tcp"])
+        run(["ufw", "--force", "enable"])
+
+
+      def with_lock(callback):
+        ensure_dirs()
+        with LOCK_PATH.open("a+", encoding="utf-8") as lock_file:
+          fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+          return callback()
+
+
+      def bootstrap(args: argparse.Namespace) -> dict:
+        values = json.loads(Path(args.allowed_cidrs_file).read_text(encoding="utf-8"))
+        if not isinstance(values, list):
+          fail("bootstrap allowed CIDR file must contain a JSON list")
+        requested = normalize_cidrs([str(item) for item in values])
+        if not requested:
+          fail("bootstrap allowed CIDR list cannot be empty")
+
+        def update() -> dict:
+          save_runtime_config({"version": 1, "allowed_cidrs": requested})
+          apply_firewall(requested)
+          return {"allowed_cidrs": requested, "added": requested, "removed": [], "unchanged": []}
+
+        return with_lock(update)
+
+
+      def update_allowed_cidrs(args: argparse.Namespace, *, remove: bool) -> dict:
+        requested = normalize_cidrs(args.allowed_cidr or [])
+        if not requested:
+          fail("--allowed-cidr is required")
+
+        def update() -> dict:
+          runtime_config = load_runtime_config()
+          current = list(runtime_config["allowed_cidrs"])
+          current_set = set(current)
+          requested_set = set(requested)
+          if remove:
+            changed = [cidr for cidr in current if cidr in requested_set]
+            unchanged = [cidr for cidr in requested if cidr not in current_set]
+            next_allowed = [cidr for cidr in current if cidr not in requested_set]
+            if not next_allowed:
+              fail("refusing to remove every SSH source CIDR; add a replacement first")
+            payload_key = "removed"
+          else:
+            changed = [cidr for cidr in requested if cidr not in current_set]
+            unchanged = [cidr for cidr in requested if cidr in current_set]
+            next_allowed = current + changed
+            payload_key = "added"
+          save_runtime_config({"version": 1, "allowed_cidrs": next_allowed})
+          apply_firewall(next_allowed)
+          payload = {
+            "allowed_cidrs": next_allowed,
+            payload_key: changed,
+            "unchanged": unchanged,
+          }
+          if remove:
+            payload["added"] = []
+          else:
+            payload["removed"] = []
+          return payload
+
+        return with_lock(update)
+
+
+      def list_allowed_cidrs(args: argparse.Namespace) -> None:
+        _ = args
+        payload = load_runtime_config()
+        result = {"allowed_cidrs": list(payload["allowed_cidrs"])}
+        if args.output_json:
+          print(json.dumps(result, sort_keys=True))
+          return
+        for cidr in result["allowed_cidrs"]:
+          print(cidr)
+
+
+      def main() -> None:
+        require_root()
+        parser = argparse.ArgumentParser(prog="nebius-ssh-jumphost")
+        subparsers = parser.add_subparsers(dest="command", required=True)
+        bootstrap_parser = subparsers.add_parser("bootstrap")
+        bootstrap_parser.add_argument("--allowed-cidrs-file", required=True)
+        bootstrap_parser.add_argument("--output-json", action="store_true")
+        bootstrap_parser.set_defaults(func=lambda args: print(json.dumps(bootstrap(args), sort_keys=True)) if args.output_json else bootstrap(args))
+        add_parser = subparsers.add_parser("add-allowed-cidrs")
+        add_parser.add_argument("--allowed-cidr", action="append", required=True)
+        add_parser.add_argument("--output-json", action="store_true")
+        add_parser.set_defaults(func=lambda args: print(json.dumps(update_allowed_cidrs(args, remove=False), sort_keys=True)) if args.output_json else update_allowed_cidrs(args, remove=False))
+        remove_parser = subparsers.add_parser("remove-allowed-cidrs")
+        remove_parser.add_argument("--allowed-cidr", action="append", required=True)
+        remove_parser.add_argument("--output-json", action="store_true")
+        remove_parser.set_defaults(func=lambda args: print(json.dumps(update_allowed_cidrs(args, remove=True), sort_keys=True)) if args.output_json else update_allowed_cidrs(args, remove=True))
+        list_parser = subparsers.add_parser("list")
+        list_parser.add_argument("--output-json", action="store_true")
+        list_parser.set_defaults(func=list_allowed_cidrs)
+        args = parser.parse_args()
+        args.func(args)
+
+
+      if __name__ == "__main__":
+        main()
+
   - path: /usr/local/bin/setup-bastion.sh
     owner: root:root
     permissions: "0755"
     content: |
-      #!/bin/bash
+      #!/usr/bin/env bash
       set -euo pipefail
 
       export PATH="/usr/sbin:/usr/bin:/sbin:/bin"
-      ALLOWED_CIDR_FILE=/etc/bastion_allowed_cidrs
-      if [ ! -f "$ALLOWED_CIDR_FILE" ]; then
-        echo "Missing $ALLOWED_CIDR_FILE; refusing to open SSH access." >&2
-        exit 1
-      fi
-      mapfile -t ALLOWED_CIDRS < <(awk '!/^[[:space:]]*(#|$)/ {print}' "$ALLOWED_CIDR_FILE")
-      if [ "$${#ALLOWED_CIDRS[@]}" -eq 0 ]; then
-        echo "No SSH source CIDRs configured; set allowed_cidrs and re-apply." >&2
+      if [ "$EUID" -ne 0 ]; then
+        echo "setup-bastion.sh must run as root" >&2
         exit 1
       fi
 
-      ufw --force reset
-      ufw default deny incoming
-      ufw default allow outgoing
-      ufw logging on
-      ufw allow from 127.0.0.1 to any port 22 proto tcp
-      for cidr in "$${ALLOWED_CIDRS[@]}"; do
-        ufw allow from "$cidr" to any port 22 proto tcp
+      for cmd in python3 ufw fail2ban-client augenrules sshd systemctl; do
+        if ! command -v "$cmd" >/dev/null 2>&1; then
+          echo "required command not found: $cmd" >&2
+          exit 1
+        fi
       done
-      ufw --force enable
 
+      install -d -m 0755 /run/sshd
       if grep -qE '^[[:space:]]*Subsystem[[:space:]]+sftp[[:space:]]+' /etc/ssh/sshd_config; then
         sed -i -E 's#^[[:space:]]*Subsystem[[:space:]]+sftp[[:space:]]+.*#Subsystem sftp internal-sftp#' /etc/ssh/sshd_config
       else
         printf '\nSubsystem sftp internal-sftp\n' >> /etc/ssh/sshd_config
       fi
-
       sshd -t
       augenrules --load
       systemctl daemon-reload
       systemctl enable --now auditd
       systemctl enable --now fail2ban
       systemctl enable --now ssh
+
+      install -d -m 0700 /etc/nebius-ssh-jumphost
+      cat > /etc/nebius-ssh-jumphost/bootstrap-allowed-cidrs.json <<'EOF'
+      ${bootstrap_allowed_cidrs_json}
+      EOF
+      chmod 0600 /etc/nebius-ssh-jumphost/bootstrap-allowed-cidrs.json
+      /usr/local/sbin/nebius-ssh-jumphost bootstrap --allowed-cidrs-file /etc/nebius-ssh-jumphost/bootstrap-allowed-cidrs.json
       systemctl reload ssh
 
 runcmd:

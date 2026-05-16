@@ -1,0 +1,133 @@
+{
+  "uid": "cxcli-vm-logs",
+  "title": "Nebius VM Logs",
+  "tags": [
+    "nebius",
+    "cxcli",
+    "vm",
+    "logs"
+  ],
+  "timezone": "browser",
+  "schemaVersion": 41,
+  "version": 2,
+  "refresh": "10s",
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "templating": {
+    "list": [
+      {
+        "name": "Bucket",
+        "label": "Bucket",
+        "type": "custom",
+        "query": "sp_serial,default",
+        "current": {
+          "selected": false,
+          "text": "sp_serial",
+          "value": "sp_serial"
+        }
+      },
+      {
+        "name": "search",
+        "label": "Search",
+        "type": "textbox",
+        "query": ".*",
+        "current": {
+          "selected": false,
+          "text": ".*",
+          "value": ".*"
+        }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "logs",
+      "title": "VM Logs",
+      "datasource": {
+        "type": "loki",
+        "uid": "nebius-logs"
+      },
+      "gridPos": {
+        "h": 16,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "options": {
+        "dedupStrategy": "none",
+        "enableLogDetails": true,
+        "prettifyLogMessage": false,
+        "showCommonLabels": false,
+        "showLabels": true,
+        "showTime": true,
+        "sortOrder": "Descending"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "{__bucket__=~\"$Bucket\"} |~ \"$search\"",
+          "queryType": "range"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Log Rate",
+      "datasource": {
+        "type": "loki",
+        "uid": "nebius-logs"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 16
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "logs/sec"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate({__bucket__=~\"$Bucket\"} |~ \"$search\"[$__interval]))",
+          "queryType": "range",
+          "legendFormat": "logs"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Error-Like Log Messages",
+      "datasource": {
+        "type": "loki",
+        "uid": "nebius-logs"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 16
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(count_over_time({__bucket__=~\"$Bucket\"} |~ \"(?i)(error|failed|critical|panic|oom)\"[$__interval]))",
+          "queryType": "range",
+          "legendFormat": "errors"
+        }
+      ]
+    }
+  ]
+}

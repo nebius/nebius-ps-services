@@ -131,6 +131,37 @@ def _starter_payload(*, selected_infra: set[str], selected_apps: set[str]) -> di
     return payload
 
 
+def _write_minimal_mk8s_module(base: Path) -> Path:
+    module_dir = base / "modules" / "mk8s"
+    module_dir.mkdir(parents=True, exist_ok=True)
+    (module_dir / "main.tf").write_text(
+        'output "cluster_id" { value = "mk8scluster-test" }\n',
+        encoding="utf-8",
+    )
+    return module_dir
+
+
+def _minimal_mk8s_catalog_entry(module_dir: Path) -> dict[str, object]:
+    return {
+        "source": {
+            "portable": "git::https://github.com/example/infra.git//modules/mk8s?ref=v1.2.3",
+            "local": str(module_dir),
+        },
+        "defaults": {
+            "inputs.cluster_name": "mk8s",
+        },
+    }
+
+
+def _retarget_enabled_apps(payload: dict, target_ref: str = "mk8s") -> None:
+    charts = payload.get("apps", {}).get("charts", [])
+    if not isinstance(charts, list):
+        return
+    for chart in charts:
+        if isinstance(chart, dict) and chart.get("enabled") is True:
+            chart["instance_id"] = target_ref
+
+
 def _infra_component_row(payload: dict, component_id: str) -> dict:
     components = payload.get("infra", {}).get("components", [])
     if not isinstance(components, list):
@@ -933,12 +964,13 @@ def test_render_local_soperator_notifier_uses_only_secret_reference(tmp_path: Pa
     config_path.parent.mkdir(parents=True, exist_ok=True)
     paths = resolve_project_paths(config_path)
 
-    payload = _starter_payload(selected_infra=set(), selected_apps={"soperator-notifier"})
+    payload = _starter_payload(selected_infra={"mk8s"}, selected_apps={"soperator-notifier"})
+    _retarget_enabled_apps(payload)
     config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
 
     render_project(load_config(config_path), paths, source_profile=SourceProfile.LOCAL)
 
-    rendered_chart = paths.flux_dir / "post-flux-helmrender-slurm-soperator-notifier.yaml"
+    rendered_chart = _target_flux_dir(paths) / "post-flux-helmrender-slurm-soperator-notifier.yaml"
     rendered = rendered_chart.read_text(encoding="utf-8")
     assert "hooks.slack.com" not in rendered
     assert "webhookUrl" not in rendered
@@ -959,9 +991,10 @@ def test_render_local_soperator_backup_uses_only_secret_reference(tmp_path: Path
     paths = resolve_project_paths(config_path)
 
     payload = _starter_payload(
-        selected_infra={"object-storage"},
+        selected_infra={"mk8s", "object-storage"},
         selected_apps={"soperator-backup-config"},
     )
+    _retarget_enabled_apps(payload)
     config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
 
     render_project(
@@ -974,7 +1007,7 @@ def test_render_local_soperator_backup_uses_only_secret_reference(tmp_path: Path
         source_profile=SourceProfile.LOCAL,
     )
 
-    rendered_chart = paths.flux_dir / "post-flux-helmrender-slurm-soperator-jail-backup.yaml"
+    rendered_chart = _target_flux_dir(paths) / "post-flux-helmrender-slurm-soperator-jail-backup.yaml"
     rendered = rendered_chart.read_text(encoding="utf-8")
     assert "aws-access-key-id:" not in rendered
     assert "aws-secret-value" not in rendered
@@ -1054,12 +1087,12 @@ def test_render_dynamic_chart_shape_writes_flux_manifests(tmp_path: Path) -> Non
     config_path = _project_config_path(tmp_path)
     config_path.parent.mkdir(parents=True, exist_ok=True)
 
-    runtime_payload = _starter_payload(selected_infra=set(), selected_apps=set())
+    runtime_payload = _starter_payload(selected_infra={"mk8s"}, selected_apps=set())
     dynamic_payload = to_dynamic_payload(runtime_payload)
     dynamic_payload["apps"]["charts"] = [
         {
             "id": "runtime-app",
-            "instance_id": "runtime-app",
+            "instance_id": "mk8s",
             "group": "workloads",
             "enabled": True,
             "repo": "https://example.invalid/charts",
@@ -1079,8 +1112,8 @@ def test_render_dynamic_chart_shape_writes_flux_manifests(tmp_path: Path) -> Non
 
     render_project(config, paths, source_profile=SourceProfile.LOCAL)
 
-    repo_sources = paths.flux_dir / "helm-repositories.yaml"
-    release = paths.flux_dir / "helmrelease-workloads-runtime-app.yaml"
+    repo_sources = _target_flux_dir(paths) / "helm-repositories.yaml"
+    release = _target_flux_dir(paths) / "helmrelease-workloads-runtime-app.yaml"
     assert repo_sources.exists()
     assert release.exists()
 
@@ -1144,7 +1177,7 @@ def test_render_instance_resets_generated_bundle_and_removes_stale_files(
         (_target_flux_dir(paths) / "kustomization.yaml").read_text(encoding="utf-8")
     )
     assert "./flux-system" not in kustomization_doc["resources"]
-    assert (paths.inventory_dir / "deploy-report.md").exists()
+    assert not (paths.inventory_dir / "deploy-report.md").exists()
 
 
 def test_render_instance_preserves_existing_generated_bundle_when_rerender_fails(
@@ -1192,12 +1225,12 @@ def test_render_dynamic_oci_chart_writes_flux_oci_repository(tmp_path: Path) -> 
     config_path = _project_config_path(tmp_path)
     config_path.parent.mkdir(parents=True, exist_ok=True)
 
-    runtime_payload = _starter_payload(selected_infra=set(), selected_apps=set())
+    runtime_payload = _starter_payload(selected_infra={"mk8s"}, selected_apps=set())
     dynamic_payload = to_dynamic_payload(runtime_payload)
     dynamic_payload["apps"]["charts"] = [
         {
             "id": "gateway-helm",
-            "instance_id": "gateway-helm",
+            "instance_id": "mk8s",
             "group": "platform",
             "enabled": True,
             "repo": "oci://docker.io/envoyproxy/gateway-helm",
@@ -1217,10 +1250,10 @@ def test_render_dynamic_oci_chart_writes_flux_oci_repository(tmp_path: Path) -> 
 
     render_project(config, paths, source_profile=SourceProfile.LOCAL)
 
-    repo_sources = paths.flux_dir / "helm-repositories.yaml"
-    namespace_manifest = paths.flux_dir / "namespace-envoy-gateway-system.yaml"
-    release = paths.flux_dir / "helmrelease-platform-envoy-gateway.yaml"
-    kustomization = paths.flux_dir / "kustomization.yaml"
+    repo_sources = _target_flux_dir(paths) / "helm-repositories.yaml"
+    namespace_manifest = _target_flux_dir(paths) / "namespace-envoy-gateway-system.yaml"
+    release = _target_flux_dir(paths) / "helmrelease-platform-envoy-gateway.yaml"
+    kustomization = _target_flux_dir(paths) / "kustomization.yaml"
     assert repo_sources.exists()
     assert namespace_manifest.exists()
     assert release.exists()
@@ -1276,19 +1309,30 @@ def test_render_externalizes_grafana_dashboard_json_to_generated_bundle(
     dashboard_files = {
         item.name for item in dashboard_dir.iterdir() if item.is_file() and item.suffix == ".json"
     }
+    vm_dashboard_dir = paths.generated_dir / "grafana_dashboards" / "mk8s" / "nebius-vm"
+    vm_dashboard_files = {
+        item.name for item in vm_dashboard_dir.iterdir() if item.is_file() and item.suffix == ".json"
+    }
     assert dashboard_files == {
         "kubernetes-cluster-monitoring.json",
         "kubernetes-gpu.json",
         "kubernetes-logs-from-loki.json",
         "kubernetes-traces.json",
     }
+    assert vm_dashboard_files == {
+        "vm-metrics.json",
+        "vm-logs.json",
+    }
     assert dashboard_dir / "kubernetes-cluster-monitoring.json" in written
+    assert vm_dashboard_dir / "vm-metrics.json" in written
 
     flux_dir = _target_flux_dir(paths)
     configmap = flux_dir / "configmap-grafana-nebius-kubernetes-dashboards.yaml"
+    vm_configmap = flux_dir / "configmap-grafana-nebius-vm-dashboards.yaml"
     release = flux_dir / "helmrelease-observability-grafana.yaml"
     kustomization = flux_dir / "kustomization.yaml"
     assert configmap.exists()
+    assert vm_configmap.exists()
     assert release.exists()
 
     configmap_doc = yaml.safe_load(configmap.read_text(encoding="utf-8"))
@@ -1297,19 +1341,30 @@ def test_render_externalizes_grafana_dashboard_json_to_generated_bundle(
         "namespace": "observability",
     }
     assert set(configmap_doc["data"]) == dashboard_files
+    vm_configmap_doc = yaml.safe_load(vm_configmap.read_text(encoding="utf-8"))
+    assert vm_configmap_doc["metadata"] == {
+        "name": "grafana-nebius-vm-dashboards",
+        "namespace": "observability",
+    }
+    assert set(vm_configmap_doc["data"]) == vm_dashboard_files
 
     release_doc = yaml.safe_load(release.read_text(encoding="utf-8"))
     values = release_doc["spec"]["values"]
     assert values["dashboardsConfigMaps"] == {
-        "nebius-kubernetes": "grafana-nebius-kubernetes-dashboards"
+        "nebius-kubernetes": "grafana-nebius-kubernetes-dashboards",
+        "nebius-vm": "grafana-nebius-vm-dashboards",
     }
     assert set(values["dashboards"]["nebius"]) == {"nebius-disk"}
     assert "json:" not in yaml.safe_dump(values["dashboards"], sort_keys=False)
 
     kustomization_doc = yaml.safe_load(kustomization.read_text(encoding="utf-8"))
     assert "./configmap-grafana-nebius-kubernetes-dashboards.yaml" in kustomization_doc["resources"]
+    assert "./configmap-grafana-nebius-vm-dashboards.yaml" in kustomization_doc["resources"]
     assert kustomization_doc["resources"].index(
         "./configmap-grafana-nebius-kubernetes-dashboards.yaml"
+    ) < kustomization_doc["resources"].index("./helmrelease-observability-grafana.yaml")
+    assert kustomization_doc["resources"].index(
+        "./configmap-grafana-nebius-vm-dashboards.yaml"
     ) < kustomization_doc["resources"].index("./helmrelease-observability-grafana.yaml")
 
 
@@ -1597,12 +1652,12 @@ def test_render_dynamic_oci_chart_uses_catalog_chart_name_when_id_differs(tmp_pa
     config_path = _project_config_path(tmp_path)
     config_path.parent.mkdir(parents=True, exist_ok=True)
 
-    runtime_payload = _starter_payload(selected_infra=set(), selected_apps=set())
+    runtime_payload = _starter_payload(selected_infra={"mk8s"}, selected_apps=set())
     dynamic_payload = to_dynamic_payload(runtime_payload)
     dynamic_payload["apps"]["charts"] = [
         {
             "id": "nvidia-network-operator",
-            "instance_id": "nvidia-network-operator",
+            "instance_id": "mk8s",
             "group": "platform",
             "enabled": True,
             "repo": "oci://cr.eu-north1.nebius.cloud/marketplace/nebius/nvidia-network-operator/chart/network-operator",
@@ -1622,8 +1677,8 @@ def test_render_dynamic_oci_chart_uses_catalog_chart_name_when_id_differs(tmp_pa
 
     render_project(config, paths, source_profile=SourceProfile.LOCAL)
 
-    repo_sources = paths.flux_dir / "helm-repositories.yaml"
-    release = paths.flux_dir / "helmrelease-platform-network-operator.yaml"
+    repo_sources = _target_flux_dir(paths) / "helm-repositories.yaml"
+    release = _target_flux_dir(paths) / "helmrelease-platform-network-operator.yaml"
     assert repo_sources.exists()
     assert release.exists()
 
@@ -1649,10 +1704,12 @@ def test_render_dynamic_oci_chart_uses_catalog_chart_name_when_id_differs(tmp_pa
 def test_render_uses_component_source_release_timeout_for_helm_release(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    mk8s_dir = _write_minimal_mk8s_module(tmp_path)
     sources_file = tmp_path / "component_sources.yaml"
     sources_file.write_text(
         yaml.safe_dump(
             _catalog(
+                infra={"mk8s": _minimal_mk8s_catalog_entry(mk8s_dir)},
                 apps={
                     "demo-app": {
                         "source": _portable_chart_source(
@@ -1677,7 +1734,8 @@ def test_render_uses_component_source_release_timeout_for_helm_release(
 
     config_path = _project_config_path(tmp_path)
     config_path.parent.mkdir(parents=True, exist_ok=True)
-    payload = _starter_payload(selected_infra=set(), selected_apps={"demo-app"})
+    payload = _starter_payload(selected_infra={"mk8s"}, selected_apps={"demo-app"})
+    _retarget_enabled_apps(payload)
     config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
 
     config = load_config(config_path)
@@ -1687,7 +1745,9 @@ def test_render_uses_component_source_release_timeout_for_helm_release(
     render_project(config, paths, source_profile=SourceProfile.PORTABLE)
 
     release_doc = yaml.safe_load(
-        (paths.flux_dir / "helmrelease-workloads-demo-app.yaml").read_text(encoding="utf-8")
+        (_target_flux_dir(paths) / "helmrelease-workloads-demo-app.yaml").read_text(
+            encoding="utf-8"
+        )
     )
     assert release_doc["spec"]["timeout"] == "10m"
 
@@ -1695,10 +1755,12 @@ def test_render_uses_component_source_release_timeout_for_helm_release(
 def test_render_uses_global_flux_release_timeout_when_chart_omits_override(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    mk8s_dir = _write_minimal_mk8s_module(tmp_path)
     sources_file = tmp_path / "component_sources.yaml"
     sources_file.write_text(
         yaml.safe_dump(
             _catalog(
+                infra={"mk8s": _minimal_mk8s_catalog_entry(mk8s_dir)},
                 apps={
                     "demo-app": {
                         "source": _portable_chart_source(
@@ -1736,7 +1798,8 @@ def test_render_uses_global_flux_release_timeout_when_chart_omits_override(
 
     config_path = _project_config_path(tmp_path)
     config_path.parent.mkdir(parents=True, exist_ok=True)
-    payload = _starter_payload(selected_infra=set(), selected_apps={"demo-app"})
+    payload = _starter_payload(selected_infra={"mk8s"}, selected_apps={"demo-app"})
+    _retarget_enabled_apps(payload)
     config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
 
     config = load_config(config_path)
@@ -1746,7 +1809,9 @@ def test_render_uses_global_flux_release_timeout_when_chart_omits_override(
     render_project(config, paths, source_profile=SourceProfile.PORTABLE)
 
     release_doc = yaml.safe_load(
-        (paths.flux_dir / "helmrelease-workloads-demo-app.yaml").read_text(encoding="utf-8")
+        (_target_flux_dir(paths) / "helmrelease-workloads-demo-app.yaml").read_text(
+            encoding="utf-8"
+        )
     )
     assert release_doc["spec"]["timeout"] == "15m"
 
@@ -2242,7 +2307,7 @@ def test_render_ignores_declared_mk8s_gpu_validation_helper_inputs(
     assert "gpu_validation_overrides" not in tfvars
 
 
-def test_render_uses_materialized_shared_admin_ssh_username_for_wireguard_jumphost(
+def test_render_uses_materialized_shared_admin_ssh_username_for_wireguard_gw(
     tmp_path: Path,
 ) -> None:
     reset_component_entry_cache()
@@ -2253,14 +2318,18 @@ def test_render_uses_materialized_shared_admin_ssh_username_for_wireguard_jumpho
     config_path = _project_config_path(tmp_path)
     config_path.parent.mkdir(parents=True, exist_ok=True)
 
-    payload = _starter_payload(selected_infra={"wireguard-jumphost"}, selected_apps=set())
-    jumphost = _infra_component_row(payload, "wireguard-jumphost")
-    jumphost["inputs"] = {
+    payload = _starter_payload(selected_infra={"wireguard-gw"}, selected_apps=set())
+    wireguard = _infra_component_row(payload, "wireguard-gw")
+    wireguard["inputs"] = {
         "parent_id": "project-456",
-        "region": "eu-north1",
         "subnet_id": "subnet-123",
-        "name": "wg-jumphost",
+        "name": "wg-gw",
+        "platform": "cpu-d3",
+        "preset": "4vcpu-16gb",
+        "source_image_family": "ubuntu24.04-driverless",
         "ssh_user_name": "adminuser",
+        "wireguard_tunnel_cidr": "10.9.0.1/22",
+        "local_subnets": ["10.0.0.0/8"],
     }
     config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
 
@@ -2273,10 +2342,11 @@ def test_render_uses_materialized_shared_admin_ssh_username_for_wireguard_jumpho
     main_tf = (paths.infra_dir / "main.tf").read_text(encoding="utf-8")
     tfvars = (paths.infra_dir / "terraform.auto.tfvars.json").read_text(encoding="utf-8")
 
-    assert 'module "wireguard_jumphost" {' in main_tf
-    assert "ssh_user_name = var.wireguard_jumphost_ssh_user_name" in main_tf
-    assert '"wireguard_jumphost_ssh_user_name": "adminuser"' in tfvars
-    assert "wireguard_jumphost_ssh_public_key" not in tfvars
+    assert 'module "wireguard_gw" {' in main_tf
+    assert "ssh_user_name = var.wireguard_gw_ssh_user_name" in main_tf
+    assert '"wireguard_gw_ssh_user_name": "adminuser"' in tfvars
+    assert '"wireguard_gw_wireguard_tunnel_cidr": "10.9.0.1/22"' in tfvars
+    assert "wireguard_gw_ssh_public_key" not in tfvars
 
 
 def test_render_uses_materialized_shared_admin_ssh_username_for_ssh_jumphost(
@@ -2294,9 +2364,11 @@ def test_render_uses_materialized_shared_admin_ssh_username_for_ssh_jumphost(
     jumphost = _infra_component_row(payload, "ssh-jumphost")
     jumphost["inputs"] = {
         "parent_id": "project-456",
-        "region": "eu-north1",
         "subnet_id": "subnet-123",
         "name": "ssh-jumphost",
+        "platform": "cpu-d3",
+        "preset": "4vcpu-16gb",
+        "source_image_family": "ubuntu24.04-driverless",
         "ssh_user_name": "adminuser",
         "ssh_public_key": _VALID_ED25519_PUBLIC_KEY,
         "allowed_cidrs": ["203.0.113.10/32"],
@@ -2319,6 +2391,7 @@ def test_render_uses_materialized_shared_admin_ssh_username_for_ssh_jumphost(
 def test_render_uses_materialized_shared_defaults_for_app_chart_values(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    mk8s_dir = _write_minimal_mk8s_module(tmp_path)
     sources_file = tmp_path / "component_sources.yaml"
     sources_file.write_text(
         yaml.safe_dump(
@@ -2329,6 +2402,7 @@ def test_render_uses_materialized_shared_defaults_for_app_chart_values(
                         "public_key": _VALID_ED25519_PUBLIC_KEY,
                     }
                 },
+                infra={"mk8s": _minimal_mk8s_catalog_entry(mk8s_dir)},
                 apps={
                     "demo-app": {
                         "source": _portable_chart_source(
@@ -2366,12 +2440,23 @@ def test_render_uses_materialized_shared_defaults_for_app_chart_values(
             },
             "notifications": {"email_enabled": True, "email": "ops@example.com"},
         },
-        "infra": {"components": []},
+        "deploy": {"targets": [{"instance_id": "mk8s"}]},
+        "infra": {
+            "components": [
+                {
+                    "id": "mk8s",
+                    "instance_id": "mk8s",
+                    "enabled": True,
+                    "source": str(mk8s_dir),
+                    "inputs": {},
+                },
+            ]
+        },
         "apps": {
             "charts": [
                 {
                     "id": "demo-app",
-                    "instance_id": "demo-app",
+                    "instance_id": "mk8s",
                     "group": "workloads",
                     "enabled": True,
                     "repo": "https://example.invalid/charts",
@@ -2392,7 +2477,9 @@ def test_render_uses_materialized_shared_defaults_for_app_chart_values(
     render_project(config, paths, source_profile=SourceProfile.LOCAL)
 
     release_doc = yaml.safe_load(
-        (paths.flux_dir / "helmrelease-workloads-demo-app.yaml").read_text(encoding="utf-8")
+        (_target_flux_dir(paths) / "helmrelease-workloads-demo-app.yaml").read_text(
+            encoding="utf-8"
+        )
     )
     assert release_doc["spec"]["values"]["admin"]["sshUser"] == "adminuser"
 
@@ -2400,6 +2487,7 @@ def test_render_uses_materialized_shared_defaults_for_app_chart_values(
 def test_render_supports_infra_input_binding_from_component_output(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    mk8s_dir = _write_minimal_mk8s_module(tmp_path)
     producer_dir = tmp_path / "modules" / "producer"
     producer_dir.mkdir(parents=True, exist_ok=True)
     (producer_dir / "main.tf").write_text(
@@ -2418,6 +2506,7 @@ def test_render_supports_infra_input_binding_from_component_output(
         yaml.safe_dump(
             _catalog(
                 infra={
+                    "mk8s": _minimal_mk8s_catalog_entry(mk8s_dir),
                     "producer": {
                         "source": {
                             "portable": "git::https://github.com/example/infra.git//modules/producer?ref=v1.2.3",
@@ -2453,8 +2542,16 @@ def test_render_supports_infra_input_binding_from_component_output(
             },
             "notifications": {"email_enabled": True, "email": "ops@example.com"},
         },
+        "deploy": {"targets": [{"instance_id": "mk8s"}]},
         "infra": {
             "components": [
+                {
+                    "id": "mk8s",
+                    "instance_id": "mk8s",
+                    "enabled": True,
+                    "source": str(mk8s_dir),
+                    "inputs": {},
+                },
                 {
                     "id": "producer",
                     "instance_id": "producer",
@@ -2599,6 +2696,7 @@ def test_render_supports_app_input_binding_from_component_output(
 def test_render_supports_explicit_instance_qualified_app_input_binding(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    mk8s_dir = _write_minimal_mk8s_module(tmp_path)
     producer_dir = tmp_path / "modules" / "producer"
     producer_dir.mkdir(parents=True, exist_ok=True)
     (producer_dir / "main.tf").write_text(
@@ -2610,6 +2708,7 @@ def test_render_supports_explicit_instance_qualified_app_input_binding(
         yaml.safe_dump(
             _catalog(
                 infra={
+                    "mk8s": _minimal_mk8s_catalog_entry(mk8s_dir),
                     "producer": {
                         "source": {
                             "portable": "git::https://github.com/example/infra.git//modules/producer?ref=v1.2.3",
@@ -2654,8 +2753,16 @@ def test_render_supports_explicit_instance_qualified_app_input_binding(
             },
             "notifications": {"email_enabled": True, "email": "ops@example.com"},
         },
+        "deploy": {"targets": [{"instance_id": "mk8s"}]},
         "infra": {
             "components": [
+                {
+                    "id": "mk8s",
+                    "instance_id": "mk8s",
+                    "enabled": True,
+                    "source": str(mk8s_dir),
+                    "inputs": {},
+                },
                 {
                     "id": "producer",
                     "instance_id": "producer-red",
@@ -2676,7 +2783,7 @@ def test_render_supports_explicit_instance_qualified_app_input_binding(
             "charts": [
                 {
                     "id": "demo-app",
-                    "instance_id": "demo-app",
+                    "instance_id": "mk8s",
                     "group": "workloads",
                     "enabled": True,
                     "repo": "https://example.invalid/charts",
@@ -2702,7 +2809,9 @@ def test_render_supports_explicit_instance_qualified_app_input_binding(
     )
 
     release_doc = yaml.safe_load(
-        (paths.flux_dir / "helmrelease-workloads-demo-app.yaml").read_text(encoding="utf-8")
+        (_target_flux_dir(paths) / "helmrelease-workloads-demo-app.yaml").read_text(
+            encoding="utf-8"
+        )
     )
     assert release_doc["spec"]["values"]["global"]["upstreamId"] == "instance-blue"
 
@@ -2710,6 +2819,7 @@ def test_render_supports_explicit_instance_qualified_app_input_binding(
 def test_render_uses_component_source_defaults_when_config_omits_values(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    mk8s_dir = _write_minimal_mk8s_module(tmp_path)
     module_dir = tmp_path / "modules" / "demo-module"
     module_dir.mkdir(parents=True, exist_ok=True)
     (module_dir / "variables.tf").write_text(
@@ -2723,6 +2833,7 @@ def test_render_uses_component_source_defaults_when_config_omits_values(
         yaml.safe_dump(
             _catalog(
                 infra={
+                    "mk8s": _minimal_mk8s_catalog_entry(mk8s_dir),
                     "demo-module": {
                         "source": {
                             "portable": "git::https://github.com/example/infra.git//modules/demo-module?ref=v1.2.3",
@@ -2772,8 +2883,16 @@ def test_render_uses_component_source_defaults_when_config_omits_values(
             },
             "notifications": {"email_enabled": True, "email": "ops@example.com"},
         },
+        "deploy": {"targets": [{"instance_id": "mk8s"}]},
         "infra": {
             "components": [
+                {
+                    "id": "mk8s",
+                    "instance_id": "mk8s",
+                    "enabled": True,
+                    "source": str(mk8s_dir),
+                    "inputs": {},
+                },
                 {
                     "id": "demo-module",
                     "instance_id": "demo-module",
@@ -2787,7 +2906,7 @@ def test_render_uses_component_source_defaults_when_config_omits_values(
             "charts": [
                 {
                     "id": "demo-app",
-                    "instance_id": "demo-app",
+                    "instance_id": "mk8s",
                     "group": "workloads",
                     "enabled": True,
                     "repo": "https://example.invalid/charts",
@@ -2812,7 +2931,9 @@ def test_render_uses_component_source_defaults_when_config_omits_values(
     assert '"demo_module_cpu_nodes_count": 3' in tfvars
 
     release_doc = yaml.safe_load(
-        (paths.flux_dir / "helmrelease-workloads-demo-app.yaml").read_text(encoding="utf-8")
+        (_target_flux_dir(paths) / "helmrelease-workloads-demo-app.yaml").read_text(
+            encoding="utf-8"
+        )
     )
     assert release_doc["spec"]["values"]["replicaCount"] == 2
     assert release_doc["spec"]["values"]["image"]["tag"] == "stable"

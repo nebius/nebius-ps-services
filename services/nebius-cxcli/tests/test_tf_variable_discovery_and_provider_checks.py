@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 import yaml
 
 import nebius_cxcli.cli as cli
@@ -17,9 +18,11 @@ from nebius_cxcli.components import ComponentEntry
 from nebius_cxcli.provider_options import OptionChoice
 from nebius_cxcli.runtime_introspection import (
     ModuleVariable,
+    canonical_local_module_source,
     module_required_variables,
     module_variable_names,
     module_variables,
+    resolve_module_source_path,
 )
 
 
@@ -47,6 +50,24 @@ variable "optional_field" {
     assert specs["required_field"].type_hint == "string"
     assert specs["optional_field"].has_default is True
     assert specs["optional_field"].default == "demo"
+
+
+def test_local_package_module_source_resolves_subdir_without_losing_package_root(
+    tmp_path: Path,
+) -> None:
+    package_root = tmp_path / "platform-infra"
+    module_dir = package_root / "modules" / "wireguard-gw"
+    module_dir.mkdir(parents=True)
+    (module_dir / "variables.tf").write_text(
+        'variable "name" { type = string }\n',
+        encoding="utf-8",
+    )
+
+    source = f"{package_root}//modules/wireguard-gw"
+
+    assert resolve_module_source_path(source) == module_dir
+    assert canonical_local_module_source(source) == source
+    assert module_variable_names(source) == ("name",)
 
 
 def test_module_variable_discovery_preserves_multiline_object_type(tmp_path: Path) -> None:
@@ -1054,7 +1075,7 @@ def test_wizard_prompts_vm_observability_without_duplicate_root_prompt(monkeypat
     assert payload["deploy"]["observability"]["vm"]["logs"]["enabled"] is True
 
 
-def test_vm_service_account_prompt_only_appears_when_standalone_collector_enabled(
+def test_vm_service_account_prompt_is_hidden_for_built_in_observability(
     monkeypatch,
 ) -> None:
     config_yaml = yaml.safe_dump(
@@ -1073,9 +1094,7 @@ def test_vm_service_account_prompt_only_appears_when_standalone_collector_enable
                 "observability": {
                     "enabled": True,
                     "vm": {
-                        "collector": {
-                            "enabled": True,
-                        }
+                        "logs": {"enabled": True, "systemd_units": []},
                     },
                 },
             },
@@ -1101,8 +1120,8 @@ def test_vm_service_account_prompt_only_appears_when_standalone_collector_enable
         description="VM",
         wizard_fields={
             "deploy.observability.enabled": {},
-            "deploy.observability.vm.collector.enabled": {},
-            "inputs.service_account_id": {},
+            "deploy.observability.vm.logs.enabled": {},
+            "inputs.service_account_id": {"prompt": False},
         },
     )
 
@@ -1120,8 +1139,6 @@ def test_vm_service_account_prompt_only_appears_when_standalone_collector_enable
     ) -> tuple[object, bool]:
         _ = current, choices, type_hint, required
         prompted_paths.append(path_label)
-        if path_label.endswith(".inputs.service_account_id"):
-            return "serviceaccount-1", False
         return True, False
 
     monkeypatch.setattr("nebius_cxcli.cli._prompt_scalar_override", _fake_prompt)
@@ -1136,9 +1153,736 @@ def test_vm_service_account_prompt_only_appears_when_standalone_collector_enable
     )
 
     assert completed is True
-    assert any(path.endswith(".inputs.service_account_id") for path in prompted_paths)
+    assert not any(path.endswith(".inputs.service_account_id") for path in prompted_paths)
     payload = yaml.safe_load(updated_yaml)
-    assert payload["infra"]["components"][0]["inputs"]["service_account_id"] == "serviceaccount-1"
+    assert "service_account_id" not in payload["infra"]["components"][0]["inputs"]
+
+
+def test_vm_observability_true_prompts_builtin_journald_logs_only(
+    monkeypatch,
+) -> None:
+    config_yaml = yaml.safe_dump(
+        {
+            "version": "v1",
+            "client_info": {
+                "client_name": "demo",
+                "nebius": {
+                    "tenant_id": "tenant-1",
+                    "project_id": "project-1",
+                    "region_id": "us-central1",
+                },
+                "notifications": {"email_enabled": True, "email": None},
+            },
+            "deploy": {
+                "observability": {
+                    "enabled": False,
+                    "vm": {
+                        "logs": {"enabled": True, "systemd_units": []},
+                    },
+                },
+            },
+            "infra": {
+                "components": [
+                    {
+                        "id": "vm",
+                        "instance_id": "vm",
+                        "enabled": True,
+                        "inputs": {},
+                    }
+                ]
+            },
+            "apps": {"charts": []},
+        },
+        sort_keys=False,
+    )
+
+    vm_entry = ComponentEntry(
+        id="vm",
+        scope="infra",
+        config_path="infra.components.vm",
+        description="VM",
+        wizard_fields={
+            "deploy.observability.enabled": {},
+            "deploy.observability.vm.logs.enabled": {},
+            "inputs.service_account_id": {"prompt": False},
+        },
+    )
+
+    monkeypatch.setattr("nebius_cxcli.cli._wizard_continue_phase", lambda *_args, **_kwargs: True)
+
+    prompted: dict[str, object] = {}
+
+    def _fake_prompt(
+        path_label: str,
+        current: object,
+        *,
+        choices=None,
+        type_hint=None,
+        required=False,
+    ) -> tuple[object, bool]:
+        _ = choices, type_hint, required
+        prompted[path_label] = current
+        if path_label == "deploy.observability.enabled":
+            return True, False
+        return current, False
+
+    monkeypatch.setattr("nebius_cxcli.cli._prompt_scalar_override", _fake_prompt)
+
+    updated_yaml, completed = _run_component_field_wizard(
+        config_yaml=config_yaml,
+        selected_infra={"vm"},
+        selected_apps=set(),
+        infra_entries=(vm_entry,),
+        app_entries=(),
+        provider_lookup=None,
+    )
+
+    assert completed is True
+    assert prompted["deploy.observability.vm.logs.enabled"] is True
+    assert "infra.components[0].inputs.service_account_id" not in prompted
+    payload = yaml.safe_load(updated_yaml)
+    assert payload["deploy"]["observability"]["enabled"] is True
+    assert payload["deploy"]["observability"]["vm"]["logs"]["enabled"] is True
+    assert "collector" not in payload["deploy"]["observability"]["vm"]
+    assert "service_account_id" not in payload["infra"]["components"][0]["inputs"]
+
+
+def test_vm_wizard_prefills_boot_disk_size_after_preset_selection(monkeypatch) -> None:
+    config_yaml = yaml.safe_dump(
+        {
+            "version": "v1",
+            "client_info": {
+                "client_name": "demo",
+                "nebius": {
+                    "tenant_id": "tenant-1",
+                    "project_id": "project-1",
+                    "region_id": "us-central1",
+                },
+                "notifications": {"email_enabled": False, "email": None},
+            },
+            "infra": {
+                "components": [
+                    {
+                        "id": "vm",
+                        "instance_id": "vm",
+                        "enabled": True,
+                        "source": "../../platform-infra/modules/vm",
+                        "inputs": {},
+                    }
+                ]
+            },
+            "apps": {"charts": []},
+        },
+        sort_keys=False,
+    )
+
+    vm_entry = ComponentEntry(
+        id="vm",
+        scope="infra",
+        config_path="infra.components.vm",
+        description="VM",
+        source="../../platform-infra/modules/vm",
+    )
+
+    monkeypatch.setattr("nebius_cxcli.cli._wizard_continue_phase", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(
+        "nebius_cxcli.cli._runtime_required_input_leaf_names",
+        lambda _entry: set(),
+    )
+    monkeypatch.setattr(
+        "nebius_cxcli.cli.module_required_variables",
+        lambda _source: (
+            "parent_id",
+            "subnet_id",
+            "name",
+            "platform",
+            "preset",
+            "source_image_family",
+        ),
+    )
+    monkeypatch.setattr(
+        "nebius_cxcli.cli.module_variables",
+        lambda _source: (
+            ModuleVariable(name="parent_id", required=True, type_hint="string"),
+            ModuleVariable(name="subnet_id", required=True, type_hint="string"),
+            ModuleVariable(name="name", required=True, type_hint="string"),
+            ModuleVariable(name="platform", required=True, type_hint="string"),
+            ModuleVariable(name="preset", required=True, type_hint="string"),
+            ModuleVariable(name="source_image_family", required=True, type_hint="string"),
+            ModuleVariable(
+                name="boot_disk_type",
+                required=False,
+                type_hint="string",
+                has_default=True,
+                default="NETWORK_SSD",
+            ),
+            ModuleVariable(
+                name="boot_disk_encryption_enabled",
+                required=False,
+                type_hint="bool",
+                has_default=True,
+                default=False,
+            ),
+            ModuleVariable(
+                name="boot_disk_deletion_protection",
+                required=False,
+                type_hint="bool",
+                has_default=True,
+                default=False,
+            ),
+            ModuleVariable(
+                name="boot_disk_size_gib",
+                required=False,
+                type_hint="number",
+                has_default=True,
+                default=None,
+            ),
+        ),
+    )
+
+    prompted_defaults: dict[str, object] = {}
+    prompted_paths: list[str] = []
+
+    def _fake_prompt(
+        path_label: str,
+        current: object,
+        *,
+        choices=None,
+        type_hint=None,
+        required=False,
+    ) -> tuple[object, bool]:
+        _ = choices, type_hint, required
+        prompted_defaults[path_label] = current
+        prompted_paths.append(path_label)
+        if path_label.endswith(".subnet_id"):
+            return "subnet-1", False
+        if path_label.endswith(".platform"):
+            return "cpu-d3", False
+        if path_label.endswith(".preset"):
+            return "4vcpu-16gb", False
+        if path_label.endswith(".source_image_family"):
+            return "ubuntu24.04-driverless", False
+        if path_label.endswith(".name"):
+            return "demo-vm", False
+        return current, False
+
+    monkeypatch.setattr("nebius_cxcli.cli._prompt_scalar_override", _fake_prompt)
+
+    updated_yaml, completed = _run_component_field_wizard(
+        config_yaml=config_yaml,
+        selected_infra={"vm"},
+        selected_apps=set(),
+        infra_entries=(vm_entry,),
+        app_entries=(),
+        provider_lookup=None,
+    )
+
+    assert completed is True
+    boot_type_path = "infra.components[0].inputs.boot_disk_type"
+    boot_encryption_path = "infra.components[0].inputs.boot_disk_encryption_enabled"
+    boot_deletion_path = "infra.components[0].inputs.boot_disk_deletion_protection"
+    boot_size_path = "infra.components[0].inputs.boot_disk_size_gib"
+    assert prompted_paths.index(boot_type_path) < prompted_paths.index(boot_size_path)
+    assert prompted_defaults[boot_type_path] == "NETWORK_SSD"
+    assert boot_encryption_path not in prompted_paths
+    assert prompted_defaults[boot_deletion_path] is False
+    assert prompted_defaults[boot_size_path] == 64
+    payload = yaml.safe_load(updated_yaml)
+    inputs = payload["infra"]["components"][0]["inputs"]
+    assert inputs["boot_disk_type"] == "NETWORK_SSD"
+    assert "boot_disk_encryption_enabled" not in inputs
+    assert inputs.get("boot_disk_deletion_protection") in (None, False)
+    assert inputs["boot_disk_size_gib"] == 64
+
+
+@pytest.mark.parametrize(
+    ("component_id", "description"),
+    [
+        ("wireguard-gw", "WireGuard VPN gateway"),
+        ("ssh-jumphost", "SSH jump host"),
+    ],
+)
+def test_jump_host_wizard_prefills_boot_disk_size_and_skips_created_public_ip_id(
+    monkeypatch,
+    component_id: str,
+    description: str,
+) -> None:
+    config_yaml = yaml.safe_dump(
+        {
+            "version": "v1",
+            "client_info": {
+                "client_name": "demo",
+                "nebius": {
+                    "tenant_id": "tenant-1",
+                    "project_id": "project-1",
+                    "region_id": "us-central1",
+                },
+                "notifications": {"email_enabled": False, "email": None},
+            },
+            "infra": {
+                "components": [
+                    {
+                        "id": component_id,
+                        "instance_id": component_id,
+                        "enabled": True,
+                        "source": f"../../platform-infra/modules/{component_id}",
+                        "inputs": {},
+                    }
+                ]
+            },
+            "apps": {"charts": []},
+        },
+        sort_keys=False,
+    )
+
+    entry = ComponentEntry(
+        id=component_id,
+        scope="infra",
+        config_path=f"infra.components.{component_id}",
+        description=description,
+        source=f"../../platform-infra/modules/{component_id}",
+        wizard_fields=(
+            {"inputs.wireguard_tunnel_cidr": {"materialize_default": True}}
+            if component_id == "wireguard-gw"
+            else {}
+        ),
+    )
+
+    monkeypatch.setattr("nebius_cxcli.cli._wizard_continue_phase", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(
+        "nebius_cxcli.cli._runtime_required_input_leaf_names",
+        lambda _entry: set(),
+    )
+    monkeypatch.setattr(
+        "nebius_cxcli.cli.module_required_variables",
+        lambda _source: (
+            "parent_id",
+            "subnet_id",
+            "name",
+            "platform",
+            "preset",
+            "source_image_family",
+            "boot_disk_size_gib",
+        ),
+    )
+    def _module_variables(_source: str) -> tuple[ModuleVariable, ...]:
+        variables = (
+            ModuleVariable(name="parent_id", required=True, type_hint="string"),
+            ModuleVariable(name="subnet_id", required=True, type_hint="string"),
+            ModuleVariable(name="name", required=True, type_hint="string"),
+            ModuleVariable(name="platform", required=True, type_hint="string"),
+            ModuleVariable(name="preset", required=True, type_hint="string"),
+            ModuleVariable(name="source_image_family", required=True, type_hint="string"),
+            ModuleVariable(name="boot_disk_size_gib", required=True, type_hint="number"),
+            ModuleVariable(
+                name="boot_disk_type",
+                required=False,
+                type_hint="string",
+                has_default=True,
+                default="NETWORK_SSD",
+            ),
+            ModuleVariable(
+                name="boot_disk_encryption_enabled",
+                required=False,
+                type_hint="bool",
+                has_default=True,
+                default=False,
+            ),
+            ModuleVariable(
+                name="boot_disk_deletion_protection",
+                required=False,
+                type_hint="bool",
+                has_default=True,
+                default=False,
+            ),
+            ModuleVariable(
+                name="create_public_ip_allocation",
+                required=False,
+                type_hint="bool",
+                has_default=True,
+                default=True,
+            ),
+            ModuleVariable(
+                name="public_ip_allocation_id",
+                required=False,
+                type_hint="string",
+                has_default=True,
+                default=None,
+            ),
+            ModuleVariable(
+                name="public_ip_allocation_name",
+                required=False,
+                type_hint="string",
+                has_default=True,
+                default=None,
+            ),
+        )
+        if component_id != "wireguard-gw":
+            return variables
+        return variables + (
+            ModuleVariable(
+                name="wireguard_tunnel_cidr",
+                required=False,
+                type_hint="string",
+                has_default=True,
+                default="10.8.0.1/22",
+            ),
+        )
+
+    monkeypatch.setattr("nebius_cxcli.cli.module_variables", _module_variables)
+
+    prompted_defaults: dict[str, object] = {}
+    prompted_paths: list[str] = []
+
+    def _fake_prompt(
+        path_label: str,
+        current: object,
+        *,
+        choices=None,
+        type_hint=None,
+        required=False,
+    ) -> tuple[object, bool]:
+        _ = choices, type_hint, required
+        prompted_defaults[path_label] = current
+        prompted_paths.append(path_label)
+        if path_label.endswith(".subnet_id"):
+            return "subnet-1", False
+        if path_label.endswith(".name"):
+            return "wg", False
+        if path_label.endswith(".platform"):
+            return "cpu-d3", False
+        if path_label.endswith(".preset"):
+            return "4vcpu-16gb", False
+        if path_label.endswith(".source_image_family"):
+            return "ubuntu24.04-driverless", False
+        if path_label.endswith(".create_public_ip_allocation"):
+            return True, False
+        return current, False
+
+    monkeypatch.setattr("nebius_cxcli.cli._prompt_scalar_override", _fake_prompt)
+
+    updated_yaml, completed = _run_component_field_wizard(
+        config_yaml=config_yaml,
+        selected_infra={component_id},
+        selected_apps=set(),
+        infra_entries=(entry,),
+        app_entries=(),
+        provider_lookup=None,
+    )
+
+    assert completed is True
+    boot_encryption_path = "infra.components[0].inputs.boot_disk_encryption_enabled"
+    boot_deletion_path = "infra.components[0].inputs.boot_disk_deletion_protection"
+    boot_size_path = "infra.components[0].inputs.boot_disk_size_gib"
+    assert boot_encryption_path not in prompted_paths
+    assert prompted_defaults[boot_deletion_path] is False
+    assert prompted_defaults[boot_size_path] == 64
+    assert "infra.components[0].inputs.public_ip_allocation_id" not in prompted_paths
+    payload = yaml.safe_load(updated_yaml)
+    inputs = payload["infra"]["components"][0]["inputs"]
+    assert "boot_disk_encryption_enabled" not in inputs
+    assert inputs.get("boot_disk_deletion_protection") in (None, False)
+    assert inputs["boot_disk_size_gib"] == 64
+    assert prompted_defaults["infra.components[0].inputs.create_public_ip_allocation"] is True
+    assert "public_ip_allocation_id" not in inputs
+    tunnel_cidr_path = "infra.components[0].inputs.wireguard_tunnel_cidr"
+    if component_id == "wireguard-gw":
+        assert prompted_defaults[tunnel_cidr_path] == "10.8.0.1/22"
+        assert inputs["wireguard_tunnel_cidr"] == "10.8.0.1/22"
+    else:
+        assert tunnel_cidr_path not in prompted_paths
+
+
+@pytest.mark.parametrize(
+    ("component_id", "description"),
+    [
+        ("vm", "VM"),
+        ("wireguard-gw", "WireGuard VPN gateway"),
+        ("ssh-jumphost", "SSH jump host"),
+    ],
+)
+def test_vm_style_wizard_prompts_boot_disk_encryption_for_supported_disk_types(
+    monkeypatch,
+    component_id: str,
+    description: str,
+) -> None:
+    config_yaml = yaml.safe_dump(
+        {
+            "version": "v1",
+            "client_info": {
+                "client_name": "demo",
+                "nebius": {
+                    "tenant_id": "tenant-1",
+                    "project_id": "project-1",
+                    "region_id": "us-central1",
+                },
+                "notifications": {"email_enabled": False, "email": None},
+            },
+            "infra": {
+                "components": [
+                    {
+                        "id": component_id,
+                        "instance_id": component_id,
+                        "enabled": True,
+                        "source": f"../../platform-infra/modules/{component_id}",
+                        "inputs": {},
+                    }
+                ]
+            },
+            "apps": {"charts": []},
+        },
+        sort_keys=False,
+    )
+
+    entry = ComponentEntry(
+        id=component_id,
+        scope="infra",
+        config_path=f"infra.components.{component_id}",
+        description=description,
+        source=f"../../platform-infra/modules/{component_id}",
+    )
+
+    monkeypatch.setattr("nebius_cxcli.cli._wizard_continue_phase", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(
+        "nebius_cxcli.cli._runtime_required_input_leaf_names",
+        lambda _entry: set(),
+    )
+    monkeypatch.setattr(
+        "nebius_cxcli.cli.module_required_variables",
+        lambda _source: (
+            "parent_id",
+            "subnet_id",
+            "name",
+            "platform",
+            "preset",
+            "source_image_family",
+            "boot_disk_size_gib",
+        ),
+    )
+    monkeypatch.setattr(
+        "nebius_cxcli.cli.module_variables",
+        lambda _source: (
+            ModuleVariable(name="parent_id", required=True, type_hint="string"),
+            ModuleVariable(name="subnet_id", required=True, type_hint="string"),
+            ModuleVariable(name="name", required=True, type_hint="string"),
+            ModuleVariable(name="platform", required=True, type_hint="string"),
+            ModuleVariable(name="preset", required=True, type_hint="string"),
+            ModuleVariable(name="source_image_family", required=True, type_hint="string"),
+            ModuleVariable(name="boot_disk_size_gib", required=True, type_hint="number"),
+            ModuleVariable(
+                name="boot_disk_type",
+                required=False,
+                type_hint="string",
+                has_default=True,
+                default="NETWORK_SSD",
+            ),
+            ModuleVariable(
+                name="boot_disk_encryption_enabled",
+                required=False,
+                type_hint="bool",
+                has_default=True,
+                default=False,
+            ),
+            ModuleVariable(
+                name="boot_disk_deletion_protection",
+                required=False,
+                type_hint="bool",
+                has_default=True,
+                default=False,
+            ),
+        ),
+    )
+
+    prompted_defaults: dict[str, object] = {}
+    prompted_paths: list[str] = []
+
+    def _fake_prompt(
+        path_label: str,
+        current: object,
+        *,
+        choices=None,
+        type_hint=None,
+        required=False,
+    ) -> tuple[object, bool]:
+        _ = choices, type_hint, required
+        prompted_defaults[path_label] = current
+        prompted_paths.append(path_label)
+        if path_label.endswith(".subnet_id"):
+            return "subnet-1", False
+        if path_label.endswith(".name"):
+            return "vm", False
+        if path_label.endswith(".platform"):
+            return "cpu-d3", False
+        if path_label.endswith(".preset"):
+            return "4vcpu-16gb", False
+        if path_label.endswith(".source_image_family"):
+            return "ubuntu24.04-driverless", False
+        if path_label.endswith(".boot_disk_type"):
+            return "NETWORK_SSD_NON_REPLICATED", False
+        return current, False
+
+    monkeypatch.setattr("nebius_cxcli.cli._prompt_scalar_override", _fake_prompt)
+
+    updated_yaml, completed = _run_component_field_wizard(
+        config_yaml=config_yaml,
+        selected_infra={component_id},
+        selected_apps=set(),
+        infra_entries=(entry,),
+        app_entries=(),
+        provider_lookup=None,
+    )
+
+    boot_type_path = "infra.components[0].inputs.boot_disk_type"
+    boot_encryption_path = "infra.components[0].inputs.boot_disk_encryption_enabled"
+    boot_deletion_path = "infra.components[0].inputs.boot_disk_deletion_protection"
+    assert completed is True
+    assert prompted_paths.index(boot_type_path) < prompted_paths.index(boot_encryption_path)
+    assert prompted_defaults[boot_encryption_path] is False
+    assert prompted_defaults[boot_deletion_path] is False
+    payload = yaml.safe_load(updated_yaml)
+    inputs = payload["infra"]["components"][0]["inputs"]
+    assert inputs["boot_disk_type"] == "NETWORK_SSD_NON_REPLICATED"
+    assert inputs.get("boot_disk_encryption_enabled") in (None, False)
+    assert inputs.get("boot_disk_deletion_protection") in (None, False)
+
+
+@pytest.mark.parametrize(
+    ("component_id", "description"),
+    [
+        ("wireguard-gw", "WireGuard VPN gateway"),
+        ("ssh-jumphost", "SSH jump host"),
+    ],
+)
+def test_jump_host_wizard_requires_existing_public_ip_id_when_create_is_false(
+    monkeypatch,
+    component_id: str,
+    description: str,
+) -> None:
+    config_yaml = yaml.safe_dump(
+        {
+            "version": "v1",
+            "client_info": {
+                "client_name": "demo",
+                "nebius": {
+                    "tenant_id": "tenant-1",
+                    "project_id": "project-1",
+                    "region_id": "us-central1",
+                },
+                "notifications": {"email_enabled": False, "email": None},
+            },
+            "infra": {
+                "components": [
+                    {
+                        "id": component_id,
+                        "instance_id": component_id,
+                        "enabled": True,
+                        "source": f"../../platform-infra/modules/{component_id}",
+                        "inputs": {},
+                    }
+                ]
+            },
+            "apps": {"charts": []},
+        },
+        sort_keys=False,
+    )
+
+    entry = ComponentEntry(
+        id=component_id,
+        scope="infra",
+        config_path=f"infra.components.{component_id}",
+        description=description,
+        source=f"../../platform-infra/modules/{component_id}",
+    )
+
+    monkeypatch.setattr("nebius_cxcli.cli._wizard_continue_phase", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(
+        "nebius_cxcli.cli._runtime_required_input_leaf_names",
+        lambda _entry: set(),
+    )
+    monkeypatch.setattr(
+        "nebius_cxcli.cli.module_required_variables",
+        lambda _source: ("parent_id", "subnet_id", "name", "platform", "preset"),
+    )
+    monkeypatch.setattr(
+        "nebius_cxcli.cli.module_variables",
+        lambda _source: (
+            ModuleVariable(name="parent_id", required=True, type_hint="string"),
+            ModuleVariable(name="subnet_id", required=True, type_hint="string"),
+            ModuleVariable(name="name", required=True, type_hint="string"),
+            ModuleVariable(name="platform", required=True, type_hint="string"),
+            ModuleVariable(name="preset", required=True, type_hint="string"),
+            ModuleVariable(
+                name="create_public_ip_allocation",
+                required=False,
+                type_hint="bool",
+                has_default=True,
+                default=True,
+            ),
+            ModuleVariable(
+                name="public_ip_allocation_id",
+                required=False,
+                type_hint="string",
+                has_default=True,
+                default=None,
+            ),
+            ModuleVariable(
+                name="public_ip_allocation_name",
+                required=False,
+                type_hint="string",
+                has_default=True,
+                default=None,
+            ),
+        ),
+    )
+
+    prompted_required: dict[str, bool] = {}
+    prompted_paths: list[str] = []
+
+    def _fake_prompt(
+        path_label: str,
+        current: object,
+        *,
+        choices=None,
+        type_hint=None,
+        required=False,
+    ) -> tuple[object, bool]:
+        _ = current, choices, type_hint
+        prompted_required[path_label] = required
+        prompted_paths.append(path_label)
+        if path_label.endswith(".subnet_id"):
+            return "subnet-1", False
+        if path_label.endswith(".name"):
+            return "wg", False
+        if path_label.endswith(".platform"):
+            return "cpu-d3", False
+        if path_label.endswith(".preset"):
+            return "4vcpu-16gb", False
+        if path_label.endswith(".create_public_ip_allocation"):
+            return False, False
+        if path_label.endswith(".public_ip_allocation_id"):
+            return "allocation-1", False
+        return current, False
+
+    monkeypatch.setattr("nebius_cxcli.cli._prompt_scalar_override", _fake_prompt)
+
+    updated_yaml, completed = _run_component_field_wizard(
+        config_yaml=config_yaml,
+        selected_infra={component_id},
+        selected_apps=set(),
+        infra_entries=(entry,),
+        app_entries=(),
+        provider_lookup=None,
+    )
+
+    public_id_path = "infra.components[0].inputs.public_ip_allocation_id"
+    assert completed is True
+    assert public_id_path in prompted_paths
+    assert prompted_required[public_id_path] is True
+    assert "infra.components[0].inputs.public_ip_allocation_name" not in prompted_paths
+    payload = yaml.safe_load(updated_yaml)
+    inputs = payload["infra"]["components"][0]["inputs"]
+    assert inputs["create_public_ip_allocation"] is False
+    assert inputs["public_ip_allocation_id"] == "allocation-1"
 
 
 def test_wizard_q_revisits_previous_nested_app_value_prompt(monkeypatch) -> None:

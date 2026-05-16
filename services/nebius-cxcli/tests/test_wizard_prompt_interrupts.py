@@ -11,6 +11,10 @@ import nebius_cxcli.cli as cli
 from nebius_cxcli.components import ComponentEntry
 from nebius_cxcli.provider_options import OptionChoice
 
+_VALID_ED25519_PUBLIC_KEY = (
+    "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4f demo@example"
+)
+
 
 def test_prompt_choice_override_tty_cancel_stops_wizard(
     monkeypatch,
@@ -72,6 +76,108 @@ def test_prompt_choice_override_tty_renders_only_selectable_values(monkeypatch) 
     assert titles == ["cpu-d3", "cpu-e2"]
     assert "<manual input>" not in titles
     assert captured["instruction"] == "Use arrows; q=back; qq=quit; Enter=select."
+
+
+def test_ssh_public_key_prompt_lists_local_pub_files(tmp_path, monkeypatch) -> None:
+    home_dir = tmp_path / "home"
+    ssh_dir = home_dir / ".ssh"
+    ssh_dir.mkdir(parents=True)
+    key_path = ssh_dir / "id_ed25519.pub"
+    key_path.write_text(_VALID_ED25519_PUBLIC_KEY + "\n", encoding="utf-8")
+    monkeypatch.setenv("HOME", str(home_dir))
+    monkeypatch.setattr(cli, "_is_tty_session", lambda: False)
+    monkeypatch.setattr(cli.typer, "prompt", lambda *_args, **_kwargs: "1")
+
+    choices = cli._ssh_public_key_file_choices()
+    value, should_stop = cli._prompt_scalar_override(
+        "infra.components[0].inputs.ssh_public_key",
+        "",
+        required=True,
+    )
+
+    assert should_stop is False
+    assert value == _VALID_ED25519_PUBLIC_KEY
+    assert choices[0].label.startswith("~/.ssh/id_ed25519.pub")
+
+
+def test_ssh_public_key_prompt_accepts_manual_pub_path(tmp_path, monkeypatch) -> None:
+    home_dir = tmp_path / "home"
+    (home_dir / ".ssh").mkdir(parents=True)
+    key_path = tmp_path / "my_ssh_key.pub"
+    key_path.write_text(_VALID_ED25519_PUBLIC_KEY + "\n", encoding="utf-8")
+    monkeypatch.setenv("HOME", str(home_dir))
+    monkeypatch.setattr(cli, "_is_tty_session", lambda: False)
+    monkeypatch.setattr(cli.typer, "prompt", lambda *_args, **_kwargs: str(key_path))
+
+    value, should_stop = cli._prompt_scalar_override(
+        "infra.components[0].inputs.ssh_public_key",
+        "",
+        required=True,
+    )
+
+    assert should_stop is False
+    assert value == _VALID_ED25519_PUBLIC_KEY
+
+
+def test_ssh_public_key_prompt_keeps_current_unmatched_inline_key(tmp_path, monkeypatch) -> None:
+    home_dir = tmp_path / "home"
+    ssh_dir = home_dir / ".ssh"
+    ssh_dir.mkdir(parents=True)
+    (ssh_dir / "id_ed25519.pub").write_text(_VALID_ED25519_PUBLIC_KEY + "\n", encoding="utf-8")
+    current_key = f"{_VALID_ED25519_PUBLIC_KEY} current"
+    monkeypatch.setenv("HOME", str(home_dir))
+    monkeypatch.setattr(cli, "_is_tty_session", lambda: False)
+
+    def _fake_prompt(*_args, **kwargs):
+        assert kwargs.get("default") == ""
+        return ""
+
+    monkeypatch.setattr(cli.typer, "prompt", _fake_prompt)
+
+    value, should_stop = cli._prompt_scalar_override(
+        "infra.components[0].inputs.ssh_public_key",
+        current_key,
+        required=True,
+    )
+
+    assert should_stop is False
+    assert value == current_key
+
+
+def test_ssh_public_key_prompt_tty_includes_manual_choice(tmp_path, monkeypatch) -> None:
+    home_dir = tmp_path / "home"
+    ssh_dir = home_dir / ".ssh"
+    ssh_dir.mkdir(parents=True)
+    (ssh_dir / "my_ssh_key.pub").write_text(_VALID_ED25519_PUBLIC_KEY + "\n", encoding="utf-8")
+    monkeypatch.setenv("HOME", str(home_dir))
+    monkeypatch.setattr(cli, "_is_tty_session", lambda: True)
+    captured: dict[str, object] = {}
+
+    class _FakePrompt:
+        def ask(self):
+            return _VALID_ED25519_PUBLIC_KEY
+
+    def _fake_select(*args, **kwargs):
+        captured["choices"] = kwargs.get("choices")
+        return _FakePrompt()
+
+    fake_questionary = SimpleNamespace(
+        Choice=lambda **kwargs: kwargs,
+        select=_fake_select,
+    )
+    monkeypatch.setitem(sys.modules, "questionary", fake_questionary)
+
+    value, should_stop = cli._prompt_scalar_override(
+        "infra.components[0].inputs.ssh_public_key",
+        "",
+        required=True,
+    )
+
+    assert should_stop is False
+    assert value == _VALID_ED25519_PUBLIC_KEY
+    titles = [choice["title"] for choice in captured["choices"]]
+    assert titles[0].startswith("~/.ssh/my_ssh_key.pub")
+    assert titles[-1] == "<manual path or inline public key>"
 
 
 def test_prompt_choice_override_text_prompt_abort_stops_wizard(
@@ -922,6 +1028,45 @@ def test_component_field_wizard_q_revisits_previous_field(monkeypatch) -> None:
     assert completed is True
     assert updated_payload["infra"]["components"][0]["inputs"]["first"] == "one-final"
     assert updated_payload["infra"]["components"][0]["inputs"]["second"] == "two-final"
+
+
+def test_wizard_backtrack_target_skips_current_prompt_left_in_history() -> None:
+    first = ("infra", "components", 0, "inputs", "first")
+    second = ("infra", "components", 0, "inputs", "second")
+    current = ("infra", "components", 0, "inputs", "third")
+    prompt_paths = [first, second, current]
+    prompt_history = [first, second, current]
+
+    target_index = cli._wizard_backtrack_target_index(
+        prompt_paths=prompt_paths,
+        prompt_history=prompt_history,
+        current_path=current,
+    )
+
+    assert target_index == 1
+    assert prompt_history == [first]
+
+
+def test_vm_observability_prompt_guidance_includes_concise_field_comments(
+    monkeypatch,
+) -> None:
+    captured: list[str] = []
+    monkeypatch.setattr(cli.console, "print", lambda message, **_kwargs: captured.append(str(message)))
+    emitted_guidance: set[str] = set()
+
+    for field_path in (
+        "deploy.observability.enabled",
+        "deploy.observability.vm.logs.enabled",
+    ):
+        cli._maybe_print_observability_prompt_guidance(
+            full_path_label=field_path,
+            emitted_guidance=emitted_guidance,
+    )
+
+    joined = "\n".join(captured)
+    assert "Compute VMs use the built-in Monitoring agent" in joined
+    assert "No VM-side collector package or cxcli-managed service account is installed" in joined
+    assert "Collect VM journald logs: answering yes applies" in joined
 
 
 def test_prompt_choice_override_defaults_to_first_option_when_required(monkeypatch) -> None:

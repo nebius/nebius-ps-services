@@ -8,7 +8,7 @@ _BUILTIN_VALIDATION_PROFILES: dict[str, str] = {
     "sfs": "shared_filesystem",
     "mysterybox": "mysterybox",
     "vm": "vm_instance",
-    "wireguard-jumphost": "wireguard_jumphost",
+    "wireguard-gw": "wireguard_gw",
     "ssh-jumphost": "ssh_jumphost",
 }
 

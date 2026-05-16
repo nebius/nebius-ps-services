@@ -11,6 +11,7 @@ import nebius_cxcli.grafana_runtime as grafana_runtime
 from nebius_cxcli.component_sources import (
     CliSettings,
     ComponentSources,
+    ComputeSettings,
     GrafanaAdminSecretSpec,
     GrafanaCliSettings,
     GrafanaDashboardSignalBinding,
@@ -103,6 +104,7 @@ def test_grafana_release_specs_uses_catalog_component_id(
 ) -> None:
     sources = ComponentSources(
         cli=CliSettings(),
+        compute=ComputeSettings(),
         shared={},
         tf_modules=(
             TFModuleSource(

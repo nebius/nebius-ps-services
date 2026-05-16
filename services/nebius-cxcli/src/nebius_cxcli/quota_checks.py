@@ -250,6 +250,14 @@ def _mk8s_boot_disk_gap_message(*, gpu: bool) -> str:
     )
 
 
+def _compute_boot_disk_gap_message() -> str:
+    return (
+        "Compute VM boot-disk quota could not be fully evaluated; set "
+        "inputs.boot_disk_size_gib and inputs.boot_disk_type, or let cxcli "
+        "materialize compute.boot_disk_defaults before running quota checks."
+    )
+
+
 def _format_disk_size_bytes(value: int) -> str:
     if value % _GIB == 0:
         return f"{value // _GIB} GiB"
@@ -1523,8 +1531,9 @@ def _estimate_jump_host_requirements(
                 reason=f"{resources.vcpu_count} vCPU(s) from {platform}/{preset}",
             )
 
-    disk_type = _disk_quota_suffix(_mapping_text(inputs, "boot_disk_type", default="NETWORK_SSD"))
-    disk_size_gib = _positive_int(inputs.get("boot_disk_size_gib")) or 60
+    raw_disk_type = _mapping_text(inputs, "boot_disk_type")
+    disk_type = _disk_quota_suffix(raw_disk_type)
+    disk_size_gib = _positive_int(inputs.get("boot_disk_size_gib"))
     _append_requirement(
         requirements,
         component_id=component_id,
@@ -1534,7 +1543,7 @@ def _estimate_jump_host_requirements(
         required=1,
         reason="one boot disk",
     )
-    if disk_type:
+    if disk_type and disk_size_gib is not None:
         _append_requirement(
             requirements,
             component_id=component_id,
@@ -1543,6 +1552,13 @@ def _estimate_jump_host_requirements(
             region=region,
             required=disk_size_gib * _GIB,
             reason=f"{disk_size_gib} GiB boot disk",
+        )
+    else:
+        _append_gap(
+            gaps,
+            component_id=component_id,
+            instance_id=instance_id,
+            message=_compute_boot_disk_gap_message(),
         )
 
     create_allocation = _mapping_bool(inputs, "create_public_ip_allocation", default=True)
@@ -1677,10 +1693,9 @@ def _estimate_vm_requirements(
             )
 
     if not _mapping_text(inputs, "boot_disk_existing_id"):
-        disk_type = _disk_quota_suffix(
-            _mapping_text(inputs, "boot_disk_type", default="NETWORK_SSD")
-        )
-        disk_size_gib = _positive_int(inputs.get("boot_disk_size_gib")) or 60
+        raw_disk_type = _mapping_text(inputs, "boot_disk_type")
+        disk_type = _disk_quota_suffix(raw_disk_type)
+        disk_size_gib = _positive_int(inputs.get("boot_disk_size_gib"))
         _append_requirement(
             requirements,
             component_id=component_id,
@@ -1690,7 +1705,7 @@ def _estimate_vm_requirements(
             required=1,
             reason="one managed boot disk",
         )
-        if disk_type:
+        if disk_type and disk_size_gib is not None:
             _append_requirement(
                 requirements,
                 component_id=component_id,
@@ -1699,6 +1714,13 @@ def _estimate_vm_requirements(
                 region=region,
                 required=disk_size_gib * _GIB,
                 reason=f"{disk_size_gib} GiB boot disk",
+            )
+        else:
+            _append_gap(
+                gaps,
+                component_id=component_id,
+                instance_id=instance_id,
+                message=_compute_boot_disk_gap_message(),
             )
 
     data_disks = inputs.get("data_disks")
@@ -2407,7 +2429,7 @@ def _requirements_for_component(
 
     requirements: list[QuotaRequirement] = []
     gaps: list[QuotaCoverageGap] = []
-    if component_id in {"ssh-jumphost", "wireguard-jumphost"}:
+    if component_id in {"ssh-jumphost", "wireguard-gw"}:
         _estimate_jump_host_requirements(
             session=session,
             project_id=project_id,

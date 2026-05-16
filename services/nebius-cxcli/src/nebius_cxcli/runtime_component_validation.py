@@ -66,7 +66,7 @@ def validate_component_runtime_rules(
             _validate_sfs_csi(payload, get_path, as_text, base)
         elif profile == "vm_instance":
             _validate_vm(payload, get_path, as_text, base, id_pattern)
-        elif profile == "wireguard_jumphost":
+        elif profile == "wireguard_gw":
             _validate_wireguard(payload, get_path, as_text, base, id_pattern)
         elif profile == "ssh_jumphost":
             _validate_ssh_jumphost(payload, get_path, as_text, base)
@@ -460,25 +460,133 @@ def _validate_wireguard(
                 "when public_ip_allocation_id is set"
             )
 
-        tunnel_cidr = as_text(get_path(payload, f"{base}.tunnel_cidr", "10.8.0.1/24"))
+        tunnel_cidr = as_text(
+            get_path(payload, f"{base}.wireguard_tunnel_cidr", "10.8.0.1/22")
+        )
         try:
             interface = ipaddress.ip_interface(tunnel_cidr)
         except ValueError as exc:
             raise ValueError(
-                f"{base}.tunnel_cidr must be a valid IPv4 interface CIDR (example: 10.8.0.1/24)"
+                f"{base}.wireguard_tunnel_cidr must be a valid IPv4 interface CIDR "
+                "(example: 10.8.0.1/22)"
             ) from exc
         if interface.version != 4:
             raise ValueError(
-                f"{base}.tunnel_cidr must be an IPv4 interface CIDR (example: 10.8.0.1/24)"
+                f"{base}.wireguard_tunnel_cidr must be an IPv4 interface CIDR "
+                "(example: 10.8.0.1/22)"
             )
 
-        listen_port = get_path(payload, f"{base}.listen_port", 51820)
+        listen_port = get_path(payload, f"{base}.wireguard_listen_port", 51820)
         try:
             listen_port_int = int(listen_port)
         except Exception as exc:
-            raise ValueError(f"{base}.listen_port must be an integer between 1 and 65535") from exc
+            raise ValueError(
+                f"{base}.wireguard_listen_port must be an integer between 1 and 65535"
+            ) from exc
         if listen_port_int < 1 or listen_port_int > 65535:
-            raise ValueError(f"{base}.listen_port must be an integer between 1 and 65535")
+            raise ValueError(
+                f"{base}.wireguard_listen_port must be an integer between 1 and 65535"
+            )
+
+        local_subnets = get_path(payload, f"{base}.local_subnets", None)
+        if local_subnets is None:
+            raise ValueError(f"{base}.local_subnets is required")
+        if not isinstance(local_subnets, list):
+            raise ValueError(f"{base}.local_subnets must be a list of CIDRs")
+        for cidr in local_subnets:
+            try:
+                network = ipaddress.ip_network(str(cidr), strict=False)
+            except ValueError as exc:
+                raise ValueError(f"{base}.local_subnets must contain valid CIDRs") from exc
+            if network.version != 4:
+                raise ValueError(f"{base}.local_subnets currently supports IPv4 CIDRs only")
+
+        client_default_dns = get_path(payload, f"{base}.client_default_dns", [])
+        if client_default_dns is not None:
+            if not isinstance(client_default_dns, list):
+                raise ValueError(f"{base}.client_default_dns must be a list of IPv4 addresses")
+            for dns in client_default_dns:
+                try:
+                    address = ipaddress.ip_address(str(dns))
+                except ValueError as exc:
+                    raise ValueError(
+                        f"{base}.client_default_dns must contain valid IPv4 addresses"
+                    ) from exc
+                if address.version != 4:
+                    raise ValueError(f"{base}.client_default_dns currently supports IPv4 only")
+
+        clients = get_path(payload, f"{base}.clients", [])
+        if clients is not None:
+            if not isinstance(clients, list):
+                raise ValueError(f"{base}.clients must be a list")
+            seen_names: set[str] = set()
+            seen_addresses: set[str] = set()
+            for index, client in enumerate(clients):
+                if not isinstance(client, Mapping):
+                    raise ValueError(f"{base}.clients[{index}] must be an object")
+                name = as_text(client.get("name"))
+                if not name:
+                    raise ValueError(f"{base}.clients[{index}].name is required")
+                if not id_pattern.fullmatch(name):
+                    raise ValueError(
+                        f"{base}.clients[{index}].name must use lowercase letters, digits, and hyphens"
+                    )
+                if name in seen_names:
+                    raise ValueError(f"{base}.clients contains duplicate client name '{name}'")
+                seen_names.add(name)
+                address = as_text(client.get("client_wg_tunnel_address"))
+                if address:
+                    try:
+                        client_interface = ipaddress.ip_interface(address)
+                    except ValueError as exc:
+                        raise ValueError(
+                            f"{base}.clients[{index}].client_wg_tunnel_address must be a valid IPv4 /32"
+                        ) from exc
+                    if client_interface.version != 4 or client_interface.network.prefixlen != 32:
+                        raise ValueError(
+                            f"{base}.clients[{index}].client_wg_tunnel_address must be an IPv4 /32"
+                        )
+                    if client_interface.ip == interface.ip or client_interface.ip not in interface.network:
+                        raise ValueError(
+                            f"{base}.clients[{index}].client_wg_tunnel_address must be inside "
+                            "wireguard_tunnel_cidr and cannot be the server address"
+                        )
+                    if str(client_interface.ip) in seen_addresses:
+                        raise ValueError(
+                            f"{base}.clients contains duplicate client_wg_tunnel_address "
+                            f"'{client_interface.with_prefixlen}'"
+                        )
+                    seen_addresses.add(str(client_interface.ip))
+                local_subnets = client.get("local_subnets", [])
+                if local_subnets is not None:
+                    if not isinstance(local_subnets, list):
+                        raise ValueError(f"{base}.clients[{index}].local_subnets must be a list")
+                    for cidr in local_subnets:
+                        try:
+                            network = ipaddress.ip_network(str(cidr), strict=False)
+                        except ValueError as exc:
+                            raise ValueError(
+                                f"{base}.clients[{index}].local_subnets must contain valid CIDRs"
+                            ) from exc
+                        if network.version != 4:
+                            raise ValueError(
+                                f"{base}.clients[{index}].local_subnets currently supports IPv4 CIDRs only"
+                            )
+                dns_values = client.get("dns", [])
+                if dns_values is not None:
+                    if not isinstance(dns_values, list):
+                        raise ValueError(f"{base}.clients[{index}].dns must be a list")
+                    for dns in dns_values:
+                        try:
+                            address = ipaddress.ip_address(str(dns))
+                        except ValueError as exc:
+                            raise ValueError(
+                                f"{base}.clients[{index}].dns must contain valid IPv4 addresses"
+                            ) from exc
+                        if address.version != 4:
+                            raise ValueError(
+                                f"{base}.clients[{index}].dns currently supports IPv4 only"
+                            )
 
 
 def _validate_ssh_jumphost(
