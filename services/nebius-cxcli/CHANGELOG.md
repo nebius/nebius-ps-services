@@ -7,9 +7,9 @@ All notable changes to this project are tracked here. This changelog follows
 ## [Unreleased]
 
 - Fixed `component add` wizard required-field discovery to use the CLI's
-  mockable module-metadata binding while strict validation still reads the real
-  runtime module contract, keeping tests deterministic across local and CI
-  environments.
+  mockable module-metadata binding for prompt-time and post-wizard no-write
+  checks, while strict validation still reads the real runtime module contract,
+  keeping tests deterministic across local and CI environments.
 - `deploy` now ends with a compact `Deployment summary` footer that separates
   validation PASS/FAIL, copy-paste commands such as WireGuard `wg-quick`,
   SSH `ProxyJump`, and GitOps bootstrap follow-ups, and important generated

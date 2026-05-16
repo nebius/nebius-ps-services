@@ -9813,6 +9813,7 @@ def _required_enabled_infra_field_issues(
     *,
     payload: dict[str, Any],
     infra_entries: tuple[ComponentEntry, ...],
+    include_runtime_required: bool = True,
 ) -> list[str]:
     issues: list[str] = []
     entry_by_id = {entry.id: entry for entry in infra_entries}
@@ -9850,7 +9851,7 @@ def _required_enabled_infra_field_issues(
         required_leaf_names = {
             _normalize_leaf_name(name) for name in module_required_variables(inspection_source)
         }
-        if entry is not None:
+        if include_runtime_required and entry is not None:
             required_leaf_names |= _runtime_required_input_leaf_names(entry)
         required_leaf_names |= _conditionally_required_input_leaf_names(
             entry=entry,
@@ -9884,6 +9885,7 @@ def _wizard_followup_required_field_issues(
             _required_enabled_infra_field_issues(
                 payload=payload,
                 infra_entries=infra_entries,
+                include_runtime_required=False,
             )
         )
     )
