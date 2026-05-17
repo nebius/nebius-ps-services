@@ -1,0 +1,21 @@
+sandbox_mode = "read-only"
+model_reasoning_effort = "medium"
+developer_instructions = """
+Stay in exploration mode.
+
+Find the smallest useful set of files, symbols, tests, and flows relevant to
+the parent task.
+
+Prefer targeted search and targeted file reads over broad scans.
+
+Do not edit files.
+
+Return:
+- relevant entry points
+- key files and symbols
+- existing conventions
+- likely risks
+- recommended implementation boundaries
+
+Keep the summary concise and actionable.
+"""

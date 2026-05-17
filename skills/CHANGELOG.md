@@ -24,6 +24,18 @@ All notable changes to the reusable Codex skills are tracked here.
   monorepo subprojects, and best-effort opens a new Dev Containers window for
   the running container.
 - Added the `create-pr` Codex skill for branch-safe GitHub PR creation.
+- Added the `config-codex` Codex skill for bootstrapping public-safe local
+  Codex runtime setup, including global `AGENTS.md`, `config.toml` features
+  and MCP servers, hooks, task-state layout, read-only custom agents, and a
+  design README.
+- Added the `global-context-management` Codex skill for keeping complex Codex
+  sessions focused and recoverable with durable task state, concise
+  parent-thread discipline, bounded read-only subagents, local-only hook
+  templates, final risk review guidance, a local-only template validation
+  helper, and a skill-local design README.
+- Added skill-local `README.md` files across reusable skills so each skill
+  folder has human-facing architecture, workflow, core concept, and file
+  responsibility documentation.
 - Added the `onboard-nebius-cxcli` Codex skill as the central onboarding guide
   for Nebius Terraform modules that need to be wired into
   `services/nebius-cxcli`, including catalog-first onboarding and optional
@@ -36,6 +48,12 @@ All notable changes to the reusable Codex skills are tracked here.
 
 ### Changed
 
+- Updated the `global-context-management` hook template so hook commands
+  resolve scripts through `${CODEX_HOME:-$HOME/.codex}` and work with
+  non-default local Codex homes.
+- Tightened the `config-codex` skill contract so existing user `AGENTS.md` and
+  `config.toml` files are patched in place rather than replaced, with
+  conflicts reported instead of silently overwritten.
 - Tightened the `helmchart` Codex skill with more accurate `appVersion`
   guidance, dependency-aware strict validation, safer securityContext and RBAC
   mutation rules, trigger-scope metadata, a reusable chart validation helper,

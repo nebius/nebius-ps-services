@@ -1,0 +1,98 @@
+#:schema https://developers.openai.com/codex/config-schema.json
+#
+# Public-safe Codex config template.
+# Replace {{CODEX_HOME}}, {{SKILLS_HOME}}, and {{PROJECT_ROOT}} when rendering
+# this file for a real user. Do not commit rendered local files.
+
+model = "gpt-5.5"
+model_reasoning_effort = "xhigh"
+plan_mode_reasoning_effort = "xhigh"
+approval_policy = "never"
+sandbox_mode = "danger-full-access"
+web_search = "live"
+personality = "pragmatic"
+
+project_doc_max_bytes = 65536
+tool_output_token_limit = 12000
+
+[features]
+apps = true
+shell_tool = true
+shell_snapshot = true
+unified_exec = true
+hooks = true
+multi_agent = true
+memories = true
+fast_mode = true
+skill_mcp_dependency_install = true
+
+[agents]
+max_threads = 4
+max_depth = 1
+
+[agents.repo_mapper]
+description = "Read-only codebase explorer for relevant files, symbols, execution paths, dependencies, and conventions."
+nickname_candidates = ["Mapper", "Pathfinder", "Scout"]
+config_file = "agents/repo_mapper.toml"
+
+[agents.test_strategist]
+description = "Read-only verification planner for tests, fixtures, CI commands, local commands, and validation gaps."
+nickname_candidates = ["Verifier", "Test Scout", "Checkmate"]
+config_file = "agents/test_strategist.toml"
+
+[agents.risk_reviewer]
+description = "Read-only reviewer focused on correctness, regressions, security, compatibility, edge cases, and missing tests."
+nickname_candidates = ["Reviewer", "Sentinel", "Auditor"]
+config_file = "agents/risk_reviewer.toml"
+
+[history]
+persistence = "save-all"
+
+[sandbox_workspace_write]
+network_access = true
+writable_roots = ["{{CODEX_HOME}}/task-state"]
+
+[[skills.config]]
+path = "{{SKILLS_HOME}}/global-context-management"
+enabled = true
+
+[[skills.config]]
+path = "{{SKILLS_HOME}}/config-codex"
+enabled = true
+
+[mcp_servers.context7]
+command = "npx"
+args = ["-y", "@upstash/context7-mcp@latest"]
+env_vars = ["CONTEXT7_API_KEY"]
+
+[mcp_servers.playwright]
+command = "npx"
+args = ["-y", "@playwright/mcp@latest"]
+
+[mcp_servers.terraform]
+command = "docker"
+args = ["run", "-i", "--rm", "hashicorp/terraform-mcp-server"]
+
+[mcp_servers.markitdown]
+command = "uvx"
+args = ["markitdown-mcp==0.0.1a4"]
+startup_timeout_sec = 30.0
+
+[mcp_servers.microsoftdocs]
+url = "https://learn.microsoft.com/api/mcp"
+
+[mcp_servers.github]
+url = "https://api.githubcopilot.com/mcp/"
+bearer_token_env_var = "GITHUB_TOKEN"
+
+[mcp_servers.openaiDeveloperDocs]
+url = "https://developers.openai.com/mcp"
+
+[apps._default]
+enabled = true
+
+[projects."{{PROJECT_ROOT}}"]
+trust_level = "trusted"
+
+[projects."{{CODEX_HOME}}"]
+trust_level = "trusted"

@@ -1,0 +1,28 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CODEX_HOME:-$HOME/.codex}/hooks/session_start_context.py\"",
+            "timeout": 10,
+            "statusMessage": "Loading global context policy"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CODEX_HOME:-$HOME/.codex}/hooks/user_prompt_context.py\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

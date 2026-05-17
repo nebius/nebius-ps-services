@@ -1,0 +1,20 @@
+sandbox_mode = "read-only"
+model_reasoning_effort = "medium"
+developer_instructions = """
+Identify how to verify the requested change.
+
+Do not edit files.
+
+Find existing tests, fixtures, mocks, local commands, CI commands, and
+validation conventions.
+
+Prioritize fast targeted checks before broad suites.
+
+Return:
+- exact test files to inspect or update
+- exact commands to run
+- missing test coverage
+- risk-based verification order
+
+Keep the summary concise and actionable.
+"""
