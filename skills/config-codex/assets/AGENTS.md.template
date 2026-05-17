@@ -1,0 +1,128 @@
+# Global AGENTS.md
+
+## Purpose
+
+- AGENTS.md is intended as a predictable place to give an agent persistent
+  context and rules that are always on.
+- Keep this file minimal and stable.
+
+## What Belongs Here
+
+- Conventions that apply to most tasks.
+- Security and publication guardrails.
+- Stable coding and review preferences.
+- Global context-management routing.
+- Skill-routing policy.
+
+## What Does Not Belong Here
+
+- On-demand workflows, long step-by-step recipes, or task-specific templates.
+- Raw logs, broad command output, stack traces, or temporary notes.
+- Tool or project-specific scripts and implementations.
+
+## Global Decisions
+
+- Default policy for logic, API, and CLI behavior changes is no legacy
+  compatibility layer and no backward-compatibility shims.
+- When behavior changes, prefer fail-fast behavior and a single canonical path
+  instead of dual old/new code paths.
+- Keep legacy flags, aliases, deprecated branches, migration shims, and
+  compatibility wrappers only when the user explicitly requests them.
+- When making code changes, also update relevant design docs, `README.md`, and
+  the `[Unreleased]` section of `CHANGELOG.md` in the same turn when those
+  files exist and are relevant.
+
+## Security and Publication
+
+- Do not publish or commit any of the following to public repositories or
+  public channels:
+  - API keys, tokens, certificates, or other secrets.
+  - Private endpoints, internal hostnames, or non-public URLs.
+  - Internal confidential materials or customer data.
+  - Proprietary scripts or automation that touches internal infrastructure.
+  - Content copied from internal repos or docs that are not explicitly
+    open-sourced.
+- Never print, persist, or copy secrets into generated files, examples, logs,
+  documentation, task-state files, or final responses.
+- Codex skills should remain public, generic, and reusable, using placeholders
+  for sensitive or environment-specific values.
+
+## Skills
+
+A skill is a set of local instructions to follow that is stored in a
+`SKILL.md` file.
+
+- Skills are discovered dynamically from installed skill directories; do not
+  maintain a static list of all skills in this file.
+- Use a skill for repeatable workflows that should not bloat AGENTS.md.
+- Scripts in skills are reference-only by default. Execute scripts only when
+  the user explicitly requests execution and begins the request with Run,
+  Execute, or an equivalent instruction.
+
+### Skill Auto-Routing
+
+- For non-trivial planning, implementation, debugging, refactoring, migration,
+  architecture, review, testing, CI failure, or multi-file coding tasks, use
+  the `global-context-management` skill.
+- For Codex runtime setup, config, hooks, custom agents, or `$CODEX_HOME`
+  layout work, use the `config-codex` skill.
+- For any request to create, update, fix, or standardize `.gitignore`, always
+  use the `gitignore` skill.
+- For any request to create, refactor, review, or harden shell scripts, Bash,
+  or shell CLI automation, always use the `shell-scripting` skill.
+- For any request to lint, auto-fix, or standardize Shell, Markdown, or Python
+  code quality, always use the `linter` skill.
+- If multiple skill-routing rules apply, use all relevant skills and keep scope
+  minimal.
+- Explicit user requests with `/skill` or `$skill` take precedence.
+- After each pass of code changes, apply the `align` skill.
+
+## Context Management
+
+- Use the durable task-state path injected by global hooks. Do not create
+  repo-local task-state files unless explicitly requested.
+- Keep the parent thread focused on objective, constraints, decisions, current
+  plan, changed files, verification status, risks, and final answer.
+- Keep raw logs, broad file listings, abandoned attempts, broad environment
+  dumps, secrets, customer data, and large copied documentation blocks out of
+  the parent thread.
+- Use bounded read-only subagents for noisy exploration when useful, and use a
+  read-only risk review before finalizing non-trivial changes.
+
+## Memory Policy
+
+- Use Codex memories for stable recurring preferences and repeated
+  project-independent facts.
+- Do not rely on memories for hard requirements. Hard requirements belong in
+  source-controlled project files, tests, CI configuration, AGENTS.md, explicit
+  user instructions, or task-state files.
+- Do not store secrets, private URLs, customer data, or temporary task details
+  in memory.
+
+## Implementation Policy
+
+- Before editing when a task affects multiple files or behavior is unclear,
+  identify the smallest change that satisfies the objective, likely files to
+  change, relevant tests or commands, risks, and rollback points.
+- During implementation, prefer targeted reads over broad scans, implement in
+  small coherent patches, follow existing project conventions, and avoid new
+  dependencies unless necessary.
+- Inspect the diff before running broad checks.
+- Run the narrowest relevant tests first, then broader lint, type, or test
+  commands when appropriate.
+- If tests cannot be run, explain exactly why and provide the command that
+  should be run.
+
+## Vendor Documentation
+
+- For technology, architecture, product, or design questions, verify
+  vendor-specific behavior against official vendor documentation.
+- Do not infer vendor-specific behavior when official documentation is
+  available.
+- If vendor behavior cannot be confirmed from authoritative sources, state that
+  explicitly.
+
+## Final Response Policy
+
+- For code changes, end with a concise summary, files changed, verification
+  performed, and remaining risks or follow-ups.

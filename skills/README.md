@@ -4,6 +4,11 @@ This folder contains public, reusable Codex skills for common engineering
 workflows. Each skill lives in its own folder and is discovered by the presence
 of `SKILL.md`.
 
+This root README is the concise index and install guide. Each skill folder also
+has a local `README.md` that explains what the skill does, its architecture,
+core concepts, workflow, and important files. `SKILL.md` remains the runtime
+instruction file Codex loads when the skill is used.
+
 For skill-specific release notes, see [CHANGELOG.md](CHANGELOG.md).
 
 ## Included Skills
@@ -12,7 +17,9 @@ For skill-specific release notes, see [CHANGELOG.md](CHANGELOG.md).
 - Skill folder alignment and validation: `align-skill`
 - Disposable Ubuntu project container setup: `attach-ubuntu`
 - Branch-safe and conflict-free GitHub pull request creation: `create-pr`
+- Public-safe local Codex runtime configuration: `config-codex`
 - GitHub Actions authoring and review: `github-workflows`
+- Global context management for long Codex tasks: `global-context-management`
 - Stack-aware `.gitignore` generation and cleanup: `gitignore`
 - Helm chart hardening and validation: `helmchart`
 - Shell, Markdown, and Python linting: `linter`
@@ -106,12 +113,28 @@ PRs, avoid duplicate PRs for the same head branch, preserve one PR per branch,
 stage complete monorepo local work with `git add -A` when committing current
 dirty changes, and report readiness plus manual merge order.
 
+### `config-codex`
+
+`config-codex` bootstraps or aligns a user's local Codex runtime setup from
+public-safe templates. Use it for `$CODEX_HOME` layout, global `AGENTS.md`
+policy, `config.toml` features and MCP servers, hooks, task-state directories,
+custom read-only agents, and validation without copying personal paths or
+secrets into a public repository.
+
 ### `github-workflows`
 
 `github-workflows` is the repository workflow skill for creating, reviewing,
 and standardizing GitHub Actions. Use it for PR and merge CI, release
 automation, container publication, merge-bot safety, permissions hardening, and
 monorepo-friendly workflow structure.
+
+### `global-context-management`
+
+`global-context-management` keeps complex Codex sessions focused and
+recoverable by using durable task-state files, limiting noisy parent-thread
+exploration, delegating bounded read-only investigation when useful, and
+reviewing risk before final answers. Its public skill files stay generic; local
+hooks, custom agent config, and task-state files belong under `$CODEX_HOME`.
 
 ### `gitignore`
 

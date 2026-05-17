@@ -1,0 +1,6 @@
+interface:
+  display_name: "Global Context Management"
+  short_description: "Keep long Codex tasks focused and recoverable"
+  default_prompt: "Use $global-context-management to keep this complex Codex task focused: maintain durable task state, delegate bounded read-only exploration when useful, keep noisy output out of the parent thread, validate narrowly first, and review risk before the final answer."
+policy:
+  allow_implicit_invocation: true
