@@ -229,8 +229,9 @@ Bundled infra components currently align like this:
   for MK8s, not a Soperator-specific path. An NFS instance can bind explicitly
   to one MK8s target with `inputs.kubernetes_target_ref`; a single unscoped NFS
   instance can also back every enabled MK8s target. Once cxcli resolves an NFS
-  export for a target, it ensures the target-scoped `csi-driver-nfs` app row
-  exists. Initial render can install the driver before Terraform state exists;
+  export for a target, config normalization persists the target-scoped
+  `csi-driver-nfs` app row. Initial render can install the driver before
+  Terraform state exists;
   after Terraform apply, deploy refreshes Flux with the NFS module `server_ip`,
   `export_path`, and `mount_options` outputs so the StorageClass points at the
   actual VM export. This component is deliberately a single-VM NFS bridge, not

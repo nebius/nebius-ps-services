@@ -2234,78 +2234,6 @@ class _ComponentRemoveTarget:
     instance_id: str
 
 
-def _resolve_component_targets(
-    *,
-    action: str,
-    tokens: list[str],
-    infra_entries: tuple[ComponentEntry, ...],
-    app_entries: tuple[ComponentEntry, ...],
-    existing_infra: set[str],
-    existing_apps: set[str],
-) -> tuple[set[str], set[str], tuple[str, ...]]:
-    infra_lookup = {entry.id: entry for entry in infra_entries}
-    app_lookup = {entry.id: entry for entry in app_entries}
-    lookup = {**infra_lookup, **app_lookup}
-    eligible_ids = (
-        {entry.id for entry in infra_entries if entry.id not in existing_infra}
-        | {entry.id for entry in app_entries if entry.id not in existing_apps}
-        if action == "add"
-        else {entry.id for entry in infra_entries if entry.id in existing_infra}
-        | {entry.id for entry in app_entries if entry.id in existing_apps}
-    )
-
-    normalized = [token.strip().lower() for token in tokens if token.strip()]
-    if len(normalized) == 1:
-        if normalized[0] == "none":
-            return set(), set(), ()
-        if normalized[0] == "all":
-            return (
-                {entry_id for entry_id in eligible_ids if entry_id in infra_lookup},
-                {entry_id for entry_id in eligible_ids if entry_id in app_lookup},
-                (),
-            )
-
-    resolved_infra: set[str] = set()
-    resolved_apps: set[str] = set()
-    skipped: list[str] = []
-    for token in normalized:
-        scope: ComponentScope | None = None
-        component_id = token
-        if ":" in token:
-            scope_raw, component_raw = token.split(":", maxsplit=1)
-            scope = cast(ComponentScope, scope_raw)
-            if scope not in {"infra", "apps"}:
-                raise RuntimeError(
-                    f"Invalid component selector '{token}'. Use '<component-id>' or 'infra:<id>' / 'apps:<id>'."
-                )
-            component_id = component_raw.strip().lower()
-
-        entry = lookup.get(component_id)
-        if entry is None:
-            available = ", ".join(sorted(lookup))
-            raise RuntimeError(f"Unknown component id '{component_id}'. Available ids: {available}")
-        if scope is not None and entry.scope != scope:
-            raise RuntimeError(
-                f"Component selector '{token}' targets scope '{scope}', but '{component_id}' is declared under '{entry.scope}'."
-            )
-        currently_selected = (
-            component_id in existing_infra
-            if entry.scope == "infra"
-            else component_id in existing_apps
-        )
-        if action == "add" and currently_selected:
-            skipped.append(component_id)
-            continue
-        if action == "remove" and not currently_selected:
-            skipped.append(component_id)
-            continue
-        if entry.scope == "infra":
-            resolved_infra.add(component_id)
-        else:
-            resolved_apps.add(component_id)
-    return resolved_infra, resolved_apps, tuple(sorted(set(skipped)))
-
-
 def _parse_scoped_component_selector(token: str) -> tuple[ComponentScope | None, str]:
     normalized = token.strip().lower()
     if ":" not in normalized:
@@ -20600,7 +20528,6 @@ def render_command(
         config, paths = _load_runtime_context(config_path)
         materialize_mk8s_gpu_app_values(config)
         materialize_soperator_companion_app_values(config)
-        ensure_nfs_csi_app_rows(config)
         materialize_observability_infra_values(config)
         materialize_observability_app_values(config)
         materialize_mysterybox_eso_app_values(config)

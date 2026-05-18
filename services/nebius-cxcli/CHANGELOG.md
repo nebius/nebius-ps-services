@@ -53,7 +53,9 @@ All notable changes to this project are tracked here. This changelog follows
   refreshes Flux after Terraform outputs exist so the generated StorageClass is
   sourced from the NFS VM endpoint, independent of Soperator. Multiple NFS
   exports can bind explicitly with `inputs.kubernetes_target_ref`; a single
-  unscoped NFS export can serve every enabled MK8s target.
+  unscoped NFS export can serve every enabled MK8s target. Direct `config.yaml`
+  edits persist the auto-enabled `csi-driver-nfs` app row during config
+  normalization.
 - Fixed `component add` wizard required-field discovery to use the CLI's
   mockable module-metadata binding for prompt-time and post-wizard no-write
   checks, while strict validation still reads the real runtime module contract,

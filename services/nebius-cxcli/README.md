@@ -1070,13 +1070,14 @@ Wizard field behavior:
   `inputs.kubernetes_target_ref`, cxcli binds that export to the named MK8s
   target. When there is exactly one enabled `nfs` instance, cxcli can bind the
   same export to every enabled MK8s target automatically. In both cases cxcli
-  auto-enables the bundled `csi-driver-nfs` app for the target. Terraform
-  creates the NFS VM and export first; after Terraform outputs exist, deploy
-  refreshes Flux so the NFS CSI Helm release creates a StorageClass named
-  `nfs-rwx-retain` with `server`, `share`, and `mountOptions` sourced from the
-  NFS module outputs. Normal workloads should create namespace-local RWX PVCs
-  from that StorageClass. If multiple namespaces intentionally need the same
-  files, create one static PV/PVC pair per namespace and point those PVs at the
+  auto-enables and persists the bundled `csi-driver-nfs` app for the target.
+  Terraform creates the NFS VM and export first; after Terraform outputs
+  exist, deploy refreshes Flux so the NFS CSI Helm release creates a
+  StorageClass named `nfs-rwx-retain` with `server`, `share`, and
+  `mountOptions` sourced from the NFS module outputs. Normal workloads should
+  create namespace-local RWX PVCs from that StorageClass. If multiple
+  namespaces intentionally need the same files, create one static PV/PVC pair
+  per namespace and point those PVs at the
   same NFS export path; Kubernetes PVCs remain namespace-local, so a single PVC
   is not the cross-namespace sharing primitive.
 - The VM-backed `nfs` component is intentionally not a high-availability NFS

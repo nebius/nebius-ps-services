@@ -949,6 +949,38 @@ def test_nfs_component_auto_enables_csi_driver_for_matching_mk8s_target() -> Non
     ]
 
 
+def test_load_config_persists_nfs_csi_app_row_for_direct_config_edit(
+    tmp_path: Path,
+) -> None:
+    config_path = _project_config_path(tmp_path)
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+
+    payload = _starter_payload(selected_infra={"mk8s", "nfs"}, selected_apps=set())
+    mk8s = _infra_component_row(payload, "mk8s")
+    _align_infra_resource_name(payload, mk8s, "cluster1")
+    nfs = _infra_component_row(payload, "nfs")
+    _align_infra_resource_name(payload, nfs, "nfs-cluster1")
+    nfs_inputs = nfs.setdefault("inputs", {})
+    nfs_inputs["kubernetes_target_ref"] = "cluster1"
+    nfs_inputs["ssh_user_name"] = "ubuntu"
+    payload["apps"]["charts"] = []
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    config = load_config(config_path, persist_normalized=True)
+    paths = resolve_project_paths(config_path)
+    render_project(config, paths, source_profile=SourceProfile.PORTABLE)
+
+    persisted = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    charts = persisted["apps"]["charts"]
+    assert [chart["id"] for chart in charts] == ["csi-driver-nfs"]
+    assert charts[0]["instance_id"] == "cluster1"
+    assert charts[0]["enabled"] is True
+    assert "target_ref" not in charts[0]
+    assert (
+        _target_flux_dir(paths, "cluster1") / "helmrelease-storage-csi-driver-nfs.yaml"
+    ).exists()
+
+
 def test_render_local_soperator_chart_source_writes_static_manifest(tmp_path: Path) -> None:
     config_path = _project_config_path(tmp_path)
     config_path.parent.mkdir(parents=True, exist_ok=True)
