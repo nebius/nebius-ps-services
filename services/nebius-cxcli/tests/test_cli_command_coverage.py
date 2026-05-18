@@ -306,7 +306,11 @@ def test_validate_command_runs_strict_checks_by_default(
 def test_validate_command_rejects_removed_strict_flag(
     tmp_path: Path,
 ) -> None:
-    result = runner.invoke(cli.app, ["validate", "--strict", str(tmp_path / "config.yaml")])
+    result = runner.invoke(
+        cli.app,
+        ["validate", "--strict", str(tmp_path / "config.yaml")],
+        terminal_width=160,
+    )
 
     assert result.exit_code != 0
     assert "No such option: --strict" in _plain_output(result.output)
