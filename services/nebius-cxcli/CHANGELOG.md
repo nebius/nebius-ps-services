@@ -6,6 +6,56 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Changed `component add` infra identity to be name-driven. Interactive adds
+  for scalar named infra modules now prompt for the resource name first,
+  defaulting to the next unique value such as `vm-2`, then derive and persist
+  `instance_id` from that normalized name. Non-interactive selectors such as
+  `infra:vm@worker-vm` now seed both `instance_id: worker-vm` and the matching
+  scalar resource-name input.
+- Fixed `component add` live UX so interactive infra adds ask for the selected
+  resource name before provider-backed Nebius scope checks, and bounded
+  provider-backed Nebius SDK requests with
+  `NEBIUS_CXCLI_PROVIDER_REQUEST_TIMEOUT_SECONDS` or a 15-second default.
+- Fixed infra-only `component add` so it no longer resolves Helm chart
+  dependencies for already-enabled app rows before adding the infra component.
+- Fixed no-op duplicate `component add` selectors so skipped exact rows do not
+  trigger provider-backed Nebius scope validation.
+- Changed `component list/add/remove` to use explicit `--config <config.yaml>`
+  targeting, with selectors first for `component add` and `component remove`.
+  This prevents selectors such as `infra:vm` from being interpreted as config
+  paths, and the command help/docs now include copy-paste examples.
+- Aligned command help/docs around name-driven infra identity: `component add`
+  presents suffixes as resource names or target ids, `component remove`
+  presents removal selectors as row ids/resource names/target ids, and
+  `--target` help explains that MK8s target ids are normalized cluster names
+  persisted as `instance_id`.
+- Fixed CI-facing command-contract regressions so incomplete interactive
+  `create` reruns preserve an existing project when required resource-name
+  prompts are abandoned, `component list/add/remove` emit an explicit missing
+  `--config` error before treating selectors as paths, and
+  `validate-dashboards --target` help names the target cluster `instance_id`.
+- Clarified in docs and catalog wording that the VM-backed `nfs` component is
+  a non-HA RWX bridge intended for tests, demos, short-lived environments, or
+  explicit NFS compatibility cases, and that production or long-lived MK8s RWX
+  storage should use direct Nebius SFS instead.
+- Refactored the bundled `nfs` component contract to use the shared
+  VM-module-backed path: the catalog now uses `wizard_profile: nfs`, the NFS
+  Terraform module delegates Compute instance/boot/data disk ownership to
+  `modules/vm`, and the old nested `data_disk` object is replaced by
+  first-class `data_disk_*` inputs with no compatibility shim.
+- Added guided single secondary-data-disk prompts for VM-style modules that
+  expose first-class `data_disk_*` inputs. The wizard now asks enabled/type/size
+  directly, uses the shared Compute disk-type choices, and only offers explicit
+  data-disk encryption when the selected disk type supports it. High-performance
+  data-disk sizes are aligned to the disk type's declared allocation unit.
+- Added a general VM-backed NFS-to-MK8s path: enabling `infra:nfs` for an MK8s
+  target now auto-enables the upstream `csi-driver-nfs` Helm app and deploy
+  refreshes Flux after Terraform outputs exist so the generated StorageClass is
+  sourced from the NFS VM endpoint, independent of Soperator. Multiple NFS
+  exports can bind explicitly with `inputs.kubernetes_target_ref`; a single
+  unscoped NFS export can serve every enabled MK8s target. Direct `config.yaml`
+  edits persist the auto-enabled `csi-driver-nfs` app row during config
+  normalization.
 - Fixed `component add` wizard required-field discovery to use the CLI's
   mockable module-metadata binding for prompt-time and post-wizard no-write
   checks, while strict validation still reads the real runtime module contract,
@@ -125,7 +175,7 @@ All notable changes to this project are tracked here. This changelog follows
   `component_sources.yaml` has a concise handoff entry without component-specific
   Python report code.
 - Tightened `wireguard` and `ssh-jumphost` day-2 commands so the current
-  `config.yaml` must still enable the same component instance present in the
+  `config.yaml` must still enable the same component row present in the
   rendered/deployed generated bundle before cxcli reads Terraform outputs or
   SSHes to the VM.
 - Tightened app target handling: enabled Helm app rows now require an enabled
@@ -602,7 +652,7 @@ All notable changes to this project are tracked here. This changelog follows
   the active item is labeled as `<target-id>: <folder>/<dashboard>`. Output now
   separates dashboard source provenance, validation checks, grouped warnings,
   and errors so informational Grafana.com-import provenance is not shown as a
-  warning. It supports `--target <instance-id>` for target-scoped Grafana rows
+  warning. It supports `--target <target-id>` for target-scoped Grafana rows
   in multi-target configs, resolves the target MK8s cluster ID from generated
   Grafana status, generated inventory, or the persisted kube context, and
   scopes Metrics/Logs dashboard checks to that cluster so another
@@ -636,7 +686,7 @@ All notable changes to this project are tracked here. This changelog follows
   credentials are grouped under one subsection per target with shared notes
   separated from target-specific links.
 - Scoped deploy validation summaries and deploy-report validation sections to
-  the selected target for `deploy --target <instance-id>`, so multi-target runs
+  the selected target for `deploy --target <target-id>`, so multi-target runs
   no longer show unrelated target validations as `NOT RUN` when they were
   intentionally outside the run. `--all-targets` still reports every selected
   target.
@@ -753,10 +803,11 @@ All notable changes to this project are tracked here. This changelog follows
   rejects `apps.charts[].target_ref`, rejects target-bound app rows whose
   `instance_id` does not reference an enabled cluster target, and rejects root
   Kubernetes deploy settings instead of pruning or migrating them.
-- Tightened `component add` idempotence. The command now skips already-enabled
-  exact selectors, including duplicate `<chart-id>@<target-id>` target-bound
-  app adds, and adding another infra or app-only instance requires an explicit
-  new `<component-id>@<new-instance-id>` selector.
+- Tightened `component add` idempotence. Non-interactive mode skips
+  already-enabled exact selectors, including duplicate `<chart-id>@<target-id>`
+  target-bound app adds; adding another infra instance interactively can now
+  reuse the bare selector, while non-interactive duplicate infra/app-only rows
+  still require an explicit named `<component-id>@<resource-name>` selector.
 - Tightened day-2 component target-binding edits. `component add` now
   target-binds existing app-only chart rows when the first built-in cluster
   target is added and the mapping is unambiguous, and `component remove` now
@@ -765,9 +816,9 @@ All notable changes to this project are tracked here. This changelog follows
 - Clarified the `component add` / `component remove` selector contract in
   CLI help, README, and design docs. The positional argument is now described
   as a component selector, matching the supported `infra:<id>`, `apps:<id>`,
-  `all`, `none`, bare instance id for remove, and
-  `<component-id>@<instance-id>` forms that edit `config.yaml` rows from the
-  active `component_sources.yaml` catalog.
+  `all`, `none`, bare row id for remove, and
+  `<component-id>@<resource-name-or-target-id>` forms that edit `config.yaml`
+  rows from the active `component_sources.yaml` catalog.
 - Clarified day-2 component edit output and docs so `component add` and
   `component remove` state that they update only `config.yaml`; existing
   `generated/` artifacts and live resources remain unchanged until `render` and
@@ -982,7 +1033,7 @@ All notable changes to this project are tracked here. This changelog follows
   interactive wizard, field-level `q` consistently revisits the previous
   answered field, and interactive `component add` can complete an infra-only add
   without selecting an app component. Repeated infra component adds, including
-  `mk8s@<instance-id>`, are documented as the canonical way to provision
+  `mk8s@<resource-name>`, are documented as the canonical way to provision
   multiple modules of the same type in one project; infra-only deploys now skip
   the optional kubeconfig refresh instead of failing when multiple
   handoff-capable MK8s instances are enabled. Remote Helm chart packages that
@@ -997,7 +1048,7 @@ All notable changes to this project are tracked here. This changelog follows
   render writes one flat Flux subtree per target under
   `generated/flux/targets/<target-id>/`, the generated manifest records
   `deploy.targets[]`, and `deploy`, `flux apply`, `flux destroy`, and
-  `flux bootstrap` accept `--target <instance-id>` / `--all-targets` instead of
+  `flux bootstrap` accept `--target <target-id>` / `--all-targets` instead of
   relying on implicit cluster order or a single global kubeconfig context.
 - Added a source-driven observability stack contract. Deploy observability is
   a first-class setting that stays disabled by default; when enabled for an

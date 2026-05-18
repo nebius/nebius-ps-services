@@ -16,9 +16,17 @@ from .component_sources import (
     load_component_sources,
 )
 from .provider_options import ProviderOptionLookup
+from .runtime_introspection import module_variable_names
 
 _PRESET_RESOURCE_RE = re.compile(r"(?P<value>\d+)(?P<kind>gpu|vcpu|gb)")
-_VM_STYLE_COMPONENT_IDS = frozenset({"vm", "ssh-jumphost", "wireguard-gw"})
+_VM_STYLE_BOOT_DISK_INPUTS = frozenset(
+    {
+        "platform",
+        "preset",
+        "boot_disk_size_gib",
+        "boot_disk_type",
+    }
+)
 
 
 class ComputeBootDiskRecommendationError(ValueError):
@@ -85,6 +93,22 @@ def compute_boot_disk_type_choices() -> tuple[ComputeBootDiskTypeChoice, ...]:
     return _boot_disk_settings().disk_types
 
 
+def _vm_style_component_ids() -> frozenset[str]:
+    ids: set[str] = set()
+    try:
+        modules = load_component_sources().tf_modules
+    except Exception:
+        return frozenset()
+    for module in modules:
+        source = str(module.metadata_source or module.source or "").strip()
+        if not source:
+            continue
+        variable_names = set(module_variable_names(source))
+        if variable_names >= _VM_STYLE_BOOT_DISK_INPUTS:
+            ids.add(module.module)
+    return frozenset(ids)
+
+
 def compute_boot_disk_type_supports_explicit_encryption(disk_type: str) -> bool:
     normalized = _as_text(disk_type).upper()
     for choice in compute_boot_disk_type_choices():
@@ -107,9 +131,17 @@ def _boot_disk_type_allocation_unit_gib(disk_type: str) -> int:
     )
 
 
+def compute_disk_type_allocation_unit_gib(disk_type: str) -> int:
+    return _boot_disk_type_allocation_unit_gib(disk_type)
+
+
 def _round_up_to_allocation_unit(value: int, *, disk_type: str) -> int:
     unit = _boot_disk_type_allocation_unit_gib(disk_type)
     return max(unit, int(math.ceil(value / unit) * unit))
+
+
+def align_compute_disk_size_to_allocation_unit(size_gib: int, *, disk_type: str) -> int:
+    return _round_up_to_allocation_unit(size_gib, disk_type=disk_type)
 
 
 def _parse_preset_resources_from_name(
@@ -155,9 +187,7 @@ def _resolved_preset_resources(
 
 def _mk8s_override_boot_disk(inputs: dict[str, Any], *, field_scope: str) -> dict[str, Any]:
     override_key = (
-        "mk8s_gpu_node_group_overrides"
-        if field_scope == "gpu"
-        else "mk8s_cpu_node_group_overrides"
+        "mk8s_gpu_node_group_overrides" if field_scope == "gpu" else "mk8s_cpu_node_group_overrides"
     )
     overrides = inputs.get(override_key)
     boot_disk = (
@@ -168,9 +198,7 @@ def _mk8s_override_boot_disk(inputs: dict[str, Any], *, field_scope: str) -> dic
 
 def _mk8s_effective_platform(inputs: dict[str, Any], *, field_scope: str) -> str:
     override_key = (
-        "mk8s_gpu_node_group_overrides"
-        if field_scope == "gpu"
-        else "mk8s_cpu_node_group_overrides"
+        "mk8s_gpu_node_group_overrides" if field_scope == "gpu" else "mk8s_cpu_node_group_overrides"
     )
     platform_key = "gpu_nodes_platform" if field_scope == "gpu" else "cpu_nodes_platform"
     overrides = inputs.get(override_key)
@@ -184,9 +212,7 @@ def _mk8s_effective_platform(inputs: dict[str, Any], *, field_scope: str) -> str
 
 def _mk8s_effective_preset(inputs: dict[str, Any], *, field_scope: str) -> str:
     override_key = (
-        "mk8s_gpu_node_group_overrides"
-        if field_scope == "gpu"
-        else "mk8s_cpu_node_group_overrides"
+        "mk8s_gpu_node_group_overrides" if field_scope == "gpu" else "mk8s_cpu_node_group_overrides"
     )
     preset_key = "gpu_nodes_preset" if field_scope == "gpu" else "cpu_nodes_preset"
     overrides = inputs.get(override_key)
@@ -198,9 +224,7 @@ def _mk8s_effective_preset(inputs: dict[str, Any], *, field_scope: str) -> str:
 
 def _mk8s_scope_enabled(inputs: dict[str, Any], *, field_scope: str) -> bool:
     override_key = (
-        "mk8s_gpu_node_group_overrides"
-        if field_scope == "gpu"
-        else "mk8s_cpu_node_group_overrides"
+        "mk8s_gpu_node_group_overrides" if field_scope == "gpu" else "mk8s_cpu_node_group_overrides"
     )
     count_key = "gpu_nodes_count_per_group" if field_scope == "gpu" else "cpu_nodes_count"
     if field_scope == "gpu" and not bool(inputs.get("gpu_enabled", False)):
@@ -221,7 +245,7 @@ def _mk8s_scope_enabled(inputs: dict[str, Any], *, field_scope: str) -> bool:
 def _component_field_scopes(component_id: str) -> tuple[str, ...]:
     if component_id == "mk8s":
         return ("cpu", "gpu")
-    if component_id in _VM_STYLE_COMPONENT_IDS:
+    if component_id in _vm_style_component_ids():
         return ("default",)
     return ()
 
@@ -232,9 +256,7 @@ def _boot_disk_fields(component_id: str, field_scope: str) -> tuple[str, str]:
             "gpu_nodes_boot_disk_size_gib"
             if field_scope == "gpu"
             else "cpu_nodes_boot_disk_size_gib",
-            "gpu_nodes_boot_disk_type"
-            if field_scope == "gpu"
-            else "cpu_nodes_boot_disk_type",
+            "gpu_nodes_boot_disk_type" if field_scope == "gpu" else "cpu_nodes_boot_disk_type",
         )
     return "boot_disk_size_gib", "boot_disk_type"
 
@@ -262,7 +284,9 @@ def _type_override_explicit(
 ) -> bool:
     if component_id != "mk8s":
         return False
-    return bool(_as_text(_path_value(_mk8s_override_boot_disk(inputs, field_scope=field_scope), "type")))
+    return bool(
+        _as_text(_path_value(_mk8s_override_boot_disk(inputs, field_scope=field_scope), "type"))
+    )
 
 
 def _resolved_first_class_disk_type(
@@ -686,8 +710,10 @@ __all__ = [
     "ComputeBootDiskContext",
     "ComputeBootDiskRecommendation",
     "ComputeBootDiskRecommendationError",
+    "align_compute_disk_size_to_allocation_unit",
     "compute_boot_disk_type_choices",
     "compute_boot_disk_type_supports_explicit_encryption",
+    "compute_disk_type_allocation_unit_gib",
     "materialize_compute_boot_disk_defaults",
     "refresh_compute_boot_disk_defaults",
     "resolve_compute_boot_disk_recommendation",

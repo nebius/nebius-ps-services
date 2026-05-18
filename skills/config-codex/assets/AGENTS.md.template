@@ -55,9 +55,12 @@ A skill is a set of local instructions to follow that is stored in a
 - Skills are discovered dynamically from installed skill directories; do not
   maintain a static list of all skills in this file.
 - Use a skill for repeatable workflows that should not bloat AGENTS.md.
-- Scripts in skills are reference-only by default. Execute scripts only when
-  the user explicitly requests execution and begins the request with Run,
-  Execute, or an equivalent instruction.
+- Scripts in skills may be executed for read-only inspection or validation
+  when they do not modify files, services, external systems, credentials, or
+  persistent state.
+- Execute scripts that make changes only when the user explicitly requests
+  execution and begins the request with Run, Execute, or an equivalent
+  instruction.
 
 ### Skill Auto-Routing
 
@@ -79,15 +82,27 @@ A skill is a set of local instructions to follow that is stored in a
 
 ## Context Management
 
-- Use the durable task-state path injected by global hooks. Do not create
-  repo-local task-state files unless explicitly requested.
+- Read the durable task-state file injected by global hooks at task start,
+  resume, or after compaction when prior context may matter. Update it with
+  concise checkpoints, and do not create repo-local task-state files unless
+  explicitly requested.
 - Keep the parent thread focused on objective, constraints, decisions, current
   plan, changed files, verification status, risks, and final answer.
 - Keep raw logs, broad file listings, abandoned attempts, broad environment
   dumps, secrets, customer data, and large copied documentation blocks out of
   the parent thread.
-- Use bounded read-only subagents for noisy exploration when useful, and use a
-  read-only risk review before finalizing non-trivial changes.
+- Use bounded read-only subagents for noisy exploration when the user
+  explicitly requests delegation, or when a user-enabled local hook policy
+  injects that request, and subagents are available and useful. Use a
+  read-only risk review before finalizing non-trivial changes only when that
+  delegation is explicitly authorized and permitted.
+- When subagents are used, ask them for concise final summaries, wait for the
+  result, consolidate it in the parent thread, and close completed subagent
+  threads when close controls are available and no follow-up is needed.
+  With multiple subagents, close each completed handle as its terminal result
+  arrives, then continue waiting on the remaining handles.
+  Treat both `wait_agent` completions and asynchronous subagent completion
+  notifications as terminal results that should be consolidated and closed.
 
 ## Memory Policy
 

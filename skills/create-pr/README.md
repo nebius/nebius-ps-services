@@ -8,6 +8,8 @@ and GitHub steps.
 
 - Creates or reuses feature branches.
 - Keeps PR branches conflict-free against the base branch when possible.
+- Repairs safe branch-owned validation, build, lint, test, or GitHub check
+  failures before presenting PR creation as handled.
 - Opens or reuses GitHub pull requests.
 - Preserves explicit user-supplied PR titles and bodies.
 - Reports PR URLs, readiness, and merge order for multi-branch work.
@@ -22,6 +24,9 @@ Branch selection and base refresh
   |
   v
 Commit or reuse requested work
+  |
+  v
+Run focused validation and repair safe branch-owned failures
   |
   v
 Push branch
@@ -39,9 +44,12 @@ Report PR number, URL, and blockers
 2. Select or create the target branch.
 3. Commit requested local work when appropriate.
 4. Refresh against the base branch and handle safe conflicts.
-5. Push the branch.
-6. Open or reuse the PR with the requested title and body.
-7. Return PR details and remaining blockers.
+5. Run focused validation and repair safe branch-owned failures.
+6. Push the branch.
+7. Open or reuse the PR with the requested title and body.
+8. Keep repairing available branch-caused check failures when safe, or mark a
+   real blocker.
+9. Return PR details, validation state, and remaining blockers.
 
 ## Core Concepts
 
@@ -50,6 +58,8 @@ Report PR number, URL, and blockers
   unclear.
 - Use draft PRs for incomplete work when that better matches readiness.
 - Preserve one PR per branch.
+- Treat a known fixable branch-owned failure as unfinished PR creation, not as
+  a successful handoff with a link.
 
 ## Files
 

@@ -19,8 +19,25 @@ locals {
     )
   )
 
+  guided_data_disks = var.data_disk_enabled ? [
+    {
+      name                = coalesce(var.data_disk_name, "${var.name}-data-disk")
+      size_gib            = var.data_disk_size_gib
+      type                = upper(var.data_disk_type)
+      block_size_bytes    = var.data_disk_block_size_bytes
+      encryption_enabled  = var.data_disk_encryption_enabled
+      deletion_protection = var.data_disk_deletion_protection
+      attach_mode         = upper(var.data_disk_attach_mode)
+      device_id           = var.data_disk_device_id
+      labels              = var.data_disk_labels
+    }
+  ] : []
+
+  managed_data_disks = concat(local.guided_data_disks, var.data_disks)
+  data_disk_names    = [for disk in local.managed_data_disks : disk.name]
+
   data_disk_specs = {
-    for disk in var.data_disks : disk.name => {
+    for disk in local.managed_data_disks : disk.name => {
       name                = disk.name
       size_gib            = disk.size_gib
       type                = upper(try(disk.type, "NETWORK_SSD"))

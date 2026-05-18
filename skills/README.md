@@ -16,7 +16,7 @@ For skill-specific release notes, see [CHANGELOG.md](CHANGELOG.md).
 - End-to-end project alignment: `align`
 - Skill folder alignment and validation: `align-skill`
 - Disposable Ubuntu project container setup: `attach-ubuntu`
-- Branch-safe and conflict-free GitHub pull request creation: `create-pr`
+- Branch-safe GitHub pull request creation with safe check repair: `create-pr`
 - Public-safe local Codex runtime configuration: `config-codex`
 - GitHub Actions authoring and review: `github-workflows`
 - Global context management for long Codex tasks: `global-context-management`
@@ -76,10 +76,11 @@ that means:
 If those prerequisites are missing, the skill should stop and explain the
 blocker instead of guessing.
 
-Skill-bundled scripts are reference-only by default in this repository. Execute
-them only when the user explicitly starts the request with `Run` or `Execute`
-(or equivalent); otherwise read the script or report the command that would be
-used.
+Skill-bundled scripts may be executed for read-only inspection or validation
+when they do not modify files, services, external systems, credentials, or
+persistent state. Execute scripts that make changes only when the user
+explicitly starts the request with `Run` or `Execute` (or equivalent);
+otherwise read the script or report the command that would be used.
 
 ## Skill Details
 
@@ -109,9 +110,11 @@ testing on macOS with Docker Desktop and the Dev Containers extension.
 
 `create-pr` turns local work or named branches into GitHub pull requests
 without leaving new work on the default branch. It can prepare conflict-free
-PRs, avoid duplicate PRs for the same head branch, preserve one PR per branch,
-stage complete monorepo local work with `git add -A` when committing current
-dirty changes, and report readiness plus manual merge order.
+PRs, repair safe branch-owned validation or GitHub check failures before
+presenting the PR as handled, avoid duplicate PRs for the same head branch,
+preserve one PR per branch, stage complete monorepo local work with
+`git add -A` when committing current dirty changes, and report readiness plus
+manual merge order.
 
 ### `config-codex`
 
@@ -132,9 +135,15 @@ monorepo-friendly workflow structure.
 
 `global-context-management` keeps complex Codex sessions focused and
 recoverable by using durable task-state files, limiting noisy parent-thread
-exploration, delegating bounded read-only investigation when useful, and
-reviewing risk before final answers. Its public skill files stay generic; local
-hooks, custom agent config, and task-state files belong under `$CODEX_HOME`.
+exploration, delegating bounded read-only investigation when the user
+explicitly authorizes delegation or enables a local hook delegation policy and
+the runtime permits it, closing completed subagent threads after their results
+are consolidated when close controls are available, and reviewing risk before
+final answers. Its public skill files stay generic; local hooks, custom agent
+config, and task-state files belong under `$CODEX_HOME`. The task-state file
+is meant to be read at task start, resume, or after compaction when prior
+context may matter, then updated with concise decisions, validation status,
+and next action.
 
 ### `gitignore`
 

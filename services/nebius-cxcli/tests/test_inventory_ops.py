@@ -53,6 +53,33 @@ def _infra_component_row(payload: dict, component_id: str) -> dict:
     raise KeyError(component_id)
 
 
+def _align_infra_resource_name(
+    payload: dict,
+    row: dict,
+    resource_name: str,
+    *,
+    name_input: str | None = None,
+) -> None:
+    component_id = str(row.get("id", "")).strip().lower()
+    old_instance_id = str(row.get("instance_id", "")).strip()
+    row["instance_id"] = resource_name
+    inputs = row.setdefault("inputs", {})
+    assert isinstance(inputs, dict)
+    inputs[name_input or ("cluster_name" if component_id == "mk8s" else "name")] = resource_name
+    if component_id != "mk8s" or not old_instance_id or old_instance_id == resource_name:
+        return
+    for chart in payload.get("apps", {}).get("charts", []):
+        if not isinstance(chart, dict):
+            continue
+        if chart.get("instance_id") == old_instance_id:
+            chart["instance_id"] = resource_name
+        if chart.get("target_ref") == old_instance_id:
+            chart["target_ref"] = resource_name
+    for target in payload.get("deploy", {}).get("targets", []):
+        if isinstance(target, dict) and target.get("instance_id") == old_instance_id:
+            target["instance_id"] = resource_name
+
+
 def _chart_row(payload: dict, chart_id: str) -> dict:
     charts = payload.get("apps", {}).get("charts", [])
     if not isinstance(charts, list):
@@ -108,9 +135,9 @@ def test_write_inventory_handles_dynamic_component_model(tmp_path: Path) -> None
 
     payload = _starter_payload(selected_infra={"mk8s"}, selected_apps={"n8n"})
     mk8s = _infra_component_row(payload, "mk8s")
+    _align_infra_resource_name(payload, mk8s, "vm-observability")
     mk8s_inputs = mk8s.setdefault("inputs", {})
     assert isinstance(mk8s_inputs, dict)
-    mk8s_inputs["cluster_name"] = "vm-observability"
     mk8s_inputs["cpu_nodes_count"] = 1
     mk8s_inputs["cpu_nodes_platform"] = "cpu-d3"
     mk8s_inputs["cpu_nodes_preset"] = "4vcpu-16gb"
@@ -138,14 +165,16 @@ def test_write_inventory_handles_dynamic_component_model(tmp_path: Path) -> None
     assert "- `vm` (Compute virtual machine): `disabled`" in markdown
     assert "### Infra Component Reports" in markdown
     assert "- `mk8s` (Managed Kubernetes baseline cluster)" in markdown
-    assert "  - Resource: `nebius.mk8s.cluster` with `cluster_name` = `vm-observability`" in markdown
+    assert (
+        "  - Resource: `nebius.mk8s.cluster` with `cluster_name` = `vm-observability`" in markdown
+    )
     assert "  - Inputs: `cluster_name=vm-observability`" in markdown
     assert "### MK8s Clusters" in markdown
     assert "## Apps\n\n### App Component Status" in markdown
     assert "### App Component Reports" in markdown
-    assert "- `n8n@mk8s` (n8n workflow automation)" in markdown
+    assert "- `n8n@vm-observability` (n8n workflow automation)" in markdown
     assert "  - Release: `n8n/n8n`" in markdown
-    assert "  - Target: `mk8s`" in markdown
+    assert "  - Target: `vm-observability`" in markdown
     assert "### Platform Apps" not in markdown
     assert "### Observability Apps" not in markdown
     assert "### Workloads" in markdown
@@ -209,8 +238,7 @@ def test_write_inventory_lists_selected_security_and_platform_components(
     assert "- `mysterybox`: `db-username-password`, `secret2`" in markdown
     assert "### MysteryBox Kubernetes Sync" in markdown
     assert (
-        "- `mk8s`: namespaces `ns1`, `ns2`; refresh interval `1m`; "
-        "store `nebius-mysterybox-shared`"
+        "- `mk8s`: namespaces `ns1`, `ns2`; refresh interval `1m`; store `nebius-mysterybox-shared`"
     ) in markdown
     assert "- Envoy Gateway: `enabled`" in markdown
     assert "- External Secrets Operator: `enabled`" in markdown
@@ -231,12 +259,11 @@ def test_write_inventory_lists_each_mk8s_cluster(
         selected_apps={"nvidia-gpu-operator", "nvidia-network-operator"},
     )
     mk8s = _infra_component_row(payload, "mk8s")
-    mk8s["instance_id"] = "mk8s"
+    _align_infra_resource_name(payload, mk8s, "cluster1")
     mk8s_inputs = mk8s.setdefault("inputs", {})
     assert isinstance(mk8s_inputs, dict)
     mk8s_inputs.update(
         {
-            "cluster_name": "cluster1",
             "cpu_nodes_count": 2,
             "cpu_nodes_platform": "cpu-d3",
             "cpu_nodes_preset": "32vcpu-128gb",
@@ -273,8 +300,8 @@ def test_write_inventory_lists_each_mk8s_cluster(
         inventory_ops,
         "terraform_output_json",
         lambda _infra_dir, *, initialize: {
-            "mk8s_cluster_id": {"value": "mk8scluster-111"},
-            "mk8s_cluster_name": {"value": "cluster1"},
+            "cluster1_cluster_id": {"value": "mk8scluster-111"},
+            "cluster1_cluster_name": {"value": "cluster1"},
             "cluster2_cluster_id": {"value": "mk8scluster-222"},
             "cluster2_cluster_name": {"value": "cluster2"},
         },
@@ -283,7 +310,7 @@ def test_write_inventory_lists_each_mk8s_cluster(
     artifacts = write_inventory(config, paths)
     markdown = artifacts.markdown.read_text(encoding="utf-8")
 
-    assert "- `mk8s` (`cluster1`)" in markdown
+    assert "- `cluster1` (`cluster1`)" in markdown
     assert "  - CPU nodes: `2` node(s) at `cpu-d3/32vcpu-128gb`" in markdown
     assert (
         "  - GPU nodes: `2` node(s) (`1` group(s) x `2` node(s)/group) "
@@ -398,13 +425,21 @@ def test_write_inventory_includes_observability_endpoint_contract(tmp_path: Path
     assert "- Traces:" not in markdown
     assert "- Dashboards:" not in markdown
     assert "- Bundled dashboards:" in markdown
-    assert "  - Nebius Kubernetes Metrics: `pending` (`nebius-kubernetes/kubernetes-cluster-monitoring`)" in markdown
-    assert "  - Nebius Kubernetes GPU Metrics: `pending` (`nebius-kubernetes/kubernetes-gpu`)" in markdown
     assert (
-        "  - Nebius Kubernetes Logs: `pending` "
-        "(`nebius-kubernetes/kubernetes-logs-from-loki`)"
+        "  - Nebius Kubernetes Metrics: `pending` (`nebius-kubernetes/kubernetes-cluster-monitoring`)"
+        in markdown
+    )
+    assert (
+        "  - Nebius Kubernetes GPU Metrics: `pending` (`nebius-kubernetes/kubernetes-gpu`)"
+        in markdown
+    )
+    assert (
+        "  - Nebius Kubernetes Logs: `pending` (`nebius-kubernetes/kubernetes-logs-from-loki`)"
     ) in markdown
-    assert "  - Nebius Kubernetes Traces: `pending` (`nebius-kubernetes/kubernetes-traces`)" in markdown
+    assert (
+        "  - Nebius Kubernetes Traces: `pending` (`nebius-kubernetes/kubernetes-traces`)"
+        in markdown
+    )
     assert "  - Nebius VM Metrics: `pending` (`nebius-vm/vm-metrics`)" in markdown
     assert "  - Nebius VM Logs: `pending` (`nebius-vm/vm-logs`)" in markdown
     assert "### Notes" in markdown
@@ -496,9 +531,7 @@ def test_write_inventory_includes_live_grafana_urls_when_status_exists(tmp_path:
         "(`nebius-vm/vm-metrics`)"
     ) in markdown
     assert (
-        "  - [Nebius VM Logs]"
-        "(http://203.0.113.10/d/cxcli-vm-logs?orgId=1) "
-        "(`nebius-vm/vm-logs`)"
+        "  - [Nebius VM Logs](http://203.0.113.10/d/cxcli-vm-logs?orgId=1) (`nebius-vm/vm-logs`)"
     ) in markdown
     assert "- Credentials: user `admin`; password command:" in markdown
     assert (
@@ -570,13 +603,13 @@ def test_bundled_grafana_dashboard_report_links_track_package_assets() -> None:
             "title": "Nebius Kubernetes Traces",
             "datasource": "Nebius Traces",
         },
-            {
-                "folder": "nebius-vm",
-                "dashboard": "vm-metrics",
-                "uid": "cxcli-vm-metrics",
-                "title": "Nebius VM Metrics",
-                "datasource": "Nebius Services",
-            },
+        {
+            "folder": "nebius-vm",
+            "dashboard": "vm-metrics",
+            "uid": "cxcli-vm-metrics",
+            "title": "Nebius VM Metrics",
+            "datasource": "Nebius Services",
+        },
         {
             "folder": "nebius-vm",
             "dashboard": "vm-logs",
@@ -941,13 +974,13 @@ def test_write_inventory_includes_wireguard_handoff(
 
     payload = _starter_payload(selected_infra={"wireguard-gw"}, selected_apps=set())
     wireguard = _infra_component_row(payload, "wireguard-gw")
+    _align_infra_resource_name(payload, wireguard, "wg-gw")
     wireguard_inputs = wireguard.setdefault("inputs", {})
     assert isinstance(wireguard_inputs, dict)
     wireguard_inputs.update(
         {
             "parent_id": "project-456",
             "subnet_id": "subnet-123",
-            "name": "wg-gw",
             "platform": "cpu-d3",
             "preset": "2vcpu-8gb",
             "source_image_family": "ubuntu24.04-driverless",
@@ -966,15 +999,17 @@ def test_write_inventory_includes_wireguard_handoff(
     (paths.infra_dir / ".terraform").mkdir(parents=True, exist_ok=True)
     client_dir = paths.project_dir / "wireguard-clients"
     client_dir.mkdir()
-    (client_dir / "laptop.conf").write_text("[Interface]\nPrivateKey = redacted\n", encoding="utf-8")
+    (client_dir / "laptop.conf").write_text(
+        "[Interface]\nPrivateKey = redacted\n", encoding="utf-8"
+    )
 
     monkeypatch.setattr(
         inventory_ops,
         "terraform_output_json",
         lambda *_args, **_kwargs: {
-            "wireguard_gw_public_ip": {"value": "198.51.100.30"},
-            "wireguard_gw_private_ip": {"value": "10.0.0.30"},
-            "wireguard_gw_wireguard_listen_port": {"value": 51820},
+            "wg_gw_public_ip": {"value": "198.51.100.30"},
+            "wg_gw_private_ip": {"value": "10.0.0.30"},
+            "wg_gw_wireguard_listen_port": {"value": 51820},
         },
     )
 
@@ -982,7 +1017,7 @@ def test_write_inventory_includes_wireguard_handoff(
     markdown = artifacts.markdown.read_text(encoding="utf-8")
 
     assert "### WireGuard VPN Gateway Access" in markdown
-    assert "- Component: `wireguard-gw`" in markdown
+    assert "- Component: `wireguard-gw@wg-gw`" in markdown
     assert "  - Public endpoint: `198.51.100.30:51820`" in markdown
     assert "  - Private IP: `10.0.0.30`" in markdown
     assert "  - WireGuard tunnel CIDR: `10.8.0.1/22`" in markdown
@@ -1018,13 +1053,13 @@ def test_write_inventory_wireguard_handoff_without_local_client_configs(
 
     payload = _starter_payload(selected_infra={"wireguard-gw"}, selected_apps=set())
     wireguard = _infra_component_row(payload, "wireguard-gw")
+    _align_infra_resource_name(payload, wireguard, "wg-gw")
     wireguard_inputs = wireguard.setdefault("inputs", {})
     assert isinstance(wireguard_inputs, dict)
     wireguard_inputs.update(
         {
             "parent_id": "project-456",
             "subnet_id": "subnet-123",
-            "name": "wg-gw",
             "platform": "cpu-d3",
             "preset": "2vcpu-8gb",
             "source_image_family": "ubuntu24.04-driverless",
@@ -1046,9 +1081,9 @@ def test_write_inventory_wireguard_handoff_without_local_client_configs(
         inventory_ops,
         "terraform_output_json",
         lambda *_args, **_kwargs: {
-            "wireguard_gw_public_ip": {"value": "198.51.100.30"},
-            "wireguard_gw_private_ip": {"value": "10.0.0.30"},
-            "wireguard_gw_wireguard_listen_port": {"value": 51820},
+            "wg_gw_public_ip": {"value": "198.51.100.30"},
+            "wg_gw_private_ip": {"value": "10.0.0.30"},
+            "wg_gw_wireguard_listen_port": {"value": 51820},
         },
     )
 
@@ -1068,7 +1103,7 @@ def test_write_inventory_wireguard_handoff_without_local_client_configs(
     command_hints = inventory_ops.wireguard_access_command_hints(config, paths)
     assert command_hints == [
         {
-            "label": "Generate WireGuard client config for wireguard-gw",
+            "label": "Generate WireGuard client config for wireguard-gw@wg-gw",
             "command": f"nebius-cxcli wireguard --gen-client-conf {config_path}",
         }
     ]
@@ -1138,12 +1173,14 @@ def test_write_inventory_reports_enabled_catalog_components_without_custom_secti
     assert isinstance(mk8s_inputs, dict)
     mk8s_inputs["cluster_name"] = "mk8s"
     object_storage = _infra_component_row(payload, "object-storage")
+    _align_infra_resource_name(payload, object_storage, "training-artifacts")
     object_storage["inputs"] = {
         "parent_id": "project-456",
         "name": "training-artifacts",
         "versioning_enabled": True,
     }
     vm = _infra_component_row(payload, "vm")
+    _align_infra_resource_name(payload, vm, "private-vm")
     vm["inputs"] = {
         "parent_id": "project-456",
         "name": "private-vm",

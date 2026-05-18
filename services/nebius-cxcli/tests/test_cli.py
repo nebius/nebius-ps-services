@@ -26,6 +26,7 @@ from nebius_cxcli.components import component_entries, reset_component_entry_cac
 from nebius_cxcli.email_settings import EmailSettings
 from nebius_cxcli.quota_checks import QuotaCheck, QuotaReport
 from nebius_cxcli.runtime_config import to_plain_data
+from nebius_cxcli.runtime_validation import validate_dynamic_payload_structure
 
 runner = CliRunner()
 
@@ -258,7 +259,7 @@ def _write_compute_boot_disk_sources_file(path: Path, *, module_dir: Path) -> No
                     "size_gib": 186,
                 },
             ],
-        }
+        },
     }
     path.write_text(
         yaml.safe_dump(
@@ -375,9 +376,10 @@ def _component_add(config_path: Path, *extra: str, input_text: str | None = None
         [
             "component",
             "add",
+            *extra,
+            "--config",
             str(config_path),
             "--no-validate-sources",
-            *extra,
         ],
         input=input_text,
     )
@@ -389,8 +391,9 @@ def _component_remove(config_path: Path, *extra: str, input_text: str | None = N
         [
             "component",
             "remove",
-            str(config_path),
             *extra,
+            "--config",
+            str(config_path),
         ],
         input=input_text,
     )
@@ -1143,6 +1146,7 @@ def test_render_normalizes_ssh_public_key_file_path_into_config(
         for item in payload["infra"]["components"]
         if isinstance(item, dict) and item.get("id") == component_id
     )
+    jumphost["instance_id"] = instance_name
     jumphost["inputs"] = {
         "parent_id": "project-456",
         "subnet_id": "subnet-123",
@@ -1345,7 +1349,14 @@ def test_create_force_overwrites_from_scratch_without_reusing_client_info_defaul
     )
     inputs = mk8s_row.setdefault("inputs", {})
     assert isinstance(inputs, dict)
+    mk8s_row["instance_id"] = "custom-cluster"
     inputs["cluster_name"] = "custom-cluster"
+    for chart in payload.get("apps", {}).get("charts", []):
+        if isinstance(chart, dict) and chart.get("instance_id") == "mk8s":
+            chart["instance_id"] = "custom-cluster"
+    for target in payload.get("deploy", {}).get("targets", []):
+        if isinstance(target, dict) and target.get("instance_id") == "mk8s":
+            target["instance_id"] = "custom-cluster"
     config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
 
     forced = _create_non_interactive(
@@ -2319,10 +2330,10 @@ def test_load_context_rejects_missing_materialized_shared_app_defaults(tmp_path:
             ]
         },
         "apps": {
-                "charts": [
-                    {
-                        "id": "demo-app",
-                        "instance_id": "mk8s",
+            "charts": [
+                {
+                    "id": "demo-app",
+                    "instance_id": "mk8s",
                     "group": "workloads",
                     "enabled": True,
                     "repo": "https://example.invalid/charts",
@@ -2458,12 +2469,12 @@ def test_create_seeds_component_source_defaults_into_config(tmp_path: Path) -> N
     sources_file = tmp_path / "component_sources.yaml"
     sources_file.write_text(
         yaml.safe_dump(
-                _catalog(
-                    infra={
-                        "mk8s": {
-                            "source": {
-                                "portable": "git::https://github.com/example/infra.git//modules/demo-module?ref=v1.2.3",
-                                "local": str(module_dir),
+            _catalog(
+                infra={
+                    "mk8s": {
+                        "source": {
+                            "portable": "git::https://github.com/example/infra.git//modules/demo-module?ref=v1.2.3",
+                            "local": str(module_dir),
                         },
                         "ui": {
                             "enabled": True,
@@ -2865,9 +2876,10 @@ def test_component_add_seeds_private_shared_admin_ssh_public_key_into_config(
             "local",
             "component",
             "add",
+            "demo-jumphost",
+            "--config",
             str(config_path),
             "--no-validate-sources",
-            "demo-jumphost",
             "--no-interactive",
         ],
     )
@@ -2949,7 +2961,14 @@ def test_create_force_treats_components_as_new_selection(tmp_path: Path) -> None
     )
     inputs = mk8s_row.setdefault("inputs", {})
     assert isinstance(inputs, dict)
+    mk8s_row["instance_id"] = "custom-cluster"
     inputs["cluster_name"] = "custom-cluster"
+    for chart in payload.get("apps", {}).get("charts", []):
+        if isinstance(chart, dict) and chart.get("instance_id") == "mk8s":
+            chart["instance_id"] = "custom-cluster"
+    for target in payload.get("deploy", {}).get("targets", []):
+        if isinstance(target, dict) and target.get("instance_id") == "mk8s":
+            target["instance_id"] = "custom-cluster"
     config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
 
     second = _create_non_interactive(
@@ -3013,7 +3032,7 @@ def test_component_list_reports_enabled_and_available_components(tmp_path: Path)
 
     config_path = _project_config_path(deployments_root)
     before_list = config_path.read_text(encoding="utf-8")
-    result = runner.invoke(app, ["component", "list", str(config_path)])
+    result = runner.invoke(app, ["component", "list", "--config", str(config_path)])
     assert result.exit_code == 0, result.output
     assert config_path.read_text(encoding="utf-8") == before_list
     assert "Enabled infra component instances:" in result.output
@@ -3026,9 +3045,60 @@ def test_component_list_reports_enabled_and_available_components(tmp_path: Path)
     assert "n8n" in result.output
     assert "Available infra components:" in result.output
     assert "mk8s" in result.output
-    repeat = runner.invoke(app, ["component", "list", str(config_path)])
+    repeat = runner.invoke(app, ["component", "list", "--config", str(config_path)])
     assert repeat.exit_code == 0, repeat.output
     assert config_path.read_text(encoding="utf-8") == before_list
+
+
+def test_component_add_uses_selector_first_config_option(tmp_path: Path) -> None:
+    deployments_root = tmp_path / "deployments"
+    deployments_root.mkdir(parents=True, exist_ok=True)
+
+    created = _create_non_interactive(deployments_root, "--infra", "none", "--app", "none")
+    assert created.exit_code == 0, created.output
+
+    config_path = _project_config_path(deployments_root)
+    result = runner.invoke(
+        app,
+        [
+            "component",
+            "add",
+            "infra:vm",
+            "--config",
+            str(config_path),
+            "--no-validate-sources",
+            "--no-interactive",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert "Config file not found: infra:vm" not in result.output
+    assert "Added infra components: vm" in result.output
+
+
+def test_component_add_requires_config_option_instead_of_treating_selector_as_path(
+    tmp_path: Path,
+) -> None:
+    deployments_root = tmp_path / "deployments"
+    deployments_root.mkdir(parents=True, exist_ok=True)
+
+    created = _create_non_interactive(deployments_root, "--infra", "none", "--app", "none")
+    assert created.exit_code == 0, created.output
+
+    config_path = _project_config_path(deployments_root)
+    result = runner.invoke(
+        app,
+        [
+            "component",
+            "add",
+            "infra:vm",
+            str(config_path),
+            "--no-interactive",
+        ],
+    )
+    assert result.exit_code != 0
+    assert "Missing option" in result.output
+    assert "--config" in result.output
+    assert "Config file not found: infra:vm" not in result.output
 
 
 def test_component_add_noninteractive_preserves_existing_values(tmp_path: Path) -> None:
@@ -3049,7 +3119,14 @@ def test_component_add_noninteractive_preserves_existing_values(tmp_path: Path) 
     )
     inputs = mk8s_row.setdefault("inputs", {})
     assert isinstance(inputs, dict)
+    mk8s_row["instance_id"] = "custom-cluster"
     inputs["cluster_name"] = "custom-cluster"
+    for chart in payload.get("apps", {}).get("charts", []):
+        if isinstance(chart, dict) and chart.get("instance_id") == "mk8s":
+            chart["instance_id"] = "custom-cluster"
+    for target in payload.get("deploy", {}).get("targets", []):
+        if isinstance(target, dict) and target.get("instance_id") == "mk8s":
+            target["instance_id"] = "custom-cluster"
     config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
 
     result = _component_add(config_path, "managed-postgresql", "--no-interactive")
@@ -3078,10 +3155,11 @@ def test_component_add_noninteractive_preserves_existing_values(tmp_path: Path) 
         if isinstance(row, dict) and str(row.get("id", "")).strip() == "managed-postgresql"
     )
     assert mk8s_refreshed["inputs"]["cluster_name"] == "custom-cluster"
+    assert mk8s_refreshed["instance_id"] == "custom-cluster"
     assert managed_pg["enabled"] is True
 
 
-def test_component_add_is_idempotent_and_explicit_instances_create_more_rows(
+def test_component_add_is_idempotent_and_explicit_resource_names_create_more_rows(
     tmp_path: Path,
 ) -> None:
     deployments_root = tmp_path / "deployments"
@@ -3095,12 +3173,12 @@ def test_component_add_is_idempotent_and_explicit_instances_create_more_rows(
     repeat = _component_add(config_path, "managed-postgresql", "--no-interactive")
     explicit = _component_add(
         config_path,
-        "managed-postgresql@managed-postgresql-2",
+        "managed-postgresql@analytics-pg",
         "--no-interactive",
     )
     repeat_explicit = _component_add(
         config_path,
-        "managed-postgresql@managed-postgresql-2",
+        "managed-postgresql@analytics-pg",
         "--no-interactive",
     )
 
@@ -3109,9 +3187,9 @@ def test_component_add_is_idempotent_and_explicit_instances_create_more_rows(
     assert explicit.exit_code == 0, explicit.output
     assert repeat_explicit.exit_code == 0, repeat_explicit.output
     assert "Skipped already-enabled components: managed-postgresql" in repeat.output
-    assert "Added infra components: managed-postgresql@managed-postgresql-2" in explicit.output
+    assert "Added infra components: managed-postgresql@analytics-pg" in explicit.output
     assert (
-        "Skipped already-enabled components: managed-postgresql@managed-postgresql-2"
+        "Skipped already-enabled components: managed-postgresql@analytics-pg"
         in repeat_explicit.output
     )
 
@@ -3125,8 +3203,364 @@ def test_component_add_is_idempotent_and_explicit_instances_create_more_rows(
     ]
     assert [row.get("instance_id") for row in postgres_rows] == [
         "managed-postgresql",
-        "managed-postgresql-2",
+        "analytics-pg",
     ]
+
+
+def test_component_add_interactive_repeated_infra_selector_prompts_with_next_instance(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    deployments_root = tmp_path / "deployments"
+    deployments_root.mkdir(parents=True, exist_ok=True)
+
+    created = _create_non_interactive(deployments_root, "--infra", "vm")
+    assert created.exit_code == 0, created.output
+
+    captured_selected_infra: list[set[str]] = []
+
+    def _fake_run_component_field_wizard(**kwargs):  # type: ignore[no-untyped-def]
+        captured_selected_infra.append(set(kwargs["selected_infra"]))
+        return kwargs["config_yaml"], True
+
+    monkeypatch.setattr(
+        cli_module,
+        "_run_component_field_wizard",
+        _fake_run_component_field_wizard,
+    )
+
+    config_path = _project_config_path(deployments_root)
+    result = _component_add(config_path, "infra:vm", input_text="\ny\n")
+
+    assert result.exit_code == 0, result.output
+    assert "VM name for new infra:vm" in result.output
+    assert captured_selected_infra == [{"vm-2"}]
+    assert "Added infra components: vm@vm-2" in result.output
+    assert "Skipped already-enabled components: vm" not in result.output
+
+    refreshed = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    components = refreshed.get("infra", {}).get("components", [])
+    assert isinstance(components, list)
+    vm_rows = [
+        row
+        for row in components
+        if isinstance(row, dict) and str(row.get("id", "")).strip() == "vm"
+    ]
+    assert [row.get("instance_id") for row in vm_rows] == ["vm", "vm-2"]
+    assert [row.get("inputs", {}).get("name") for row in vm_rows] == ["vm", "vm-2"]
+
+
+def test_component_add_interactive_repeated_infra_selector_uses_prompted_instance_id(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    deployments_root = tmp_path / "deployments"
+    deployments_root.mkdir(parents=True, exist_ok=True)
+
+    created = _create_non_interactive(deployments_root, "--infra", "vm")
+    assert created.exit_code == 0, created.output
+
+    captured_selected_infra: list[set[str]] = []
+
+    def _fake_run_component_field_wizard(**kwargs):  # type: ignore[no-untyped-def]
+        captured_selected_infra.append(set(kwargs["selected_infra"]))
+        return kwargs["config_yaml"], True
+
+    monkeypatch.setattr(
+        cli_module,
+        "_run_component_field_wizard",
+        _fake_run_component_field_wizard,
+    )
+
+    config_path = _project_config_path(deployments_root)
+    result = _component_add(config_path, "infra:vm", input_text="worker-vm\ny\n")
+
+    assert result.exit_code == 0, result.output
+    assert captured_selected_infra == [{"worker-vm"}]
+    assert "Added infra components: vm@worker-vm" in result.output
+
+    refreshed = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    components = refreshed.get("infra", {}).get("components", [])
+    assert isinstance(components, list)
+    vm_rows = [
+        row
+        for row in components
+        if isinstance(row, dict) and str(row.get("id", "")).strip() == "vm"
+    ]
+    assert [row.get("instance_id") for row in vm_rows] == ["vm", "worker-vm"]
+    assert [row.get("inputs", {}).get("name") for row in vm_rows] == ["vm", "worker-vm"]
+
+
+def test_component_add_interactive_prompts_name_before_scope_validation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    deployments_root = tmp_path / "deployments"
+    deployments_root.mkdir(parents=True, exist_ok=True)
+
+    created = _create_non_interactive(deployments_root, "--infra", "vm")
+    assert created.exit_code == 0, created.output
+
+    captured: list[tuple[str, str, bool]] = []
+
+    def _fail_scope_validation(
+        *,
+        tenant_id: str,
+        project_id: str,
+        interactive: bool,
+        provider_lookup,
+    ):
+        _ = provider_lookup
+        captured.append((tenant_id, project_id, interactive))
+        raise RuntimeError("scope validation unavailable")
+
+    monkeypatch.setattr(
+        "nebius_cxcli.cli._validate_tenant_project_ids_or_prompt",
+        _fail_scope_validation,
+    )
+
+    config_path = _project_config_path(deployments_root)
+    result = _component_add(config_path, "infra:vm", input_text="worker-vm\ny\n")
+
+    assert result.exit_code == 1, result.output
+    assert "VM name for new infra:vm" in result.output
+    assert result.output.index("VM name for new infra:vm") < result.output.index(
+        "Validating Nebius tenant/project scope"
+    )
+    assert "scope validation unavailable" in result.output
+    assert captured == [("tenant-123", "project-456", False)]
+
+
+def test_component_add_infra_only_does_not_resolve_existing_app_chart_dependencies(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    deployments_root = tmp_path / "deployments"
+    deployments_root.mkdir(parents=True, exist_ok=True)
+
+    created = _create_non_interactive(
+        deployments_root,
+        "--infra",
+        "mk8s",
+        "--app",
+        "gateway-helm",
+    )
+    assert created.exit_code == 0, created.output
+
+    def _fail_chart_dependency_lookup(**_kwargs):  # type: ignore[no-untyped-def]
+        raise AssertionError("infra-only add must not resolve existing app chart dependencies")
+
+    def _fake_run_component_field_wizard(**kwargs):  # type: ignore[no-untyped-def]
+        return kwargs["config_yaml"], True
+
+    monkeypatch.setattr(cli_module, "_helm_chart_dependency_names", _fail_chart_dependency_lookup)
+    monkeypatch.setattr(
+        cli_module,
+        "_run_component_field_wizard",
+        _fake_run_component_field_wizard,
+    )
+
+    config_path = _project_config_path(deployments_root)
+    result = _component_add(config_path, "infra:vm", input_text="worker-vm\ny\n")
+
+    assert result.exit_code == 0, result.output
+    assert "Added infra components: vm@worker-vm" in result.output
+
+
+def test_component_add_noop_duplicate_skips_provider_scope_validation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    deployments_root = tmp_path / "deployments"
+    deployments_root.mkdir(parents=True, exist_ok=True)
+
+    created = _create_non_interactive(deployments_root, "--infra", "vm")
+    assert created.exit_code == 0, created.output
+
+    def _fail_scope_validation(**_kwargs):  # type: ignore[no-untyped-def]
+        raise AssertionError("no-op duplicate add must not validate provider scope")
+
+    monkeypatch.setattr(
+        "nebius_cxcli.cli._validate_tenant_project_ids_or_prompt",
+        _fail_scope_validation,
+    )
+
+    config_path = _project_config_path(deployments_root)
+    result = _component_add(config_path, "infra:vm", "--no-interactive")
+
+    assert result.exit_code == 0, result.output
+    assert "Added infra components: (none)" in result.output
+    assert "Skipped already-enabled components: vm" in result.output
+
+
+def test_component_add_non_interactive_infra_selector_suffix_seeds_resource_name(
+    tmp_path: Path,
+) -> None:
+    deployments_root = tmp_path / "deployments"
+    deployments_root.mkdir(parents=True, exist_ok=True)
+
+    created = _create_non_interactive(deployments_root, "--infra", "none", "--app", "none")
+    assert created.exit_code == 0, created.output
+
+    config_path = _project_config_path(deployments_root)
+    result = _component_add(config_path, "infra:vm@worker-vm", "--no-interactive")
+
+    assert result.exit_code == 0, result.output
+    assert "Added infra components: vm@worker-vm" in result.output
+
+    refreshed = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    components = refreshed.get("infra", {}).get("components", [])
+    assert isinstance(components, list)
+    vm_rows = [
+        row
+        for row in components
+        if isinstance(row, dict) and str(row.get("id", "")).strip() == "vm"
+    ]
+    assert len(vm_rows) == 1
+    assert vm_rows[0]["instance_id"] == "worker-vm"
+    assert vm_rows[0]["inputs"]["name"] == "worker-vm"
+
+
+def test_all_infra_components_can_allocate_additional_instances() -> None:
+    for entry in component_entries("infra"):
+        payload = {
+            "infra": {
+                "components": [
+                    {
+                        "id": entry.id,
+                        "instance_id": entry.id,
+                        "enabled": True,
+                        "inputs": {},
+                    }
+                ]
+            },
+            "apps": {"charts": []},
+        }
+
+        row = cli_module._append_component_instance_row(
+            payload=payload,
+            entry=entry,
+        )
+
+        assert row["id"] == entry.id
+        assert row["instance_id"] == f"{entry.id}-2"
+        name_input = cli_module._entry_scalar_resource_name_input(entry)
+        if name_input:
+            assert cli_module._mapping_path_value(row.get("inputs", {}), name_input) == (
+                f"{entry.id}-2"
+            )
+
+
+def test_runtime_validation_rejects_duplicate_infra_instance_id() -> None:
+    payload = {
+        "infra": {
+            "components": [
+                {
+                    "id": "vm",
+                    "instance_id": "worker-vm",
+                    "enabled": True,
+                    "inputs": {"name": "worker-vm"},
+                },
+                {
+                    "id": "nfs",
+                    "instance_id": "worker-vm",
+                    "enabled": True,
+                    "inputs": {"name": "worker-vm"},
+                },
+            ]
+        },
+        "apps": {"charts": []},
+    }
+
+    with pytest.raises(ValueError, match="instance_id 'worker-vm' is duplicated"):
+        validate_dynamic_payload_structure(payload)
+
+
+def test_runtime_validation_rejects_mismatched_scalar_name_and_instance_id() -> None:
+    payload = {
+        "infra": {
+            "components": [
+                {
+                    "id": "vm",
+                    "instance_id": "vm-2",
+                    "enabled": True,
+                    "inputs": {"name": "worker-vm"},
+                }
+            ]
+        },
+        "apps": {"charts": []},
+    }
+
+    with pytest.raises(
+        ValueError,
+        match=r"instance_id 'vm-2' must match normalized inputs\.name 'worker-vm'",
+    ):
+        validate_dynamic_payload_structure(payload)
+
+
+def test_runtime_validation_rejects_duplicate_scalar_names_for_same_infra_type() -> None:
+    payload = {
+        "infra": {
+            "components": [
+                {
+                    "id": "vm",
+                    "instance_id": "worker-vm",
+                    "enabled": True,
+                    "inputs": {"name": "worker-vm"},
+                },
+                {
+                    "id": "vm",
+                    "instance_id": "worker-vm-2",
+                    "enabled": True,
+                    "inputs": {"name": "worker-vm"},
+                },
+            ]
+        },
+        "apps": {"charts": []},
+    }
+
+    with pytest.raises(ValueError, match=r"inputs\.name 'worker-vm' duplicates"):
+        validate_dynamic_payload_structure(payload)
+
+
+def test_runtime_validation_does_not_force_collection_identity_to_scalar_name() -> None:
+    payload = {
+        "infra": {
+            "components": [
+                {
+                    "id": "mysterybox",
+                    "instance_id": "secretstore-alpha",
+                    "enabled": True,
+                    "inputs": {
+                        "secrets": [
+                            {
+                                "name": "db-credentials",
+                                "payload": {"USERNAME": {"text": "app"}},
+                            }
+                        ]
+                    },
+                }
+            ]
+        },
+        "apps": {"charts": []},
+    }
+
+    validate_dynamic_payload_structure(payload)
+
+    scalar_collection_payload = {
+        "infra": {
+            "components": [
+                {
+                    "id": "mysterybox",
+                    "instance_id": "secretstore-alpha",
+                    "enabled": True,
+                    "inputs": {"secrets": "db-credentials"},
+                }
+            ]
+        },
+        "apps": {"charts": []},
+    }
+    validate_dynamic_payload_structure(scalar_collection_payload)
 
 
 def test_component_add_allows_multiple_mk8s_instances(tmp_path: Path) -> None:
@@ -3137,13 +3571,13 @@ def test_component_add_allows_multiple_mk8s_instances(tmp_path: Path) -> None:
     assert created.exit_code == 0, created.output
 
     config_path = _project_config_path(deployments_root)
-    result = _component_add(config_path, "mk8s@mk8s-2", "--no-interactive")
-    repeat = _component_add(config_path, "mk8s@mk8s-2", "--no-interactive")
+    result = _component_add(config_path, "mk8s@training-cluster", "--no-interactive")
+    repeat = _component_add(config_path, "mk8s@training-cluster", "--no-interactive")
 
     assert result.exit_code == 0, result.output
-    assert "Added infra components: mk8s@mk8s-2" in result.output
+    assert "Added infra components: mk8s@training-cluster" in result.output
     assert repeat.exit_code == 0, repeat.output
-    assert "Skipped already-enabled components: mk8s@mk8s-2" in repeat.output
+    assert "Skipped already-enabled components: mk8s@training-cluster" in repeat.output
 
     refreshed = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     components = refreshed.get("infra", {}).get("components", [])
@@ -3153,7 +3587,11 @@ def test_component_add_allows_multiple_mk8s_instances(tmp_path: Path) -> None:
         for row in components
         if isinstance(row, dict) and str(row.get("id", "")).strip() == "mk8s"
     ]
-    assert [row.get("instance_id") for row in mk8s_rows] == ["mk8s", "mk8s-2"]
+    assert [row.get("instance_id") for row in mk8s_rows] == ["mk8s", "training-cluster"]
+    assert [row.get("inputs", {}).get("cluster_name") for row in mk8s_rows] == [
+        "mk8s",
+        "training-cluster",
+    ]
 
 
 def test_component_add_list_remove_bind_app_instance_to_explicit_mk8s_target(
@@ -3192,7 +3630,7 @@ def test_component_add_list_remove_bind_app_instance_to_explicit_mk8s_target(
     assert "target_ref" not in n8n_row
     assert n8n_row["release-name"] == "n8n"
 
-    listed = runner.invoke(app, ["component", "list", str(config_path)])
+    listed = runner.invoke(app, ["component", "list", "--config", str(config_path)])
     assert listed.exit_code == 0, listed.output
     assert "n8n @ mk8s-2 on mk8s-2" in listed.output
 
@@ -3368,7 +3806,7 @@ def test_component_add_interactive_prompts_for_new_component_fields(
     config_path = _project_config_path(deployments_root)
     result = _component_add(
         config_path,
-        input_text="managed-postgresql\n\n\ny\ndemo-pg\n",
+        input_text="managed-postgresql\n\ndemo-pg\ny\n\n",
     )
     assert result.exit_code == 0, result.output
     assert "Select apps components to add too?" in result.output
@@ -3411,7 +3849,7 @@ def test_component_add_does_not_write_when_quit_leaves_required_fields_missing(
 
     config_path = _project_config_path(deployments_root)
     original_config = config_path.read_text(encoding="utf-8")
-    result = _component_add(config_path, "managed-postgresql", input_text="y\n")
+    result = _component_add(config_path, "managed-postgresql", input_text="\ny\n")
 
     assert result.exit_code == 1, result.output
     normalized = _normalized_cli_output(result.output)
@@ -3502,7 +3940,7 @@ def test_component_add_requeues_provider_dependent_module_fields(
     result = _component_add(
         config_path,
         "wireguard-gw",
-        input_text="y\ny\n\n\ndemo-wg\n",
+        input_text="wg-gw\ny\ny\n\n\n",
     )
 
     assert result.exit_code == 0, result.output
@@ -3511,10 +3949,10 @@ def test_component_add_requeues_provider_dependent_module_fields(
     components = refreshed.get("infra", {}).get("components", [])
     assert isinstance(components, list)
     wireguard = next(
-        item
-        for item in components
-        if isinstance(item, dict) and item.get("id") == "wireguard-gw"
+        item for item in components if isinstance(item, dict) and item.get("id") == "wireguard-gw"
     )
+    assert wireguard["instance_id"] == "wg-gw"
+    assert wireguard["inputs"]["name"] == "wg-gw"
     assert wireguard["inputs"]["platform"] == "cpu-d3"
     assert wireguard["inputs"]["preset"] == "4vcpu-16gb"
 
@@ -3532,6 +3970,7 @@ def test_component_add_mysterybox_interactive_preserves_existing_mk8s_target(
     payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     components = payload["infra"]["components"]
     mk8s = next(row for row in components if row["id"] == "mk8s")
+    mk8s["instance_id"] = "cluster1"
     mk8s_inputs = mk8s.setdefault("inputs", {})
     mk8s_inputs.update(
         {
@@ -3544,6 +3983,12 @@ def test_component_add_mysterybox_interactive_preserves_existing_mk8s_target(
             "infiniband_fabric": "fabric-6",
         }
     )
+    for chart in payload.get("apps", {}).get("charts", []):
+        if isinstance(chart, dict) and chart.get("instance_id") == "mk8s":
+            chart["instance_id"] = "cluster1"
+    for target in payload.get("deploy", {}).get("targets", []):
+        if isinstance(target, dict) and target.get("instance_id") == "mk8s":
+            target["instance_id"] = "cluster1"
     config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
 
     secrets = [
@@ -3563,7 +4008,7 @@ def test_component_add_mysterybox_interactive_preserves_existing_mk8s_target(
     )
 
     assert result.exit_code == 0, result.output
-    assert "'apps:external-secrets@mk8s'" in result.output
+    assert "'apps:external-secrets@cluster1'" in result.output
     refreshed = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     infra_ids = {
         row["id"]
@@ -3576,7 +4021,7 @@ def test_component_add_mysterybox_interactive_preserves_existing_mk8s_target(
         for row in refreshed.get("apps", {}).get("charts", [])
         if isinstance(row, dict) and row.get("id") == "external-secrets"
     )
-    assert external_secrets["instance_id"] == "mk8s"
+    assert external_secrets["instance_id"] == "cluster1"
 
 
 def test_component_add_noninteractive_adds_app_chart_and_preserves_existing_values(
@@ -3745,7 +4190,7 @@ def test_component_remove_noninteractive_removes_app_chart_when_no_dependency_br
     assert f"Next steps: run `nebius-cxcli validate {config_arg}`, then " in repeat_output
 
 
-def test_component_remove_requires_instance_id_when_multiple_instances_match(
+def test_component_remove_requires_row_id_when_multiple_instances_match(
     tmp_path: Path,
 ) -> None:
     deployments_root = tmp_path / "deployments"
@@ -3759,7 +4204,7 @@ def test_component_remove_requires_instance_id_when_multiple_instances_match(
     assert (
         _component_add(
             config_path,
-            "managed-postgresql@managed-postgresql-2",
+            "managed-postgresql@analytics-pg",
             "--no-interactive",
         ).exit_code
         == 0
@@ -3769,11 +4214,11 @@ def test_component_remove_requires_instance_id_when_multiple_instances_match(
     assert ambiguous.exit_code == 1, ambiguous.output
     normalized_output = " ".join(ambiguous.output.split())
     assert "matches multiple enabled instances" in normalized_output
-    assert "Available instances:" in normalized_output
+    assert "Available rows:" in normalized_output
 
-    targeted = _component_remove(config_path, "managed-postgresql-2", "--no-interactive")
+    targeted = _component_remove(config_path, "analytics-pg", "--no-interactive")
     assert targeted.exit_code == 0, targeted.output
-    assert "managed-postgresql@managed-postgresql-2" in targeted.output
+    assert "managed-postgresql@analytics-pg" in targeted.output
 
     refreshed = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     components = refreshed.get("infra", {}).get("components", [])

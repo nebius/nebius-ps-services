@@ -147,13 +147,20 @@ def test_docs_define_component_selector_contract() -> None:
     readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
     design = (REPO_ROOT / "docs" / "design.md").read_text(encoding="utf-8")
 
-    assert "`component add <config.yaml> [component-selector...]`" in design
-    assert "`component remove <config.yaml> [component-selector...]`" in design
+    assert "`component add [component-selector...] --config <config.yaml>`" in design
+    assert "`component remove [component-selector...] --config <config.yaml>`" in design
+    assert "`component list --config <config.yaml>`" in design
     assert (
         "`<component-id>`, `infra:<component-id>`, `apps:<component-id>`, `all`, `none`" in readme
     )
-    assert "`<instance-id>`, or `<component-id>@<instance-id>`" in readme
-    assert "becomes `apps.charts[].instance_id`" in readme
+    assert "`<row-id>`, or `<component-id>@<resource-name-or-target-id>`" in readme
+    assert "becomes" in readme
+    assert "`apps.charts[].instance_id`" in readme
+    assert "scalar named infra modules prompt for the resource name" in design
+    assert "`instance_id` is derived from that normalized name" in design
+    assert "bare infra selector creates the default named row when absent" in readme
+    assert "For scalar named infra, the row id is the normalized resource name" in readme
+    assert "non-interactive mode" in design
     assert "removes app chart rows and `deploy.targets[]` settings" in design
 
 
@@ -165,7 +172,8 @@ def test_docs_define_validation_command_boundaries() -> None:
     assert "active `component_sources.yaml` catalog" in readme
     assert "- `validate <config.yaml>`" in readme
     assert "project config contract and deployment-readiness shape" in readme
-    assert "Use `--target <instance-id>` to validate one target-scoped Grafana row" in readme
+    assert "Use `--target <target-id>` to validate one target-scoped Grafana row" in readme
+    assert "the target id is the normalized cluster resource name" in readme
     assert "each target must resolve an explicit kube context" in readme
     assert "accepted only when its generated Nebius name matches that target" in readme
     assert "Use `--target <target_ref>`" not in readme
@@ -177,7 +185,7 @@ def test_docs_define_validation_command_boundaries() -> None:
     ) in readme
     assert "### `validate-sources [component_sources.yaml]`" in design
     assert "### `validate <config.yaml>`" in design
-    assert "Supports `--target <instance-id>` for multi-target configs." in design
+    assert "Supports `--target <target-id>` for multi-target configs." in design
     assert "Target-scoped rows must resolve an explicit kube context" in design
     assert "current kubeconfig context is accepted only when its generated Nebius name" in (
         " ".join(design.split())
@@ -194,13 +202,13 @@ def test_docs_define_target_scoped_deploy_validation_report_filtering() -> None:
     design = (REPO_ROOT / "docs" / "design.md").read_text(encoding="utf-8")
 
     assert (
-        "When a run selects one target with `--target <instance-id>`, the refreshed "
+        "When a run selects one target with `--target <target-id>`, the refreshed "
         "validation section is scoped to that selected target instead of marking "
         "unselected target validations as not run; `--all-targets` reports every "
         "selected target."
     ) in readme
     assert (
-        "When a run selects one target with `--target <instance-id>`, the refreshed "
+        "When a run selects one target with `--target <target-id>`, the refreshed "
         "validation section includes only that target's validations; `--all-targets` "
         "reports every selected target."
     ) in design
@@ -293,7 +301,7 @@ def test_design_supporting_commands_include_quota_request_and_flux_targets() -> 
     assert "- `flux apply <generated-path>`" in supporting
     assert "- `flux destroy <generated-path>`" in supporting
     assert "- `flux bootstrap <generated-path>`" in supporting
-    assert "--target <instance-id>` / `--all-targets`" in supporting
+    assert "--target <target-id>` / `--all-targets`" in supporting
 
 
 def test_customer_docs_use_exact_generated_bundle_wrapper_commands() -> None:

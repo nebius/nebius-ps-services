@@ -1,6 +1,6 @@
 ---
 name: create-pr
-description: Create or reuse one or more feature branches, make each branch conflict-free against the default branch when possible, push it, open or reuse GitHub pull requests, and return the PR numbers, URLs, and merge order. Use when a user wants local work or named branches turned into reviewable PRs without hand-driving Git and GitHub steps, including when they provide the exact PR title or body to use.
+description: Create or reuse one or more feature branches, make each branch conflict-free against the default branch when possible, repair safe branch-owned validation or check failures, push it, open or reuse GitHub pull requests, and return the PR numbers, URLs, validation state, and merge order. Use when a user wants local work or named branches turned into reviewable PRs without hand-driving Git and GitHub steps, including when they provide the exact PR title or body to use.
 ---
 
 # Create PR
@@ -20,6 +20,8 @@ branch, and report the order the user should merge the PRs manually.
 - Reusing the current feature branch instead of creating extra branches.
 - Making each target branch conflict-free against the default branch, usually
   `main`, before returning the PR.
+- Repairing safe branch-owned validation, build, lint, test, or GitHub check
+  failures before presenting PR creation as handled.
 - Planning an ordered multi-branch merge path when several branches may overlap.
 - Treating the current non-default branch as the target when the user invokes
   the skill without naming a branch.
@@ -122,7 +124,11 @@ branch, and report the order the user should merge the PRs manually.
    Run focused checks based on touched files. At minimum, scan for conflict
    markers and whitespace errors before pushing. If relevant sibling skills
    apply to the touched surfaces, use them after the branch edits and keep the
-   scope limited to the PR branches.
+   scope limited to the PR branches. If validation fails and the failures are
+   plausibly caused by the branch, continue repairing the branch before
+   treating PR creation as complete. Do not stop at opening a PR link when the
+   branch has fixable local test, lint, build, or CI failures. Commit and push
+   the repair, then rerun the focused failing checks.
 8. Publish each branch.
    If a branch has no upstream yet, push it with upstream tracking. If conflict
    resolution created new commits, push those commits to the same branch.
@@ -142,8 +148,11 @@ branch, and report the order the user should merge the PRs manually.
       `gh pr create --fill` when the commit history is clean enough to support
       it.
 
-   Prefer a draft PR when the branch is intentionally incomplete or validation
-   has not run yet.
+   Prefer a draft PR when the branch is intentionally incomplete, validation
+   has not run yet, or a non-fixable blocker remains. If GitHub checks fail
+   after the PR is opened and the failures are available and branch-caused,
+   keep working on the same branch until the failures are resolved or clearly
+   blocked by external state.
 11. Return the result.
    Report:
 
@@ -224,6 +233,13 @@ branch, and report the order the user should merge the PRs manually.
   title when the user supplied a title explicitly.
 - Prefer a draft PR over a misleading ready-for-review PR when the work is
   intentionally still in progress.
+- Do not present the PR URL as the completed outcome while known branch-caused
+  validation or GitHub check failures remain fixable. Repair the branch first,
+  update the PR branch, and return the URL together with the now-current
+  validation state.
+- If a failure cannot be fixed safely in the current turn, leave or convert the
+  PR to draft, document the blocker in the PR body, and make the blocker lead
+  the final answer instead of treating PR creation as successful.
 
 ## Output Contract
 

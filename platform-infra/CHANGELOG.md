@@ -20,6 +20,27 @@ All notable changes to this project are documented in this file.
 
 ### Changed
 
+- Clarified that `modules/nfs` is a non-HA, single-VM NFS bridge intended for
+  tests, demos, short-lived environments, or explicit NFS compatibility cases;
+  production or long-lived Kubernetes RWX storage should use direct Nebius SFS.
+- Refactored `modules/nfs` into a thin wrapper around `modules/vm`: the shared
+  VM module now owns the Compute instance, boot disk, secondary data disk,
+  network interface, filesystem attachments, and disk security controls, while
+  the NFS module owns only NFS-specific cloud-init and export metadata. The old
+  nested `data_disk` object is replaced by first-class `data_disk_*` inputs with
+  no compatibility shim.
+- Hardened the default NFS export model for Kubernetes CSI use: exported paths
+  now use numeric storage UID/GID ownership, setgid permissions, and
+  `root_squash` with anon UID/GID values derived from the module storage
+  identity instead of permissive client-root defaults.
+- Added optional `kubernetes_target_ref` metadata for cxcli-managed configs
+  that need to bind one VM-backed NFS export to one MK8s target when multiple
+  NFS exports are enabled.
+- Added first-class guided single secondary-disk inputs to `modules/vm`
+  (`data_disk_enabled`, `data_disk_size_gib`, `data_disk_type`, encryption, and
+  deletion protection) while keeping `data_disks` for explicit multi-disk
+  Terraform callers. High-performance secondary disk sizes should follow the
+  selected disk type's allocation unit.
 - Changed `modules/vm` standalone observability collector identity handling so
   the module can create the dedicated VM-attached service account, IAM permit
   group, group membership, and configured project role grants during Terraform

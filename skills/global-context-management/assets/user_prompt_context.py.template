@@ -11,6 +11,11 @@ import re
 import subprocess
 import sys
 
+try:
+    import tomllib
+except ModuleNotFoundError:  # pragma: no cover - for older Python hook hosts.
+    tomllib = None
+
 
 COMPLEX_KEYWORDS = (
     "implement",
@@ -24,8 +29,13 @@ COMPLEX_KEYWORDS = (
     "test",
     "tests",
     "review",
+    "align",
+    "standardize",
+    "harden",
+    "hardening",
     "plan",
     "investigate",
+    "workflow",
     "ci",
     "failing",
     "failure",
@@ -108,9 +118,12 @@ def chmod_private(path: Path, mode: int) -> None:
         pass
 
 
+def codex_home() -> Path:
+    return Path(os.environ.get("CODEX_HOME", Path.home() / ".codex")).expanduser()
+
+
 def state_file_for_payload(root: str, payload: dict) -> Path:
-    codex_home = Path(os.environ.get("CODEX_HOME", Path.home() / ".codex"))
-    codex_home = codex_home.expanduser()
+    home = codex_home()
 
     workspace_name = safe_segment(Path(root).name or "workspace", "workspace")
     workspace_hash = hashlib.sha256(root.encode("utf-8")).hexdigest()[:12]
@@ -118,13 +131,13 @@ def state_file_for_payload(root: str, payload: dict) -> Path:
     session_segment = safe_segment(str(session_id), "manual")
 
     state_dir = (
-        codex_home
+        home
         / "task-state"
         / f"{workspace_name}-{workspace_hash}"
         / session_segment
     )
     state_dir.mkdir(parents=True, exist_ok=True)
-    chmod_private(codex_home / "task-state", 0o700)
+    chmod_private(home / "task-state", 0o700)
     chmod_private(state_dir.parent, 0o700)
     chmod_private(state_dir, 0o700)
 
@@ -136,6 +149,213 @@ def state_file_for_payload(root: str, payload: dict) -> Path:
     return state_file
 
 
+def read_json_file(path: Path) -> dict:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def read_toml_file(path: Path) -> dict:
+    if tomllib is None:
+        return {}
+    try:
+        data = tomllib.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def truthy(value: object, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return default
+
+
+def delegation_policy(home: Path) -> dict:
+    return read_json_file(home / "hooks" / "global_context_policy.json")
+
+
+def auto_subagents_enabled(policy: dict) -> bool:
+    return truthy(policy.get("auto_read_only_subagents")) or truthy(
+        policy.get("enabled")
+    )
+
+
+def is_relative_to(path: Path, parent: Path) -> bool:
+    try:
+        path.resolve().relative_to(parent.resolve())
+    except ValueError:
+        return False
+    except OSError:
+        return False
+    return True
+
+
+def safe_agent_name(name: object) -> str:
+    if not isinstance(name, str):
+        return ""
+    if re.fullmatch(r"[A-Za-z0-9_.-]{1,80}", name):
+        return name
+    return ""
+
+
+def compact_text(value: object, max_length: int = 160) -> str:
+    if not isinstance(value, str):
+        return ""
+    text = re.sub(r"\s+", " ", value).strip().replace("`", "'")
+    return text[:max_length]
+
+
+def agent_config_path(home: Path, name: str, spec: dict) -> Path:
+    config_file = spec.get("config_file")
+    if isinstance(config_file, str) and config_file.strip():
+        path = Path(config_file).expanduser()
+        if not path.is_absolute():
+            path = home / path
+        return path
+    return home / "agents" / f"{name}.toml"
+
+
+def configured_read_only_agents(home: Path) -> list[dict[str, str]]:
+    config = read_toml_file(home / "config.toml")
+    agents_table = config.get("agents", {})
+    if not isinstance(agents_table, dict):
+        return []
+
+    agents: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for raw_name, spec in agents_table.items():
+        name = safe_agent_name(raw_name)
+        if not name or name in seen or not isinstance(spec, dict):
+            continue
+
+        path = agent_config_path(home, name, spec)
+        if not is_relative_to(path, home):
+            continue
+
+        agent_config = read_toml_file(path)
+        if agent_config.get("sandbox_mode") != "read-only":
+            continue
+
+        agents.append(
+            {
+                "name": name,
+                "description": compact_text(spec.get("description")),
+            }
+        )
+        seen.add(name)
+
+    return agents
+
+
+def classify_agent(agent: dict[str, str]) -> str:
+    text = f"{agent['name']} {agent.get('description', '')}".lower()
+    if any(
+        marker in text
+        for marker in (
+            "risk",
+            "review",
+            "regression",
+            "security",
+            "compatibility",
+        )
+    ):
+        return "review"
+    if any(
+        marker in text
+        for marker in (
+            "test",
+            "verification",
+            "validate",
+            "validation",
+            "fixture",
+            "ci",
+        )
+    ):
+        return "planning"
+    return "exploration"
+
+
+def format_agent_names(names: list[str]) -> str:
+    return ", ".join(f"`{name}`" for name in names)
+
+
+def subagent_context(home: Path) -> str:
+    policy = delegation_policy(home)
+    if not auto_subagents_enabled(policy):
+        return ""
+
+    agents = configured_read_only_agents(home)
+    if not agents:
+        return ""
+
+    include_descriptions = truthy(policy.get("include_agent_descriptions"))
+    exploration_or_planning: list[str] = []
+    review: list[str] = []
+    lines = [
+        "",
+        "Hook-assisted read-only subagent delegation is enabled by local policy.",
+        "Configured read-only agent roles discovered from `$CODEX_HOME/config.toml`:",
+    ]
+    for agent in agents:
+        name = agent["name"]
+        if include_descriptions and agent.get("description"):
+            lines.append(f"- `{name}`: {agent['description']}")
+        else:
+            lines.append(f"- `{name}`")
+
+        if classify_agent(agent) == "review":
+            review.append(name)
+        else:
+            exploration_or_planning.append(name)
+
+    lines.extend(
+        [
+            "",
+            "For complex tasks that touch many files or require noisy exploration,",
+            "explicitly use all discovered read-only roles across the task when the",
+            "current runtime exposes subagent tools and active instructions permit",
+            "delegation.",
+        ]
+    )
+    if exploration_or_planning:
+        lines.append(
+            "Use these read-only exploration/planning roles early, preferably in "
+            f"parallel when their work is independent: "
+            f"{format_agent_names(exploration_or_planning)}."
+        )
+    if review:
+        lines.append(
+            "Use these read-only review roles before finalizing non-trivial or "
+            f"risky changes: {format_agent_names(review)}."
+        )
+    lines.append(
+        "For every subagent you spawn, request a concise final summary, wait "
+        "for the result, consolidate it in the parent thread, and close the "
+        "completed subagent thread when close controls are available and no "
+        "follow-up is needed."
+    )
+    lines.append(
+        "When multiple subagents are running, close each completed handle as "
+        "its terminal result arrives, then continue waiting on the remaining "
+        "handles until all spawned subagents are closed."
+    )
+    lines.append(
+        "Treat both `wait_agent` completions and asynchronous subagent "
+        "completion notifications as terminal results that should be "
+        "consolidated and closed."
+    )
+    lines.append(
+        "Keep subagent requests bounded and read-only. If spawning is unavailable "
+        "or denied, continue locally with narrow reads and state that limitation."
+    )
+    return "\n".join(lines) + "\n"
+
+
 def main() -> int:
     payload = read_payload()
     prompt = payload.get("prompt") or ""
@@ -145,16 +365,24 @@ def main() -> int:
     cwd = payload.get("cwd") or os.getcwd()
     root = resolve_root(cwd)
     state_file = state_file_for_payload(root, payload)
+    home = codex_home()
 
     context = f"""This prompt should use global context management.
 
 Durable task-state file: `{state_file}`
 
-Apply the `global-context-management` skill. Keep raw exploration output out of
-the parent context. Use `repo_mapper` and `test_strategist` for read-heavy
-exploration when useful. Use `risk_reviewer` before finalizing non-trivial code
-changes.
-"""
+Apply the `global-context-management` skill. Read the task-state file first
+when this prompt is a continuation or prior decisions may matter. Keep raw
+exploration output out of the parent context. Use configured read-only
+subagents for read-heavy exploration only when the user explicitly requests
+subagents, delegation, or parallel agents, or when a user-enabled local hook
+policy injects that request, the current runtime exposes subagent tools, and
+the current instructions permit delegation. If delegation was not explicitly
+authorized by the prompt or local hook policy, or subagents are unavailable or
+not permitted, continue with narrow local reads and state that limitation. Use
+read-only review agents before finalizing non-trivial code changes only when
+delegation is explicitly authorized, available, and permitted.
+{subagent_context(home)}"""
 
     print(
         json.dumps(

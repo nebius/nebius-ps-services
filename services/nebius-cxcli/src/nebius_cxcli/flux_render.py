@@ -44,6 +44,7 @@ from .mysterybox_eso import (
     MYSTERYBOX_ESO_MANAGED_VALUE,
     mysterybox_eso_extra_objects_for_target,
 )
+from .nfs_csi import NFS_CSI_APP_ID, nfs_instance_id_for_target
 from .paths import ProjectPaths
 from .runtime_config import to_plain_data
 
@@ -295,12 +296,7 @@ def _soperator_nfs_instance_id(
     *,
     target_ref: str,
 ) -> str:
-    nfs_instance_ids = _enabled_infra_instance_ids(payload, "nfs")
-    if target_ref in nfs_instance_ids:
-        return target_ref
-    if len(nfs_instance_ids) == 1:
-        return nfs_instance_ids[0]
-    return ""
+    return nfs_instance_id_for_target(payload, target_ref=target_ref)
 
 
 def _component_output_or_missing(
@@ -361,6 +357,84 @@ def _materialize_soperator_nfs_values(
     external_nfs["enabled"] = True
     external_nfs.setdefault("server", server)
     external_nfs.setdefault("path", export_path)
+
+
+def _coerce_mount_options(value: Any) -> list[str]:
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    token = str(value or "").strip()
+    return [token] if token else []
+
+
+def _materialize_nfs_csi_storage_class_values(
+    *,
+    payload: Mapping[str, Any],
+    chart_node: dict[str, Any],
+    target_ref: str,
+    resolved_component_outputs: Mapping[str, Any],
+) -> None:
+    if not target_ref:
+        return
+    nfs_instance_id = nfs_instance_id_for_target(payload, target_ref=target_ref)
+    values = _nested_mapping(chart_node, "values")
+    storage_class = _nested_mapping(values, "storageClass")
+    if storage_class.get("create") is False:
+        return
+    if not nfs_instance_id:
+        if storage_class.get("create") is True:
+            raise ValueError(
+                "apps chart 'csi-driver-nfs' StorageClass binding requires one enabled "
+                "infra:nfs component for this MK8s target"
+            )
+        return
+
+    parameters = _nested_mapping(storage_class, "parameters")
+    existing_server = str(parameters.get("server", "") or "").strip()
+    existing_share = str(parameters.get("share", "") or "").strip()
+    server = existing_server or _component_output_or_missing(
+        resolved_component_outputs,
+        instance_id=nfs_instance_id,
+        output_name="server_ip",
+    )
+    share = existing_share or _component_output_or_missing(
+        resolved_component_outputs,
+        instance_id=nfs_instance_id,
+        output_name="export_path",
+    )
+
+    existing_mount_options = _coerce_mount_options(storage_class.get("mountOptions"))
+    mount_options: Any
+    if existing_mount_options:
+        mount_options = existing_mount_options
+    else:
+        mount_options = _component_output_or_missing(
+            resolved_component_outputs,
+            instance_id=nfs_instance_id,
+            output_name="mount_options",
+        )
+
+    missing: list[str] = []
+    if server is _UNRESOLVED:
+        missing.append(component_output_ref(nfs_instance_id, "server_ip"))
+    if share is _UNRESOLVED:
+        missing.append(component_output_ref(nfs_instance_id, "export_path"))
+    if mount_options is _UNRESOLVED:
+        missing.append(component_output_ref(nfs_instance_id, "mount_options"))
+    if missing:
+        if storage_class.get("create") is True:
+            raise ValueError(
+                "apps chart 'csi-driver-nfs' StorageClass binding requires Terraform output(s) "
+                f"{', '.join(missing)}. Run `deploy`, or rerun `render` after Terraform state exists."
+            )
+        return
+
+    storage_class["create"] = True
+    parameters.setdefault("server", server)
+    parameters.setdefault("share", share)
+    if not existing_mount_options:
+        normalized_mount_options = _coerce_mount_options(mount_options)
+        if normalized_mount_options:
+            storage_class["mountOptions"] = normalized_mount_options
 
 
 def _configured_app_release_specs(
@@ -475,6 +549,13 @@ def _configured_app_release_specs(
 
                 if entry_id == "soperator":
                     _materialize_soperator_nfs_values(
+                        payload=payload,
+                        chart_node=chart_node,
+                        target_ref=target_ref,
+                        resolved_component_outputs=resolved_component_outputs,
+                    )
+                if entry_id == NFS_CSI_APP_ID:
+                    _materialize_nfs_csi_storage_class_values(
                         payload=payload,
                         chart_node=chart_node,
                         target_ref=target_ref,
@@ -761,7 +842,9 @@ def _externalize_dashboard_json_values(
             continue
         configmap_name = _file_slug(f"{release_name}-{folder_key}-dashboards")
         dashboards_config_maps[folder_key] = configmap_name
-        configmap_file = Path(f"configmap-{_file_slug(release_name)}-{_file_slug(folder_key)}-dashboards.yaml")
+        configmap_file = Path(
+            f"configmap-{_file_slug(release_name)}-{_file_slug(folder_key)}-dashboards.yaml"
+        )
         state.write_doc(
             configmap_file,
             _configmap_doc(

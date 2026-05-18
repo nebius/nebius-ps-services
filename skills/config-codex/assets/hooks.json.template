@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"{{CODEX_HOME}}/hooks/session_start_context.py\"",
+            "command": "python3 \"${CODEX_HOME:-$HOME/.codex}/hooks/session_start_context.py\"",
             "timeout": 10,
             "statusMessage": "Loading global context policy"
           }
@@ -18,7 +18,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"{{CODEX_HOME}}/hooks/user_prompt_context.py\"",
+            "command": "python3 \"${CODEX_HOME:-$HOME/.codex}/hooks/user_prompt_context.py\"",
             "timeout": 10
           }
         ]

@@ -41,6 +41,8 @@ resource "nebius_compute_v1_disk" "boot" {
 resource "nebius_compute_v1_disk" "data" {
   for_each = local.data_disk_specs
 
+  depends_on = [terraform_data.data_disk_contract]
+
   parent_id = var.parent_id
   name      = each.value.name
 
@@ -61,6 +63,17 @@ resource "nebius_compute_v1_disk" "data" {
         contains(["NETWORK_SSD_NON_REPLICATED", "NETWORK_SSD_IO_M3"], each.value.type)
       )
       error_message = "data_disks encryption_enabled can be true only for NETWORK_SSD_NON_REPLICATED or NETWORK_SSD_IO_M3 disks."
+    }
+  }
+}
+
+resource "terraform_data" "data_disk_contract" {
+  input = sha256(jsonencode(local.data_disk_names))
+
+  lifecycle {
+    precondition {
+      condition     = length(local.data_disk_names) == length(toset(local.data_disk_names))
+      error_message = "The guided secondary data disk name and data_disks names must be unique."
     }
   }
 }

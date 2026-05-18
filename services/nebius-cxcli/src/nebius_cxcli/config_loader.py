@@ -20,6 +20,7 @@ from .mysterybox_eso import (
     normalize_mysterybox_eso_project_settings,
     strip_mysterybox_eso_app_values,
 )
+from .nfs_csi import ensure_nfs_csi_app_rows
 from .observability import (
     ensure_observability_app_rows,
     materialize_observability_infra_values,
@@ -49,6 +50,8 @@ def normalize_runtime_config_payload(
     if materialize_mk8s_gpu_app_values(payload):
         changed = True
     if materialize_soperator_companion_app_values(payload):
+        changed = True
+    if ensure_nfs_csi_app_rows(payload):
         changed = True
     if normalize_observability_project_settings(payload):
         changed = True

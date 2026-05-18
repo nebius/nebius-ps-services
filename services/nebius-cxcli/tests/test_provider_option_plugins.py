@@ -8,6 +8,24 @@ import nebius_cxcli.provider_options as provider_options
 from nebius_cxcli.provider_options import OptionChoice, ProviderOptionLookup
 
 
+def test_provider_request_kwargs_are_bounded_and_env_tunable(monkeypatch) -> None:
+    monkeypatch.delenv("NEBIUS_CXCLI_PROVIDER_REQUEST_TIMEOUT_SECONDS", raising=False)
+    assert provider_options._provider_request_kwargs() == {
+        "timeout": 15.0,
+        "per_retry_timeout": 15.0,
+        "auth_timeout": 15.0,
+        "retries": 0,
+    }
+
+    monkeypatch.setenv("NEBIUS_CXCLI_PROVIDER_REQUEST_TIMEOUT_SECONDS", "3.5")
+    assert provider_options._provider_request_kwargs() == {
+        "timeout": 3.5,
+        "per_retry_timeout": 3.5,
+        "auth_timeout": 3.5,
+        "retries": 0,
+    }
+
+
 def _install_module(monkeypatch, name: str, module: ModuleType) -> None:
     parts = name.split(".")
     for index in range(1, len(parts)):
@@ -42,7 +60,9 @@ def _install_fake_mk8s_module(
         def __init__(self, sdk: object) -> None:
             self.sdk = sdk
 
-        def get_compatibility_matrix(self, request: object) -> SimpleNamespace:
+        def get_compatibility_matrix(
+            self, request: object, **_kwargs: object
+        ) -> SimpleNamespace:
             _ = request
             if compatibility_items is not None:
                 items = [
@@ -106,7 +126,7 @@ def _install_fake_compute_module(
         def __init__(self, sdk: object) -> None:
             self.sdk = sdk
 
-        def list(self, request: object) -> SimpleNamespace:
+        def list(self, request: object, **_kwargs: object) -> SimpleNamespace:
             assert 1 <= request.page_size <= 999
             response = SimpleNamespace(
                 items=[
@@ -120,7 +140,7 @@ def _install_fake_compute_module(
             )
             return SimpleNamespace(wait=lambda: response)
 
-        def get_by_name(self, request: object) -> SimpleNamespace:
+        def get_by_name(self, request: object, **_kwargs: object) -> SimpleNamespace:
             platform_name = getattr(request, "name", "")
             presets = [
                 SimpleNamespace(
@@ -145,7 +165,7 @@ def _install_fake_compute_module(
         def __init__(self, sdk: object) -> None:
             self.sdk = sdk
 
-        def list_public(self, request: object) -> SimpleNamespace:
+        def list_public(self, request: object, **_kwargs: object) -> SimpleNamespace:
             assert 1 <= request.page_size <= 999
             response = SimpleNamespace(
                 items=[

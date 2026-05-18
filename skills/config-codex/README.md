@@ -68,9 +68,12 @@ Codex is restarted and hooks are reviewed in /hooks
 
 ### Public Templates, Local Rendering
 
-Assets in this skill use placeholders such as `$CODEX_HOME`, `$HOME`, and
-`<PROJECT_ROOT>`. They are safe to publish. A user or Codex agent renders those
-templates into real files on that user's machine.
+Assets in this skill are public templates. Most files use placeholders such as
+`{{CODEX_HOME}}`, `{{SKILLS_HOME}}`, and `{{PROJECT_ROOT}}`;
+`hooks.json.template` intentionally uses `${CODEX_HOME:-$HOME/.codex}` so hook
+commands can follow the active shell environment without rendering a machine
+path. A user or Codex agent renders or adapts those templates into real files
+on that user's machine.
 
 ### Back Up, Then Patch
 
@@ -110,17 +113,25 @@ The hook layer injects durable context before Codex starts work:
 ```text
 Here is the workspace root.
 Here is the task-state file.
+Read current task state when prior context may matter.
 Use global-context-management for complex work.
 Keep the parent thread concise.
 ```
 
 Hooks do not implement the task. They make the right context visible to Codex.
+If a user deliberately opts in by creating
+`$CODEX_HOME/hooks/global_context_policy.json`, the `UserPromptSubmit` hook can
+also discover configured read-only agents from `$CODEX_HOME/config.toml` and
+inject a request to use them for complex prompts. The hook injects agent names
+only by default and does not directly call subagent tools.
 
 ### Skills Provide Workflow
 
 `global-context-management` defines the task workflow after hooks inject the
-state path. It tells Codex when to update task state, how to avoid parent-thread
-noise, when to use read-only subagents, and how to validate and review risk.
+state path. It tells Codex when to read and update task state, how to avoid
+parent-thread noise, when to use read-only subagents if the user explicitly
+authorizes delegation and the current runtime permits it, and how to validate
+and review risk.
 
 ### Custom Agents Are Read-Only Helpers
 
@@ -130,8 +141,44 @@ The custom agent config layers define three bounded roles:
 - `test_strategist`: identifies focused tests and validation order.
 - `risk_reviewer`: reviews near-final work for defects and missing tests.
 
-They inspect, summarize, and report. The main agent owns edits and final
-decisions.
+They inspect, summarize, and report. The main agent owns edits, final
+decisions, and cleanup. After a helper returns its final summary, the main
+agent should consolidate the useful result and close the completed subagent
+thread when close controls are available and no follow-up is needed.
+With multiple helpers, it should close each completed handle as its terminal
+result arrives and continue waiting on the remaining handles.
+
+The expected operating model is:
+
+```text
+Parent agent:
+  1. Spawn bounded read-only helpers for independent sidecar questions.
+  2. Continue parent work while helpers run when the parent is not blocked.
+  3. Wait for helper results before relying on their findings.
+  4. Treat wait results and async completion notices as terminal results.
+  5. Close each completed handle as soon as no follow-up is needed.
+  6. Use helper output as evidence, not final authority.
+  7. Own edits, verification, risk judgment, and the final answer.
+```
+
+Custom agents require the `multi_agent` feature, the configured `[agents.*]`
+roles, a restarted Codex session, and a surface that exposes subagent tools.
+They may not appear as separate user-visible controls in every surface. In
+current Codex surfaces, this setup makes subagent tools available but does not
+force automatic delegation; prompts that need subagents should explicitly say
+to use or spawn subagents, use delegation, or run parallel agents. For users
+who want hook-assisted delegation, a private local policy file can opt in to
+injecting that request for complex prompts without hardcoding agent names in
+the public repo:
+
+```json
+{
+  "auto_read_only_subagents": true,
+  "include_agent_descriptions": false
+}
+```
+
+Place it at `$CODEX_HOME/hooks/global_context_policy.json`.
 
 ### Full Access Is A Trusted-Machine Profile
 
@@ -240,19 +287,21 @@ setup.
    /hooks
    ```
 
-   Review the two local hook commands. They should point to:
+   Review the two local hook commands. They should resolve to the local hook
+   scripts, either directly or through `${CODEX_HOME:-$HOME/.codex}`:
 
    ```text
    $CODEX_HOME/hooks/session_start_context.py
    $CODEX_HOME/hooks/user_prompt_context.py
    ```
 
-   Trust or enable the hooks only after the paths are local and expected.
+   Trust or enable the hooks only after the resolved paths are local and
+   expected.
 
 9. Run a non-mutating probe:
 
    ```bash
-   codex exec --ask-for-approval never --cd <PROJECT_ROOT> \
+   codex exec --sandbox read-only --cd <PROJECT_ROOT> \
      "Summarize active instruction sources, available skills/custom agents, and the injected durable task-state path. Do not edit files."
    ```
 
@@ -263,6 +312,20 @@ setup.
    $CODEX_HOME/task-state/<workspace>-<hash>/<session-id>/current.md
    ```
 
+   The probe should also show that complex-task guidance tells Codex to read
+   current task state when prior context may matter, update it at checkpoints,
+   and avoid claiming automatic subagent delegation. To prove subagent
+   activation, run a second probe whose prompt explicitly asks Codex to spawn a
+   read-only helper, or enable the local hook policy and run a complex prompt
+   that should discover configured read-only agents from `$CODEX_HOME`.
+
+   Direct hook unit probes against a live `$CODEX_HOME` with synthetic
+   `session_id` values create scaffold-only task-state directories named after
+   those IDs. They prove the hook path calculation, but they are not active
+   persistent model state unless an agent later reads and updates that exact
+   path. Prefer `global-context-management/scripts/validate-local-templates.py`
+   for hook-unit validation because it uses disposable temporary homes.
+
 ## File Responsibilities
 
 - `SKILL.md`: runtime procedure Codex follows when configuring a user's Codex
@@ -271,8 +334,11 @@ setup.
 - `references/local-setup.md`: detailed setup and validation checklist.
 - `assets/AGENTS.md.template`: generic global instruction file.
 - `assets/config.toml.template`: public-safe Codex config template.
-- `assets/hooks.json.template`: hook registration template.
+- `assets/hooks.json.template`: hook registration template using
+  `${CODEX_HOME:-$HOME/.codex}` so hook commands follow the active Codex home.
 - `assets/hooks/*.py.template`: context-injection hook templates.
+- `assets/hooks/global_context_policy.json.template`: optional local policy
+  template for hook-assisted read-only subagent delegation.
 - `assets/agents/*.toml.template`: read-only custom-agent config templates.
 - `assets/task-state-template.md`: initial durable task-state document.
 - `agents/openai.yaml`: UI metadata and implicit invocation policy.
@@ -283,12 +349,16 @@ From the skills repo root:
 
 ```bash
 python3 align-skill/scripts/validate-skill-structure.py config-codex
+python3 align-skill/scripts/validate-skill-structure.py global-context-management
+python3 global-context-management/scripts/validate-local-templates.py
 markdownlint README.md CHANGELOG.md config-codex/**/*.md
 git diff --check
 ```
 
-Also run a targeted public-file scan for personal paths, names, tokens,
-private URLs, and real customer/project identifiers before publishing.
+Also confirm duplicate hook and custom-agent templates stay aligned between
+`config-codex/assets/` and `global-context-management/assets/`, then run a
+targeted public-file scan for personal paths, names, tokens, private URLs, and
+real customer/project identifiers before publishing.
 
 ## Sources
 
