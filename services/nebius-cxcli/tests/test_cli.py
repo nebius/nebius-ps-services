@@ -259,7 +259,7 @@ def _write_compute_boot_disk_sources_file(path: Path, *, module_dir: Path) -> No
                     "size_gib": 186,
                 },
             ],
-        }
+        },
     }
     path.write_text(
         yaml.safe_dump(
@@ -1146,6 +1146,7 @@ def test_render_normalizes_ssh_public_key_file_path_into_config(
         for item in payload["infra"]["components"]
         if isinstance(item, dict) and item.get("id") == component_id
     )
+    jumphost["instance_id"] = instance_name
     jumphost["inputs"] = {
         "parent_id": "project-456",
         "subnet_id": "subnet-123",
@@ -2329,10 +2330,10 @@ def test_load_context_rejects_missing_materialized_shared_app_defaults(tmp_path:
             ]
         },
         "apps": {
-                "charts": [
-                    {
-                        "id": "demo-app",
-                        "instance_id": "mk8s",
+            "charts": [
+                {
+                    "id": "demo-app",
+                    "instance_id": "mk8s",
                     "group": "workloads",
                     "enabled": True,
                     "repo": "https://example.invalid/charts",
@@ -2468,12 +2469,12 @@ def test_create_seeds_component_source_defaults_into_config(tmp_path: Path) -> N
     sources_file = tmp_path / "component_sources.yaml"
     sources_file.write_text(
         yaml.safe_dump(
-                _catalog(
-                    infra={
-                        "mk8s": {
-                            "source": {
-                                "portable": "git::https://github.com/example/infra.git//modules/demo-module?ref=v1.2.3",
-                                "local": str(module_dir),
+            _catalog(
+                infra={
+                    "mk8s": {
+                        "source": {
+                            "portable": "git::https://github.com/example/infra.git//modules/demo-module?ref=v1.2.3",
+                            "local": str(module_dir),
                         },
                         "ui": {
                             "enabled": True,
@@ -3323,9 +3324,8 @@ def test_component_add_interactive_prompts_name_before_scope_validation(
 
     assert result.exit_code == 1, result.output
     assert "VM name for new infra:vm" in result.output
-    assert (
-        result.output.index("VM name for new infra:vm")
-        < result.output.index("Validating Nebius tenant/project scope")
+    assert result.output.index("VM name for new infra:vm") < result.output.index(
+        "Validating Nebius tenant/project scope"
     )
     assert "scope validation unavailable" in result.output
     assert captured == [("tenant-123", "project-456", False)]
@@ -3940,7 +3940,7 @@ def test_component_add_requeues_provider_dependent_module_fields(
     result = _component_add(
         config_path,
         "wireguard-gw",
-        input_text="\ny\ny\n\n\n",
+        input_text="wg-gw\ny\ny\n\n\n",
     )
 
     assert result.exit_code == 0, result.output
@@ -3949,10 +3949,10 @@ def test_component_add_requeues_provider_dependent_module_fields(
     components = refreshed.get("infra", {}).get("components", [])
     assert isinstance(components, list)
     wireguard = next(
-        item
-        for item in components
-        if isinstance(item, dict) and item.get("id") == "wireguard-gw"
+        item for item in components if isinstance(item, dict) and item.get("id") == "wireguard-gw"
     )
+    assert wireguard["instance_id"] == "wg-gw"
+    assert wireguard["inputs"]["name"] == "wg-gw"
     assert wireguard["inputs"]["platform"] == "cpu-d3"
     assert wireguard["inputs"]["preset"] == "4vcpu-16gb"
 

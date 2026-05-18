@@ -29,6 +29,11 @@ All notable changes to this project are tracked here. This changelog follows
   presents removal selectors as row ids/resource names/target ids, and
   `--target` help explains that MK8s target ids are normalized cluster names
   persisted as `instance_id`.
+- Fixed CI-facing command-contract regressions so incomplete interactive
+  `create` reruns preserve an existing project when required resource-name
+  prompts are abandoned, `component list/add/remove` emit an explicit missing
+  `--config` error before treating selectors as paths, and
+  `validate-dashboards --target` help names the target cluster `instance_id`.
 - Clarified in docs and catalog wording that the VM-backed `nfs` component is
   a non-HA RWX bridge intended for tests, demos, short-lived environments, or
   explicit NFS compatibility cases, and that production or long-lived MK8s RWX

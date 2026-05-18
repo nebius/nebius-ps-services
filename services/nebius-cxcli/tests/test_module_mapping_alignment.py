@@ -84,10 +84,22 @@ def _payload_with_mk8s() -> dict:
     assert isinstance(components, list)
     for row in components:
         if isinstance(row, dict) and str(row.get("id", "")).strip().lower() == "mk8s":
+            old_instance_id = str(row.get("instance_id") or "mk8s")
+            row["instance_id"] = "cluster-a"
             inputs = row.setdefault("inputs", {})
             assert isinstance(inputs, dict)
             inputs["subnet_id"] = "subnet-abc123"
             inputs["cluster_name"] = "cluster-a"
+            for chart in payload.get("apps", {}).get("charts", []):
+                if not isinstance(chart, dict):
+                    continue
+                if chart.get("instance_id") == old_instance_id:
+                    chart["instance_id"] = "cluster-a"
+                if chart.get("target_ref") == old_instance_id:
+                    chart["target_ref"] = "cluster-a"
+            for target in payload.get("deploy", {}).get("targets", []):
+                if isinstance(target, dict) and target.get("instance_id") == old_instance_id:
+                    target["instance_id"] = "cluster-a"
             return payload
     raise AssertionError("mk8s component missing from starter payload")
 

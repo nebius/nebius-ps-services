@@ -108,6 +108,9 @@ All notable changes to the reusable Codex skills are tracked here.
   branches against the default branch, use the current branch as the target
   when no branch is provided, check ordered multi-branch merge paths, preserve
   one PR per branch, and report the manual merge order.
+- Tightened `create-pr` so known branch-owned validation, build, lint, test,
+  or GitHub check failures are repaired when safe before the PR link is
+  presented as the completed outcome.
 - Expanded `review-pr` so Codex can review PRs by number, URL, or current
   branch, distinguish user-owned, same-repository, forked, writable, and
   externally owned branches, resolve safe base-branch conflicts only when

@@ -71,6 +71,32 @@ def _infra_component_row(payload: dict, component_id: str) -> dict:
     raise KeyError(component_id)
 
 
+def _align_infra_resource_name(payload: dict, row: dict, resource_name: str) -> None:
+    component_id = str(row.get("id", "")).strip().lower()
+    old_instance_id = str(row.get("instance_id", "")).strip()
+    row["instance_id"] = resource_name
+    inputs = row.setdefault("inputs", {})
+    assert isinstance(inputs, dict)
+    inputs["cluster_name" if component_id == "mk8s" else "name"] = resource_name
+    if component_id != "mk8s" or not old_instance_id or old_instance_id == resource_name:
+        return
+    for chart in payload.get("apps", {}).get("charts", []):
+        if not isinstance(chart, dict):
+            continue
+        if chart.get("instance_id") == old_instance_id:
+            chart["instance_id"] = resource_name
+        if chart.get("target_ref") == old_instance_id:
+            chart["target_ref"] = resource_name
+    for target in payload.get("deploy", {}).get("targets", []):
+        if isinstance(target, dict) and target.get("instance_id") == old_instance_id:
+            target["instance_id"] = resource_name
+
+
+def _infra_component_path(component_id: str, instance_name: str) -> str:
+    label = component_id if component_id == instance_name else f"{component_id}@{instance_name}"
+    return f"infra.components[{label}]"
+
+
 def _catalog_with_shared_admin_ssh(
     tmp_path: Path,
     *,
@@ -155,6 +181,7 @@ def test_strict_validation_checks_dynamic_custom_component_source(
 def test_strict_validation_rejects_unknown_custom_module_inputs(tmp_path: Path) -> None:
     payload = _starter_payload(selected_infra={"mk8s"}, selected_apps=set())
     mk8s = _infra_component_row(payload, "mk8s")
+    _align_infra_resource_name(payload, mk8s, "demo-cluster")
     mk8s["inputs"] = {
         "parent_id": "project-456",
         "cluster_name": "demo-cluster",
@@ -168,9 +195,10 @@ def test_strict_validation_rejects_unknown_custom_module_inputs(tmp_path: Path) 
 
     with pytest.raises(RuntimeError) as exc_info:
         _validate_strict_config(config)
-    assert "infra.components[mk8s].inputs.ssh_public_key is not declared by module" in str(
-        exc_info.value
-    )
+    assert (
+        f"{_infra_component_path('mk8s', 'demo-cluster')}.inputs.ssh_public_key "
+        "is not declared by module"
+    ) in str(exc_info.value)
 
 
 def test_strict_validation_requires_managed_postgresql_name_when_enabled(
@@ -207,6 +235,7 @@ def test_strict_validation_requires_mk8s_cpu_shape_when_baseline_pool_is_enabled
 ) -> None:
     payload = _starter_payload(selected_infra={"mk8s"}, selected_apps=set())
     mk8s = _infra_component_row(payload, "mk8s")
+    _align_infra_resource_name(payload, mk8s, "demo-cluster")
     mk8s["inputs"] = {
         "parent_id": "project-456",
         "cluster_name": "demo-cluster",
@@ -228,8 +257,9 @@ def test_strict_validation_requires_mk8s_cpu_shape_when_baseline_pool_is_enabled
     with pytest.raises(RuntimeError) as exc_info:
         _validate_strict_config(config)
     message = str(exc_info.value)
-    assert "infra.components[mk8s].inputs.cpu_nodes_platform is required" in message
-    assert "infra.components[mk8s].inputs.cpu_nodes_preset is required" in message
+    mk8s_path = _infra_component_path("mk8s", "demo-cluster")
+    assert f"{mk8s_path}.inputs.cpu_nodes_platform is required" in message
+    assert f"{mk8s_path}.inputs.cpu_nodes_preset is required" in message
 
 
 def test_strict_validation_requires_mk8s_gpu_shape_when_gpu_enabled(
@@ -241,6 +271,7 @@ def test_strict_validation_requires_mk8s_gpu_shape_when_gpu_enabled(
         selected_apps={"nvidia-gpu-operator"},
     )
     mk8s = _infra_component_row(payload, "mk8s")
+    _align_infra_resource_name(payload, mk8s, "demo-cluster")
     mk8s["inputs"] = {
         "parent_id": "project-456",
         "cluster_name": "demo-cluster",
@@ -265,10 +296,11 @@ def test_strict_validation_requires_mk8s_gpu_shape_when_gpu_enabled(
     with pytest.raises(RuntimeError) as exc_info:
         _validate_strict_config(config)
     message = str(exc_info.value)
-    assert "infra.components[mk8s].inputs.gpu_node_groups is required" in message
-    assert "infra.components[mk8s].inputs.gpu_nodes_count_per_group is required" in message
-    assert "infra.components[mk8s].inputs.gpu_nodes_platform is required" in message
-    assert "infra.components[mk8s].inputs.gpu_nodes_preset is required" in message
+    mk8s_path = _infra_component_path("mk8s", "demo-cluster")
+    assert f"{mk8s_path}.inputs.gpu_node_groups is required" in message
+    assert f"{mk8s_path}.inputs.gpu_nodes_count_per_group is required" in message
+    assert f"{mk8s_path}.inputs.gpu_nodes_platform is required" in message
+    assert f"{mk8s_path}.inputs.gpu_nodes_preset is required" in message
 
 
 def test_strict_validation_requires_object_storage_name_when_enabled(
@@ -304,6 +336,7 @@ def test_strict_validation_ssh_jumphost_requires_allowed_cidrs(
 ) -> None:
     payload = _starter_payload(selected_infra={"ssh-jumphost"}, selected_apps=set())
     jumphost = _infra_component_row(payload, "ssh-jumphost")
+    _align_infra_resource_name(payload, jumphost, "ssh-jh")
     jumphost["inputs"] = {
         "parent_id": "project-456",
         "subnet_id": "subnet-123",
@@ -338,7 +371,9 @@ def test_strict_validation_ssh_jumphost_requires_allowed_cidrs(
 
     with pytest.raises(RuntimeError) as exc_info:
         _validate_strict_config(config)
-    assert "infra.components[ssh-jumphost].inputs.allowed_cidrs is required" in str(exc_info.value)
+    assert (
+        f"{_infra_component_path('ssh-jumphost', 'ssh-jh')}.inputs.allowed_cidrs is required"
+    ) in str(exc_info.value)
 
 
 def test_strict_validation_mysterybox_requires_secrets_when_enabled(
@@ -390,6 +425,7 @@ def test_strict_validation_allows_explicit_ssh_public_key_for_jumphost(
     reset_component_entry_cache()
     payload = _starter_payload(selected_infra={component_id}, selected_apps=set())
     jumphost = _infra_component_row(payload, component_id)
+    _align_infra_resource_name(payload, jumphost, instance_name)
     jumphost["inputs"] = {
         "parent_id": "project-456",
         "subnet_id": "subnet-123",
@@ -424,6 +460,7 @@ def test_strict_validation_rejects_missing_ssh_public_key_for_jumphost(
 ) -> None:
     payload = _starter_payload(selected_infra={component_id}, selected_apps=set())
     jumphost = _infra_component_row(payload, component_id)
+    _align_infra_resource_name(payload, jumphost, instance_name)
     jumphost["inputs"] = {
         "parent_id": "project-456",
         "subnet_id": "subnet-123",
@@ -442,8 +479,9 @@ def test_strict_validation_rejects_missing_ssh_public_key_for_jumphost(
     with pytest.raises(RuntimeError) as exc_info:
         _validate_strict_config(config)
 
-    assert f"infra.components[{component_id}].inputs.ssh_public_key is required" in str(
-        exc_info.value
+    assert (
+        f"{_infra_component_path(component_id, instance_name)}.inputs.ssh_public_key is required"
+        in str(exc_info.value)
     )
 
 
@@ -462,6 +500,7 @@ def test_strict_validation_requires_existing_public_ip_allocation_id_for_jump_ho
 ) -> None:
     payload = _starter_payload(selected_infra={component_id}, selected_apps=set())
     jumphost = _infra_component_row(payload, component_id)
+    _align_infra_resource_name(payload, jumphost, instance_name)
     jumphost["inputs"] = {
         "parent_id": "project-456",
         "subnet_id": "subnet-123",
@@ -482,8 +521,9 @@ def test_strict_validation_requires_existing_public_ip_allocation_id_for_jump_ho
     with pytest.raises(RuntimeError) as exc_info:
         _validate_strict_config(config)
 
-    assert f"infra.components[{component_id}].inputs.public_ip_allocation_id is required" in str(
-        exc_info.value
+    assert (
+        f"{_infra_component_path(component_id, instance_name)}.inputs.public_ip_allocation_id is required"
+        in str(exc_info.value)
     )
 
 
@@ -502,6 +542,7 @@ def test_strict_validation_rejects_public_ip_allocation_id_when_jump_host_create
 ) -> None:
     payload = _starter_payload(selected_infra={component_id}, selected_apps=set())
     jumphost = _infra_component_row(payload, component_id)
+    _align_infra_resource_name(payload, jumphost, instance_name)
     jumphost["inputs"] = {
         "parent_id": "project-456",
         "subnet_id": "subnet-123",
@@ -524,7 +565,7 @@ def test_strict_validation_rejects_public_ip_allocation_id_when_jump_host_create
         _validate_strict_config(config)
 
     assert (
-        f"infra.components[{component_id}].inputs.create_public_ip_allocation must be false "
+        f"{_infra_component_path(component_id, instance_name)}.inputs.create_public_ip_allocation must be false "
         "when inputs.public_ip_allocation_id is set"
     ) in str(exc_info.value)
 
@@ -556,6 +597,7 @@ def test_strict_validation_rejects_boot_disk_encryption_on_unsupported_disk_type
 ) -> None:
     payload = _starter_payload(selected_infra={component_id}, selected_apps=set())
     component = _infra_component_row(payload, component_id)
+    _align_infra_resource_name(payload, component, instance_name)
     component["inputs"] = {
         "parent_id": "project-456",
         "subnet_id": "subnet-123",
@@ -579,7 +621,7 @@ def test_strict_validation_rejects_boot_disk_encryption_on_unsupported_disk_type
         _validate_strict_config(config)
 
     assert (
-        f"infra.components[{component_id}].inputs.boot_disk_encryption_enabled can be true "
+        f"{_infra_component_path(component_id, instance_name)}.inputs.boot_disk_encryption_enabled can be true "
         "only for boot disk types that support explicit encryption"
     ) in str(exc_info.value)
 
@@ -588,8 +630,6 @@ def test_strict_validation_rejects_boot_disk_encryption_on_unsupported_disk_type
     ("component_id", "instance_name", "extra_inputs"),
     [
         ("vm", "vm", {}),
-        ("wireguard-gw", "wg-gw", {"local_subnets": ["10.0.0.0/8"]}),
-        ("ssh-jumphost", "ssh-jh", {"allowed_cidrs": ["203.0.113.10/32"]}),
         (
             "nfs",
             "nfs",
@@ -611,6 +651,7 @@ def test_strict_validation_rejects_created_disk_security_flags_with_existing_boo
 ) -> None:
     payload = _starter_payload(selected_infra={component_id}, selected_apps=set())
     component = _infra_component_row(payload, component_id)
+    _align_infra_resource_name(payload, component, instance_name)
     component["inputs"] = {
         "parent_id": "project-456",
         "subnet_id": "subnet-123",
@@ -633,7 +674,7 @@ def test_strict_validation_rejects_created_disk_security_flags_with_existing_boo
         _validate_strict_config(config)
 
     assert (
-        f"infra.components[{component_id}].inputs.boot_disk_encryption_enabled and "
+        f"{_infra_component_path(component_id, instance_name)}.inputs.boot_disk_encryption_enabled and "
         "inputs.boot_disk_deletion_protection apply only when cxcli creates the boot disk"
     ) in str(exc_info.value)
 

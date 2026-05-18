@@ -16,7 +16,7 @@ For skill-specific release notes, see [CHANGELOG.md](CHANGELOG.md).
 - End-to-end project alignment: `align`
 - Skill folder alignment and validation: `align-skill`
 - Disposable Ubuntu project container setup: `attach-ubuntu`
-- Branch-safe and conflict-free GitHub pull request creation: `create-pr`
+- Branch-safe GitHub pull request creation with safe check repair: `create-pr`
 - Public-safe local Codex runtime configuration: `config-codex`
 - GitHub Actions authoring and review: `github-workflows`
 - Global context management for long Codex tasks: `global-context-management`
@@ -110,9 +110,11 @@ testing on macOS with Docker Desktop and the Dev Containers extension.
 
 `create-pr` turns local work or named branches into GitHub pull requests
 without leaving new work on the default branch. It can prepare conflict-free
-PRs, avoid duplicate PRs for the same head branch, preserve one PR per branch,
-stage complete monorepo local work with `git add -A` when committing current
-dirty changes, and report readiness plus manual merge order.
+PRs, repair safe branch-owned validation or GitHub check failures before
+presenting the PR as handled, avoid duplicate PRs for the same head branch,
+preserve one PR per branch, stage complete monorepo local work with
+`git add -A` when committing current dirty changes, and report readiness plus
+manual merge order.
 
 ### `config-codex`
 

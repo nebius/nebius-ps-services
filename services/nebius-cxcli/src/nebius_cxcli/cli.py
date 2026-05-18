@@ -995,12 +995,11 @@ _CONFIG_YAML_ARGUMENT_HELP = (
     "(<tenant-folder>/<project-folder>/config.yaml)."
 )
 _COMPONENT_CONFIG_OPTION_HELP = (
-    "Project config.yaml to inspect or edit; selectors stay unambiguous and "
-    "are not path arguments."
+    "Project config.yaml to inspect or edit; selectors stay unambiguous and are not path arguments."
 )
 _MK8S_TARGET_ID_HELP = (
-    "MK8s target id (the normalized cluster resource name stored as that "
-    "target's instance_id)"
+    "MK8s target cluster instance_id (the normalized cluster resource name "
+    "stored as that target's instance_id)"
 )
 _GENERATED_BUNDLE_CONFIG_ARGUMENT_HELP = (
     "Path to project config.yaml under the deployments root. "
@@ -1024,6 +1023,16 @@ _COMPONENT_SOURCES_ARGUMENT_HELP = (
     "When omitted, validate-sources uses the normal catalog resolution order "
     "from global flags, environment, and bundled defaults."
 )
+
+
+def _require_component_config_option(config_path: Path | None) -> Path:
+    if config_path is None:
+        raise RuntimeError(
+            "Missing option '--config'. Pass the project config.yaml with --config <config.yaml>."
+        )
+    return config_path
+
+
 app = typer.Typer(
     add_completion=False,
     help=(
@@ -10224,15 +10233,69 @@ def _wizard_followup_required_field_issues(
     payload: dict[str, Any],
     infra_entries: tuple[ComponentEntry, ...],
 ) -> list[str]:
-    return list(
-        dict.fromkeys(
-            _required_enabled_infra_field_issues(
-                payload=payload,
-                infra_entries=infra_entries,
-                include_runtime_required=False,
-            )
+    issues = _required_enabled_infra_field_issues(
+        payload=payload,
+        infra_entries=infra_entries,
+        include_runtime_required=False,
+    )
+    issues.extend(
+        _wizard_placeholder_resource_name_issues(
+            payload=payload,
+            infra_entries=infra_entries,
         )
     )
+    return list(dict.fromkeys(issues))
+
+
+def _wizard_placeholder_resource_name_issues(
+    *,
+    payload: dict[str, Any],
+    infra_entries: tuple[ComponentEntry, ...],
+) -> list[str]:
+    issues: list[str] = []
+    entry_by_id = {entry.id: entry for entry in infra_entries}
+    for row in _dynamic_enabled_infra_component_rows(payload):
+        component_id = str(row["id"])
+        instance_id = str(row["instance_id"])
+        if not _component_instance_id_is_auto_allocated(component_id, instance_id):
+            continue
+        entry = entry_by_id.get(component_id)
+        if entry is None:
+            continue
+        name_input = _entry_scalar_resource_name_input(entry)
+        if not name_input:
+            continue
+        source = str(row.get("source", "")).strip() or str(entry.source or "").strip()
+        if not source:
+            continue
+        required_leaf_names = {
+            _normalize_leaf_name(name)
+            for name in module_required_variables(
+                _entry_module_metadata_source(entry, fallback_source=source)
+            )
+        }
+        required_leaf_names |= _conditionally_required_input_leaf_names(
+            entry=entry,
+            component_node=row,
+        )
+        required_leaf_names -= input_binding_leaf_names(entry)
+        required_leaf_names -= literal_default_input_leaf_names(entry)
+        if _normalize_leaf_name(name_input) not in required_leaf_names:
+            continue
+        inputs = row.get("inputs")
+        if not isinstance(inputs, Mapping):
+            continue
+        raw_name = _mapping_path_value(inputs, name_input)
+        normalized_name = normalize_component_token(raw_name)
+        if normalized_name != instance_id:
+            continue
+        component_path_label = _component_instance_path_label(
+            "infra",
+            component_id,
+            instance_id,
+        )
+        issues.append(f"{component_path_label}.inputs.{name_input} is required")
+    return issues
 
 
 def _print_incomplete_wizard_no_write_warning(
@@ -17790,13 +17853,13 @@ def create_command(
 )
 def component_list_command(
     config_path: Annotated[
-        Path,
+        Path | None,
         typer.Option(
             "--config",
             metavar="CONFIG_YAML",
             help=_COMPONENT_CONFIG_OPTION_HELP,
         ),
-    ] = ...,
+    ] = None,
 ) -> None:
     """List enabled component instances and reusable catalog component types.
 
@@ -17809,6 +17872,7 @@ def component_list_command(
       nebius-cxcli component list --config <config.yaml>
     """
     try:
+        config_path = _require_component_config_option(config_path)
         _config, _paths = _load_context_readonly(config_path)
         payload = to_plain_data(_config)
         if not isinstance(payload, dict):
@@ -17899,13 +17963,13 @@ def component_add_command(
         ),
     ] = None,
     config_path: Annotated[
-        Path,
+        Path | None,
         typer.Option(
             "--config",
             metavar="CONFIG_YAML",
             help=_COMPONENT_CONFIG_OPTION_HELP,
         ),
-    ] = ...,
+    ] = None,
     no_interactive: Annotated[
         bool,
         typer.Option(
@@ -17945,6 +18009,7 @@ def component_add_command(
       nebius-cxcli component add gateway-helm@serving-cluster --config <config.yaml> --no-interactive
     """
     try:
+        config_path = _require_component_config_option(config_path)
         _config, _paths = _load_context(config_path)
         if validate_sources:
             _validate_component_sources_or_raise()
@@ -18549,13 +18614,13 @@ def component_remove_command(
         ),
     ] = None,
     config_path: Annotated[
-        Path,
+        Path | None,
         typer.Option(
             "--config",
             metavar="CONFIG_YAML",
             help=_COMPONENT_CONFIG_OPTION_HELP,
         ),
-    ] = ...,
+    ] = None,
     no_interactive: Annotated[
         bool,
         typer.Option(
@@ -18580,6 +18645,7 @@ def component_remove_command(
       nebius-cxcli component remove gateway-helm@serving-cluster --config <config.yaml> --no-interactive
     """
     try:
+        config_path = _require_component_config_option(config_path)
         _config, _paths = _load_context(config_path)
         payload = _load_config_payload(config_path.resolve())
         interactive_mode = not no_interactive

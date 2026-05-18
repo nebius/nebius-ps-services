@@ -1,4 +1,4 @@
 interface:
   display_name: "Create PR"
-  short_description: "Open conflict-free ordered branch PRs"
-  default_prompt: "Use $create-pr to refresh the base-branch context, resolve the current branch or named branches against the default branch when safe, stage complete local monorepo work with git add -A when committing current dirty changes, preserve one PR per branch, honor any explicit PR title or body from the user request, open or reuse the GitHub pull requests, and return the PR numbers, URLs, readiness state, and manual merge order."
+  short_description: "Open conflict-free PRs and repair safe checks"
+  default_prompt: "Use $create-pr to refresh the base-branch context, resolve the current branch or named branches against the default branch when safe, stage complete local monorepo work with git add -A when committing current dirty changes, preserve one PR per branch, repair safe branch-owned validation or GitHub check failures before treating PR creation as complete, honor any explicit PR title or body from the user request, open or reuse the GitHub pull requests, and return the PR numbers, URLs, readiness state, validation state, and manual merge order."

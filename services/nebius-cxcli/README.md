@@ -1599,7 +1599,7 @@ nebius-cxcli auth --project-config /path/to/config.yaml --validate-profile
   - `create`: pass the deployments root directory.
   - `discover`: pass the deployments root or any narrower directory under it, including one project directory or `generated/`.
   - `component list/add/remove`: pass the project `config.yaml` with `--config <config.yaml>` so component selectors can be written first.
-  - `validate`, `validate-dashboards`, `quota-check`, `quota-request`, `render`, `deploy`, `bootstrap-ci`, `wireguard`, `ssh-jumphost`, `destroy`, `email`: pass the project `config.yaml`.
+  - `component`, `validate`, `validate-dashboards`, `quota-check`, `quota-request`, `render`, `deploy`, `bootstrap-ci`, `wireguard`, `ssh-jumphost`, `destroy`, `email`: operate on the project `config.yaml`.
   - `validate-generated`: pass `generated/`, one of its subdirectories, or a file under that tree.
   - `terraform *`: pass the project `generated/` directory or a path under `generated/infra/`.
   - `flux *`: pass the project `generated/` directory or a path under `generated/flux/`.
