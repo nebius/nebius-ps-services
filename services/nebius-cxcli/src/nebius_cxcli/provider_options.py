@@ -47,6 +47,8 @@ SUPPORTED_PROVIDER_OPTION_SOURCES = frozenset(
 
 ProviderOptionPlugin = Callable[..., Iterable[object] | None]
 _OPTION_PLUGIN_ENV = "NEBIUS_CXCLI_PROVIDER_OPTION_PLUGINS"
+_REQUEST_TIMEOUT_ENV = "NEBIUS_CXCLI_PROVIDER_REQUEST_TIMEOUT_SECONDS"
+_DEFAULT_REQUEST_TIMEOUT_SECONDS = 15.0
 _NEBIUS_LIST_PAGE_SIZE = 999
 
 
@@ -139,6 +141,28 @@ def _normalize_plugin_choices(items: Iterable[object] | None) -> list[OptionChoi
 def _is_live_fabric_name(value: object) -> bool:
     normalized = _as_str(value)
     return bool(normalized) and normalized.upper() not in {"N/A", "NA", "NONE"}
+
+
+def _provider_request_timeout_seconds() -> float:
+    raw = os.environ.get(_REQUEST_TIMEOUT_ENV, "").strip()
+    if raw:
+        try:
+            parsed = float(raw)
+        except ValueError:
+            return _DEFAULT_REQUEST_TIMEOUT_SECONDS
+        if parsed > 0:
+            return parsed
+    return _DEFAULT_REQUEST_TIMEOUT_SECONDS
+
+
+def _provider_request_kwargs() -> dict[str, float | int]:
+    timeout_seconds = _provider_request_timeout_seconds()
+    return {
+        "timeout": timeout_seconds,
+        "per_retry_timeout": timeout_seconds,
+        "auth_timeout": timeout_seconds,
+        "retries": 0,
+    }
 
 
 @lru_cache(maxsize=8)
@@ -616,7 +640,14 @@ class ProviderOptionLookup:
             )
 
         try:
-            tenant = TenantServiceClient(sdk).get(GetTenantRequest(id=normalized_tenant_id)).wait()
+            tenant = (
+                TenantServiceClient(sdk)
+                .get(
+                    GetTenantRequest(id=normalized_tenant_id),
+                    **_provider_request_kwargs(),
+                )
+                .wait()
+            )
             resolved_tenant_id = _as_str(getattr(getattr(tenant, "metadata", None), "id", None))
             if resolved_tenant_id and resolved_tenant_id != normalized_tenant_id:
                 return TenantProjectValidationResult(
@@ -637,7 +668,12 @@ class ProviderOptionLookup:
 
         try:
             project = (
-                ProjectServiceClient(sdk).get(GetProjectRequest(id=normalized_project_id)).wait()
+                ProjectServiceClient(sdk)
+                .get(
+                    GetProjectRequest(id=normalized_project_id),
+                    **_provider_request_kwargs(),
+                )
+                .wait()
             )
         except Exception as exc:
             return TenantProjectValidationResult(
@@ -698,13 +734,25 @@ class ProviderOptionLookup:
         tenant_name = ""
         project_name = ""
         try:
-            tenant = TenantServiceClient(sdk).get(GetTenantRequest(id=normalized_tenant_id)).wait()
+            tenant = (
+                TenantServiceClient(sdk)
+                .get(
+                    GetTenantRequest(id=normalized_tenant_id),
+                    **_provider_request_kwargs(),
+                )
+                .wait()
+            )
             tenant_name = _as_str(getattr(getattr(tenant, "metadata", None), "name", None))
         except Exception:
             tenant_name = ""
         try:
             project = (
-                ProjectServiceClient(sdk).get(GetProjectRequest(id=normalized_project_id)).wait()
+                ProjectServiceClient(sdk)
+                .get(
+                    GetProjectRequest(id=normalized_project_id),
+                    **_provider_request_kwargs(),
+                )
+                .wait()
             )
             project_name = _as_str(getattr(getattr(project, "metadata", None), "name", None))
         except Exception:
@@ -1416,7 +1464,8 @@ class ProviderOptionLookup:
         client = PlatformServiceClient(sdk)
         try:
             platform = client.get_by_name(
-                GetByNameRequest(parent_id=project_id, name=platform_name)
+                GetByNameRequest(parent_id=project_id, name=platform_name),
+                **_provider_request_kwargs(),
             ).wait()
         except Exception:
             return ()
@@ -1555,7 +1604,8 @@ class ProviderOptionLookup:
         response = (
             NodeGroupServiceClient(sdk)
             .get_compatibility_matrix(
-                GetNodeGroupCompatibilityMatrixRequest(cluster_kubernetes_version=version)
+                GetNodeGroupCompatibilityMatrixRequest(cluster_kubernetes_version=version),
+                **_provider_request_kwargs(),
             )
             .wait()
         )
@@ -1732,7 +1782,10 @@ class ProviderOptionLookup:
 
         response = (
             ClusterServiceClient(sdk)
-            .list_control_plane_versions(ListClusterControlPlaneVersionsRequest())
+            .list_control_plane_versions(
+                ListClusterControlPlaneVersionsRequest(),
+                **_provider_request_kwargs(),
+            )
             .wait()
         )
         items = list(getattr(response, "items", []))
@@ -1749,8 +1802,9 @@ class ProviderOptionLookup:
     def _paged_list(self, *, request_factory, request_call) -> list[Any]:
         items: list[Any] = []
         page_token = ""
+        request_kwargs = _provider_request_kwargs()
         while True:
-            response = request_call(request_factory(page_token)).wait()
+            response = request_call(request_factory(page_token), **request_kwargs).wait()
             items.extend(list(getattr(response, "items", [])))
             next_page_token = _as_str(getattr(response, "next_page_token", None))
             if not next_page_token:

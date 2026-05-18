@@ -104,6 +104,11 @@ module "vm" {
   - `boot_disk_type`
   - `boot_disk_encryption_enabled`
   - `boot_disk_deletion_protection`
+  - `data_disk_enabled`
+  - `data_disk_size_gib`
+  - `data_disk_type`
+  - `data_disk_encryption_enabled`
+  - `data_disk_deletion_protection`
   - `data_disks`
   - `existing_data_disks`
   - `filesystems`
@@ -152,8 +157,19 @@ Disk security controls map directly to the Nebius disk API fields. Set
 is encrypted by the platform. Set `boot_disk_deletion_protection=true` to
 enable provider-side deletion protection on the module-created boot disk. Both
 controls are invalid with `boot_disk_existing_id` because the module is not
-creating that disk. Managed `data_disks` support the same per-disk
-`encryption_enabled` and `deletion_protection` fields.
+creating that disk.
+
+For the common single secondary-disk case, set `data_disk_enabled=true` and
+choose `data_disk_size_gib` plus `data_disk_type`. The module creates and
+attaches that disk through the same managed-disk path as `data_disks`.
+`data_disk_encryption_enabled` and `data_disk_deletion_protection` map to the
+same Nebius disk API fields as the boot disk. Explicit encryption is valid only
+for `NETWORK_SSD_NON_REPLICATED` and `NETWORK_SSD_IO_M3`; `NETWORK_SSD` is
+encrypted by the platform. Nebius high-performance SSD types use 93 GiB
+allocation units, so choose data-disk sizes that match the selected disk type.
+Use `data_disks` only when you need more than one managed disk or per-disk
+object-level customization, and use
+`existing_data_disks` for caller-owned disks.
 
 ## VM Type Semantics
 
@@ -208,16 +224,17 @@ Operational notes:
   local `.pub` path when using `nebius-cxcli`; direct Terraform module callers
   must pass inline OpenSSH public key text.
 - `cloud_init_user_data_override` is intended for wrapper modules such as
-  `ssh-jumphost` and `wireguard-gw` that should reuse this module's VM
+  `ssh-jumphost`, `wireguard-gw`, and `nfs` that should reuse this module's VM
   resource model while owning a specialized cloud-init payload.
 - Nebius does not allow `cloud_init_user_data` to be updated on a running VM.
   The module ignores in-place `cloud_init_user_data` diffs and uses a separate
   cloud-init hash trigger so future rendered cloud-init changes replace the
   module-created boot disk and instance instead of attempting a rejected update
   or reusing old cloud-init state.
-- Advanced disk/filesystem/container attachment shapes remain Terraform-native
-  object/list inputs so they can still be edited as YAML/JSON in `config.yaml`
-  when needed.
+- `nebius-cxcli` prompts the guided single secondary-disk fields directly.
+  Advanced multi-disk, existing-disk, filesystem, and container attachment
+  shapes remain Terraform-native object/list inputs so they can still be edited
+  as YAML/JSON in `config.yaml` when needed.
 - VM observability in `nebius-cxcli` uses Nebius' built-in VM Monitoring agent:
   service-provider metrics are collected automatically by Nebius, and journald
   logs are enabled by cxcli-managed VM labels when

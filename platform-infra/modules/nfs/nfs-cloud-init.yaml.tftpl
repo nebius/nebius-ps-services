@@ -20,6 +20,9 @@ write_files:
       set -euo pipefail
 
       export EXPORT_PATH='${export_path}'
+      export STORAGE_UID='${storage_uid}'
+      export STORAGE_GID='${storage_gid}'
+      export EXPORT_PERMISSIONS='${export_permissions}'
       export CLIENT_CIDRS_JSON='${client_cidrs_json}'
       export EXPORT_OPTIONS='${export_options}'
       export FILESYSTEMS_JSON='${filesystems_json}'
@@ -74,8 +77,14 @@ write_files:
 
       mount -a
       mkdir -p "$EXPORT_PATH"
-      chown nobody:nogroup "$EXPORT_PATH"
-      chmod 0777 "$EXPORT_PATH"
+      if ! getent group "$STORAGE_GID" >/dev/null; then
+        groupadd --gid "$STORAGE_GID" k8s-storage
+      fi
+      if ! getent passwd "$STORAGE_UID" >/dev/null; then
+        useradd --system --uid "$STORAGE_UID" --gid "$STORAGE_GID" --no-create-home --shell /usr/sbin/nologin k8s-storage
+      fi
+      chown "$STORAGE_UID:$STORAGE_GID" "$EXPORT_PATH"
+      chmod "$EXPORT_PERMISSIONS" "$EXPORT_PATH"
 
       mkdir -p /etc/exports.d
       exports_file=/etc/exports.d/cxcli-nfs.exports

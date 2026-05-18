@@ -48,6 +48,43 @@ All notable changes to the reusable Codex skills are tracked here.
 
 ### Changed
 
+- Clarified the `global-context-management` and `config-codex` contracts so
+  subagent delegation is described as runtime- and instruction-dependent,
+  noisy parent-thread output is called out as the main context-growth risk, and
+  hook prompts now provide a narrow-read fallback when subagents are not
+  available or permitted. Task-state files are now explicitly described as
+  continuity notes that must be read at task start, resume, or compaction
+  boundaries when prior context may matter, then updated at checkpoints. The
+  shared hook registration template now consistently resolves scripts through
+  `${CODEX_HOME:-$HOME/.codex}`, and the skill READMEs plus `SKILL.md`
+  contracts now state the same installer-versus-runtime split.
+- Clarified that `multi_agent`, configured `[agents.*]` roles, hooks, and skill
+  activation make subagent delegation possible but do not force automatic
+  delegation. Current runtime probes must explicitly ask Codex to use or spawn
+  subagents, use delegation, or run parallel agents; the `codex exec` examples
+  now use the current `--sandbox read-only` flag instead of the obsolete
+  `--ask-for-approval` option.
+- Added opt-in hook-assisted read-only subagent delegation for
+  `global-context-management`: the `UserPromptSubmit` hook can now discover
+  configured read-only agents from `$CODEX_HOME/config.toml` and
+  `$CODEX_HOME/agents` when a local `$CODEX_HOME/hooks/global_context_policy.json`
+  policy enables it, while keeping public templates free of personal paths.
+- Clarified the read-only subagent lifecycle: the parent agent should ask
+  helpers for concise final summaries, wait for results, consolidate them, and
+  close completed subagent threads when close controls are available and no
+  follow-up is needed. When multiple helpers are running, the parent should
+  close each completed handle as its terminal result arrives and continue
+  waiting on the remaining handles.
+- Documented the parent/subagent mental model in the `config-codex` and
+  `global-context-management` READMEs.
+- Clarified that direct live hook probes with synthetic `session_id` values can
+  leave scaffold-only task-state directories, and extended local template
+  validation to cover the no-`session_id` manual fallback path.
+- Aligned the `config-codex` AGENTS template and skills README with the global
+  script-execution policy: read-only inspection or validation scripts may run
+  when they do not modify files, services, external systems, credentials, or
+  persistent state, while mutating scripts still require explicit Run/Execute
+  wording.
 - Updated the `global-context-management` hook template so hook commands
   resolve scripts through `${CODEX_HOME:-$HOME/.codex}` and work with
   non-default local Codex homes.

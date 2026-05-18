@@ -16,6 +16,7 @@ from .component_instances import (
     INSTANCE_ID_PATTERN,
     component_instance_id,
     component_type_id,
+    normalize_component_token,
 )
 from .components import (
     ComponentScope,
@@ -48,6 +49,49 @@ def _as_text(value: Any) -> str:
     if value is None:
         return ""
     return str(value).strip()
+
+
+def _resolve_mapping_segment(node: Mapping[str, Any], segment: str) -> Any:
+    candidates = (segment, segment.replace("-", "_"), segment.replace("_", "-"))
+    for candidate in candidates:
+        if candidate in node:
+            return node[candidate]
+    return None
+
+
+def _mapping_path_value(node: Mapping[str, Any], dotted_path: str) -> Any:
+    current: Any = node
+    for raw_segment in dotted_path.split("."):
+        segment = raw_segment.strip()
+        if not segment or not isinstance(current, Mapping):
+            return None
+        current = _resolve_mapping_segment(current, segment)
+        if current is None:
+            return None
+    return current
+
+
+def _is_scalar_resource_name_value(value: Any) -> bool:
+    return value is not None and not isinstance(value, (bool, Mapping, list, tuple, set))
+
+
+def _is_complex_type_hint(type_hint: Any) -> bool:
+    normalized = _as_text(type_hint).lower()
+    return normalized.startswith(("list(", "set(", "map(", "object(", "tuple("))
+
+
+def _entry_scalar_resource_name_input(entry: Any) -> str:
+    if entry is None or entry.status is None:
+        return ""
+    name_input = _as_text(entry.status.name_input) or "name"
+    wizard_fields = getattr(entry, "wizard_fields", {}) or {}
+    for candidate in (name_input, f"inputs.{name_input}"):
+        field = wizard_fields.get(candidate)
+        if not isinstance(field, Mapping):
+            continue
+        if bool(field.get("prompt_complex")) or _is_complex_type_hint(field.get("type_hint")):
+            return ""
+    return name_input
 
 
 def _validate_client_info(payload: Mapping[str, Any]) -> None:
@@ -526,6 +570,7 @@ def validate_dynamic_payload_structure(payload: Mapping[str, Any]) -> None:
     app_lookup = component_lookup("apps")
     infra_lookup = component_lookup("infra")
     seen_infra_instance_ids: set[str] = set()
+    seen_infra_resource_names: dict[tuple[str, str], int] = {}
     cluster_target_refs: set[str] = set()
     enabled_vm_instance_ids: set[str] = set()
     for index, raw_component in enumerate(infra_components):
@@ -582,6 +627,30 @@ def validate_dynamic_payload_structure(payload: Mapping[str, Any]) -> None:
                 "use deploy.targets[].validations.mk8s_gpu.*"
             )
         entry = infra_lookup.get(component_id)
+        if entry is not None and bool(raw_component.get("enabled", False)):
+            name_input = _entry_scalar_resource_name_input(entry)
+            if name_input:
+                raw_resource_name = _mapping_path_value(inputs, name_input)
+                if _is_scalar_resource_name_value(raw_resource_name):
+                    normalized_name = normalize_component_token(raw_resource_name)
+                    if not normalized_name or not INSTANCE_ID_PATTERN.fullmatch(normalized_name):
+                        raise ValueError(
+                            f"infra.components[{index}].inputs.{name_input} must normalize to a valid "
+                            "instance_id using lowercase letters, digits, and hyphens"
+                        )
+                    name_key = (component_id, normalized_name)
+                    existing_index = seen_infra_resource_names.get(name_key)
+                    if existing_index is not None:
+                        raise ValueError(
+                            f"infra.components[{index}].inputs.{name_input} '{normalized_name}' "
+                            f"duplicates infra.components[{existing_index}].inputs.{name_input}"
+                        )
+                    seen_infra_resource_names[name_key] = index
+                    if instance_id != normalized_name:
+                        raise ValueError(
+                            f"infra.components[{index}].instance_id '{instance_id}' must match "
+                            f"normalized inputs.{name_input} '{normalized_name}'"
+                        )
         if (
             entry is not None
             and entry.handoff is not None

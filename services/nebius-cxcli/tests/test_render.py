@@ -23,6 +23,7 @@ from nebius_cxcli.deploy_targets import flux_target_dir
 from nebius_cxcli.flux_render import render_flux
 from nebius_cxcli.mk8s_gpu import materialize_mk8s_gpu_app_values
 from nebius_cxcli.mysterybox_eso import materialize_mysterybox_eso_app_values
+from nebius_cxcli.nfs_csi import ensure_nfs_csi_app_rows
 from nebius_cxcli.paths import resolve_project_paths, validate_path_alignment
 from nebius_cxcli.render import render_project
 from nebius_cxcli.runtime_introspection import ModuleVariable, reset_runtime_introspection_cache
@@ -172,6 +173,33 @@ def _infra_component_row(payload: dict, component_id: str) -> dict:
         if str(item.get("id", "")).strip().lower() == component_id:
             return item
     raise KeyError(component_id)
+
+
+def _align_infra_resource_name(
+    payload: dict,
+    row: dict,
+    resource_name: str,
+    *,
+    name_input: str | None = None,
+) -> None:
+    component_id = str(row.get("id", "")).strip().lower()
+    old_instance_id = str(row.get("instance_id", "")).strip()
+    row["instance_id"] = resource_name
+    inputs = row.setdefault("inputs", {})
+    assert isinstance(inputs, dict)
+    inputs[name_input or ("cluster_name" if component_id == "mk8s" else "name")] = resource_name
+    if component_id != "mk8s" or not old_instance_id or old_instance_id == resource_name:
+        return
+    for chart in payload.get("apps", {}).get("charts", []):
+        if not isinstance(chart, dict):
+            continue
+        if chart.get("instance_id") == old_instance_id:
+            chart["instance_id"] = resource_name
+        if chart.get("target_ref") == old_instance_id:
+            chart["target_ref"] = resource_name
+    for target in payload.get("deploy", {}).get("targets", []):
+        if isinstance(target, dict) and target.get("instance_id") == old_instance_id:
+            target["instance_id"] = resource_name
 
 
 def _set_catalog_override(
@@ -477,6 +505,7 @@ def test_render_passes_vm_preemptible_contract_inputs(
             "recovery_policy": "FAIL",
         }
     )
+    _align_infra_resource_name(payload, vm, "gpu-preemptible-vm")
     config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
 
     monkeypatch.setattr(
@@ -506,12 +535,12 @@ def test_render_passes_vm_preemptible_contract_inputs(
         (paths.infra_dir / "terraform.auto.tfvars.json").read_text(encoding="utf-8")
     )
 
-    assert "preemptible_enabled = var.vm_preemptible_enabled" in main_tf
-    assert "preemptible_priority = var.vm_preemptible_priority" in main_tf
-    assert "recovery_policy = var.vm_recovery_policy" in main_tf
-    assert tfvars["vm_preemptible_enabled"] is True
-    assert tfvars["vm_preemptible_priority"] == 1
-    assert tfvars["vm_recovery_policy"] == "FAIL"
+    assert "preemptible_enabled = var.gpu_preemptible_vm_preemptible_enabled" in main_tf
+    assert "preemptible_priority = var.gpu_preemptible_vm_preemptible_priority" in main_tf
+    assert "recovery_policy = var.gpu_preemptible_vm_recovery_policy" in main_tf
+    assert tfvars["gpu_preemptible_vm_preemptible_enabled"] is True
+    assert tfvars["gpu_preemptible_vm_preemptible_priority"] == 1
+    assert tfvars["gpu_preemptible_vm_recovery_policy"] == "FAIL"
 
 
 def test_render_keeps_duplicate_component_instances_distinct(
@@ -526,7 +555,7 @@ def test_render_keeps_duplicate_component_instances_distinct(
     payload["infra"]["components"] = [
         {
             "id": "mk8s",
-            "instance_id": "mk8s",
+            "instance_id": "clust1",
             "enabled": True,
             "inputs": {
                 "parent_id": "project-456",
@@ -537,7 +566,7 @@ def test_render_keeps_duplicate_component_instances_distinct(
         },
         {
             "id": "mk8s",
-            "instance_id": "mk8s-2",
+            "instance_id": "clust2",
             "enabled": True,
             "inputs": {
                 "parent_id": "project-456",
@@ -581,10 +610,10 @@ def test_render_keeps_duplicate_component_instances_distinct(
     main_tf = (paths.infra_dir / "main.tf").read_text(encoding="utf-8")
     outputs_tf = (paths.infra_dir / "outputs.tf").read_text(encoding="utf-8")
 
-    assert 'module "mk8s" {' in main_tf
-    assert 'module "mk8s_2" {' in main_tf
-    assert 'output "mk8s_cluster_id" {' in outputs_tf
-    assert 'output "mk8s_2_cluster_id" {' in outputs_tf
+    assert 'module "clust1" {' in main_tf
+    assert 'module "clust2" {' in main_tf
+    assert 'output "clust1_cluster_id" {' in outputs_tf
+    assert 'output "clust2_cluster_id" {' in outputs_tf
 
 
 def test_render_uses_cluster_instance_ids_for_multi_target_artifacts(
@@ -717,9 +746,9 @@ def test_render_binds_soperator_external_nfs_from_matching_nfs_output(tmp_path: 
         },
         {
             "id": "nfs",
-            "instance_id": "cluster1",
+            "instance_id": "nfs-cluster1",
             "enabled": True,
-            "inputs": {},
+            "inputs": {"kubernetes_target_ref": "cluster1"},
         },
     ]
     payload["apps"]["charts"] = [
@@ -742,6 +771,8 @@ def test_render_binds_soperator_external_nfs_from_matching_nfs_output(tmp_path: 
         component_output_values={
             "cluster1.server_ip": "10.10.0.5",
             "cluster1.export_path": "/srv/nfs/home",
+            "nfs-cluster1.server_ip": "10.10.0.5",
+            "nfs-cluster1.export_path": "/srv/nfs/home",
         },
     )
 
@@ -755,6 +786,167 @@ def test_render_binds_soperator_external_nfs_from_matching_nfs_output(tmp_path: 
         "server": "10.10.0.5",
         "path": "/srv/nfs/home",
     }
+
+
+def test_render_binds_general_nfs_csi_storage_class_from_matching_nfs_output(
+    tmp_path: Path,
+) -> None:
+    config_path = _project_config_path(tmp_path)
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    paths = resolve_project_paths(config_path)
+
+    payload = _starter_payload(selected_infra={"mk8s", "nfs"}, selected_apps={"csi-driver-nfs"})
+    payload["infra"]["components"] = [
+        {
+            "id": "mk8s",
+            "instance_id": "cluster1",
+            "enabled": True,
+            "inputs": {
+                "parent_id": "project-456",
+                "cluster_name": "cluster1",
+            },
+        },
+        {
+            "id": "nfs",
+            "instance_id": "nfs-cluster1",
+            "enabled": True,
+            "inputs": {"kubernetes_target_ref": "cluster1"},
+        },
+    ]
+    payload["apps"]["charts"] = [
+        {
+            "id": "csi-driver-nfs",
+            "instance_id": "cluster1",
+            "group": "storage",
+            "enabled": True,
+            "repo": "https://raw.githubusercontent.com/kubernetes-csi/csi-driver-nfs/master/charts",
+            "version": "4.13.2",
+            "namespace": "kube-system",
+            "release-name": "csi-driver-nfs",
+            "values": {
+                "controller": {"replicas": 2},
+                "storageClass": {
+                    "name": "nfs-rwx-retain",
+                    "parameters": {
+                        "subDir": "${pvc.metadata.namespace}/${pvc.metadata.name}",
+                        "mountPermissions": "0770",
+                        "onDelete": "retain",
+                    },
+                    "reclaimPolicy": "Retain",
+                    "volumeBindingMode": "Immediate",
+                },
+            },
+        }
+    ]
+
+    render_flux(
+        payload,
+        paths,
+        component_output_values={
+            "nfs-cluster1.server_ip": "10.10.0.5",
+            "nfs-cluster1.export_path": "/srv/k8s-nfs",
+            "nfs-cluster1.mount_options": ["nfsvers=4.1"],
+        },
+    )
+
+    release_doc = yaml.safe_load(
+        (_target_flux_dir(paths, "cluster1") / "helmrelease-storage-csi-driver-nfs.yaml").read_text(
+            encoding="utf-8"
+        )
+    )
+    storage_class = release_doc["spec"]["values"]["storageClass"]
+    assert storage_class["create"] is True
+    assert storage_class["name"] == "nfs-rwx-retain"
+    assert storage_class["parameters"] == {
+        "subDir": "${pvc.metadata.namespace}/${pvc.metadata.name}",
+        "mountPermissions": "0770",
+        "onDelete": "retain",
+        "server": "10.10.0.5",
+        "share": "/srv/k8s-nfs",
+    }
+    assert storage_class["reclaimPolicy"] == "Retain"
+    assert storage_class["volumeBindingMode"] == "Immediate"
+    assert storage_class["mountOptions"] == ["nfsvers=4.1"]
+
+
+def test_render_omits_nfs_csi_storage_class_until_nfs_outputs_exist(tmp_path: Path) -> None:
+    config_path = _project_config_path(tmp_path)
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    paths = resolve_project_paths(config_path)
+
+    payload = _starter_payload(selected_infra={"mk8s", "nfs"}, selected_apps={"csi-driver-nfs"})
+    payload["infra"]["components"] = [
+        {"id": "mk8s", "instance_id": "cluster1", "enabled": True, "inputs": {}},
+        {
+            "id": "nfs",
+            "instance_id": "nfs-cluster1",
+            "enabled": True,
+            "inputs": {"kubernetes_target_ref": "cluster1"},
+        },
+    ]
+    payload["apps"]["charts"] = [
+        {
+            "id": "csi-driver-nfs",
+            "instance_id": "cluster1",
+            "group": "storage",
+            "enabled": True,
+            "repo": "https://raw.githubusercontent.com/kubernetes-csi/csi-driver-nfs/master/charts",
+            "version": "4.13.2",
+            "namespace": "kube-system",
+            "release-name": "csi-driver-nfs",
+            "values": {"storageClass": {"name": "nfs-rwx-retain"}},
+        }
+    ]
+
+    render_flux(payload, paths, component_output_values={})
+
+    release_doc = yaml.safe_load(
+        (_target_flux_dir(paths, "cluster1") / "helmrelease-storage-csi-driver-nfs.yaml").read_text(
+            encoding="utf-8"
+        )
+    )
+    storage_class = release_doc["spec"]["values"]["storageClass"]
+    assert storage_class["name"] == "nfs-rwx-retain"
+    assert "create" not in storage_class
+    assert "server" not in storage_class["parameters"]
+    assert "share" not in storage_class["parameters"]
+
+
+def test_nfs_component_auto_enables_csi_driver_for_matching_mk8s_target() -> None:
+    payload = _starter_payload(selected_infra={"mk8s", "nfs"}, selected_apps=set())
+    payload["infra"]["components"] = [
+        {"id": "mk8s", "instance_id": "cluster1", "enabled": True, "inputs": {}},
+        {"id": "nfs", "instance_id": "nfs-cluster1", "enabled": True, "inputs": {}},
+    ]
+    payload["apps"]["charts"] = []
+
+    assert ensure_nfs_csi_app_rows(payload, app_entries=component_entries("apps")) is True
+
+    assert payload["apps"]["charts"] == [
+        {
+            "id": "csi-driver-nfs",
+            "instance_id": "cluster1",
+            "group": "storage",
+            "enabled": True,
+            "repo": "https://raw.githubusercontent.com/kubernetes-csi/csi-driver-nfs/master/charts",
+            "version": "4.13.2",
+            "namespace": "kube-system",
+            "release-name": "csi-driver-nfs",
+            "values": {
+                "controller": {"replicas": 2},
+                "storageClass": {
+                    "name": "nfs-rwx-retain",
+                    "parameters": {
+                        "subDir": "${pvc.metadata.namespace}/${pvc.metadata.name}",
+                        "mountPermissions": "0770",
+                        "onDelete": "retain",
+                    },
+                    "reclaimPolicy": "Retain",
+                    "volumeBindingMode": "Immediate",
+                },
+            },
+        }
+    ]
 
 
 def test_render_local_soperator_chart_source_writes_static_manifest(tmp_path: Path) -> None:
@@ -1007,7 +1199,9 @@ def test_render_local_soperator_backup_uses_only_secret_reference(tmp_path: Path
         source_profile=SourceProfile.LOCAL,
     )
 
-    rendered_chart = _target_flux_dir(paths) / "post-flux-helmrender-slurm-soperator-jail-backup.yaml"
+    rendered_chart = (
+        _target_flux_dir(paths) / "post-flux-helmrender-slurm-soperator-jail-backup.yaml"
+    )
     rendered = rendered_chart.read_text(encoding="utf-8")
     assert "aws-access-key-id:" not in rendered
     assert "aws-secret-value" not in rendered
@@ -1311,7 +1505,9 @@ def test_render_externalizes_grafana_dashboard_json_to_generated_bundle(
     }
     vm_dashboard_dir = paths.generated_dir / "grafana_dashboards" / "mk8s" / "nebius-vm"
     vm_dashboard_files = {
-        item.name for item in vm_dashboard_dir.iterdir() if item.is_file() and item.suffix == ".json"
+        item.name
+        for item in vm_dashboard_dir.iterdir()
+        if item.is_file() and item.suffix == ".json"
     }
     assert dashboard_files == {
         "kubernetes-cluster-monitoring.json",
@@ -1723,7 +1919,7 @@ def test_render_uses_component_source_release_timeout_for_helm_release(
                             "timeout": "10m",
                         },
                     }
-                }
+                },
             ),
             sort_keys=False,
         ),
@@ -1840,6 +2036,7 @@ def test_render_materializes_nebius_gpu_operator_driver_crd_override_for_nebius_
             "gpu_stack_source": "nebius_image",
         }
     )
+    _align_infra_resource_name(payload, mk8s, "cluster1", name_input="cluster_name")
     config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
 
     monkeypatch.setattr(
@@ -1876,7 +2073,7 @@ def test_render_materializes_nebius_gpu_operator_driver_crd_override_for_nebius_
     render_project(config, paths, source_profile=SourceProfile.LOCAL)
 
     release_doc = yaml.safe_load(
-        (_target_flux_dir(paths) / "helmrelease-platform-gpu-operator.yaml").read_text(
+        (_target_flux_dir(paths, "cluster1") / "helmrelease-platform-gpu-operator.yaml").read_text(
             encoding="utf-8"
         )
     )
@@ -1922,6 +2119,7 @@ def test_render_materializes_driverful_rdma_policy_for_nebius_gpu_clusters(
             "infiniband_fabric": "fabric-1",
         }
     )
+    _align_infra_resource_name(payload, mk8s, "cluster1", name_input="cluster_name")
     config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
 
     monkeypatch.setattr(
@@ -1958,7 +2156,7 @@ def test_render_materializes_driverful_rdma_policy_for_nebius_gpu_clusters(
 
     render_project(config, paths, source_profile=SourceProfile.LOCAL)
 
-    target_flux_dir = _target_flux_dir(paths)
+    target_flux_dir = _target_flux_dir(paths, "cluster1")
     network_release_doc = yaml.safe_load(
         (target_flux_dir / "helmrelease-platform-network-operator.yaml").read_text(encoding="utf-8")
     )
@@ -2050,6 +2248,7 @@ def test_render_disables_gpu_operator_nfd_for_operator_managed_b200_network_oper
             "gpu_stack_source": "operator_managed",
         }
     )
+    _align_infra_resource_name(payload, mk8s, "cluster1", name_input="cluster_name")
     config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
 
     monkeypatch.setattr(
@@ -2085,7 +2284,7 @@ def test_render_disables_gpu_operator_nfd_for_operator_managed_b200_network_oper
 
     render_project(config, paths, source_profile=SourceProfile.LOCAL)
 
-    target_flux_dir = _target_flux_dir(paths)
+    target_flux_dir = _target_flux_dir(paths, "cluster1")
     network_release_doc = yaml.safe_load(
         (target_flux_dir / "helmrelease-platform-network-operator.yaml").read_text(encoding="utf-8")
     )
@@ -2127,6 +2326,7 @@ def test_render_materializes_operator_managed_rdma_policy_for_gpu_cluster_shapes
             "infiniband_fabric": "fabric-1",
         }
     )
+    _align_infra_resource_name(payload, mk8s, "cluster1", name_input="cluster_name")
     config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
 
     monkeypatch.setattr(
@@ -2163,7 +2363,7 @@ def test_render_materializes_operator_managed_rdma_policy_for_gpu_cluster_shapes
 
     render_project(config, paths, source_profile=SourceProfile.LOCAL)
 
-    target_flux_dir = _target_flux_dir(paths)
+    target_flux_dir = _target_flux_dir(paths, "cluster1")
     network_release_doc = yaml.safe_load(
         (target_flux_dir / "helmrelease-platform-network-operator.yaml").read_text(encoding="utf-8")
     )
@@ -2224,6 +2424,7 @@ def test_render_rejects_unknown_custom_module_input(tmp_path: Path) -> None:
         "subnet_id": "subnet-123",
         "ssh_public_key": _VALID_ED25519_PUBLIC_KEY,
     }
+    _align_infra_resource_name(payload, mk8s, "demo-cluster", name_input="cluster_name")
     config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
 
     config = load_config(config_path)
@@ -2256,10 +2457,11 @@ def test_render_ignores_declared_mk8s_gpu_validation_helper_inputs(
         "gpu_nodes_platform": "gpu-h100-sxm",
         "gpu_nodes_preset": "8gpu-128vcpu-1600gb",
     }
+    _align_infra_resource_name(payload, mk8s, "demo-cluster", name_input="cluster_name")
     payload["deploy"] = {
         "targets": [
             {
-                "instance_id": "mk8s",
+                "instance_id": "demo-cluster",
                 "validations": {
                     "mk8s_gpu": {
                         "operator_readiness": {"enabled": False},
@@ -2331,6 +2533,7 @@ def test_render_uses_materialized_shared_admin_ssh_username_for_wireguard_gw(
         "wireguard_tunnel_cidr": "10.9.0.1/22",
         "local_subnets": ["10.0.0.0/8"],
     }
+    _align_infra_resource_name(payload, wireguard, "wg-gw")
     config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
 
     config = load_config(config_path)
@@ -2342,11 +2545,11 @@ def test_render_uses_materialized_shared_admin_ssh_username_for_wireguard_gw(
     main_tf = (paths.infra_dir / "main.tf").read_text(encoding="utf-8")
     tfvars = (paths.infra_dir / "terraform.auto.tfvars.json").read_text(encoding="utf-8")
 
-    assert 'module "wireguard_gw" {' in main_tf
-    assert "ssh_user_name = var.wireguard_gw_ssh_user_name" in main_tf
-    assert '"wireguard_gw_ssh_user_name": "adminuser"' in tfvars
-    assert '"wireguard_gw_wireguard_tunnel_cidr": "10.9.0.1/22"' in tfvars
-    assert "wireguard_gw_ssh_public_key" not in tfvars
+    assert 'module "wg_gw" {' in main_tf
+    assert "ssh_user_name = var.wg_gw_ssh_user_name" in main_tf
+    assert '"wg_gw_ssh_user_name": "adminuser"' in tfvars
+    assert '"wg_gw_wireguard_tunnel_cidr": "10.9.0.1/22"' in tfvars
+    assert "wg_gw_ssh_public_key" not in tfvars
 
 
 def test_render_uses_materialized_shared_admin_ssh_username_for_ssh_jumphost(
@@ -2714,7 +2917,7 @@ def test_render_supports_explicit_instance_qualified_app_input_binding(
                             "portable": "git::https://github.com/example/infra.git//modules/producer?ref=v1.2.3",
                             "local": str(producer_dir),
                         }
-                    }
+                    },
                 },
                 apps={
                     "demo-app": {
@@ -2843,7 +3046,7 @@ def test_render_uses_component_source_defaults_when_config_omits_values(
                             "inputs.cluster_name": "demo-cluster",
                             "inputs.cpu_nodes_count": 3,
                         },
-                    }
+                    },
                 },
                 apps={
                     "demo-app": {

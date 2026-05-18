@@ -1,22 +1,26 @@
 output "instance_id" {
   description = "NFS VM instance ID."
-  value       = nebius_compute_v1_instance.this.id
+  value       = module.vm.instance_id
+}
+
+output "boot_disk_id" {
+  description = "NFS VM boot disk ID."
+  value       = module.vm.boot_disk_id
+}
+
+output "data_disk_ids" {
+  description = "NFS VM managed data disk IDs created by the upstream VM module."
+  value       = module.vm.data_disk_ids
 }
 
 output "server_ip" {
   description = "Private IP address clients should use for NFS mounts."
-  value = try(
-    trimsuffix(nebius_compute_v1_instance.this.status.network_interfaces[0].ip_address.address, "/32"),
-    null
-  )
+  value       = module.vm.private_ip
 }
 
 output "public_ip" {
   description = "Public IP address when public_ip_mode is not none."
-  value = try(
-    trimsuffix(nebius_compute_v1_instance.this.status.network_interfaces[0].public_ip_address.address, "/32"),
-    null
-  )
+  value       = module.vm.public_ip
 }
 
 output "export_path" {
@@ -31,13 +35,13 @@ output "mount_options" {
 
 output "export_options" {
   description = "Server-side /etc/exports options."
-  value       = var.export_options
+  value       = local.effective_export_options
 }
 
 output "export_spec" {
   description = "Structured NFS export metadata for cxcli and Helm values."
   value = {
-    server_ip     = try(trimsuffix(nebius_compute_v1_instance.this.status.network_interfaces[0].ip_address.address, "/32"), null)
+    server_ip     = module.vm.private_ip
     export_path   = var.export_path
     mount_options = var.mount_options
   }

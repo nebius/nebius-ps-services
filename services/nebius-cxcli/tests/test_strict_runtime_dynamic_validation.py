@@ -482,9 +482,8 @@ def test_strict_validation_requires_existing_public_ip_allocation_id_for_jump_ho
     with pytest.raises(RuntimeError) as exc_info:
         _validate_strict_config(config)
 
-    assert (
-        f"infra.components[{component_id}].inputs.public_ip_allocation_id is required"
-        in str(exc_info.value)
+    assert f"infra.components[{component_id}].inputs.public_ip_allocation_id is required" in str(
+        exc_info.value
     )
 
 
@@ -536,6 +535,17 @@ def test_strict_validation_rejects_public_ip_allocation_id_when_jump_host_create
         ("vm", "vm", {}),
         ("wireguard-gw", "wg-gw", {"local_subnets": ["10.0.0.0/8"]}),
         ("ssh-jumphost", "ssh-jh", {"allowed_cidrs": ["203.0.113.10/32"]}),
+        (
+            "nfs",
+            "nfs",
+            {
+                "export_path": "/srv/nfs",
+                "client_cidrs": ["10.0.0.0/8"],
+                "data_disk_enabled": True,
+                "data_disk_size_gib": 128,
+                "data_disk_type": "NETWORK_SSD",
+            },
+        ),
     ],
 )
 def test_strict_validation_rejects_boot_disk_encryption_on_unsupported_disk_type(
@@ -580,6 +590,17 @@ def test_strict_validation_rejects_boot_disk_encryption_on_unsupported_disk_type
         ("vm", "vm", {}),
         ("wireguard-gw", "wg-gw", {"local_subnets": ["10.0.0.0/8"]}),
         ("ssh-jumphost", "ssh-jh", {"allowed_cidrs": ["203.0.113.10/32"]}),
+        (
+            "nfs",
+            "nfs",
+            {
+                "export_path": "/srv/nfs",
+                "client_cidrs": ["10.0.0.0/8"],
+                "data_disk_enabled": True,
+                "data_disk_size_gib": 128,
+                "data_disk_type": "NETWORK_SSD",
+            },
+        ),
     ],
 )
 def test_strict_validation_rejects_created_disk_security_flags_with_existing_boot_disk(
@@ -614,6 +635,75 @@ def test_strict_validation_rejects_created_disk_security_flags_with_existing_boo
     assert (
         f"infra.components[{component_id}].inputs.boot_disk_encryption_enabled and "
         "inputs.boot_disk_deletion_protection apply only when cxcli creates the boot disk"
+    ) in str(exc_info.value)
+
+
+def test_strict_validation_rejects_data_disk_encryption_on_unsupported_disk_type(
+    tmp_path: Path,
+) -> None:
+    payload = _starter_payload(selected_infra={"vm"}, selected_apps=set())
+    component = _infra_component_row(payload, "vm")
+    component["inputs"] = {
+        "parent_id": "project-456",
+        "subnet_id": "subnet-123",
+        "name": "vm",
+        "platform": "cpu-d3",
+        "preset": "4vcpu-16gb",
+        "source_image_family": "ubuntu24.04-driverless",
+        "ssh_user_name": "ubuntu",
+        "ssh_public_key": _VALID_ED25519_PUBLIC_KEY,
+        "boot_disk_size_gib": 64,
+        "boot_disk_type": "NETWORK_SSD",
+        "data_disk_enabled": True,
+        "data_disk_size_gib": 128,
+        "data_disk_type": "NETWORK_SSD",
+        "data_disk_encryption_enabled": True,
+    }
+
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+    config = load_config(config_path)
+
+    with pytest.raises(RuntimeError) as exc_info:
+        _validate_strict_config(config)
+
+    assert (
+        "infra.components[vm].inputs.data_disk_encryption_enabled can be true only "
+        "for data disk types that support explicit encryption"
+    ) in str(exc_info.value)
+
+
+def test_strict_validation_rejects_unaligned_high_performance_data_disk_size(
+    tmp_path: Path,
+) -> None:
+    payload = _starter_payload(selected_infra={"vm"}, selected_apps=set())
+    component = _infra_component_row(payload, "vm")
+    component["inputs"] = {
+        "parent_id": "project-456",
+        "subnet_id": "subnet-123",
+        "name": "vm",
+        "platform": "cpu-d3",
+        "preset": "4vcpu-16gb",
+        "source_image_family": "ubuntu24.04-driverless",
+        "ssh_user_name": "ubuntu",
+        "ssh_public_key": _VALID_ED25519_PUBLIC_KEY,
+        "boot_disk_size_gib": 64,
+        "boot_disk_type": "NETWORK_SSD",
+        "data_disk_enabled": True,
+        "data_disk_size_gib": 128,
+        "data_disk_type": "NETWORK_SSD_IO_M3",
+    }
+
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+    config = load_config(config_path)
+
+    with pytest.raises(RuntimeError) as exc_info:
+        _validate_strict_config(config)
+
+    assert (
+        "infra.components[vm].inputs.data_disk_size_gib must be a multiple "
+        "of 93 GiB for NETWORK_SSD_IO_M3"
     ) in str(exc_info.value)
 
 

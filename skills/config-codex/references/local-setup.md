@@ -56,6 +56,9 @@ assets/hooks/session_start_context.py.template
   -> $CODEX_HOME/hooks/session_start_context.py
 assets/hooks/user_prompt_context.py.template
   -> $CODEX_HOME/hooks/user_prompt_context.py
+Optional local hook policy:
+assets/hooks/global_context_policy.json.template
+  -> $CODEX_HOME/hooks/global_context_policy.json
 assets/agents/repo_mapper.toml.template
   -> $CODEX_HOME/agents/repo_mapper.toml
 assets/agents/test_strategist.toml.template
@@ -69,6 +72,10 @@ Replace placeholders:
 - `{{CODEX_HOME}}` with the user's Codex home.
 - `{{SKILLS_HOME}}` with the user's installed skills directory.
 - `{{PROJECT_ROOT}}` with the user's trusted project root.
+
+The `hooks.json` template intentionally uses
+`${CODEX_HOME:-$HOME/.codex}` directly, so the hook commands stay portable when
+the user sets `CODEX_HOME` in the shell before starting Codex.
 
 If `$CODEX_HOME/AGENTS.md` is missing, create it from
 `assets/AGENTS.md.template`. If it exists, do not replace it. Append or update a
@@ -97,6 +104,29 @@ Preserve existing user values, comments, profiles, project trust entries, MCP
 servers, app settings, and unrelated feature flags. If an existing value
 conflicts with the template, report the difference and ask before changing it.
 Do not silently relax approval or sandbox settings.
+
+## Optional Hook-Assisted Subagent Policy
+
+To have the `UserPromptSubmit` hook inject a request to use configured
+read-only subagents for complex prompts, create this local-only file:
+
+```json
+{
+  "auto_read_only_subagents": true,
+  "include_agent_descriptions": false
+}
+```
+
+Save it as `$CODEX_HOME/hooks/global_context_policy.json`. The public templates
+do not hardcode agent names for this path. The hook reads `$CODEX_HOME/config.toml`,
+discovers `[agents.<name>]` entries whose referenced config files have
+`sandbox_mode = "read-only"`, and injects those agent names into model-visible
+context. It does not inject local agent config paths, and it does not directly
+call the subagent tool. The parent agent still owns lifecycle cleanup: wait for
+returned summaries, consolidate them, and close completed subagent threads when
+close controls are available and no follow-up is needed.
+With multiple subagents, close each completed handle as its terminal result
+arrives and continue waiting on the remaining handles.
 
 ## Secret Handling
 
@@ -212,7 +242,7 @@ expected scripts under `$CODEX_HOME/hooks/`.
 After trusting hooks, run a non-mutating probe:
 
 ```bash
-codex exec --ask-for-approval never --cd <PROJECT_ROOT> \
+codex exec --sandbox read-only --cd <PROJECT_ROOT> \
   "Summarize active instruction sources, available skills/custom agents, and the injected durable task-state path. Do not edit files."
 ```
 
@@ -220,6 +250,31 @@ Expected evidence:
 
 - `global-context-management` is available.
 - `config-codex` is available.
-- `repo_mapper`, `test_strategist`, and `risk_reviewer` are available.
+- `repo_mapper`, `test_strategist`, and `risk_reviewer` are available, or the
+  session clearly reports that subagent delegation is unavailable or not
+  permitted in the current surface.
 - The injected task-state path is session-scoped under
   `$CODEX_HOME/task-state/<workspace>-<hash>/<session-id>/current.md`.
+- Complex-task guidance tells Codex to read current task state when prior
+  context may matter, then keep checkpoint updates concise.
+  If the optional policy is enabled, it should also mention the discovered
+  configured read-only agents by name.
+
+Direct hook unit probes against a live `$CODEX_HOME` with synthetic
+`session_id` values create scaffold-only task-state directories named after
+those IDs. They validate hook path calculation, not active persistent model
+state. Prefer `global-context-management/scripts/validate-local-templates.py`
+for hook-unit validation because it uses disposable temporary homes.
+
+Then run an explicit subagent probe:
+
+```bash
+codex exec --sandbox read-only --cd <PROJECT_ROOT> \
+  "Use $global-context-management. Explicitly spawn one read-only repo_mapper subagent to inspect this repository. Do not edit files. Wait for it, then report whether the subagent was spawned."
+```
+
+If that succeeds but ordinary complex prompts do not spawn subagents, the
+configuration is working; the remaining gate is the runtime policy that
+requires the user prompt to explicitly ask for subagents, delegation, or
+parallel agents, or the optional local hook policy has not been enabled or
+trusted in a fresh session.

@@ -1,102 +1,58 @@
-resource "nebius_compute_v1_disk" "boot" {
-  parent_id = var.parent_id
-  name      = "${var.name}-boot"
-
-  block_size_bytes = var.boot_disk_block_size_bytes
-  size_gibibytes   = var.boot_disk_size_gib
-  type             = var.boot_disk_type
-  source_image_id  = var.source_image_id
-  source_image_family = var.source_image_id == null ? {
-    image_family = var.source_image_family
-  } : null
-
-  labels = merge(var.labels, { role = "boot" })
-}
-
-resource "nebius_compute_v1_disk" "data" {
-  count = local.create_data_disk ? 1 : 0
-
-  parent_id = var.parent_id
-  name      = local.data_disk_name
-
-  block_size_bytes = try(var.data_disk.block_size_bytes, 4096)
-  size_gibibytes   = try(var.data_disk.size_gib, 128)
-  type             = upper(try(var.data_disk.type, "NETWORK_SSD"))
-
-  labels = merge(var.labels, { role = "nfs-data" })
-}
-
-resource "nebius_compute_v1_instance" "this" {
-  parent_id = var.parent_id
-  name      = var.name
-
-  boot_disk = {
-    attach_mode = "READ_WRITE"
-    existing_disk = {
-      id = nebius_compute_v1_disk.boot.id
-    }
-  }
-
-  network_interfaces = [
-    {
-      name              = "eth0"
-      subnet_id         = var.subnet_id
-      ip_address        = local.private_ip_address
-      public_ip_address = local.public_ip_address
-      security_groups = [
-        for group_id in var.security_group_ids : {
-          id = group_id
-        }
-      ]
-    }
-  ]
-
-  resources = {
-    platform = var.platform
-    preset   = var.preset
-  }
-
-  secondary_disks      = local.secondary_disk_attachments
-  filesystems          = local.filesystem_attachments
-  cloud_init_user_data = local.cloud_init_user_data
-
-  labels = merge(var.labels, { role = "nfs" })
+resource "terraform_data" "nfs_export_contract" {
+  input = sha256(jsonencode({
+    data_disk_enabled = var.data_disk_enabled
+    filesystems       = var.filesystems
+  }))
 
   lifecycle {
     precondition {
-      condition = !(
-        var.source_image_id == null &&
-        var.source_image_family == null
-      )
-      error_message = "Set source_image_family unless you supply source_image_id."
-    }
-    precondition {
-      condition = !(
-        var.source_image_id != null &&
-        var.source_image_family != null
-      )
-      error_message = "Set only one of source_image_id or source_image_family."
-    }
-    precondition {
-      condition = !(
-        lower(var.public_ip_mode) == "allocation" &&
-        var.public_ip_allocation_id == null
-      )
-      error_message = "public_ip_mode=allocation requires public_ip_allocation_id."
-    }
-    precondition {
-      condition = !(
-        lower(var.public_ip_mode) != "allocation" &&
-        var.public_ip_allocation_id != null
-      )
-      error_message = "public_ip_allocation_id can only be used when public_ip_mode=allocation."
-    }
-    precondition {
-      condition = (
-        local.create_data_disk ||
-        length(var.filesystems) > 0
-      )
-      error_message = "Enable data_disk or attach at least one filesystem before creating an NFS export."
+      condition     = var.data_disk_enabled || length(var.filesystems) > 0
+      error_message = "Enable data_disk_enabled or attach at least one filesystem before creating an NFS export."
     }
   }
+}
+
+module "vm" {
+  source = "../vm"
+
+  depends_on = [terraform_data.nfs_export_contract]
+
+  parent_id             = var.parent_id
+  subnet_id             = var.subnet_id
+  name                  = var.name
+  platform              = var.platform
+  preset                = var.preset
+  ssh_user_name         = var.ssh_user_name
+  ssh_public_key        = var.ssh_public_key
+  source_image_family   = var.source_image_family
+  source_image_id       = var.source_image_id
+  boot_disk_existing_id = var.boot_disk_existing_id
+
+  boot_disk_size_gib            = var.boot_disk_size_gib
+  boot_disk_block_size_bytes    = var.boot_disk_block_size_bytes
+  boot_disk_type                = upper(var.boot_disk_type)
+  boot_disk_encryption_enabled  = var.boot_disk_encryption_enabled
+  boot_disk_deletion_protection = var.boot_disk_deletion_protection
+  boot_disk_device_id           = var.boot_disk_device_id
+
+  public_ip_mode           = var.public_ip_mode
+  public_ip_allocation_id  = var.public_ip_allocation_id
+  private_ip_allocation_id = var.private_ip_allocation_id
+  security_group_ids       = var.security_group_ids
+
+  data_disk_enabled             = var.data_disk_enabled
+  data_disk_name                = local.data_disk_name
+  data_disk_size_gib            = var.data_disk_size_gib
+  data_disk_type                = upper(var.data_disk_type)
+  data_disk_block_size_bytes    = var.data_disk_block_size_bytes
+  data_disk_encryption_enabled  = var.data_disk_encryption_enabled
+  data_disk_deletion_protection = var.data_disk_deletion_protection
+  data_disk_attach_mode         = "READ_WRITE"
+  data_disk_device_id           = var.data_disk_device_id
+  data_disk_labels              = local.nfs_data_disk_labels
+
+  filesystems = local.vm_filesystem_attachments
+  labels      = local.effective_vm_labels
+
+  cloud_init_user_data_override = local.cloud_init_user_data
 }

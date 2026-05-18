@@ -115,17 +115,30 @@ def main() -> int:
 Workspace root: `{root}`
 Durable task-state file: `{state_file}`
 
-Use this task-state file for complex work instead of creating repo-local state
-files.
+Read this task-state file at the start of complex work when it may contain
+prior decisions, validation status, or next action. Use it instead of creating
+repo-local state files.
 
 For non-trivial planning, implementation, debugging, refactoring, migration,
 architecture, review, testing, CI failure, or multi-file work, apply the
 `global-context-management` skill.
 
-Use bounded read-only subagents when useful:
-- `repo_mapper` for code exploration
-- `test_strategist` for verification planning
-- `risk_reviewer` before finalizing risky or non-trivial changes
+Use bounded read-only subagents only when the user explicitly requests
+subagents, delegation, or parallel agents, or when a user-enabled local hook
+policy injects that request, the current runtime exposes subagent tools, and
+the current instructions permit delegation. When hook-assisted delegation is
+enabled, the prompt hook discovers configured read-only subagent roles from
+the local Codex config and requests them by configured name.
+
+If delegation was not explicitly authorized by the prompt or local hook policy,
+or subagents are unavailable or not permitted, continue with narrow local reads
+and state that limitation.
+
+When subagents are used, ask them for concise final summaries, wait for their
+results, consolidate them in the parent thread, and close completed subagent
+threads when close controls are available and no follow-up is needed.
+With multiple subagents, close each completed handle as its terminal result
+arrives, then continue waiting on the remaining handles.
 
 Keep the parent thread concise and update the task-state file before
 implementation, after major edits, after tests, before compaction, and before

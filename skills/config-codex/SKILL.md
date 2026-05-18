@@ -78,11 +78,14 @@ For existing `$CODEX_HOME/config.toml`:
    - `$CODEX_HOME/hooks/`
    - `$CODEX_HOME/agents/`
    - `$CODEX_HOME/task-state/`
+   - optional `$CODEX_HOME/hooks/global_context_policy.json` only when the
+     user deliberately wants hook-assisted read-only subagent delegation
 7. Render or adapt templates from `assets/`:
    - `AGENTS.md.template`
    - `config.toml.template`
    - `hooks.json.template`
    - hook script templates
+   - optional hook policy template
    - custom-agent TOML templates
    - task-state template
 8. Keep `global-context-management` and `config-codex` installed or enabled as
@@ -95,15 +98,18 @@ For existing `$CODEX_HOME/config.toml`:
 
 Use placeholders in public assets:
 
-- `$CODEX_HOME` for the user's Codex home.
-- `$HOME` for the user's home directory.
-- `$HOME/.agents/skills` for the default user skill install location.
-- `<PROJECT_ROOT>` for the user's trusted repository root.
+- `{{CODEX_HOME}}` for the user's Codex home in rendered TOML and text files.
+- `{{SKILLS_HOME}}` for the user's installed skills directory.
+- `{{PROJECT_ROOT}}` for the user's trusted repository root.
+- `${CODEX_HOME:-$HOME/.codex}` inside `hooks.json.template`, so hook commands
+  can resolve against the active shell environment without publishing or
+  rendering a machine-specific absolute path.
 
-When writing rendered local files, replace placeholders with that user's real
-paths. Do not commit rendered files. Treat full-file templates as source
-material for missing files; for existing `AGENTS.md` and `config.toml`, extract
-and patch only the missing sections or keys.
+When writing rendered local files, replace template placeholders with that
+user's real paths where the target file needs literal paths. Do not commit
+rendered files. Treat full-file templates as source material for missing files;
+for existing `AGENTS.md` and `config.toml`, extract and patch only the missing
+sections or keys.
 
 ## Validation
 
@@ -117,7 +123,15 @@ Use the focused checks in `references/local-setup.md`. At minimum:
 
 Do not claim runtime activation is proven until a fresh Codex session has
 loaded the config, the hooks have been trusted in `/hooks`, and a non-mutating
-probe shows the injected task-state path.
+probe shows the injected task-state path and read/update guidance.
+
+Do not claim subagent activation is proven until a fresh Codex session receives
+an explicit user request to use subagents and can spawn a read-only helper, or
+reports that delegation is unavailable or not permitted in that surface. If a
+local hook policy is enabled, verify it in a fresh trusted-hook session before
+claiming hook-assisted delegation works. Do not claim that hooks, skills,
+`multi_agent`, or `[agents.*]` config force automatic delegation; they only
+make delegation possible when the runtime policy allows it.
 
 ## References
 
@@ -134,4 +148,5 @@ Return:
 - what validations passed or failed
 - which values still need user-specific replacement
 - how to restart Codex and trust hooks
+- whether optional hook-assisted read-only subagent delegation was enabled
 - any remaining risk or unverified runtime behavior

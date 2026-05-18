@@ -18,6 +18,7 @@ from nebius_cxcli.compute_boot_disks import (
 
 
 def _write_sources_file(path: Path) -> None:
+    repo_root = Path(__file__).resolve().parents[3]
     path.write_text(
         yaml.safe_dump(
             {
@@ -26,13 +27,21 @@ def _write_sources_file(path: Path) -> None:
                         "mk8s": {
                             "source": {
                                 "portable": "../../platform-infra/modules/mk8s",
+                                "local": str(repo_root / "platform-infra" / "modules" / "mk8s"),
                             },
                         },
                         "vm": {
                             "source": {
                                 "portable": "../../platform-infra/modules/vm",
+                                "local": str(repo_root / "platform-infra" / "modules" / "vm"),
                             },
-                        }
+                        },
+                        "nfs": {
+                            "source": {
+                                "portable": "../../platform-infra/modules/nfs",
+                                "local": str(repo_root / "platform-infra" / "modules" / "nfs"),
+                            },
+                        },
                     }
                 }
             },
@@ -283,6 +292,51 @@ def test_materialize_compute_boot_disk_defaults_for_vm_uses_shared_policy(
     assert changed is True
     inputs = payload["infra"]["components"][0]["inputs"]
     assert inputs["boot_disk_size_gib"] == 256
+    assert inputs["boot_disk_type"] == "NETWORK_SSD"
+
+
+def test_materialize_compute_boot_disk_defaults_for_nfs_uses_vm_style_contract(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    sources_file = tmp_path / "component_sources.yaml"
+    _write_sources_file(sources_file)
+    monkeypatch.setattr(component_sources, "_discover_terraform_outputs", lambda _source: ())
+    set_component_sources_file_override(sources_file)
+    reset_component_sources_cache()
+
+    payload = {
+        "version": "v1",
+        "client_info": {
+            "client_name": "demo",
+            "nebius": {
+                "tenant_id": "tenant-1",
+                "project_id": "project-1",
+                "region_id": "us-central1",
+            },
+            "notifications": {"email_enabled": False, "email": None},
+        },
+        "infra": {
+            "components": [
+                {
+                    "id": "nfs",
+                    "instance_id": "nfs",
+                    "enabled": True,
+                    "inputs": {
+                        "platform": "cpu-d3",
+                        "preset": "32vcpu-128gb",
+                    },
+                }
+            ]
+        },
+        "apps": {"charts": []},
+    }
+
+    changed = materialize_compute_boot_disk_defaults(payload)
+
+    assert changed is True
+    inputs = payload["infra"]["components"][0]["inputs"]
+    assert inputs["boot_disk_size_gib"] == 93
     assert inputs["boot_disk_type"] == "NETWORK_SSD"
 
 

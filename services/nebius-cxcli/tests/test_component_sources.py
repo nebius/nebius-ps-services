@@ -227,6 +227,48 @@ def test_bundled_catalog_exposes_soperator_and_nfs_local_sources() -> None:
     nfs = next(module for module in sources.tf_modules if module.module == "nfs")
     assert nfs.local_source is not None
     assert nfs.local_source.endswith("platform-infra/modules/nfs")
+    assert nfs.description == "VM-based NFS bridge (non-HA)"
+    assert nfs.wizard_fields["inputs.subnet_id"]["options"] == {
+        "from": "project_subnets",
+    }
+    assert nfs.wizard_fields["inputs.platform"]["options"] == {
+        "from": "compute_platforms",
+    }
+    assert nfs.wizard_fields["inputs.preset"]["options"] == {
+        "from": "compute_platform_presets",
+        "args": {"platform_path": "inputs.platform"},
+    }
+    assert nfs.wizard_fields["inputs.boot_disk_type"] == {
+        "options": {
+            "from": "compute_boot_disk_types",
+            "auto_select_first": True,
+        }
+    }
+    assert nfs.wizard_fields["inputs.data_disk_enabled"]["materialize_default"] is True
+    assert nfs.wizard_fields["inputs.data_disk_type"] == {
+        "options": {
+            "from": "compute_boot_disk_types",
+            "auto_select_first": True,
+        },
+        "materialize_default": True,
+    }
+    assert nfs.wizard_fields["inputs.data_disk_size_gib"]["materialize_default"] is True
+
+    nfs_csi = next(chart for chart in sources.helm_charts if chart.name == "csi-driver-nfs")
+    assert (
+        nfs_csi.repo
+        == "https://raw.githubusercontent.com/kubernetes-csi/csi-driver-nfs/master/charts"
+    )
+    assert nfs_csi.chart_name == "csi-driver-nfs"
+    assert nfs_csi.version == "4.13.2"
+    assert nfs_csi.namespace == "kube-system"
+    assert nfs_csi.release_name == "csi-driver-nfs"
+    nfs_csi_defaults = {default.target_path: default.value for default in nfs_csi.defaults}
+    assert nfs_csi_defaults["values.storageClass.name"] == "nfs-rwx-retain"
+    assert (
+        nfs_csi_defaults["values.storageClass.parameters.subDir"]
+        == "${pvc.metadata.namespace}/${pvc.metadata.name}"
+    )
 
     soperator = next(chart for chart in sources.helm_charts if chart.name == "soperator")
     assert soperator.source.path is not None
@@ -1969,16 +2011,12 @@ def test_bundled_global_observability_declares_public_endpoint_templates() -> No
         "https://write.monitoring.{region}.nebius.cloud/projects/"
         "{project_id}/prometheus/api/v1/write"
     )
-    assert write["metrics_prometheus_remote_write"].include_when == (
-        "kubernetes_metrics",
-    )
+    assert write["metrics_prometheus_remote_write"].include_when == ("kubernetes_metrics",)
     assert write["logs_otlp_write"].template == ("https://write.logging.{region}.nebius.cloud")
     assert write["logs_agent_grpc_write"].template == (
         "dns:///write.logging.{region}.nebius.cloud:443"
     )
-    assert write["logs_agent_grpc_write"].include_when == (
-        "kubernetes_logs",
-    )
+    assert write["logs_agent_grpc_write"].include_when == ("kubernetes_logs",)
     assert read["metrics_service_provider_read"].template == (
         "https://read.monitoring.api.nebius.cloud/projects/{project_id}/service-provider/prometheus"
     )
@@ -2573,18 +2611,19 @@ def test_bundled_cpu_only_charts_avoid_nebius_gpu_nodes_by_default() -> None:
         '(container_cpu_usage_seconds_total{\\"k8s.cluster.id\\"=~\\"$Cluster\\",pod!=\\"\\"}))'
         in grafana_dashboards["kubernetes-cluster-monitoring"]["json"]
     )
-    assert "container_cpu_cfs_throttled_periods_total" in grafana_dashboards[
-        "kubernetes-cluster-monitoring"
-    ]["json"]
-    assert "container_memory_failures_total" in grafana_dashboards[
-        "kubernetes-cluster-monitoring"
-    ]["json"]
-    assert "container_fs_reads_bytes_total" in grafana_dashboards[
-        "kubernetes-cluster-monitoring"
-    ]["json"]
-    assert "apiserver_request_total" in grafana_dashboards["kubernetes-cluster-monitoring"][
-        "json"
-    ]
+    assert (
+        "container_cpu_cfs_throttled_periods_total"
+        in grafana_dashboards["kubernetes-cluster-monitoring"]["json"]
+    )
+    assert (
+        "container_memory_failures_total"
+        in grafana_dashboards["kubernetes-cluster-monitoring"]["json"]
+    )
+    assert (
+        "container_fs_reads_bytes_total"
+        in grafana_dashboards["kubernetes-cluster-monitoring"]["json"]
+    )
+    assert "apiserver_request_total" in grafana_dashboards["kubernetes-cluster-monitoring"]["json"]
     assert (
         'DCGM_FI_DEV_GPU_UTIL{job=\\"nebius-observability-agent\\",mk8s_cluster_id=~\\"$Cluster\\",instance_id=~\\"$GpuNode\\"'
         in grafana_dashboards["kubernetes-gpu"]["json"]
@@ -2604,7 +2643,7 @@ def test_bundled_cpu_only_charts_avoid_nebius_gpu_nodes_by_default() -> None:
     assert grafana_vm_dashboards["vm-logs"]["datasource"] == "Nebius Logs"
     assert "node_cpu_seconds_total" in grafana_vm_dashboards["vm-metrics"]["json"]
     assert "cxcli-vm-collector" not in grafana_vm_dashboards["vm-logs"]["json"]
-    assert "__bucket__=~\\\"$Bucket\\\"" in grafana_vm_dashboards["vm-logs"]["json"]
+    assert '__bucket__=~\\"$Bucket\\"' in grafana_vm_dashboards["vm-logs"]["json"]
     assert {
         dashboard["datasource"]
         for key, dashboard in grafana_service_dashboards.items()
@@ -2701,6 +2740,19 @@ def test_bundled_vm_and_jump_hosts_use_component_scoped_wizard_profiles() -> Non
                 "auto_select_first": True,
             }
         },
+        "inputs.data_disk_enabled": {
+            "materialize_default": True,
+        },
+        "inputs.data_disk_type": {
+            "options": {
+                "from": "compute_boot_disk_types",
+                "auto_select_first": True,
+            },
+            "materialize_default": True,
+        },
+        "inputs.data_disk_size_gib": {
+            "materialize_default": True,
+        },
         "inputs.public_ip_mode": {
             "sources": [
                 {
@@ -2759,6 +2811,21 @@ def test_bundled_vm_and_jump_hosts_use_component_scoped_wizard_profiles() -> Non
             "prompt": False,
         },
         "inputs.labels": {
+            "prompt": False,
+        },
+        "inputs.data_disk_name": {
+            "prompt": False,
+        },
+        "inputs.data_disk_block_size_bytes": {
+            "prompt": False,
+        },
+        "inputs.data_disk_attach_mode": {
+            "prompt": False,
+        },
+        "inputs.data_disk_device_id": {
+            "prompt": False,
+        },
+        "inputs.data_disk_labels": {
             "prompt": False,
         },
         "inputs.data_disks": {
@@ -2939,10 +3006,7 @@ def test_local_profile_uses_local_source_when_available() -> None:
     assert wireguard.source == "../../platform-infra/modules/wireguard-gw"
     assert ssh.source == "../../platform-infra/modules/ssh-jumphost"
     assert wireguard.metadata_source == str(
-        (
-            Path(__file__).resolve().parents[3]
-            / "platform-infra/modules/wireguard-gw"
-        ).resolve()
+        (Path(__file__).resolve().parents[3] / "platform-infra/modules/wireguard-gw").resolve()
     )
     assert ssh.metadata_source == str(
         (Path(__file__).resolve().parents[3] / "platform-infra/modules/ssh-jumphost").resolve()
@@ -2994,7 +3058,7 @@ def test_shipped_catalogs_do_not_embed_jump_host_public_key_defaults() -> None:
     admin_ssh = loaded.shared.get("admin_ssh")
     assert isinstance(admin_ssh, dict)
     assert "public_key" not in admin_ssh
-    for module_id in ("vm", "wireguard-gw", "ssh-jumphost"):
+    for module_id in ("vm", "wireguard-gw", "ssh-jumphost", "nfs"):
         module = next(item for item in loaded.tf_modules if item.module == module_id)
         default_targets = {default.target_path for default in module.defaults}
         assert "inputs.ssh_user_name" in default_targets

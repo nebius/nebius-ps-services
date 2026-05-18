@@ -4,15 +4,17 @@ module "nfs" {
   parent_id           = var.parent_id
   name                = var.name
   subnet_id           = var.subnet_id
+  platform            = "cpu-d3"
+  preset              = "2vcpu-8gb"
   ssh_public_key      = var.ssh_public_key
   source_image_family = "ubuntu24.04"
 
-  export_path  = var.export_path
-  client_cidrs = var.client_cidrs
-  data_disk = {
-    enabled = false
-  }
-  filesystems = var.filesystems
+  boot_disk_size_gib = 64
+
+  export_path       = var.export_path
+  client_cidrs      = var.client_cidrs
+  data_disk_enabled = false
+  filesystems       = var.filesystems
 }
 
 variable "parent_id" {

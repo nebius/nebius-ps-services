@@ -304,6 +304,120 @@ variable "labels" {
   nullable    = false
 }
 
+variable "data_disk_enabled" {
+  description = "Create and attach one module-managed secondary data disk."
+  type        = bool
+  default     = false
+  nullable    = false
+}
+
+variable "data_disk_name" {
+  description = "Optional name for the module-managed secondary data disk. Defaults to <name>-data-disk."
+  type        = string
+  default     = null
+  nullable    = true
+  validation {
+    condition = (
+      var.data_disk_name == null ||
+      can(regex("^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$", var.data_disk_name))
+    )
+    error_message = "data_disk_name must be null or use lowercase letters, digits, and hyphens."
+  }
+}
+
+variable "data_disk_size_gib" {
+  description = "Size in GiB for the module-managed secondary data disk."
+  type        = number
+  default     = 128
+  nullable    = false
+  validation {
+    condition = (
+      var.data_disk_size_gib >= 1 &&
+      floor(var.data_disk_size_gib) == var.data_disk_size_gib
+    )
+    error_message = "data_disk_size_gib must be an integer >= 1."
+  }
+}
+
+variable "data_disk_type" {
+  description = "Disk type for the module-managed secondary data disk."
+  type        = string
+  default     = "NETWORK_SSD"
+  nullable    = false
+  validation {
+    condition = contains(
+      ["NETWORK_SSD", "NETWORK_HDD", "NETWORK_SSD_NON_REPLICATED", "NETWORK_SSD_IO_M3"],
+      upper(var.data_disk_type)
+    )
+    error_message = "data_disk_type must be one of NETWORK_SSD, NETWORK_HDD, NETWORK_SSD_NON_REPLICATED, NETWORK_SSD_IO_M3."
+  }
+}
+
+variable "data_disk_block_size_bytes" {
+  description = "Block size in bytes for the module-managed secondary data disk."
+  type        = number
+  default     = 4096
+  nullable    = false
+  validation {
+    condition = (
+      var.data_disk_block_size_bytes >= 4096 &&
+      var.data_disk_block_size_bytes <= 131072 &&
+      floor(var.data_disk_block_size_bytes) == var.data_disk_block_size_bytes &&
+      floor(log(var.data_disk_block_size_bytes, 2)) == ceil(log(var.data_disk_block_size_bytes, 2))
+    )
+    error_message = "data_disk_block_size_bytes must be a power of two between 4096 and 131072."
+  }
+}
+
+variable "data_disk_encryption_enabled" {
+  description = "Enable provider-managed data encryption on the module-managed secondary data disk. Nebius supports explicit disk_encryption only for NETWORK_SSD_NON_REPLICATED and NETWORK_SSD_IO_M3; NETWORK_SSD is always encrypted by the platform."
+  type        = bool
+  default     = false
+  nullable    = false
+}
+
+variable "data_disk_deletion_protection" {
+  description = "Enable deletion protection on the module-managed secondary data disk."
+  type        = bool
+  default     = false
+  nullable    = false
+}
+
+variable "data_disk_attach_mode" {
+  description = "Attach mode for the module-managed secondary data disk."
+  type        = string
+  default     = "READ_WRITE"
+  nullable    = false
+  validation {
+    condition = contains(
+      ["READ_ONLY", "READ_WRITE"],
+      upper(var.data_disk_attach_mode)
+    )
+    error_message = "data_disk_attach_mode must be READ_ONLY or READ_WRITE."
+  }
+}
+
+variable "data_disk_device_id" {
+  description = "Optional device ID for the module-managed secondary data disk."
+  type        = string
+  default     = null
+  nullable    = true
+  validation {
+    condition = (
+      var.data_disk_device_id == null ||
+      length(trimspace(var.data_disk_device_id)) > 0
+    )
+    error_message = "data_disk_device_id must be null or a non-empty string."
+  }
+}
+
+variable "data_disk_labels" {
+  description = "Additional labels applied to the module-managed secondary data disk."
+  type        = map(string)
+  default     = {}
+  nullable    = false
+}
+
 variable "data_disks" {
   description = "Managed data disks to create and attach to the VM."
   type = list(object({

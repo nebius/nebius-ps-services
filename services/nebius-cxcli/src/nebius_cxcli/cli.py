@@ -92,7 +92,9 @@ from .components import (
     resolve_component_dependencies,
 )
 from .compute_boot_disks import (
+    align_compute_disk_size_to_allocation_unit,
     compute_boot_disk_type_supports_explicit_encryption,
+    compute_disk_type_allocation_unit_gib,
     materialize_compute_boot_disk_defaults,
     refresh_compute_boot_disk_defaults,
 )
@@ -219,6 +221,11 @@ from .mysterybox_eso import (
     mysterybox_eso_runtime_secret_specs,
     mysterybox_eso_terraform_output_specs,
     mysterybox_eso_validation_specs,
+)
+from .nfs_csi import (
+    ensure_nfs_csi_app_rows,
+    nfs_csi_binding_issues,
+    nfs_csi_terraform_output_specs,
 )
 from .notify_ops import DeployReportEmailResult, send_deploy_report_email
 from .observability import (
@@ -987,6 +994,14 @@ _CONFIG_YAML_ARGUMENT_HELP = (
     "Path to project config.yaml under the deployments root "
     "(<tenant-folder>/<project-folder>/config.yaml)."
 )
+_COMPONENT_CONFIG_OPTION_HELP = (
+    "Project config.yaml to inspect or edit; selectors stay unambiguous and "
+    "are not path arguments."
+)
+_MK8S_TARGET_ID_HELP = (
+    "MK8s target id (the normalized cluster resource name stored as that "
+    "target's instance_id)"
+)
 _GENERATED_BUNDLE_CONFIG_ARGUMENT_HELP = (
     "Path to project config.yaml under the deployments root. "
     "This command resolves the sibling generated/ bundle automatically."
@@ -995,7 +1010,7 @@ _DEPLOY_CONFIG_ARGUMENT_HELP = _GENERATED_BUNDLE_CONFIG_ARGUMENT_HELP
 _WIREGUARD_CONFIG_ARGUMENT_HELP = (
     "Path to project config.yaml under the deployments root. The command reads "
     "the sibling generated/ Terraform state to find the deployed WireGuard VPN "
-    "gateway, and requires both files to contain the same component instance."
+    "gateway, and requires both files to contain the same component row."
 )
 _GENERATED_PATH_ARGUMENT_HELP = (
     "Path to generated/, one of its subdirectories, or a file under generated/."
@@ -1014,8 +1029,8 @@ app = typer.Typer(
     help=(
         "Nebius artifact generator and deployer. Target guide: create bootstraps one "
         "name-based tenant/project folder from a deployments root directory and overwrites existing "
-        "resolved project folders only with confirmation; component list/add/remove are "
-        "the day-2 config.yaml editing surface; "
+        "resolved project folders only with confirmation; component list/add/remove use "
+        "--config CONFIG_YAML as the day-2 config.yaml editing surface; "
         "discover uses a deployment-scope directory; validate, validate-dashboards, "
         "quota-check, quota-request, render, deploy, and bootstrap-ci use config.yaml; "
         "destroy uses config.yaml to tear down all rendered project resources from sibling generated/; "
@@ -1031,7 +1046,8 @@ app = typer.Typer(
 component_app = typer.Typer(
     help=(
         "Inspect or edit enabled source-driven infra/app component instances in an "
-        "existing config.yaml. Use this after create for day-2 add/remove/list changes."
+        "existing config.yaml. Use --config CONFIG_YAML after create for day-2 "
+        "add/remove/list changes."
     )
 )
 terraform_app = typer.Typer(
@@ -1734,7 +1750,8 @@ def _warn_existing_project_overwrite(*, config_path: Path) -> None:
         "from the normal create defaults instead of reusing the old config values.[/dim]"
     )
     console.print(
-        "[dim]Use `component list/add/remove` for day-2 component edits without replacing the project folder.[/dim]"
+        "[dim]Use `component list/add/remove --config <config.yaml>` for day-2 "
+        "component edits without replacing the project folder.[/dim]"
     )
 
 
@@ -2198,6 +2215,7 @@ class _ComponentAddTarget:
     scope: ComponentScope
     component_id: str
     requested_instance_id: str | None = None
+    allocate_new_infra_instance_if_enabled: bool = False
 
 
 @dataclass(frozen=True)
@@ -2337,13 +2355,17 @@ def _resolve_component_add_targets(
         requested_instance_id = normalize_component_token(instance_raw) if separator else ""
         if requested_instance_id and not INSTANCE_ID_PATTERN.fullmatch(requested_instance_id):
             raise RuntimeError(
-                f"Invalid instance id '{instance_raw}'. Expected lowercase letters, digits, and hyphens."
+                f"Invalid resource name or target id '{instance_raw}'. "
+                "Expected lowercase letters, digits, and hyphens."
             )
         targets.append(
             _ComponentAddTarget(
                 scope=entry.scope,
                 component_id=component_id,
                 requested_instance_id=requested_instance_id or None,
+                allocate_new_infra_instance_if_enabled=(
+                    entry.scope == "infra" and not requested_instance_id
+                ),
             )
         )
     return targets
@@ -2391,7 +2413,8 @@ def _resolve_component_remove_targets(
             instance_id = normalize_component_token(instance_raw)
             if not component_id or not instance_id:
                 raise RuntimeError(
-                    f"Invalid component selector '{token}'. Use '<instance-id>' or '<component-id>@<instance-id>'."
+                    f"Invalid component selector '{token}'. Use '<row-id>' or "
+                    "'<component-id>@<resource-name-or-target-id>'."
                 )
             candidates = by_instance.get(instance_id, [])
             candidate = next(
@@ -2425,7 +2448,8 @@ def _resolve_component_remove_targets(
             available = ", ".join(sorted(item.instance_id for item in flattened))
             raise RuntimeError(
                 f"Component selector '{token}' matches multiple enabled instances. "
-                f"Use an instance id or '<component-id>@<instance-id>'. Available instances: {available}"
+                "Use an exact resource name, target id, row id, or "
+                f"'<component-id>@<resource-name-or-target-id>'. Available rows: {available}"
             )
         if len(flattened) == 1:
             only = flattened[0]
@@ -2446,7 +2470,8 @@ def _resolve_component_remove_targets(
             )
             raise RuntimeError(
                 f"Component selector '{token}' matches multiple enabled instances. "
-                f"Use '<component-id>@<instance-id>'. Available instances: {available}"
+                "Use '<component-id>@<resource-name-or-target-id>'. "
+                f"Available rows: {available}"
             )
         if len(instance_matches) == 1:
             candidate = instance_matches[0]
@@ -3318,12 +3343,81 @@ def _component_instance_id_is_auto_allocated(component_id: str, instance_id: str
     return bool(suffix) and suffix.isdigit()
 
 
-def _align_new_handoff_instance_ids_with_resource_names(
+def _is_scalar_resource_name_value(value: Any) -> bool:
+    return value is not None and not isinstance(value, (bool, Mapping, list, tuple, set))
+
+
+def _set_mapping_path_value(node: dict[str, Any], dotted_path: str, value: Any) -> None:
+    current: dict[str, Any] = node
+    segments = [segment.strip() for segment in dotted_path.split(".") if segment.strip()]
+    if not segments:
+        return
+    for segment in segments[:-1]:
+        child = current.get(segment)
+        if not isinstance(child, dict):
+            child = {}
+            current[segment] = child
+        current = child
+    current[segments[-1]] = value
+
+
+def _entry_scalar_resource_name_input(entry: ComponentEntry) -> str:
+    if entry.scope != "infra" or entry.status is None:
+        return ""
+    name_input = str(entry.status.name_input or "name").strip()
+    if not name_input:
+        return ""
+
+    wizard_fields = getattr(entry, "wizard_fields", {}) or {}
+    for candidate in (name_input, f"inputs.{name_input}"):
+        field = wizard_fields.get(candidate)
+        if not isinstance(field, Mapping):
+            continue
+        if bool(field.get("prompt_complex")) or _is_complex_type_hint(
+            _non_empty_text(field.get("type_hint"))
+        ):
+            return ""
+
+    root_input = name_input.split(".", 1)[0]
+    module_var = _module_variable_specs_for_entry(entry).get(_normalize_leaf_name(root_input))
+    if module_var is not None and _is_complex_type_hint(module_var.type_hint):
+        return ""
+    return name_input
+
+
+def _infra_resource_name_prompt_label(entry: ComponentEntry) -> str:
+    if entry.id == "vm":
+        return "VM name"
+    title = str(entry.name or entry.description or entry.id).strip()
+    if not title:
+        title = entry.id
+    if title.lower().endswith("name"):
+        return title
+    return f"{title} name"
+
+
+def _seed_infra_resource_name_from_instance_id(row: dict[str, Any], entry: ComponentEntry) -> None:
+    name_input = _entry_scalar_resource_name_input(entry)
+    if not name_input:
+        return
+    instance_id = component_instance_id(row)
+    if not instance_id:
+        return
+    inputs = row.setdefault("inputs", {})
+    if not isinstance(inputs, dict):
+        return
+    current = _mapping_path_value(inputs, name_input)
+    if _is_scalar_resource_name_value(current):
+        return
+    _set_mapping_path_value(inputs, name_input, instance_id)
+
+
+def _align_new_infra_instance_ids_with_resource_names(
     payload: dict[str, Any],
     *,
     selected_instance_ids: set[str] | None = None,
 ) -> dict[str, str]:
-    """Rename newly scaffolded handoff instances from placeholder ids to resource names."""
+    """Rename newly scaffolded scalar named infra rows from placeholder ids to names."""
     infra_rows = _scope_rows(payload, scope="infra")
     apps_rows = _scope_rows(payload, scope="apps")
     infra_entry_by_id = {entry.id: entry for entry in component_entries("infra")}
@@ -3351,19 +3445,21 @@ def _align_new_handoff_instance_ids_with_resource_names(
         if selected is not None and instance_id not in selected:
             continue
         entry = infra_entry_by_id.get(component_id)
-        if entry is None or entry.handoff is None or entry.status is None:
+        if entry is None:
+            continue
+        name_input = _entry_scalar_resource_name_input(entry)
+        if not name_input:
             continue
         if not _component_instance_id_is_auto_allocated(component_id, instance_id):
             continue
         inputs = row.get("inputs")
         if not isinstance(inputs, Mapping):
             continue
-        resource_names = _status_resource_names_from_value(
-            _mapping_path_value(inputs, entry.status.name_input)
-        )
-        if len(resource_names) != 1:
+        raw_resource_name = _mapping_path_value(inputs, name_input)
+        if not _is_scalar_resource_name_value(raw_resource_name):
             continue
-        target_instance_id = normalize_component_token(resource_names[0])
+        resource_name = str(raw_resource_name).strip()
+        target_instance_id = normalize_component_token(resource_name)
         if (
             not target_instance_id
             or target_instance_id == instance_id
@@ -3372,7 +3468,7 @@ def _align_new_handoff_instance_ids_with_resource_names(
             continue
         if target_instance_id in used_infra_instance_ids:
             raise RuntimeError(
-                f"Cannot use {entry.status.name_input} '{resource_names[0]}' as the "
+                f"Cannot use {name_input} '{resource_name}' as the "
                 f"instance_id for infra:{component_id}; component instance_id "
                 f"'{target_instance_id}' already exists."
             )
@@ -3384,13 +3480,25 @@ def _align_new_handoff_instance_ids_with_resource_names(
     if not renames:
         return {}
 
+    target_renames: dict[str, str] = {}
+    for old, new in renames.items():
+        for row in infra_rows:
+            if not isinstance(row, Mapping) or component_instance_id(row) != new:
+                continue
+            entry = infra_entry_by_id.get(component_type_id(row))
+            if entry is not None and entry.handoff is not None:
+                target_renames[old] = new
+            break
+    if not target_renames:
+        return renames
+
     for row in apps_rows:
         if not isinstance(row, dict):
             continue
-        target_ref = app_chart_target_ref(row) or component_instance_id(row)
-        if target_ref not in renames:
+        target_ref = component_instance_id(row)
+        if target_ref not in target_renames:
             continue
-        new_target_ref = renames[target_ref]
+        new_target_ref = target_renames[target_ref]
         app_id = component_type_id(row)
         if app_id and is_auto_target_scoped_app_instance_id(
             row.get(INSTANCE_ID_FIELD),
@@ -3401,8 +3509,6 @@ def _align_new_handoff_instance_ids_with_resource_names(
                 app_id,
                 target_ref=new_target_ref,
             )
-        if TARGET_REF_FIELD in row:
-            row[TARGET_REF_FIELD] = new_target_ref
     deploy = payload.get("deploy")
     targets = deploy.get("targets") if isinstance(deploy, Mapping) else None
     if isinstance(targets, list):
@@ -3410,8 +3516,8 @@ def _align_new_handoff_instance_ids_with_resource_names(
             if not isinstance(row, dict):
                 continue
             target_ref = normalize_component_token(row.get(INSTANCE_ID_FIELD))
-            if target_ref in renames:
-                row[INSTANCE_ID_FIELD] = renames[target_ref]
+            if target_ref in target_renames:
+                row[INSTANCE_ID_FIELD] = target_renames[target_ref]
     return renames
 
 
@@ -3487,6 +3593,7 @@ def _append_component_instance_row(
             "enabled": True,
             "inputs": {},
         }
+        _seed_infra_resource_name_from_instance_id(row, entry)
     else:
         chart_repo = str(entry.chart_repo or "").strip()
         chart_name = str(entry.chart_name or "").strip()
@@ -3525,6 +3632,107 @@ def _append_component_instance_row(
         )
     rows.append(row)
     return row
+
+
+def _prompt_new_infra_resource_name(
+    *,
+    entry: ComponentEntry,
+    rows: list[Any],
+) -> str | None:
+    default_name = next_component_instance_id(component_id=entry.id, rows=rows)
+    label = _infra_resource_name_prompt_label(entry)
+    while True:
+        try:
+            raw = typer.prompt(
+                f"{label} for new infra:{entry.id} "
+                f"({WIZARD_EXIT_TOKEN}/{WIZARD_ABORT_TOKEN}=stop wizard)",
+                default=default_name,
+                show_default=True,
+            ).strip()
+        except (KeyboardInterrupt, EOFError, typer.Abort):
+            return None
+        normalized = normalize_component_token(raw)
+        if normalized in {WIZARD_EXIT_TOKEN, WIZARD_ABORT_TOKEN}:
+            return None
+        if not INSTANCE_ID_PATTERN.fullmatch(normalized):
+            console.print(
+                f"{error_markup('Invalid name')}. "
+                "Use lowercase letters, digits, and hyphens; do not start or end with a hyphen."
+            )
+            continue
+        try:
+            return next_component_instance_id(
+                component_id=entry.id,
+                rows=rows,
+                requested_instance_id=normalized,
+            )
+        except ValueError as exc:
+            console.print(f"{error_markup('Invalid name')}. {exc}")
+
+
+def _prompt_infra_add_resource_names(
+    *,
+    payload: dict[str, Any],
+    add_targets: list[_ComponentAddTarget],
+    infra_entries: tuple[ComponentEntry, ...],
+) -> list[_ComponentAddTarget] | None:
+    infra_lookup = {entry.id: entry for entry in infra_entries}
+    infra_node = payload.get("infra")
+    raw_rows = infra_node.get("components") if isinstance(infra_node, Mapping) else []
+    reserved_rows: list[Any] = (
+        [copy.deepcopy(row) for row in raw_rows if isinstance(row, Mapping)]
+        if isinstance(raw_rows, list)
+        else []
+    )
+    enabled_infra_types = {
+        component_type_id(row)
+        for row in reserved_rows
+        if isinstance(row, Mapping) and bool(row.get("enabled", False))
+    }
+
+    resolved_targets: list[_ComponentAddTarget] = []
+    for target in add_targets:
+        if (
+            target.scope != "infra"
+            or target.requested_instance_id is not None
+            or not target.allocate_new_infra_instance_if_enabled
+        ):
+            resolved_targets.append(target)
+            continue
+
+        entry = infra_lookup.get(target.component_id)
+        if entry is None:
+            resolved_targets.append(target)
+            continue
+
+        if _entry_scalar_resource_name_input(entry):
+            instance_id = _prompt_new_infra_resource_name(entry=entry, rows=reserved_rows)
+            if instance_id is None:
+                return None
+        elif target.component_id in enabled_infra_types:
+            instance_id = next_component_instance_id(
+                component_id=entry.id,
+                rows=reserved_rows,
+            )
+        else:
+            resolved_targets.append(target)
+            continue
+        reserved_rows.append(
+            {
+                "id": entry.id,
+                INSTANCE_ID_FIELD: instance_id,
+                "enabled": True,
+                "inputs": {},
+            }
+        )
+        resolved_targets.append(
+            replace(
+                target,
+                requested_instance_id=instance_id,
+                allocate_new_infra_instance_if_enabled=False,
+            )
+        )
+    return resolved_targets
 
 
 def _remove_component_instance_row(
@@ -4816,6 +5024,38 @@ def _module_variable_specs_for_entry(entry: ComponentEntry) -> dict[str, Any]:
     return {_normalize_leaf_name(item.name): item for item in module_variables(source)}
 
 
+def _entry_declares_module_inputs(entry: ComponentEntry, required_inputs: set[str]) -> bool:
+    if entry.scope != "infra":
+        return False
+    available_inputs = set(_module_variable_specs_for_entry(entry))
+    return {_normalize_leaf_name(item) for item in required_inputs} <= available_inputs
+
+
+def _entry_declares_compute_boot_disk_contract(entry: ComponentEntry) -> bool:
+    return _entry_declares_module_inputs(
+        entry,
+        {
+            "platform",
+            "preset",
+            "boot_disk_size_gib",
+            "boot_disk_type",
+        },
+    )
+
+
+def _entry_declares_compute_data_disk_contract(entry: ComponentEntry) -> bool:
+    return _entry_declares_module_inputs(
+        entry,
+        {
+            "data_disk_enabled",
+            "data_disk_size_gib",
+            "data_disk_type",
+            "data_disk_encryption_enabled",
+            "data_disk_deletion_protection",
+        },
+    )
+
+
 def _short_type_hint(type_hint: str | None) -> str | None:
     if not type_hint:
         return None
@@ -5024,6 +5264,11 @@ def _prompt_path_sort_key(
         "create_public_ip_allocation": 30,
         "public_ip_allocation_id": 31,
         "public_ip_allocation_name": 32,
+        "data_disk_enabled": 33,
+        "data_disk_type": 34,
+        "data_disk_encryption_enabled": 35,
+        "data_disk_deletion_protection": 36,
+        "data_disk_size_gib": 37,
     }
     full_label = _format_payload_path(path)
     nested_order_hints = {
@@ -5057,7 +5302,8 @@ def _prompt_path_sort_key(
         required_rank = 1
     toggle_rank = (
         0
-        if leaf_name.endswith("_enabled") and leaf_name != "boot_disk_encryption_enabled"
+        if leaf_name.endswith("_enabled")
+        and leaf_name not in {"boot_disk_encryption_enabled", "data_disk_encryption_enabled"}
         else 1
     )
     leaf_rank = next(
@@ -5143,7 +5389,12 @@ def _maybe_clear_gpu_cluster_fabric_after_shape_change(
 
 def _is_compute_boot_disk_type_field(full_path_label: str) -> bool:
     return full_path_label.endswith(
-        (".cpu_nodes_boot_disk_type", ".gpu_nodes_boot_disk_type", ".boot_disk_type")
+        (
+            ".cpu_nodes_boot_disk_type",
+            ".gpu_nodes_boot_disk_type",
+            ".boot_disk_type",
+            ".data_disk_type",
+        )
     )
 
 
@@ -5373,9 +5624,9 @@ def _maybe_print_compute_boot_disk_prompt_guidance(
     if "compute_boot_disk" in emitted_guidance:
         return
     console.print(
-        "[dim]Compute boot disk guidance: cxcli recommends the size from the "
-        "selected platform/preset and the settings-owned disk policy. The disk "
-        "type choices are sourced from compute.boot_disk_defaults.disk_types.[/dim]"
+        "[dim]Compute disk guidance: cxcli recommends boot-disk size from the "
+        "selected platform/preset and the settings-owned disk policy. Guided "
+        "boot/data disk type choices are sourced from compute.boot_disk_defaults.disk_types.[/dim]"
     )
     emitted_guidance.add("compute_boot_disk")
 
@@ -5627,7 +5878,7 @@ def _skip_compute_boot_disk_security_prompt(
 ) -> bool:
     if (
         entry.scope != "infra"
-        or entry.id not in {"vm", "ssh-jumphost", "wireguard-gw"}
+        or not _entry_declares_compute_boot_disk_contract(entry)
         or not full_path_label.endswith(
             (
                 ".inputs.boot_disk_encryption_enabled",
@@ -5656,6 +5907,91 @@ def _skip_compute_boot_disk_security_prompt(
         return not compute_boot_disk_type_supports_explicit_encryption(disk_type)
     except ValueError:
         return True
+
+
+def _skip_compute_data_disk_prompt(
+    *,
+    payload: dict[str, Any],
+    entry: ComponentEntry,
+    full_path_label: str,
+) -> bool:
+    if (
+        entry.scope != "infra"
+        or not _entry_declares_compute_data_disk_contract(entry)
+        or not full_path_label.endswith(
+            (
+                ".inputs.data_disk_type",
+                ".inputs.data_disk_size_gib",
+                ".inputs.data_disk_encryption_enabled",
+                ".inputs.data_disk_deletion_protection",
+            )
+        )
+    ):
+        return False
+    component_prefix = _dynamic_component_prefix(entry=entry, full_path_label=full_path_label)
+    if not component_prefix:
+        return True
+    if _read_payload_field(payload, f"{component_prefix}.inputs.data_disk_enabled") is not True:
+        return True
+    if full_path_label.endswith((".inputs.data_disk_type", ".inputs.data_disk_size_gib")):
+        return False
+    if full_path_label.endswith(".inputs.data_disk_deletion_protection"):
+        return False
+    disk_type = _non_empty_text(
+        _read_payload_field(payload, f"{component_prefix}.inputs.data_disk_type")
+    ).upper()
+    if not disk_type:
+        return True
+    try:
+        return not compute_boot_disk_type_supports_explicit_encryption(disk_type)
+    except ValueError:
+        return True
+
+
+def _data_disk_size_default_for_entry(entry: ComponentEntry) -> int:
+    spec = _module_variable_specs_for_entry(entry).get("data_disk_size_gib")
+    default = _state_positive_int(getattr(spec, "default", None))
+    return default if default and default > 0 else 128
+
+
+def _maybe_refresh_compute_data_disk_size_after_type_change(
+    *,
+    payload: dict[str, Any],
+    entry: ComponentEntry,
+    full_path_label: str,
+) -> None:
+    if (
+        entry.scope != "infra"
+        or not _entry_declares_compute_data_disk_contract(entry)
+        or not full_path_label.endswith(".inputs.data_disk_type")
+    ):
+        return
+    component_prefix = _dynamic_component_prefix(entry=entry, full_path_label=full_path_label)
+    if not component_prefix:
+        return
+    if _read_payload_field(payload, f"{component_prefix}.inputs.data_disk_enabled") is not True:
+        return
+    size_label = f"{component_prefix}.inputs.data_disk_size_gib"
+    if _read_payload_field(payload, size_label) is not None:
+        return
+    disk_type = _non_empty_text(
+        _read_payload_field(payload, f"{component_prefix}.inputs.data_disk_type")
+    ).upper()
+    if not disk_type:
+        return
+    base_size = _data_disk_size_default_for_entry(entry)
+    try:
+        aligned_size = align_compute_disk_size_to_allocation_unit(
+            base_size,
+            disk_type=disk_type,
+        )
+    except ValueError:
+        return
+    if aligned_size == base_size:
+        return
+    parsed_size_path = _parse_payload_path_label(size_label)
+    if parsed_size_path is not None:
+        _set_payload_value_creating_containers(payload, parsed_size_path, aligned_size)
 
 
 def _jump_host_create_public_ip_allocation_enabled(
@@ -5780,7 +6116,7 @@ def _maybe_refresh_compute_boot_disk_defaults_after_shape_change(
 ) -> None:
     if (
         entry.scope != "infra"
-        or entry.id not in {"mk8s", "vm", "ssh-jumphost", "wireguard-gw"}
+        or (entry.id != "mk8s" and not _entry_declares_compute_boot_disk_contract(entry))
         or previous_component_inputs is None
     ):
         return
@@ -6281,8 +6617,7 @@ def _prompt_choice_override(
             return option_values_by_text[raw], False
         allowed = ", ".join(str(value) for value in option_values)
         console.print(
-            f"{error_markup('Invalid option value')}. "
-            f"Use an option index or one of: {allowed}."
+            f"{error_markup('Invalid option value')}. Use an option index or one of: {allowed}."
         )
 
 
@@ -7686,6 +8021,12 @@ def _run_component_field_wizard(
                     full_path_label=full_path_label,
                 ):
                     continue
+                if _skip_compute_data_disk_prompt(
+                    payload=payload,
+                    entry=entry,
+                    full_path_label=full_path_label,
+                ):
+                    continue
                 if _skip_jump_host_public_ip_allocation_prompt(
                     payload=payload,
                     entry=entry,
@@ -7719,7 +8060,7 @@ def _run_component_field_wizard(
                 previous_component_inputs: dict[str, Any] | None = None
                 if (
                     entry.scope == "infra"
-                    and entry.id in {"mk8s", "vm", "ssh-jumphost", "wireguard-gw"}
+                    and (entry.id == "mk8s" or _entry_declares_compute_boot_disk_contract(entry))
                     and component_path is not None
                 ):
                     current_component = _get_payload_value(payload, component_path)
@@ -7865,12 +8206,9 @@ def _run_component_field_wizard(
                     continue
                 backtracked = False
                 while allowed_provider_values:
-                    if (
-                        not prompt_required
-                        and not _has_required_prompt_value(
-                            updated,
-                            type_hint=field_type_hints.get(full_path_label),
-                        )
+                    if not prompt_required and not _has_required_prompt_value(
+                        updated,
+                        type_hint=field_type_hints.get(full_path_label),
                     ):
                         break
                     updated_value = str(updated).strip()
@@ -7936,6 +8274,11 @@ def _run_component_field_wizard(
                     full_path_label=full_path_label,
                     previous_component_inputs=previous_component_inputs,
                     provider_lookup=provider_lookup,
+                )
+                _maybe_refresh_compute_data_disk_size_after_type_change(
+                    payload=payload,
+                    entry=entry,
+                    full_path_label=full_path_label,
                 )
                 _maybe_clear_gpu_cluster_fabric_after_shape_change(
                     payload=payload,
@@ -8586,6 +8929,7 @@ def _component_dependency_issues_from_payload(
     payload: dict[str, Any],
     *,
     chart_meta_cache: _ChartMetaCache | None = None,
+    include_app_chart_dependencies: bool = True,
 ) -> list[str]:
     issues: list[str] = []
     selected_infra = {str(row["id"]) for row in _dynamic_enabled_infra_component_rows(payload)}
@@ -8609,7 +8953,7 @@ def _component_dependency_issues_from_payload(
                         f"component dependency '{scope}:{entry.id}' requires '{dep_scope}:{dep_id}' to be enabled"
                     )
 
-    if selected_apps:
+    if selected_apps and include_app_chart_dependencies:
         runtime_app_entries = list(component_entries("apps"))
         known_app_ids = {entry.id for entry in runtime_app_entries}
         for chart_row in _dynamic_enabled_app_chart_rows(payload):
@@ -9901,8 +10245,7 @@ def _print_incomplete_wizard_no_write_warning(
     if not issues:
         return
     console.print(
-        f"{warning_markup('Wizard stopped before all required fields were filled.')} "
-        f"{message}"
+        f"{warning_markup('Wizard stopped before all required fields were filled.')} {message}"
     )
     for issue in issues:
         console.print(f"  - {escape(issue)}")
@@ -10219,18 +10562,26 @@ def _jump_host_public_ip_allocation_issues(payload: dict[str, Any]) -> list[str]
     return issues
 
 
-def _compute_boot_disk_security_issues(payload: dict[str, Any]) -> list[str]:
+def _compute_boot_disk_security_issues(
+    payload: dict[str, Any],
+    *,
+    infra_entries: tuple[ComponentEntry, ...],
+) -> list[str]:
     issues: list[str] = []
+    entry_by_id = {entry.id: entry for entry in infra_entries}
     for row in _dynamic_enabled_infra_component_rows(payload):
         component_id = str(row["id"])
-        if component_id not in {"vm", "ssh-jumphost", "wireguard-gw"}:
+        entry = entry_by_id.get(component_id)
+        if entry is None or not _entry_declares_compute_boot_disk_contract(entry):
             continue
         instance_id = str(row["instance_id"])
         component_label = _component_instance_path_label("infra", component_id, instance_id)
         inputs = row.get("inputs", {})
         if not isinstance(inputs, Mapping):
             continue
-        existing_disk_id = _non_empty_text(_resolve_mapping_segment(inputs, "boot_disk_existing_id"))
+        existing_disk_id = _non_empty_text(
+            _resolve_mapping_segment(inputs, "boot_disk_existing_id")
+        )
         encryption_enabled = (
             _resolve_mapping_segment(inputs, "boot_disk_encryption_enabled") is True
         )
@@ -10257,6 +10608,59 @@ def _compute_boot_disk_security_issues(payload: dict[str, Any]) -> list[str]:
             issues.append(
                 f"{component_label}.inputs.boot_disk_encryption_enabled can be true only "
                 "for boot disk types that support explicit encryption"
+            )
+    return issues
+
+
+def _compute_data_disk_security_issues(
+    payload: dict[str, Any],
+    *,
+    infra_entries: tuple[ComponentEntry, ...],
+) -> list[str]:
+    issues: list[str] = []
+    entry_by_id = {entry.id: entry for entry in infra_entries}
+    for row in _dynamic_enabled_infra_component_rows(payload):
+        component_id = str(row["id"])
+        entry = entry_by_id.get(component_id)
+        if entry is None or not _entry_declares_compute_data_disk_contract(entry):
+            continue
+        instance_id = str(row["instance_id"])
+        component_label = _component_instance_path_label("infra", component_id, instance_id)
+        inputs = row.get("inputs", {})
+        if not isinstance(inputs, Mapping):
+            continue
+        if _resolve_mapping_segment(inputs, "data_disk_enabled") is not True:
+            continue
+        disk_type = (
+            _non_empty_text(_resolve_mapping_segment(inputs, "data_disk_type")).upper()
+            or "NETWORK_SSD"
+        )
+        size_gib = _state_positive_int(_resolve_mapping_segment(inputs, "data_disk_size_gib"))
+        if size_gib is not None:
+            try:
+                allocation_unit = compute_disk_type_allocation_unit_gib(disk_type)
+                aligned_size = align_compute_disk_size_to_allocation_unit(
+                    size_gib,
+                    disk_type=disk_type,
+                )
+            except ValueError:
+                allocation_unit = 1
+                aligned_size = size_gib
+            if allocation_unit > 1 and aligned_size != size_gib:
+                issues.append(
+                    f"{component_label}.inputs.data_disk_size_gib must be a multiple "
+                    f"of {allocation_unit} GiB for {disk_type}"
+                )
+        if _resolve_mapping_segment(inputs, "data_disk_encryption_enabled") is not True:
+            continue
+        try:
+            encryption_supported = compute_boot_disk_type_supports_explicit_encryption(disk_type)
+        except ValueError:
+            encryption_supported = False
+        if not encryption_supported:
+            issues.append(
+                f"{component_label}.inputs.data_disk_encryption_enabled can be true only "
+                "for data disk types that support explicit encryption"
             )
     return issues
 
@@ -10353,7 +10757,9 @@ def _validate_strict_config(
     )
     issues.extend(_binding_conflict_issues(payload))
     issues.extend(_jump_host_public_ip_allocation_issues(payload))
-    issues.extend(_compute_boot_disk_security_issues(payload))
+    issues.extend(_compute_boot_disk_security_issues(payload, infra_entries=infra_entries))
+    issues.extend(_compute_data_disk_security_issues(payload, infra_entries=infra_entries))
+    issues.extend(nfs_csi_binding_issues(payload))
     issues.extend(
         _enabled_custom_module_input_schema_issues(payload=payload, infra_entries=infra_entries)
     )
@@ -11636,9 +12042,33 @@ def _sync_mysterybox_primary_version_ids_to_config(
     return True
 
 
-def _refresh_mysterybox_eso_flux_after_terraform(config: Any, paths: ProjectPaths) -> bool:
-    """Re-render Flux after Terraform creates MysteryBox IDs used by ESO."""
-    required_specs = list(mysterybox_eso_terraform_output_specs(config))
+def _dedupe_component_output_specs(specs: Sequence[dict[str, str]]) -> list[dict[str, str]]:
+    deduped: list[dict[str, str]] = []
+    seen: set[tuple[str, str, str, str]] = set()
+    for spec in specs:
+        key = (
+            str(spec.get("component_id", "")).strip(),
+            str(spec.get("instance_id", "")).strip(),
+            str(spec.get("output_name", "")).strip(),
+            str(spec.get("source_ref", "")).strip(),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(dict(spec))
+    return deduped
+
+
+def _refresh_flux_after_terraform_outputs(config: Any, paths: ProjectPaths) -> bool:
+    """Re-render Flux after Terraform creates outputs consumed by cluster apps."""
+    ensure_nfs_csi_app_rows(config)
+    required_specs = _dedupe_component_output_specs(
+        [
+            *_required_runtime_component_output_specs(config),
+            *mysterybox_eso_terraform_output_specs(config),
+            *nfs_csi_terraform_output_specs(config),
+        ]
+    )
     if not required_specs:
         return False
     component_output_values = _runtime_component_output_values(
@@ -11651,8 +12081,13 @@ def _refresh_mysterybox_eso_flux_after_terraform(config: Any, paths: ProjectPath
         component_output_values=component_output_values,
     )
     render_flux(config, paths, component_output_values=component_output_values)
-    console.print("Refreshed MysteryBox ESO Flux manifests with Terraform-created secret IDs.")
+    console.print("Refreshed Flux manifests with Terraform-created component outputs.")
     return True
+
+
+def _refresh_mysterybox_eso_flux_after_terraform(config: Any, paths: ProjectPaths) -> bool:
+    """Re-render Flux after Terraform creates outputs consumed by cluster apps."""
+    return _refresh_flux_after_terraform_outputs(config, paths)
 
 
 def _mysterybox_eso_credentials_json(credentials: MysteryBoxEsoCredentials) -> str:
@@ -13295,7 +13730,7 @@ def _multi_cluster_handoff_skip_note(handoffs: list[dict[str, str]]) -> str:
         "Multiple cluster handoff sources are enabled: "
         f"{_multi_cluster_handoff_labels(handoffs)}. "
         "Terraform infra apply can continue, but cxcli will not run target-specific "
-        "Kubernetes work until you select a target. Use --target <instance_id> or "
+        "Kubernetes work until you select a target. Use --target <target-id> or "
         "--all-targets when Kubernetes access is required."
     )
 
@@ -16188,12 +16623,14 @@ def _filter_runtime_payload_for_selected_components(
                 "enabled": True,
                 "inputs": {},
             }
+            _seed_infra_resource_name_from_instance_id(row, entry)
             matched_rows = [row]
         else:
             for row in matched_rows:
                 if not isinstance(row.get("inputs"), Mapping):
                     row["inputs"] = {}
                 row["enabled"] = True
+                _seed_infra_resource_name_from_instance_id(row, entry)
         selected_infra_components.extend(matched_rows)
     infra["components"] = selected_infra_components
     target_refs = enabled_cluster_target_refs(runtime_payload)
@@ -16354,9 +16791,79 @@ def _target_bound_app_issues_from_payload(payload: dict[str, Any]) -> list[str]:
     return issues
 
 
-def _selection_change_issues(payload: dict[str, Any]) -> list[str]:
+def _active_infra_resource_identity_issues(payload: dict[str, Any]) -> list[str]:
     issues: list[str] = []
-    issues.extend(_component_dependency_issues_from_payload(payload))
+    entry_by_id = {entry.id: entry for entry in component_entries("infra")}
+    seen_names: dict[tuple[str, str], str] = {}
+    seen_instance_ids: dict[str, str] = {}
+
+    for index, row in enumerate(_scope_rows(payload, scope="infra")):
+        if not isinstance(row, Mapping) or not bool(row.get("enabled", False)):
+            continue
+        component_id = component_type_id(row)
+        instance_id = component_instance_id(row)
+        if not component_id or not instance_id:
+            continue
+        label = _component_instance_path_label("infra", component_id, instance_id)
+        existing_instance_label = seen_instance_ids.get(instance_id)
+        if existing_instance_label is not None:
+            issues.append(
+                f"{label}.{INSTANCE_ID_FIELD} duplicates enabled infra component "
+                f"{existing_instance_label}"
+            )
+        else:
+            seen_instance_ids[instance_id] = label
+
+        entry = entry_by_id.get(component_id)
+        if entry is None:
+            continue
+        name_input = _entry_scalar_resource_name_input(entry)
+        if not name_input:
+            continue
+        inputs = row.get("inputs")
+        if not isinstance(inputs, Mapping):
+            continue
+        raw_name = _mapping_path_value(inputs, name_input)
+        if not _is_scalar_resource_name_value(raw_name):
+            continue
+        resource_name = str(raw_name).strip()
+        normalized_name = normalize_component_token(resource_name)
+        if not normalized_name or not INSTANCE_ID_PATTERN.fullmatch(normalized_name):
+            issues.append(
+                f"infra.components[{index}].inputs.{name_input} must normalize to a valid "
+                "instance_id using lowercase letters, digits, and hyphens"
+            )
+            continue
+        name_key = (component_id, normalized_name)
+        existing_name_label = seen_names.get(name_key)
+        if existing_name_label is not None:
+            issues.append(
+                f"{label}.inputs.{name_input} duplicates scalar resource name "
+                f"'{normalized_name}' already used by {existing_name_label}"
+            )
+        else:
+            seen_names[name_key] = label
+        if instance_id != normalized_name:
+            issues.append(
+                f"{label}.{INSTANCE_ID_FIELD} '{instance_id}' must match normalized "
+                f"inputs.{name_input} '{normalized_name}'"
+            )
+    return issues
+
+
+def _selection_change_issues(
+    payload: dict[str, Any],
+    *,
+    include_app_chart_dependencies: bool = True,
+) -> list[str]:
+    issues: list[str] = []
+    issues.extend(
+        _component_dependency_issues_from_payload(
+            payload,
+            include_app_chart_dependencies=include_app_chart_dependencies,
+        )
+    )
+    issues.extend(_active_infra_resource_identity_issues(payload))
     issues.extend(_active_component_input_binding_issues(payload))
     issues.extend(_target_bound_app_issues_from_payload(payload))
     return issues
@@ -16796,7 +17303,8 @@ def create_command(
                 raise RuntimeError(
                     "Existing project found: "
                     f"{existing_config_path.parent}. `create` no longer reconciles existing configs. "
-                    "Use `component list/add/remove` for day-2 component edits, or rerun with "
+                    "Use `component list/add/remove --config <config.yaml>` for day-2 "
+                    "component edits, or rerun with "
                     "`--force` to overwrite this one project folder from scratch."
                 )
             if validate_sources:
@@ -16884,8 +17392,7 @@ def create_command(
                             )
                             if app_target_issue:
                                 console.print(
-                                    f"{warning_markup('Invalid app selection:')} "
-                                    f"{app_target_issue}"
+                                    f"{warning_markup('Invalid app selection:')} {app_target_issue}"
                                 )
                                 if infra_components_opt is not None:
                                     raise RuntimeError(app_target_issue)
@@ -17159,9 +17666,14 @@ def create_command(
                 )
                 + " because the selected observability configuration requires them."
             )
-        _align_new_handoff_instance_ids_with_resource_names(final_payload)
+        _align_new_infra_instance_ids_with_resource_names(final_payload)
         _materialize_soperator_component_defaults(final_payload)
         if ensure_mysterybox_eso_app_rows(final_payload, app_entries=app_entries):
+            selected_apps = _enabled_ids_from_runtime_payload(
+                payload=final_payload,
+                entries=app_entries,
+            )
+        if ensure_nfs_csi_app_rows(final_payload, app_entries=app_entries):
             selected_apps = _enabled_ids_from_runtime_payload(
                 payload=final_payload,
                 entries=app_entries,
@@ -17274,18 +17786,28 @@ def create_command(
 
 @component_app.command(
     "list",
-    short_help="Use CONFIG_YAML to inspect enabled instances and available catalog components.",
+    short_help="Use --config CONFIG_YAML to inspect enabled instances and available catalog components.",
 )
 def component_list_command(
     config_path: Annotated[
         Path,
-        typer.Argument(
+        typer.Option(
+            "--config",
             metavar="CONFIG_YAML",
-            help=_CONFIG_YAML_ARGUMENT_HELP,
+            help=_COMPONENT_CONFIG_OPTION_HELP,
         ),
-    ],
+    ] = ...,
 ) -> None:
-    """List enabled component instances and reusable catalog component types."""
+    """List enabled component instances and reusable catalog component types.
+
+    Flags:
+
+      --config <config.yaml>
+
+    Examples:
+
+      nebius-cxcli component list --config <config.yaml>
+    """
     try:
         _config, _paths = _load_context_readonly(config_path)
         payload = to_plain_data(_config)
@@ -17352,16 +17874,9 @@ def component_list_command(
 
 @component_app.command(
     "add",
-    short_help="Use CONFIG_YAML for day-2 additive infra/app component changes.",
+    short_help="Add component selectors to --config CONFIG_YAML.",
 )
 def component_add_command(
-    config_path: Annotated[
-        Path,
-        typer.Argument(
-            metavar="CONFIG_YAML",
-            help=_CONFIG_YAML_ARGUMENT_HELP,
-        ),
-    ],
     component_ids: Annotated[
         list[str] | None,
         typer.Argument(
@@ -17369,17 +17884,28 @@ def component_add_command(
             help=(
                 "Optional infra module or app chart selector(s) to add. Use "
                 "'<id>', 'infra:<id>', 'apps:<id>', 'all', 'none', or "
-                "'<id>@<instance-id>'. Omit to prompt "
+                "'<id>@<resource-name-or-target-id>'. Omit to prompt "
                 "interactively; infra-only interactive adds are valid. "
-                "Repeat selectors are no-ops when the exact row is already enabled; "
-                "use '<id>@<new-instance-id>' to create another instance. "
+                "In interactive mode, scalar named infra modules prompt for the "
+                "resource name first and derive the saved instance_id from that "
+                "name. In non-interactive mode, bare infra selectors create the "
+                "default named row when absent; use '<id>@<resource-name>' to "
+                "choose the resource name or create another named infra row. "
                 "For target-bound app charts, use '<app-id>@<target-id>'; one chart row "
-                "is allowed per app id and cluster target, and the suffix sets the "
+                "is allowed per app id and cluster target, and the suffix becomes the "
                 "app row instance_id. Apps are Helm charts and require an enabled MK8s "
                 "target in the same project."
             ),
         ),
     ] = None,
+    config_path: Annotated[
+        Path,
+        typer.Option(
+            "--config",
+            metavar="CONFIG_YAML",
+            help=_COMPONENT_CONFIG_OPTION_HELP,
+        ),
+    ] = ...,
     no_interactive: Annotated[
         bool,
         typer.Option(
@@ -17398,7 +17924,26 @@ def component_add_command(
         ),
     ] = True,
 ) -> None:
-    """Use CONFIG_YAML for day-2 additive infra/app component changes in an existing project config.yaml."""
+    """Add source-defined components to an existing project config.yaml.
+
+    Flags:
+
+      --config <config.yaml>
+      --no-interactive
+      --validate-sources --no-validate-sources
+
+    Examples:
+
+      nebius-cxcli component add --config <config.yaml>
+
+      nebius-cxcli component add infra:vm --config <config.yaml>
+
+      nebius-cxcli component add infra:vm@worker-vm --config <config.yaml> --no-interactive
+
+      nebius-cxcli component add managed-postgresql object-storage@logs-bucket --config <config.yaml> --no-interactive
+
+      nebius-cxcli component add gateway-helm@serving-cluster --config <config.yaml> --no-interactive
+    """
     try:
         _config, _paths = _load_context(config_path)
         if validate_sources:
@@ -17409,12 +17954,24 @@ def component_add_command(
             payload
         )
         provider_lookup = ProviderOptionLookup()
-        tenant_id, project_id = _validate_tenant_project_ids_or_prompt(
-            tenant_id=tenant_id,
-            project_id=project_id,
-            interactive=False,
-            provider_lookup=provider_lookup,
-        )
+        provider_scope_validated = False
+
+        def _ensure_provider_scope_validated() -> None:
+            nonlocal tenant_id, project_id, provider_scope_validated
+            if provider_scope_validated:
+                return
+            if interactive_mode:
+                console.print(
+                    "[dim]Validating Nebius tenant/project scope before "
+                    "provider-backed field prompts...[/dim]"
+                )
+            tenant_id, project_id = _validate_tenant_project_ids_or_prompt(
+                tenant_id=tenant_id,
+                project_id=project_id,
+                interactive=False,
+                provider_lookup=provider_lookup,
+            )
+            provider_scope_validated = True
 
         infra_entries = _with_infra_provider_groups(component_entries("infra"))
         app_entries = component_entries("apps")
@@ -17465,14 +18022,16 @@ def component_add_command(
                     infra_entries=infra_entries,
                 )
                 if app_target_issue:
-                    console.print(
-                        f"{warning_markup('Invalid app selection:')} {app_target_issue}"
-                    )
+                    console.print(f"{warning_markup('Invalid app selection:')} {app_target_issue}")
                     continue
                 break
             add_targets = [
                 *(
-                    _ComponentAddTarget(scope="infra", component_id=component_id)
+                    _ComponentAddTarget(
+                        scope="infra",
+                        component_id=component_id,
+                        allocate_new_infra_instance_if_enabled=True,
+                    )
                     for component_id in sorted(requested_infra)
                 ),
                 *(
@@ -17533,12 +18092,13 @@ def component_add_command(
             merge_existing=True,
         )
         dependency_resolution_started = time.monotonic()
+        app_chart_dependency_payload = dependency_seed_payload if requested_apps_types else None
         selected_infra, selected_apps = _normalize_component_dependencies(
             selected_infra=selected_infra_raw,
             selected_apps=selected_apps_raw,
             infra_entries=infra_entries,
             app_entries=app_entries,
-            payload_for_app_chart_deps=dependency_seed_payload,
+            payload_for_app_chart_deps=app_chart_dependency_payload,
         )
         dependency_resolution_elapsed = time.monotonic() - dependency_resolution_started
         if dependency_resolution_elapsed >= 1:
@@ -17557,6 +18117,17 @@ def component_add_command(
             _ComponentAddTarget(scope="apps", component_id=component_id)
             for component_id in sorted(auto_added_apps_types)
         )
+
+        if interactive_mode:
+            resolved_add_targets = _prompt_infra_add_resource_names(
+                payload=payload,
+                add_targets=add_targets,
+                infra_entries=infra_entries,
+            )
+            if resolved_add_targets is None:
+                console.print("No component changes applied.")
+                return
+            add_targets = resolved_add_targets
 
         if interactive_mode and not _wizard_continue_phase(
             "Add selected components to config.yaml now?",
@@ -17593,6 +18164,14 @@ def component_add_command(
                 requested_instance_id=target.requested_instance_id,
                 allow_unassigned_app_target=interactive_mode,
             )
+            if (
+                existing_label
+                and target.scope == "infra"
+                and target.requested_instance_id is None
+                and target.allocate_new_infra_instance_if_enabled
+                and interactive_mode
+            ):
+                existing_label = None
             if existing_label:
                 if existing_label not in skipped_add_labels:
                     skipped_add_labels.append(existing_label)
@@ -17624,6 +18203,8 @@ def component_add_command(
             _print_component_edit_config_only_note()
             _print_component_edit_next_steps(config_path)
             return
+
+        _ensure_provider_scope_validated()
         _seed_infra_project_scope_defaults(
             payload=next_payload,
             infra_entries=infra_entries,
@@ -17831,7 +18412,7 @@ def component_add_command(
                 )
                 + " because the selected observability configuration requires them."
             )
-        infra_renames = _align_new_handoff_instance_ids_with_resource_names(
+        infra_renames = _align_new_infra_instance_ids_with_resource_names(
             next_payload,
             selected_instance_ids=set(added_infra_instances),
         )
@@ -17851,6 +18432,33 @@ def component_add_command(
                 payload=next_payload,
                 entries=app_entries,
             )
+        before_nfs_csi_app_instances = {
+            (component_type_id(row), component_instance_id(row))
+            for row in next_payload.get("apps", {}).get("charts", [])
+            if isinstance(row, dict)
+        }
+        if ensure_nfs_csi_app_rows(next_payload, app_entries=app_entries):
+            selected_apps = _enabled_ids_from_runtime_payload(
+                payload=next_payload,
+                entries=app_entries,
+            )
+            new_nfs_csi_labels: list[str] = []
+            for row in next_payload.get("apps", {}).get("charts", []):
+                if not isinstance(row, dict):
+                    continue
+                key = (component_type_id(row), component_instance_id(row))
+                if key in before_nfs_csi_app_instances or key[0] != "csi-driver-nfs":
+                    continue
+                label = component_instance_label(key[0], key[1])
+                if label not in added_apps_labels:
+                    added_apps_labels.append(label)
+                new_nfs_csi_labels.append(label)
+            if new_nfs_csi_labels:
+                console.print(
+                    f"{warning_markup('Adjusted component selection:')} enabling "
+                    + ", ".join(new_nfs_csi_labels)
+                    + " because VM-backed NFS for MK8s requires the NFS CSI driver."
+                )
         materialize_mk8s_gpu_app_values(next_payload)
         materialize_soperator_companion_app_values(next_payload)
         materialize_observability_infra_values(next_payload)
@@ -17871,7 +18479,10 @@ def component_add_command(
             )
             raise typer.Exit(code=1)
 
-        selection_issues = _selection_change_issues(next_payload)
+        selection_issues = _selection_change_issues(
+            next_payload,
+            include_app_chart_dependencies=bool(requested_apps_types),
+        )
         if selection_issues:
             raise RuntimeError(
                 "Component add would leave config.yaml with unresolved dependencies:\n  - "
@@ -17917,32 +18528,34 @@ def component_add_command(
 
 @component_app.command(
     "remove",
-    short_help="Use CONFIG_YAML for day-2 infra/app component removal from config.",
+    short_help="Remove component selectors from --config CONFIG_YAML.",
 )
 def component_remove_command(
-    config_path: Annotated[
-        Path,
-        typer.Argument(
-            metavar="CONFIG_YAML",
-            help=_CONFIG_YAML_ARGUMENT_HELP,
-        ),
-    ],
     component_ids: Annotated[
         list[str] | None,
         typer.Argument(
             metavar="[COMPONENT_SELECTOR]...",
             help=(
                 "Optional enabled infra module or app chart selector(s) to remove. Use "
-                "'<id>', 'infra:<id>', 'apps:<id>', 'all', 'none', '<instance-id>', "
-                "or '<id>@<instance-id>'. Omit to prompt interactively. "
-                "Already-absent selectors are skipped. "
-                "If multiple instances of the same component type are enabled, pass the "
-                "instance_id or '<id>@<instance-id>' to remove one exact "
-                "config.yaml row. Removing a cluster target also removes app rows and "
-                "deploy.targets[] settings bound to that target."
+                "'<id>', 'infra:<id>', 'apps:<id>', 'all', 'none', '<row-id>', or "
+                "'<id>@<resource-name-or-target-id>'. For scalar named infra, the "
+                "row id is the normalized resource name; for target-bound app charts, "
+                "it is the target id. Omit to prompt interactively. Already-absent "
+                "selectors are skipped. If multiple rows match the same component "
+                "type, pass the exact row id or '<id>@<resource-name-or-target-id>' "
+                "to remove one config.yaml row. Removing a cluster target also "
+                "removes app rows and deploy.targets[] settings bound to that target."
             ),
         ),
     ] = None,
+    config_path: Annotated[
+        Path,
+        typer.Option(
+            "--config",
+            metavar="CONFIG_YAML",
+            help=_COMPONENT_CONFIG_OPTION_HELP,
+        ),
+    ] = ...,
     no_interactive: Annotated[
         bool,
         typer.Option(
@@ -17951,7 +18564,21 @@ def component_remove_command(
         ),
     ] = False,
 ) -> None:
-    """Use CONFIG_YAML for day-2 infra/app component removal from an existing project config.yaml."""
+    """Remove enabled component rows from an existing project config.yaml.
+
+    Flags:
+
+      --config <config.yaml>
+      --no-interactive
+
+    Examples:
+
+      nebius-cxcli component remove vm@worker-vm --config <config.yaml> --no-interactive
+
+      nebius-cxcli component remove managed-postgresql@analytics-pg --config <config.yaml> --no-interactive
+
+      nebius-cxcli component remove gateway-helm@serving-cluster --config <config.yaml> --no-interactive
+    """
     try:
         _config, _paths = _load_context(config_path)
         payload = _load_config_payload(config_path.resolve())
@@ -18475,8 +19102,9 @@ def ssh_jumphost_command(
         typer.Option(
             "--component",
             help=(
-                "SSH jump-host component instance to use when config.yaml enables more "
-                "than one, for example ssh-jumphost or ssh-jumphost@bastion."
+                "SSH jump-host row selector to use when config.yaml enables more "
+                "than one. For scalar named rows, use the resource name or "
+                "'ssh-jumphost@<resource-name>', for example ssh-jumphost@bastion."
             ),
         ),
     ] = None,
@@ -18495,8 +19123,7 @@ def ssh_jumphost_command(
         typer.Option(
             "--ssh-user",
             help=(
-                "SSH username for the SSH jump host. Defaults to component "
-                "inputs.ssh_user_name."
+                "SSH username for the SSH jump host. Defaults to component inputs.ssh_user_name."
             ),
         ),
     ] = None,
@@ -18511,10 +19138,7 @@ def ssh_jumphost_command(
         bool,
         typer.Option(
             "--auto-auth-bootstrap/--no-auto-auth-bootstrap",
-            help=(
-                "Automatically bootstrap runtime auth when Terraform output lookup "
-                "needs it."
-            ),
+            help=("Automatically bootstrap runtime auth when Terraform output lookup needs it."),
         ),
     ] = True,
 ) -> None:
@@ -18529,7 +19153,7 @@ def ssh_jumphost_command(
     Add/remove modes require exactly one comma-separated --allowed-cidr value.
     The VM-local helper refuses to apply an empty allowlist to avoid SSH lockout.
     The current config.yaml and sibling generated bundle must both contain the
-    same selected component instance.
+    same selected component row.
     """
     try:
         selected_modes = [
@@ -18575,9 +19199,7 @@ def ssh_jumphost_command(
         _ensure_terraform_backend_ready(config, auto_auth_bootstrap=auto_auth_bootstrap)
         runtime_env = _terraform_runtime_env(config)
         terraform_outputs = terraform_output_json(paths.infra_dir, extra_env=runtime_env)
-        public_ip = ssh_jumphost_public_ip_from_outputs(
-            terraform_outputs, component_selection
-        )
+        public_ip = ssh_jumphost_public_ip_from_outputs(terraform_outputs, component_selection)
 
         resolved_ssh_user = (
             ssh_user or str(component_selection.inputs.get("ssh_user_name") or "")
@@ -18651,8 +19273,9 @@ def wireguard_command(
         typer.Option(
             "--component",
             help=(
-                "All modes. WireGuard component instance to use when config.yaml enables "
-                "more than one, for example wireguard-gw or wireguard-gw@vpn."
+                "All modes. WireGuard row selector to use when config.yaml enables "
+                "more than one. For scalar named rows, use the resource name or "
+                "'wireguard-gw@<resource-name>', for example wireguard-gw@vpn."
             ),
         ),
     ] = None,
@@ -18762,7 +19385,7 @@ def wireguard_command(
     Add/remove subnet modes require one comma-separated --local-subnet value.
     Existing downloaded client configs are not rewritten automatically.
     The current config.yaml and sibling generated bundle must both contain the
-    same selected component instance.
+    same selected component row.
 
     Examples:
 
@@ -18810,9 +19433,7 @@ def wireguard_command(
 
         source_config_path = config_path
         source_config = load_config(source_config_path, persist_normalized=False)
-        source_component = select_wireguard_component(
-            source_config, component_selector=component
-        )
+        source_component = select_wireguard_component(source_config, component_selector=component)
         config, paths, _manifest = _load_deploy_context(source_config_path)
         component_selection = _select_deployed_day2_component(
             config_path=source_config_path,
@@ -18826,7 +19447,9 @@ def wireguard_command(
         terraform_outputs = terraform_output_json(paths.infra_dir, extra_env=runtime_env)
         public_ip = wireguard_public_ip_from_outputs(terraform_outputs, component_selection)
 
-        resolved_ssh_user = (ssh_user or str(component_selection.inputs.get("ssh_user_name") or "")).strip()
+        resolved_ssh_user = (
+            ssh_user or str(component_selection.inputs.get("ssh_user_name") or "")
+        ).strip()
         if not resolved_ssh_user:
             raise RuntimeError(
                 f"{component_selection.label} is missing inputs.ssh_user_name for SSH access"
@@ -18850,7 +19473,9 @@ def wireguard_command(
                 console.print(f"Removed: {', '.join(update_result.removed)}")
             if update_result.unchanged:
                 console.print(f"Unchanged: {', '.join(update_result.unchanged)}")
-            console.print(f"Current local subnets: {', '.join(update_result.local_subnets) or '(none)'}")
+            console.print(
+                f"Current local subnets: {', '.join(update_result.local_subnets) or '(none)'}"
+            )
             return
 
         selected_output_dir = (
@@ -19445,7 +20070,7 @@ def validate_dashboards_command(
             "--target",
             "-t",
             help=(
-                "Optional target cluster instance_id to validate when the config has "
+                f"Optional {_MK8S_TARGET_ID_HELP} to validate when the config has "
                 "target-scoped Grafana rows. When omitted, every enabled Grafana row "
                 "is checked and each target must resolve an explicit kube context."
             ),
@@ -19909,6 +20534,7 @@ def render_command(
         config, paths = _load_runtime_context(config_path)
         materialize_mk8s_gpu_app_values(config)
         materialize_soperator_companion_app_values(config)
+        ensure_nfs_csi_app_rows(config)
         materialize_observability_infra_values(config)
         materialize_observability_app_values(config)
         materialize_mysterybox_eso_app_values(config)
@@ -20083,8 +20709,8 @@ def deploy_command(
         typer.Option(
             "--target",
             help=(
-                "Explicit MK8s target instance_id for Flux/app work and deploy-time validations "
-                "when the bundle declares more than one built-in cluster target."
+                f"Explicit {_MK8S_TARGET_ID_HELP} for Flux/app work and deploy-time "
+                "validations when the bundle declares more than one built-in cluster target."
             ),
         ),
     ] = None,
@@ -20115,10 +20741,11 @@ def deploy_command(
     cluster handoff such as MK8s is enabled, deploy also refreshes local
     kubeconfig access for that cluster even if no app charts are configured.
     When more than one built-in cluster target is present, use `--target
-    <instance_id>` or `--all-targets` for Flux/app work and deploy-time
-    validations. For a single-target run, the refreshed validation summary and
-    deploy report include only validations for that selected target; `--all-targets`
-    reports every selected target.
+    <target-id>` or `--all-targets` for Flux/app work and deploy-time
+    validations. The target id is the normalized cluster resource name stored as
+    that MK8s row's `instance_id`. For a single-target run, the refreshed
+    validation summary and deploy report include only validations for that
+    selected target; `--all-targets` reports every selected target.
     Existing managed resources may be updated when the bundle differs from live
     state. Use `nebius-cxcli terraform plan
     <generated>` first when you need a non-mutating preview. It does not run
@@ -20464,7 +21091,10 @@ def flux_destroy_command(
         str | None,
         typer.Option(
             "--target",
-            help="Explicit MK8s target instance_id when the bundle declares more than one built-in cluster target.",
+            help=(
+                f"Explicit {_MK8S_TARGET_ID_HELP} when the bundle declares more than "
+                "one built-in cluster target."
+            ),
         ),
     ] = None,
     all_targets: Annotated[
@@ -20528,7 +21158,10 @@ def flux_bootstrap_command(
         str | None,
         typer.Option(
             "--target",
-            help="Explicit MK8s target instance_id when the bundle declares more than one built-in cluster target.",
+            help=(
+                f"Explicit {_MK8S_TARGET_ID_HELP} when the bundle declares more than "
+                "one built-in cluster target."
+            ),
         ),
     ] = None,
     all_targets: Annotated[
@@ -20630,7 +21263,10 @@ def flux_apply_command(
         str | None,
         typer.Option(
             "--target",
-            help="Explicit MK8s target instance_id when the bundle declares more than one built-in cluster target.",
+            help=(
+                f"Explicit {_MK8S_TARGET_ID_HELP} when the bundle declares more than "
+                "one built-in cluster target."
+            ),
         ),
     ] = None,
     all_targets: Annotated[

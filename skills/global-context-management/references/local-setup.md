@@ -15,7 +15,8 @@ $CODEX_HOME/
 |-- hooks.json
 |-- hooks/
 |   |-- session_start_context.py
-|   `-- user_prompt_context.py
+|   |-- user_prompt_context.py
+|   `-- global_context_policy.json  # optional local opt-in
 |-- agents/
 |   |-- repo_mapper.toml
 |   |-- test_strategist.toml
@@ -27,9 +28,10 @@ The source-controlled skill lives in a public skills repository. The runtime
 hooks, custom agent configs, and task-state files live only under
 `$CODEX_HOME`.
 
-Template files for `hooks.json`, hook scripts, custom agent config layers, and
-task-state structure are available in this skill's `assets/` directory. Copy
-or adapt them locally; do not commit the rendered `$CODEX_HOME` files.
+Template files for `hooks.json`, hook scripts, optional hook policy, custom
+agent config layers, and task-state structure are available in this skill's
+`assets/` directory. Copy or adapt them locally; do not commit the rendered
+`$CODEX_HOME` files.
 
 ## Backup First
 
@@ -59,15 +61,27 @@ global file.
 - For non-trivial planning, implementation, debugging, refactoring, migration,
   architecture, review, testing, CI failure, or multi-file coding tasks, use
   the `global-context-management` skill.
-- Use the durable task-state path injected by global hooks. Do not create
-  repo-local task-state files unless explicitly requested.
+- Read the durable task-state file injected by global hooks at task start,
+  resume, or after compaction when prior context may matter. Update it with
+  concise checkpoints, and do not create repo-local task-state files unless
+  explicitly requested.
 - Keep the parent thread focused on objective, constraints, decisions, current
   plan, changed files, verification status, risks, and final answer.
 - Keep raw logs, broad file listings, abandoned attempts, secrets, customer
   data, broad environment dumps, and large copied documentation blocks out of
   the parent thread.
-- Use bounded read-only subagents for noisy exploration when useful, and use a
-  read-only risk review before finalizing non-trivial changes.
+- Use bounded read-only subagents for noisy exploration when the user
+  explicitly requests delegation and subagents are available and useful. Use a
+  read-only risk review before finalizing non-trivial changes only when that
+  delegation is explicitly authorized and permitted.
+- When subagents are used, ask them for concise final summaries, wait for the
+  result, consolidate it in the parent thread, and close completed subagent
+  threads when close controls are available and no follow-up is needed.
+  With multiple subagents, close each completed handle as its terminal result
+  arrives, then continue waiting on the remaining handles.
+- If subagent tools are not visible or the current instructions do not permit
+  delegation, continue with narrow local reads and state that delegation was
+  unavailable or not permitted.
 ```
 
 ## Config Snippet
@@ -102,6 +116,34 @@ config_file = "agents/risk_reviewer.toml"
 
 If an MCP server currently stores a secret directly in `config.toml`, move it
 to an environment variable and configure the server to use `env_vars`.
+
+The `multi_agent` feature and `[agents.*]` roles make subagent delegation
+available to Codex. They do not force every complex task to spawn a subagent,
+they do not count as user authorization, and they do not guarantee a separate
+user-visible control in every Codex surface. In runtimes that require explicit
+user authorization, the prompt must say to use or spawn subagents, use
+delegation, or run parallel agents.
+
+If the user wants hook-assisted delegation for complex prompts, create this
+local-only policy file:
+
+```json
+{
+  "auto_read_only_subagents": true,
+  "include_agent_descriptions": false
+}
+```
+
+Save it as `$CODEX_HOME/hooks/global_context_policy.json`. The hook will read
+`$CODEX_HOME/config.toml`, discover configured `[agents.<name>]` entries whose
+referenced configs under `$CODEX_HOME` have `sandbox_mode = "read-only"`, and
+inject a request to use those read-only roles by name. It does not inject local
+agent config paths and does not directly call the subagent tool. The parent
+agent still owns lifecycle cleanup: wait for returned summaries, consolidate
+them, and close completed subagent threads when close controls are available
+and no follow-up is needed. With multiple subagents, close each completed
+handle as its terminal result arrives and continue waiting on the remaining
+handles.
 
 ## Hook Review
 
@@ -139,3 +181,40 @@ codex features list
 Then run a non-mutating Codex probe from a test repository and confirm the
 injected task-state path appears. Treat runtime activation as unverified until
 observed in the target Codex surface.
+
+Direct hook unit probes against a live `$CODEX_HOME` with synthetic
+`session_id` values create scaffold-only task-state directories named after
+those IDs. They validate hook path calculation, not active persistent model
+state. Prefer `scripts/validate-local-templates.py` for hook-unit validation
+because it uses disposable temporary homes.
+
+Use a second probe for subagent availability:
+
+```text
+Use $global-context-management. Explicitly spawn one read-only repo_mapper
+subagent to inspect this repository. Do not edit files. Wait for it, then
+report whether the subagent was spawned, and keep raw command output out of
+the answer.
+```
+
+If the probe does not spawn a subagent, check:
+
+- `codex features list` shows `multi_agent` enabled.
+- `$CODEX_HOME/config.toml` contains the `[agents]` and `[agents.<name>]`
+  entries.
+- The session was restarted after editing config.
+- The current Codex surface exposes multi-agent tools.
+- The user prompt explicitly asks Codex to use or spawn subagents, use
+  delegation, or run parallel agents.
+- The current user or developer instructions permit delegation for the task.
+
+If `$CODEX_HOME/hooks/global_context_policy.json` is enabled, also run a
+complex prompt without naming a specific subagent and confirm the hook-injected
+context discovers the configured read-only agent names. If it does not, check
+that the hook was trusted after the file changed and that each referenced
+agent config uses `sandbox_mode = "read-only"`.
+
+Even when the probe succeeds, context can still grow quickly if broad command
+output, long logs, large file dumps, or repeated exploration are returned in
+the parent thread. The skill reduces future noise; it cannot remove context
+that already entered the conversation.

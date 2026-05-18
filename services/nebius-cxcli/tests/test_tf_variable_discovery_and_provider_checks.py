@@ -734,40 +734,30 @@ def test_wizard_prints_section_banners_and_selected_values(monkeypatch) -> None:
     assert (
         "[bold cyan]Wizard context:[/bold cyan] [dim]Current:[/dim] "
         "[bold magenta]Apps[/bold magenta] [dim]/[/dim] "
-        "[bold green]demo-app on mk8s[/bold green]"
-        in rendered_output
+        "[bold green]demo-app on mk8s[/bold green]" in rendered_output
     )
     assert (
         "[bold cyan]Wizard context:[/bold cyan] [dim]Current:[/dim] "
         "[bold magenta]Deploy Target[/bold magenta] [dim]/[/dim] "
-        "[bold green]mk8s / MysteryBox ESO sync[/bold green]"
-        in rendered_output
+        "[bold green]mk8s / MysteryBox ESO sync[/bold green]" in rendered_output
     )
-    assert (
-        "Selected deploy.targets[0].secrets.mysterybox.enabled = true" in rendered_output
-    )
+    assert "Selected deploy.targets[0].secrets.mysterybox.enabled = true" in rendered_output
     assert (
         "Selected deploy.targets[0].secrets.mysterybox.allow_all_namespaces = true"
         in rendered_output
     )
     assert (
-        'Selected deploy.targets[0].secrets.mysterybox.sync_namespaces = ["app"]'
-        in rendered_output
+        'Selected deploy.targets[0].secrets.mysterybox.sync_namespaces = ["app"]' in rendered_output
     )
     updated_payload = yaml.safe_load(updated_yaml)
+    assert updated_payload["deploy"]["targets"][0]["secrets"]["mysterybox"]["enabled"] is True
     assert (
-        updated_payload["deploy"]["targets"][0]["secrets"]["mysterybox"]["enabled"]
+        updated_payload["deploy"]["targets"][0]["secrets"]["mysterybox"]["allow_all_namespaces"]
         is True
     )
-    assert (
-        updated_payload["deploy"]["targets"][0]["secrets"]["mysterybox"][
-            "allow_all_namespaces"
-        ]
-        is True
-    )
-    assert updated_payload["deploy"]["targets"][0]["secrets"]["mysterybox"][
-        "sync_namespaces"
-    ] == ["app"]
+    assert updated_payload["deploy"]["targets"][0]["secrets"]["mysterybox"]["sync_namespaces"] == [
+        "app"
+    ]
     assert "    * mk8s (current)" not in rendered_output
     assert "    * demo-app on mk8s (current)" not in rendered_output
     assert any(
@@ -1282,6 +1272,17 @@ def test_vm_wizard_prefills_boot_disk_size_after_preset_selection(monkeypatch) -
         config_path="infra.components.vm",
         description="VM",
         source="../../platform-infra/modules/vm",
+        wizard_fields={
+            "inputs.data_disk_enabled": {"materialize_default": True},
+            "inputs.data_disk_type": {
+                "options": {
+                    "from": "compute_boot_disk_types",
+                    "auto_select_first": True,
+                },
+                "materialize_default": True,
+            },
+            "inputs.data_disk_size_gib": {"materialize_default": True},
+        },
     )
 
     monkeypatch.setattr("nebius_cxcli.cli._wizard_continue_phase", lambda *_args, **_kwargs: True)
@@ -1337,6 +1338,27 @@ def test_vm_wizard_prefills_boot_disk_size_after_preset_selection(monkeypatch) -
                 has_default=True,
                 default=None,
             ),
+            ModuleVariable(
+                name="data_disk_enabled",
+                required=False,
+                type_hint="bool",
+                has_default=True,
+                default=False,
+            ),
+            ModuleVariable(
+                name="data_disk_type",
+                required=False,
+                type_hint="string",
+                has_default=True,
+                default="NETWORK_SSD",
+            ),
+            ModuleVariable(
+                name="data_disk_size_gib",
+                required=False,
+                type_hint="number",
+                has_default=True,
+                default=128,
+            ),
         ),
     )
 
@@ -1382,17 +1404,222 @@ def test_vm_wizard_prefills_boot_disk_size_after_preset_selection(monkeypatch) -
     boot_encryption_path = "infra.components[0].inputs.boot_disk_encryption_enabled"
     boot_deletion_path = "infra.components[0].inputs.boot_disk_deletion_protection"
     boot_size_path = "infra.components[0].inputs.boot_disk_size_gib"
+    data_enabled_path = "infra.components[0].inputs.data_disk_enabled"
+    data_type_path = "infra.components[0].inputs.data_disk_type"
+    data_size_path = "infra.components[0].inputs.data_disk_size_gib"
     assert prompted_paths.index(boot_type_path) < prompted_paths.index(boot_size_path)
     assert prompted_defaults[boot_type_path] == "NETWORK_SSD"
     assert boot_encryption_path not in prompted_paths
     assert prompted_defaults[boot_deletion_path] is False
     assert prompted_defaults[boot_size_path] == 64
+    assert prompted_defaults[data_enabled_path] is False
+    assert data_type_path not in prompted_paths
+    assert data_size_path not in prompted_paths
     payload = yaml.safe_load(updated_yaml)
     inputs = payload["infra"]["components"][0]["inputs"]
     assert inputs["boot_disk_type"] == "NETWORK_SSD"
     assert "boot_disk_encryption_enabled" not in inputs
     assert inputs.get("boot_disk_deletion_protection") in (None, False)
     assert inputs["boot_disk_size_gib"] == 64
+    assert inputs["data_disk_enabled"] is False
+    assert "data_disk_type" not in inputs
+    assert "data_disk_size_gib" not in inputs
+
+
+def test_vm_wizard_prompts_secondary_data_disk_shape_when_enabled(monkeypatch) -> None:
+    config_yaml = yaml.safe_dump(
+        {
+            "version": "v1",
+            "client_info": {
+                "client_name": "demo",
+                "nebius": {
+                    "tenant_id": "tenant-1",
+                    "project_id": "project-1",
+                    "region_id": "us-central1",
+                },
+                "notifications": {"email_enabled": False, "email": None},
+            },
+            "infra": {
+                "components": [
+                    {
+                        "id": "vm",
+                        "instance_id": "vm",
+                        "enabled": True,
+                        "source": "../../platform-infra/modules/vm",
+                        "inputs": {},
+                    }
+                ]
+            },
+            "apps": {"charts": []},
+        },
+        sort_keys=False,
+    )
+
+    vm_entry = ComponentEntry(
+        id="vm",
+        scope="infra",
+        config_path="infra.components.vm",
+        description="VM",
+        source="../../platform-infra/modules/vm",
+        wizard_fields={
+            "inputs.data_disk_enabled": {"materialize_default": True},
+            "inputs.data_disk_type": {
+                "options": {
+                    "from": "compute_boot_disk_types",
+                    "auto_select_first": True,
+                },
+                "materialize_default": True,
+            },
+            "inputs.data_disk_size_gib": {"materialize_default": True},
+        },
+    )
+
+    monkeypatch.setattr("nebius_cxcli.cli._wizard_continue_phase", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(
+        "nebius_cxcli.cli._runtime_required_input_leaf_names",
+        lambda _entry: set(),
+    )
+    monkeypatch.setattr(
+        "nebius_cxcli.cli.module_required_variables",
+        lambda _source: (
+            "parent_id",
+            "subnet_id",
+            "name",
+            "platform",
+            "preset",
+            "source_image_family",
+        ),
+    )
+    monkeypatch.setattr(
+        "nebius_cxcli.cli.module_variables",
+        lambda _source: (
+            ModuleVariable(name="parent_id", required=True, type_hint="string"),
+            ModuleVariable(name="subnet_id", required=True, type_hint="string"),
+            ModuleVariable(name="name", required=True, type_hint="string"),
+            ModuleVariable(name="platform", required=True, type_hint="string"),
+            ModuleVariable(name="preset", required=True, type_hint="string"),
+            ModuleVariable(name="source_image_family", required=True, type_hint="string"),
+            ModuleVariable(
+                name="boot_disk_type",
+                required=False,
+                type_hint="string",
+                has_default=True,
+                default="NETWORK_SSD",
+            ),
+            ModuleVariable(
+                name="boot_disk_deletion_protection",
+                required=False,
+                type_hint="bool",
+                has_default=True,
+                default=False,
+            ),
+            ModuleVariable(
+                name="boot_disk_size_gib",
+                required=False,
+                type_hint="number",
+                has_default=True,
+                default=None,
+            ),
+            ModuleVariable(
+                name="data_disk_enabled",
+                required=False,
+                type_hint="bool",
+                has_default=True,
+                default=False,
+            ),
+            ModuleVariable(
+                name="data_disk_type",
+                required=False,
+                type_hint="string",
+                has_default=True,
+                default="NETWORK_SSD",
+            ),
+            ModuleVariable(
+                name="data_disk_encryption_enabled",
+                required=False,
+                type_hint="bool",
+                has_default=True,
+                default=False,
+            ),
+            ModuleVariable(
+                name="data_disk_deletion_protection",
+                required=False,
+                type_hint="bool",
+                has_default=True,
+                default=False,
+            ),
+            ModuleVariable(
+                name="data_disk_size_gib",
+                required=False,
+                type_hint="number",
+                has_default=True,
+                default=128,
+            ),
+        ),
+    )
+
+    prompted_defaults: dict[str, object] = {}
+    prompted_paths: list[str] = []
+
+    def _fake_prompt(
+        path_label: str,
+        current: object,
+        *,
+        choices=None,
+        type_hint=None,
+        required=False,
+    ) -> tuple[object, bool]:
+        _ = choices, type_hint, required
+        prompted_defaults[path_label] = current
+        prompted_paths.append(path_label)
+        if path_label.endswith(".subnet_id"):
+            return "subnet-1", False
+        if path_label.endswith(".platform"):
+            return "cpu-d3", False
+        if path_label.endswith(".preset"):
+            return "4vcpu-16gb", False
+        if path_label.endswith(".source_image_family"):
+            return "ubuntu24.04-driverless", False
+        if path_label.endswith(".name"):
+            return "demo-vm", False
+        if path_label.endswith(".data_disk_enabled"):
+            return True, False
+        if path_label.endswith(".data_disk_type"):
+            return "NETWORK_SSD_NON_REPLICATED", False
+        return current, False
+
+    monkeypatch.setattr("nebius_cxcli.cli._prompt_scalar_override", _fake_prompt)
+
+    updated_yaml, completed = _run_component_field_wizard(
+        config_yaml=config_yaml,
+        selected_infra={"vm"},
+        selected_apps=set(),
+        infra_entries=(vm_entry,),
+        app_entries=(),
+        provider_lookup=None,
+    )
+
+    data_enabled_path = "infra.components[0].inputs.data_disk_enabled"
+    data_type_path = "infra.components[0].inputs.data_disk_type"
+    data_encryption_path = "infra.components[0].inputs.data_disk_encryption_enabled"
+    data_deletion_path = "infra.components[0].inputs.data_disk_deletion_protection"
+    data_size_path = "infra.components[0].inputs.data_disk_size_gib"
+    assert completed is True
+    assert prompted_paths.index(data_enabled_path) < prompted_paths.index(data_type_path)
+    assert prompted_paths.index(data_type_path) < prompted_paths.index(data_size_path)
+    assert prompted_defaults[data_enabled_path] is False
+    assert prompted_defaults[data_type_path] == "NETWORK_SSD"
+    assert prompted_paths.index(data_type_path) < prompted_paths.index(data_encryption_path)
+    assert prompted_defaults[data_encryption_path] is False
+    assert prompted_defaults[data_deletion_path] is False
+    assert prompted_defaults[data_size_path] == 186
+    payload = yaml.safe_load(updated_yaml)
+    inputs = payload["infra"]["components"][0]["inputs"]
+    assert inputs["data_disk_enabled"] is True
+    assert inputs["data_disk_type"] == "NETWORK_SSD_NON_REPLICATED"
+    assert "data_disk_encryption_enabled" not in inputs
+    assert inputs.get("data_disk_deletion_protection") in (None, False)
+    assert inputs["data_disk_size_gib"] == 186
 
 
 @pytest.mark.parametrize(
@@ -1465,6 +1692,7 @@ def test_jump_host_wizard_prefills_boot_disk_size_and_skips_created_public_ip_id
             "boot_disk_size_gib",
         ),
     )
+
     def _module_variables(_source: str) -> tuple[ModuleVariable, ...]:
         variables = (
             ModuleVariable(name="parent_id", required=True, type_hint="string"),
@@ -1599,6 +1827,7 @@ def test_jump_host_wizard_prefills_boot_disk_size_and_skips_created_public_ip_id
         ("vm", "VM"),
         ("wireguard-gw", "WireGuard VPN gateway"),
         ("ssh-jumphost", "SSH jump host"),
+        ("nfs", "NFS server"),
     ],
 )
 def test_vm_style_wizard_prompts_boot_disk_encryption_for_supported_disk_types(

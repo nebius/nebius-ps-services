@@ -50,11 +50,12 @@ components:
         portable: git::https://github.com/nebius/nebius-ps-services.git//platform-infra/modules/nfs?ref=main
         local: ../../platform-infra/modules/nfs
       ui:
-        title: VM-based NFS server
+        title: VM-based NFS bridge (non-HA)
         group: Storage
         enabled: false
       status:
         kind: nebius.compute.instance
+      wizard_profile: nfs
       defaults:
         inputs.ssh_user_name: shared.admin_ssh.user_name
     object-storage:
@@ -424,6 +425,28 @@ components:
       defaults:
         values.monitoring.enabled: false
         values.monitoring.serviceMonitor.enabled: false
+    csi-driver-nfs:
+      source:
+        portable:
+          repo: https://raw.githubusercontent.com/kubernetes-csi/csi-driver-nfs/master/charts
+          chart: csi-driver-nfs
+          version: 4.13.2
+      ui:
+        title: Kubernetes NFS CSI driver
+        group: Storage
+        enabled: false
+      release:
+        namespace: kube-system
+        name: csi-driver-nfs
+        timeout: 10m
+      defaults:
+        values.controller.replicas: 2
+        values.storageClass.name: nfs-rwx-retain
+        values.storageClass.parameters.subDir: ${pvc.metadata.namespace}/${pvc.metadata.name}
+        values.storageClass.parameters.mountPermissions: "0770"
+        values.storageClass.parameters.onDelete: retain
+        values.storageClass.reclaimPolicy: Retain
+        values.storageClass.volumeBindingMode: Immediate
     soperator-dcgm-exporter:
       source:
         portable:

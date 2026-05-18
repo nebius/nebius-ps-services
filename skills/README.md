@@ -76,10 +76,11 @@ that means:
 If those prerequisites are missing, the skill should stop and explain the
 blocker instead of guessing.
 
-Skill-bundled scripts are reference-only by default in this repository. Execute
-them only when the user explicitly starts the request with `Run` or `Execute`
-(or equivalent); otherwise read the script or report the command that would be
-used.
+Skill-bundled scripts may be executed for read-only inspection or validation
+when they do not modify files, services, external systems, credentials, or
+persistent state. Execute scripts that make changes only when the user
+explicitly starts the request with `Run` or `Execute` (or equivalent);
+otherwise read the script or report the command that would be used.
 
 ## Skill Details
 
@@ -132,9 +133,15 @@ monorepo-friendly workflow structure.
 
 `global-context-management` keeps complex Codex sessions focused and
 recoverable by using durable task-state files, limiting noisy parent-thread
-exploration, delegating bounded read-only investigation when useful, and
-reviewing risk before final answers. Its public skill files stay generic; local
-hooks, custom agent config, and task-state files belong under `$CODEX_HOME`.
+exploration, delegating bounded read-only investigation when the user
+explicitly authorizes delegation or enables a local hook delegation policy and
+the runtime permits it, closing completed subagent threads after their results
+are consolidated when close controls are available, and reviewing risk before
+final answers. Its public skill files stay generic; local hooks, custom agent
+config, and task-state files belong under `$CODEX_HOME`. The task-state file
+is meant to be read at task start, resume, or after compaction when prior
+context may matter, then updated with concise decisions, validation status,
+and next action.
 
 ### `gitignore`
 

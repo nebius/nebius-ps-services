@@ -278,6 +278,61 @@ BUILTIN_WIZARD_PROFILES: dict[str, dict[str, dict[str, Any]]] = {
             "inputs.labels",
         ),
     },
+    "nfs": {
+        **_project_subnets_field(),
+        **_compute_platform_and_preset_fields(
+            platform_field="inputs.platform",
+            preset_field="inputs.preset",
+        ),
+        **_compute_public_image_family_field(
+            image_field="inputs.source_image_family",
+            platform_field="inputs.platform",
+        ),
+        "inputs.boot_disk_type": {
+            "options": {
+                "from": "compute_boot_disk_types",
+                "auto_select_first": True,
+            }
+        },
+        "inputs.public_ip_mode": _static_sources("none", "dynamic", "static", "allocation"),
+        "inputs.export_path": {
+            "materialize_default": True,
+        },
+        "inputs.client_cidrs": {
+            "type_hint": "list(string)",
+            "materialize_default": True,
+        },
+        "inputs.data_disk_enabled": {
+            "materialize_default": True,
+        },
+        "inputs.data_disk_type": {
+            "options": {
+                "from": "compute_boot_disk_types",
+                "auto_select_first": True,
+            },
+            "materialize_default": True,
+        },
+        "inputs.data_disk_size_gib": {
+            "materialize_default": True,
+        },
+        **_suppressed_prompt_fields(
+            "inputs.boot_disk_existing_id",
+            "inputs.boot_disk_block_size_bytes",
+            "inputs.boot_disk_device_id",
+            "inputs.source_image_id",
+            "inputs.public_ip_allocation_id",
+            "inputs.private_ip_allocation_id",
+            "inputs.security_group_ids",
+            "inputs.labels",
+            "inputs.data_disk_name",
+            "inputs.data_disk_block_size_bytes",
+            "inputs.data_disk_device_id",
+            "inputs.data_disk_filesystem_type",
+            "inputs.mount_options",
+            "inputs.export_options",
+            "inputs.filesystems",
+        ),
+    },
     "vm": {
         **_project_subnets_field(),
         **_compute_platform_and_preset_fields(
@@ -293,6 +348,19 @@ BUILTIN_WIZARD_PROFILES: dict[str, dict[str, dict[str, Any]]] = {
                 "from": "compute_boot_disk_types",
                 "auto_select_first": True,
             }
+        },
+        "inputs.data_disk_enabled": {
+            "materialize_default": True,
+        },
+        "inputs.data_disk_type": {
+            "options": {
+                "from": "compute_boot_disk_types",
+                "auto_select_first": True,
+            },
+            "materialize_default": True,
+        },
+        "inputs.data_disk_size_gib": {
+            "materialize_default": True,
         },
         "inputs.public_ip_mode": _static_sources("dynamic", "none", "static", "allocation"),
         "inputs.gpu_cluster_infiniband_fabric": {
@@ -315,6 +383,11 @@ BUILTIN_WIZARD_PROFILES: dict[str, dict[str, dict[str, Any]]] = {
             "inputs.cloud_init_user_data_override",
             "inputs.stopped",
             "inputs.labels",
+            "inputs.data_disk_name",
+            "inputs.data_disk_block_size_bytes",
+            "inputs.data_disk_attach_mode",
+            "inputs.data_disk_device_id",
+            "inputs.data_disk_labels",
             "inputs.data_disks",
             "inputs.existing_data_disks",
             "inputs.filesystems",

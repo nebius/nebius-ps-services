@@ -9254,7 +9254,10 @@ def test_help_text_maps_commands_to_target_types() -> None:
         in output
     )
     assert "overwrites existing resolved project folders only with confirmation" in output
-    assert "component list/add/remove are the day-2 config.yaml editing surface" in output
+    assert (
+        "component list/add/remove use --config CONFIG_YAML as the day-2 config.yaml editing surface"
+        in output
+    )
     assert "discover uses a deployment-scope directory" in output
     assert (
         "validate, validate-dashboards, quota-check, quota-request, render, "
@@ -9298,8 +9301,19 @@ def test_help_text_maps_commands_to_target_types() -> None:
 def test_command_help_usage_labels_positional_target_types() -> None:
     create_result = runner.invoke(cli.app, ["create", "--help"])
     component_result = runner.invoke(cli.app, ["component", "--help"])
-    component_add_result = runner.invoke(cli.app, ["component", "add", "--help"])
-    component_remove_result = runner.invoke(cli.app, ["component", "remove", "--help"])
+    component_list_result = runner.invoke(cli.app, ["component", "list", "--help"])
+    component_add_result = runner.invoke(
+        cli.app,
+        ["component", "add", "--help"],
+        env={"COLUMNS": "240"},
+        terminal_width=240,
+    )
+    component_remove_result = runner.invoke(
+        cli.app,
+        ["component", "remove", "--help"],
+        env={"COLUMNS": "240"},
+        terminal_width=240,
+    )
     discover_result = runner.invoke(cli.app, ["discover", "--help"])
     validate_result = runner.invoke(cli.app, ["validate", "--help"])
     validate_dashboards_result = runner.invoke(cli.app, ["validate-dashboards", "--help"])
@@ -9316,6 +9330,7 @@ def test_command_help_usage_labels_positional_target_types() -> None:
 
     assert create_result.exit_code == 0, create_result.output
     assert component_result.exit_code == 0, component_result.output
+    assert component_list_result.exit_code == 0, component_list_result.output
     assert component_add_result.exit_code == 0, component_add_result.output
     assert component_remove_result.exit_code == 0, component_remove_result.output
     assert discover_result.exit_code == 0, discover_result.output
@@ -9334,6 +9349,7 @@ def test_command_help_usage_labels_positional_target_types() -> None:
 
     create_help = _plain_output(create_result.output)
     component_help = _plain_output(component_result.output)
+    component_list_help = _plain_output(component_list_result.output)
     component_add_help = _plain_output(component_add_result.output)
     component_remove_help = _plain_output(component_remove_result.output)
     discover_help = _plain_output(discover_result.output)
@@ -9350,6 +9366,7 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     flux_destroy_help = _plain_output(flux_destroy_result.output)
     email_help = _plain_output(email_result.output)
     normalized_email_help = " ".join(email_help.split())
+    normalized_component_list_help = " ".join(component_list_help.split())
     normalized_component_add_help = " ".join(component_add_help.split())
     normalized_component_remove_help = " ".join(component_remove_help.split())
     normalized_wireguard_help = " ".join(wireguard_help.split())
@@ -9360,7 +9377,10 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     normalized_component_help = " ".join(component_help.split())
     assert "source-driven" in normalized_component_help
     assert "component instances" in normalized_component_help
-    assert "Use this after create for day-2 add/remove/list changes." in normalized_component_help
+    assert (
+        "Use --config CONFIG_YAML after create for day-2 add/remove/list changes."
+        in normalized_component_help
+    )
     normalized_create_help = " ".join(create_help.split())
     assert (
         "bootstrap one name-based tenant/project folder with config.yaml plus generated/ skeleton"
@@ -9377,18 +9397,38 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "Validate the full" in normalized_create_help
     assert "component catalog" in normalized_create_help
     assert "source settings before" in normalized_create_help
-    assert "add [OPTIONS] CONFIG_YAML [COMPONENT_SELECTOR]..." in component_add_help
+    assert "list [OPTIONS]" in component_list_help
+    assert "--config CONFIG_YAML" in normalized_component_list_help
+    assert "nebius-cxcli component list --config <config.yaml>" in normalized_component_list_help
+    assert "add [OPTIONS] [COMPONENT_SELECTOR]..." in component_add_help
+    assert "--config CONFIG_YAML" in normalized_component_add_help
+    assert "Project" in normalized_component_add_help
+    assert "config.yaml" in normalized_component_add_help
+    assert "inspect or edit" in normalized_component_add_help
+    assert "nebius-cxcli component add infra:vm --config <config.yaml>" in normalized_component_add_help
+    assert (
+        "nebius-cxcli component add infra:vm@worker-vm "
+        "--config <config.yaml> --no-interactive"
+    ) in normalized_component_add_help
+    assert (
+        "nebius-cxcli component add managed-postgresql object-storage@logs-bucket "
+        "--config <config.yaml> --no-interactive"
+    ) in normalized_component_add_help
     assert "Omit" in normalized_component_add_help
     assert "prompt" in normalized_component_add_help
     assert "interactively" in normalized_component_add_help
     assert "infra-only" in normalized_component_add_help
     assert "interactive adds" in normalized_component_add_help
     assert "valid" in normalized_component_add_help
-    assert "Repeat selectors" in normalized_component_add_help
-    assert "no-ops" in normalized_component_add_help
-    assert "<id>@<new-instance-id>" in normalized_component_add_help
-    assert "create another instance" in normalized_component_add_help
-    assert "<id>@<instance-id>" in normalized_component_add_help
+    assert "scalar named infra modules" in normalized_component_add_help
+    assert "resource name first" in normalized_component_add_help
+    assert "derive the saved instance_id" in normalized_component_add_help
+    assert "non-interactive mode" in normalized_component_add_help
+    assert "bare" in normalized_component_add_help
+    assert "default named row" in normalized_component_add_help
+    assert "<id>@<resource-name>" in normalized_component_add_help
+    assert "create another named infra row" in normalized_component_add_help
+    assert "<id>@<resource-name-or-target-id>" in normalized_component_add_help
     assert "infra:<id>" in normalized_component_add_help
     assert "apps:<id>" in normalized_component_add_help
     assert "all" in normalized_component_add_help
@@ -9396,19 +9436,35 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "instance_id" in normalized_component_add_help
     assert "--validate-sources --no-validate-sources" in " ".join(component_add_help.split())
     assert "Validate the full" in normalized_component_add_help
-    assert "catalog and source settings" in normalized_component_add_help
-    assert "before component add" in normalized_component_add_help
-    assert "day-2 additive" in normalized_component_add_help
+    assert "catalog" in normalized_component_add_help
+    assert "source" in normalized_component_add_help
+    assert "settings" in normalized_component_add_help
+    assert "before" in normalized_component_add_help
+    assert "component add" in normalized_component_add_help
+    assert (
+        "Add source-defined components to an existing project config.yaml"
+        in normalized_component_add_help
+    )
     assert "Apps are" in normalized_component_add_help
-    assert "Helm charts" in normalized_component_add_help
-    assert "enabled MK8s target" in normalized_component_add_help
+    assert "Helm" in normalized_component_add_help
+    assert "charts" in normalized_component_add_help
+    assert "enabled" in normalized_component_add_help
+    assert "MK8s target" in normalized_component_add_help
     assert "requires an enabled" in normalized_create_help
     assert "MK8s infra target" in normalized_create_help
-    assert "remove [OPTIONS] CONFIG_YAML [COMPONENT_SELECTOR]..." in component_remove_help
-    assert "<id>@<instance-id>" in normalized_component_remove_help
+    assert "remove [OPTIONS] [COMPONENT_SELECTOR]..." in component_remove_help
+    assert "--config CONFIG_YAML" in normalized_component_remove_help
+    assert (
+        "nebius-cxcli component remove managed-postgresql@analytics-pg "
+        "--config <config.yaml> --no-interactive"
+    ) in normalized_component_remove_help
+    assert "nebius-cxcli component remove vm@worker-vm" in normalized_component_remove_help
+    assert "<id>@<resource-name-or-target-id>" in normalized_component_remove_help
     assert "infra:<id>" in normalized_component_remove_help
     assert "apps:<id>" in normalized_component_remove_help
-    assert "<instance-id>" in normalized_component_remove_help
+    assert "<row-id>" in normalized_component_remove_help
+    assert "row id is the normalized resource name" in normalized_component_remove_help
+    assert "it is the target id" in normalized_component_remove_help
     assert "Omit" in normalized_component_remove_help
     assert "prompt" in normalized_component_remove_help
     assert "interactively" in normalized_component_remove_help
@@ -9428,7 +9484,7 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "All modes" in normalized_wireguard_help
     assert "pass exactly one" in normalized_wireguard_help
     assert "comma-separated" in normalized_wireguard_help
-    assert "same selected component instance" in normalized_wireguard_help
+    assert "same selected component row" in normalized_wireguard_help
     assert "Examples" in normalized_wireguard_help
     assert "nebius-cxcli wireguard --gen-client-conf <config.yaml>" in normalized_wireguard_help
     assert (
@@ -9455,15 +9511,18 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     )
     assert "one comma-separated --allowed-cidr value" in normalized_ssh_jumphost_help
     assert "refuses to apply an empty allowlist" in normalized_ssh_jumphost_help
-    assert "same selected component instance" in normalized_ssh_jumphost_help
-    assert "config.yaml row" in normalized_component_remove_help
+    assert "same selected component row" in normalized_ssh_jumphost_help
+    assert "config.yaml" in normalized_component_remove_help
+    assert "row" in normalized_component_remove_help
     assert "Already-absent selectors" in normalized_component_remove_help
-    assert "are skipped" in normalized_component_remove_help
+    assert "are" in normalized_component_remove_help
+    assert "skipped" in normalized_component_remove_help
     assert "Removing a" in normalized_component_remove_help
-    assert "cluster target also removes" in normalized_component_remove_help
+    assert "cluster target" in normalized_component_remove_help
+    assert "also removes" in normalized_component_remove_help
     assert "app rows" in normalized_component_remove_help
     assert "deploy.targets[] settings" in normalized_component_remove_help
-    assert "day-2 infra/app component removal" in normalized_component_remove_help
+    assert "Remove enabled component rows" in normalized_component_remove_help
     assert "discover [OPTIONS] DEPLOYMENT_SCOPE" in discover_help
     assert "generated/" in discover_help
     assert "narrower directory under it" in discover_help
