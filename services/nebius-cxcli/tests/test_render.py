@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 from pathlib import Path
 
 import pytest
@@ -978,6 +979,51 @@ def test_load_config_persists_nfs_csi_app_row_for_direct_config_edit(
     assert "target_ref" not in charts[0]
     assert (
         _target_flux_dir(paths, "cluster1") / "helmrelease-storage-csi-driver-nfs.yaml"
+    ).exists()
+
+
+def test_load_config_persists_unscoped_nfs_csi_rows_for_each_mk8s_target(
+    tmp_path: Path,
+) -> None:
+    config_path = _project_config_path(tmp_path)
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+
+    payload = _starter_payload(selected_infra={"mk8s", "nfs"}, selected_apps=set())
+    mk8s_template = _infra_component_row(payload, "mk8s")
+    cluster1 = copy.deepcopy(mk8s_template)
+    cluster2 = copy.deepcopy(mk8s_template)
+    _align_infra_resource_name(payload, cluster1, "cluster1")
+    _align_infra_resource_name(payload, cluster2, "cluster2")
+    nfs = _infra_component_row(payload, "nfs")
+    _align_infra_resource_name(payload, nfs, "nfs-shared")
+    nfs_inputs = nfs.setdefault("inputs", {})
+    nfs_inputs.pop("kubernetes_target_ref", None)
+    nfs_inputs["ssh_user_name"] = "ubuntu"
+    payload["infra"]["components"] = [cluster1, cluster2, nfs]
+    payload["deploy"]["targets"] = [
+        {"instance_id": "cluster1"},
+        {"instance_id": "cluster2"},
+    ]
+    payload["apps"]["charts"] = []
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    config = load_config(config_path, persist_normalized=True)
+    paths = resolve_project_paths(config_path)
+    render_project(config, paths, source_profile=SourceProfile.PORTABLE)
+
+    persisted = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    charts = persisted["apps"]["charts"]
+    assert [
+        (chart["id"], chart["instance_id"], chart["enabled"]) for chart in charts
+    ] == [
+        ("csi-driver-nfs", "cluster1", True),
+        ("csi-driver-nfs", "cluster2", True),
+    ]
+    assert (
+        _target_flux_dir(paths, "cluster1") / "helmrelease-storage-csi-driver-nfs.yaml"
+    ).exists()
+    assert (
+        _target_flux_dir(paths, "cluster2") / "helmrelease-storage-csi-driver-nfs.yaml"
     ).exists()
 
 
