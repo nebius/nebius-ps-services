@@ -306,14 +306,17 @@ def test_validate_command_runs_strict_checks_by_default(
 def test_validate_command_rejects_removed_strict_flag(
     tmp_path: Path,
 ) -> None:
-    result = runner.invoke(
-        cli.app,
-        ["validate", "--strict", str(tmp_path / "config.yaml")],
-        terminal_width=160,
-    )
+    result = runner.invoke(cli.app, ["validate", "--strict", str(tmp_path / "config.yaml")])
+    help_result = runner.invoke(cli.app, ["validate", "--help"])
 
-    assert result.exit_code != 0
-    assert "No such option: --strict" in _plain_output(result.output)
+    output = _plain_output(result.output)
+    help_output = _plain_output(help_result.output)
+
+    assert result.exit_code == 2
+    assert "Usage: root validate [OPTIONS] CONFIG_YAML" in output
+    assert "Config file not found" not in output
+    assert help_result.exit_code == 0
+    assert "--strict" not in help_output
 
 
 def test_validation_scope_summary_lines_group_enabled_components_concisely(
