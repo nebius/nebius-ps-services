@@ -1,366 +1,79 @@
-variable "parent_id" {
-  description = "Nebius project ID where MK8s resources are created."
-  type        = string
-  nullable    = false
-  validation {
-    condition     = length(trimspace(var.parent_id)) > 0
-    error_message = "parent_id cannot be empty."
-  }
-}
+variable "cluster" {
+  description = "Canonical MK8s cluster configuration. The subnet is the provider control-plane subnet; network_id is retained for caller and wizard validation that the subnet belongs to the selected VPC."
+  type = object({
+    parent_id         = string
+    cluster_name      = string
+    network_id        = string
+    subnet_id         = string
+    k8s_version       = string
+    public_endpoint   = bool
+    etcd_cluster_size = optional(number)
+    labels            = optional(map(string), {})
+    control_plane     = optional(any, {})
+    kube_network = optional(object({
+      service_cidrs = optional(list(string), ["/20"])
+    }), {})
+  })
+  nullable = false
 
-variable "cluster_name" {
-  description = "MK8s cluster name."
-  type        = string
-  nullable    = false
   validation {
-    condition     = length(trimspace(var.cluster_name)) > 0
-    error_message = "cluster_name cannot be empty."
+    condition     = length(trimspace(var.cluster.parent_id)) > 0
+    error_message = "cluster.parent_id cannot be empty."
   }
-}
-
-variable "subnet_id" {
-  description = "VPC subnet ID for MK8s control plane and default node interfaces."
-  type        = string
-  nullable    = false
   validation {
-    condition     = length(trimspace(var.subnet_id)) > 0
-    error_message = "subnet_id cannot be empty."
+    condition     = length(trimspace(var.cluster.cluster_name)) > 0
+    error_message = "cluster.cluster_name cannot be empty."
   }
-}
-
-variable "k8s_version" {
-  description = "Kubernetes version <major>.<minor> (for example 1.31)."
-  type        = string
-  default     = null
-  nullable    = true
+  validation {
+    condition     = length(trimspace(var.cluster.network_id)) > 0
+    error_message = "cluster.network_id cannot be empty."
+  }
+  validation {
+    condition     = length(trimspace(var.cluster.subnet_id)) > 0
+    error_message = "cluster.subnet_id cannot be empty."
+  }
+  validation {
+    condition     = length(trimspace(var.cluster.k8s_version)) > 0
+    error_message = "cluster.k8s_version cannot be empty."
+  }
   validation {
     condition = (
-      var.k8s_version == null ||
-      length(trimspace(var.k8s_version)) > 0
-    )
-    error_message = "k8s_version cannot be an empty string when provided."
-  }
-}
-
-variable "etcd_cluster_size" {
-  description = "etcd control plane size."
-  type        = number
-  default     = null
-  nullable    = true
-  validation {
-    condition = (
-      var.etcd_cluster_size == null ||
+      try(var.cluster.etcd_cluster_size, null) == null ||
       (
-        floor(var.etcd_cluster_size) == var.etcd_cluster_size &&
-        var.etcd_cluster_size >= 1
+        floor(var.cluster.etcd_cluster_size) == var.cluster.etcd_cluster_size &&
+        var.cluster.etcd_cluster_size >= 1
       )
     )
-    error_message = "etcd_cluster_size must be an integer >= 1 when provided."
+    error_message = "cluster.etcd_cluster_size must be an integer >= 1 when provided."
   }
-}
-
-variable "mk8s_cluster_public_endpoint" {
-  description = "Enable public endpoint for MK8s control plane."
-  type        = bool
-  default     = false
-  nullable    = false
-}
-
-variable "kube_network_service_cidrs" {
-  description = "CIDR blocks for Kubernetes Service ClusterIP allocation. Defaults to a smaller /20 allocation to avoid Nebius' broad /16 implicit default on single-pool subnets."
-  type        = list(string)
-  default     = ["/20"]
-  nullable    = false
   validation {
-    condition = (
-      length(var.kube_network_service_cidrs) == 1 &&
-      alltrue([
-        for cidr in var.kube_network_service_cidrs : length(trimspace(cidr)) > 0
-      ])
-    )
-    error_message = "kube_network_service_cidrs must contain exactly one non-empty CIDR or prefix-length string."
+    condition = alltrue([
+      for cidr in try(var.cluster.kube_network.service_cidrs, ["/20"]) :
+      length(trimspace(cidr)) > 0
+    ])
+    error_message = "cluster.kube_network.service_cidrs must contain only non-empty CIDR or prefix-length strings."
   }
-}
-
-variable "cpu_nodes_count" {
-  description = "Fixed node count for CPU node group. Set explicitly in callers that want the baseline CPU node pool."
-  type        = number
-  default     = null
-  nullable    = true
-  validation {
-    condition = (
-      var.cpu_nodes_count == null ||
-      (
-        floor(var.cpu_nodes_count) == var.cpu_nodes_count &&
-        var.cpu_nodes_count >= 0
-      )
-    )
-    error_message = "cpu_nodes_count must be null or an integer >= 0."
-  }
-}
-
-variable "cpu_nodes_platform" {
-  description = "Default CPU node group resources.platform. Required when CPU node group creation is enabled unless override template.resources sets it."
-  type        = string
-  default     = ""
-  nullable    = false
-}
-
-variable "cpu_nodes_preset" {
-  description = "Default CPU node group resources.preset. Required when CPU node group creation is enabled unless override template.resources sets it."
-  type        = string
-  default     = ""
-  nullable    = false
-}
-
-variable "cpu_nodes_os" {
-  description = "Default CPU node group template.os. When null, provider defaults or override template.os apply."
-  type        = string
-  default     = null
-  nullable    = true
-  validation {
-    condition = (
-      var.cpu_nodes_os == null ||
-      length(trimspace(var.cpu_nodes_os)) > 0
-    )
-    error_message = "cpu_nodes_os cannot be empty when provided."
-  }
-}
-
-variable "cpu_nodes_boot_disk_size_gib" {
-  description = "Default CPU node group template.boot_disk.size_gibibytes. When null, provider defaults or override template.boot_disk.size_* apply."
-  type        = number
-  default     = null
-  nullable    = true
-  validation {
-    condition = (
-      var.cpu_nodes_boot_disk_size_gib == null ||
-      (
-        floor(var.cpu_nodes_boot_disk_size_gib) == var.cpu_nodes_boot_disk_size_gib &&
-        var.cpu_nodes_boot_disk_size_gib >= 1
-      )
-    )
-    error_message = "cpu_nodes_boot_disk_size_gib must be null or an integer >= 1."
-  }
-}
-
-variable "cpu_nodes_boot_disk_type" {
-  description = "Default CPU node group template.boot_disk.type. When null, provider defaults or override template.boot_disk.type apply."
-  type        = string
-  default     = null
-  nullable    = true
-  validation {
-    condition = (
-      var.cpu_nodes_boot_disk_type == null ||
-      contains(
-        [
-          "NETWORK_SSD",
-          "NETWORK_HDD",
-          "NETWORK_SSD_NON_REPLICATED",
-          "NETWORK_SSD_IO_M3",
-        ],
-        trimspace(var.cpu_nodes_boot_disk_type)
-      )
-    )
-    error_message = "cpu_nodes_boot_disk_type must be null or one of NETWORK_SSD, NETWORK_HDD, NETWORK_SSD_NON_REPLICATED, NETWORK_SSD_IO_M3."
-  }
-}
-
-variable "cpu_nodes_preemptible" {
-  description = "Use preemptible CPU nodes."
-  type        = bool
-  default     = false
-  nullable    = false
-}
-
-variable "cpu_nodes_public_ips" {
-  description = "Attach public IPs to CPU nodes."
-  type        = bool
-  default     = false
-  nullable    = false
-}
-
-variable "gpu_enabled" {
-  description = "Enable GPU node groups."
-  type        = bool
-  default     = false
-  nullable    = false
-}
-
-variable "gpu_node_groups" {
-  description = "Number of GPU node groups."
-  type        = number
-  default     = 0
-  nullable    = false
-  validation {
-    condition = (
-      floor(var.gpu_node_groups) == var.gpu_node_groups &&
-      var.gpu_node_groups >= 0
-    )
-    error_message = "gpu_node_groups must be an integer >= 0."
-  }
-}
-
-variable "gpu_nodes_count_per_group" {
-  description = "Fixed nodes per GPU node group."
-  type        = number
-  default     = 0
-  nullable    = false
-  validation {
-    condition = (
-      floor(var.gpu_nodes_count_per_group) == var.gpu_nodes_count_per_group &&
-      var.gpu_nodes_count_per_group >= 0
-    )
-    error_message = "gpu_nodes_count_per_group must be an integer >= 0."
-  }
-}
-
-variable "gpu_nodes_platform" {
-  description = "Default GPU node group resources.platform. Required when gpu_enabled=true unless override template.resources sets it."
-  type        = string
-  default     = ""
-  nullable    = false
-}
-
-variable "gpu_nodes_preset" {
-  description = "Default GPU node group resources.preset. Required when gpu_enabled=true unless override template.resources sets it."
-  type        = string
-  default     = ""
-  nullable    = false
-}
-
-variable "gpu_nodes_os" {
-  description = "Default GPU node group template.os. When null, provider defaults or override template.os apply."
-  type        = string
-  default     = null
-  nullable    = true
-  validation {
-    condition = (
-      var.gpu_nodes_os == null ||
-      length(trimspace(var.gpu_nodes_os)) > 0
-    )
-    error_message = "gpu_nodes_os cannot be empty when provided."
-  }
-}
-
-variable "gpu_nodes_boot_disk_size_gib" {
-  description = "Default GPU node group template.boot_disk.size_gibibytes. When null, provider defaults or override template.boot_disk.size_* apply."
-  type        = number
-  default     = null
-  nullable    = true
-  validation {
-    condition = (
-      var.gpu_nodes_boot_disk_size_gib == null ||
-      (
-        floor(var.gpu_nodes_boot_disk_size_gib) == var.gpu_nodes_boot_disk_size_gib &&
-        var.gpu_nodes_boot_disk_size_gib >= 1
-      )
-    )
-    error_message = "gpu_nodes_boot_disk_size_gib must be null or an integer >= 1."
-  }
-}
-
-variable "gpu_nodes_boot_disk_type" {
-  description = "Default GPU node group template.boot_disk.type. When null, provider defaults or override template.boot_disk.type apply."
-  type        = string
-  default     = null
-  nullable    = true
-  validation {
-    condition = (
-      var.gpu_nodes_boot_disk_type == null ||
-      contains(
-        [
-          "NETWORK_SSD",
-          "NETWORK_HDD",
-          "NETWORK_SSD_NON_REPLICATED",
-          "NETWORK_SSD_IO_M3",
-        ],
-        trimspace(var.gpu_nodes_boot_disk_type)
-      )
-    )
-    error_message = "gpu_nodes_boot_disk_type must be null or one of NETWORK_SSD, NETWORK_HDD, NETWORK_SSD_NON_REPLICATED, NETWORK_SSD_IO_M3."
-  }
-}
-
-variable "gpu_nodes_preemptible" {
-  description = "Use preemptible GPU nodes."
-  type        = bool
-  default     = false
-  nullable    = false
-}
-
-variable "gpu_nodes_public_ips" {
-  description = "Attach public IPs to GPU nodes."
-  type        = bool
-  default     = false
-  nullable    = false
-}
-
-variable "gpu_stack_preset" {
-  description = "Nebius GPU software-stack preset for GPU node groups when gpu_stack_source=nebius_image. This maps to the Nebius API field template.gpu_settings.drivers_preset."
-  type        = string
-  default     = null
-  nullable    = true
-  validation {
-    condition = (
-      var.gpu_stack_preset == null ||
-      length(trimspace(var.gpu_stack_preset)) > 0
-    )
-    error_message = "gpu_stack_preset cannot be empty when provided."
-  }
-}
-
-variable "gpu_stack_source" {
-  description = "How the GPU software stack reaches MK8s nodes: nebius_image renders template.gpu_settings.drivers_preset so Managed Kubernetes preinstalls the Nebius image stack; operator_managed omits gpu_settings so operators or other tooling can manage drivers, toolkit, and kernels."
-  type        = string
-  default     = "nebius_image"
-  nullable    = false
-  validation {
-    condition     = contains(["nebius_image", "operator_managed"], trimspace(var.gpu_stack_source))
-    error_message = "gpu_stack_source must be 'nebius_image' or 'operator_managed'."
-  }
-}
-
-variable "infiniband_fabric" {
-  description = "GPU fabric name for optional GPU cluster creation."
-  type        = string
-  default     = ""
-  nullable    = false
-}
-
-variable "mk8s_cluster_overrides" {
-  description = "Optional provider-aligned cluster override object."
-  type        = map(any)
-  default     = {}
-  nullable    = false
-}
-
-variable "mk8s_cpu_node_group_overrides" {
-  description = "Optional provider-aligned CPU node group override object."
-  type        = map(any)
-  default     = {}
-  nullable    = false
-}
-
-variable "mk8s_gpu_node_group_overrides" {
-  description = "Optional provider-aligned GPU node group override object."
-  type        = map(any)
-  default     = {}
-  nullable    = false
 }
 
 variable "gpu_clusters" {
-  description = "Provider-aligned named GPU clusters for generic node_groups. Each value can set name, parent_id, labels, enabled, and infiniband_fabric."
-  type        = map(any)
-  default     = {}
-  nullable    = false
+  description = "Optional named Nebius GPU clusters keyed by caller-owned logical name. Node groups attach with gpu_cluster_key or gpu_cluster_id."
+  type = map(object({
+    enabled           = optional(bool, true)
+    parent_id         = optional(string)
+    name              = optional(string)
+    labels            = optional(map(string), {})
+    infiniband_fabric = optional(string)
+  }))
+  default  = {}
+  nullable = false
+
   validation {
     condition = alltrue([
       for key, cluster in var.gpu_clusters : (
         length(trimspace(key)) > 0 &&
         (
           try(cluster.enabled, true) == false ||
-          length(trimspace(try(cluster.infiniband_fabric, ""))) > 0
+          length(trimspace(try(cluster.infiniband_fabric != null ? cluster.infiniband_fabric : "", ""))) > 0
         )
       )
     ])
@@ -369,16 +82,171 @@ variable "gpu_clusters" {
 }
 
 variable "node_groups" {
-  description = "Generic provider-aligned MK8s node groups keyed by caller-owned logical name. Terraform creates only Nebius MK8s node groups; any Soperator role names come from caller or cxcli profile data."
-  type        = any
-  default     = {}
-  nullable    = false
+  description = "Canonical MK8s node groups keyed by logical name. Every node group declares its own shape, placement, optional service account, reservation, SSH, and filesystem attachments."
+  type = map(object({
+    enabled     = optional(bool, true)
+    name        = optional(string)
+    parent_id   = optional(string)
+    version     = optional(string)
+    labels      = optional(map(string), {})
+    node_labels = optional(map(string), {})
+    node_count  = optional(number)
+    autoscaling = optional(any)
+    auto_repair = optional(any)
+    strategy    = optional(any)
+    gpu         = optional(bool, false)
+    platform    = optional(string)
+    preset      = optional(string)
+    os          = optional(string)
+    subnet_id   = optional(string)
+    public_ips  = optional(bool, false)
+    boot_disk = optional(object({
+      size_bytes       = optional(number)
+      size_kibibytes   = optional(number)
+      size_mebibytes   = optional(number)
+      size_gibibytes   = optional(number)
+      block_size_bytes = optional(number)
+      type             = optional(string)
+    }))
+    preemptible = optional(bool, false)
+    taints = optional(list(object({
+      key    = string
+      value  = string
+      effect = string
+    })), [])
+    network_interfaces = optional(any)
+    local_disks        = optional(any)
+    gpu_stack_source   = optional(string, "nebius_image")
+    gpu_stack_preset   = optional(string)
+    gpu_cluster_key    = optional(string)
+    gpu_cluster_id     = optional(string)
+    reservation = optional(object({
+      policy          = optional(string)
+      reservation_ids = optional(list(string), [])
+    }))
+    service_account = optional(object({
+      id          = optional(string)
+      name        = optional(string)
+      description = optional(string)
+      labels      = optional(map(string), {})
+    }))
+    ssh = optional(object({
+      username    = string
+      public_keys = list(string)
+    }))
+    filesystems = optional(list(object({
+      attach_mode = string
+      mount_tag   = string
+      existing_filesystem = optional(object({
+        id = string
+      }))
+    })), [])
+    sfs_filesystem_keys = optional(list(string), [])
+  }))
+  nullable = false
+
+  validation {
+    condition = alltrue([
+      for key, group in var.node_groups : length(trimspace(key)) > 0
+    ])
+    error_message = "Each node_groups entry must have a non-empty key."
+  }
   validation {
     condition = alltrue([
       for key, group in var.node_groups : (
-        length(trimspace(key)) > 0
+        try(group.enabled, true) == false ||
+        (
+          length(trimspace(try(group.platform != null ? group.platform : "", ""))) > 0 &&
+          length(trimspace(try(group.preset != null ? group.preset : "", ""))) > 0
+        )
       )
     ])
-    error_message = "Each node_groups entry must have a non-empty key."
+    error_message = "Each enabled node group requires platform and preset."
+  }
+  validation {
+    condition = alltrue([
+      for key, group in var.node_groups : !(
+        try(group.node_count, null) != null &&
+        try(group.autoscaling, null) != null
+      )
+    ])
+    error_message = "A node group cannot set both node_count and autoscaling."
+  }
+  validation {
+    condition = alltrue([
+      for key, group in var.node_groups : (
+        try(group.node_count, null) == null ||
+        (
+          floor(group.node_count) == group.node_count &&
+          group.node_count >= 0
+        )
+      )
+    ])
+    error_message = "node_groups[*].node_count must be an integer >= 0 when provided."
+  }
+  validation {
+    condition = alltrue([
+      for key, group in var.node_groups : contains(
+        ["nebius_image", "operator_managed"],
+        trimspace(try(group.gpu_stack_source, "nebius_image"))
+      )
+    ])
+    error_message = "node_groups[*].gpu_stack_source must be 'nebius_image' or 'operator_managed'."
+  }
+  validation {
+    condition = alltrue([
+      for key, group in var.node_groups : (
+        try(group.enabled, true) == false ||
+        try(group.gpu, false) == false ||
+        try(group.gpu_stack_source, "nebius_image") != "nebius_image" ||
+        length(trimspace(try(group.gpu_stack_preset != null ? group.gpu_stack_preset : "", ""))) > 0
+      )
+    ])
+    error_message = "GPU node groups require gpu_stack_preset when gpu_stack_source is 'nebius_image'."
+  }
+  validation {
+    condition = alltrue([
+      for key, group in var.node_groups : contains(
+        ["AUTO", "FORBID", "STRICT"],
+        trimspace(try(group.reservation.policy, group.gpu ? "FORBID" : "FORBID"))
+      )
+    ])
+    error_message = "node_groups[*].reservation.policy must be AUTO, FORBID, or STRICT."
+  }
+  validation {
+    condition = alltrue([
+      for key, group in var.node_groups : !(
+        try(group.reservation.policy, null) == "FORBID" &&
+        length(try(group.reservation.reservation_ids, [])) > 0
+      )
+    ])
+    error_message = "node_groups[*].reservation.reservation_ids cannot be set when reservation.policy is FORBID."
+  }
+  validation {
+    condition = alltrue([
+      for key, group in var.node_groups : (
+        try(group.reservation, null) == null ||
+        try(group.gpu, false)
+      )
+    ])
+    error_message = "node_groups[*].reservation is supported only for GPU node groups."
+  }
+  validation {
+    condition = alltrue([
+      for key, group in var.node_groups : !(
+        length(trimspace(try(group.service_account.id != null ? group.service_account.id : "", ""))) > 0 &&
+        length(trimspace(try(group.service_account.name != null ? group.service_account.name : "", ""))) > 0
+      )
+    ])
+    error_message = "node_groups[*].service_account can set only one of id or name."
+  }
+  validation {
+    condition = alltrue([
+      for key, group in var.node_groups : !(
+        length(trimspace(try(group.gpu_cluster_key != null ? group.gpu_cluster_key : "", ""))) > 0 &&
+        length(trimspace(try(group.gpu_cluster_id != null ? group.gpu_cluster_id : "", ""))) > 0
+      )
+    ])
+    error_message = "node_groups[*] can set only one of gpu_cluster_key or gpu_cluster_id."
   }
 }

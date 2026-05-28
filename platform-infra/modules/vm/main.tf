@@ -126,7 +126,6 @@ resource "nebius_compute_v1_instance" "vm" {
   recovery_policy = upper(var.recovery_policy)
   preemptible = var.preemptible_enabled ? {
     on_preemption = "STOP"
-    priority      = var.preemptible_priority
   } : null
   gpu_cluster = local.effective_gpu_cluster_id != null ? {
     id = local.effective_gpu_cluster_id

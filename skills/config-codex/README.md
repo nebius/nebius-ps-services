@@ -112,8 +112,9 @@ The hook layer injects durable context before Codex starts work:
 
 ```text
 Here is the workspace root.
-Here is the task-state file.
-Read current task state when prior context may matter.
+Here is the task-state path.
+Create task state automatically only for complex prompts.
+Read current task state when it already exists and prior context may matter.
 Use global-context-management for complex work.
 Keep the parent thread concise.
 ```
@@ -324,7 +325,12 @@ setup.
    those IDs. They prove the hook path calculation, but they are not active
    persistent model state unless an agent later reads and updates that exact
    path. Prefer `global-context-management/scripts/validate-local-templates.py`
-   for hook-unit validation because it uses disposable temporary homes.
+   for hook-unit validation because it uses disposable temporary homes and
+   checks that `SessionStart` does not create missing scaffold files, an
+   existing nonempty `current.md` is preserved for the agent to read instead of
+   being overwritten or injected into hook context, and loose task-state file
+   permissions are repaired on reuse. No manual or legacy task-state path is
+   created when a hook payload lacks `session_id`.
 
 ## File Responsibilities
 

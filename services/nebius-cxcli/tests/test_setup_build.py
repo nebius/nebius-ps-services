@@ -31,23 +31,38 @@ def _write_catalog(
     portable_source: str,
     *,
     local_source: str | None = "../../platform-infra/modules/mk8s",
+    app_portable_repo: str | None = None,
+    app_local_path: str | None = None,
 ) -> None:
-    path.write_text(
-        yaml.safe_dump(
-            {
-                "components": {
-                    "infra": {
-                        "mk8s": {
-                            "source": {
-                                "portable": portable_source,
-                                "local": local_source,
-                            }
-                        }
+    payload: dict[str, object] = {
+        "components": {
+            "infra": {
+                "mk8s": {
+                    "source": {
+                        "portable": portable_source,
+                        "local": local_source,
                     }
                 }
-            },
-            sort_keys=False,
-        ),
+            }
+        }
+    }
+    if app_portable_repo is not None or app_local_path is not None:
+        app_source: dict[str, object] = {}
+        if app_portable_repo is not None:
+            app_source["portable"] = {
+                "repo": app_portable_repo,
+                "chart": "soperator",
+                "version": "0.1.0",
+            }
+        if app_local_path is not None:
+            app_source["local"] = {"path": app_local_path}
+        payload["components"]["apps"] = {
+            "soperator": {
+                "source": app_source,
+            }
+        }
+    path.write_text(
+        yaml.safe_dump(payload, sort_keys=False),
         encoding="utf-8",
     )
 
@@ -103,6 +118,30 @@ def test_render_bundled_component_sources_prefers_release_ref_over_cli_ref(
     assert rendered["components"]["infra"]["mk8s"]["source"]["portable"].endswith(
         "?ref=deadbeefcafebabe"
     )
+
+
+def test_render_bundled_component_sources_rewrites_app_chart_refs_and_strips_local(
+    monkeypatch, tmp_path: Path
+) -> None:
+    module = _load_setup_module(monkeypatch)
+    catalog = tmp_path / "component_sources.yaml"
+    _write_catalog(
+        catalog,
+        "git::https://github.com/nebius/nebius-ps-services.git//platform-infra/modules/mk8s?ref=main",
+        app_portable_repo=(
+            "https://github.com/nebius/nebius-ps-services/tree/main/helm-charts/soperator"
+        ),
+        app_local_path="../../helm-charts/soperator",
+    )
+    monkeypatch.setenv("NEBIUS_CXCLI_BUILD_RELEASE_REF", "nebius-cxcli-v0.1.1")
+
+    rendered = yaml.safe_load(module._render_bundled_component_sources(catalog))
+
+    app_source = rendered["components"]["apps"]["soperator"]["source"]
+    assert app_source["portable"]["repo"].endswith(
+        "/tree/nebius-cxcli-v0.1.1/helm-charts/soperator"
+    )
+    assert "local" not in app_source
 
 
 def test_select_bundled_component_sources_uses_root_catalog_by_default(

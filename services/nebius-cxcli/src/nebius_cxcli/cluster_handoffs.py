@@ -20,7 +20,7 @@ _BUILTIN_HANDOFFS: dict[str, Handoff] = {
     "mk8s": Handoff(
         cluster_id_output_name="cluster_id",
         access_kind="input",
-        access_source_path="inputs.mk8s_cluster_public_endpoint",
+        access_source_path="inputs.cluster.public_endpoint",
     ),
 }
 

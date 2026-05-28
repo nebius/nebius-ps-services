@@ -56,55 +56,18 @@ def test_apps_dependency_resolution_uses_release_install_after(monkeypatch) -> N
     assert warnings == ()
 
 
-def test_soperator_notifier_selects_soperator_and_cert_manager_from_release_order() -> None:
-    selected, adjustments, warnings = _resolve_apps_chart_dependencies(
-        payload={},
-        selected_apps={"soperator-notifier"},
-        app_entries=component_entries("apps", source_profile=SourceProfile.LOCAL),
-        cache={},
-        collect_warnings=True,
-    )
+def test_soperator_family_exposes_only_parent_app_entry() -> None:
+    app_ids = {entry.id for entry in component_entries("apps", source_profile=SourceProfile.LOCAL)}
 
-    assert {"soperator-notifier", "soperator", "cert-manager"}.issubset(selected)
-    assert {(item.dependency_app_id, item.dependency_kind) for item in adjustments} >= {
-        ("soperator", "install_after"),
-        ("cert-manager", "install_after"),
-    }
-    assert warnings == ()
-
-
-def test_soperator_activechecks_selects_checks_controller_from_release_order() -> None:
-    selected, adjustments, warnings = _resolve_apps_chart_dependencies(
-        payload={},
-        selected_apps={"soperator-activechecks"},
-        app_entries=component_entries("apps", source_profile=SourceProfile.LOCAL),
-        cache={},
-        collect_warnings=True,
-    )
-
-    assert {"soperator-activechecks", "soperator-checks", "soperator"}.issubset(selected)
-    assert {(item.dependency_app_id, item.dependency_kind) for item in adjustments} >= {
-        ("soperator-checks", "install_after"),
-        ("soperator", "install_after"),
-    }
-    assert warnings == ()
-
-
-def test_soperator_backup_selects_k8up_from_release_order() -> None:
-    selected, adjustments, warnings = _resolve_apps_chart_dependencies(
-        payload={},
-        selected_apps={"soperator-backup-config"},
-        app_entries=component_entries("apps", source_profile=SourceProfile.LOCAL),
-        cache={},
-        collect_warnings=True,
-    )
-
-    assert {"soperator-backup-config", "soperator", "k8up"}.issubset(selected)
-    assert {(item.dependency_app_id, item.dependency_kind) for item in adjustments} >= {
-        ("soperator", "install_after"),
-        ("k8up", "install_after"),
-    }
-    assert warnings == ()
+    assert "soperator" in app_ids
+    assert {
+        "soperator-activechecks",
+        "soperator-backup-config",
+        "soperator-checks",
+        "soperator-dcgm-exporter",
+        "soperator-notifier",
+        "k8up",
+    }.isdisjoint(app_ids)
 
 
 def test_apps_dependency_resolution_uses_source_chart_name_fallback(monkeypatch) -> None:

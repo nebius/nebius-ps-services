@@ -296,7 +296,8 @@
     {
       "id": 6,
       "type": "stat",
-      "title": "XID Errors",
+      "title": "Current XID Code",
+      "description": "NVIDIA DCGM reports DCGM_FI_DEV_XID_ERRORS as the latest XID code value, not an error counter. cxcli shows the highest current code across the selected GPU scope; zero means no XID is currently reported. No data means the XID read point is absent.",
       "gridPos": {
         "x": 20,
         "y": 0,
@@ -309,7 +310,7 @@
       },
       "targets": [
         {
-          "expr": "max(DCGM_FI_DEV_XID_ERRORS{job=\"nebius-observability-agent\",mk8s_cluster_id=~\"$Cluster\",instance_id=~\"$GpuNode\",uuid=~\"$Gpu\"})",
+          "expr": "max(max by (instance_id, uuid) (DCGM_FI_DEV_XID_ERRORS{job=\"nebius-observability-agent\",mk8s_cluster_id=~\"$Cluster\",instance_id=~\"$GpuNode\",uuid=~\"$Gpu\"}))",
           "refId": "A",
           "datasource": {
             "type": "prometheus",
@@ -319,7 +320,30 @@
       ],
       "fieldConfig": {
         "defaults": {
-          "decimals": 0
+          "decimals": 0,
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "No XID"
+                }
+              }
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          }
         },
         "overrides": []
       },

@@ -14,7 +14,7 @@ from nebius_cxcli.component_sources import (
     set_component_sources_file_override,
 )
 from nebius_cxcli.components import component_entries, reset_component_entry_cache
-from nebius_cxcli.config_loader import load_config
+from nebius_cxcli.config_loader import load_config, normalize_runtime_config_payload
 from nebius_cxcli.config_model import is_dynamic_payload, to_dynamic_payload, to_runtime_payload
 from nebius_cxcli.config_template import starter_config_yaml
 
@@ -182,6 +182,113 @@ def test_load_config_accepts_dynamic_payload_with_extra_chart(tmp_path: Path) ->
     loaded = load_config(config_path)
     assert loaded.apps.workloads.runtime_app_mk8s.enabled is True
     assert loaded.apps.workloads.runtime_app_mk8s.repo == "https://example.invalid/charts"
+
+
+def test_load_config_prunes_inactive_mk8s_node_group_defaults(tmp_path: Path) -> None:
+    payload = {
+        "version": "v1",
+        "client_info": {
+            "client_name": "client-a",
+            "nebius": {
+                "tenant_id": "tenant-123",
+                "project_id": "project-456",
+                "region_id": "eu-north1",
+            },
+            "notifications": {"email_enabled": False, "email": None},
+        },
+        "infra": {
+            "components": [
+                {
+                    "id": "mk8s",
+                    "instance_id": "cluster1",
+                    "enabled": True,
+                    "inputs": {
+                        "cluster": {
+                            "cluster_name": "cluster1",
+                            "parent_id": "project-456",
+                            "network_id": "vpcnetwork-1",
+                            "subnet_id": "vpcsubnet-1",
+                            "k8s_version": "1.33",
+                            "public_endpoint": True,
+                        },
+                        "node_groups": {
+                            "system": {
+                                "platform": "cpu-d3",
+                                "preset": "32vcpu-128gb",
+                                "node_count": 2,
+                            }
+                        },
+                        "node_group_defaults": {
+                            "gpu": {
+                                "platform": "gpu-h100-sxm",
+                                "preset": "1gpu-16vcpu-200gb",
+                            }
+                        },
+                    },
+                }
+            ]
+        },
+        "apps": {"charts": []},
+    }
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    load_config(config_path, persist_normalized=True)
+
+    normalized = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    inputs = normalized["infra"]["components"][0]["inputs"]
+    assert "node_group_defaults" not in inputs
+    assert inputs["node_groups"]["system"]["node_count"] == 2
+
+
+def test_normalize_runtime_config_prunes_cpu_soperator_gpu_node_group_defaults() -> None:
+    payload = {
+        "infra": {
+            "components": [
+                {
+                    "id": "mk8s",
+                    "instance_id": "cluster1",
+                    "enabled": True,
+                    "inputs": {
+                        "node_group_defaults": {
+                            "cpu": {
+                                "platform": "cpu-d3",
+                                "preset": "8vcpu-32gb",
+                            },
+                            "gpu": {
+                                "platform": "gpu-h100-sxm",
+                                "preset": "8gpu-128vcpu-1600gb",
+                            },
+                        }
+                    },
+                },
+                {
+                    "id": "sfs",
+                    "instance_id": "sfs",
+                    "enabled": True,
+                    "inputs": {},
+                },
+            ]
+        },
+        "apps": {
+            "charts": [
+                {
+                    "id": "soperator",
+                    "instance_id": "cluster1",
+                    "enabled": True,
+                    "install_mode": "production-cluster",
+                    "profile": "nebius-cpu-v1",
+                    "values": {},
+                }
+            ]
+        },
+    }
+
+    assert normalize_runtime_config_payload(payload) is True
+
+    defaults = payload["infra"]["components"][0]["inputs"]["node_group_defaults"]
+    assert defaults == {"cpu": {"platform": "cpu-d3", "preset": "8vcpu-32gb"}}
+    assert "gpu_clusters" not in payload["infra"]["components"][0]["inputs"]
 
 
 def test_starter_payload_names_target_bound_app_instances() -> None:

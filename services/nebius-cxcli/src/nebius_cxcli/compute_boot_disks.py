@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import math
 import re
 from dataclasses import dataclass
@@ -15,6 +16,7 @@ from .component_sources import (
     ComputeBootDiskTypeChoice,
     load_component_sources,
 )
+from .mk8s_node_groups import Mk8sNodeGroup, gpu_cluster_fabric, iter_node_groups
 from .provider_options import ProviderOptionLookup
 from .runtime_introspection import module_variable_names
 
@@ -27,6 +29,7 @@ _VM_STYLE_BOOT_DISK_INPUTS = frozenset(
         "boot_disk_type",
     }
 )
+_LOGGER = logging.getLogger(__name__)
 
 
 class ComputeBootDiskRecommendationError(ValueError):
@@ -97,7 +100,8 @@ def _vm_style_component_ids() -> frozenset[str]:
     ids: set[str] = set()
     try:
         modules = load_component_sources().tf_modules
-    except Exception:
+    except (OSError, RuntimeError, ValueError) as exc:
+        _LOGGER.warning("Unable to load component sources for VM-style boot-disk defaults: %s", exc)
         return frozenset()
     for module in modules:
         source = str(module.metadata_source or module.source or "").strip()
@@ -185,61 +189,116 @@ def _resolved_preset_resources(
     return _parse_preset_resources_from_name(preset)
 
 
-def _mk8s_override_boot_disk(inputs: dict[str, Any], *, field_scope: str) -> dict[str, Any]:
-    override_key = (
-        "mk8s_gpu_node_group_overrides" if field_scope == "gpu" else "mk8s_cpu_node_group_overrides"
-    )
-    overrides = inputs.get(override_key)
-    boot_disk = (
-        _path_value(overrides, "template.boot_disk") if isinstance(overrides, dict) else None
-    )
-    return dict(boot_disk) if isinstance(boot_disk, dict) else {}
+def _set_path_value(mapping: dict[str, Any], dotted_path: str, value: Any) -> None:
+    current = mapping
+    segments = dotted_path.split(".")
+    for segment in segments[:-1]:
+        next_value = current.setdefault(segment, {})
+        if not isinstance(next_value, dict):
+            next_value = {}
+            current[segment] = next_value
+        current = next_value
+    current[segments[-1]] = value
+
+
+def _pop_path_value(mapping: dict[str, Any], dotted_path: str) -> None:
+    current = mapping
+    segments = dotted_path.split(".")
+    for segment in segments[:-1]:
+        next_value = current.get(segment)
+        if not isinstance(next_value, dict):
+            return
+        current = next_value
+    current.pop(segments[-1], None)
+
+
+def _field_value(
+    component_id: str,
+    inputs: dict[str, Any],
+    field_name: str,
+) -> Any | None:
+    if component_id == "mk8s":
+        return _path_value(inputs, field_name)
+    return inputs.get(field_name)
+
+
+def _set_field_value(
+    component_id: str,
+    inputs: dict[str, Any],
+    field_name: str,
+    value: Any,
+) -> None:
+    if component_id == "mk8s":
+        _set_path_value(inputs, field_name, value)
+        return
+    inputs[field_name] = value
+
+
+def _pop_field_value(component_id: str, inputs: dict[str, Any], field_name: str) -> None:
+    if component_id == "mk8s":
+        _pop_path_value(inputs, field_name)
+        return
+    inputs.pop(field_name, None)
+
+
+def _mk8s_node_group_defaults(inputs: dict[str, Any], *, field_scope: str) -> dict[str, Any]:
+    defaults = _path_value(inputs, f"node_group_defaults.{field_scope}")
+    return dict(defaults) if isinstance(defaults, dict) else {}
+
+
+def _mk8s_node_groups_for_scope(
+    inputs: dict[str, Any],
+    *,
+    field_scope: str,
+) -> tuple[Mk8sNodeGroup, ...]:
+    gpu = field_scope == "gpu"
+    return tuple(group for group in iter_node_groups(inputs) if group.gpu is gpu)
+
+
+def _mk8s_has_node_groups(inputs: dict[str, Any]) -> bool:
+    return bool(iter_node_groups(inputs))
+
+
+def _mk8s_first_node_group_for_scope(
+    inputs: dict[str, Any],
+    *,
+    field_scope: str,
+) -> Mk8sNodeGroup | None:
+    groups = _mk8s_node_groups_for_scope(inputs, field_scope=field_scope)
+    return groups[0] if groups else None
 
 
 def _mk8s_effective_platform(inputs: dict[str, Any], *, field_scope: str) -> str:
-    override_key = (
-        "mk8s_gpu_node_group_overrides" if field_scope == "gpu" else "mk8s_cpu_node_group_overrides"
-    )
-    platform_key = "gpu_nodes_platform" if field_scope == "gpu" else "cpu_nodes_platform"
-    overrides = inputs.get(override_key)
-    override_value = (
-        _path_value(overrides, "template.resources.platform")
-        if isinstance(overrides, dict)
-        else None
-    )
-    return _as_text(override_value) or _as_text(inputs.get(platform_key))
+    group = _mk8s_first_node_group_for_scope(inputs, field_scope=field_scope)
+    if group is not None and group.platform:
+        return group.platform
+    return _as_text(_mk8s_node_group_defaults(inputs, field_scope=field_scope).get("platform"))
 
 
 def _mk8s_effective_preset(inputs: dict[str, Any], *, field_scope: str) -> str:
-    override_key = (
-        "mk8s_gpu_node_group_overrides" if field_scope == "gpu" else "mk8s_cpu_node_group_overrides"
-    )
-    preset_key = "gpu_nodes_preset" if field_scope == "gpu" else "cpu_nodes_preset"
-    overrides = inputs.get(override_key)
-    override_value = (
-        _path_value(overrides, "template.resources.preset") if isinstance(overrides, dict) else None
-    )
-    return _as_text(override_value) or _as_text(inputs.get(preset_key))
+    group = _mk8s_first_node_group_for_scope(inputs, field_scope=field_scope)
+    if group is not None and group.preset:
+        return group.preset
+    return _as_text(_mk8s_node_group_defaults(inputs, field_scope=field_scope).get("preset"))
 
 
 def _mk8s_scope_enabled(inputs: dict[str, Any], *, field_scope: str) -> bool:
-    override_key = (
-        "mk8s_gpu_node_group_overrides" if field_scope == "gpu" else "mk8s_cpu_node_group_overrides"
-    )
-    count_key = "gpu_nodes_count_per_group" if field_scope == "gpu" else "cpu_nodes_count"
-    if field_scope == "gpu" and not bool(inputs.get("gpu_enabled", False)):
+    if _mk8s_has_node_groups(inputs):
+        return any(
+            group.platform or group.preset
+            for group in _mk8s_node_groups_for_scope(inputs, field_scope=field_scope)
+        )
+    defaults = _mk8s_node_group_defaults(inputs, field_scope=field_scope)
+    return bool(_as_text(defaults.get("platform")) or _as_text(defaults.get("preset")))
+
+
+def _mk8s_gpu_cluster_enabled(inputs: dict[str, Any], *, field_scope: str) -> bool:
+    if field_scope != "gpu":
         return False
-    overrides = inputs.get(override_key)
-    autoscaling = _path_value(overrides, "autoscaling") if isinstance(overrides, dict) else None
-    if autoscaling is not None:
-        return True
-    fixed_count = _positive_int(_path_value(overrides, "fixed_node_count"))
-    if fixed_count is not None:
-        return fixed_count > 0
-    configured_count = _positive_int(inputs.get(count_key))
-    if configured_count is not None:
-        return configured_count > 0
-    return True
+    groups = _mk8s_node_groups_for_scope(inputs, field_scope=field_scope)
+    if groups:
+        return any(group.gpu_cluster_key or group.gpu_cluster_id for group in groups)
+    return bool(_as_text(_mk8s_node_group_defaults(inputs, field_scope=field_scope).get("infiniband_fabric")))
 
 
 def _component_field_scopes(component_id: str) -> tuple[str, ...]:
@@ -253,10 +312,8 @@ def _component_field_scopes(component_id: str) -> tuple[str, ...]:
 def _boot_disk_fields(component_id: str, field_scope: str) -> tuple[str, str]:
     if component_id == "mk8s":
         return (
-            "gpu_nodes_boot_disk_size_gib"
-            if field_scope == "gpu"
-            else "cpu_nodes_boot_disk_size_gib",
-            "gpu_nodes_boot_disk_type" if field_scope == "gpu" else "cpu_nodes_boot_disk_type",
+            f"node_group_defaults.{field_scope}.boot_disk.size_gibibytes",
+            f"node_group_defaults.{field_scope}.boot_disk.type",
         )
     return "boot_disk_size_gib", "boot_disk_type"
 
@@ -266,14 +323,20 @@ def _size_override_explicit(
     inputs: dict[str, Any],
     *,
     field_scope: str,
+    previous_inputs: dict[str, Any] | None = None,
 ) -> bool:
     if component_id != "mk8s":
         return False
-    boot_disk = _mk8s_override_boot_disk(inputs, field_scope=field_scope)
-    return any(
-        _positive_int(_path_value(boot_disk, key)) is not None
-        for key in ("size_bytes", "size_kibibytes", "size_mebibytes", "size_gibibytes")
+    size_field, _type_field = _boot_disk_fields(component_id, field_scope)
+    current_size = _positive_int(_field_value(component_id, inputs, size_field))
+    if current_size is None:
+        return False
+    previous_size = (
+        _positive_int(_field_value(component_id, previous_inputs, size_field))
+        if previous_inputs is not None
+        else None
     )
+    return previous_size is None or current_size != previous_size
 
 
 def _type_override_explicit(
@@ -281,12 +344,20 @@ def _type_override_explicit(
     inputs: dict[str, Any],
     *,
     field_scope: str,
+    previous_inputs: dict[str, Any] | None = None,
 ) -> bool:
     if component_id != "mk8s":
         return False
-    return bool(
-        _as_text(_path_value(_mk8s_override_boot_disk(inputs, field_scope=field_scope), "type"))
+    _size_field, type_field = _boot_disk_fields(component_id, field_scope)
+    current_type = _as_text(_field_value(component_id, inputs, type_field)).upper()
+    if not current_type:
+        return False
+    previous_type = (
+        _as_text(_field_value(component_id, previous_inputs, type_field)).upper()
+        if previous_inputs is not None
+        else ""
     )
+    return not previous_type or current_type != previous_type
 
 
 def _resolved_first_class_disk_type(
@@ -296,7 +367,7 @@ def _resolved_first_class_disk_type(
     field_scope: str,
 ) -> str:
     _size_field, type_field = _boot_disk_fields(component_id, field_scope)
-    return _as_text(inputs.get(type_field)).upper()
+    return _as_text(_field_value(component_id, inputs, type_field)).upper()
 
 
 def _resolved_first_class_disk_size(
@@ -306,7 +377,7 @@ def _resolved_first_class_disk_size(
     field_scope: str,
 ) -> int | None:
     size_field, _type_field = _boot_disk_fields(component_id, field_scope)
-    return _positive_int(inputs.get(size_field))
+    return _positive_int(_field_value(component_id, inputs, size_field))
 
 
 def _policy_scope(
@@ -337,7 +408,7 @@ def _context_for_scope(
             return None
         platform = _mk8s_effective_platform(inputs, field_scope=field_scope)
         preset = _mk8s_effective_preset(inputs, field_scope=field_scope)
-        gpu_cluster_enabled = bool(_as_text(inputs.get("infiniband_fabric")))
+        gpu_cluster_enabled = _mk8s_gpu_cluster_enabled(inputs, field_scope=field_scope)
     else:
         if _as_text(inputs.get("boot_disk_existing_id")):
             return None
@@ -481,6 +552,191 @@ def resolve_compute_boot_disk_recommendation(
     )
 
 
+def _mk8s_recommendation_inputs_for_group(
+    inputs: dict[str, Any],
+    group: Mk8sNodeGroup,
+) -> tuple[str, dict[str, Any]]:
+    field_scope = "gpu" if group.gpu else "cpu"
+    defaults: dict[str, Any] = {
+        "platform": group.platform,
+        "preset": group.preset,
+    }
+    if group.gpu:
+        fabric = gpu_cluster_fabric(inputs, group)
+        if fabric:
+            defaults["infiniband_fabric"] = fabric
+        elif group.gpu_cluster_key or group.gpu_cluster_id:
+            defaults["infiniband_fabric"] = group.gpu_cluster_key or group.gpu_cluster_id
+    return field_scope, {"node_group_defaults": {field_scope: defaults}}
+
+
+def _mk8s_group_boot_disk(
+    raw_group: dict[str, Any],
+    *,
+    create: bool = False,
+) -> dict[str, Any]:
+    boot_disk = raw_group.get("boot_disk")
+    if isinstance(boot_disk, dict):
+        return boot_disk
+    if not create:
+        return {}
+    boot_disk = {}
+    raw_group["boot_disk"] = boot_disk
+    return boot_disk
+
+
+def _materialize_mk8s_node_group_boot_disk_defaults(
+    *,
+    inputs: dict[str, Any],
+    instance_id: str,
+    project_id: str,
+    provider_lookup: ProviderOptionLookup | None,
+) -> bool:
+    raw_node_groups = inputs.get("node_groups")
+    if not isinstance(raw_node_groups, dict):
+        return False
+    changed = False
+    parsed_groups = {group.key: group for group in iter_node_groups(inputs)}
+    for group_key, raw_group in raw_node_groups.items():
+        group = parsed_groups.get(_as_text(group_key))
+        if group is None or not isinstance(raw_group, dict):
+            continue
+        boot_disk = _mk8s_group_boot_disk(raw_group)
+        if _positive_int(boot_disk.get("size_gibibytes")) and _as_text(boot_disk.get("type")):
+            continue
+        field_scope, recommendation_inputs = _mk8s_recommendation_inputs_for_group(inputs, group)
+        recommendation = resolve_compute_boot_disk_recommendation(
+            component_id="mk8s",
+            instance_id=instance_id,
+            inputs=recommendation_inputs,
+            project_id=project_id,
+            field_scope=field_scope,
+            provider_lookup=provider_lookup,
+        )
+        if recommendation is None:
+            continue
+        boot_disk = _mk8s_group_boot_disk(raw_group, create=True)
+        if _positive_int(boot_disk.get("size_gibibytes")) is None:
+            boot_disk["size_gibibytes"] = recommendation.size_gib
+            changed = True
+        if not _as_text(boot_disk.get("type")):
+            boot_disk["type"] = recommendation.disk_type
+            changed = True
+    return changed
+
+
+def _refresh_mk8s_node_group_boot_disk_defaults(
+    inputs: dict[str, Any],
+    previous_inputs: dict[str, Any],
+    *,
+    instance_id: str,
+    project_id: str,
+    provider_lookup: ProviderOptionLookup | None,
+) -> bool:
+    raw_node_groups = inputs.get("node_groups")
+    previous_raw_node_groups = previous_inputs.get("node_groups")
+    if not isinstance(raw_node_groups, dict) or not isinstance(previous_raw_node_groups, dict):
+        return False
+
+    changed = False
+    current_groups = {group.key: group for group in iter_node_groups(inputs)}
+    previous_groups = {group.key: group for group in iter_node_groups(previous_inputs)}
+    for group_key, raw_group in raw_node_groups.items():
+        group = current_groups.get(_as_text(group_key))
+        previous_group = previous_groups.get(_as_text(group_key))
+        previous_raw_group = previous_raw_node_groups.get(group_key)
+        if (
+            group is None
+            or previous_group is None
+            or not isinstance(raw_group, dict)
+            or not isinstance(previous_raw_group, dict)
+        ):
+            continue
+
+        previous_boot_disk = _mk8s_group_boot_disk(previous_raw_group)
+        current_boot_disk = _mk8s_group_boot_disk(raw_group)
+        previous_field_scope, previous_recommendation_inputs = (
+            _mk8s_recommendation_inputs_for_group(previous_inputs, previous_group)
+        )
+        previous_auto_recommendation = resolve_compute_boot_disk_recommendation(
+            component_id="mk8s",
+            instance_id=instance_id,
+            inputs=previous_recommendation_inputs,
+            project_id=project_id,
+            field_scope=previous_field_scope,
+            provider_lookup=provider_lookup,
+        )
+        if previous_auto_recommendation is None:
+            continue
+        previous_auto_type = _as_text(previous_auto_recommendation.disk_type).upper()
+        previous_type = _as_text(previous_boot_disk.get("type")).upper() or previous_auto_type
+        previous_recommendation = resolve_compute_boot_disk_recommendation(
+            component_id="mk8s",
+            instance_id=instance_id,
+            inputs=previous_recommendation_inputs,
+            project_id=project_id,
+            field_scope=previous_field_scope,
+            provider_lookup=provider_lookup,
+            disk_type_override=previous_type,
+        )
+        previous_size = (
+            previous_recommendation.size_gib if previous_recommendation is not None else None
+        )
+        current_type = _as_text(current_boot_disk.get("type")).upper()
+        current_size = _positive_int(current_boot_disk.get("size_gibibytes"))
+        type_override_explicit = bool(
+            current_type and (not previous_type or current_type != previous_type)
+        )
+        size_override_explicit = bool(
+            current_size is not None
+            and (previous_size is None or current_size != previous_size)
+        )
+
+        field_scope, recommendation_inputs = _mk8s_recommendation_inputs_for_group(inputs, group)
+        current_auto_recommendation = resolve_compute_boot_disk_recommendation(
+            component_id="mk8s",
+            instance_id=instance_id,
+            inputs=recommendation_inputs,
+            project_id=project_id,
+            field_scope=field_scope,
+            provider_lookup=provider_lookup,
+        )
+        if current_auto_recommendation is None:
+            continue
+        new_default_type = _as_text(current_auto_recommendation.disk_type).upper()
+        refresh_type = not type_override_explicit and (
+            not current_type or current_type == previous_auto_type
+        )
+        effective_type = current_type
+        if refresh_type and new_default_type:
+            effective_type = new_default_type
+            if current_type != new_default_type:
+                current_boot_disk = _mk8s_group_boot_disk(raw_group, create=True)
+                current_boot_disk["type"] = new_default_type
+                current_type = new_default_type
+                changed = True
+
+        new_recommendation = resolve_compute_boot_disk_recommendation(
+            component_id="mk8s",
+            instance_id=instance_id,
+            inputs=recommendation_inputs,
+            project_id=project_id,
+            field_scope=field_scope,
+            provider_lookup=provider_lookup,
+            disk_type_override=effective_type,
+        )
+        if new_recommendation is None:
+            continue
+        refresh_size = not size_override_explicit and (
+            current_size is None or previous_size is None or current_size == previous_size
+        )
+        if refresh_size and current_size != new_recommendation.size_gib:
+            current_boot_disk = _mk8s_group_boot_disk(raw_group, create=True)
+            current_boot_disk["size_gibibytes"] = new_recommendation.size_gib
+            changed = True
+    return changed
+
+
 def materialize_compute_boot_disk_defaults(
     payload: dict[str, Any],
     *,
@@ -508,10 +764,21 @@ def materialize_compute_boot_disk_defaults(
         inputs = row.get("inputs")
         if not isinstance(inputs, dict):
             continue
+        if component_id == "mk8s" and _mk8s_has_node_groups(inputs):
+            if _materialize_mk8s_node_group_boot_disk_defaults(
+                inputs=inputs,
+                instance_id=instance_id,
+                project_id=project_id,
+                provider_lookup=provider_lookup,
+            ):
+                changed = True
+            continue
 
         for field_scope in scopes:
             size_field, type_field = _boot_disk_fields(component_id, field_scope)
-            if _positive_int(inputs.get(size_field)) and _as_text(inputs.get(type_field)):
+            if _positive_int(_field_value(component_id, inputs, size_field)) and _as_text(
+                _field_value(component_id, inputs, type_field)
+            ):
                 continue
             recommendation = resolve_compute_boot_disk_recommendation(
                 component_id=component_id,
@@ -537,7 +804,7 @@ def materialize_compute_boot_disk_defaults(
                     field_scope=field_scope,
                 )
             ):
-                inputs[size_field] = recommendation.size_gib
+                _set_field_value(component_id, inputs, size_field, recommendation.size_gib)
                 changed = True
             if (
                 recommendation.disk_type
@@ -552,7 +819,7 @@ def materialize_compute_boot_disk_defaults(
                     field_scope=field_scope,
                 )
             ):
-                inputs[type_field] = recommendation.disk_type
+                _set_field_value(component_id, inputs, type_field, recommendation.disk_type)
                 changed = True
     return changed
 
@@ -566,6 +833,15 @@ def refresh_compute_boot_disk_defaults(
     project_id: str,
     provider_lookup: ProviderOptionLookup | None = None,
 ) -> bool:
+    if component_id == "mk8s" and _mk8s_has_node_groups(inputs):
+        return _refresh_mk8s_node_group_boot_disk_defaults(
+            inputs,
+            previous_inputs,
+            instance_id=instance_id,
+            project_id=project_id,
+            provider_lookup=provider_lookup,
+        )
+
     changed = False
     for field_scope in _component_field_scopes(component_id):
         size_field, type_field = _boot_disk_fields(component_id, field_scope)
@@ -639,11 +915,13 @@ def refresh_compute_boot_disk_defaults(
             component_id,
             inputs,
             field_scope=field_scope,
+            previous_inputs=previous_inputs,
         )
         type_override_explicit = _type_override_explicit(
             component_id,
             inputs,
             field_scope=field_scope,
+            previous_inputs=previous_inputs,
         )
         current_auto_recommendation = resolve_compute_boot_disk_recommendation(
             component_id=component_id,
@@ -670,7 +948,7 @@ def refresh_compute_boot_disk_defaults(
         if refresh_first_class_type and new_default_type:
             effective_type = new_default_type
             if current_type != new_default_type:
-                inputs[type_field] = new_default_type
+                _set_field_value(component_id, inputs, type_field, new_default_type)
                 current_type = new_default_type
                 changed = True
 
@@ -685,7 +963,7 @@ def refresh_compute_boot_disk_defaults(
         )
         if new_recommendation is None:
             if refresh_first_class_type and current_type and current_type == previous_auto_type:
-                inputs.pop(type_field, None)
+                _pop_field_value(component_id, inputs, type_field)
                 changed = True
             if (
                 not size_override_explicit
@@ -693,7 +971,7 @@ def refresh_compute_boot_disk_defaults(
                 and previous_size is not None
                 and current_size == previous_size
             ):
-                inputs.pop(size_field, None)
+                _pop_field_value(component_id, inputs, size_field)
                 changed = True
             continue
 
@@ -701,7 +979,7 @@ def refresh_compute_boot_disk_defaults(
             current_size is None or previous_size is None or current_size == previous_size
         )
         if refresh_first_class_size and current_size != new_recommendation.size_gib:
-            inputs[size_field] = new_recommendation.size_gib
+            _set_field_value(component_id, inputs, size_field, new_recommendation.size_gib)
             changed = True
     return changed
 

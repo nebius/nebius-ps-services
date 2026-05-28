@@ -106,9 +106,9 @@ def resolve_root(cwd: str) -> str:
     return os.path.abspath(root or cwd)
 
 
-def safe_segment(value: str, fallback: str) -> str:
+def safe_segment(value: str) -> str:
     safe = re.sub(r"[^A-Za-z0-9._-]+", "-", value).strip("-")
-    return safe[:80] or fallback
+    return safe[:80]
 
 
 def chmod_private(path: Path, mode: int) -> None:
@@ -122,13 +122,17 @@ def codex_home() -> Path:
     return Path(os.environ.get("CODEX_HOME", Path.home() / ".codex")).expanduser()
 
 
-def state_file_for_payload(root: str, payload: dict) -> Path:
+def state_file_for_payload(root: str, payload: dict) -> Path | None:
     home = codex_home()
 
-    workspace_name = safe_segment(Path(root).name or "workspace", "workspace")
+    workspace_name = safe_segment(Path(root).name or "workspace") or "workspace"
     workspace_hash = hashlib.sha256(root.encode("utf-8")).hexdigest()[:12]
-    session_id = payload.get("session_id") or "manual"
-    session_segment = safe_segment(str(session_id), "manual")
+    session_id = payload.get("session_id")
+    if not session_id:
+        return None
+    session_segment = safe_segment(str(session_id))
+    if not session_segment:
+        return None
 
     state_dir = (
         home
@@ -144,7 +148,7 @@ def state_file_for_payload(root: str, payload: dict) -> Path:
     state_file = state_dir / "current.md"
     if not state_file.exists():
         state_file.write_text(STATE_TEMPLATE.format(root=root), encoding="utf-8")
-        chmod_private(state_file, 0o600)
+    chmod_private(state_file, 0o600)
 
     return state_file
 
@@ -366,13 +370,23 @@ def main() -> int:
     root = resolve_root(cwd)
     state_file = state_file_for_payload(root, payload)
     home = codex_home()
+    if state_file is None:
+        task_state_context = """Durable task-state file: unavailable (hook payload missing session_id)
+
+No session-scoped task-state path is available for this prompt. Continue without
+creating a manual fallback path or repo-local state file.
+"""
+    else:
+        task_state_context = f"""Durable task-state file: `{state_file}`
+
+Read the task-state file first when this prompt is a continuation or prior
+decisions may matter.
+"""
 
     context = f"""This prompt should use global context management.
 
-Durable task-state file: `{state_file}`
-
-Apply the `global-context-management` skill. Read the task-state file first
-when this prompt is a continuation or prior decisions may matter. Keep raw
+{task_state_context}
+Apply the `global-context-management` skill. Keep raw
 exploration output out of the parent context. Use configured read-only
 subagents for read-heavy exploration only when the user explicitly requests
 subagents, delegation, or parallel agents, or when a user-enabled local hook

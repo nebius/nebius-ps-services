@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from enum import Enum
 from types import SimpleNamespace
@@ -11,6 +12,7 @@ from nebius_cxcli.deployment_status import (
     StatusWatcherTarget,
     _enum_field_name,
     _is_transient_node_group_warning,
+    _latest_operation_summary,
     _mk8s_deployment_target,
     _transient_node_group_note,
     deployment_status_reporting,
@@ -29,9 +31,7 @@ def test_mk8s_deployment_target_resolves_enabled_cluster() -> None:
                 {
                     "id": "mk8s",
                     "enabled": True,
-                    "inputs": {
-                        "cluster_name": "clust1",
-                    },
+                        "inputs": {"cluster": {"cluster_name": "clust1"}},
                 }
             ]
         },
@@ -65,9 +65,7 @@ def test_deployment_status_reporting_falls_back_to_heartbeat_on_sdk_init_error(
                 {
                     "id": "mk8s",
                     "enabled": True,
-                    "inputs": {
-                        "cluster_name": "clust1",
-                    },
+                        "inputs": {"cluster": {"cluster_name": "clust1"}},
                 }
             ]
         },
@@ -113,9 +111,7 @@ def test_deployment_status_reporter_merges_terraform_and_api_status(monkeypatch)
                 {
                     "id": "mk8s",
                     "enabled": True,
-                    "inputs": {
-                        "cluster_name": "clust1",
-                    },
+                        "inputs": {"cluster": {"cluster_name": "clust1"}},
                 }
             ]
         },
@@ -182,7 +178,7 @@ def test_deployment_status_reporter_includes_node_group_alerts(monkeypatch) -> N
                 {
                     "id": "mk8s",
                     "enabled": True,
-                    "inputs": {"cluster_name": "clust1"},
+                        "inputs": {"cluster": {"cluster_name": "clust1"}},
                 }
             ]
         },
@@ -437,6 +433,239 @@ def test_mk8s_status_poller_ignores_stale_terminal_error_from_before_current_run
     assert "alerts ERROR workers:" not in summary
 
 
+def test_mk8s_status_poller_keeps_fresh_terminal_error_from_current_run() -> None:
+    class _Level(Enum):
+        ERROR = 1
+
+    class _StatusCode(Enum):
+        RESOURCE_EXHAUSTED = 1
+
+    cluster = SimpleNamespace(
+        metadata=SimpleNamespace(name="clust1", id="mk8scluster-123"),
+        status=SimpleNamespace(
+            state="RUNNING",
+            control_plane=SimpleNamespace(
+                endpoints=SimpleNamespace(public_endpoint="1.2.3.4", private_endpoint="")
+            ),
+        ),
+    )
+    node_group = SimpleNamespace(
+        metadata=SimpleNamespace(name="workers"),
+        status=SimpleNamespace(
+            state="PROVISIONING",
+            ready_node_count=0,
+            target_node_count=2,
+            events=[
+                SimpleNamespace(
+                    first_occurred_at=datetime(2026, 4, 20, 19, 10, 2, tzinfo=UTC),
+                    last_occurrence=SimpleNamespace(
+                        level=_Level.ERROR,
+                        code="ComputeInstanceCreationFailed",
+                        message="Fresh create failure from the current run",
+                        occurred_at=datetime(2026, 4, 20, 19, 10, 3, tzinfo=UTC),
+                        error=SimpleNamespace(code=_StatusCode.RESOURCE_EXHAUSTED),
+                    ),
+                )
+            ],
+        ),
+    )
+    poller = deployment_status_module._Mk8sStatusPoller.__new__(
+        deployment_status_module._Mk8sStatusPoller
+    )
+    poller._target = Mk8sDeploymentTarget(project_id="project-u123", cluster_name="clust1")
+    poller._monitor_started_at = datetime(2026, 4, 20, 19, 10, 0, tzinfo=UTC)
+    poller._find_cluster = lambda: cluster
+    poller._list_node_groups = lambda cluster_id: [node_group]
+    poller._latest_operation_summary = lambda cluster_id: None
+    poller._cluster_state_name = lambda raw_state: str(raw_state)
+    poller._node_group_state_name = lambda raw_state: str(raw_state)
+
+    summary = poller.summary()
+    failure = poller.terminal_failure()
+
+    assert "alerts ERROR workers:" in summary
+    assert "Fresh create failure from the current run" in summary
+    assert failure is not None
+    assert "ComputeInstanceCreationFailed" in failure
+    assert "RESOURCE_EXHAUSTED" in failure
+
+
+def test_latest_operation_summary_omits_completed_operation_from_before_monitor_start() -> None:
+    operation = SimpleNamespace(
+        id="opmk8scluster-old",
+        description="Update cluster",
+        created_at=datetime(2026, 5, 21, 8, 0, 0, tzinfo=UTC),
+    )
+
+    class _FakeOperationService:
+        def list(self, _request):
+            return SimpleNamespace(wait=lambda: SimpleNamespace(operations=[operation]))
+
+        def get(self, _request):
+            return SimpleNamespace(wait=lambda: SimpleNamespace(done=lambda: True))
+
+    summary = _latest_operation_summary(
+        _FakeOperationService(),
+        "mk8scluster-123",
+        monitor_started_at=datetime(2026, 5, 21, 12, 0, 0, tzinfo=UTC),
+    )
+
+    assert summary is None
+
+
+def test_latest_operation_summary_keeps_running_operation_from_before_monitor_start() -> None:
+    operation = SimpleNamespace(
+        id="opmk8scluster-running",
+        description="Update cluster",
+        created_at=datetime(2026, 5, 21, 8, 0, 0, tzinfo=UTC),
+    )
+
+    class _FakeOperationService:
+        def list(self, _request):
+            return SimpleNamespace(wait=lambda: SimpleNamespace(operations=[operation]))
+
+        def get(self, _request):
+            return SimpleNamespace(wait=lambda: SimpleNamespace(done=lambda: False))
+
+    summary = _latest_operation_summary(
+        _FakeOperationService(),
+        "mk8scluster-123",
+        monitor_started_at=datetime(2026, 5, 21, 12, 0, 0, tzinfo=UTC),
+    )
+
+    assert summary is not None
+    assert "op Update cluster opmk8scluster-running running" in summary
+
+
+def test_latest_operation_summary_keeps_completed_operation_from_current_monitor_run() -> None:
+    operation = SimpleNamespace(
+        id="opmk8scluster-current",
+        description="Update cluster",
+        created_at=datetime(2026, 5, 21, 12, 0, 1, tzinfo=UTC),
+    )
+
+    class _FakeOperationService:
+        def list(self, _request):
+            return SimpleNamespace(wait=lambda: SimpleNamespace(operations=[operation]))
+
+        def get(self, _request):
+            return SimpleNamespace(wait=lambda: SimpleNamespace(done=lambda: True))
+
+    summary = _latest_operation_summary(
+        _FakeOperationService(),
+        "mk8scluster-123",
+        monitor_started_at=datetime(2026, 5, 21, 12, 0, 0, tzinfo=UTC),
+    )
+
+    assert summary is not None
+    assert "op Update cluster opmk8scluster-current done" in summary
+
+
+def test_latest_operation_summary_keeps_observed_running_operation_after_completion() -> None:
+    operation = SimpleNamespace(
+        id="opmk8scluster-observed",
+        description="Update cluster",
+        created_at=datetime(2026, 5, 21, 8, 0, 0, tzinfo=UTC),
+    )
+    done_states = iter((False, True))
+
+    class _FakeOperationService:
+        def list(self, _request):
+            return SimpleNamespace(wait=lambda: SimpleNamespace(operations=[operation]))
+
+        def get(self, _request):
+            return SimpleNamespace(wait=lambda: SimpleNamespace(done=lambda: next(done_states)))
+
+    observed: set[str] = set()
+    first_summary = _latest_operation_summary(
+        _FakeOperationService(),
+        "mk8scluster-123",
+        monitor_started_at=datetime(2026, 5, 21, 12, 0, 0, tzinfo=UTC),
+        observed_running_operation_ids=observed,
+    )
+    second_summary = _latest_operation_summary(
+        _FakeOperationService(),
+        "mk8scluster-123",
+        monitor_started_at=datetime(2026, 5, 21, 12, 0, 0, tzinfo=UTC),
+        observed_running_operation_ids=observed,
+    )
+
+    assert first_summary is not None
+    assert "op Update cluster opmk8scluster-observed running" in first_summary
+    assert second_summary is not None
+    assert "op Update cluster opmk8scluster-observed done" in second_summary
+
+
+def test_latest_operation_summary_skips_stale_completed_operation_for_running_operation() -> None:
+    stale_completed_operation = SimpleNamespace(
+        id="opmk8scluster-stale",
+        description="Update cluster",
+        created_at=datetime(2026, 5, 21, 11, 0, 0, tzinfo=UTC),
+    )
+    running_operation = SimpleNamespace(
+        id="opmk8scluster-running",
+        description="Create node group",
+        created_at=datetime(2026, 5, 21, 10, 0, 0, tzinfo=UTC),
+    )
+
+    class _FakeOperationService:
+        def list(self, _request):
+            return SimpleNamespace(
+                wait=lambda: SimpleNamespace(
+                    operations=[stale_completed_operation, running_operation]
+                )
+            )
+
+        def get(self, request):
+            done = getattr(request, "id", "") == "opmk8scluster-stale"
+            return SimpleNamespace(wait=lambda: SimpleNamespace(done=lambda: done))
+
+    summary = _latest_operation_summary(
+        _FakeOperationService(),
+        "mk8scluster-123",
+        monitor_started_at=datetime(2026, 5, 21, 12, 0, 0, tzinfo=UTC),
+        observed_running_operation_ids=set(),
+    )
+
+    assert summary is not None
+    assert "op Create node group opmk8scluster-running running" in summary
+
+
+def test_deployment_status_reporting_suppresses_expected_sdk_retry_logs(monkeypatch) -> None:
+    events: list[str] = []
+
+    @contextmanager
+    def _fake_suppression():
+        events.append("enter")
+        try:
+            yield
+        finally:
+            events.append("exit")
+
+    class _FakeReporter:
+        def __init__(self, *_args, **_kwargs):
+            events.append("init")
+
+        def start(self):
+            events.append("start")
+            return self
+
+        def close(self) -> None:
+            events.append("close")
+
+    monkeypatch.setattr(
+        deployment_status_module,
+        "suppress_expected_sdk_retry_logs",
+        _fake_suppression,
+    )
+    monkeypatch.setattr(deployment_status_module, "DeploymentStatusReporter", _FakeReporter)
+
+    with deployment_status_reporting({}, emit=lambda _message: None):
+        events.append("body")
+
+    assert events == ["enter", "init", "start", "body", "close", "exit"]
+
+
 def test_deployment_status_reporter_exposes_terminal_api_failure(monkeypatch) -> None:
     messages: list[str] = []
 
@@ -470,7 +699,7 @@ def test_deployment_status_reporter_exposes_terminal_api_failure(monkeypatch) ->
                 {
                     "id": "mk8s",
                     "enabled": True,
-                    "inputs": {"cluster_name": "clust1"},
+                        "inputs": {"cluster": {"cluster_name": "clust1"}},
                 }
             ]
         },
@@ -489,6 +718,65 @@ def test_deployment_status_reporter_exposes_terminal_api_failure(monkeypatch) ->
         reporter.close()
 
     assert any("aborting Terraform wait early" in message for message in messages)
+
+
+def test_deployment_status_reporter_escapes_plain_notices(monkeypatch) -> None:
+    messages: list[str] = []
+
+    class _FakePoller:
+        def __init__(self, target):
+            self.target = target
+
+        def summary(self) -> str:
+            return "api summary [green]should stay plain[/green]"
+
+        def terminal_failure(self) -> str | None:
+            return "api failure [red]should stay plain[/red] [/broken]"
+
+        def close(self) -> None:
+            return
+
+    monkeypatch.setattr(
+        deployment_status_module,
+        "_STATUS_POLLER_FACTORIES",
+        {"nebius.compute.filesystem": _FakePoller},
+    )
+
+    reporter = DeploymentStatusReporter(
+        {},
+        emit=messages.append,
+        status_watchers=[
+            {
+                "component_id": "sfs",
+                "kind": "nebius.compute.filesystem",
+                "parent_id": "project-u123",
+                "resource_name": "[green]sharedfs[/green]",
+            }
+        ],
+        poll_interval_seconds=999,
+        repeat_interval_seconds=999,
+    ).start()
+    try:
+        assert reporter.abort_reason() is not None
+    finally:
+        reporter.close()
+
+    assert any(
+        "Watching Terraform + Nebius status" in message
+        and "\\[green]sharedfs\\[/green]" in message
+        for message in messages
+    )
+    assert any(
+        "[bold cyan]API[/bold cyan] api summary \\[green]should stay plain\\[/green]"
+        in message
+        for message in messages
+    )
+    assert any(
+        "aborting Terraform wait early" in message
+        and "\\[red]should stay plain\\[/red]" in message
+        and "\\[/broken]" in message
+        for message in messages
+    )
 
 
 def test_deployment_status_reporter_supports_multiple_manifest_watchers(monkeypatch) -> None:
@@ -560,6 +848,44 @@ def test_deployment_status_reporter_supports_multiple_manifest_watchers(monkeypa
         and "sfs sharedfs (fs-123): READY" in message
         for message in messages
     )
+
+
+def test_composite_status_poller_reports_terminal_check_errors_without_abort() -> None:
+    class _BrokenTerminalCheckPoller:
+        def summary(self) -> str:
+            return "managed-postgresql pgsql1 (pg-123): RUNNING."
+
+        def terminal_failure(self) -> str | None:
+            raise RuntimeError("operation API unavailable")
+
+        def close(self) -> None:
+            return
+
+    class _HealthyPoller:
+        def summary(self) -> str:
+            return "sfs sharedfs (fs-123): READY."
+
+        def terminal_failure(self) -> str | None:
+            return None
+
+        def close(self) -> None:
+            return
+
+    poller = deployment_status_module._CompositeStatusPoller(
+        (
+            ("managed-postgresql 'pgsql1'", _BrokenTerminalCheckPoller()),
+            ("sfs 'sharedfs'", _HealthyPoller()),
+        )
+    )
+
+    assert poller.terminal_failure() is None
+    summary = poller.summary()
+    assert "managed-postgresql pgsql1 (pg-123): RUNNING" in summary
+    assert "sfs sharedfs (fs-123): READY" in summary
+    assert (
+        "managed-postgresql 'pgsql1': terminal check unavailable "
+        "(operation API unavailable)"
+    ) in summary
 
 
 def test_object_storage_status_poller_reads_bucket_state(monkeypatch) -> None:

@@ -180,8 +180,31 @@ def verify_wheel(*, wheel_path: Path, release_ref: str) -> None:
 def verify_wheel_bundle(*, wheel_path: Path) -> None:
     payload = _load_bundled_wheel_catalog(wheel_path)
     _load_bundled_wheel_cli_settings(wheel_path)
-    _infra_modules(payload, subject=str(wheel_path))
-    _app_charts(payload, subject=str(wheel_path))
+    modules = _infra_modules(payload, subject=str(wheel_path))
+    charts = _app_charts(payload, subject=str(wheel_path))
+    _validate_no_local_sources(modules=modules, charts=charts, subject=str(wheel_path))
+
+
+def _validate_no_local_sources(
+    *,
+    modules: list[dict[str, Any]],
+    charts: list[tuple[str, dict[str, Any]]],
+    subject: str,
+) -> None:
+    bad_sources: list[str] = []
+    for module in modules:
+        source_block = module.get("source")
+        if isinstance(source_block, dict) and source_block.get("local") not in (None, "", {}):
+            bad_sources.append("infra:source.local is present")
+    for chart_id, chart in charts:
+        source_block = chart.get("source")
+        if isinstance(source_block, dict) and source_block.get("local") not in (None, "", {}):
+            bad_sources.append(f"{chart_id}:source.local is present")
+    if bad_sources:
+        raise ValueError(
+            f"{subject} bundled component sources still contain local source entries: "
+            + ", ".join(bad_sources)
+        )
 
 
 def _load_bundled_wheel_catalog(wheel_path: Path) -> dict[str, Any]:

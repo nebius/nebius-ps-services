@@ -6,6 +6,512 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Hardened cxcli diagnostics around dynamic provider lookups, Grafana runtime
+  status, deployment status pollers, MK8s preflight, quota preset lookup
+  retries, emitted kubectl helper commands, and malformed JSON responses so
+  transient or malformed inputs no longer degrade into silent empty results.
+- Fixed local Helm chart dependency staging so clean runners can render charts
+  with locked remote dependencies without preconfigured global Helm repo
+  entries, and stale staged copies no longer cascade into follow-on failures.
+- Made NCCL launcher placement resource-aware: cxcli now pins the launcher to
+  non-GPU nodes only when they have enough scheduler-visible CPU/memory
+  headroom, otherwise it falls back to GPU-node headroom accounting.
+- Added strict cxcli validation for `wireguard-gw` and `ssh-jumphost`
+  `inputs.public_ip_allocation_name` values so Terraform resource-name regex
+  failures surface before deploy.
+- Highlighted the NCCL average bus bandwidth value in the generated
+  `deploy-report.md` Markdown summary while keeping terminal diagnostics and
+  deploy footers plain.
+- Removed deprecated VM preemptible priority handling from cxcli's VM
+  wizard/render contract; preemptible VM flows now only materialize
+  `recovery_policy=FAIL` and pass `preemptible_enabled` to the VM module,
+  which requires Nebius Terraform provider `>= 0.5.217`; generated Terraform
+  roots now use that same provider floor.
+- Made local Helm chart renders explicit about cert-manager
+  `Certificate.spec.privateKey.rotationPolicy=Always`, covering Soperator
+  post-Flux manifests and dependency-rendered webhook certificates. Portable
+  Soperator Flux `HelmRelease` output now also carries matching post-render
+  patches for the Soperator and MariaDB Operator webhook certificates, so
+  cert-manager 1.18+ no longer emits default-change warnings in generated
+  cxcli deployment paths.
+- Retried the initial rendered Flux `kubectl apply -k` step for known transient
+  Kubernetes API transport failures such as connection resets, while preserving
+  immediate failures for validation, RBAC, and admission errors.
+- Completed the SFS wizard/render contract across standalone, MK8s-attached,
+  and Soperator-managed layouts: scalar SFS now exposes `mount_tag`, Soperator
+  production profiles share one complete jail/controller-spool/accounting
+  filesystem default map with explicit block size and deletion guard values,
+  and focused tests cover scalar and multi-filesystem Terraform rendering.
+- Bound Soperator production-profile chart-managed MariaDB storage to the
+  accounting SFS-backed `slurm-local-pv` storage class, so the generated
+  accounting filesystem is consumed by the accounting database path instead of
+  only rendering the accounting mount/PV surface.
+- Collapsed the Soperator SSSD wizard surface to one curated
+  `values.sssd.enabled` identity gate. When enabled, cxcli now materializes
+  both `values.slurmNodes.sssd.enabled=true` and generated
+  `values.nodesets[].sssd.enabled=true`; when explicitly disabled, it clears
+  those generated identity surfaces. The raw chart values remain available for
+  advanced direct `config.yaml` edits when the guided helper is absent.
+- Added Soperator production wizard helpers for CPU service-role node counts:
+  `inputs.soperator.system_node_count`, `controller_node_count`,
+  `login_node_count`, and `accounting_node_count`. The wizard still hides raw
+  profile-owned `inputs.node_groups.*` fields, but those curated helpers now
+  materialize the `system`, `controller`, `login`, and `accounting` MK8s
+  `node_count` values alongside the existing worker sizing helpers.
+- Hid the raw Soperator `rebooter.enabled` gate from the normal guided wizard
+  while keeping explicit `config.yaml` overrides supported. The docs and
+  warnings now describe it as a cluster-level NodeConfigurator maintenance
+  helper and RBAC, not a per-NodeSet switch, install-time reboot, or chart-owned
+  reboot schedule. They also describe the upstream condition-driven,
+  `NoExecute` taint-based drain path, with examples of the maintenance and
+  degraded-node condition chains that set `SlurmNodeDrain` and
+  `SlurmNodeReboot`, and clarify advanced production-maintenance mode:
+  `NebiusMaintenanceScheduled=True` is graceful drain/node handoff while
+  `SlurmNodeReboot=True` is the actual host reboot path after drain.
+- Made Soperator production profiles explicitly keep Slurm accounting, SlurmDBD,
+  and chart-managed MariaDB enabled, and clarified partition-profile labels/docs
+  so baseline/debug queue choices are not confused with disabling accounting.
+- Added a redacted guided `create` example to command help and README for
+  preseeding client, tenant, project, infra, and app selections while skipping
+  source and post-write config validation.
+- Hid Soperator ActiveChecks readiness partitions from guided partition-profile
+  choices and source config. cxcli now keeps only the ActiveChecks intent toggle
+  in the guided surface and derives the readiness/check partition from the
+  selected profile as render-time Helm values when ActiveChecks are enabled.
+  The internal `hidden` partition is also stripped from source config and
+  injected only for ActiveChecks-enabled renders that need it.
+- Fixed create-time target identity alignment so an entered MK8s
+  `cluster.cluster_name` is applied before app wizard default previews and
+  internal target refs are materialized. Target-scoped apps such as Soperator
+  now keep `instance_id`, derived `target_ref`, and `values.clusterName`
+  aligned to the cluster target name before render, preventing client-name or
+  placeholder target drift in config and generated artifacts.
+- Added concise app chart default previews before interactive app field prompts,
+  capped to four lines, so answering the default `n` shows the Helm
+  defaults that will be kept. The Soperator preview now surfaces
+  SFS-derived jail/controller-spool/accounting sizes while SFS remains the
+  capacity source of truth and the app row mirrors those sizes into chart
+  storage values.
+- Fixed the Soperator production MK8s wizard so GPU Visibility and NCCL
+  deploy-time validation toggles are prompted alongside GPU stack readiness
+  instead of being suppressed by the Soperator app policy. Soperator
+  ActiveChecks and Soperator DCGM child charts remain disabled by default;
+  validation continues to use cxcli-owned deploy-time checks such as the
+  transient `nccl-test` chart.
+- Fixed the interactive Soperator production-cluster `create` and
+  `component add` wizards so the worker layout profile is selected immediately
+  after `install_mode`, before MK8s shape/fabric helpers and target GPU
+  validation prompts. CPU-only Soperator profiles now also skip and prune the
+  inactive `inputs.node_group_defaults.gpu.*` helper scope instead of offering
+  GPU fabric fields, including during direct `config.yaml` normalization.
+  Soperator onboarding mode now also skips same-transaction `mk8s`/`sfs` infra
+  selections so external MK8s onboarding does not create Terraform-managed
+  cluster rows. Soperator worker profile materialization now honors
+  `worker_nodes_per_group` as the generated MK8s node-group shard size even
+  when the profile also uses `worker_total_nodes`. Non-interactive
+  `component add soperator@<external-target>` now infers onboarding for
+  existing external MK8s targets and repairs missing target-scoped
+  Soperator-required app rows without adding Terraform MK8s/SFS rows. External
+  onboarding now also materializes `use-existing-pvc-or-storageclass` storage
+  as the chart's one-node local storage profile, pins generated local-storage
+  Slurm pods to one discovered node, disables accounting/REST/chart-managed
+  MariaDB for that profile while keeping SConfigController enabled, and applies
+  compact OpenKruise, MariaDB, Slurm control-plane, worker pod requests, and
+  CPU worker topology derived from the discovered node group's allocatable CPU
+  count so modest external CPU clusters can schedule and register the
+  onboarded stack before operators tune production sizing. The
+  local-storage onboarding path also defaults `populateJail.overwrite: true` so
+  failed partial installs do not leave stale jail sentinel files that skip
+  required jail population on the next deploy.
+- Moved the bundled Soperator `with-qos-preemption` profiles from raw
+  `customSlurmConfig` accounting enforcement lines to typed
+  `schedulingConfig.accountingStorageEnforce` and
+  `schedulingConfig.enforcePartLimits` values, matching the parent chart's
+  typed scheduling contract.
+- Fixed top-level `destroy <config.yaml>` for generated managed MK8s bundles so
+  it attempts rendered app teardown before Terraform cluster destroy. The
+  teardown now also removes locally applied post-Flux manifests and rendered
+  admission webhooks before namespace deletion, selects all generated deploy
+  targets for project-wide teardown, attempts every selected target before
+  reporting target-specific teardown failures, and gives Kubernetes finalizers
+  and CSI cleanup a chance to remove app-owned PVC-backed disks while still
+  falling back to Terraform cluster destroy if the managed cluster is
+  unreachable during teardown.
+- Added README guidance for Soperator Slurm scheduling, concept ownership,
+  preemption, partition, config, fairshare, niceness, and QOS inspection
+  commands, including the smoke-test command patterns used for baseline,
+  debug/long, and QOS partition profiles.
+- Refined the Soperator Slurm inspection examples to use the login
+  LoadBalancer service and SSH path first, then run Slurm commands directly
+  from the login node.
+- Aligned the Soperator optional-service gate contract with the parent Helm
+  chart: direct Helm installs now keep the NodeConfigurator rebooter disabled
+  by default, and docs distinguish child chart gates from in-chart SSSD and
+  rebooter gates. The chart keeps a no-op NodeConfigurator custom container so
+  host-setup initContainers still render a valid DaemonSet while rebooter is
+  off.
+- Renamed wizard metadata `materialize_default: true` to
+  `write_default_to_config: true` and reject the old key in component source
+  catalogs, keeping the prompt-default persistence contract explicit.
+- Fixed non-interactive `create --infra mk8s --app soperator` so the bundled
+  MK8s profile writes the provider-ranked default network and subnet before
+  render/deploy, avoiding Terraform failures from missing required
+  `cluster.network_id` / `cluster.subnet_id`.
+- Fixed non-interactive Soperator GPU production defaults so cluster-capable
+  GPU shapes auto-select the provider-ranked InfiniBand fabric when live fabric
+  choices are available, keeping generated H100/H200/B200-style profiles on the
+  reserved/fabric-aware GPU-cluster path instead of accidentally trying
+  unclustered on-demand capacity.
+- Fixed Soperator GPU and mixed production worker profiles to render
+  `reservation.policy: AUTO` on GPU worker node groups, so reserved-capacity
+  fabric recommendations can actually use matching reservations while still
+  falling back to suitable capacity.
+- Normalized the bundled Soperator catalog/settings authoring by moving the app
+  wizard prompt map into built-in `wizard_profile: soperator`, while keeping
+  the large `soperator_nodesets_profile` policy table in
+  `component_cli_settings.yaml` and preserving the resolved catalog contract.
+- Fixed the wheel packaging path so bundled app chart sources get the same
+  `source.local` stripping and release-ref rewrite as Terraform module sources;
+  the branch wheel-bundle verifier now fails if local source entries leak into
+  the packaged catalog without requiring every app to have a release-grade
+  portable source.
+- Fixed Soperator profile/policy rematerialization so wizard or direct
+  `config.yaml` switches from the generated GPU baseline to CPU or mixed
+  profiles recompute profile-owned node groups, `nodeGroupMapping`, NodeSets,
+  partitions, and topology settings. Runtime config loading now materializes
+  Soperator before MK8s GPU app normalization, so CPU-only Soperator configs no
+  longer re-add or retain GPU Operator rows from stale GPU node-group defaults.
+- Fixed config normalization around explicit app rows and Soperator onboarding:
+  CPU-only MK8s configs now preserve enabled GPU/platform app rows that carry
+  explicit chart source metadata while still pruning stale Soperator-owned GPU
+  Operator rows and other auto target-scoped GPU policy rows, external
+  Soperator onboarding storage selectors stay scoped to discovered node groups
+  while generated Soperator profiles keep their profile jail aliases, and
+  accepted onboarding fingerprints remain valid across deterministic Soperator
+  default materialization plus unrelated `component add` changes.
+- Added catalog-owned GPU shape defaults to the Soperator GPU and mixed
+  production profiles so default non-interactive or skipped-field Soperator
+  bundles still render Terraform-valid GPU worker node groups.
+- Aligned create/component wizard defaults for Soperator-led MK8s projects:
+  selected observability apps now default the matching MK8s target
+  observability switch to enabled, SFS prompts show the Terraform-backed
+  `sfs` / 1024 GiB / `NETWORK_SSD` / 4 KiB /
+  deletion-protection-off defaults, the production Soperator layout defaults to
+  one node per generated role group including system roles and mixed worker
+  NodeSet replicas, and the QoS reconciliation prompt is shown only for
+  QoS-capable partition profiles.
+- Added explicit `create` and `component add` adjusted-selection notices for
+  Soperator-owned dependencies, so auto-added `sfs` and `cert-manager` rows are
+  explained alongside generic app `release.install_after` dependencies.
+- Removed the Soperator profile/chart default `PluginDir` override after live
+  H100 deployment showed Slurm 25.11 fails when a static multi-arch path
+  includes a directory absent from the selected image. Image-specific plugin
+  paths now stay image-owned unless an operator explicitly overrides
+  `customSlurmConfig`.
+- Aligned omitted MK8s GPU stack-source behavior so cxcli and the MK8s
+  Terraform module both default GPU node groups to the Nebius GPU image path.
+- Reworked the Soperator create wizard to stay on a concise guided surface:
+  raw parent chart values are hidden by default, skipping the app field phase now
+  prints the production layout that will be kept, and the prompted fields focus
+  on profile, partition, topology, and top-level service gates. ActiveChecks,
+  the checks controller, Soperator DCGM job mapping, notifier, backup, QoS
+  reconciliation, SSSD, and NodeConfigurator rebooter now default off, with
+  deploy-validation warnings when production-impacting Soperator check or DCGM
+  child charts are explicitly enabled.
+- Fixed MK8s GPU validation prompts so enabled GPU visibility and NCCL checks
+  materialize their default `max_nodes` caps. Soperator ActiveChecks remain
+  opt-in diagnostics rather than production-training defaults, while cxcli
+  deploy-time GPU visibility/NCCL validations stay available on Soperator
+  targets.
+- Clarified the SFS wizard's Weka/VAST choices as advanced quota-gated
+  filesystem types after live validation showed Weka is not currently
+  provisionable in the tested project because its Weka filesystem quota is zero.
+- Optimized the local test suite by avoiding repeated Soperator Helm dependency
+  rebuilds across `tests/test_render.py` and removing real wait loops from
+  stubbed MK8s GPU, strict-validation, and Terraform streaming unit tests.
+- Fixed pure CPU Soperator profile materialization so `nebius-cpu-v1` maps the
+  Slurm worker role only to the generated `worker-cpu` node group, keeps service
+  groups out of the CPU partition, and disables the Soperator DCGM exporter when
+  no GPU node groups exist.
+- Added a deploy-validation warning when Soperator NCCL ActiveChecks and cxcli
+  deploy-time NCCL validation are both runnable on the same MK8s target,
+  explaining that the Slurm NCCL checks and transient Kubernetes `MPIJob` can
+  compete for GPUs/RDMA and skew, delay, or skip results.
+- Migrated all bundled Soperator partition profiles (CPU / GPU / Mixed
+  base partitions and the `with-debug-long`, `with-qos-preemption`, and
+  `with-h100-infiniband-debug-long` overlays) from raw Slurm.conf strings
+  to the chart's typed `policy` blocks under
+  `partitionConfiguration.partitions[].policy`. The `with-qos-preemption`
+  overlay now emits preemption controls through the chart's typed
+  `schedulingConfig` instead of `customSlurmConfig`. The chart's render
+  hard-fails on typed-vs-raw overlap, so this is also a strict
+  correctness improvement.
+- Added a `nebius-nvl-rack-v1` topology profile to both the GPU and
+  Mixed Soperator profile entries. The profile sets
+  `slurmConfig.topologyPlugin: topology/block` and points the operator's
+  `topologyLabelPrefix` at `topology.nvidia.com` so NVL rack membership
+  on GB300 clusters becomes a Slurm topology source. The existing
+  `disabled` and `nebius-tiered-tree-v1` topology profiles remain unchanged.
+- Documented cxcli alignment with the Soperator chart's new typed Slurm
+  scheduling surfaces. Profile materialization should populate the chart's
+  typed `schedulingConfig` block and per-partition `policy` block directly
+  instead of concatenating `customSlurmConfig` / partition `config` strings;
+  the typed-vs-raw conflict guard hard-fails the helm render on overlap. The
+  free-form escape hatches remain available for Slurm.conf tokens the typed
+  surface does not model.
+- Added an opt-in Soperator `with-qos-preemption` partition profile for CPU,
+  GPU, and mixed worker layouts. The catalog overlay writes Slurm
+  `PreemptType=preempt/qos` config plus `debug`, `eval`, `train`, and `data`
+  policy partitions plus standard QOS object definitions, non-zero QOS /
+  fairshare priority weights, and a root account/association for smoke tests.
+  cxcli now fails fast when this profile is selected without
+  `qosConfiguration.enabled=true` or without QOS objects matching the partition
+  `AllowQos` lists, preventing a live Slurm controller CrashLoop on missing
+  SlurmDBD QOS rows.
+- Updated the Soperator `qosConfiguration` hook to reconcile through the
+  accounting pod instead of the controller pod, so QOS objects can be
+  bootstrapped before slurmctld successfully starts with `AllowQos` partitions.
+  The hook now uses the live-verified `alpine/k8s:1.33.5` image for Bash plus
+  kubectl, grants pod watch for `kubectl wait`, and streams the reconcile script
+  with `kubectl exec -i` instead of relying on `kubectl cp`. It now applies QOS
+  preemption relationships in a second `sacctmgr` pass after all referenced QOS
+  names exist. cxcli local static Helm renders now keep this explicitly opted-in
+  hook manifest instead of stripping it with generic Helm lifecycle hooks.
+- Fixed local Helm chart rendering to rebuild `file://` child-chart
+  dependencies inside the temporary staging directory, so cxcli local-source
+  Soperator renders do not use stale packaged child chart archives.
+- Extended the catalog-owned NCCL `-mca coll ^hcoll` MPI overlay to the Nebius
+  B300/GB300 shape alongside B200/B200A, keeping Blackwell-specific MPI policy in
+  `component_cli_settings.yaml` instead of the shared `nccl-test` chart.
+- Clarified the NCCL validation chart contract: `nccl-test` remains an
+  internal deploy-time validation chart rather than a selectable `--app` /
+  `component add` target, and the CLI now points operators to
+  `deploy.targets[].validations.mk8s_gpu.nccl.enabled` when they try to select
+  it directly.
+- Fixed Soperator production profile materialization so catalog-owned CPU shape
+  defaults are applied to the `system`, `controller`, `login`, `accounting`,
+  and CPU worker MK8s node groups before Terraform render.
+- Raised the built-in Soperator production CPU role baseline to
+  `cpu-d3/8vcpu-32gb` and added the catalog-owned login role taint so fresh
+  production clusters have schedulable controller/login capacity while cxcli
+  still derives the matching Soperator tolerations from node-group taints.
+- Fixed Soperator MK8s node-group boot-disk materialization so profile-owned
+  `boot_disk.type` defaults no longer erase computed `size_gibibytes` values
+  before Terraform render or deploy.
+- Fixed Soperator Helm value materialization so generated `null` booleans under
+  the cert-manager and MariaDB webhook paths are treated as unset before render,
+  preserving chart defaults while keeping explicit `false` and intentional
+  `null` overrides on other Helm values intact.
+- Fixed NCCL deploy validation handling for Soperator-style GPU workloads that
+  claim all worker GPUs while the transient `MPIJob` is starting: cxcli now
+  observes the `MPIJob` terminal condition when the launcher pod has already
+  been cleaned up and records a skipped NCCL report when every Ready GPU node is
+  reserved by higher-priority workload pods instead of spinning until timeout.
+- Added `nebius-cxcli grafana --export-dashboard` and `--dashboard-json` to
+  export dashboards from a Grafana API or normalize local dashboard JSON files,
+  with opt-in `--attach` support that updates `component_sources.yaml`, creates
+  JSON dashboard providers when needed, rewrites datasource refs to cxcli
+  Grafana datasource UID/type values, rolls back catalog edits if validation
+  fails, sorts interactive folder/dashboard selections, adds first-character
+  jump keys for long Grafana lists, and documents the common export/attach
+  scenarios directly in `grafana --help`.
+- Cleaned up `deploy` / `terraform apply` / `terraform destroy` status output
+  so transient Nebius SDK request retries no longer print tracebacks, stale
+  completed MK8s operations from previous runs are omitted from the live API
+  snapshot, and the Ethernet-only NCCL warning is shorter.
+- Fixed `deploy <config.yaml>` multi-target selection so a plain deploy now
+  reconciles every generated cluster target by default instead of failing with
+  a `--target` / `--all-targets` prompt; `--target` remains available to narrow
+  the run, and MK8s GPU validation guidance is printed once instead of twice.
+- Fixed the interactive `component add infra:mk8s` wizard so target-scoped
+  observability/GPU auto-enabled app rows are selected as exact
+  `<chart>@<target>` rows, preserving existing target app rows and avoiding a
+  stale prompt-index `list index out of range` crash after enabling
+  observability on a newly added MK8s target. Interactive adds also stop
+  repeating the redundant final `Added infra/apps components` summary after
+  the wizard has already shown target-aware component selections, and
+  non-interactive adds no longer print no-op `(none)` summary categories.
+- Updated the Kubernetes GPU Grafana dashboard XID stat to follow NVIDIA DCGM
+  semantics: `DCGM_FI_DEV_XID_ERRORS` is shown as the current XID code for the
+  selected GPU scope, with zero mapped to `No XID` instead of treating the
+  field as an error counter. The panel no longer falls back through GPU
+  utilization, so a missing XID read point shows as no data instead of a false
+  zero.
+- Security: updated the locked transitive `idna` dependency to `3.15` to pick
+  up the IDNA denial-of-service hardening for oversized crafted inputs.
+- Fixed the MK8s GPU reservation CBG lookup to use the Capacity Block Group
+  API's 200-item page-size limit, avoiding a live `INVALID_ARGUMENT` fallback
+  during the wizard's `reservation.reservation_ids` prompt.
+- Scoped `create` and `component add` source validation so they validate infra
+  sources first and only resolve selected app chart sources plus auto-enabled
+  app dependencies, including a final app-source pass for rows auto-enabled
+  after the wizard before config write; clarified MK8s destroy messaging and
+  replaced the raw MK8s `inputs.cluster` and `inputs.node_groups` wizard
+  prompts with guided typed fields; documented the existing `create --validate-config` /
+  `--no-validate-config` flag pair in the common command flag list.
+- Replaced the plain MK8s create wizard's fixed `node_groups.system.*` walk
+  with a concrete node-group creation loop that can add CPU or GPU groups,
+  GPU reservations, GPU-cluster fabric, SFS attachments, SSH keys, and service
+  account settings while keeping inactive `node_group_defaults.*` out of the
+  saved MK8s-only config. The loop now uses the shared compute boot-disk policy
+  for shape-specific boot-disk defaults, materializes singleton compatible OS
+  choices without a redundant prompt, defaults the SSH toggle to enabled, and
+  keeps `q` within the current draft node group. GPU-cluster fabric is now
+  offered and accepted only after live metadata confirms the selected GPU shape
+  supports clustering, and the plain MK8s wizard defaults that toggle to enabled
+  for live-confirmed cluster-capable shapes. Reservation policy now defaults to
+  `AUTO` when the selected live GPU shape/fabric exposes reserved capacity and
+  otherwise keeps `FORBID`.
+- Cleaned up wizard ordering and profile coverage: component selection now
+  prints one target-aware summary after infra/app dependency resolution,
+  component Terraform inputs finish before deploy-target observability/GPU
+  customization prompts, MK8s hides raw `inputs.gpu_clusters`, and SFS uses a
+  guided profile instead of raw `inputs.filesystems` prompts.
+- Kept plain MK8s-only config output on concrete `inputs.node_groups.*`
+  fields by suppressing and pruning inactive `inputs.node_group_defaults.*`
+  helper values during wizard writes and runtime normalization unless a
+  Soperator production profile needs them, and made optional provider-backed
+  choice and scalar prompts offer an explicit skip/unset action.
+- Fixed MK8s GPU and boot-disk evaluation to treat concrete
+  `inputs.node_groups.*` entries as canonical, so mixed Ethernet/RDMA GPU pools
+  can trigger the required app policy for the same target, CPU-only configs do
+  not inherit stale GPU helper defaults, and direct MK8s boot-disk edits are not
+  overwritten during refresh.
+- Added ordered `status.name_inputs` watcher metadata so multi-filesystem SFS
+  rows watch the configured `inputs.filesystems` resources before falling back
+  to scalar `inputs.name`, avoiding stale status checks for unused default names.
+- Disabled Rich auto-highlighting for deploy/destroy status blocks so Nebius
+  API resource names, IDs, counts, and states stay plain text while the fixed
+  TF/API labels and explicit warning/error colors remain consistent.
+- Updated the Soperator production path so fresh MK8s+Soperator selections
+  materialize the five-role MK8s/SFS bundle, expose worker total/shard sizing,
+  and keep production-impacting child-chart gates disabled by default:
+  ActiveChecks, ActiveChecks install wait, the checks controller, and Soperator
+  DCGM job mapping.
+- For Soperator targets, default generic MK8s GPU workload validations off so
+  deploy-time CUDA/NCCL test pods do not compete with Slurm worker pods; keep
+  the non-workload GPU stack readiness validation enabled. The generated
+  profiles also avoid topology or node-health initial runs unless the matching
+  profile enables them.
+- Moved K8up under the Soperator Helm chart as an optional dependency gated by
+  `values.soperator-backup-config.enabled`, removing the standalone
+  `apps:k8up` selection path from cxcli.
+- Aligned the Soperator render and source-validation paths with the folded
+  child-chart model: `render_project()` now materializes the same Soperator
+  profile defaults as CLI render, the portable Soperator catalog entry carries
+  the chart version, and stale `apps:k8up` rows now fail fast with guidance to
+  enable `values.soperator-backup-config.enabled` under `apps:soperator`.
+- Reworked MK8s generation around typed `cluster` and `node_groups` inputs and
+  aligned Soperator profile materialization with that inventory. The default
+  Nebius GPU Soperator profile now produces the five logical node groups
+  `system`, `controller`, `login`, `accounting`, and `worker`, while CPU/mixed
+  variants remain catalog data.
+- Added Soperator `values.nodeGroupMapping` materialization for existing typed
+  MK8s node groups. The wizard now lists target node groups per Soperator role,
+  defaults workers to GPU groups and service roles to CPU groups, and renders
+  the selected mapping into chart-native filters, NodeSets, storage selectors,
+  partitions, SFS attachments, and NodeConfigurator rebooter tolerations
+  without creating extra role-named node groups.
+- Added an explicit Soperator `install_mode` prompt. `production-cluster`
+  creates the complete MK8s+SFS+Soperator five-role bundle, while
+  `onboard-existing-cluster` registers an external Nebius MK8s target, records
+  a read-only Soperator onboarding analysis and accepted action plan, and opens
+  the role-mapping wizard for discovered node groups without Terraform-managing
+  the existing cluster.
+- Documented the Soperator onboarding workflow and ownership boundary:
+  external MK8s clusters are made visible to cxcli for selected app/remediation
+  management and future Soperator upgrades, but are not imported into Terraform,
+  and `destroy` does not remove their clusters or node groups. The docs now
+  also call out that remediation actions which update existing node-group
+  templates, such as SFS attachment, are disruptive rolling updates that can
+  evict pods and interrupt Slurm jobs.
+- Fixed Soperator onboarding for live-discovered external MK8s groups so
+  Soperator worker resources use Nebius resource-preset labels and GPU
+  allocatable data when Terraform-style `preset` fields are not present, and
+  live inventory-derived replicas, selectors, tolerations, and GPU resources
+  override catalog NodeSet template defaults for generated onboarding NodeSets.
+  The generated external-target Terraform skeleton is also emitted in
+  `terraform fmt` style.
+- Extended Soperator role mapping to chart-owned system helpers so the
+  operator manager, checks controller, and MariaDB operator pods follow the
+  selected `system` CPU node groups instead of landing on GPU workers.
+- For Nebius GPU-image Soperator targets, cxcli now disables the Soperator
+  DCGM job-mapping exporter's GPU Operator toolkit init wait because those
+  nodes already include the host NVIDIA runtime stack.
+- Added profile-owned Soperator onboarding service sizing so
+  `onboard-existing-cluster` can reduce login pod requests for small external
+  CPU pools without changing production-cluster defaults.
+- Local Helm chart rendering now reuses packaged dependency archives when they
+  already satisfy `Chart.lock`, avoiding unnecessary network downloads during
+  `render` and `deploy`.
+- Local Helm chart rendering now copies symlink targets into its staging tree
+  and strips generic Helm hook-only renders from the static manifest while
+  keeping explicitly annotated hooks for cxcli's ordered post-Flux apply path.
+- Aligned `create` / `component add` command help and docs with Soperator's
+  target-scoped node-group role mapping, and added a command-help guard against
+  reintroducing old MK8s shortcut input names.
+- Added the `nebius.com/node-group` Kubernetes node label to Soperator-created
+  MK8s node groups so generated role filters and worker NodeSets can schedule
+  on the five-role production profile without hand-authored labels.
+- Preserved explicit per-node-group SFS key selections during Soperator role
+  mapping so custom target-specific SFS filesystems are not mixed with default
+  profile keys.
+- Carried MK8s node-group taints into Soperator role filters, worker NodeSets,
+  and storage selectors when role mapping is used, so tainted controller,
+  accounting, and GPU worker groups can schedule their intended Soperator pods.
+- Fixed Soperator onboarding and MK8s nested-schema edge cases: MIG validation
+  now reads component-row `inputs`, including profile helper and node-group
+  MIG fields, deploy reports flatten preferred `inputs.cluster.*` fields, MK8s
+  preflight falls back to the resolved project id and checks every referenced
+  GPU cluster name even before fabric is selected, Soperator onboarding no
+  longer mistakes sibling `soperator-*` charts or unrelated `slurm`/`nebius`
+  CRDs for installed Soperator, shellout failures block analysis instead of
+  implying a vanilla cluster, partial/incompatible analyses are not persisted
+  as accepted, and multi-target onboarding preserves each row's matching
+  external target while rejecting multiple unbound onboarding rows. The
+  bundled MK8s catalog still intentionally defaults `inputs.cluster.public_endpoint: true`;
+  set it to `false` for private-only control planes.
+- Preserved operator edits during repeated Soperator partition/topology profile
+  materialization while still allowing profiles to replace catalog-owned base
+  defaults on first materialization.
+- Tightened Soperator backup and notifier runtime secret lookup for target-scoped
+  rows: target-specific environment variables are required when `target_ref` is
+  set, the notifier runtime now honors `NEBIUS_CXCLI_TARGET_KUBE_CONTEXT` the
+  same way as the backup runtime, and `webhookSource=mysterybox` now requires
+  the matching target `external-secrets` dependency.
+- Aligned MK8s preflight messages, wizard examples, and focused tests with the
+  typed `inputs.cluster.*` and `inputs.node_groups` contract so shortcut-era
+  paths no longer appear in bundled MK8s-facing guidance.
+- Added catalog-backed Soperator `values.topologyProfile` choices so topology
+  stays disabled by default for generic clusters, while production tiered
+  topology can be explicitly enabled with the `nebius-tiered-tree-v1` profile.
+- Documented the Soperator topology policy: the five-role Nebius production
+  node-group shape is role separation, while Slurm topology is an optional
+  worker-locality optimization for prepared production clusters with accurate
+  `topology.nebius.com/tier-*` labels.
+- Fixed app chart default pruning so it no longer deletes scalar fields inside
+  structured list values such as Soperator `k8sNodeFilters` and `nodesets`.
+- Collapsed the Soperator upstream-family chart catalog surface to the single
+  `soperator` app row. Optional notifier, active checks, jail backup, and DCGM
+  job-mapping features now use nested parent chart values instead of standalone
+  Soperator-family app ids.
+- Removed the in-cluster `soperator-nfs-server` child chart surface from cxcli;
+  production Soperator shared storage should use Nebius SFS, while the existing
+  VM-backed `infra:nfs` path remains separate for explicit non-HA NFS cases.
+- Gated the Soperator wizard so optional child chart details are prompted only
+  after the matching nested child chart is enabled.
+- Set the CPU Soperator profile ActiveChecks `srun` readiness probe to the
+  rendered `cpu` partition so CPU-only installs do not wait on the upstream
+  `hidden` partition.
+- Added an explicit Soperator notifier webhook-source flow. Operators can
+  choose deploy-time hidden input for a Slack App incoming webhook URL, or
+  provide an existing Nebius MysteryBox Secret ID so cxcli auto-enables ESO,
+  renders the notifier ExternalSecret, and follows the MysteryBox primary
+  version without storing the webhook URL in Git.
+- Fixed the Soperator notifier MysteryBox path so target-scoped source
+  configs using the Soperator row `instance_id` auto-select the matching
+  `external-secrets` app and persist the target MysteryBox sync defaults
+  during `create` and `component add`.
 - Changed `component add` infra identity to be name-driven. Interactive adds
   for scalar named infra modules now prompt for the resource name first,
   defaulting to the next unique value such as `vm-2`, then derive and persist
@@ -55,15 +561,19 @@ All notable changes to this project are tracked here. This changelog follows
   exports can bind explicitly with `inputs.kubernetes_target_ref`; a single
   unscoped NFS export can serve every enabled MK8s target. Direct `config.yaml`
   edits persist the auto-enabled `csi-driver-nfs` app row during config
-  normalization.
+  normalization, and `create` / `component add` report the auto-selection when
+  they add the CSI app row.
 - Fixed `component add` wizard required-field discovery to use the CLI's
   mockable module-metadata binding for prompt-time and post-wizard no-write
   checks, while strict validation still reads the real runtime module contract,
   keeping tests deterministic across local and CI environments.
 - `deploy` now ends with a compact `Deployment summary` footer that separates
-  validation PASS/FAIL, copy-paste commands such as WireGuard `wg-quick`,
-  SSH `ProxyJump`, and GitOps bootstrap follow-ups, and important generated
-  paths including `deploy-report.md` and validation JSON detail files.
+  target-grouped validation PASS/FAIL results, copy-paste commands such as
+  WireGuard `wg-quick`, SSH `ProxyJump`, and GitOps bootstrap follow-ups, and
+  important generated paths limited to the generated bundle and `deploy-report.md`.
+  The footer highlights section headers plus PASS/FAIL/completion status with
+  terminal color and keeps machine-readable validation JSON paths inside
+  `generated/inventory/` instead of printing them in the footer.
 - WireGuard deploy footer/report generation now omits `--component` for the
   common single-gateway case, keeps day-2 subnet add/remove examples in
   README/help instead of the generated handoff report, and shows enabled-only
@@ -228,19 +738,18 @@ All notable changes to this project are tracked here. This changelog follows
   contract, aligned prompting and strict validation with the required
   `inputs.name` field, and added catalog-driven Nebius Storage bucket status
   polling during deploy/apply.
-- Added optional Soperator companion apps for active checks, K8up-backed jail
-  backups, Soperator DCGM job-mapping telemetry, and in-cluster NFS. Backup
-  bucket values bind to Terraform Object Storage outputs, while access keys and
-  repository passwords are created or reused as deploy-time Kubernetes Secrets.
+- Added optional Soperator child chart controls for active checks, K8up-backed jail
+  backups, and Soperator DCGM job-mapping telemetry. Backup bucket values bind
+  to Terraform Object Storage outputs, while access keys and repository
+  passwords are created or reused as deploy-time Kubernetes Secrets.
 - Soperator ActiveChecks now derive `slurmClusterRefName` and
   `NUM_OF_LOGIN_NODES` from the matching Soperator app row instead of carrying
-  fixed companion defaults.
-- Added the `soperator-notifier` Slack job-notification app and deploy-time
-  runtime-secret bootstrap. The component installs a companion Helm chart that
-  references an existing Slack webhook Secret, supports `existing-webhook` and
-  advanced Slack OAuth `incoming-webhook` setup, rejects webhook URLs in
-  generated values, and fails fast when VictoriaMetrics Operator CRDs are
-  missing.
+  fixed child chart defaults.
+- Added Soperator notifier child-chart support under `apps:soperator` and
+  deploy-time runtime-secret bootstrap. The child chart references an existing
+  Slack webhook Secret, supports `existing-webhook` and advanced Slack OAuth
+  `incoming-webhook` setup, rejects webhook URLs in generated values, and fails
+  fast when VictoriaMetrics Operator CRDs are missing.
 - Made MK8s GPU workload deploy validations aware of live GPU allocations:
   GPU Visibility and NCCL now skip with an explicit report when existing
   workloads already reserve every GPU on every Ready GPU node, and NCCL caps
@@ -760,8 +1269,8 @@ All notable changes to this project are tracked here. This changelog follows
   terminal `Selected <path> = <value>` line with secret-like paths redacted, and
   keeps the VM preemptible flow aligned with Nebius Compute requirements by
   showing preemptible follow-ups only for GPU platforms, materializing
-  `recovery_policy=FAIL` when `preemptible_enabled=true`, and leaving
-  `preemptible_priority` as the conditional follow-up field.
+  `recovery_policy=FAIL` when `preemptible_enabled=true`, and omitting the
+  deprecated preemptible priority field.
 - Simplified optional wizard navigation for `create` and `component add`: `q`
   now backs up through component selection, component phase prompts, and field
   prompts so operators can revise earlier answers, while `qq` stops the wizard
@@ -794,10 +1303,10 @@ All notable changes to this project are tracked here. This changelog follows
   only after `render` refreshes the generated manifest. Fresh checkouts should
   use the cxcli wrapper commands rather than raw `terraform apply`.
 - Clarified and normalized multi-target component identity: new MK8s rows created
-  by the wizard use `inputs.cluster_name` as the cluster target `instance_id`
-  when the row still has a generated placeholder id, while target-bound app rows
-  use that same target id as their `instance_id`, so generated identities read
-  clearly as `nvidia-gpu-operator@cluster2`.
+  by the wizard use `inputs.cluster.cluster_name` as the cluster target
+  `instance_id` when the row still has a generated placeholder id, while
+  target-bound app rows use that same target id as their `instance_id`, so
+  generated identities read clearly as `nvidia-gpu-operator@cluster2`.
 - Removed the old compatibility path for implicit or chart-named app instances:
   config validation now requires explicit `instance_id` on every infra/app row,
   rejects `apps.charts[].target_ref`, rejects target-bound app rows whose
@@ -1452,18 +1961,16 @@ All notable changes to this project are tracked here. This changelog follows
 - Adjusted per-component field-phase defaults in the interactive wizard so
   infra components still default to `y`, while app chart field prompts now
   default to `n` because chart overrides are normally optional.
-- Clarified the remaining B200-only NCCL MPI overlay contract in
+- Clarified the remaining catalog-owned NCCL MPI overlay contract in
   `component_sources.yaml`, README, and the design doc: the bundled
-  `-mca coll ^hcoll` override stays catalog-owned because the official Nebius
-  B200 NCCL example includes it while the H100/H200 example does not, and the
-  docs now also point to NVIDIA HPC-X release notes / known issues that mark
-  HCOLL unsupported on GB200/GB300 as additional nearby context.
+  `-mca coll ^hcoll` override stays catalog-owned for platform-specific
+  Blackwell cases instead of becoming a shared chart default.
 - Tightened MK8s in-cluster deploy validation behavior so `deploy`, `flux apply`, and `flux bootstrap` no longer block on a generic all-nodes-ready pre-wait, MK8s GPU validations now emit live Kubernetes status instead of silently polling, local `deploy` keeps a continuous spinner alive across those validation phase transitions with non-TTY log fallback, and the bundled GPU Visibility/NCCL checks now bound their default node fan-out with catalog-owned `max_nodes` caps plus shorter default timeouts to keep deploy-time validation fast on large clusters.
 - Simplified the bundled app-side MK8s GPU catalog contract: `components.apps.<id>.cli.mk8s_gpu_policy` now uses one conditional `rules` list where each rule can auto-enable the app and/or contribute conditional chart defaults, replacing the earlier split between `auto_enable` and `value_overrides` while keeping top-level app `defaults` as the unconditional chart-default layer.
 - Added the published portable OCI source for the bundled `nccl-test` Helm chart in `component_sources.yaml`, so the NCCL validation chart now resolves through the same dual `source.local` / `source.portable` contract as the other bundled charts.
 - Aligned the bundled NCCL validation image overrides with the first-party `services/nccl-test` release path, so `component_sources.yaml` now points at `cr.<region>.nebius.cloud/<registry-short-id>/images/nccl-test` SemVer tags instead of the legacy `nebius-benchmarks/nccl-tests` repository.
 - Pinned the bundled NCCL chart/image contract to the current first-party release set: `component_sources.yaml` now keeps the portable chart source on `oci://cr.<region>.nebius.cloud/<registry-short-id>/charts/nccl-test --version 0.2.8`, the bundled MK8s GPU validation path consumes the runtime image `cr.<region>.nebius.cloud/<registry-short-id>/images/nccl-test:0.2.0` from the chart's own defaults, and release-catalog coverage now guards OCI chart refs from being rewritten back to legacy GitHub tree paths.
-- Simplified the bundled MK8s GPU app catalog around live chart defaults and customer-facing reports: the shared NCCL image/tag plus deploy-time benchmark defaults are now sourced directly from `helm-charts/nccl-test/values.yaml`, only the B200-specific MPI overlay remains in `mk8s_gpu_policy.rules`, redundant operator values that already match the live NVIDIA chart defaults were dropped from `component_sources.yaml`, and the generated GPU validation reports now preserve readable field order while keeping only compact summaries plus failure-focused log excerpts.
+- Simplified the bundled MK8s GPU app catalog around live chart defaults and customer-facing reports: the shared NCCL image/tag plus deploy-time benchmark defaults are now sourced directly from `helm-charts/nccl-test/values.yaml`, only the platform-specific Blackwell MPI overlay remains in `mk8s_gpu_policy.rules`, redundant operator values that already match the live NVIDIA chart defaults were dropped from `component_sources.yaml`, and the generated GPU validation reports now preserve readable field order while keeping only compact summaries plus failure-focused log excerpts.
 - Fixed the remaining `nebius-cxcli-ci` wheel gate for local-only charts: branch CI now verifies that the built wheel bundles `component_sources.yaml` without forcing release-grade portable chart sources, while the tag/release workflow still runs the stricter portable `verify-wheel` / `verify-catalog` checks.
 - Fixed `nebius-cxcli-ci` catalog validation for branch work: the normal CI workflow now runs `validate-sources component_sources.yaml` with source profile `local` so new in-repo Terraform modules and local-only Helm charts are validated against the checked-out branch, while the release workflow keeps the portable-profile validation for published wheel/catalog verification.
 - Aligned the remaining strict-validation and docs surfaces with the current Helm/source contract: the MK8s GPU strict-validation coverage now enables `nvidia-gpu-operator` before asserting missing GPU shape fields, and the README/design examples now consistently show app charts under `source.portable` instead of the removed top-level `source.repo/chart/version` layout.

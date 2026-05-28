@@ -692,3 +692,113 @@ def test_collect_grafana_runtime_status_uses_long_urls_when_public_root_not_read
     assert len(statuses) == 1
     assert "schemaVersion=1" in statuses[0]["metrics_url"]
     assert "panes=" in statuses[0]["traces_url"]
+
+
+def test_collect_grafana_runtime_status_records_public_root_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        grafana_runtime,
+        "_grafana_base_url",
+        lambda _spec, *, extra_env: "http://203.0.113.20/",
+    )
+
+    def _raise_root_error(_spec: object, _base_url: str, *, extra_env: object) -> bool:
+        raise RuntimeError("last probe failed")
+
+    monkeypatch.setattr(grafana_runtime, "_ensure_grafana_public_root_url", _raise_root_error)
+
+    statuses = grafana_runtime.collect_grafana_runtime_status(
+        _grafana_payload(),
+        extra_env={},
+        target_ref="cluster2",
+    )
+
+    assert len(statuses) == 1
+    assert statuses[0]["root_url_warning"] == "last probe failed"
+    assert "schemaVersion=1" in statuses[0]["metrics_url"]
+
+
+def test_collect_grafana_runtime_status_records_rollout_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        grafana_runtime,
+        "_grafana_base_url",
+        lambda _spec, *, extra_env: "http://203.0.113.20/",
+    )
+    monkeypatch.setattr(
+        grafana_runtime,
+        "_grafana_helm_release_root_url",
+        lambda _spec, *, extra_env: "http://old.example/",
+    )
+    monkeypatch.setattr(
+        grafana_runtime,
+        "_patch_grafana_helm_release_root_url",
+        lambda _spec, _root_url, *, extra_env: None,
+    )
+    monkeypatch.setattr(
+        grafana_runtime,
+        "_grafana_configmap_has_root_url",
+        lambda _spec, _root_url, *, extra_env: True,
+    )
+
+    def fake_run_kubectl(
+        args: list[str],
+        *,
+        extra_env: dict[str, str] | None,
+        input_text: str | None = None,
+        timeout: int = 120,
+    ) -> object:
+        del extra_env, input_text, timeout
+        if args[:4] == ["-n", "observability", "rollout", "status"]:
+            raise RuntimeError("deployment/grafana exceeded its progress deadline")
+        raise AssertionError(f"unexpected kubectl args: {args}")
+
+    monkeypatch.setattr(grafana_runtime, "_run_kubectl", fake_run_kubectl)
+    monkeypatch.setattr(
+        grafana_runtime,
+        "_grafana_dashboard_signal_bindings",
+        lambda: {
+            "metrics": GrafanaDashboardSignalBinding(
+                signal="metrics",
+                folder="nebius",
+                dashboard="kubernetes-cluster-monitoring",
+                gnet_id=0,
+                datasource="Nebius User Metrics",
+                dashboard_uid="cxcli-kubernetes-metrics",
+            )
+        },
+    )
+    monkeypatch.setattr(
+        grafana_runtime,
+        "_grafana_datasources_by_name",
+        lambda: {
+            "Nebius User Metrics": GrafanaDatasourceSpec(
+                key="user-metrics",
+                name="Nebius User Metrics",
+                uid="nebius-user-metrics",
+                datasource_type="prometheus",
+                read_endpoint="metrics_user_read",
+            )
+        },
+    )
+    monkeypatch.setattr(
+        grafana_runtime,
+        "_grafana_cli_settings",
+        lambda: GrafanaCliSettings(
+            explore_queries=(GrafanaExploreQuerySpec(signal="metrics", query="up"),),
+            org_id=1,
+        ),
+    )
+
+    statuses = grafana_runtime.collect_grafana_runtime_status(
+        _grafana_payload(),
+        extra_env={},
+        target_ref="cluster2",
+    )
+
+    assert len(statuses) == 1
+    assert "deployment rollout did not become ready" in statuses[0]["root_url_warning"]
+    assert "deployment/grafana exceeded its progress deadline" in statuses[0]["root_url_warning"]
+    assert "schemaVersion=1" in statuses[0]["metrics_url"]

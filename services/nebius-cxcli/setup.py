@@ -10,6 +10,7 @@ from setuptools import setup
 from setuptools.command.build_py import build_py as _build_py
 
 _REPO_PREFIX = "git::https://github.com/nebius/nebius-ps-services.git//"
+_TREE_PREFIX = "https://github.com/nebius/nebius-ps-services/tree/"
 
 
 def _build_release_ref() -> str | None:
@@ -39,17 +40,31 @@ def _build_release_ref() -> str | None:
 
 def _rewrite_internal_repo_refs(payload: dict[str, Any], *, release_ref: str) -> dict[str, Any]:
     modules = (((payload or {}).get("components") or {}).get("infra") or {})
-    if not isinstance(modules, dict):
-        return payload
-    for module in modules.values():
-        if not isinstance(module, dict):
-            continue
-        source_block = module.get("source")
-        if not isinstance(source_block, dict):
-            continue
-        source = str(source_block.get("portable", "")).strip()
-        if source.startswith(_REPO_PREFIX):
-            source_block["portable"] = source.replace("?ref=main", f"?ref={release_ref}")
+    if isinstance(modules, dict):
+        for module in modules.values():
+            if not isinstance(module, dict):
+                continue
+            source_block = module.get("source")
+            if not isinstance(source_block, dict):
+                continue
+            source = str(source_block.get("portable", "")).strip()
+            if source.startswith(_REPO_PREFIX):
+                source_block["portable"] = source.replace("?ref=main", f"?ref={release_ref}")
+
+    charts = (((payload or {}).get("components") or {}).get("apps") or {})
+    if isinstance(charts, dict):
+        for chart in charts.values():
+            if not isinstance(chart, dict):
+                continue
+            source_block = chart.get("source")
+            if not isinstance(source_block, dict):
+                continue
+            portable = source_block.get("portable")
+            if not isinstance(portable, dict):
+                continue
+            repo = str(portable.get("repo", "")).strip()
+            if repo.startswith(f"{_TREE_PREFIX}main/"):
+                portable["repo"] = repo.replace("/tree/main/", f"/tree/{release_ref}/", 1)
     return payload
 
 
@@ -66,6 +81,14 @@ def _render_bundled_component_sources(source: Path) -> str:
             if not isinstance(module, dict):
                 continue
             source_block = module.get("source")
+            if isinstance(source_block, dict):
+                source_block.pop("local", None)
+    charts = (((payload or {}).get("components") or {}).get("apps") or {})
+    if isinstance(charts, dict):
+        for chart in charts.values():
+            if not isinstance(chart, dict):
+                continue
+            source_block = chart.get("source")
             if isinstance(source_block, dict):
                 source_block.pop("local", None)
     return yaml.safe_dump(payload, sort_keys=False)

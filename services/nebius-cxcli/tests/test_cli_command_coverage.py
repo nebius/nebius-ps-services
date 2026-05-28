@@ -4,6 +4,8 @@ import json
 import os
 import re
 import subprocess
+import sys
+from collections.abc import Callable, Mapping
 from contextlib import ExitStack, contextmanager
 from dataclasses import replace
 from pathlib import Path
@@ -47,6 +49,7 @@ from nebius_cxcli.quota_checks import (
 
 runner = CliRunner()
 _ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
+_RICH_BOX_RE = re.compile(r"[\u2500-\u257f]")
 _RUNTIME_AUTH_ENV_KEYS = (
     "NEBIUS_AUTH_CREDENTIALS_FILE",
     "NEBIUS_SA_ID",
@@ -67,6 +70,25 @@ def _empty_quota_report() -> cli.QuotaReport:
         region_id="eu-north1",
         checked_at="2026-04-10T00:00:00+00:00",
     )
+
+
+def _config_with_enabled_mk8s(
+    *, charts: list[dict[str, object]] | None = None
+) -> dict[str, object]:
+    return {
+        "client_info": {
+            "client_name": "client-a",
+            "nebius": {
+                "tenant_id": "tenant-123",
+                "project_id": "project-456",
+                "region_id": "eu-north1",
+            },
+        },
+        "infra": {
+            "components": [{"id": "mk8s", "instance_id": "mk8s", "enabled": True, "inputs": {}}]
+        },
+        "apps": {"charts": charts or []},
+    }
 
 
 @pytest.fixture(autouse=True)
@@ -104,7 +126,7 @@ def _reset_component_sources_runtime(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def _plain_output(text: str) -> str:
-    return _ANSI_ESCAPE_RE.sub("", text)
+    return _RICH_BOX_RE.sub(" ", _ANSI_ESCAPE_RE.sub("", text))
 
 
 def _clear_runtime_auth_env() -> None:
@@ -137,6 +159,19 @@ def _mk8s_target(paths: ProjectPaths, *, target_ref: str = "mk8s") -> dict[str, 
         "cluster_id_output_name": f"{target_ref.replace('-', '_')}_cluster_id",
         "component_output_ref": f"{target_ref}.cluster_id",
         "access": "external",
+        "flux_dir": str(flux_target_dir(paths, target_ref)),
+    }
+
+
+def _external_mk8s_target(paths: ProjectPaths, *, target_ref: str = "mk8s") -> dict[str, str]:
+    return {
+        "kind": "external-mk8s",
+        "ownership": "external",
+        "component_id": "external-mk8s",
+        "instance_id": target_ref,
+        "target_ref": target_ref,
+        "access": "external",
+        "kube_context": f"nebius-{target_ref}-mk8scluster-123-external",
         "flux_dir": str(flux_target_dir(paths, target_ref)),
     }
 
@@ -180,6 +215,13 @@ def test_manifest_deploy_targets_reject_malformed_target_rows() -> None:
         match=r"Generated manifest deploy\.targets\[0\] must be a mapping",
     ):
         cli._manifest_deploy_targets({"deploy": {"targets": ["cluster1"]}})
+
+
+def test_manifest_deploy_targets_accept_external_mk8s_target(tmp_path: Path) -> None:
+    fake_paths = _fake_paths(tmp_path)
+    target = _external_mk8s_target(fake_paths, target_ref="cluster1")
+
+    assert cli._manifest_deploy_targets({"deploy": {"targets": [target]}}) == [target]
 
 
 def test_render_overwrite_warning_never_mentions_flux_system(tmp_path: Path) -> None:
@@ -725,10 +767,8 @@ def test_quota_check_command_coverage_gap_warns_without_all_regions_next_step(
                     component_label="mk8s",
                     message=(
                         "MK8s CPU node-group boot-disk quota could not be fully evaluated; "
-                        "set inputs.cpu_nodes_boot_disk_size_gib and "
-                        "inputs.cpu_nodes_boot_disk_type, or set "
-                        "inputs.mk8s_cpu_node_group_overrides.template.boot_disk.size_* "
-                        "and inputs.mk8s_cpu_node_group_overrides.template.boot_disk.type"
+                        "set inputs.node_groups.<cpu-group>.boot_disk.type and "
+                        "inputs.node_groups.<cpu-group>.boot_disk.size_gibibytes"
                     ),
                 ),
                 QuotaCoverageGap(
@@ -737,10 +777,8 @@ def test_quota_check_command_coverage_gap_warns_without_all_regions_next_step(
                     component_label="mk8s",
                     message=(
                         "MK8s GPU node-group boot-disk quota could not be fully evaluated; "
-                        "set inputs.gpu_nodes_boot_disk_size_gib and "
-                        "inputs.gpu_nodes_boot_disk_type, or set "
-                        "inputs.mk8s_gpu_node_group_overrides.template.boot_disk.size_* "
-                        "and inputs.mk8s_gpu_node_group_overrides.template.boot_disk.type"
+                        "set inputs.node_groups.<gpu-group>.boot_disk.type and "
+                        "inputs.node_groups.<gpu-group>.boot_disk.size_gibibytes"
                     ),
                 ),
             ),
@@ -774,15 +812,13 @@ def test_quota_check_command_coverage_gap_warns_without_all_regions_next_step(
     assert "    gaps:" in plain_output
     assert (
         "MK8s CPU node-group boot-disk quota could not be fully evaluated; "
-        "set inputs.cpu_nodes_boot_disk_size_gib and inputs.cpu_nodes_boot_disk_type, "
-        "or set inputs.mk8s_cpu_node_group_overrides.template.boot_disk.size_* "
-        "and inputs.mk8s_cpu_node_group_overrides.template.boot_disk.type"
+        "set inputs.node_groups.<cpu-group>.boot_disk.type and "
+        "inputs.node_groups.<cpu-group>.boot_disk.size_gibibytes"
     ) in collapsed_output
     assert (
         "MK8s GPU node-group boot-disk quota could not be fully evaluated; "
-        "set inputs.gpu_nodes_boot_disk_size_gib and inputs.gpu_nodes_boot_disk_type, "
-        "or set inputs.mk8s_gpu_node_group_overrides.template.boot_disk.size_* "
-        "and inputs.mk8s_gpu_node_group_overrides.template.boot_disk.type"
+        "set inputs.node_groups.<gpu-group>.boot_disk.type and "
+        "inputs.node_groups.<gpu-group>.boot_disk.size_gibibytes"
     ) in collapsed_output
     assert "Next step: compare quota availability across regions with:" not in collapsed_output
 
@@ -1317,10 +1353,8 @@ def test_quota_request_command_prints_coverage_gaps_when_no_request_is_possible(
                 component_label="mk8s",
                 message=(
                     "MK8s GPU node-group boot-disk quota could not be fully evaluated; "
-                    "set inputs.gpu_nodes_boot_disk_size_gib and "
-                    "inputs.gpu_nodes_boot_disk_type, or set "
-                    "inputs.mk8s_gpu_node_group_overrides.template.boot_disk.size_* "
-                    "and inputs.mk8s_gpu_node_group_overrides.template.boot_disk.type"
+                    "set inputs.node_groups.<gpu-group>.boot_disk.type and "
+                    "inputs.node_groups.<gpu-group>.boot_disk.size_gibibytes"
                 ),
             ),
         ),
@@ -1587,10 +1621,8 @@ def test_render_command_persists_quota_report_and_warns(
                 component_label="mk8s",
                 message=(
                     "MK8s CPU node-group boot-disk quota could not be fully evaluated; "
-                    "set inputs.cpu_nodes_boot_disk_size_gib and "
-                    "inputs.cpu_nodes_boot_disk_type, or set "
-                    "inputs.mk8s_cpu_node_group_overrides.template.boot_disk.size_* "
-                    "and inputs.mk8s_cpu_node_group_overrides.template.boot_disk.type"
+                    "set inputs.node_groups.<cpu-group>.boot_disk.type and "
+                    "inputs.node_groups.<cpu-group>.boot_disk.size_gibibytes"
                 ),
             ),
         ),
@@ -1722,7 +1754,11 @@ def test_validate_generated_command_portable_checks_module_sources(
     monkeypatch.setattr(
         cli,
         "_load_generated_context",
-        lambda _path: ("cfg", fake_paths, {"render": {"module_sources": []}}),
+        lambda _path: (
+            _config_with_enabled_mk8s(),
+            fake_paths,
+            {"render": {"module_sources": []}},
+        ),
     )
     monkeypatch.setattr(cli, "_validate_strict_config", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(cli, "validate_mk8s_network_preflight", lambda _cfg: None)
@@ -1928,6 +1964,759 @@ def test_validate_sources_command_accepts_positional_component_sources_path(
     assert result.exit_code == 0, result.output
     assert captured["load_explicit"] == sources_file
     assert captured["validate_explicit"] == sources_file
+
+
+def test_grafana_command_exports_selected_dashboard_json(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output_dir = tmp_path / "dashboards"
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        cli,
+        "bearer_auth_candidates",
+        lambda **_kwargs: [cli.GrafanaAuth(kind="bearer", value="token", source="test")],
+    )
+    monkeypatch.setattr(
+        cli,
+        "list_folders",
+        lambda base_url, auth_candidates: (
+            captured.__setitem__("folder_base_url", base_url),
+            captured.__setitem__("folder_auth_sources", [item.source for item in auth_candidates]),
+            (cli.GrafanaFolder(uid="folder-uid", title="mk8s"),),
+        )[2],
+    )
+    monkeypatch.setattr(
+        cli,
+        "list_dashboards",
+        lambda base_url, auth_candidates, *, folder_uid, folder_title="": (
+            captured.__setitem__("dashboard_base_url", base_url),
+            captured.__setitem__("dashboard_folder_uid", folder_uid),
+            captured.__setitem__("dashboard_folder_title", folder_title),
+            (
+                cli.GrafanaDashboard(
+                    uid="dashboard-uid",
+                    title="Cluster Autoscaler",
+                    folder_uid=folder_uid,
+                    folder_title=folder_title,
+                ),
+            ),
+        )[3],
+    )
+    monkeypatch.setattr(
+        cli,
+        "dashboard_json",
+        lambda base_url, auth_candidates, *, dashboard_uid: (
+            captured.__setitem__("detail_base_url", base_url),
+            captured.__setitem__("detail_dashboard_uid", dashboard_uid),
+            {
+                "uid": dashboard_uid,
+                "title": "Cluster Autoscaler",
+                "panels": [{"datasource": {"type": "prometheus", "uid": "source"}}],
+            },
+        )[2],
+    )
+
+    result = runner.invoke(
+        cli.app,
+        [
+            "grafana",
+            "--export-dashboard",
+            "https://grafana.example/dashboards/f/folder-uid/mk8s",
+            "--dashboard-uid",
+            "dashboard-uid",
+            "--output-dir",
+            str(output_dir),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    exported = output_dir / "mk8s" / "cluster-autoscaler.json"
+    assert json.loads(exported.read_text(encoding="utf-8")) == {
+        "uid": "dashboard-uid",
+        "title": "Cluster Autoscaler",
+        "panels": [{"datasource": {"type": "prometheus", "uid": "source"}}],
+    }
+    assert captured["folder_base_url"] == "https://grafana.example/"
+    assert captured["folder_auth_sources"] == ["test"]
+    assert captured["dashboard_folder_uid"] == "folder-uid"
+    assert captured["detail_dashboard_uid"] == "dashboard-uid"
+    assert "Exported Cluster Autoscaler" in _plain_output(result.output)
+
+
+def test_grafana_command_api_export_with_attach_rewrites_and_attaches(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output_dir = tmp_path / "dashboards"
+    catalog_path = tmp_path / "component_sources.yaml"
+    catalog_path.write_text("components:\n  apps: {}\n", encoding="utf-8")
+    captured: dict[str, object] = {"detail_uids": []}
+
+    monkeypatch.setattr(
+        cli,
+        "bearer_auth_candidates",
+        lambda **_kwargs: [cli.GrafanaAuth(kind="bearer", value="token", source="test")],
+    )
+    monkeypatch.setattr(
+        cli,
+        "list_folders",
+        lambda _base_url, _auth_candidates: (cli.GrafanaFolder(uid="folder-uid", title="mk8s"),),
+    )
+    monkeypatch.setattr(
+        cli,
+        "list_dashboards",
+        lambda _base_url, _auth_candidates, *, folder_uid, folder_title="": (
+            cli.GrafanaDashboard(
+                uid="dashboard-one",
+                title="Cluster",
+                folder_uid=folder_uid,
+                folder_title=folder_title,
+            ),
+            cli.GrafanaDashboard(
+                uid="dashboard-two",
+                title="Nodes",
+                folder_uid=folder_uid,
+                folder_title=folder_title,
+            ),
+        ),
+    )
+
+    def fake_dashboard_json(
+        _base_url: str,
+        _auth_candidates: object,
+        *,
+        dashboard_uid: str,
+    ) -> dict[str, object]:
+        cast(list[str], captured["detail_uids"]).append(dashboard_uid)
+        title = "Cluster" if dashboard_uid == "dashboard-one" else "Nodes"
+        return {
+            "uid": dashboard_uid,
+            "title": title,
+            "panels": [{"datasource": {"type": "prometheus", "uid": "source-prometheus"}}],
+        }
+
+    monkeypatch.setattr(cli, "dashboard_json", fake_dashboard_json)
+    monkeypatch.setattr(
+        cli,
+        "resolve_component_sources_file",
+        lambda *, explicit=None: explicit or catalog_path,
+    )
+    monkeypatch.setattr(
+        cli,
+        "catalog_datasources",
+        lambda _path: (
+            "grafana",
+            (
+                cli.CatalogDatasource(
+                    name="Nebius User Metrics",
+                    uid="nebius-user-metrics",
+                    datasource_type="prometheus",
+                ),
+            ),
+        ),
+    )
+
+    def fake_attach_dashboards_to_catalog(
+        component_sources_path: Path,
+        *,
+        grafana_component_id: str,
+        exports: object,
+        overwrite: bool,
+    ) -> None:
+        captured["attach_path"] = component_sources_path
+        captured["grafana_component_id"] = grafana_component_id
+        captured["exports"] = tuple(exports)
+        captured["overwrite"] = overwrite
+
+    monkeypatch.setattr(cli, "attach_dashboards_to_catalog", fake_attach_dashboards_to_catalog)
+
+    result = runner.invoke(
+        cli.app,
+        [
+            "grafana",
+            "--export-dashboard",
+            "https://grafana.example/",
+            "--folder-uid",
+            "folder-uid",
+            "--dashboard-uid",
+            "dashboard-one,dashboard-two",
+            "--output-dir",
+            str(output_dir),
+            "--attach",
+            "--component-sources",
+            str(catalog_path),
+            "--dashboard-folder",
+            "mk8s",
+            "--datasource",
+            "Nebius User Metrics",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert captured["detail_uids"] == ["dashboard-one", "dashboard-two"]
+    assert json.loads((output_dir / "mk8s" / "cluster.json").read_text(encoding="utf-8")) == {
+        "uid": "dashboard-one",
+        "title": "Cluster",
+        "panels": [{"datasource": {"type": "prometheus", "uid": "nebius-user-metrics"}}],
+    }
+    assert captured["attach_path"] == catalog_path
+    assert captured["grafana_component_id"] == "grafana"
+    assert captured["overwrite"] is False
+    exports = cast(tuple[cli.ExportedDashboard, ...], captured["exports"])
+    assert [export.dashboard_key for export in exports] == ["cluster", "nodes"]
+    assert all(export.catalog_folder == "mk8s" for export in exports)
+    assert all(export.datasource_name == "Nebius User Metrics" for export in exports)
+    assert "Attached 2 dashboard(s)" in _plain_output(result.output)
+
+
+def test_grafana_export_url_parts_parse_dashboard_urls_and_uid_lists() -> None:
+    base_url, folder_uid, dashboard_uids = cli._grafana_export_url_parts(
+        "https://grafana.example/d/dashboard-uid/title?orgId=1",
+        folder_uid="",
+        dashboard_uids=(),
+    )
+
+    assert base_url == "https://grafana.example/"
+    assert folder_uid == ""
+    assert dashboard_uids == ("dashboard-uid",)
+
+    requested_uids = tuple(cli._split_multi_value_tokens(["first,second", "third"]))
+    base_url, folder_uid, dashboard_uids = cli._grafana_export_url_parts(
+        "https://grafana.example/dashboards/f/folder-uid/mk8s",
+        folder_uid="explicit-folder",
+        dashboard_uids=requested_uids,
+    )
+
+    assert base_url == "https://grafana.example/"
+    assert folder_uid == "explicit-folder"
+    assert dashboard_uids == ("first", "second", "third")
+
+    with pytest.raises(RuntimeError, match="must be a Grafana URL"):
+        cli._grafana_export_url_parts("not-a-url", folder_uid="", dashboard_uids=())
+
+
+def test_grafana_export_auth_candidates_support_basic_auth_password_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ADMIN_PASSWORD", "s3cr3t")
+    monkeypatch.setattr(
+        cli,
+        "bearer_auth_candidates",
+        lambda **_kwargs: [cli.GrafanaAuth(kind="bearer", value="token", source="bearer")],
+    )
+
+    candidates = cli._grafana_export_auth_candidates(
+        token_env="",
+        username="admin",
+        password_env="ADMIN_PASSWORD",
+    )
+
+    assert [candidate.source for candidate in candidates] == ["bearer", "Basic auth user admin"]
+    assert candidates[-1].authorization_header() == "Basic YWRtaW46czNjcjN0"
+
+
+def test_grafana_export_auth_candidates_require_basic_auth_password_non_tty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("GRAFANA_PASSWORD", raising=False)
+    monkeypatch.setattr(cli, "bearer_auth_candidates", lambda **_kwargs: [])
+    monkeypatch.setattr(cli, "_is_tty_session", lambda: False)
+
+    with pytest.raises(RuntimeError, match="Grafana Basic auth password is missing"):
+        cli._grafana_export_auth_candidates(
+            token_env="",
+            username="admin",
+            password_env="GRAFANA_PASSWORD",
+        )
+
+
+def test_prompt_grafana_folder_tty_sorts_choices_and_enables_prefix_jump(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(cli, "_is_tty_session", lambda: True)
+    captured: dict[str, object] = {}
+
+    def fake_select(*_args: object, **kwargs: object) -> str:
+        captured.update(kwargs)
+        return "question"
+
+    fake_questionary = SimpleNamespace(
+        Choice=lambda **kwargs: SimpleNamespace(**kwargs),
+        select=fake_select,
+    )
+    monkeypatch.setitem(sys.modules, "questionary", fake_questionary)
+    monkeypatch.setattr(
+        cli,
+        "_ask_questionary_with_prefix_jumps",
+        lambda _question: cast(list[SimpleNamespace], captured["choices"])[0].value,
+    )
+
+    selected = cli._prompt_grafana_folder(
+        (
+            cli.GrafanaFolder(uid="gamma", title="Gamma"),
+            cli.GrafanaFolder(uid="alpha", title="alpha"),
+            cli.GrafanaFolder(uid="beta", title="Beta"),
+        )
+    )
+
+    assert selected.uid == "alpha"
+    assert [choice.title for choice in cast(list[SimpleNamespace], captured["choices"])] == [
+        "alpha (alpha)",
+        "Beta (beta)",
+        "Gamma (gamma)",
+    ]
+    assert captured["use_jk_keys"] is False
+    assert "Type a letter to jump" in str(captured["instruction"])
+
+
+def test_prompt_grafana_dashboards_tty_sorts_choices_and_enables_prefix_jump(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(cli, "_is_tty_session", lambda: True)
+    captured: dict[str, object] = {}
+
+    def fake_checkbox(*_args: object, **kwargs: object) -> str:
+        captured.update(kwargs)
+        return "question"
+
+    fake_questionary = SimpleNamespace(
+        Choice=lambda **kwargs: SimpleNamespace(**kwargs),
+        checkbox=fake_checkbox,
+    )
+    monkeypatch.setitem(sys.modules, "questionary", fake_questionary)
+    monkeypatch.setattr(cli, "_configure_questionary_checkbox_symbols", lambda: None)
+    monkeypatch.setattr(
+        cli,
+        "_ask_questionary_with_prefix_jumps",
+        lambda _question: [cast(list[SimpleNamespace], captured["choices"])[1].value],
+    )
+
+    selected = cli._prompt_grafana_dashboards(
+        (
+            cli.GrafanaDashboard(
+                uid="gamma",
+                title="Gamma Dashboard",
+                folder_uid="folder",
+                folder_title="Folder",
+            ),
+            cli.GrafanaDashboard(
+                uid="alpha",
+                title="alpha Dashboard",
+                folder_uid="folder",
+                folder_title="Folder",
+            ),
+            cli.GrafanaDashboard(
+                uid="beta",
+                title="Beta Dashboard",
+                folder_uid="folder",
+                folder_title="Folder",
+            ),
+        )
+    )
+
+    assert [dashboard.uid for dashboard in selected] == ["beta"]
+    assert [choice.title for choice in cast(list[SimpleNamespace], captured["choices"])] == [
+        "alpha Dashboard (alpha)",
+        "Beta Dashboard (beta)",
+        "Gamma Dashboard (gamma)",
+    ]
+    assert captured["use_jk_keys"] is False
+    assert captured["use_search_filter"] is True
+    assert "Type a letter to jump" in str(captured["instruction"])
+    assert "Ctrl-A toggles all" in str(captured["instruction"])
+
+
+def test_questionary_prefix_jump_keys_move_to_first_matching_choice() -> None:
+    class _FakeKeyBindings:
+        def __init__(self) -> None:
+            self.handlers: dict[str, Callable[[object], None]] = {}
+            self.calls: list[tuple[str, bool]] = []
+
+        def add(self, key: str, eager: bool = False):
+            self.calls.append((key, eager))
+
+            def _decorator(fn: Callable[[object], None]) -> Callable[[object], None]:
+                self.handlers[key] = fn
+                return fn
+
+            return _decorator
+
+    control = SimpleNamespace(
+        choices=[
+            SimpleNamespace(title="Alpha", disabled=False),
+            SimpleNamespace(title="Beta", disabled=False),
+            SimpleNamespace(title="Gamma", disabled=False),
+        ],
+        pointed_at=0,
+        is_selection_valid=lambda: True,
+    )
+    bindings = _FakeKeyBindings()
+    question = SimpleNamespace(
+        application=SimpleNamespace(
+            key_bindings=bindings,
+            layout=SimpleNamespace(
+                container=SimpleNamespace(children=[SimpleNamespace(content=control)])
+            ),
+        )
+    )
+
+    cli._register_questionary_prefix_jump_keys(question)
+
+    assert ("g", True) in bindings.calls
+    assert ("G", True) in bindings.calls
+    bindings.handlers["g"](SimpleNamespace(key_sequence=[SimpleNamespace(key="g")]))
+    assert control.pointed_at == 2
+    bindings.handlers["B"](SimpleNamespace(key_sequence=[SimpleNamespace(key="B")]))
+    assert control.pointed_at == 1
+    bindings.handlers["z"](SimpleNamespace(key_sequence=[SimpleNamespace(key="z")]))
+    assert control.pointed_at == 1
+    bindings.handlers["g"](SimpleNamespace(key_sequence=[]))
+    assert control.pointed_at == 1
+
+
+def test_collect_leaf_paths_skip_recursive_config_structures() -> None:
+    payload: dict[str, object] = {"name": "demo"}
+    payload["self"] = payload
+    values: list[object] = ["first"]
+    values.append(values)
+
+    assert cli._collect_scalar_leaf_paths(payload) == [("name",)]
+    assert cli._collect_promptable_leaf_paths(values) == [(0,)]
+
+
+def test_grafana_export_auth_candidates_suppress_bearer_warning_for_basic_auth(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_bearer_auth_candidates(**kwargs: object) -> list[object]:
+        captured.update(kwargs)
+        return []
+
+    monkeypatch.setenv("GRAFANA_PASSWORD", "secret")
+    monkeypatch.setattr(cli, "bearer_auth_candidates", fake_bearer_auth_candidates)
+
+    candidates = cli._grafana_export_auth_candidates(
+        token_env="",
+        username="admin",
+        password_env="GRAFANA_PASSWORD",
+    )
+
+    assert captured["on_warning"] is None
+    assert len(candidates) == 1
+    assert candidates[0].source == "Basic auth user admin"
+
+
+def test_grafana_command_attaches_local_dashboard_json_without_api_calls(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dashboard_file = tmp_path / "source-dashboard.json"
+    dashboard_file.write_text(
+        json.dumps(
+            {
+                "dashboard": {
+                    "id": 1,
+                    "version": 4,
+                    "uid": "local-dashboard",
+                    "title": "Local Dashboard",
+                    "panels": [{"datasource": {"type": "prometheus", "uid": "source-prometheus"}}],
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    catalog_path = tmp_path / "component_sources.yaml"
+    catalog_path.write_text("components:\n  apps: {}\n", encoding="utf-8")
+    output_dir = tmp_path / "dashboards"
+    captured: dict[str, object] = {}
+
+    def fail_api_call(*_args: object, **_kwargs: object) -> object:
+        raise AssertionError("local dashboard JSON mode must not call Grafana API helpers")
+
+    monkeypatch.setattr(cli, "bearer_auth_candidates", fail_api_call)
+    monkeypatch.setattr(cli, "list_folders", fail_api_call)
+    monkeypatch.setattr(cli, "list_dashboards", fail_api_call)
+    monkeypatch.setattr(cli, "dashboard_json", fail_api_call)
+    monkeypatch.setattr(
+        cli,
+        "resolve_component_sources_file",
+        lambda *, explicit=None: explicit or catalog_path,
+    )
+    monkeypatch.setattr(
+        cli,
+        "catalog_datasources",
+        lambda path: (
+            captured.__setitem__("catalog_path", path),
+            (
+                "grafana",
+                (
+                    cli.CatalogDatasource(
+                        name="Nebius User Metrics",
+                        uid="nebius-user-metrics",
+                        datasource_type="prometheus",
+                    ),
+                ),
+            ),
+        )[1],
+    )
+
+    def fake_attach_dashboards_to_catalog(
+        component_sources_path: Path,
+        *,
+        grafana_component_id: str,
+        exports: object,
+        overwrite: bool,
+    ) -> None:
+        captured["attach_path"] = component_sources_path
+        captured["grafana_component_id"] = grafana_component_id
+        captured["exports"] = tuple(exports)
+        captured["overwrite"] = overwrite
+
+    monkeypatch.setattr(cli, "attach_dashboards_to_catalog", fake_attach_dashboards_to_catalog)
+
+    result = runner.invoke(
+        cli.app,
+        [
+            "grafana",
+            "--dashboard-json",
+            str(dashboard_file),
+            "--output-dir",
+            str(output_dir),
+            "--attach",
+            "--component-sources",
+            str(catalog_path),
+            "--dashboard-folder",
+            "mk8s",
+            "--datasource",
+            "Nebius User Metrics",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    exported = output_dir / "mk8s" / "local-dashboard.json"
+    assert json.loads(exported.read_text(encoding="utf-8")) == {
+        "uid": "local-dashboard",
+        "title": "Local Dashboard",
+        "panels": [{"datasource": {"type": "prometheus", "uid": "nebius-user-metrics"}}],
+    }
+    assert captured["catalog_path"] == catalog_path
+    assert captured["attach_path"] == catalog_path
+    assert captured["grafana_component_id"] == "grafana"
+    assert captured["overwrite"] is False
+    exports = captured["exports"]
+    assert len(exports) == 1
+    assert exports[0].dashboard_key == "local-dashboard"
+    assert exports[0].catalog_folder == "mk8s"
+    assert exports[0].datasource_name == "Nebius User Metrics"
+    assert exports[0].path == exported
+    assert "Attached 1 dashboard(s)" in _plain_output(result.output)
+
+
+def test_grafana_command_exports_multiple_local_dashboard_json_without_catalog_calls(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    first_dashboard = tmp_path / "cluster.json"
+    first_dashboard.write_text(
+        json.dumps(
+            {
+                "dashboard": {
+                    "id": 1,
+                    "version": 2,
+                    "uid": "cluster",
+                    "title": "Cluster",
+                    "panels": [],
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    second_dashboard = tmp_path / "nodes.json"
+    second_dashboard.write_text(
+        json.dumps({"id": 3, "version": 4, "uid": "nodes", "title": "Nodes", "panels": []}),
+        encoding="utf-8",
+    )
+    output_dir = tmp_path / "dashboards"
+
+    def fail_call(*_args: object, **_kwargs: object) -> object:
+        raise AssertionError("local export-only mode must not call API or catalog helpers")
+
+    monkeypatch.setattr(cli, "bearer_auth_candidates", fail_call)
+    monkeypatch.setattr(cli, "list_folders", fail_call)
+    monkeypatch.setattr(cli, "list_dashboards", fail_call)
+    monkeypatch.setattr(cli, "dashboard_json", fail_call)
+    monkeypatch.setattr(cli, "resolve_component_sources_file", fail_call)
+    monkeypatch.setattr(cli, "catalog_datasources", fail_call)
+    monkeypatch.setattr(cli, "attach_dashboards_to_catalog", fail_call)
+
+    result = runner.invoke(
+        cli.app,
+        [
+            "grafana",
+            "--dashboard-json",
+            str(first_dashboard),
+            "--dashboard-json",
+            str(second_dashboard),
+            "--output-dir",
+            str(output_dir),
+            "--dashboard-folder",
+            "mk8s",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert json.loads((output_dir / "mk8s" / "cluster.json").read_text(encoding="utf-8")) == {
+        "uid": "cluster",
+        "title": "Cluster",
+        "panels": [],
+    }
+    assert json.loads((output_dir / "mk8s" / "nodes.json").read_text(encoding="utf-8")) == {
+        "uid": "nodes",
+        "title": "Nodes",
+        "panels": [],
+    }
+    assert "Attached" not in _plain_output(result.output)
+
+
+def test_grafana_command_overwrite_applies_to_local_json_and_catalog_attach(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    dashboard_file = tmp_path / "dashboard.json"
+    dashboard_file.write_text(
+        json.dumps({"uid": "local-dashboard", "title": "Local Dashboard", "panels": []}),
+        encoding="utf-8",
+    )
+    output_dir = tmp_path / "dashboards"
+    existing = output_dir / "mk8s" / "local-dashboard.json"
+    existing.parent.mkdir(parents=True)
+    existing.write_text('{"uid":"old"}\n', encoding="utf-8")
+    catalog_path = tmp_path / "component_sources.yaml"
+    catalog_path.write_text("components:\n  apps: {}\n", encoding="utf-8")
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        cli,
+        "resolve_component_sources_file",
+        lambda *, explicit=None: explicit or catalog_path,
+    )
+    monkeypatch.setattr(
+        cli,
+        "catalog_datasources",
+        lambda _path: (
+            "grafana",
+            (
+                cli.CatalogDatasource(
+                    name="Nebius User Metrics",
+                    uid="nebius-user-metrics",
+                    datasource_type="prometheus",
+                ),
+            ),
+        ),
+    )
+
+    def fake_attach_dashboards_to_catalog(
+        _component_sources_path: Path,
+        *,
+        grafana_component_id: str,
+        exports: object,
+        overwrite: bool,
+    ) -> None:
+        captured["grafana_component_id"] = grafana_component_id
+        captured["exports"] = tuple(exports)
+        captured["overwrite"] = overwrite
+
+    monkeypatch.setattr(cli, "attach_dashboards_to_catalog", fake_attach_dashboards_to_catalog)
+
+    result = runner.invoke(
+        cli.app,
+        [
+            "grafana",
+            "--dashboard-json",
+            str(dashboard_file),
+            "--output-dir",
+            str(output_dir),
+            "--attach",
+            "--component-sources",
+            str(catalog_path),
+            "--dashboard-folder",
+            "mk8s",
+            "--datasource",
+            "Nebius User Metrics",
+            "--overwrite",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert json.loads(existing.read_text(encoding="utf-8")) == {
+        "uid": "local-dashboard",
+        "title": "Local Dashboard",
+        "panels": [],
+    }
+    assert captured["grafana_component_id"] == "grafana"
+    assert captured["overwrite"] is True
+    exports = captured["exports"]
+    assert len(exports) == 1
+    assert exports[0].path == existing
+
+
+def test_grafana_command_requires_exactly_one_dashboard_source(tmp_path: Path) -> None:
+    dashboard_file = tmp_path / "dashboard.json"
+    dashboard_file.write_text(json.dumps({"uid": "local", "title": "Local"}), encoding="utf-8")
+
+    missing_result = runner.invoke(cli.app, ["grafana"])
+    both_result = runner.invoke(
+        cli.app,
+        [
+            "grafana",
+            "--export-dashboard",
+            "https://grafana.example/",
+            "--dashboard-json",
+            str(dashboard_file),
+        ],
+    )
+    local_with_folder_uid_result = runner.invoke(
+        cli.app,
+        [
+            "grafana",
+            "--dashboard-json",
+            str(dashboard_file),
+            "--folder-uid",
+            "folder",
+        ],
+    )
+    local_with_dashboard_uid_result = runner.invoke(
+        cli.app,
+        [
+            "grafana",
+            "--dashboard-json",
+            str(dashboard_file),
+            "--dashboard-uid",
+            "dashboard",
+        ],
+    )
+
+    assert missing_result.exit_code != 0
+    assert "Pass exactly one of --export-dashboard or --dashboard-json" in _plain_output(
+        missing_result.output
+    )
+    assert both_result.exit_code != 0
+    assert "Pass exactly one of --export-dashboard or --dashboard-json" in _plain_output(
+        both_result.output
+    )
+    assert local_with_folder_uid_result.exit_code != 0
+    assert (
+        "--folder-uid and --dashboard-uid are only valid with --export-dashboard"
+        in _plain_output(local_with_folder_uid_result.output)
+    )
+    assert local_with_dashboard_uid_result.exit_code != 0
+    assert (
+        "--folder-uid and --dashboard-uid are only valid with --export-dashboard"
+        in _plain_output(local_with_dashboard_uid_result.output)
+    )
 
 
 def test_validate_dashboards_command_reports_live_fit(
@@ -2181,8 +2970,7 @@ def test_kube_context_name_for_target_prefers_matching_current_context(
     monkeypatch.setenv("KUBECONFIG", str(kubeconfig))
 
     assert (
-        cli._kube_context_name_for_target("cluster1")
-        == "nebius-cluster1-mk8scluster-new-external"
+        cli._kube_context_name_for_target("cluster1") == "nebius-cluster1-mk8scluster-new-external"
     )
     assert cli._kube_context_name_for_target("cluster2") == (
         "nebius-cluster2-mk8scluster-other-external"
@@ -2428,7 +3216,8 @@ def test_deploy_command_passes_auto_auth_flag(
     assert "Important paths:" in output
     assert "No deploy-time validations were configured for this run." in output
     assert f"Deploy report: {fake_paths.inventory_dir / 'deploy-report.md'}" in output
-    assert f"Deploy completed from {fake_paths.generated_dir}" in output
+    assert "Deploy completed" in output
+    assert "Deploy completed from" not in output
     assert captured == {
         "config": "cfg",
         "paths": fake_paths,
@@ -2439,6 +3228,126 @@ def test_deploy_command_passes_auto_auth_flag(
         "requested_target_ref": None,
         "all_targets": False,
     }
+
+
+def test_deploy_footer_groups_target_validations_and_keeps_paths_concise(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_paths = _fake_paths(tmp_path)
+    fake_paths.inventory_dir.mkdir(parents=True, exist_ok=True)
+    validations = [
+        {
+            "kind": "mk8s_gpu_operator_readiness",
+            "name": "GPU stack readiness (cluster1)",
+            "report_file": "gpu-stack-readiness-report-cluster1.json",
+            "target_ref": "cluster1",
+        },
+        {
+            "kind": "mk8s_nccl",
+            "name": "NCCL test (cluster1)",
+            "report_file": "nccl-test-report-cluster1.json",
+            "target_ref": "cluster1",
+        },
+        {
+            "kind": "mk8s_nccl",
+            "name": "NCCL test (cluster2)",
+            "report_file": "nccl-test-report-cluster2.json",
+            "target_ref": "cluster2",
+        },
+    ]
+    (fake_paths.inventory_dir / "gpu-stack-readiness-report-cluster1.json").write_text(
+        json.dumps(
+            {
+                "passed": True,
+                "target_ref": "cluster1",
+                "gpu_operator": {"gpu_nodes": [{"name": "gpu-a"}, {"name": "gpu-b"}]},
+                "network_operator": {"required": False},
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (fake_paths.inventory_dir / "nccl-test-report-cluster1.json").write_text(
+        json.dumps(
+            {
+                "passed": True,
+                "target_ref": "cluster1",
+                "launcher_phase": "Succeeded",
+                "transport_label": "Socket/TCPIP",
+                "avg_bus_bandwidth_gbps": 1.2,
+                "threshold_enforced": False,
+                "selected_worker_node_count": 2,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (fake_paths.inventory_dir / "nccl-test-report-cluster2.json").write_text(
+        json.dumps(
+            {
+                "passed": True,
+                "target_ref": "cluster2",
+                "launcher_phase": "Succeeded",
+                "transport_label": "RDMA verbs (IB/RoCE)",
+                "avg_bus_bandwidth_gbps": 467.7,
+                "threshold_gbps": 300.0,
+                "threshold_enforced": True,
+                "selected_worker_node_count": 1,
+                "gpudirect_mode": "dma-buf",
+                "nccl_dmabuf_env_name": "NCCL_DMABUF_ENABLE",
+                "nccl_dmabuf_enable": "1",
+                "nccl_dmabuf_enable_source": "explicit MPI environment",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    report = cli.build_deploy_validation_report(
+        validations,
+        inventory_dir=fake_paths.inventory_dir,
+    )
+    printed: list[str] = []
+
+    monkeypatch.setattr(cli, "wireguard_access_command_hints", lambda *_args: [])
+    monkeypatch.setattr(cli, "ssh_jump_access_hints", lambda *_args: [])
+    monkeypatch.setattr(
+        cli.console,
+        "print",
+        lambda message="", *args, **kwargs: printed.append(str(message)),
+    )
+
+    cli._print_deploy_command_footer(
+        {},
+        fake_paths,
+        cli.DeployRunSummary(validation_report=report),
+        succeeded=True,
+    )
+
+    assert printed == [
+        "",
+        "[bold]Deployment summary[/bold]",
+        "[bright_magenta]Validation:[/bright_magenta]",
+        "  Overall: [green]PASS[/green] (3/3 completed, 0 not run)",
+        "  cluster1:",
+        "    [green]PASS[/green] GPU stack readiness: GPU Operator ready on 2 GPU nodes.",
+        (
+            "    [green]PASS[/green] NCCL test: Succeeded; Socket/TCPIP 1.2 Gbps "
+            "across 2 workers; RDMA threshold not enforced."
+        ),
+        "  cluster2:",
+        (
+            "    [green]PASS[/green] NCCL test: Succeeded; RDMA verbs (IB/RoCE) "
+            "467.7 Gbps (threshold 300.0) across 1 worker; DMA-BUF enabled."
+        ),
+        "[bright_magenta]Copy/paste commands:[/bright_magenta]",
+        "  No immediate access or follow-up commands were derived.",
+        "[bright_magenta]Important paths:[/bright_magenta]",
+        f"  Generated bundle: {fake_paths.generated_dir}",
+        f"  Deploy report: {fake_paths.inventory_dir / 'deploy-report.md'}",
+        "[green]Deploy completed[/green]",
+    ]
+    assert all("Validation JSON:" not in line for line in printed)
+    assert all("Generated manifest:" not in line for line in printed)
 
 
 def test_deploy_command_prints_ssh_jumphost_access_hint(
@@ -2627,7 +3536,8 @@ def test_deploy_command_accepts_config_yaml_target(
     assert result.exit_code == 0, result.output
     assert captured["target"] == fake_paths.config_path
     output = _plain_output(result.output)
-    assert f"Deploy completed from {fake_paths.generated_dir}" in output
+    assert "Deploy completed" in output
+    assert "Deploy completed from" not in output
     assert f"Deploy report: {fake_paths.inventory_dir / 'deploy-report.md'}" in output
 
 
@@ -2775,7 +3685,7 @@ def test_destroy_command_confirmation_targets_infra_only_when_no_apps(
     )
 
 
-def test_destroy_command_confirmation_skips_flux_delete_when_cluster_destroy_covers_apps(
+def test_destroy_command_confirmation_deletes_apps_before_cluster_destroy(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fake_paths = _fake_paths(tmp_path)
@@ -2812,10 +3722,10 @@ def test_destroy_command_confirmation_skips_flux_delete_when_cluster_destroy_cov
     )
     assert captured["warning_text"] == (
         "Destroy will remove all rendered project resources represented by the generated "
-        "manifest by running Terraform destroy against the rendered infra bundle under "
-        f"{fake_paths.infra_dir}. Because this bundle destroys the handed-off cluster directly, "
-        "it will not delete the rendered app resources under "
-        f"{fake_paths.flux_dir} separately first."
+        "manifest by deleting rendered app resources from the handed-off MK8s target first "
+        "so Kubernetes finalizers and CSI cleanup can run, then running Terraform destroy "
+        f"against the rendered infra bundle under {fake_paths.infra_dir}. This generated bundle "
+        "still destroys the handed-off MK8s cluster directly after app teardown."
     )
 
 
@@ -2825,7 +3735,10 @@ def test_destroy_command_confirmation_deletes_flux_first_for_external_cluster_ap
     fake_paths = _fake_paths(tmp_path)
     captured: dict[str, object] = {}
     config = {"apps": {"charts": [{"id": "gateway-helm", "enabled": True}]}}
-    manifest = {"schema": "nebius-cxcli-generated/v1"}
+    manifest = {
+        "schema": "nebius-cxcli-generated/v1",
+        "deploy": {"targets": [_external_mk8s_target(fake_paths)]},
+    }
 
     monkeypatch.setattr(
         cli,
@@ -2844,13 +3757,13 @@ def test_destroy_command_confirmation_deletes_flux_first_for_external_cluster_ap
     assert "No changes applied." in _plain_output(result.output)
     assert (
         captured["prompt_text"]
-        == "Continue and destroy all rendered app and infra resources for this project?"
+        == "Continue and delete rendered app resources and destroy only cxcli-owned infra?"
     )
     assert captured["warning_text"] == (
-        "Destroy will remove all rendered project resources represented by the generated "
-        "manifest by deleting the rendered app resources from the target cluster using "
-        f"{fake_paths.flux_dir} first and then running Terraform destroy against the rendered "
-        f"infra bundle under {fake_paths.infra_dir}."
+        "Destroy will delete the rendered app resources from the external MK8s target first. "
+        "The existing MK8s cluster and node groups are external to cxcli and will not be "
+        f"destroyed. Any cxcli-managed infra under {fake_paths.infra_dir} is still destroyed "
+        "after app teardown."
     )
 
 
@@ -2859,7 +3772,7 @@ def test_run_deploy_preflight_runs_strict_quota_backend_terraform_and_flux_valid
 ) -> None:
     fake_paths = _fake_paths(tmp_path)
     fake_paths.infra_dir.mkdir(parents=True, exist_ok=True)
-    config = {"apps": {"charts": [{"id": "gateway-helm", "enabled": True}]}}
+    config = _config_with_enabled_mk8s(charts=[{"id": "gateway-helm", "enabled": True}])
     calls: list[tuple[object, ...]] = []
 
     monkeypatch.setattr(
@@ -2943,7 +3856,7 @@ def test_run_deploy_preflight_skips_flux_validation_when_no_apps_enabled(
 ) -> None:
     fake_paths = _fake_paths(tmp_path)
     fake_paths.infra_dir.mkdir(parents=True, exist_ok=True)
-    config = {"apps": {"charts": []}}
+    config = _config_with_enabled_mk8s()
     calls: list[tuple[object, ...]] = []
 
     monkeypatch.setattr(
@@ -3285,9 +4198,8 @@ def test_run_deploy_preflight_prompts_for_mysterybox_values_before_progress(
     assert ("progress_run", "mysterybox-payload-values") in events
     assert any(
         event[0] == "validate_payload"
-        and event[1]["TF_VAR_mysterybox_payload_values"] == payload_env[
-            "TF_VAR_mysterybox_payload_values"
-        ]
+        and event[1]["TF_VAR_mysterybox_payload_values"]
+        == payload_env["TF_VAR_mysterybox_payload_values"]
         for event in events
         if isinstance(event, tuple)
     )
@@ -3538,14 +4450,20 @@ def test_managed_mk8s_quota_requirements_from_terraform_state_maps_generated_mod
     assert captured["instance_id"] == "mk8s-1"
     assert captured["context"] == "generated-bundle quota baseline"
     assert captured["inputs"] == {
-        "gpu_enabled": True,
-        "gpu_node_groups": 1,
-        "gpu_nodes_count_per_group": 2,
-        "gpu_nodes_platform": "gpu-h100-sxm",
-        "gpu_nodes_preset": "8gpu-128vcpu-1600gb",
-        "gpu_nodes_boot_disk_type": "NETWORK_SSD",
-        "gpu_nodes_boot_disk_size_gib": 200,
-        "infiniband_fabric": "fabric-6",
+        "gpu_clusters": {"state": {"infiniband_fabric": "fabric-6"}},
+        "node_groups": {
+            "state-0": {
+                "boot_disk": {
+                    "size_gibibytes": 200,
+                    "type": "NETWORK_SSD",
+                },
+                "gpu": True,
+                "gpu_cluster_key": "state",
+                "node_count": 2,
+                "platform": "gpu-h100-sxm",
+                "preset": "8gpu-128vcpu-1600gb",
+            }
+        },
     }
 
 
@@ -3586,10 +4504,20 @@ def test_validate_generated_mk8s_resource_name_preflight_passes_state_managed_na
                     "enabled": True,
                     "source": "../../platform-infra/modules/mk8s",
                     "inputs": {
-                        "parent_id": "project-123",
-                        "cluster_name": "cluster-a",
-                        "gpu_enabled": True,
-                        "infiniband_fabric": "fabric-1",
+                        "cluster": {
+                            "parent_id": "project-123",
+                            "cluster_name": "cluster-a",
+                        },
+                        "node_groups": {
+                            "worker": {
+                                "node_count": 1,
+                                "gpu": True,
+                                "platform": "gpu-h100-sxm",
+                                "preset": "8gpu-128vcpu-1600gb",
+                                "gpu_cluster_key": "workers",
+                            }
+                        },
+                        "gpu_clusters": {"workers": {"infiniband_fabric": "fabric-1"}},
                     },
                 }
             ]
@@ -3645,7 +4573,10 @@ def test_deploy_generated_artifacts_validates_before_apply_and_prepares_kube_env
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fake_paths = _fake_paths(tmp_path)
-    config = {"apps": {"charts": [{"id": "gateway-helm", "enabled": True, "instance_id": "mk8s"}]}}
+    config = {
+        "infra": {"components": [{"id": "mk8s", "instance_id": "mk8s", "enabled": True}]},
+        "apps": {"charts": [{"id": "gateway-helm", "enabled": True, "instance_id": "mk8s"}]},
+    }
     manifest = {
         "deploy": {
             "targets": [_mk8s_target(fake_paths)],
@@ -3744,21 +4675,102 @@ def test_deploy_generated_artifacts_validates_before_apply_and_prepares_kube_env
     ]
 
 
+def test_deploy_generated_artifacts_external_target_skips_terraform_apply(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_paths = _fake_paths(tmp_path)
+    config = {"apps": {"charts": [{"id": "gateway-helm", "enabled": True, "instance_id": "mk8s"}]}}
+    manifest = {
+        "deploy": {
+            "targets": [_external_mk8s_target(fake_paths)],
+            "validations": [],
+        }
+    }
+    calls: list[tuple[object, ...]] = []
+    messages: list[str] = []
+
+    monkeypatch.setattr(
+        cli,
+        "_run_deploy_preflight",
+        lambda config, paths, *, auto_auth_bootstrap, manifest=None: calls.append(
+            ("preflight", config, paths, auto_auth_bootstrap, manifest)
+        ),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_run_terraform_apply_with_status",
+        lambda *_args, **_kwargs: calls.append(("apply_with_status",)),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_prepare_cluster_handoff_kube_env",
+        lambda config, paths, *, stack, target=None, persist_local_kubeconfig=True, set_current_context=True: (
+            calls.append(("kube_env", target)) or {"KUBECONFIG": "/tmp/kubeconfig"}
+        ),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_report_cluster_nodes_status",
+        lambda *, extra_env, emit: calls.append(("cluster_status", extra_env)),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_apply_rendered_flux",
+        lambda paths, *, extra_env=None: calls.append(("flux", paths, extra_env)),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_warn_if_flux_gitops_not_bootstrapped",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        cli,
+        "write_inventory",
+        lambda config, paths, **kwargs: (
+            calls.append(("inventory", config, paths))
+            or SimpleNamespace(markdown=paths.inventory_dir / "deploy-report.md")
+        ),
+    )
+    monkeypatch.setattr(
+        cli.console,
+        "print",
+        lambda message, *args, **kwargs: messages.append(str(message)),
+    )
+
+    cli._deploy_generated_artifacts(
+        config,
+        fake_paths,
+        manifest,
+        auto_auth_bootstrap=True,
+        skip_validations=False,
+        skip_validation_kinds=set(),
+    )
+
+    assert ("apply_with_status",) not in calls
+    assert calls[:3] == [
+        ("preflight", config, fake_paths, True, manifest),
+        ("inventory", config, fake_paths),
+        ("kube_env", _external_mk8s_target(fake_paths)),
+    ]
+    assert ("cluster_status", {"KUBECONFIG": "/tmp/kubeconfig"}) in calls
+    assert ("flux", _target_paths(fake_paths), {"KUBECONFIG": "/tmp/kubeconfig"}) in calls
+    assert any("skipping Terraform apply" in item for item in messages)
+
+
 def test_deploy_generated_artifacts_recovers_mysterybox_versions_after_apply_failure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fake_paths = _fake_paths(tmp_path)
-    config: dict[str, object] = {}
+    config = _config_with_enabled_mk8s()
     manifest = {"deploy": {"targets": [], "validations": []}}
     calls: list[tuple[object, ...]] = []
 
     monkeypatch.setattr(
         cli,
         "_run_deploy_preflight",
-        lambda config, paths, *, auto_auth_bootstrap, manifest=None: calls.append(
-            ("preflight", auto_auth_bootstrap, manifest)
-        )
-        or {},
+        lambda config, paths, *, auto_auth_bootstrap, manifest=None: (
+            calls.append(("preflight", auto_auth_bootstrap, manifest)) or {}
+        ),
     )
 
     def _fake_apply(config, paths, **kwargs):
@@ -3868,17 +4880,7 @@ def test_deploy_generated_artifacts_without_apps_still_prepares_kube_env(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fake_paths = _fake_paths(tmp_path)
-    config = {
-        "apps": {"charts": []},
-        "client_info": {
-            "client_name": "client-a",
-            "nebius": {
-                "tenant_id": "tenant-123",
-                "project_id": "project-456",
-                "region_id": "eu-north1",
-            },
-        },
-    }
+    config = _config_with_enabled_mk8s()
     manifest = {
         "deploy": {
             "targets": [_mk8s_target(fake_paths)],
@@ -3972,17 +4974,7 @@ def test_deploy_generated_artifacts_with_multiple_handoffs_and_no_apps_refreshes
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fake_paths = _fake_paths(tmp_path)
-    config = {
-        "apps": {"charts": []},
-        "client_info": {
-            "client_name": "client-a",
-            "nebius": {
-                "tenant_id": "tenant-123",
-                "project_id": "project-456",
-                "region_id": "eu-north1",
-            },
-        },
-    }
+    config = _config_with_enabled_mk8s()
     manifest = {
         "deploy": {
             "targets": [
@@ -4076,21 +5068,221 @@ def test_deploy_generated_artifacts_with_multiple_handoffs_and_no_apps_refreshes
     ]
 
 
+def test_deploy_generated_artifacts_defaults_multi_target_apps_to_all_targets(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_paths = _fake_paths(tmp_path)
+    config = _config_with_enabled_mk8s(
+        charts=[
+            {"id": "gateway-helm", "enabled": True, "instance_id": "cluster1"},
+            {"id": "gateway-helm", "enabled": True, "instance_id": "cluster2"},
+        ]
+    )
+    manifest = {
+        "deploy": {
+            "targets": [
+                _mk8s_target(fake_paths, target_ref="cluster1"),
+                _mk8s_target(fake_paths, target_ref="cluster2"),
+            ],
+            "validations": [],
+        }
+    }
+    calls: list[tuple[object, ...]] = []
+
+    monkeypatch.setattr(
+        cli,
+        "_run_deploy_preflight",
+        lambda config, paths, *, auto_auth_bootstrap, manifest=None: calls.append(
+            ("preflight", config, paths, auto_auth_bootstrap, manifest)
+        ),
+    )
+    monkeypatch.setattr(cli, "_run_terraform_apply_with_status", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        cli,
+        "write_inventory",
+        lambda config, paths, **kwargs: (
+            calls.append(("inventory", config, paths, kwargs.get("validations")))
+            or SimpleNamespace(markdown=paths.inventory_dir / "deploy-report.md")
+        ),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_prepare_cluster_handoff_kube_env",
+        lambda config, paths, *, stack, target=None, persist_local_kubeconfig=True, set_current_context=True: (
+            calls.append(
+                (
+                    "kube_env",
+                    target,
+                    persist_local_kubeconfig,
+                    set_current_context,
+                )
+            )
+            or {"KUBECONFIG": f"/tmp/{target['target_ref']}.kubeconfig"}
+        ),
+    )
+    monkeypatch.setattr(cli, "_report_cluster_nodes_status", lambda *, extra_env, emit: None)
+    monkeypatch.setattr(
+        cli,
+        "_apply_rendered_flux",
+        lambda paths, *, extra_env=None: calls.append(("flux", paths.flux_dir, extra_env)),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_warn_if_flux_gitops_not_bootstrapped",
+        lambda config, paths, *, extra_env=None, target_ref=None, **_kwargs: calls.append(
+            ("warn_bootstrap", target_ref, paths.flux_dir, extra_env)
+        ),
+    )
+
+    cli._deploy_generated_artifacts(
+        config,
+        fake_paths,
+        manifest,
+        auto_auth_bootstrap=True,
+        skip_validations=False,
+        skip_validation_kinds=set(),
+    )
+
+    assert ("preflight", config, fake_paths, True, manifest) in calls
+    assert (
+        "kube_env",
+        _mk8s_target(fake_paths, target_ref="cluster1"),
+        True,
+        False,
+    ) in calls
+    assert (
+        "kube_env",
+        _mk8s_target(fake_paths, target_ref="cluster2"),
+        True,
+        False,
+    ) in calls
+    assert (
+        "flux",
+        flux_target_dir(fake_paths, "cluster1"),
+        {"KUBECONFIG": "/tmp/cluster1.kubeconfig"},
+    ) in calls
+    assert (
+        "flux",
+        flux_target_dir(fake_paths, "cluster2"),
+        {"KUBECONFIG": "/tmp/cluster2.kubeconfig"},
+    ) in calls
+
+
+def test_deploy_generated_artifacts_prints_mk8s_gpu_warning_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_paths = _fake_paths(tmp_path)
+    config = {"apps": {"charts": []}}
+    manifest = {
+        "runtime_config": config,
+        "deploy": {"targets": [], "validations": []},
+    }
+    printed: list[str] = []
+
+    monkeypatch.setattr(
+        cli,
+        "mk8s_gpu_validation_warnings",
+        lambda _config: ("deploy warning only once",),
+    )
+
+    def _fake_preflight(config, paths, *, auto_auth_bootstrap, manifest=None):
+        cli._print_mk8s_gpu_validation_warnings(config)
+        return {}
+
+    monkeypatch.setattr(cli, "_run_deploy_preflight", _fake_preflight)
+    monkeypatch.setattr(
+        cli,
+        "write_inventory",
+        lambda config, paths, **kwargs: SimpleNamespace(
+            markdown=paths.inventory_dir / "deploy-report.md"
+        ),
+    )
+    monkeypatch.setattr(
+        cli.console,
+        "print",
+        lambda message="", *args, **kwargs: printed.append(str(message)),
+    )
+
+    cli._deploy_generated_artifacts(
+        config,
+        fake_paths,
+        manifest,
+        auto_auth_bootstrap=True,
+        skip_validations=False,
+        skip_validation_kinds=set(),
+    )
+
+    assert sum("deploy warning only once" in item for item in printed) == 1
+
+
+def test_print_mk8s_gpu_validation_warnings_includes_soperator_child_chart_warnings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = {
+        "apps": {
+            "charts": [
+                {
+                    "id": "soperator",
+                    "instance_id": "bench",
+                    "target_ref": "bench",
+                    "enabled": True,
+                    "values": {
+                        "soperator-activechecks": {"enabled": True},
+                        "soperator-dcgm-exporter": {"enabled": True},
+                    },
+                },
+                {
+                    "id": "soperator",
+                    "instance_id": "checks-only",
+                    "target_ref": "checks-only",
+                    "enabled": True,
+                    "values": {
+                        "soperator-checks": {"enabled": True},
+                        "soperator-activechecks": {"enabled": False},
+                    },
+                },
+                {
+                    "id": "soperator",
+                    "instance_id": "rebooter-enabled",
+                    "target_ref": "rebooter-enabled",
+                    "enabled": True,
+                    "values": {
+                        "rebooter": {"enabled": True},
+                    },
+                },
+            ]
+        }
+    }
+    printed: list[str] = []
+    monkeypatch.setattr(
+        cli.console,
+        "print",
+        lambda message="", *args, **kwargs: printed.append(str(message)),
+    )
+
+    cli._print_mk8s_gpu_validation_warnings(payload)
+
+    joined = "\n".join(printed)
+    assert "ActiveChecks are enabled for target bench" in joined
+    assert "not production training clusters" in joined
+    assert "checks controller is enabled for target checks-only" in joined
+    assert "does not run GPU benchmarks by itself" in joined
+    assert "NebiusMaintenanceScheduled" in joined
+    assert "graceful maintenance drain/node handoff" in joined
+    assert "SlurmNodeReboot" in joined
+    assert "Soperator-managed node maintenance automation" in joined
+    assert "NodeConfigurator rebooter is enabled for target rebooter-enabled" in joined
+    assert "privileged host-level helper" in joined
+    assert "actual host reboot happens only after SlurmNodeReboot" in joined
+    assert "Soperator DCGM job-mapping exporter is enabled for target bench" in joined
+    assert "NVIDIA GPU Operator DCGM exporter plus the Nebius Observability Agent" in joined
+
+
 def test_deploy_generated_artifacts_runs_manifest_gpu_validations(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fake_paths = _fake_paths(tmp_path)
-    config = {
-        "apps": {"charts": []},
-        "client_info": {
-            "client_name": "client-a",
-            "nebius": {
-                "tenant_id": "tenant-123",
-                "project_id": "project-456",
-                "region_id": "eu-north1",
-            },
-        },
-    }
+    config = _config_with_enabled_mk8s()
     manifest = {
         "deploy": {
             "targets": [_mk8s_target(fake_paths)],
@@ -4199,17 +5391,7 @@ def test_deploy_generated_artifacts_rejects_manifest_missing_deploy_validations(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fake_paths = _fake_paths(tmp_path)
-    config = {
-        "apps": {"charts": []},
-        "client_info": {
-            "client_name": "client-a",
-            "nebius": {
-                "tenant_id": "tenant-123",
-                "project_id": "project-456",
-                "region_id": "eu-north1",
-            },
-        },
-    }
+    config = _config_with_enabled_mk8s()
     manifest = {"deploy": {"targets": [_mk8s_target(fake_paths)]}}
     monkeypatch.setattr(cli, "_run_deploy_preflight", lambda *_args, **_kwargs: None)
 
@@ -4231,17 +5413,7 @@ def test_deploy_generated_artifacts_rejects_manifest_missing_deploy_section(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fake_paths = _fake_paths(tmp_path)
-    config = {
-        "apps": {"charts": []},
-        "client_info": {
-            "client_name": "client-a",
-            "nebius": {
-                "tenant_id": "tenant-123",
-                "project_id": "project-456",
-                "region_id": "eu-north1",
-            },
-        },
-    }
+    config = _config_with_enabled_mk8s()
     manifest = {"schema": "nebius-cxcli-generated/v1"}
     monkeypatch.setattr(cli, "_run_deploy_preflight", lambda *_args, **_kwargs: None)
 
@@ -4263,17 +5435,7 @@ def test_deploy_generated_artifacts_updates_validation_spinner_when_terminal(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fake_paths = _fake_paths(tmp_path)
-    config = {
-        "apps": {"charts": []},
-        "client_info": {
-            "client_name": "client-a",
-            "nebius": {
-                "tenant_id": "tenant-123",
-                "project_id": "project-456",
-                "region_id": "eu-north1",
-            },
-        },
-    }
+    config = _config_with_enabled_mk8s()
     manifest = {
         "deploy": {
             "targets": [_mk8s_target(fake_paths)],
@@ -4390,21 +5552,100 @@ def test_deploy_generated_artifacts_updates_validation_spinner_when_terminal(
     assert printed == []
 
 
+def test_deploy_generated_artifacts_default_all_targets_reports_all_validations(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_paths = _fake_paths(tmp_path)
+    config = _config_with_enabled_mk8s()
+    cluster1_validation = {
+        "kind": "mk8s_gpu_visibility",
+        "name": "GPU Visibility test (cluster1)",
+        "namespace": "gpu-validation",
+        "report_file": "gpu-visibility-report-cluster1.json",
+        "target_ref": "cluster1",
+    }
+    cluster2_validation = {
+        "kind": "mk8s_gpu_visibility",
+        "name": "GPU Visibility test (cluster2)",
+        "namespace": "gpu-validation",
+        "report_file": "gpu-visibility-report-cluster2.json",
+        "target_ref": "cluster2",
+    }
+    manifest = {
+        "deploy": {
+            "targets": [
+                _mk8s_target(fake_paths, target_ref="cluster1"),
+                _mk8s_target(fake_paths, target_ref="cluster2"),
+            ],
+            "validations": [cluster1_validation, cluster2_validation],
+        }
+    }
+
+    monkeypatch.setattr(cli, "_run_deploy_preflight", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(cli, "_run_terraform_apply_with_status", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(cli, "write_inventory", write_inventory_artifacts)
+    monkeypatch.setattr(
+        cli,
+        "_prepare_cluster_handoff_kube_env",
+        lambda config, paths, *, stack, target=None, **_kwargs: {
+            "KUBECONFIG": f"/tmp/{target['target_ref']}.kubeconfig"
+        },
+    )
+    monkeypatch.setattr(cli, "_report_cluster_nodes_status", lambda *, extra_env, emit: None)
+
+    validation_calls: list[tuple[list[dict[str, object]], dict[str, str] | None]] = []
+
+    def _fake_run_mk8s_gpu_validations(
+        validations: list[dict[str, object]],
+        *,
+        inventory_dir: Path,
+        extra_env: dict[str, str] | None,
+        emit=None,
+    ) -> list[Path]:
+        validation_calls.append((validations, extra_env))
+        inventory_dir.mkdir(parents=True, exist_ok=True)
+        written: list[Path] = []
+        for validation in validations:
+            report_path = inventory_dir / str(validation["report_file"])
+            report_path.write_text(
+                json.dumps({"passed": True, "summary": str(validation["name"])}) + "\n",
+                encoding="utf-8",
+            )
+            written.append(report_path)
+        return written
+
+    monkeypatch.setattr(cli, "run_mk8s_gpu_validations", _fake_run_mk8s_gpu_validations)
+
+    @contextmanager
+    def _fake_status(_message: str, **_kwargs: object):
+        yield SimpleNamespace(update=lambda *_args, **_kwargs: None)
+
+    monkeypatch.setattr(cli.console, "status", _fake_status)
+    monkeypatch.setattr(cli.console, "print", lambda *_args, **_kwargs: None)
+
+    cli._deploy_generated_artifacts(
+        config,
+        fake_paths,
+        manifest,
+        auto_auth_bootstrap=True,
+        skip_validations=False,
+        skip_validation_kinds=set(),
+    )
+
+    assert validation_calls == [
+        ([cluster1_validation], {"KUBECONFIG": "/tmp/cluster1.kubeconfig"}),
+        ([cluster2_validation], {"KUBECONFIG": "/tmp/cluster2.kubeconfig"}),
+    ]
+    markdown = (fake_paths.inventory_dir / "deploy-report.md").read_text(encoding="utf-8")
+    assert "GPU Visibility test (cluster1)" in markdown
+    assert "GPU Visibility test (cluster2)" in markdown
+
+
 def test_deploy_generated_artifacts_target_report_excludes_unselected_validations(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fake_paths = _fake_paths(tmp_path)
-    config = {
-        "apps": {"charts": []},
-        "client_info": {
-            "client_name": "client-a",
-            "nebius": {
-                "tenant_id": "tenant-123",
-                "project_id": "project-456",
-                "region_id": "eu-north1",
-            },
-        },
-    }
+    config = _config_with_enabled_mk8s()
     cluster1_validation = {
         "kind": "mk8s_gpu_visibility",
         "name": "GPU Visibility test (cluster1)",
@@ -4506,17 +5747,7 @@ def test_deploy_generated_artifacts_keeps_required_mysterybox_validation_when_sk
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fake_paths = _fake_paths(tmp_path)
-    config = {
-        "apps": {"charts": []},
-        "client_info": {
-            "client_name": "client-a",
-            "nebius": {
-                "tenant_id": "tenant-123",
-                "project_id": "project-456",
-                "region_id": "eu-north1",
-            },
-        },
-    }
+    config = _config_with_enabled_mk8s()
     optional_validation = {
         "kind": "mk8s_gpu_visibility",
         "name": "GPU Visibility test",
@@ -4628,17 +5859,7 @@ def test_deploy_generated_artifacts_prints_validation_phase_lines_when_console_i
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fake_paths = _fake_paths(tmp_path)
-    config = {
-        "apps": {"charts": []},
-        "client_info": {
-            "client_name": "client-a",
-            "nebius": {
-                "tenant_id": "tenant-123",
-                "project_id": "project-456",
-                "region_id": "eu-north1",
-            },
-        },
-    }
+    config = _config_with_enabled_mk8s()
     manifest = {
         "deploy": {
             "targets": [_mk8s_target(fake_paths)],
@@ -4735,17 +5956,7 @@ def test_deploy_generated_artifacts_writes_summary_even_when_validation_fails(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fake_paths = _fake_paths(tmp_path)
-    config = {
-        "apps": {"charts": []},
-        "client_info": {
-            "client_name": "client-a",
-            "nebius": {
-                "tenant_id": "tenant-123",
-                "project_id": "project-456",
-                "region_id": "eu-north1",
-            },
-        },
-    }
+    config = _config_with_enabled_mk8s()
     manifest = {
         "deploy": {
             "targets": [_mk8s_target(fake_paths)],
@@ -4833,18 +6044,17 @@ def test_deploy_generated_artifacts_writes_summary_even_when_validation_fails(
     assert printed == [
         "",
         "[bold]Deployment summary[/bold]",
-        "Validation:",
-        "  Overall: FAIL (1/2 completed, 1 not run)",
-        "  FAIL GPU stack readiness: GPU Operator ready on 0 Ready GPU node(s).",
-        "  NOT RUN GPU Visibility test: No deploy validation results recorded yet.",
-        "Copy/paste commands:",
+        "[bright_magenta]Validation:[/bright_magenta]",
+        "  Overall: [red]FAIL[/red] (1/2 completed, 1 not run)",
+        "  mk8s:",
+        "    [red]FAIL[/red] GPU stack readiness: GPU Operator ready on 0 GPU nodes.",
+        "    NOT RUN GPU Visibility test: No deploy validation results recorded yet.",
+        "[bright_magenta]Copy/paste commands:[/bright_magenta]",
         "  No immediate access or follow-up commands were derived.",
-        "Important paths:",
+        "[bright_magenta]Important paths:[/bright_magenta]",
         f"  Generated bundle: {fake_paths.generated_dir}",
         f"  Deploy report: {fake_paths.inventory_dir / 'deploy-report.md'}",
-        f"  Generated manifest: {fake_paths.generated_dir / 'nebius-cxcli-manifest.json'}",
-        f"  Validation JSON: {fake_paths.inventory_dir / 'gpu-stack-readiness-report.json'}",
-        f"Deploy failed from {fake_paths.generated_dir}",
+        "[red]Deploy failed[/red]",
     ]
 
 
@@ -4927,8 +6137,8 @@ def test_destroy_generated_artifacts_destroys_flux_before_terraform(
     monkeypatch.setattr(
         cli,
         "_destroy_rendered_flux_bundle",
-        lambda current_config, paths, loaded_manifest: calls.append(
-            ("destroy_flux", current_config, paths, loaded_manifest)
+        lambda current_config, paths, loaded_manifest, **kwargs: calls.append(
+            ("destroy_flux", current_config, paths, loaded_manifest, kwargs)
         ),
     )
     monkeypatch.setattr(
@@ -4959,7 +6169,7 @@ def test_destroy_generated_artifacts_destroys_flux_before_terraform(
 
     assert calls == [
         ("backend", config, True),
-        ("destroy_flux", config, fake_paths, manifest),
+        ("destroy_flux", config, fake_paths, manifest, {"all_targets": True}),
         (
             "destroy_tf",
             config,
@@ -4978,6 +6188,342 @@ def test_destroy_generated_artifacts_destroys_flux_before_terraform(
             ],
         ),
     ]
+
+
+def test_destroy_rendered_flux_bundle_deletes_post_flux_before_flux(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_paths = _fake_paths(tmp_path)
+    config = {"apps": {"charts": [{"id": "soperator", "enabled": True}]}}
+    calls: list[tuple[str, ProjectPaths]] = []
+
+    monkeypatch.setattr(
+        cli,
+        "_delete_post_flux_manifests",
+        lambda paths, *, env: calls.append(("post_flux", paths)),
+    )
+    monkeypatch.setattr(
+        cli,
+        "delete_rendered_flux",
+        lambda paths, *, extra_env=None, emit=None: calls.append(("flux", paths)),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_delete_rendered_flux_namespaces",
+        lambda paths, *, env: calls.append(("namespaces", paths)),
+    )
+
+    cli._destroy_rendered_flux_bundle(config, fake_paths, {})
+
+    assert calls == [
+        ("post_flux", fake_paths),
+        ("flux", fake_paths),
+        ("namespaces", fake_paths),
+    ]
+
+
+def test_destroy_generated_artifacts_deletes_all_target_flux_before_terraform(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_paths = _fake_paths(tmp_path)
+    config = {
+        "infra": {"components": [{"id": "mk8s", "enabled": True, "inputs": {}}]},
+        "apps": {"charts": [{"id": "gateway-helm", "enabled": True}]},
+    }
+    manifest = {
+        "schema": "nebius-cxcli-generated/v1",
+        "deploy": {
+            "targets": [
+                _mk8s_target(fake_paths, target_ref="cluster-a"),
+                _mk8s_target(fake_paths, target_ref="cluster-b"),
+            ]
+        },
+    }
+    calls: list[tuple[str, str | None]] = []
+
+    def _fake_prepare_cluster_handoff_kube_env(
+        _config: object,
+        _paths: ProjectPaths,
+        *,
+        stack: ExitStack,
+        target: Mapping[str, object],
+        persist_local_kubeconfig: bool,
+    ) -> dict[str, str]:
+        assert persist_local_kubeconfig is False
+        stack.callback(lambda: None)
+        return {"TARGET_REF": str(target["target_ref"])}
+
+    monkeypatch.setattr(cli, "_ensure_terraform_backend_ready", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        cli,
+        "_prepare_cluster_handoff_kube_env",
+        _fake_prepare_cluster_handoff_kube_env,
+    )
+    monkeypatch.setattr(
+        cli,
+        "_delete_post_flux_manifests",
+        lambda _paths, *, env: calls.append(("post_flux", env.get("TARGET_REF"))),
+    )
+    monkeypatch.setattr(
+        cli,
+        "delete_rendered_flux",
+        lambda _paths, *, extra_env=None, emit=None: calls.append(
+            ("flux", (extra_env or {}).get("TARGET_REF"))
+        ),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_delete_rendered_flux_namespaces",
+        lambda _paths, *, env: calls.append(("namespaces", env.get("TARGET_REF"))),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_run_terraform_destroy_with_recovery",
+        lambda *_args, **_kwargs: calls.append(("terraform", None)),
+    )
+    monkeypatch.setattr(cli.console, "print", lambda *_args, **_kwargs: None)
+
+    cli._destroy_generated_artifacts(
+        config,
+        fake_paths,
+        manifest,
+        auto_auth_bootstrap=True,
+        yes=True,
+    )
+
+    assert calls == [
+        ("post_flux", "cluster-a"),
+        ("flux", "cluster-a"),
+        ("namespaces", "cluster-a"),
+        ("post_flux", "cluster-b"),
+        ("flux", "cluster-b"),
+        ("namespaces", "cluster-b"),
+        ("terraform", None),
+    ]
+
+
+def test_destroy_rendered_flux_bundle_attempts_remaining_targets_after_target_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_paths = _fake_paths(tmp_path)
+    config = {"apps": {"charts": [{"id": "gateway-helm", "enabled": True}]}}
+    manifest = {
+        "schema": "nebius-cxcli-generated/v1",
+        "deploy": {
+            "targets": [
+                _external_mk8s_target(fake_paths, target_ref="external-a"),
+                _mk8s_target(fake_paths, target_ref="managed-b"),
+            ]
+        },
+    }
+    calls: list[tuple[str, str | None]] = []
+    messages: list[str] = []
+
+    def _fake_prepare_cluster_handoff_kube_env(
+        _config: object,
+        _paths: ProjectPaths,
+        *,
+        stack: ExitStack,
+        target: Mapping[str, object],
+        persist_local_kubeconfig: bool,
+    ) -> dict[str, str]:
+        assert persist_local_kubeconfig is False
+        stack.callback(lambda: None)
+        return {"TARGET_REF": str(target["target_ref"])}
+
+    def _fake_delete_post_flux_manifests(_paths: ProjectPaths, *, env: Mapping[str, str]) -> None:
+        target_ref = env.get("TARGET_REF")
+        calls.append(("post_flux", target_ref))
+        if target_ref == "external-a":
+            raise RuntimeError("external-a unreachable")
+
+    monkeypatch.setattr(
+        cli,
+        "_prepare_cluster_handoff_kube_env",
+        _fake_prepare_cluster_handoff_kube_env,
+    )
+    monkeypatch.setattr(cli, "_delete_post_flux_manifests", _fake_delete_post_flux_manifests)
+    monkeypatch.setattr(
+        cli,
+        "delete_rendered_flux",
+        lambda _paths, *, extra_env=None, emit=None: calls.append(
+            ("flux", (extra_env or {}).get("TARGET_REF"))
+        ),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_delete_rendered_flux_namespaces",
+        lambda _paths, *, env: calls.append(("namespaces", env.get("TARGET_REF"))),
+    )
+    monkeypatch.setattr(
+        cli.console,
+        "print",
+        lambda message, *args, **kwargs: messages.append(str(message)),
+    )
+
+    with pytest.raises(RuntimeError, match="external-a unreachable"):
+        cli._destroy_rendered_flux_bundle(config, fake_paths, manifest, all_targets=True)
+
+    assert calls == [
+        ("post_flux", "external-a"),
+        ("post_flux", "managed-b"),
+        ("flux", "managed-b"),
+        ("namespaces", "managed-b"),
+    ]
+    assert any("continuing with remaining targets" in item for item in messages)
+
+
+def test_delete_post_flux_manifest_removes_webhooks_before_namespaces(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    manifest_path = tmp_path / "post-flux-soperator.yaml"
+    manifest_path.write_text(
+        yaml.safe_dump_all(
+            [
+                {
+                    "apiVersion": "admissionregistration.k8s.io/v1",
+                    "kind": "ValidatingWebhookConfiguration",
+                    "metadata": {"name": "soperator-validating-webhook-configuration"},
+                    "webhooks": [
+                        {
+                            "name": "soperator.example.com",
+                            "clientConfig": {
+                                "service": {
+                                    "namespace": "soperator",
+                                    "name": "soperator-webhook-service",
+                                }
+                            },
+                        }
+                    ],
+                },
+                {
+                    "apiVersion": "v1",
+                    "kind": "Namespace",
+                    "metadata": {"name": "soperator"},
+                },
+                {
+                    "apiVersion": "slurm.nebius.ai/v1",
+                    "kind": "SlurmCluster",
+                    "metadata": {"name": "soperator", "namespace": "soperator"},
+                },
+                {
+                    "apiVersion": "slurm.nebius.ai/v1alpha1",
+                    "kind": "NodeSet",
+                    "metadata": {"name": "worker-cpu", "namespace": "soperator"},
+                },
+                {
+                    "apiVersion": "apps/v1",
+                    "kind": "Deployment",
+                    "metadata": {"name": "soperator-manager", "namespace": "soperator"},
+                },
+                {
+                    "apiVersion": "apiextensions.k8s.io/v1",
+                    "kind": "CustomResourceDefinition",
+                    "metadata": {"name": "nodesets.slurm.nebius.ai"},
+                },
+            ]
+        ),
+        encoding="utf-8",
+    )
+    calls: list[tuple[str, object]] = []
+
+    def _fake_run(cmd: list[str], *, env: Mapping[str, str], **_kwargs: object) -> None:
+        manifest = Path(cmd[cmd.index("-f") + 1])
+        docs = [
+            doc
+            for doc in yaml.safe_load_all(manifest.read_text(encoding="utf-8"))
+            if isinstance(doc, dict)
+        ]
+        calls.append(("kubectl", [doc["kind"] for doc in docs]))
+
+    monkeypatch.setattr(cli, "_run_post_flux_kubectl", _fake_run)
+    monkeypatch.setattr(
+        cli,
+        "_delete_admission_webhooks_for_namespaces",
+        lambda namespaces, *, env: calls.append(("webhook-discovery", sorted(namespaces))),
+    )
+
+    cli._delete_post_flux_manifest(manifest_path, env={})
+
+    assert calls == [
+        ("kubectl", ["ValidatingWebhookConfiguration"]),
+        ("webhook-discovery", ["soperator"]),
+        ("kubectl", ["NodeSet"]),
+        ("kubectl", ["SlurmCluster"]),
+        ("kubectl", ["Deployment"]),
+        ("kubectl", ["Namespace"]),
+        ("kubectl", ["CustomResourceDefinition"]),
+    ]
+
+
+def test_destroy_generated_artifacts_external_target_skips_terraform_destroy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_paths = _fake_paths(tmp_path)
+    config = {"apps": {"charts": [{"id": "gateway-helm", "enabled": True, "instance_id": "mk8s"}]}}
+    manifest = {
+        "schema": "nebius-cxcli-generated/v1",
+        "deploy": {"targets": [_external_mk8s_target(fake_paths)]},
+    }
+    calls: list[tuple[object, ...]] = []
+    messages: list[str] = []
+
+    monkeypatch.setattr(
+        cli,
+        "_destroy_rendered_flux_bundle",
+        lambda current_config, paths, loaded_manifest, **kwargs: calls.append(
+            ("destroy_flux", current_config, paths, loaded_manifest, kwargs)
+        ),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_run_terraform_destroy_with_recovery",
+        lambda *_args, **_kwargs: calls.append(("destroy_tf",)),
+    )
+    monkeypatch.setattr(
+        cli.console,
+        "print",
+        lambda message, *args, **kwargs: messages.append(str(message)),
+    )
+
+    cli._destroy_generated_artifacts(
+        config,
+        fake_paths,
+        manifest,
+        auto_auth_bootstrap=True,
+        yes=True,
+    )
+
+    assert calls == [("destroy_flux", config, fake_paths, manifest, {"all_targets": True})]
+    assert any(
+        "External MK8s cluster and node groups were not destroyed" in item for item in messages
+    )
+
+
+def test_destroy_generated_artifacts_external_target_flux_failure_is_fatal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_paths = _fake_paths(tmp_path)
+    config = {"apps": {"charts": [{"id": "gateway-helm", "enabled": True, "instance_id": "mk8s"}]}}
+    manifest = {
+        "schema": "nebius-cxcli-generated/v1",
+        "deploy": {"targets": [_external_mk8s_target(fake_paths)]},
+    }
+    monkeypatch.setattr(
+        cli,
+        "_destroy_rendered_flux_bundle",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("cluster unreachable")),
+    )
+    monkeypatch.setattr(cli.console, "print", lambda *_args, **_kwargs: None)
+
+    with pytest.raises(RuntimeError, match="external MK8s target"):
+        cli._destroy_generated_artifacts(
+            config,
+            fake_paths,
+            manifest,
+            auto_auth_bootstrap=True,
+            yes=True,
+        )
 
 
 def test_destroy_generated_artifacts_continues_when_flux_teardown_fails(
@@ -5041,7 +6587,7 @@ def test_destroy_generated_artifacts_continues_when_flux_teardown_fails(
     assert any("cluster unreachable" in message for message in messages)
 
 
-def test_destroy_generated_artifacts_skips_flux_teardown_when_handoff_cluster_is_destroyed(
+def test_destroy_generated_artifacts_deletes_flux_before_handoff_cluster_is_destroyed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fake_paths = _fake_paths(tmp_path)
@@ -5054,18 +6600,31 @@ def test_destroy_generated_artifacts_skips_flux_teardown_when_handoff_cluster_is
         "deploy": {"targets": [_mk8s_target(fake_paths)]},
     }
     captured: dict[str, object] = {}
+    calls: list[str] = []
     messages: list[str] = []
 
     monkeypatch.setattr(cli, "_ensure_terraform_backend_ready", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(
         cli,
         "_destroy_rendered_flux_bundle",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("should not be called")),
+        lambda current_config, paths, loaded_manifest, **kwargs: (
+            calls.append("destroy_flux"),
+            captured.setdefault(
+                "destroy_flux",
+                {
+                    "config": current_config,
+                    "paths": paths,
+                    "manifest": loaded_manifest,
+                    "kwargs": kwargs,
+                },
+            ),
+        ),
     )
     monkeypatch.setattr(
         cli,
         "_run_terraform_destroy_with_recovery",
         lambda current_config, paths, *, auto_auth_bootstrap, yes, initialize=True, status_watchers=None: (
+            calls.append("destroy_terraform"),
             captured.setdefault(
                 "destroy",
                 {
@@ -5076,7 +6635,7 @@ def test_destroy_generated_artifacts_skips_flux_teardown_when_handoff_cluster_is
                     "initialize": initialize,
                     "status_watchers": status_watchers,
                 },
-            )
+            ),
         ),
     )
     monkeypatch.setattr(
@@ -5099,11 +6658,14 @@ def test_destroy_generated_artifacts_skips_flux_teardown_when_handoff_cluster_is
         "initialize": True,
         "status_watchers": None,
     }
-    assert any(
-        "Skipping rendered app teardown before infra destroy because this generated bundle destroys "
-        "the handed-off cluster directly." in message
-        for message in messages
-    )
+    assert captured["destroy_flux"] == {
+        "config": config,
+        "paths": fake_paths,
+        "manifest": manifest,
+        "kwargs": {"all_targets": True},
+    }
+    assert calls == ["destroy_flux", "destroy_terraform"]
+    assert messages == []
 
 
 def test_apply_rendered_flux_installs_flux_controllers_when_missing(
@@ -5305,6 +6867,140 @@ def test_apply_rendered_flux_skips_flux_install_when_controllers_exist(
     ]
 
 
+def test_apply_rendered_flux_retries_transient_kubectl_apply_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_paths = _fake_paths(tmp_path)
+    fake_paths.flux_dir.mkdir(parents=True, exist_ok=True)
+    calls: list[tuple[str, ...]] = []
+    apply_calls: list[tuple[str, ...]] = []
+    sleeps: list[float] = []
+    wait_calls: list[str] = []
+
+    monkeypatch.setattr(cli, "flux_dir_has_rendered_resources", lambda _path: True)
+    monkeypatch.setattr(
+        cli.shutil,
+        "which",
+        lambda name: "/usr/bin/kubectl" if name == "kubectl" else None,
+    )
+    monkeypatch.setattr(cli, "flux_controllers_installed", lambda *, extra_env=None: True)
+    monkeypatch.setattr(cli, "flux_crds_installed", lambda *, extra_env=None: True)
+    monkeypatch.setattr(
+        cli,
+        "wait_for_flux_resource_apis",
+        lambda *args, **kwargs: wait_calls.append("apis"),
+    )
+    monkeypatch.setattr(
+        cli,
+        "wait_for_rendered_flux_resources",
+        lambda *args, **kwargs: wait_calls.append("flux"),
+    )
+
+    def _fake_run(cmd: list[str], **_kwargs: object) -> SimpleNamespace:
+        calls.append(tuple(cmd))
+        if (
+            len(cmd) >= 4
+            and cmd[0] == "kubectl"
+            and cmd[1] == "--cache-dir"
+            and cmd[3] == "apply"
+        ):
+            apply_calls.append(tuple(cmd))
+            if len(apply_calls) == 1:
+                return SimpleNamespace(
+                    returncode=1,
+                    stderr="read: connection reset by peer",
+                    stdout="",
+                )
+        return SimpleNamespace(returncode=0, stderr="", stdout="")
+
+    monkeypatch.setattr(cli.subprocess, "run", _fake_run)
+    monkeypatch.setattr(cli.time, "sleep", lambda seconds: sleeps.append(seconds))
+    monkeypatch.setattr(cli, "_console_is_terminal", lambda: True)
+
+    class _FakeStatus:
+        def update(self, _message: str, **_kwargs: object) -> None:
+            return
+
+    @contextmanager
+    def _fake_status(_message: str, **_kwargs: object):
+        yield _FakeStatus()
+
+    monkeypatch.setattr(cli.console, "status", _fake_status)
+
+    cli._apply_rendered_flux(fake_paths, extra_env={"KUBECONFIG": "/tmp/kubeconfig"})
+
+    assert calls[0] == ("kubectl", "cluster-info")
+    assert len(apply_calls) == 2
+    assert sleeps == [5.0]
+    assert wait_calls == ["apis", "flux"]
+
+
+def test_apply_rendered_flux_does_not_retry_non_transient_kubectl_apply_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_paths = _fake_paths(tmp_path)
+    fake_paths.flux_dir.mkdir(parents=True, exist_ok=True)
+    apply_calls: list[tuple[str, ...]] = []
+    sleeps: list[float] = []
+    wait_calls: list[str] = []
+
+    monkeypatch.setattr(cli, "flux_dir_has_rendered_resources", lambda _path: True)
+    monkeypatch.setattr(
+        cli.shutil,
+        "which",
+        lambda name: "/usr/bin/kubectl" if name == "kubectl" else None,
+    )
+    monkeypatch.setattr(cli, "flux_controllers_installed", lambda *, extra_env=None: True)
+    monkeypatch.setattr(cli, "flux_crds_installed", lambda *, extra_env=None: True)
+    monkeypatch.setattr(
+        cli,
+        "wait_for_flux_resource_apis",
+        lambda *args, **kwargs: wait_calls.append("apis"),
+    )
+    monkeypatch.setattr(
+        cli,
+        "wait_for_rendered_flux_resources",
+        lambda *args, **kwargs: wait_calls.append("flux"),
+    )
+
+    def _fake_run(cmd: list[str], **_kwargs: object) -> SimpleNamespace:
+        if (
+            len(cmd) >= 4
+            and cmd[0] == "kubectl"
+            and cmd[1] == "--cache-dir"
+            and cmd[3] == "apply"
+        ):
+            apply_calls.append(tuple(cmd))
+            return SimpleNamespace(
+                returncode=1,
+                stderr="Error from server (Forbidden): helmreleases is forbidden",
+                stdout="",
+            )
+        return SimpleNamespace(returncode=0, stderr="", stdout="")
+
+    monkeypatch.setattr(cli.subprocess, "run", _fake_run)
+    monkeypatch.setattr(cli.time, "sleep", lambda seconds: sleeps.append(seconds))
+    monkeypatch.setattr(cli, "_console_is_terminal", lambda: True)
+
+    class _FakeStatus:
+        def update(self, _message: str, **_kwargs: object) -> None:
+            return
+
+    @contextmanager
+    def _fake_status(_message: str, **_kwargs: object):
+        yield _FakeStatus()
+
+    monkeypatch.setattr(cli.console, "status", _fake_status)
+
+    with pytest.raises(subprocess.CalledProcessError) as excinfo:
+        cli._apply_rendered_flux(fake_paths, extra_env={"KUBECONFIG": "/tmp/kubeconfig"})
+
+    assert len(apply_calls) == 1
+    assert sleeps == []
+    assert wait_calls == ["apis"]
+    assert "Forbidden" in str(excinfo.value.stderr)
+
+
 def test_apply_rendered_flux_applies_post_flux_manifests_after_flux_ready(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -5373,7 +7069,9 @@ def test_apply_rendered_flux_applies_post_flux_manifests_after_flux_ready(
         and call[2] == 300
         for call in calls
     )
-    assert status_updates[-1] == "[cyan]Applying post-Flux manifests to the target cluster...[/cyan]"
+    assert (
+        status_updates[-1] == "[cyan]Applying post-Flux manifests to the target cluster...[/cyan]"
+    )
 
 
 def test_apply_post_flux_manifest_orders_crds_webhook_resources_before_custom_resources(
@@ -5488,6 +7186,112 @@ def test_apply_post_flux_manifest_orders_crds_webhook_resources_before_custom_re
         ["SlurmCluster"],
         ["NodeSet"],
     ]
+
+
+def test_apply_post_flux_manifest_deletes_hook_resources_before_creation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    manifest_path = tmp_path / "post-flux-soperator.yaml"
+    hook_annotations = {
+        "helm.sh/hook": "post-install,post-upgrade",
+        "helm.sh/hook-delete-policy": "before-hook-creation,hook-succeeded",
+        "nebius-cxcli.nebius.ai/include-local-render": "true",
+    }
+    manifest_path.write_text(
+        yaml.safe_dump_all(
+            [
+                {
+                    "apiVersion": "v1",
+                    "kind": "ConfigMap",
+                    "metadata": {
+                        "name": "cluster1-qos-reconcile-script",
+                        "namespace": "soperator",
+                        "annotations": hook_annotations,
+                    },
+                },
+                {
+                    "apiVersion": "batch/v1",
+                    "kind": "Job",
+                    "metadata": {
+                        "name": "cluster1-qos-reconcile",
+                        "namespace": "soperator",
+                        "annotations": hook_annotations,
+                    },
+                    "spec": {"activeDeadlineSeconds": 1200},
+                },
+                {
+                    "apiVersion": "v1",
+                    "kind": "Service",
+                    "metadata": {"name": "soperator-webhook-service", "namespace": "soperator"},
+                    "spec": {},
+                },
+                {
+                    "apiVersion": "slurm.nebius.ai/v1alpha1",
+                    "kind": "SlurmCluster",
+                    "metadata": {"name": "cluster1", "namespace": "soperator"},
+                    "spec": {},
+                },
+            ],
+            explicit_start=True,
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    calls: list[tuple[str, ...]] = []
+    applied_kinds: list[list[str]] = []
+    deleted_kinds: list[list[str]] = []
+
+    def _fake_run(cmd: list[str], **_kwargs: object) -> SimpleNamespace:
+        calls.append(tuple(cmd))
+        if len(cmd) > 5 and cmd[:5] == [
+            "kubectl",
+            "apply",
+            "--server-side",
+            "--force-conflicts",
+            "-f",
+        ]:
+            applied_kinds.append(
+                [
+                    doc["kind"]
+                    for doc in yaml.safe_load_all(Path(cmd[5]).read_text(encoding="utf-8"))
+                    if isinstance(doc, dict)
+                ]
+            )
+        if len(cmd) > 3 and cmd[:3] == ["kubectl", "delete", "-f"]:
+            deleted_kinds.append(
+                [
+                    doc["kind"]
+                    for doc in yaml.safe_load_all(Path(cmd[3]).read_text(encoding="utf-8"))
+                    if isinstance(doc, dict)
+                ]
+            )
+        return SimpleNamespace(returncode=0, stderr="", stdout="")
+
+    monkeypatch.setattr(cli.subprocess, "run", _fake_run)
+
+    cli._apply_post_flux_manifest(manifest_path, env={})
+
+    assert applied_kinds == [
+        ["Service"],
+        ["SlurmCluster"],
+        ["ConfigMap", "Job"],
+    ]
+    assert calls[2][:4] == ("kubectl", "delete", "-f", calls[2][3])
+    assert calls[2][4:] == (
+        "--ignore-not-found=true",
+        "--wait=true",
+        "--timeout=120s",
+    )
+    assert calls[4] == (
+        "kubectl",
+        "-n",
+        "soperator",
+        "wait",
+        "--for=condition=complete",
+        "--timeout=1260s",
+        "job/cluster1-qos-reconcile",
+    )
+    assert deleted_kinds == [["ConfigMap", "Job"]]
 
 
 def test_apply_post_flux_manifest_replaces_priority_classes_when_value_changes(
@@ -5625,9 +7429,13 @@ def test_run_post_flux_kubectl_retries_transient_webhook_failures(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls: list[tuple[str, ...]] = []
+    envs: list[Mapping[str, str]] = []
 
-    def _fake_run(cmd: list[str], **_kwargs: object) -> SimpleNamespace:
+    def _fake_run(cmd: list[str], **kwargs: object) -> SimpleNamespace:
         calls.append(tuple(cmd))
+        env = kwargs.get("env")
+        if isinstance(env, Mapping):
+            envs.append(env)
         if len(calls) == 1:
             return SimpleNamespace(
                 returncode=1,
@@ -5642,10 +7450,10 @@ def test_run_post_flux_kubectl_retries_transient_webhook_failures(
 
     cli._run_post_flux_kubectl(
         ["kubectl", "apply", "-f", "custom.yaml"],
-        env={},
+        env={"KUBECONFIG": "/tmp/kubeconfig"},
         retries=1,
         retry_delay_seconds=3.0,
-        retry_stderr_markers=cli._POST_FLUX_WEBHOOK_TRANSIENT_MARKERS,
+        retry_stderr_markers=cli._KUBECTL_TRANSIENT_FAILURE_MARKERS,
     )
 
     assert calls == [
@@ -5653,6 +7461,8 @@ def test_run_post_flux_kubectl_retries_transient_webhook_failures(
         ("kubectl", "apply", "-f", "custom.yaml"),
     ]
     assert sleeps == [3.0]
+    assert envs[0]["KUBECONFIG"] == "/tmp/kubeconfig"
+    assert envs[0]["PATH"] == os.environ["PATH"]
 
 
 def test_apply_rendered_flux_prints_phase_lines_when_console_is_not_terminal(
@@ -6497,17 +8307,37 @@ def test_run_terraform_apply_with_status_wraps_apply_in_status_reporting(
     monkeypatch.setattr(
         cli.console,
         "print",
-        lambda message: calls.append(("print", message)),
+        lambda message, **kwargs: calls.append(("print", message, kwargs)),
     )
 
     cli._run_terraform_apply_with_status("cfg", fake_paths)
 
     assert calls == [
         ("status_enter", "cfg", 15.0, 60.0),
-        ("print", "hello"),
+        ("print", "hello", {"highlight": False}),
         ("apply", fake_paths.infra_dir, {"TF_VAR_DEMO": "1"}, True, "callback"),
         ("status_exit", "cfg"),
     ]
+
+
+def test_print_deployment_status_message_disables_rich_auto_highlighter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rich_console = cli.Console(
+        force_terminal=True,
+        color_system="standard",
+        width=220,
+        record=True,
+    )
+    monkeypatch.setattr(cli, "console", rich_console)
+
+    cli._print_deployment_status_message("[bold cyan]API[/bold cyan] mk8s-cpu-b:DELETING 2/2 ready")
+
+    rendered = rich_console.export_text(styles=True)
+    plain_rendered = _ANSI_ESCAPE_RE.sub("", rendered)
+    assert "mk8s-cpu-b:DELETING 2/2 ready" in plain_rendered
+    assert "\x1b[1;36mAPI\x1b[0m" in rendered
+    assert "\x1b[1;92mb:DE\x1b[0m" not in rendered
 
 
 def test_run_terraform_apply_with_status_can_skip_mk8s_preflight(
@@ -6596,14 +8426,14 @@ def test_run_terraform_apply_with_status_passes_explicit_status_watchers(
     monkeypatch.setattr(
         cli.console,
         "print",
-        lambda message: calls.append(("print", message)),
+        lambda message, **kwargs: calls.append(("print", message, kwargs)),
     )
 
     cli._run_terraform_apply_with_status("cfg", fake_paths, status_watchers=watchers)
 
     assert calls == [
         ("status_enter", "cfg", 15.0, 60.0, watchers),
-        ("print", "hello"),
+        ("print", "hello", {"highlight": False}),
         ("apply", fake_paths.infra_dir, {"TF_VAR_DEMO": "1"}, True, "callback"),
         ("status_exit", "cfg"),
     ]
@@ -6810,7 +8640,7 @@ def test_run_terraform_destroy_with_status_passes_abort_check_when_reporter_supp
             True,
             "callback",
             reporter.abort_reason,
-        )
+        ),
     ]
 
 
@@ -6827,8 +8657,10 @@ def test_enabled_status_watcher_specs_resolve_from_enabled_component_inputs() ->
                     "id": "mk8s",
                     "enabled": True,
                     "inputs": {
-                        "parent_id": "project-456",
-                        "cluster_name": "clust1",
+                        "cluster": {
+                            "parent_id": "project-456",
+                            "cluster_name": "clust1",
+                        },
                     },
                 },
                 {
@@ -6877,9 +8709,13 @@ def test_enabled_status_watcher_specs_resolve_from_enabled_component_inputs() ->
                 },
                 {
                     "id": "sfs",
-                    "enabled": False,
+                    "enabled": True,
                     "inputs": {
                         "parent_id": "project-456",
+                        "filesystems": {
+                            "jail": {"name": "sharedfs-jail"},
+                            "controller-spool": {"name": "sharedfs-controller-spool"},
+                        },
                         "name": "sharedfs",
                     },
                 },
@@ -6922,6 +8758,20 @@ def test_enabled_status_watcher_specs_resolve_from_enabled_component_inputs() ->
             "kind": "nebius.mysterybox.secret",
             "parent_id": "project-456",
             "resource_name": "worker-runtime",
+        },
+        {
+            "component_id": "sfs",
+            "instance_id": "sfs",
+            "kind": "nebius.compute.filesystem",
+            "parent_id": "project-456",
+            "resource_name": "sharedfs-jail",
+        },
+        {
+            "component_id": "sfs",
+            "instance_id": "sfs",
+            "kind": "nebius.compute.filesystem",
+            "parent_id": "project-456",
+            "resource_name": "sharedfs-controller-spool",
         },
     ]
 
@@ -6981,9 +8831,7 @@ def test_sync_mysterybox_primary_version_ids_updates_unset_config_values(
 
     monkeypatch.setattr(cli, "terraform_output_json", _fake_terraform_output_json)
 
-    assert cli._sync_mysterybox_primary_version_ids_to_config(
-        "cfg", fake_paths, initialize=False
-    )
+    assert cli._sync_mysterybox_primary_version_ids_to_config("cfg", fake_paths, initialize=False)
 
     refreshed = yaml.safe_load(fake_paths.config_path.read_text(encoding="utf-8"))
     secrets = refreshed["infra"]["components"][0]["inputs"]["secrets"]
@@ -7060,9 +8908,7 @@ def test_sync_mysterybox_primary_version_ids_updates_generated_manifest_and_tfva
         cli,
         "terraform_output_json",
         lambda *_args, **_kwargs: {
-            "mysterybox_primary_secret_version_ids": {
-                "value": {"app-runtime": "mbsecver-created"}
-            }
+            "mysterybox_primary_secret_version_ids": {"value": {"app-runtime": "mbsecver-created"}}
         },
     )
 
@@ -8163,7 +10009,7 @@ def test_enabled_cluster_handoffs_normalizes_boolean_access_outputs(
         handoff=Handoff(
             cluster_id_output_name="cluster_id",
             access_kind="input",
-            access_source_path="inputs.mk8s_cluster_public_endpoint",
+            access_source_path="inputs.cluster.public_endpoint",
         ),
     )
     payload = {
@@ -8173,7 +10019,7 @@ def test_enabled_cluster_handoffs_normalizes_boolean_access_outputs(
                     "id": "mk8s",
                     "instance_id": "mk8s",
                     "enabled": True,
-                    "inputs": {"mk8s_cluster_public_endpoint": False},
+                    "inputs": {"cluster": {"public_endpoint": False}},
                 }
             ]
         }
@@ -8273,23 +10119,92 @@ def test_mysterybox_eso_wizard_prompts_sync_namespaces_for_all_store_modes() -> 
         },
     }
 
-    assert cli._skip_mysterybox_eso_prompt(
-        payload=payload,
-        entry=entry,
-        full_path_label="deploy.targets[0].secrets.mysterybox.sync_namespaces",
-    ) is False
+    assert (
+        cli._skip_mysterybox_eso_prompt(
+            payload=payload,
+            entry=entry,
+            full_path_label="deploy.targets[0].secrets.mysterybox.sync_namespaces",
+        )
+        is False
+    )
     del payload["deploy"]["targets"][0]["secrets"]["mysterybox"]["allow_all_namespaces"]
-    assert cli._skip_mysterybox_eso_prompt(
-        payload=payload,
-        entry=entry,
-        full_path_label="deploy.targets[0].secrets.mysterybox.sync_namespaces",
-    ) is False
+    assert (
+        cli._skip_mysterybox_eso_prompt(
+            payload=payload,
+            entry=entry,
+            full_path_label="deploy.targets[0].secrets.mysterybox.sync_namespaces",
+        )
+        is False
+    )
     payload["deploy"]["targets"][0]["secrets"]["mysterybox"]["allow_all_namespaces"] = False
-    assert cli._skip_mysterybox_eso_prompt(
-        payload=payload,
-        entry=entry,
-        full_path_label="deploy.targets[0].secrets.mysterybox.sync_namespaces",
-    ) is False
+    assert (
+        cli._skip_mysterybox_eso_prompt(
+            payload=payload,
+            entry=entry,
+            full_path_label="deploy.targets[0].secrets.mysterybox.sync_namespaces",
+        )
+        is False
+    )
+
+
+def test_soperator_notifier_mysterybox_materialization_selects_external_secrets() -> None:
+    payload = {
+        "deploy": {"targets": [{"instance_id": "cluster1"}]},
+        "apps": {
+            "charts": [
+                {
+                    "id": "soperator",
+                    "instance_id": "cluster1",
+                    "enabled": True,
+                    "namespace": "soperator",
+                    "values": {
+                        "soperator-notifier": {
+                            "enabled": True,
+                            "slack": {
+                                "mode": "existing-webhook",
+                                "webhookSource": "mysterybox",
+                                "existingSecret": "soperator-notifier-slack-webhook",
+                                "existingSecretKey": "url",
+                                "mysterybox": {
+                                    "secretId": "mbsec-e00slack",
+                                    "property": "url",
+                                },
+                            },
+                        },
+                    },
+                },
+            ]
+        },
+    }
+    external_secrets_entry = ComponentEntry(
+        id="external-secrets",
+        scope="apps",
+        config_path="apps.external_secrets",
+        description="External Secrets Operator",
+        group="platform",
+        version="0.19.2",
+        chart_name="external-secrets",
+        chart_repo="https://charts.external-secrets.io",
+        default_namespace="external-secrets",
+        default_release_name="external-secrets",
+    )
+
+    selected_apps, labels = cli._materialize_soperator_child_chart_secret_dependencies(
+        payload,
+        selected_apps={"soperator"},
+        app_entries=(external_secrets_entry,),
+    )
+
+    assert "external-secrets" in selected_apps
+    assert labels == ("external-secrets@cluster1",)
+    target_mysterybox = payload["deploy"]["targets"][0]["secrets"]["mysterybox"]
+    assert target_mysterybox["enabled"] is True
+    assert target_mysterybox["sync_namespaces"] == ["soperator"]
+    assert target_mysterybox["store_name"] == "nebius-mysterybox-shared"
+    external_secrets_row = payload["apps"]["charts"][1]
+    assert external_secrets_row["id"] == "external-secrets"
+    assert external_secrets_row["instance_id"] == "cluster1"
+    assert external_secrets_row["enabled"] is True
 
 
 def test_wizard_selected_value_shows_boolean_secret_controls() -> None:
@@ -8724,6 +10639,28 @@ def test_flux_bootstrap_command_uses_cluster_handoff_when_config_declares_it(
         "deploy": {"targets": [_mk8s_target(fake_paths)]},
     }
     target_paths = _target_paths(fake_paths)
+    target_paths.flux_dir.mkdir(parents=True, exist_ok=True)
+    (target_paths.flux_dir / "post-flux-mysterybox-eso.yaml").write_text(
+        yaml.safe_dump_all(
+            [
+                {
+                    "apiVersion": "external-secrets.io/v1",
+                    "kind": "ExternalSecret",
+                    "metadata": {
+                        "name": "soperator-notifier-slack-webhook",
+                        "namespace": "soperator",
+                    },
+                    "spec": {
+                        "target": {"name": "soperator-notifier-slack-webhook"},
+                        "data": [{"secretKey": "url"}],
+                    },
+                }
+            ],
+            explicit_start=True,
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
     captured: dict[str, object] = {}
 
     monkeypatch.setattr(
@@ -8771,6 +10708,34 @@ def test_flux_bootstrap_command_uses_cluster_handoff_when_config_declares_it(
             captured.update({"flux": (paths, extra_env)}) or "reconciled"
         ),
     )
+    monkeypatch.setattr(
+        cli,
+        "wait_for_rendered_flux_resources",
+        lambda paths, *, extra_env=None, emit=None: captured.update(
+            {"wait_flux": (paths, extra_env)}
+        ),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_apply_post_flux_manifests",
+        lambda paths, *, env: captured.update({"post_flux": (paths, env)}),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_ensure_soperator_notifier_runtime_before_flux",
+        lambda config, *, extra_env, target_ref="", externally_managed_secret_keys=None: (
+            captured.update(
+                {
+                    "soperator_notifier": (
+                        config,
+                        extra_env,
+                        target_ref,
+                        externally_managed_secret_keys,
+                    )
+                }
+            )
+        ),
+    )
 
     result = runner.invoke(
         cli.app,
@@ -8789,6 +10754,15 @@ def test_flux_bootstrap_command_uses_cluster_handoff_when_config_declares_it(
     )
     assert captured["flux"] == (target_paths, {"KUBECONFIG": "/tmp/kubeconfig"})
     assert captured["cluster_status"] == {"KUBECONFIG": "/tmp/kubeconfig"}
+    assert captured["soperator_notifier"] == (
+        fake_config,
+        {"KUBECONFIG": "/tmp/kubeconfig"},
+        "mk8s",
+        {("soperator", "soperator-notifier-slack-webhook", "url")},
+    )
+    assert captured["wait_flux"] == (target_paths, {"KUBECONFIG": "/tmp/kubeconfig"})
+    assert captured["post_flux"][0] == target_paths
+    assert captured["post_flux"][1]["KUBECONFIG"] == "/tmp/kubeconfig"
 
 
 def test_flux_apply_command_applies_rendered_flux_with_cluster_handoff(
@@ -8814,6 +10788,28 @@ def test_flux_apply_command_applies_rendered_flux_with_cluster_handoff(
         "deploy": {"targets": [_mk8s_target(fake_paths)]},
     }
     target_paths = _target_paths(fake_paths)
+    target_paths.flux_dir.mkdir(parents=True, exist_ok=True)
+    (target_paths.flux_dir / "post-flux-mysterybox-eso.yaml").write_text(
+        yaml.safe_dump_all(
+            [
+                {
+                    "apiVersion": "external-secrets.io/v1",
+                    "kind": "ExternalSecret",
+                    "metadata": {
+                        "name": "soperator-notifier-slack-webhook",
+                        "namespace": "soperator",
+                    },
+                    "spec": {
+                        "target": {"name": "soperator-notifier-slack-webhook"},
+                        "data": [{"secretKey": "url"}],
+                    },
+                }
+            ],
+            explicit_start=True,
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
     captured: dict[str, object] = {}
 
     monkeypatch.setattr(
@@ -8866,6 +10862,22 @@ def test_flux_apply_command_applies_rendered_flux_with_cluster_handoff(
         "write_inventory",
         lambda config, paths, **kwargs: captured.update({"inventory": (config, paths)}),
     )
+    monkeypatch.setattr(
+        cli,
+        "_ensure_soperator_notifier_runtime_before_flux",
+        lambda config, *, extra_env, target_ref="", externally_managed_secret_keys=None: (
+            captured.update(
+                {
+                    "soperator_notifier": (
+                        config,
+                        extra_env,
+                        target_ref,
+                        externally_managed_secret_keys,
+                    )
+                }
+            )
+        ),
+    )
 
     result = runner.invoke(
         cli.app,
@@ -8891,6 +10903,12 @@ def test_flux_apply_command_applies_rendered_flux_with_cluster_handoff(
         "mk8s",
     )
     assert captured["cluster_status"] == {"KUBECONFIG": "/tmp/kubeconfig"}
+    assert captured["soperator_notifier"] == (
+        fake_config,
+        {"KUBECONFIG": "/tmp/kubeconfig"},
+        "mk8s",
+        {("soperator", "soperator-notifier-slack-webhook", "url")},
+    )
 
 
 def test_flux_apply_command_all_targets_persists_contexts_without_switching_current_context(
@@ -9178,6 +11196,7 @@ def test_help_text_aligns_render_and_apply_surfaces() -> None:
     top_result = runner.invoke(cli.app, ["--help"])
     quota_check_result = runner.invoke(cli.app, ["quota-check", "--help"])
     quota_request_result = runner.invoke(cli.app, ["quota-request", "--help"])
+    grafana_result = runner.invoke(cli.app, ["grafana", "--help"])
     render_result = runner.invoke(cli.app, ["render", "--help"])
     validate_dashboards_result = runner.invoke(cli.app, ["validate-dashboards", "--help"])
     deploy_result = runner.invoke(cli.app, ["deploy", "--help"])
@@ -9191,6 +11210,7 @@ def test_help_text_aligns_render_and_apply_surfaces() -> None:
     assert top_result.exit_code == 0, top_result.output
     assert quota_check_result.exit_code == 0, quota_check_result.output
     assert quota_request_result.exit_code == 0, quota_request_result.output
+    assert grafana_result.exit_code == 0, grafana_result.output
     assert render_result.exit_code == 0, render_result.output
     assert validate_dashboards_result.exit_code == 0, validate_dashboards_result.output
     assert deploy_result.exit_code == 0, deploy_result.output
@@ -9214,9 +11234,29 @@ def test_help_text_aligns_render_and_apply_surfaces() -> None:
     flux_bootstrap_help = " ".join(_plain_output(flux_bootstrap_result.output).split()).lower()
     quota_check_help = " ".join(_plain_output(quota_check_result.output).split()).lower()
     quota_request_help = " ".join(_plain_output(quota_request_result.output).split()).lower()
+    grafana_help = " ".join(_plain_output(grafana_result.output).split()).lower()
 
     assert "live nebius quota/capacity assessment" in quota_check_help
     assert "quota allowances to confirm the shortage" in quota_request_help
+    assert "export grafana dashboards through the api or local json" in grafana_help
+    assert "--export-dashboard" in grafana_help
+    assert "--dashboard-json" in grafana_help
+    assert "grafana base url or folder url to export from" in grafana_help
+    assert "dashboard url to export from" not in grafana_help
+    assert "repeat to process multiple files" in grafana_help
+    assert "repeat to attach multiple files" not in grafana_help
+    assert "--attach" in grafana_help
+    assert "examples:" in grafana_help
+    assert "interactive api export" in grafana_help
+    assert "non-interactive api export" in grafana_help
+    assert "api export with catalog attach" in grafana_help
+    assert "local json attach without grafana api credentials" in grafana_help
+    assert "multiple local json files with an explicit catalog" in grafana_help
+    assert (
+        "nebius-cxcli grafana --export-dashboard https://grafana.example.invalid/" in grafana_help
+    )
+    assert "grafana.nebius.dev" not in grafana_help
+    assert "nebius-cxcli grafana --dashboard-json ./dashboards/mk8s/custom.json" in grafana_help
     assert "separate request surface" in quota_request_help
     assert "confirmed live quota shortages" in quota_request_help
     assert "--all-regions" in quota_check_help
@@ -9229,6 +11269,9 @@ def test_help_text_aligns_render_and_apply_surfaces() -> None:
     assert "generated artifact bundle" in deploy_help
     assert "does not run `flux bootstrap`" in deploy_help
     assert "does not create or update github workflows" in deploy_help
+    assert "deploy reconciles every target by default" in deploy_help
+    assert "use `--target <target-id>` to narrow flux/app work" in deploy_help
+    assert "the default all-target behavior" in deploy_help
     assert "for a single-target run, the refreshed validation summary" in deploy_help
     assert "include only validations for that selected target" in deploy_help
     assert "validation pass/fail" in deploy_help
@@ -9267,6 +11310,10 @@ def test_help_text_maps_commands_to_target_types() -> None:
     )
     assert "discover uses a deployment-scope directory" in output
     assert (
+        "grafana exports dashboard JSON from a Grafana API or local JSON file "
+        "and only edits component_sources.yaml with --attach"
+    ) in output
+    assert (
         "validate, validate-dashboards, quota-check, quota-request, render, "
         "deploy, and bootstrap-ci use config.yaml"
     ) in output
@@ -9279,10 +11326,7 @@ def test_help_text_maps_commands_to_target_types() -> None:
         "wireguard uses config.yaml to generate client configs and manage VM-local "
         "WireGuard route defaults from a deployed VPN gateway"
     ) in output
-    assert (
-        "ssh-jumphost uses config.yaml to manage VM-local SSH source CIDR allowlists"
-        in output
-    )
+    assert "ssh-jumphost uses config.yaml to manage VM-local SSH source CIDR allowlists" in output
     assert "validate-generated uses generated/" in output
     assert "terraform uses generated/infra" in output
     assert "flux uses generated/flux" in output
@@ -9291,6 +11335,7 @@ def test_help_text_maps_commands_to_target_types() -> None:
     assert "report Use CONFIG_YAML" not in output
     assert "bootstrap-ci Use CONFIG_YAML" in output
     assert "component" in output
+    assert "grafana Export or attach Grafana dashboard JSON" in output
     assert "validate Use CONFIG_YAML" in output
     assert "validate-dashboards Use CONFIG_YAML" in output
     assert "source config" in output
@@ -9306,7 +11351,12 @@ def test_help_text_maps_commands_to_target_types() -> None:
 
 
 def test_command_help_usage_labels_positional_target_types() -> None:
-    create_result = runner.invoke(cli.app, ["create", "--help"])
+    create_result = runner.invoke(
+        cli.app,
+        ["create", "--help"],
+        env={"COLUMNS": "240"},
+        terminal_width=240,
+    )
     component_result = runner.invoke(cli.app, ["component", "--help"])
     component_list_result = runner.invoke(cli.app, ["component", "list", "--help"])
     component_add_result = runner.invoke(
@@ -9323,6 +11373,7 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     )
     discover_result = runner.invoke(cli.app, ["discover", "--help"])
     validate_result = runner.invoke(cli.app, ["validate", "--help"])
+    grafana_result = runner.invoke(cli.app, ["grafana", "--help"])
     validate_dashboards_result = runner.invoke(cli.app, ["validate-dashboards", "--help"])
     validate_sources_result = runner.invoke(cli.app, ["validate-sources", "--help"])
     validate_generated_result = runner.invoke(cli.app, ["validate-generated", "--help"])
@@ -9342,6 +11393,7 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert component_remove_result.exit_code == 0, component_remove_result.output
     assert discover_result.exit_code == 0, discover_result.output
     assert validate_result.exit_code == 0, validate_result.output
+    assert grafana_result.exit_code == 0, grafana_result.output
     assert validate_dashboards_result.exit_code == 0, validate_dashboards_result.output
     assert validate_sources_result.exit_code == 0, validate_sources_result.output
     assert validate_generated_result.exit_code == 0, validate_generated_result.output
@@ -9361,6 +11413,7 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     component_remove_help = _plain_output(component_remove_result.output)
     discover_help = _plain_output(discover_result.output)
     validate_help = _plain_output(validate_result.output)
+    grafana_help = _plain_output(grafana_result.output)
     validate_dashboards_help = _plain_output(validate_dashboards_result.output)
     validate_sources_help = _plain_output(validate_sources_result.output)
     validate_generated_help = _plain_output(validate_generated_result.output)
@@ -9399,11 +11452,30 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "warning-only live" in normalized_create_help
     assert "quota/capacity" in normalized_create_help
     assert "assessment" in normalized_create_help
+    assert (
+        "nebius-cxcli create /path/to/deployments-root --client-name client-slug "
+        "--tenant-id TENANT_ID --project-id PROJECT_ID "
+        "--infra mk8s,vm,wireguard-gw,ssh-jumphost "
+        "--no-validate-sources --no-validate-config"
+    ) in normalized_create_help
+    assert "add --app none to skip app selection" in normalized_create_help
+    assert (
+        "nebius-cxcli create /path/to/deployments-root --client-name client-slug "
+        "--tenant-id TENANT_ID --project-id PROJECT_ID "
+        "--infra mk8s,vm --infra wireguard-gw,ssh-jumphost "
+        "--app n8n,gateway-helm --app cert-manager "
+        "--no-validate-sources --no-validate-config"
+    ) in normalized_create_help
+    assert "guided create with multiple infra and app choices preselected" in (
+        normalized_create_help
+    )
+    assert re.search(r"\btenant-[a-z0-9]{16,}\b", normalized_create_help) is None
+    assert re.search(r"\bproject-[a-z0-9]{16,}\b", normalized_create_help) is None
     assert "not a reservation" in normalized_create_help
     assert "not a wizard-selectable deployment gate" in normalized_create_help
-    assert "Validate the full" in normalized_create_help
-    assert "component catalog" in normalized_create_help
-    assert "source settings before" in normalized_create_help
+    assert "Validate infra sources first" in normalized_create_help
+    assert "selected app chart sources" in normalized_create_help
+    assert "auto-enabled app dependencies" in normalized_create_help
     assert "list [OPTIONS]" in component_list_help
     assert "--config CONFIG_YAML" in normalized_component_list_help
     assert "nebius-cxcli component list --config <config.yaml>" in normalized_component_list_help
@@ -9412,15 +11484,18 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "Project" in normalized_component_add_help
     assert "config.yaml" in normalized_component_add_help
     assert "inspect or edit" in normalized_component_add_help
-    assert "nebius-cxcli component add infra:vm --config <config.yaml>" in normalized_component_add_help
     assert (
-        "nebius-cxcli component add infra:vm@worker-vm "
-        "--config <config.yaml> --no-interactive"
+        "nebius-cxcli component add infra:vm --config <config.yaml>"
+        in normalized_component_add_help
+    )
+    assert (
+        "nebius-cxcli component add infra:vm@worker-vm --config <config.yaml> --no-interactive"
     ) in normalized_component_add_help
     assert (
         "nebius-cxcli component add managed-postgresql object-storage@logs-bucket "
         "--config <config.yaml> --no-interactive"
     ) in normalized_component_add_help
+    assert "apps:nccl-test" not in normalized_component_add_help
     assert "Omit" in normalized_component_add_help
     assert "prompt" in normalized_component_add_help
     assert "interactively" in normalized_component_add_help
@@ -9442,11 +11517,9 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "none" in normalized_component_add_help
     assert "instance_id" in normalized_component_add_help
     assert "--validate-sources --no-validate-sources" in " ".join(component_add_help.split())
-    assert "Validate the full" in normalized_component_add_help
-    assert "catalog" in normalized_component_add_help
-    assert "source" in normalized_component_add_help
-    assert "settings" in normalized_component_add_help
-    assert "before" in normalized_component_add_help
+    assert "Validate infra sources first" in normalized_component_add_help
+    assert "app chart sources selected" in normalized_component_add_help
+    assert "auto-enabled by this add" in normalized_component_add_help
     assert "component add" in normalized_component_add_help
     assert (
         "Add source-defined components to an existing project config.yaml"
@@ -9457,8 +11530,19 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "charts" in normalized_component_add_help
     assert "enabled" in normalized_component_add_help
     assert "MK8s target" in normalized_component_add_help
-    assert "requires an enabled" in normalized_create_help
-    assert "MK8s infra target" in normalized_create_help
+    assert "apps:soperator" in normalized_component_add_help
+    assert "install mode" in normalized_component_add_help
+    assert "onboarding registers an external Nebius MK8s target" in normalized_component_add_help
+    assert "production cluster creates" in normalized_component_add_help
+    assert (
+        "nebius-cxcli component add soperator@training-cluster --config <config.yaml>"
+        in normalized_component_add_help
+    )
+    assert "requires a managed" in normalized_create_help
+    assert "managed or onboarded MK8s target" in normalized_create_help
+    assert "selecting soperator prompts" in normalized_create_help
+    assert "onboard-existing-cluster role-mapping install" in normalized_create_help
+    assert "complete production MK8s+SFS+Soperator cluster" in normalized_create_help
     assert "remove [OPTIONS] [COMPONENT_SELECTOR]..." in component_remove_help
     assert "--config CONFIG_YAML" in normalized_component_remove_help
     assert (
@@ -9477,16 +11561,28 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "interactively" in normalized_component_remove_help
     assert "wireguard [OPTIONS]" in wireguard_help
     assert "Use exactly one mode per invocation" in normalized_wireguard_help
-    assert "--gen-client-conf CONFIG_YAML generates and downloads one client .conf" in normalized_wireguard_help
+    assert (
+        "--gen-client-conf CONFIG_YAML generates and downloads one client .conf"
+        in normalized_wireguard_help
+    )
     assert "prints the local wg-quick up/down commands" in normalized_wireguard_help
     assert "OS-specific install hint when wg-quick is missing" in normalized_wireguard_help
     assert "wg-quick-safe filename/interface name" in normalized_wireguard_help
     assert "max 15" in normalized_wireguard_help
     assert "unique" in normalized_wireguard_help
     assert "short" in normalized_wireguard_help
-    assert "--add-local-subnets CONFIG_YAML adds future-client route defaults" in normalized_wireguard_help
-    assert "--remove-local-subnets CONFIG_YAML removes future-client route defaults" in normalized_wireguard_help
-    assert "Add/remove subnet modes require one comma-separated --local-subnet value" in normalized_wireguard_help
+    assert (
+        "--add-local-subnets CONFIG_YAML adds future-client route defaults"
+        in normalized_wireguard_help
+    )
+    assert (
+        "--remove-local-subnets CONFIG_YAML removes future-client route defaults"
+        in normalized_wireguard_help
+    )
+    assert (
+        "Add/remove subnet modes require one comma-separated --local-subnet value"
+        in normalized_wireguard_help
+    )
     assert "Generation mode" in normalized_wireguard_help
     assert "All modes" in normalized_wireguard_help
     assert "pass exactly one" in normalized_wireguard_help
@@ -9534,6 +11630,23 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "generated/" in discover_help
     assert "narrower directory under it" in discover_help
     assert "validate [OPTIONS] CONFIG_YAML" in validate_help
+    assert "grafana [OPTIONS]" in grafana_help
+    normalized_grafana_help = " ".join(grafana_help.split()).lower()
+    assert "--export-dashboard" in normalized_grafana_help
+    assert "--dashboard-json" in normalized_grafana_help
+    assert "--output-dir" in normalized_grafana_help
+    assert "--folder-uid" in normalized_grafana_help
+    assert "--dashboard-uid" in normalized_grafana_help
+    assert "--attach" in normalized_grafana_help
+    assert "--component-sources" in normalized_grafana_help
+    assert "--dashboard-folder" in normalized_grafana_help
+    assert "--datasource" in normalized_grafana_help
+    assert "--token-env" in normalized_grafana_help
+    assert "--username" in normalized_grafana_help
+    assert "examples:" in normalized_grafana_help
+    assert "api export with catalog attach" in normalized_grafana_help
+    assert "local json attach without grafana api credentials" in normalized_grafana_help
+    assert "multiple local json files with an explicit catalog" in normalized_grafana_help
     assert "validate-dashboards [OPTIONS] CONFIG_YAML" in validate_dashboards_help
     normalized_validate_dashboards_help = " ".join(validate_dashboards_help.split()).lower()
     assert "grafana dashboard datasource/read-endpoint fit" in normalized_validate_dashboards_help
@@ -9568,6 +11681,7 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "required platform validations" in normalized_deploy_help
     assert "eso mysterybox connectivity" in normalized_deploy_help
     assert "one-run override" in normalized_deploy_help
+    assert "when omitted, deploy reconciles every built-in cluster target" in normalized_deploy_help
     assert "quota-request [OPTIONS] CONFIG_YAML" in quota_request_help
     normalized_quota_request_help = " ".join(quota_request_help.split()).lower()
     assert "already sufficient" in normalized_quota_request_help
@@ -9585,6 +11699,61 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "Omit the path" in normalized_email_help
     assert "only when" in normalized_email_help
     assert "using --setup." in normalized_email_help
+
+
+def test_public_command_help_omits_legacy_mk8s_shortcut_fields() -> None:
+    legacy_tokens = (
+        "mk8s_cluster_public_endpoint",
+        "kube_network_service_cidrs",
+        "cpu_nodes_count",
+        "cpu_nodes_platform",
+        "cpu_nodes_preset",
+        "cpu_nodes_os",
+        "cpu_nodes_boot_disk_size_gib",
+        "cpu_nodes_boot_disk_type",
+        "gpu_enabled",
+        "gpu_node_groups",
+        "gpu_nodes_count_per_group",
+        "gpu_nodes_platform",
+        "gpu_nodes_preset",
+        "gpu_nodes_os",
+        "gpu_nodes_boot_disk_size_gib",
+        "gpu_nodes_boot_disk_type",
+        "mk8s_cluster_overrides",
+        "mk8s_cpu_node_group_overrides",
+        "mk8s_gpu_node_group_overrides",
+    )
+    help_commands = (
+        ["--help"],
+        ["create", "--help"],
+        ["component", "--help"],
+        ["component", "list", "--help"],
+        ["component", "add", "--help"],
+        ["component", "remove", "--help"],
+        ["validate", "--help"],
+        ["quota-check", "--help"],
+        ["quota-request", "--help"],
+        ["render", "--help"],
+        ["validate-generated", "--help"],
+        ["deploy", "--help"],
+        ["destroy", "--help"],
+        ["terraform", "plan", "--help"],
+        ["terraform", "apply", "--help"],
+        ["terraform", "destroy", "--help"],
+        ["terraform", "unlock", "--help"],
+        ["flux", "apply", "--help"],
+        ["flux", "bootstrap", "--help"],
+        ["flux", "destroy", "--help"],
+        ["discover", "--help"],
+        ["email", "--help"],
+    )
+
+    for args in help_commands:
+        result = runner.invoke(cli.app, args, env={"COLUMNS": "240"}, terminal_width=240)
+
+        assert result.exit_code == 0, result.output
+        help_text = _plain_output(result.output)
+        assert not any(token in help_text for token in legacy_tokens), args
 
 
 def test_bootstrap_ci_help_reflects_reconcile_first_contract() -> None:
@@ -10124,22 +12293,26 @@ def test_mysterybox_eso_credentials_from_json_requires_subject_credentials() -> 
         private_key_pem="MYSTERYBOX-PRIVATE-KEY",
     )
 
-    assert cli._mysterybox_eso_credentials_from_json(
-        cli._mysterybox_eso_credentials_json(credentials)
-    ) == credentials
-    assert cli._mysterybox_eso_credentials_from_json(
-        json.dumps(
-            {
-                "subject-credentials": {
-                    "alg": "RS256",
-                    "private-key": "MYSTERYBOX-PRIVATE-KEY",
-                    "kid": "publickey-mysterybox",
-                    "iss": "serviceaccount-mysterybox",
-                    "sub": "other-serviceaccount",
+    assert (
+        cli._mysterybox_eso_credentials_from_json(cli._mysterybox_eso_credentials_json(credentials))
+        == credentials
+    )
+    assert (
+        cli._mysterybox_eso_credentials_from_json(
+            json.dumps(
+                {
+                    "subject-credentials": {
+                        "alg": "RS256",
+                        "private-key": "MYSTERYBOX-PRIVATE-KEY",
+                        "kid": "publickey-mysterybox",
+                        "iss": "serviceaccount-mysterybox",
+                        "sub": "other-serviceaccount",
+                    }
                 }
-            }
+            )
         )
-    ) is None
+        is None
+    )
 
 
 def test_create_mysterybox_eso_credentials_uses_dedicated_service_account(
@@ -10158,9 +12331,7 @@ def test_create_mysterybox_eso_credentials_uses_dedicated_service_account(
 
     def _fake_bootstrap_service_account_auth_key(**kwargs: object) -> SimpleNamespace:
         captured.update(kwargs)
-        captured["runtime_auth_env"] = {
-            key: os.environ.get(key) for key in runtime_env
-        }
+        captured["runtime_auth_env"] = {key: os.environ.get(key) for key in runtime_env}
         return SimpleNamespace(
             project_id="project-123",
             service_account_name="mysterybox-sa",
@@ -10214,9 +12385,7 @@ def test_ensure_mysterybox_eso_service_account_uses_operator_auth(
 
     def _fake_ensure_ci_service_account_identity(**kwargs: object) -> SimpleNamespace:
         captured.update(kwargs)
-        captured["runtime_auth_env"] = {
-            key: os.environ.get(key) for key in runtime_env
-        }
+        captured["runtime_auth_env"] = {key: os.environ.get(key) for key in runtime_env}
         return SimpleNamespace(
             service_account_id="serviceaccount-mysterybox",
             service_account_created=False,
@@ -10281,10 +12450,9 @@ def test_ensure_mysterybox_eso_credentials_secret_reuses_valid_cluster_secret(
     monkeypatch.setattr(
         cli,
         "auth_public_key_exists",
-        lambda **_kwargs: auth_key_checks.append(
-            {key: os.environ.get(key) for key in runtime_env}
-        )
-        or True,
+        lambda **_kwargs: (
+            auth_key_checks.append({key: os.environ.get(key) for key in runtime_env}) or True
+        ),
     )
     monkeypatch.setattr(
         cli,
@@ -10424,8 +12592,9 @@ def test_ensure_mysterybox_eso_credentials_secret_requires_auto_bootstrap_when_m
             fresh_credentials=None,
         )
 
-    assert "credential Secret external-secrets/nebius-mysterybox-shared-creds:credentials.json is missing" in str(
-        exc_info.value
+    assert (
+        "credential Secret external-secrets/nebius-mysterybox-shared-creds:credentials.json is missing"
+        in str(exc_info.value)
     )
 
 
@@ -10603,7 +12772,9 @@ def test_ensure_mysterybox_eso_runtime_prints_confirmation_per_applied_secret(
 
     assert len(applied) == 2
     assert credential_creates == ["project-123"]
-    confirmations = [m for m in rendered_messages if "Ensured ESO MysteryBox credential Secret" in m]
+    confirmations = [
+        m for m in rendered_messages if "Ensured ESO MysteryBox credential Secret" in m
+    ]
     assert confirmations == [
         "Ensured ESO MysteryBox credential Secret external-secrets/creds-a for native provider.",
         "Ensured ESO MysteryBox credential Secret external-secrets-other/creds-b for native provider.",
@@ -11284,6 +13455,14 @@ def test_soperator_selection_seeds_required_infra_and_defaults() -> None:
     )
 
     assert selected == {"mk8s", "sfs"}
+    onboarding_mode_selected = cli._expand_soperator_component_selection(
+        selected_infra={"mk8s"},
+        selected_apps={"soperator"},
+        infra_entries=infra_entries,
+        install_mode="onboard-existing-cluster",
+    )
+
+    assert onboarding_mode_selected == {"mk8s"}
     app_entries = (
         ComponentEntry(
             id="soperator",
@@ -11328,6 +13507,282 @@ def test_soperator_selection_seeds_required_infra_and_defaults() -> None:
                     "id": "soperator",
                     "instance_id": "cluster1",
                     "enabled": True,
+                    "install_mode": "production-cluster",
+                    "values": {},
+                }
+            ]
+        },
+    }
+
+    cli._materialize_soperator_component_defaults(payload)
+
+    assert sum(1 for row in payload["infra"]["components"] if row["id"] == "sfs") == 1
+    mk8s_inputs = payload["infra"]["components"][0]["inputs"]
+    assert "cpu_nodes_count" not in mk8s_inputs
+    assert "gpu_enabled" not in mk8s_inputs
+    assert "gpu_node_groups" not in mk8s_inputs
+    assert "mk8s_gpu_node_group_overrides" not in mk8s_inputs
+    assert set(mk8s_inputs["node_groups"]) == {
+        "system",
+        "controller",
+        "login",
+        "accounting",
+        "worker",
+    }
+    assert mk8s_inputs["node_groups"]["system"]["gpu"] is False
+    assert mk8s_inputs["node_groups"]["controller"]["jail"] is True
+    assert mk8s_inputs["node_groups"]["login"]["gpu"] is False
+    assert mk8s_inputs["node_groups"]["accounting"]["gpu"] is False
+    assert mk8s_inputs["node_groups"]["worker"]["nodeset_name"] == "worker"
+    assert mk8s_inputs["node_groups"]["system"]["node_count"] == 1
+    assert mk8s_inputs["node_groups"]["worker"]["node_count"] == 1
+    assert mk8s_inputs["node_groups"]["worker"]["gpu"] is True
+    assert mk8s_inputs["node_groups"]["worker"]["reservation"] == {"policy": "AUTO"}
+    assert mk8s_inputs["node_groups"]["system"]["node_labels"]["nebius.com/node-group"] == (
+        "system"
+    )
+    assert mk8s_inputs["node_groups"]["worker"]["node_labels"]["nebius.com/node-group"] == (
+        "worker"
+    )
+    sfs_inputs = payload["infra"]["components"][1]["inputs"]
+    assert sfs_inputs["filesystems"]["jail"]["name"] == "cluster1-jail"
+    assert sfs_inputs["filesystems"]["jail"]["block_size_kib"] == 4
+    assert sfs_inputs["filesystems"]["accounting"]["mount_tag"] == "accounting"
+    for filesystem_key in ("jail", "controller-spool", "accounting"):
+        filesystem = sfs_inputs["filesystems"][filesystem_key]
+        assert filesystem["block_size_kib"] == 4
+        assert filesystem["forbid_deletion"] is False
+    assert payload["apps"]["charts"][0]["install_mode"] == "production-cluster"
+    soperator_values = payload["apps"]["charts"][0]["values"]
+    assert soperator_values["clusterName"] == "cluster1"
+    assert soperator_values["mariadb-operator"]["installOperator"] is True
+    assert soperator_values["populateJail"]["k8sNodeFilterName"] == "system"
+    assert soperator_values["slurmNodes"]["accounting"]["enabled"] is True
+    assert soperator_values["slurmNodes"]["accounting"]["k8sNodeFilterName"] == "accounting"
+    assert soperator_values["slurmNodes"]["accounting"]["mariadbOperator"]["enabled"] is True
+    assert soperator_values["slurmNodes"]["accounting"]["mariadbOperator"]["storage"] == {
+        "size": "128Gi",
+        "storageClassName": "slurm-local-pv",
+        "volumeClaimTemplate": {"accessModes": ["ReadWriteMany"]},
+    }
+    assert soperator_values["slurmNodes"]["login"]["sshRootPublicKeys"] == []
+    assert soperator_values["sfs"]["filesystems"]["jail"]["mount_tag"] == "jail"
+    assert soperator_values["volume"]["jail"]["size"] == "1024Gi"
+    assert soperator_values["volume"]["accounting"]["enabled"] is True
+    assert soperator_values["volume"]["accounting"]["size"] == "128Gi"
+    assert soperator_values["volume"]["controllerSpool"]["filestoreDeviceName"] == (
+        "controller-spool"
+    )
+    assert soperator_values["nodeGroupMapping"]["worker"] == ["worker"]
+
+
+def test_soperator_sfs_defaults_are_target_scoped_for_multi_target_rows() -> None:
+    payload = {
+        "infra": {
+            "components": [
+                {
+                    "id": "mk8s",
+                    "instance_id": "cluster-a",
+                    "enabled": True,
+                    "inputs": {},
+                },
+                {
+                    "id": "mk8s",
+                    "instance_id": "cluster-b",
+                    "enabled": True,
+                    "inputs": {},
+                },
+                {
+                    "id": "sfs",
+                    "instance_id": "cluster-a",
+                    "enabled": True,
+                    "inputs": {
+                        "filesystems": {
+                            "jail": {
+                                "name": "cluster-a-jail",
+                                "size_gib": 111,
+                                "mount_tag": "jail-a",
+                            }
+                        }
+                    },
+                },
+                {
+                    "id": "sfs",
+                    "instance_id": "cluster-b",
+                    "enabled": True,
+                    "inputs": {
+                        "filesystems": {
+                            "jail": {
+                                "name": "cluster-b-jail",
+                                "size_gib": 222,
+                                "mount_tag": "jail-b",
+                            }
+                        }
+                    },
+                },
+            ]
+        },
+        "apps": {
+            "charts": [
+                {
+                    "id": "soperator",
+                    "instance_id": "cluster-a",
+                    "enabled": True,
+                    "install_mode": "production-cluster",
+                    "values": {},
+                },
+                {
+                    "id": "soperator",
+                    "instance_id": "cluster-b",
+                    "enabled": True,
+                    "install_mode": "production-cluster",
+                    "values": {},
+                },
+            ]
+        },
+    }
+
+    assert cli._materialize_soperator_component_defaults(payload) is True
+
+    values_by_target = {row["instance_id"]: row["values"] for row in payload["apps"]["charts"]}
+    assert values_by_target["cluster-a"]["sfs"]["filesystems"]["jail"]["name"] == "cluster-a-jail"
+    assert values_by_target["cluster-a"]["volume"]["jail"]["size"] == "111Gi"
+    assert values_by_target["cluster-a"]["volume"]["jail"]["filestoreDeviceName"] == "jail-a"
+    assert values_by_target["cluster-a"]["sfs"]["filesystems"]["jail"]["block_size_kib"] == 4
+    assert values_by_target["cluster-a"]["sfs"]["filesystems"]["jail"]["forbid_deletion"] is False
+    assert values_by_target["cluster-b"]["sfs"]["filesystems"]["jail"]["name"] == "cluster-b-jail"
+    assert values_by_target["cluster-b"]["volume"]["jail"]["size"] == "222Gi"
+    assert values_by_target["cluster-b"]["volume"]["jail"]["filestoreDeviceName"] == "jail-b"
+    assert values_by_target["cluster-b"]["sfs"]["filesystems"]["jail"]["block_size_kib"] == 4
+    assert values_by_target["cluster-b"]["sfs"]["filesystems"]["jail"]["forbid_deletion"] is False
+
+
+def test_soperator_profiles_share_complete_sfs_filesystem_defaults() -> None:
+    _default_profile, profiles = cli._soperator_nodesets_profiles()
+
+    for profile_name in ("nebius-cpu-v1", "nebius-mixed-v1", "nebius-gpu-v1"):
+        filesystems = profiles[profile_name]["sfs"]["filesystems"]
+        assert set(filesystems) == {"jail", "controller-spool", "accounting"}
+        assert filesystems["jail"] == {
+            "name": "{target}-jail",
+            "size_gib": 1024,
+            "block_size_kib": 4,
+            "mount_tag": "jail",
+            "forbid_deletion": False,
+        }
+        assert filesystems["controller-spool"] == {
+            "name": "{target}-controller-spool",
+            "size_gib": 128,
+            "block_size_kib": 4,
+            "mount_tag": "controller-spool",
+            "forbid_deletion": False,
+        }
+        assert filesystems["accounting"] == {
+            "name": "{target}-accounting",
+            "size_gib": 128,
+            "block_size_kib": 4,
+            "mount_tag": "accounting",
+            "forbid_deletion": False,
+        }
+
+
+def test_soperator_production_service_role_counts_materialize_mk8s_groups() -> None:
+    payload = {
+        "infra": {
+            "components": [
+                {
+                    "id": "mk8s",
+                    "instance_id": "cluster1",
+                    "enabled": True,
+                    "inputs": {
+                        "soperator": {
+                            "system_node_count": 2,
+                            "controller_node_count": 3,
+                            "login_node_count": 4,
+                            "accounting_node_count": 5,
+                        },
+                        "node_groups": {
+                            "system": {
+                                "node_count": 1,
+                                "node_count_input": "soperator.system_node_count",
+                            },
+                            "controller": {
+                                "node_count": 1,
+                                "node_count_input": "soperator.controller_node_count",
+                            },
+                            "login": {
+                                "node_count": 1,
+                                "node_count_input": "soperator.login_node_count",
+                            },
+                            "accounting": {
+                                "node_count": 1,
+                                "node_count_input": "soperator.accounting_node_count",
+                            },
+                        },
+                    },
+                },
+                {
+                    "id": "sfs",
+                    "instance_id": "sfs",
+                    "enabled": True,
+                    "inputs": {},
+                },
+            ]
+        },
+        "apps": {
+            "charts": [
+                {
+                    "id": "soperator",
+                    "instance_id": "cluster1",
+                    "enabled": True,
+                    "install_mode": "production-cluster",
+                    "values": {},
+                }
+            ]
+        },
+    }
+
+    assert cli._materialize_soperator_component_defaults(payload) is True
+
+    node_groups = payload["infra"]["components"][0]["inputs"]["node_groups"]
+    assert node_groups["system"]["node_count"] == 2
+    assert node_groups["controller"]["node_count"] == 3
+    assert node_groups["login"]["node_count"] == 4
+    assert node_groups["accounting"]["node_count"] == 5
+    assert node_groups["worker"]["node_count"] == 1
+    assert all("node_count_input" not in group for group in node_groups.values())
+
+
+def test_soperator_production_worker_count_shards_mk8s_groups_and_nodesets() -> None:
+    payload = {
+        "infra": {
+            "components": [
+                {
+                    "id": "mk8s",
+                    "instance_id": "cluster1",
+                    "enabled": True,
+                    "inputs": {
+                        "soperator": {
+                            "worker_total_nodes": 1000,
+                            "worker_nodes_per_group": 100,
+                        }
+                    },
+                },
+                {
+                    "id": "sfs",
+                    "instance_id": "sfs",
+                    "enabled": True,
+                    "inputs": {},
+                },
+            ]
+        },
+        "apps": {
+            "charts": [
+                {
+                    "id": "soperator",
+                    "instance_id": "cluster1",
+                    "enabled": True,
+                    "install_mode": "production-cluster",
                     "values": {},
                 }
             ]
@@ -11337,31 +13792,280 @@ def test_soperator_selection_seeds_required_infra_and_defaults() -> None:
     assert cli._materialize_soperator_component_defaults(payload) is True
 
     mk8s_inputs = payload["infra"]["components"][0]["inputs"]
-    assert mk8s_inputs["cpu_nodes_count"] == 0
-    assert mk8s_inputs["gpu_enabled"] is True
-    assert mk8s_inputs["gpu_node_groups"] == 0
-    assert "mk8s_gpu_node_group_overrides" not in mk8s_inputs
-    assert mk8s_inputs["node_groups"]["system"]["gpu"] is False
-    assert mk8s_inputs["node_groups"]["controller"]["jail"] is True
-    assert mk8s_inputs["node_groups"]["login"]["gpu"] is False
-    assert mk8s_inputs["node_groups"]["accounting"]["gpu"] is False
-    assert mk8s_inputs["node_groups"]["worker-gpu-0"]["nodeset_name"] == "worker-gpu"
-    assert mk8s_inputs["node_groups"]["worker-gpu-0"]["fixed_node_count"] == 1
-    sfs_inputs = payload["infra"]["components"][1]["inputs"]
-    assert sfs_inputs["filesystems"]["jail"]["name"] == "cluster1-jail"
-    assert sfs_inputs["filesystems"]["accounting"]["mount_tag"] == "accounting"
-    soperator_values = payload["apps"]["charts"][0]["values"]
-    assert soperator_values["clusterName"] == "cluster1"
-    assert soperator_values["populateJail"]["k8sNodeFilterName"] == "system"
-    assert soperator_values["slurmNodes"]["accounting"]["k8sNodeFilterName"] == "accounting"
-    assert soperator_values["slurmNodes"]["login"]["sshRootPublicKeys"] == []
-    assert soperator_values["sfs"]["filesystems"]["jail"]["mount_tag"] == "jail"
-    assert soperator_values["volume"]["jail"]["size"] == "1024Gi"
-    assert soperator_values["volume"]["accounting"]["enabled"] is True
-    assert soperator_values["volume"]["accounting"]["size"] == "128Gi"
-    assert soperator_values["volume"]["controllerSpool"]["filestoreDeviceName"] == (
-        "controller-spool"
+    worker_group_keys = [key for key in mk8s_inputs["node_groups"] if str(key).startswith("worker")]
+    assert worker_group_keys == [f"worker-{index}" for index in range(10)]
+    assert all(
+        mk8s_inputs["node_groups"][group_key]["node_count"] == 100
+        for group_key in worker_group_keys
     )
+
+    values = payload["apps"]["charts"][0]["values"]
+    assert values["nodeGroupMapping"]["worker"] == worker_group_keys
+    worker_nodesets = [
+        item for item in values["nodesets"] if str(item.get("name", "")).startswith("worker-")
+    ]
+    assert [item["name"] for item in worker_nodesets] == [
+        f"worker-worker-{index}" for index in range(10)
+    ]
+    assert all(item["replicas"] == 100 for item in worker_nodesets)
+    worker_partition = next(
+        partition
+        for partition in values["partitionConfiguration"]["partitions"]
+        if partition["name"] == "gpu"
+    )
+    assert worker_partition["nodeSetRefs"] == [
+        f"worker-worker-{index}" for index in range(10)
+    ]
+
+
+def test_soperator_profile_managed_groups_track_selected_shape_defaults() -> None:
+    payload = {
+        "infra": {
+            "components": [
+                {
+                    "id": "mk8s",
+                    "instance_id": "cluster1",
+                    "enabled": True,
+                    "inputs": {},
+                },
+                {
+                    "id": "sfs",
+                    "instance_id": "sfs",
+                    "enabled": True,
+                    "inputs": {},
+                },
+            ]
+        },
+        "apps": {
+            "charts": [
+                {
+                    "id": "soperator",
+                    "instance_id": "cluster1",
+                    "enabled": True,
+                    "install_mode": "production-cluster",
+                    "values": {},
+                }
+            ]
+        },
+    }
+
+    assert cli._materialize_soperator_component_defaults(payload) is True
+    mk8s_inputs = payload["infra"]["components"][0]["inputs"]
+    assert mk8s_inputs["node_groups"]["worker"]["gpu_stack_source"] == "nebius_image"
+    assert mk8s_inputs["node_groups"]["worker"]["platform"] == "gpu-h100-sxm"
+    assert mk8s_inputs["node_groups"]["worker"]["preset"] == "8gpu-128vcpu-1600gb"
+    assert mk8s_inputs["node_groups"]["worker"]["gpu_stack_preset"] == "cuda13.0"
+    assert mk8s_inputs["node_groups"]["worker"]["reservation"] == {"policy": "AUTO"}
+
+    mk8s_inputs["node_group_defaults"] = {
+        "cpu": {
+            "platform": "cpu-d3",
+            "preset": "16vcpu-64gb",
+            "os": "ubuntu24.04",
+            "boot_disk": {"type": "NETWORK_SSD", "size_gibibytes": 93},
+        },
+        "gpu": {
+            "platform": "gpu-h100-sxm",
+            "preset": "1gpu-16vcpu-200gb",
+            "os": "ubuntu24.04",
+            "boot_disk": {"type": "NETWORK_SSD", "size_gibibytes": 256},
+            "gpu_stack_source": "nebius_image",
+            "gpu_stack_preset": "cuda13.0",
+        },
+    }
+
+    assert cli._materialize_soperator_component_defaults(payload) is True
+
+    assert mk8s_inputs["node_groups"]["system"]["platform"] == "cpu-d3"
+    assert mk8s_inputs["node_groups"]["system"]["preset"] == "16vcpu-64gb"
+    assert mk8s_inputs["node_groups"]["worker"]["platform"] == "gpu-h100-sxm"
+    assert mk8s_inputs["node_groups"]["worker"]["preset"] == "1gpu-16vcpu-200gb"
+    assert mk8s_inputs["node_groups"]["worker"]["gpu_stack_source"] == "nebius_image"
+    assert mk8s_inputs["node_groups"]["worker"]["gpu_stack_preset"] == "cuda13.0"
+    assert (
+        payload["apps"]["charts"][0]["values"]["soperator-dcgm-exporter"]["validateToolkit"]
+        is False
+    )
+
+    mk8s_inputs["node_group_defaults"]["gpu"]["infiniband_fabric"] = "fabric-6"
+
+    assert cli._materialize_soperator_component_defaults(payload) is True
+
+    assert mk8s_inputs["gpu_clusters"]["workers"]["infiniband_fabric"] == "fabric-6"
+    assert mk8s_inputs["node_groups"]["worker"]["gpu_cluster_key"] == "workers"
+
+
+def test_soperator_shape_defaults_preserve_materialized_boot_disk_sizes() -> None:
+    payload = {
+        "client_info": {
+            "nebius": {
+                "tenant_id": "tenant-1",
+                "project_id": "project-1",
+                "region_id": "eu-north1",
+            }
+        },
+        "infra": {
+            "components": [
+                {
+                    "id": "mk8s",
+                    "instance_id": "cluster1",
+                    "enabled": True,
+                    "inputs": {
+                        "node_group_defaults": {
+                            "cpu": {
+                                "platform": "cpu-d3",
+                                "preset": "4vcpu-16gb",
+                                "boot_disk": {"type": "NETWORK_SSD"},
+                            },
+                            "gpu": {
+                                "platform": "gpu-h100-sxm",
+                                "preset": "1gpu-16vcpu-200gb",
+                                "boot_disk": {"type": "NETWORK_SSD"},
+                                "gpu_stack_source": "nebius_image",
+                                "gpu_stack_preset": "cuda13.0",
+                            },
+                        },
+                        "soperator": {
+                            "worker_total_nodes": 2,
+                            "worker_nodes_per_group": 1,
+                        },
+                    },
+                },
+                {
+                    "id": "sfs",
+                    "instance_id": "sfs",
+                    "enabled": True,
+                    "inputs": {},
+                },
+            ]
+        },
+        "apps": {
+            "charts": [
+                {
+                    "id": "soperator",
+                    "instance_id": "cluster1",
+                    "enabled": True,
+                    "install_mode": "production-cluster",
+                    "values": {},
+                }
+            ]
+        },
+    }
+
+    assert cli._materialize_soperator_component_defaults(payload) is True
+    assert cli.materialize_compute_boot_disk_defaults(payload) is True
+
+    mk8s_inputs = payload["infra"]["components"][0]["inputs"]
+    assert mk8s_inputs["node_groups"]["system"]["boot_disk"]["size_gibibytes"] == 64
+    worker_groups = {
+        key: group
+        for key, group in mk8s_inputs["node_groups"].items()
+        if group.get("workload") == "worker"
+    }
+    assert set(worker_groups) == {"worker-0", "worker-1"}
+    assert all(group["boot_disk"]["size_gibibytes"] == 256 for group in worker_groups.values())
+
+    cli._materialize_soperator_component_defaults(payload)
+
+    assert mk8s_inputs["node_groups"]["system"]["boot_disk"] == {
+        "type": "NETWORK_SSD",
+        "size_gibibytes": 64,
+    }
+    worker_groups = {
+        key: group
+        for key, group in mk8s_inputs["node_groups"].items()
+        if group.get("workload") == "worker"
+    }
+    assert set(worker_groups) == {"worker-0", "worker-1"}
+    for group in worker_groups.values():
+        assert group["boot_disk"] == {
+            "type": "NETWORK_SSD",
+            "size_gibibytes": 256,
+        }
+
+
+def test_soperator_cpu_profile_materializes_only_cpu_worker_nodeset() -> None:
+    payload = {
+        "infra": {
+            "components": [
+                {
+                    "id": "mk8s",
+                    "instance_id": "cluster1",
+                    "enabled": True,
+                    "inputs": {},
+                },
+                {
+                    "id": "sfs",
+                    "instance_id": "sfs",
+                    "enabled": True,
+                    "inputs": {},
+                },
+            ]
+        },
+        "apps": {
+            "charts": [
+                {
+                    "id": "soperator",
+                    "instance_id": "cluster1",
+                    "enabled": True,
+                    "profile": "nebius-cpu-v1",
+                    "values": {},
+                }
+            ]
+        },
+    }
+
+    assert cli._materialize_soperator_component_defaults(payload) is True
+
+    mk8s_inputs = payload["infra"]["components"][0]["inputs"]
+    assert "gpu_enabled" not in mk8s_inputs
+    assert "gpu_node_groups" not in mk8s_inputs
+    assert "gpu_nodes_count_per_group" not in mk8s_inputs
+    assert "gpu_clusters" not in mk8s_inputs
+    assert set(mk8s_inputs["node_groups"]) == {
+        "system",
+        "controller",
+        "login",
+        "accounting",
+        "worker-cpu",
+    }
+    assert all(group["node_count"] == 1 for group in mk8s_inputs["node_groups"].values())
+    assert all(group["gpu"] is False for group in mk8s_inputs["node_groups"].values())
+    assert mk8s_inputs["node_groups"]["worker-cpu"]["nodeset_name"] == "worker-cpu"
+    assert mk8s_inputs["node_groups"]["worker-cpu"]["node_count"] == 1
+    assert mk8s_inputs["node_groups"]["worker-cpu"]["jail"] is True
+
+    soperator_values = payload["apps"]["charts"][0]["values"]
+    assert soperator_values["mariadb-operator"]["installOperator"] is True
+    assert soperator_values["clusterType"] == "cpu"
+    assert soperator_values["slurmNodes"]["accounting"]["enabled"] is True
+    assert soperator_values["slurmNodes"]["accounting"]["mariadbOperator"]["enabled"] is True
+    assert soperator_values["nodeGroupMapping"] == {
+        "system": ["system"],
+        "controller": ["controller"],
+        "login": ["login"],
+        "accounting": ["accounting"],
+        "worker": ["worker-cpu"],
+    }
+    assert [node["name"] for node in soperator_values["nodesets"]] == ["worker-cpu"]
+    worker_cpu = soperator_values["nodesets"][0]
+    assert worker_cpu["gpu"]["enabled"] is False
+    assert "gpu" not in worker_cpu["slurmd"]["resources"]
+    assert "nvidia.com/gpu" not in worker_cpu["slurmd"]["resources"]
+    assert soperator_values["partitionConfiguration"]["partitions"] == [
+        {
+            "name": "cpu",
+            "nodeSetRefs": ["worker-cpu"],
+            "policy": {
+                "default": True,
+                "state": "UP",
+                "maxTime": "INFINITE",
+                "priorityTier": 5,
+            },
+        },
+    ]
+    assert soperator_values["soperator-dcgm-exporter"]["enabled"] is False
+
 
 def test_soperator_mixed_profile_materializes_cpu_and_gpu_workers() -> None:
     payload = {
@@ -11397,27 +14101,36 @@ def test_soperator_mixed_profile_materializes_cpu_and_gpu_workers() -> None:
     assert cli._materialize_soperator_component_defaults(payload) is True
 
     mk8s_inputs = payload["infra"]["components"][0]["inputs"]
-    assert mk8s_inputs["gpu_enabled"] is True
-    assert mk8s_inputs["gpu_node_groups"] == 0
-    assert mk8s_inputs["gpu_nodes_count_per_group"] == 0
-    assert mk8s_inputs["node_groups"]["worker-cpu-0"]["nodeset_name"] == "worker-cpu"
-    assert mk8s_inputs["node_groups"]["worker-cpu-0"]["fixed_node_count"] == 2
-    assert mk8s_inputs["node_groups"]["worker-cpu-0"]["gpu"] is False
-    assert mk8s_inputs["node_groups"]["worker-cpu-0"]["jail"] is True
-    assert mk8s_inputs["node_groups"]["worker-gpu-0"]["nodeset_name"] == "worker-gpu"
-    assert mk8s_inputs["node_groups"]["worker-gpu-0"]["fixed_node_count"] == 2
-    assert mk8s_inputs["node_groups"]["worker-gpu-0"]["gpu"] is True
-    assert mk8s_inputs["node_groups"]["worker-gpu-0"]["jail"] is True
+    assert "gpu_enabled" not in mk8s_inputs
+    assert "gpu_node_groups" not in mk8s_inputs
+    assert "gpu_nodes_count_per_group" not in mk8s_inputs
+    assert mk8s_inputs["node_groups"]["system"]["node_count"] == 1
+    assert mk8s_inputs["node_groups"]["controller"]["node_count"] == 1
+    assert mk8s_inputs["node_groups"]["login"]["node_count"] == 1
+    assert mk8s_inputs["node_groups"]["accounting"]["node_count"] == 1
+    assert mk8s_inputs["node_groups"]["worker-cpu"]["nodeset_name"] == "worker-cpu"
+    assert mk8s_inputs["node_groups"]["worker-cpu"]["node_count"] == 1
+    assert mk8s_inputs["node_groups"]["worker-cpu"]["gpu"] is False
+    assert mk8s_inputs["node_groups"]["worker-cpu"]["jail"] is True
+    assert mk8s_inputs["node_groups"]["worker-gpu"]["nodeset_name"] == "worker-gpu"
+    assert mk8s_inputs["node_groups"]["worker-gpu"]["node_count"] == 1
+    assert mk8s_inputs["node_groups"]["worker-gpu"]["gpu"] is True
+    assert mk8s_inputs["node_groups"]["worker-gpu"]["jail"] is True
+    assert mk8s_inputs["node_groups"]["worker-gpu"]["reservation"] == {"policy": "AUTO"}
 
     soperator_values = payload["apps"]["charts"][0]["values"]
+    assert soperator_values["mariadb-operator"]["installOperator"] is True
     assert soperator_values["clusterType"] == "gpu"
+    assert soperator_values["slurmNodes"]["accounting"]["enabled"] is True
+    assert soperator_values["slurmNodes"]["accounting"]["mariadbOperator"]["enabled"] is True
     assert [node["name"] for node in soperator_values["nodesets"]] == [
         "worker-cpu",
         "worker-gpu",
     ]
-    worker_gpu = next(
-        node for node in soperator_values["nodesets"] if node["name"] == "worker-gpu"
-    )
+    worker_cpu = next(node for node in soperator_values["nodesets"] if node["name"] == "worker-cpu")
+    worker_gpu = next(node for node in soperator_values["nodesets"] if node["name"] == "worker-gpu")
+    assert worker_cpu["replicas"] == 1
+    assert worker_gpu["replicas"] == 1
     assert {
         "name": "NVIDIA_DRIVER_CAPABILITIES",
         "value": "compute,graphics,utility,video",
@@ -11426,14 +14139,1069 @@ def test_soperator_mixed_profile_materializes_cpu_and_gpu_workers() -> None:
         {
             "name": "cpu",
             "nodeSetRefs": ["worker-cpu"],
-            "config": "Default=YES MaxTime=INFINITE State=UP PriorityTier=5",
+            "policy": {
+                "default": True,
+                "state": "UP",
+                "maxTime": "INFINITE",
+                "priorityTier": 5,
+            },
         },
         {
             "name": "gpu",
             "nodeSetRefs": ["worker-gpu"],
-            "config": "Default=NO MaxTime=INFINITE State=UP PriorityTier=10",
+            "policy": {
+                "default": False,
+                "state": "UP",
+                "maxTime": "INFINITE",
+                "priorityTier": 10,
+            },
         },
     ]
+
+
+def test_soperator_onboarding_maps_external_mk8s_node_groups_without_creating_role_groups() -> None:
+    payload = {
+        "deploy": {
+            "targets": [
+                {
+                    "instance_id": "cluster1",
+                    "kind": "external-mk8s",
+                    "ownership": "external",
+                    "access": "external",
+                    "kube_context": "nebius-cluster1-mk8scluster-123-external",
+                    "inventory": {
+                        "node_groups": {
+                            "cpu-a": {
+                                "node_count": 2,
+                                "nodes": ["computeinstance-a", "computeinstance-b"],
+                                "gpu": False,
+                                "platform": "cpu-d3",
+                                "preset": "4vcpu-16gb",
+                            },
+                            "cpu-b": {
+                                "node_count": 2,
+                                "gpu": False,
+                                "platform": "cpu-d3",
+                                "preset": "4vcpu-16gb",
+                            },
+                            "h100": {
+                                "node_count": 2,
+                                "gpu": True,
+                                "platform": "gpu-h100-sxm",
+                                "preset": "1gpu-16vcpu-200gb",
+                                "labels": {
+                                    "nebius.com/driverful": "true",
+                                    "nebius.com/drivers-preset": "cuda13.0",
+                                    "nebius.com/node-group": "h100",
+                                },
+                            },
+                        }
+                    },
+                    "soperator_onboarding": {
+                        "accepted": True,
+                        "analysis_fingerprint": "",
+                        "state": "vanilla-mk8s",
+                        "actions": ["install-soperator"],
+                    },
+                }
+            ]
+        },
+        "infra": {"components": []},
+        "apps": {
+            "charts": [
+                {
+                    "id": "soperator",
+                    "instance_id": "cluster1",
+                    "enabled": True,
+                    "install_mode": "onboard-existing-cluster",
+                    "values": {},
+                }
+            ]
+        },
+    }
+    cli._refresh_soperator_onboarding_fingerprints(payload)
+
+    assert cli._materialize_soperator_component_defaults(payload) is True
+
+    mk8s_inputs = payload["deploy"]["targets"][0]["inventory"]
+    assert set(mk8s_inputs["node_groups"]) == {"cpu-a", "cpu-b", "h100"}
+    assert "gpu_clusters" not in mk8s_inputs
+    assert payload["apps"]["charts"][0]["install_mode"] == "onboard-existing-cluster"
+
+    values = payload["apps"]["charts"][0]["values"]
+    assert values["nodeGroupMapping"] == {
+        "system": ["cpu-a", "cpu-b"],
+        "controller": ["cpu-a", "cpu-b"],
+        "login": ["cpu-a", "cpu-b"],
+        "accounting": ["cpu-a", "cpu-b"],
+        "worker": ["h100"],
+    }
+    worker = next(node for node in values["nodesets"] if node["name"] == "worker")
+    assert worker["replicas"] == 2
+    assert worker["nodeSelector"] == {"nebius.com/node-group": "h100"}
+    assert values["soperator-dcgm-exporter"]["validateToolkit"] is False
+    assert worker["slurmd"]["resources"]["gpu"] == 1
+    assert values["rebooter"]["tolerations"] == [
+        {"key": "nvidia.com/gpu", "operator": "Exists", "effect": "NoSchedule"}
+    ]
+    worker_partition = next(
+        partition
+        for partition in values["partitionConfiguration"]["partitions"]
+        if partition["name"] == "gpu"
+    )
+    assert worker_partition["nodeSetRefs"] == ["worker"]
+
+    filters = {item["name"]: item for item in values["k8sNodeFilters"]}
+    assert filters["controller"]["affinity"]["nodeAffinity"][
+        "requiredDuringSchedulingIgnoredDuringExecution"
+    ]["nodeSelectorTerms"][0]["matchExpressions"][0] == {
+        "key": "nebius.com/node-group",
+        "operator": "In",
+        "values": ["cpu-a", "cpu-b"],
+    }
+    system_affinity = filters["system"]["affinity"]
+    assert values["controllerManager"]["affinity"] == system_affinity
+    assert values["soperator-checks"]["checks"]["affinity"] == system_affinity
+    assert values["mariadb-operator"]["affinity"] == system_affinity
+    assert values["mariadb-operator"]["webhook"]["affinity"] == system_affinity
+    assert "certController" not in values["mariadb-operator"]
+    assert values["slurmNodes"]["controller"]["k8sNodeFilterName"] == "controller"
+    assert values["slurmNodes"]["login"]["k8sNodeFilterName"] == "login"
+    assert values["slurmNodes"]["login"]["sshd"]["resources"] == {
+        "cpu": "250m",
+        "memory": "512Mi",
+        "ephemeralStorage": "2Gi",
+    }
+    assert values["slurmNodes"]["login"]["munge"]["resources"] == {
+        "cpu": "100m",
+        "memory": "128Mi",
+        "ephemeralStorage": "1Gi",
+    }
+    assert values["storage"]["jail"]["matchExpressions"] == [
+        {
+            "key": "nebius.com/node-group",
+            "operator": "In",
+            "values": ["cpu-a", "cpu-b", "h100"],
+        }
+    ]
+    assert values["storage"]["controllerSpool"]["matchExpressions"] == [
+        {
+            "key": "nebius.com/node-group",
+            "operator": "In",
+            "values": ["cpu-a", "cpu-b"],
+        }
+    ]
+    assert values["storage"]["accounting"]["matchExpressions"] == [
+        {
+            "key": "nebius.com/node-group",
+            "operator": "In",
+            "values": ["cpu-a", "cpu-b"],
+        }
+    ]
+
+
+def test_soperator_onboarding_existing_storage_mode_uses_local_storage_and_allocatable_fit() -> None:
+    payload = {
+        "deploy": {
+            "targets": [
+                {
+                    "instance_id": "cluster1",
+                    "kind": "external-mk8s",
+                    "ownership": "external",
+                    "access": "external",
+                    "kube_context": "nebius-cluster1-mk8scluster-123-external",
+                    "inventory": {
+                        "node_groups": {
+                            "cpu-small": {
+                                "node_count": 2,
+                                "nodes": ["computeinstance-a", "computeinstance-b"],
+                                "gpu": False,
+                                "platform": "cpu-d3",
+                                "preset": "4vcpu-16gb",
+                                "allocatable": {
+                                    "cpu": "3900m",
+                                    "memory": "15749428Ki",
+                                },
+                            }
+                        }
+                    },
+                    "soperator_onboarding": {
+                        "accepted": True,
+                        "analysis_fingerprint": "",
+                        "state": "vanilla-mk8s",
+                        "storage_mode": "use-existing-pvc-or-storageclass",
+                        "actions": ["configure-soperator-storage", "install-soperator"],
+                    },
+                }
+            ]
+        },
+        "infra": {"components": []},
+        "apps": {
+            "charts": [
+                {
+                    "id": "soperator",
+                    "instance_id": "cluster1",
+                    "enabled": True,
+                    "install_mode": "onboard-existing-cluster",
+                    "profile": "nebius-cpu-v1",
+                    "values": {
+                        "k8sNodeFilters": [
+                            {
+                                "name": "system",
+                                "affinity": {
+                                    "nodeAffinity": {
+                                        "requiredDuringSchedulingIgnoredDuringExecution": {
+                                            "nodeSelectorTerms": [
+                                                {
+                                                    "matchExpressions": [
+                                                        {
+                                                            "key": "node.kubernetes.io/instance-type",
+                                                            "operator": "In",
+                                                            "values": ["cpu-d3"],
+                                                        }
+                                                    ]
+                                                }
+                                            ]
+                                        }
+                                    }
+                                },
+                            }
+                        ]
+                    },
+                }
+            ]
+        },
+    }
+    cli._refresh_soperator_onboarding_fingerprints(payload)
+
+    assert cli._materialize_soperator_component_defaults(payload) is True
+
+    values = payload["apps"]["charts"][0]["values"]
+    assert values["volume"]["jail"]["type"] == "local"
+    assert values["volume"]["controllerSpool"]["type"] == "local"
+    assert values["volume"]["accounting"]["type"] == "local"
+    assert values["volume"]["accounting"]["enabled"] is False
+    assert values["populateJail"]["overwrite"] is True
+    assert values["customSlurmConfig"] == "PlugStackConfig=/dev/null"
+    assert values["slurmNodes"]["accounting"]["enabled"] is False
+    assert values["slurmNodes"]["accounting"]["mariadbOperator"]["enabled"] is False
+    assert values["slurmNodes"]["rest"]["enabled"] is False
+    assert values["mariadb-operator"]["installOperator"] is False
+    assert (
+        values["controllerManager"]["manager"]["env"]["isMariadbCrdInstalled"]
+        == "false"
+    )
+    worker = next(node for node in values["nodesets"] if node["name"] == "worker-cpu")
+    assert worker["replicas"] == 1
+    assert worker["nodeSelector"] == {"kubernetes.io/hostname": "computeinstance-a"}
+    assert (
+        worker["nodeConfig"]["static"]
+        == "Boards=1 SocketsPerBoard=1 CoresPerSocket=2 ThreadsPerCore=2"
+    )
+    assert worker["slurmd"]["resources"]["cpu"] == "500m"
+    assert worker["slurmd"]["resources"]["memory"] == "1024Mi"
+    system_filter = next(item for item in values["k8sNodeFilters"] if item["name"] == "system")
+    assert system_filter["affinity"]["nodeAffinity"][
+        "requiredDuringSchedulingIgnoredDuringExecution"
+    ]["nodeSelectorTerms"] == [
+        {
+            "matchExpressions": [
+                {
+                    "key": "kubernetes.io/hostname",
+                    "operator": "In",
+                    "values": ["computeinstance-a"],
+                }
+            ]
+        }
+    ]
+    assert values["kruise"]["manager"]["resources"]["requests"] == {
+        "cpu": "100m",
+        "memory": "128Mi",
+    }
+    assert values["slurmNodes"]["accounting"]["slurmdbd"]["resources"] == {
+        "cpu": "250m",
+        "memory": "512Mi",
+        "ephemeralStorage": "2Gi",
+    }
+    assert values["slurmNodes"]["accounting"]["mariadbOperator"]["resources"] == {
+        "cpu": "250m",
+        "memory": "1Gi",
+        "ephemeralStorage": "2Gi",
+    }
+    assert values["slurmNodes"]["controller"]["slurmctld"]["resources"] == {
+        "cpu": "250m",
+        "memory": "512Mi",
+        "ephemeralStorage": "2Gi",
+    }
+
+
+def test_soperator_onboarding_uses_discovered_selector_labels_for_external_groups() -> None:
+    payload = {
+        "deploy": {
+            "targets": [
+                {
+                    "instance_id": "cluster1",
+                    "kind": "external-mk8s",
+                    "ownership": "external",
+                    "access": "external",
+                    "kube_context": "nebius-cluster1-mk8scluster-123-external",
+                    "inventory": {
+                        "node_groups": {
+                            "h100": {
+                                "node_count": 2,
+                                "gpu": True,
+                                "platform": "gpu-h100-sxm",
+                                "preset": "1gpu-16vcpu-200gb",
+                                "selector": {
+                                    "key": "yandex.cloud/node-group-id",
+                                    "operator": "In",
+                                    "values": ["mk8snodegroup-123"],
+                                },
+                            }
+                        }
+                    },
+                    "soperator_onboarding": {
+                        "accepted": True,
+                        "analysis_fingerprint": "",
+                        "state": "vanilla-mk8s",
+                        "actions": ["install-soperator"],
+                    },
+                }
+            ]
+        },
+        "infra": {"components": []},
+        "apps": {
+            "charts": [
+                {
+                    "id": "soperator",
+                    "instance_id": "cluster1",
+                    "enabled": True,
+                    "install_mode": "onboard-existing-cluster",
+                    "values": {"nodeGroupMapping": {"worker": ["h100"]}},
+                }
+            ]
+        },
+    }
+    cli._refresh_soperator_onboarding_fingerprints(payload)
+
+    assert cli._materialize_soperator_component_defaults(payload) is True
+
+    values = payload["apps"]["charts"][0]["values"]
+    worker = next(node for node in values["nodesets"] if node["name"] == "worker")
+    assert worker["nodeSelector"] == {"yandex.cloud/node-group-id": "mk8snodegroup-123"}
+
+
+def test_soperator_onboarding_uses_fallback_live_labels_when_selector_is_absent() -> None:
+    payload = {
+        "deploy": {
+            "targets": [
+                {
+                    "instance_id": "cluster1",
+                    "kind": "external-mk8s",
+                    "ownership": "external",
+                    "access": "external",
+                    "kube_context": "nebius-cluster1-mk8scluster-123-external",
+                    "inventory": {
+                        "node_groups": {
+                            "fallback": {
+                                "node_count": 2,
+                                "gpu": True,
+                                "platform": "gpu-h100-sxm",
+                                "preset": "1gpu-16vcpu-200gb",
+                                "labels": {"yandex.cloud/node-group-id": "mk8snodegroup-123"},
+                            }
+                        }
+                    },
+                    "soperator_onboarding": {
+                        "accepted": True,
+                        "analysis_fingerprint": "",
+                        "state": "vanilla-mk8s",
+                        "actions": ["install-soperator"],
+                    },
+                }
+            ]
+        },
+        "infra": {"components": []},
+        "apps": {
+            "charts": [
+                {
+                    "id": "soperator",
+                    "instance_id": "cluster1",
+                    "enabled": True,
+                    "install_mode": "onboard-existing-cluster",
+                    "values": {"nodeGroupMapping": {"worker": ["fallback"]}},
+                }
+            ]
+        },
+    }
+    cli._refresh_soperator_onboarding_fingerprints(payload)
+
+    assert cli._materialize_soperator_component_defaults(payload) is True
+
+    values = payload["apps"]["charts"][0]["values"]
+    worker = next(node for node in values["nodesets"] if node["name"] == "worker")
+    assert worker["nodeSelector"] == {"yandex.cloud/node-group-id": "mk8snodegroup-123"}
+
+
+def test_soperator_onboarding_uses_live_resource_labels_for_external_groups() -> None:
+    payload = {
+        "deploy": {
+            "targets": [
+                {
+                    "instance_id": "cluster1",
+                    "kind": "external-mk8s",
+                    "ownership": "external",
+                    "access": "external",
+                    "kube_context": "nebius-cluster1-mk8scluster-123-external",
+                    "inventory": {
+                        "node_groups": {
+                            "h100": {
+                                "node_count": 2,
+                                "gpu": True,
+                                "labels": {
+                                    "nebius.com/node-group": "h100",
+                                    "nebius.com/resource-preset": "1gpu-16vcpu-200gb",
+                                },
+                                "allocatable": {"nvidia.com/gpu": "1"},
+                            }
+                        }
+                    },
+                    "soperator_onboarding": {
+                        "accepted": True,
+                        "analysis_fingerprint": "",
+                        "state": "vanilla-mk8s",
+                        "actions": ["install-soperator"],
+                    },
+                }
+            ]
+        },
+        "infra": {"components": []},
+        "apps": {
+            "charts": [
+                {
+                    "id": "soperator",
+                    "instance_id": "cluster1",
+                    "enabled": True,
+                    "install_mode": "onboard-existing-cluster",
+                    "values": {"nodeGroupMapping": {"worker": ["h100"]}},
+                }
+            ]
+        },
+    }
+    cli._refresh_soperator_onboarding_fingerprints(payload)
+
+    assert cli._materialize_soperator_component_defaults(payload) is True
+
+    values = payload["apps"]["charts"][0]["values"]
+    worker = next(node for node in values["nodesets"] if node["name"] == "worker")
+    assert worker["slurmd"]["resources"]["gpu"] == 1
+
+
+def test_soperator_profile_strips_internal_hidden_partition_from_source_config() -> None:
+    payload = {
+        "infra": {
+            "components": [
+                {
+                    "id": "mk8s",
+                    "instance_id": "cluster1",
+                    "enabled": True,
+                    "inputs": {
+                        "node_groups": {
+                            "system": {
+                                "node_count": 2,
+                                "gpu": False,
+                                "platform": "cpu-d3",
+                                "preset": "4vcpu-16gb",
+                            },
+                            "controller": {
+                                "node_count": 1,
+                                "gpu": False,
+                                "platform": "cpu-d3",
+                                "preset": "4vcpu-16gb",
+                            },
+                            "login": {
+                                "node_count": 1,
+                                "gpu": False,
+                                "platform": "cpu-d3",
+                                "preset": "4vcpu-16gb",
+                                "taints": [
+                                    {
+                                        "key": "slurm.nebius.ai/nodeset-name",
+                                        "value": "login",
+                                        "effect": "NO_SCHEDULE",
+                                    }
+                                ],
+                            },
+                            "accounting": {
+                                "node_count": 1,
+                                "gpu": False,
+                                "platform": "cpu-d3",
+                                "preset": "4vcpu-16gb",
+                            },
+                            "worker": {
+                                "node_count": 2,
+                                "gpu": True,
+                                "platform": "gpu-h100-sxm",
+                                "preset": "1gpu-16vcpu-200gb",
+                            },
+                        }
+                    },
+                },
+                {"id": "sfs", "instance_id": "sfs", "enabled": True, "inputs": {}},
+            ]
+        },
+        "apps": {
+            "charts": [
+                {
+                    "id": "soperator",
+                    "instance_id": "cluster1",
+                    "enabled": True,
+                    "values": {
+                        "partitionConfiguration": {
+                            "partitions": [
+                                {
+                                    "name": "gpu",
+                                    "nodeSetRefs": ["worker"],
+                                    "config": "Default=YES MaxTime=INFINITE State=UP PriorityTier=10",
+                                }
+                            ]
+                        }
+                    },
+                }
+            ]
+        },
+    }
+
+    assert cli._materialize_soperator_component_defaults(payload) is True
+
+    values = payload["apps"]["charts"][0]["values"]
+    partitions = values["partitionConfiguration"]["partitions"]
+    assert [partition["name"] for partition in partitions] == ["gpu"]
+    assert partitions[0] == {
+        "name": "gpu",
+        "nodeSetRefs": ["worker"],
+        "policy": {
+            "default": True,
+            "state": "UP",
+            "maxTime": "INFINITE",
+            "priorityTier": 10,
+        },
+    }
+    assert "srunReadyPartition" not in values.get("soperator-activechecks", {})
+
+
+def test_soperator_activechecks_ready_partition_is_render_only_profile_value() -> None:
+    payload = {
+        "apps": {
+            "charts": [
+                {
+                    "id": "soperator",
+                    "instance_id": "cluster1",
+                    "enabled": True,
+                    "values": {
+                        "soperator-activechecks": {
+                            "enabled": True,
+                            "srunReadyPartition": "custom",
+                        }
+                    },
+                }
+            ]
+        }
+    }
+
+    assert cli._materialize_soperator_component_defaults(payload) is True
+
+    values = payload["apps"]["charts"][0]["values"]
+    assert "srunReadyPartition" not in values["soperator-activechecks"]
+
+    assert cli._materialize_soperator_render_only_values(payload) is True
+    assert values["soperator-activechecks"]["srunReadyPartition"] == "hidden"
+    assert [
+        partition["name"] for partition in values["partitionConfiguration"]["partitions"]
+    ] == ["hidden", "gpu"]
+
+
+def test_soperator_guided_sssd_helper_is_render_only_profile_value() -> None:
+    payload = {
+        "apps": {
+            "charts": [
+                {
+                    "id": "soperator",
+                    "instance_id": "cluster1",
+                    "enabled": True,
+                    "values": {
+                        "sssd": {"enabled": True},
+                    },
+                }
+            ]
+        }
+    }
+
+    assert cli._materialize_soperator_component_defaults(payload) is True
+
+    values = payload["apps"]["charts"][0]["values"]
+    assert values["sssd"]["enabled"] is True
+    assert values["slurmNodes"]["sssd"]["enabled"] is True
+    assert all(
+        (nodeset.get("sssd") or {}).get("enabled") is True
+        for nodeset in values["nodesets"]
+        if isinstance(nodeset, dict)
+    )
+
+    assert cli._materialize_soperator_render_only_values(payload) is True
+    assert "sssd" not in values
+    assert values["slurmNodes"]["sssd"]["enabled"] is True
+    assert all(
+        (nodeset.get("sssd") or {}).get("enabled") is True
+        for nodeset in values["nodesets"]
+        if isinstance(nodeset, dict)
+    )
+
+
+def test_soperator_role_mapping_derives_tolerations_from_mk8s_taints() -> None:
+    payload = {
+        "infra": {
+            "components": [
+                {
+                    "id": "mk8s",
+                    "instance_id": "cluster1",
+                    "enabled": True,
+                    "inputs": {
+                        "node_groups": {
+                            "system": {
+                                "node_count": 2,
+                                "gpu": False,
+                                "platform": "cpu-d3",
+                                "preset": "4vcpu-16gb",
+                            },
+                            "controller": {
+                                "node_count": 1,
+                                "gpu": False,
+                                "platform": "cpu-d3",
+                                "preset": "4vcpu-16gb",
+                                "taints": [
+                                    {
+                                        "key": "slurm.nebius.ai/nodeset-name",
+                                        "value": "controller",
+                                        "effect": "NO_SCHEDULE",
+                                    }
+                                ],
+                            },
+                            "login": {
+                                "node_count": 1,
+                                "gpu": False,
+                                "platform": "cpu-d3",
+                                "preset": "4vcpu-16gb",
+                            },
+                            "accounting": {
+                                "node_count": 1,
+                                "gpu": False,
+                                "platform": "cpu-d3",
+                                "preset": "4vcpu-16gb",
+                                "taints": [
+                                    {
+                                        "key": "slurm.nebius.ai/nodeset-name",
+                                        "value": "accounting",
+                                        "effect": "NO_SCHEDULE",
+                                    }
+                                ],
+                            },
+                            "worker": {
+                                "node_count": 1,
+                                "gpu": True,
+                                "platform": "gpu-h100-sxm",
+                                "preset": "1gpu-16vcpu-200gb",
+                                "taints": [
+                                    {
+                                        "key": "nvidia.com/gpu",
+                                        "value": "true",
+                                        "effect": "NO_SCHEDULE",
+                                    }
+                                ],
+                            },
+                        }
+                    },
+                }
+            ]
+        },
+        "apps": {
+            "charts": [
+                {
+                    "id": "soperator",
+                    "instance_id": "cluster1",
+                    "enabled": True,
+                    "values": {
+                        "rebooter": {
+                            "tolerations": [
+                                {
+                                    "key": "custom.nebius.ai/reboot",
+                                    "operator": "Exists",
+                                    "effect": "NoSchedule",
+                                }
+                            ]
+                        },
+                        "nodeGroupMapping": {
+                            "system": ["system"],
+                            "controller": ["controller"],
+                            "login": ["login"],
+                            "accounting": ["accounting"],
+                            "worker": ["worker"],
+                        },
+                    },
+                }
+            ]
+        },
+    }
+
+    assert cli._materialize_soperator_component_defaults(payload) is True
+
+    values = payload["apps"]["charts"][0]["values"]
+    filters = {item["name"]: item for item in values["k8sNodeFilters"]}
+    assert filters["controller"]["tolerations"] == [
+        {
+            "key": "slurm.nebius.ai/nodeset-name",
+            "operator": "Equal",
+            "value": "controller",
+            "effect": "NoSchedule",
+        }
+    ]
+    assert filters["login"]["tolerations"] == [
+        {
+            "key": "slurm.nebius.ai/nodeset-name",
+            "operator": "Equal",
+            "value": "login",
+            "effect": "NoSchedule",
+        }
+    ]
+    assert filters["accounting"]["tolerations"] == [
+        {
+            "key": "slurm.nebius.ai/nodeset-name",
+            "operator": "Equal",
+            "value": "accounting",
+            "effect": "NoSchedule",
+        }
+    ]
+    worker = next(node for node in values["nodesets"] if node["name"] == "worker")
+    assert {
+        "key": "nvidia.com/gpu",
+        "operator": "Equal",
+        "value": "true",
+        "effect": "NoSchedule",
+    } in worker["tolerations"]
+    assert {
+        "key": "custom.nebius.ai/reboot",
+        "operator": "Exists",
+        "effect": "NoSchedule",
+    } in values["rebooter"]["tolerations"]
+    assert {
+        "key": "nvidia.com/gpu",
+        "operator": "Equal",
+        "value": "true",
+        "effect": "NoSchedule",
+    } in values["rebooter"]["tolerations"]
+    assert values["storage"]["accounting"]["tolerations"] == [
+        {
+            "key": "slurm.nebius.ai/nodeset-name",
+            "operator": "Equal",
+            "value": "accounting",
+            "effect": "NoSchedule",
+        }
+    ]
+    assert values["storage"]["controllerSpool"]["tolerations"] == [
+        {
+            "key": "slurm.nebius.ai/nodeset-name",
+            "operator": "Equal",
+            "value": "controller",
+            "effect": "NoSchedule",
+        }
+    ]
+
+
+def test_soperator_role_mapping_preserves_explicit_node_group_sfs_keys() -> None:
+    payload = {
+        "infra": {
+            "components": [
+                {
+                    "id": "mk8s",
+                    "instance_id": "cluster1",
+                    "enabled": True,
+                    "inputs": {
+                        "node_groups": {
+                            "controller": {
+                                "node_count": 1,
+                                "gpu": False,
+                                "platform": "cpu-d3",
+                                "preset": "4vcpu-16gb",
+                                "sfs_filesystem_keys": [
+                                    "cluster1-jail",
+                                    "cluster1-controller-spool",
+                                ],
+                            },
+                            "worker": {
+                                "node_count": 1,
+                                "gpu": True,
+                                "platform": "gpu-h100-sxm",
+                                "preset": "1gpu-16vcpu-200gb",
+                                "sfs_filesystem_keys": ["cluster1-jail"],
+                            },
+                        }
+                    },
+                },
+                {
+                    "id": "sfs",
+                    "instance_id": "sfs",
+                    "enabled": True,
+                    "inputs": {},
+                },
+            ]
+        },
+        "apps": {
+            "charts": [
+                {
+                    "id": "soperator",
+                    "instance_id": "cluster1",
+                    "enabled": True,
+                    "values": {
+                        "nodeGroupMapping": {
+                            "controller": ["controller"],
+                            "worker": ["worker"],
+                        }
+                    },
+                }
+            ]
+        },
+    }
+
+    assert cli._materialize_soperator_component_defaults(payload) is True
+
+    node_groups = payload["infra"]["components"][0]["inputs"]["node_groups"]
+    assert node_groups["controller"]["sfs_filesystem_keys"] == [
+        "cluster1-jail",
+        "cluster1-controller-spool",
+    ]
+    assert node_groups["worker"]["sfs_filesystem_keys"] == ["cluster1-jail"]
+    assert node_groups["controller"]["node_labels"]["nebius.com/node-group"] == "controller"
+    assert node_groups["worker"]["node_labels"]["nebius.com/node-group"] == "worker"
+    values = payload["apps"]["charts"][0]["values"]
+    controller_filter = next(
+        item for item in values["k8sNodeFilters"] if item["name"] == "controller"
+    )
+    controller_filter["comment"] = "operator override"
+
+    cli._materialize_soperator_component_defaults(payload)
+
+    values = payload["apps"]["charts"][0]["values"]
+    controller_filter = next(
+        item for item in values["k8sNodeFilters"] if item["name"] == "controller"
+    )
+    assert controller_filter["comment"] == "operator override"
+
+
+def test_soperator_onboarding_target_selection_preserves_multi_target_rows() -> None:
+    payload = {
+        "deploy": {
+            "targets": [
+                {
+                    "instance_id": "cluster1",
+                    "kind": "external-mk8s",
+                    "ownership": "external",
+                    "kube_context": "ctx-1",
+                },
+                {
+                    "instance_id": "cluster2",
+                    "kind": "external-mk8s",
+                    "ownership": "external",
+                    "kube_context": "ctx-2",
+                },
+            ]
+        },
+        "apps": {
+            "charts": [
+                {
+                    "id": "soperator",
+                    "instance_id": "cluster1",
+                    "enabled": True,
+                    "install_mode": "onboard-existing-cluster",
+                    "values": {},
+                },
+                {
+                    "id": "soperator",
+                    "instance_id": "cluster2",
+                    "enabled": True,
+                    "install_mode": "onboard-existing-cluster",
+                    "values": {},
+                },
+                {
+                    "id": "cert-manager",
+                    "instance_id": "cluster2",
+                    "enabled": True,
+                },
+            ]
+        },
+    }
+
+    cli._ensure_soperator_onboarding_target(payload, interactive=False)
+
+    charts = payload["apps"]["charts"]
+    assert charts[0]["instance_id"] == "cluster1"
+    assert charts[1]["instance_id"] == "cluster2"
+    assert charts[2]["instance_id"] == "cluster2"
+
+
+def test_soperator_onboarding_target_selection_rejects_multiple_empty_target_rows() -> None:
+    payload = {
+        "deploy": {
+            "targets": [
+                {
+                    "instance_id": "cluster1",
+                    "kind": "external-mk8s",
+                    "ownership": "external",
+                    "kube_context": "ctx-1",
+                },
+            ]
+        },
+        "apps": {
+            "charts": [
+                {
+                    "id": "soperator",
+                    "enabled": True,
+                    "install_mode": "onboard-existing-cluster",
+                    "values": {},
+                },
+                {
+                    "id": "soperator",
+                    "enabled": True,
+                    "install_mode": "onboard-existing-cluster",
+                    "values": {},
+                },
+            ]
+        },
+    }
+
+    with pytest.raises(RuntimeError, match="require an explicit target_ref"):
+        cli._ensure_soperator_onboarding_target(payload, interactive=False)
+
+
+def test_soperator_onboarding_target_defaults_do_not_accept_partial_analysis() -> None:
+    target = cli._soperator_onboarding_target_defaults(
+        "cluster1",
+        kube_context="ctx-1",
+        snapshot={
+            "node_groups": {},
+            "helm_releases": [
+                {
+                    "name": "custom-slurm",
+                    "namespace": "slurm",
+                    "chart": "soperator-1.0.0",
+                    "app_version": "1.0.0",
+                }
+            ],
+            "crds": [],
+            "collection_errors": [],
+        },
+        pinned_chart_version="0.25.0",
+        pinned_app_version="0.25.0",
+    )
+
+    assert target["soperator_onboarding"]["state"] == "partial-soperator"
+    assert target["soperator_onboarding"]["accepted"] is False
+
+
+def test_soperator_partition_and_topology_profiles_do_not_overwrite_user_values() -> None:
+    values = {
+        "partitionProfile": "custom-partitions",
+        "topologyProfile": "custom-topology",
+        "partitionConfiguration": {
+            "limits": {
+                "gpu": "user-gpu-limit",
+            }
+        },
+        "slurmConfig": {
+            "topologyPlugin": "user/plugin",
+        },
+    }
+    profile = {
+        "chart": {
+            "partition_profiles": {
+                "custom-partitions": {
+                    "values": {
+                        "partitionConfiguration": {
+                            "limits": {
+                                "gpu": "profile-gpu-limit",
+                                "cpu": "profile-cpu-limit",
+                            }
+                        }
+                    }
+                }
+            },
+            "topology_profiles": {
+                "custom-topology": {
+                    "values": {
+                        "slurmConfig": {
+                            "topologyPlugin": "topology/tree",
+                            "topologyParam": "SwitchAsNodeRank",
+                        }
+                    }
+                }
+            },
+        }
+    }
+
+    cli._materialize_soperator_partition_profile(values=values, profile=profile)
+    cli._materialize_soperator_topology_profile(values=values, profile=profile)
+
+    assert values["partitionConfiguration"]["limits"] == {
+        "gpu": "user-gpu-limit",
+        "cpu": "profile-cpu-limit",
+    }
+    assert values["slurmConfig"] == {
+        "topologyPlugin": "user/plugin",
+        "topologyParam": "SwitchAsNodeRank",
+    }
+
+
+def test_soperator_topology_profile_materializes_only_when_selected() -> None:
+    payload = {
+        "infra": {
+            "components": [
+                {
+                    "id": "mk8s",
+                    "instance_id": "cluster1",
+                    "enabled": True,
+                    "inputs": {},
+                },
+                {
+                    "id": "sfs",
+                    "instance_id": "sfs",
+                    "enabled": True,
+                    "inputs": {},
+                },
+            ]
+        },
+        "apps": {
+            "charts": [
+                {
+                    "id": "soperator",
+                    "instance_id": "cluster1",
+                    "enabled": True,
+                    "profile": "nebius-gpu-v1",
+                    "values": {"topologyProfile": "nebius-tiered-tree-v1"},
+                }
+            ]
+        },
+    }
+
+    assert cli._materialize_soperator_component_defaults(payload) is True
+
+    values = payload["apps"]["charts"][0]["values"]
+    assert values["slurmConfig"] == {
+        "topologyPlugin": "topology/tree",
+        "topologyParam": "SwitchAsNodeRank",
+    }
+    assert (
+        values["controllerManager"]["manager"]["env"]["topologyLabelPrefix"]
+        == "topology.nebius.com"
+    )
 
 
 def test_soperator_mixed_feature_partition_profile_materializes_node_features() -> None:
@@ -11471,12 +15239,9 @@ def test_soperator_mixed_feature_partition_profile_materializes_node_features() 
 
     soperator_values = payload["apps"]["charts"][0]["values"]
     assert [
-        partition["name"]
-        for partition in soperator_values["partitionConfiguration"]["partitions"]
+        partition["name"] for partition in soperator_values["partitionConfiguration"]["partitions"]
     ] == ["cpu", "gpu", "h100", "infiniband", "debug", "long"]
-    worker_gpu = next(
-        node for node in soperator_values["nodesets"] if node["name"] == "worker-gpu"
-    )
+    worker_gpu = next(node for node in soperator_values["nodesets"] if node["name"] == "worker-gpu")
     assert worker_gpu["nodeConfig"]["features"] == [
         "gpu",
         "cuda",
@@ -11484,3 +15249,72 @@ def test_soperator_mixed_feature_partition_profile_materializes_node_features() 
         "infiniband",
     ]
     assert worker_gpu["slurmd"]["resources"]["gpu"] == 8
+
+
+def test_soperator_profile_switch_replaces_generated_default_profile_values() -> None:
+    payload = {
+        "infra": {
+            "components": [
+                {
+                    "id": "mk8s",
+                    "instance_id": "cluster1",
+                    "enabled": True,
+                    "inputs": {},
+                },
+                {
+                    "id": "sfs",
+                    "instance_id": "sfs",
+                    "enabled": True,
+                    "inputs": {},
+                },
+            ]
+        },
+        "apps": {
+            "charts": [
+                {
+                    "id": "soperator",
+                    "instance_id": "cluster1",
+                    "enabled": True,
+                    "values": {},
+                }
+            ]
+        },
+    }
+
+    assert cli._materialize_soperator_component_defaults(payload) is True
+    app_row = payload["apps"]["charts"][0]
+    assert app_row["profile"] == "nebius-gpu-v1"
+    assert app_row["values"]["partitionProfile"] == "shape-default"
+    assert app_row["values"]["topologyProfile"] == "disabled"
+    assert app_row["values"]["nodeGroupMapping"]["worker"] == ["worker"]
+
+    app_row["profile"] = "nebius-mixed-v1"
+    app_row["values"]["partitionProfile"] = "with-h100-infiniband-debug-long"
+    app_row["values"]["topologyProfile"] = "nebius-nvl-rack-v1"
+
+    assert cli._materialize_soperator_component_defaults(payload) is True
+
+    mk8s_inputs = payload["infra"]["components"][0]["inputs"]
+    assert set(mk8s_inputs["node_groups"]) == {
+        "system",
+        "controller",
+        "login",
+        "accounting",
+        "worker-cpu",
+        "worker-gpu",
+    }
+    values = app_row["values"]
+    assert values["nodeGroupMapping"]["worker"] == ["worker-gpu"]
+    assert [node["name"] for node in values["nodesets"]] == [
+        "worker-cpu",
+        "worker-gpu",
+    ]
+    assert [partition["name"] for partition in values["partitionConfiguration"]["partitions"]] == [
+        "cpu",
+        "gpu",
+        "h100",
+        "infiniband",
+        "debug",
+        "long",
+    ]
+    assert values["slurmConfig"]["topologyPlugin"] == "topology/block"

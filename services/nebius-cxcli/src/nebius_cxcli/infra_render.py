@@ -54,9 +54,7 @@ _PROVIDER_VAR_AUTH_PRIVATE_KEY_FILE = "nebius_auth_private_key_file"
 _PROVIDER_VAR_CREDENTIALS_FILE = "nebius_service_account_credentials_file"
 _NO_VARIABLE_DEFAULT = object()
 _RUNTIME_ONLY_MODULE_ARGUMENTS = frozenset({"payload_values"})
-_MYSTERYBOX_CXCLI_ONLY_SECRET_KEYS = frozenset(
-    {"eso_version_policy", "kubernetes_secret_name"}
-)
+_MYSTERYBOX_CXCLI_ONLY_SECRET_KEYS = frozenset({"eso_version_policy", "kubernetes_secret_name"})
 
 
 @dataclass(frozen=True)
@@ -344,12 +342,12 @@ def _module_type_hints(module_source: str) -> dict[str, str]:
 
 
 def _runtime_only_module_argument_names(declared_argument_names: set[str]) -> set[str]:
-    return {
-        name for name in _RUNTIME_ONLY_MODULE_ARGUMENTS if name in declared_argument_names
-    }
+    return {name for name in _RUNTIME_ONLY_MODULE_ARGUMENTS if name in declared_argument_names}
 
 
-def _module_inputs_for_terraform(component_id: str, module_inputs: dict[str, Any]) -> dict[str, Any]:
+def _module_inputs_for_terraform(
+    component_id: str, module_inputs: dict[str, Any]
+) -> dict[str, Any]:
     if component_id != "mysterybox":
         return module_inputs
     secrets = module_inputs.get("secrets")
@@ -364,8 +362,7 @@ def _module_inputs_for_terraform(component_id: str, module_inputs: dict[str, Any
         cleaned = {
             key: value
             for key, value in item.items()
-            if str(key).strip().replace("-", "_").lower()
-            not in _MYSTERYBOX_CXCLI_ONLY_SECRET_KEYS
+            if str(key).strip().replace("-", "_").lower() not in _MYSTERYBOX_CXCLI_ONLY_SECRET_KEYS
         }
         if cleaned != item:
             changed = True
@@ -444,21 +441,23 @@ def _enabled_infra_instance_ids(payload: dict[str, Any], component_id: str) -> t
     return tuple(instance_ids)
 
 
-def _soperator_sfs_module_name(
+def _sfs_module_name_for_target(
     payload: dict[str, Any],
     *,
     target_ref: str,
-    module_name_by_instance_id: dict[str, str],
+    sfs_module_name_by_instance_id: dict[str, str],
 ) -> str:
     sfs_instance_ids = _enabled_infra_instance_ids(payload, "sfs")
     if target_ref in sfs_instance_ids:
-        return module_name_by_instance_id.get(target_ref, "")
+        return sfs_module_name_by_instance_id.get(target_ref, "")
     if len(sfs_instance_ids) == 1:
-        return module_name_by_instance_id.get(sfs_instance_ids[0], "")
+        return sfs_module_name_by_instance_id.get(sfs_instance_ids[0], "")
     return ""
 
 
-def _sfs_filesystem_attachments_expr(module_name: str, filesystem_keys: list[str]) -> _HclExpression:
+def _sfs_filesystem_attachments_expr(
+    module_name: str, filesystem_keys: list[str]
+) -> _HclExpression:
     keys_expr = json.dumps(filesystem_keys)
     return _HclExpression(
         "\n".join(
@@ -475,17 +474,20 @@ def _sfs_filesystem_attachments_expr(module_name: str, filesystem_keys: list[str
     )
 
 
-def _soperator_node_group_filesystem_keys(group: dict[str, Any]) -> list[str]:
+def _node_group_sfs_filesystem_keys(group_key: str, group: dict[str, Any]) -> list[str]:
     filesystem_keys: list[str] = []
+    workload = str(group.get("workload") or group.get("nodeset_name") or group_key).strip()
+    if bool(group.get("jail", False)):
+        filesystem_keys.append("jail")
+    if workload == "controller" or group_key == "controller":
+        filesystem_keys.extend(["jail", "controller-spool"])
+    if workload == "accounting" or group_key == "accounting":
+        filesystem_keys.extend(["jail", "accounting"])
     explicit_keys = group.get("sfs_filesystem_keys", group.get("filesystem_keys"))
     if isinstance(explicit_keys, str):
-        filesystem_keys.extend(
-            key.strip() for key in explicit_keys.split(",") if key.strip()
-        )
+        filesystem_keys.extend(key.strip() for key in explicit_keys.split(",") if key.strip())
     elif isinstance(explicit_keys, list):
-        filesystem_keys.extend(
-            str(key).strip() for key in explicit_keys if str(key).strip()
-        )
+        filesystem_keys.extend(str(key).strip() for key in explicit_keys if str(key).strip())
     return filesystem_keys
 
 
@@ -495,22 +497,20 @@ def _truthy(value: Any) -> bool:
     return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
 
 
-def _materialize_soperator_sfs_attachments(
+def _materialize_mk8s_sfs_attachments(
     *,
     payload: dict[str, Any],
     component_id: str,
     instance_id: str,
     module_inputs: dict[str, Any],
-    module_name_by_instance_id: dict[str, str],
+    sfs_module_name_by_instance_id: dict[str, str],
 ) -> None:
     if component_id != "mk8s":
         return
-    if instance_id not in _enabled_soperator_target_refs(payload):
-        return
-    sfs_module_name = _soperator_sfs_module_name(
+    sfs_module_name = _sfs_module_name_for_target(
         payload,
         target_ref=instance_id,
-        module_name_by_instance_id=module_name_by_instance_id,
+        sfs_module_name_by_instance_id=sfs_module_name_by_instance_id,
     )
     if not sfs_module_name:
         return
@@ -520,32 +520,18 @@ def _materialize_soperator_sfs_attachments(
         for key, group in node_groups.items():
             if not isinstance(group, dict) or "filesystems" in group:
                 continue
-            filesystem_keys: list[str] = []
-            if _truthy(group.get("jail")):
-                filesystem_keys.append("jail")
-            filesystem_keys.extend(_soperator_node_group_filesystem_keys(group))
-            workload = str(group.get("workload", "") or "").strip().lower()
-            group_key = str(key).strip().lower()
-            if group_key == "controller" or workload == "controller":
-                filesystem_keys.append("controller-spool")
-            if group_key == "accounting" or workload == "accounting":
-                filesystem_keys.append("accounting")
+            filesystem_keys = _node_group_sfs_filesystem_keys(str(key), group)
+            if (
+                instance_id not in _enabled_soperator_target_refs(payload)
+                and not group.get("sfs_filesystem_keys")
+                and not group.get("filesystem_keys")
+            ):
+                continue
             if filesystem_keys:
                 group["filesystems"] = _sfs_filesystem_attachments_expr(
                     sfs_module_name,
                     list(dict.fromkeys(filesystem_keys)),
                 )
-
-    gpu_overrides = module_inputs.get("mk8s_gpu_node_group_overrides")
-    if not isinstance(gpu_overrides, dict):
-        return
-    template = gpu_overrides.get("template")
-    if not isinstance(template, dict) or "filesystems" in template:
-        return
-    metadata = template.get("metadata")
-    labels = metadata.get("labels") if isinstance(metadata, dict) else None
-    if isinstance(labels, dict) and _truthy(labels.get("slurm.nebius.ai/jail")):
-        template["filesystems"] = _sfs_filesystem_attachments_expr(sfs_module_name, ["jail"])
 
 
 def _build_module_plans(
@@ -579,7 +565,8 @@ def _build_module_plans(
         return ()
 
     prepared_rows: list[dict[str, Any]] = []
-    module_name_by_instance_id: dict[str, str] = {}
+    module_name_by_component_instance: dict[tuple[str, str], str] = {}
+    sfs_module_name_by_instance_id: dict[str, str] = {}
     for item in components:
         if not isinstance(item, dict):
             continue
@@ -697,7 +684,9 @@ def _build_module_plans(
                 "runtime_only_argument_names": runtime_only_argument_names,
             }
         )
-        module_name_by_instance_id[instance_id] = module_name
+        module_name_by_component_instance[(component_id, instance_id)] = module_name
+        if component_id == "sfs":
+            sfs_module_name_by_instance_id[instance_id] = module_name
 
     for prepared in prepared_rows:
         component_id = str(prepared["component_id"])
@@ -765,7 +754,9 @@ def _build_module_plans(
                         f"Terraform output '{source_ref}' "
                         f"from non-infra component '{binding.source_component_id}'"
                     )
-                source_module_name = module_name_by_instance_id.get(source_instance_id)
+                source_module_name = module_name_by_component_instance.get(
+                    (binding.source_component_id, source_instance_id)
+                )
                 if not source_module_name:
                     raise ValueError(
                         f"infra component '{component_label}' input binding '{binding.target_path}' requires "
@@ -777,12 +768,12 @@ def _build_module_plans(
                     _HclExpression(f"module.{source_module_name}.{source_output.source_path}"),
                 )
 
-        _materialize_soperator_sfs_attachments(
+        _materialize_mk8s_sfs_attachments(
             payload=payload,
             component_id=component_id,
             instance_id=instance_id,
             module_inputs=module_inputs,
-            module_name_by_instance_id=module_name_by_instance_id,
+            sfs_module_name_by_instance_id=sfs_module_name_by_instance_id,
         )
 
         bindings: list[_VariableBinding] = []
@@ -947,13 +938,13 @@ def _render_provider_variable_blocks() -> tuple[str, ...]:
     for name, type_expr, description, default, sensitive in specs:
         lines = [
             f'variable "{name}" {{',
-            f"  type = {type_expr}",
+            f"  type        = {type_expr}",
             f"  description = {json.dumps(description)}",
         ]
         if default is not None:
-            lines.append(f"  default = {json.dumps(default)}")
+            lines.append(f"  default     = {json.dumps(default)}")
         if sensitive:
-            lines.append("  sensitive = true")
+            lines.append("  sensitive   = true")
         lines.append("}")
         blocks.append("\n".join(lines))
     return tuple(blocks)
@@ -967,13 +958,13 @@ def _render_variables_tf(plans: tuple[_ModulePlan, ...]) -> str:
                 continue
             lines = [
                 f'variable "{binding.variable_name}" {{',
-                f"  type = {binding.type_expr}",
+                f"  type        = {binding.type_expr}",
                 f"  description = {json.dumps(binding.description)}",
             ]
             if binding.default is not _NO_VARIABLE_DEFAULT:
-                lines.append(f"  default = {_hcl_value(binding.default, indent=2)}")
+                lines.append(f"  default     = {_hcl_value(binding.default, indent=2)}")
             if binding.sensitive:
-                lines.append("  sensitive = true")
+                lines.append("  sensitive   = true")
             lines.append("}")
             blocks.append("\n".join(lines))
     if not blocks:

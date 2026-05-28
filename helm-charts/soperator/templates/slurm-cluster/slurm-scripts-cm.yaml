@@ -23,6 +23,8 @@ data:
   {{ $name }}: |-
   {{- if $conf.customContent }}
 {{ tpl ($conf.customContent) $ | indent 4 }}
+  {{- else if $conf.customContentFile }}
+{{ tpl (required (printf "slurmScripts.builtIn.%s.customContentFile references missing file %q" $name $conf.customContentFile) ($.Files.Get $conf.customContentFile)) $ | indent 4 }}
   {{- else }}
 {{ tpl (printf "slurm_scripts/%s" $name | $.Files.Get) $ | indent 4 }}
   {{- end }}

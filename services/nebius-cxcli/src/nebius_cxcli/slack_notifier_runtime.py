@@ -10,7 +10,7 @@ import secrets
 import shutil
 import subprocess
 import webbrowser
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass
 from getpass import getpass
 from typing import Any
@@ -20,11 +20,21 @@ from urllib.request import Request, urlopen
 
 import yaml
 
-from .component_instances import component_type_id
+from .component_defaults import read_component_path
+from .component_instances import component_instance_id, component_type_id
 from .deploy_targets import app_chart_target_ref
 from .runtime_config import to_plain_data
 
-SOPERATOR_NOTIFIER_COMPONENT_ID = "soperator-notifier"
+SOPERATOR_COMPONENT_ID = "soperator"
+SOPERATOR_NOTIFIER_VALUES_KEY = "soperator-notifier"
+SLACK_WEBHOOK_SOURCE_DEPLOY_TIME = "deploy-time"
+SLACK_WEBHOOK_SOURCE_MYSTERYBOX = "mysterybox"
+SLACK_WEBHOOK_SOURCES = frozenset(
+    {
+        SLACK_WEBHOOK_SOURCE_DEPLOY_TIME,
+        SLACK_WEBHOOK_SOURCE_MYSTERYBOX,
+    }
+)
 SLACK_WEBHOOK_URL_ENV = "NEBIUS_CXCLI_SOPERATOR_SLACK_WEBHOOK_URL"
 SLACK_CLIENT_SECRET_ENV = "NEBIUS_CXCLI_SLACK_CLIENT_SECRET"
 SLACK_OAUTH_CODE_ENV = "NEBIUS_CXCLI_SLACK_OAUTH_CODE"
@@ -33,6 +43,7 @@ SLACK_OAUTH_ACCESS_URL = "https://slack.com/api/oauth.v2.access"
 SLACK_GOV_OAUTH_AUTHORIZE_URL = "https://slack-gov.com/oauth/v2/authorize"
 SLACK_GOV_OAUTH_ACCESS_URL = "https://slack-gov.com/api/oauth.v2.access"
 KUBE_CONTEXT_ENV = "NEBIUS_CXCLI_TARGET_KUBE_CONTEXT"
+RuntimeSecretKey = tuple[str, str, str]
 REQUIRED_VICTORIAMETRICS_CRDS = (
     "vmalertmanagerconfigs.operator.victoriametrics.com",
     "vmalertmanagers.operator.victoriametrics.com",
@@ -61,6 +72,9 @@ class SlackNotifierSpec:
     oauth_client_id: str = ""
     oauth_redirect_uri: str = ""
     gov_slack: bool = False
+    webhook_source: str = SLACK_WEBHOOK_SOURCE_DEPLOY_TIME
+    mysterybox_secret_id: str = ""
+    mysterybox_property: str = ""
 
 
 def _as_payload(value: Any) -> dict[str, Any]:
@@ -82,8 +96,40 @@ def _active_notifier_rows(payload_or_config: Any) -> tuple[dict[str, Any], ...]:
         for row in rows
         if isinstance(row, Mapping)
         and bool(row.get("enabled", False))
-        and component_type_id(row) == SOPERATOR_NOTIFIER_COMPONENT_ID
+        and component_type_id(row) == SOPERATOR_COMPONENT_ID
+        and read_component_path(row, f"values.{SOPERATOR_NOTIFIER_VALUES_KEY}.enabled") is True
     )
+
+
+def _soperator_row_target_ref(row: Mapping[str, Any]) -> str:
+    target_ref = app_chart_target_ref(row)
+    if target_ref:
+        return target_ref
+    instance_id = component_instance_id(row)
+    if instance_id and instance_id != SOPERATOR_COMPONENT_ID:
+        return instance_id
+    return ""
+
+
+def _validate_mysterybox_secret_id(secret_id: str) -> str:
+    value = str(secret_id or "").strip()
+    if not value:
+        raise RuntimeError(
+            "Soperator Slack notifier MysteryBox webhook source requires "
+            f"values.{SOPERATOR_NOTIFIER_VALUES_KEY}.slack.mysterybox.secretId"
+        )
+    if value.startswith("mbsecver-"):
+        raise RuntimeError(
+            "Soperator Slack notifier MysteryBox webhook source requires a MysteryBox "
+            "Secret ID such as `mbsec-...`, not a Secret version ID. The primary "
+            "version is used automatically."
+        )
+    if not re.fullmatch(r"mbsec-[a-z0-9][a-z0-9-]*", value):
+        raise RuntimeError(
+            "Soperator Slack notifier MysteryBox webhook source requires a MysteryBox "
+            "Secret ID with the `mbsec-...` form."
+        )
+    return value
 
 
 def soperator_notifier_release_specs(
@@ -94,49 +140,116 @@ def soperator_notifier_release_specs(
     normalized_target_ref = str(target_ref or "").strip().lower()
     specs: list[SlackNotifierSpec] = []
     for row in _active_notifier_rows(payload_or_config):
-        row_target_ref = app_chart_target_ref(row)
+        row_target_ref = _soperator_row_target_ref(row)
         if normalized_target_ref and row_target_ref != normalized_target_ref:
             continue
         if not normalized_target_ref and row_target_ref:
             continue
 
         values = _mapping(row.get("values"))
-        slack = _mapping(values.get("slack"))
+        notifier_values = _mapping(values.get(SOPERATOR_NOTIFIER_VALUES_KEY))
+        slack = _mapping(notifier_values.get("slack"))
         if "webhookUrl" in slack:
             raise RuntimeError(
-                "apps.charts[] soperator-notifier values must not contain "
-                "values.slack.webhookUrl. Store the URL in the runtime Kubernetes Secret "
-                "referenced by values.slack.existingSecret and values.slack.existingSecretKey."
+                "apps.charts[] soperator values must not contain "
+                f"values.{SOPERATOR_NOTIFIER_VALUES_KEY}.slack.webhookUrl. Store the URL "
+                "in the runtime Kubernetes Secret referenced by "
+                f"values.{SOPERATOR_NOTIFIER_VALUES_KEY}.slack.existingSecret and "
+                f"values.{SOPERATOR_NOTIFIER_VALUES_KEY}.slack.existingSecretKey."
             )
         oauth = _mapping(slack.get("oauth"))
         mode = str(slack.get("mode") or "existing-webhook").strip()
         if mode not in {"existing-webhook", "oauth-webhook"}:
             raise RuntimeError(
-                "apps.charts[] soperator-notifier values.slack.mode must be one of: "
+                "apps.charts[] soperator "
+                f"values.{SOPERATOR_NOTIFIER_VALUES_KEY}.slack.mode must be one of: "
                 "existing-webhook, oauth-webhook"
             )
-        release_name = (
-            str(row.get("release-name") or SOPERATOR_NOTIFIER_COMPONENT_ID).strip()
-            or SOPERATOR_NOTIFIER_COMPONENT_ID
-        )
+        webhook_source = str(
+            slack.get("webhookSource") or SLACK_WEBHOOK_SOURCE_DEPLOY_TIME
+        ).strip()
+        if webhook_source not in SLACK_WEBHOOK_SOURCES:
+            raise RuntimeError(
+                "apps.charts[] soperator "
+                f"values.{SOPERATOR_NOTIFIER_VALUES_KEY}.slack.webhookSource must be "
+                "one of: deploy-time, mysterybox"
+            )
+        mysterybox = _mapping(slack.get("mysterybox"))
+        mysterybox_secret_id = ""
+        mysterybox_property = ""
+        if webhook_source == SLACK_WEBHOOK_SOURCE_MYSTERYBOX:
+            if mode != "existing-webhook":
+                raise RuntimeError(
+                    "Soperator Slack notifier MysteryBox webhook source requires "
+                    f"values.{SOPERATOR_NOTIFIER_VALUES_KEY}.slack.mode=existing-webhook"
+                )
+            mysterybox_secret_id = _validate_mysterybox_secret_id(
+                str(mysterybox.get("secretId") or "")
+            )
+            mysterybox_property = str(mysterybox.get("property") or "").strip()
+        secret_name = str(
+            slack.get("existingSecret") or "soperator-notifier-slack-webhook"
+        ).strip()
+        secret_key = str(slack.get("existingSecretKey") or "url").strip()
         specs.append(
             SlackNotifierSpec(
                 target_ref=row_target_ref,
                 namespace=str(row.get("namespace") or "soperator").strip() or "soperator",
-                release_name=release_name,
+                release_name=str(
+                    notifier_values.get("fullnameOverride") or SOPERATOR_NOTIFIER_VALUES_KEY
+                ).strip()
+                or SOPERATOR_NOTIFIER_VALUES_KEY,
                 mode=mode,
-                secret_name=str(
-                    slack.get("existingSecret") or "soperator-notifier-slack-webhook"
-                ).strip(),
-                secret_key=str(slack.get("existingSecretKey") or "url").strip(),
+                secret_name=secret_name,
+                secret_key=secret_key,
                 channel_name=str(slack.get("channelName") or "").strip(),
                 channel_id=str(slack.get("channelId") or "").strip(),
                 oauth_client_id=str(oauth.get("clientId") or "").strip(),
                 oauth_redirect_uri=str(oauth.get("redirectUri") or "").strip(),
                 gov_slack=bool(oauth.get("govSlack", False)),
+                webhook_source=webhook_source,
+                mysterybox_secret_id=mysterybox_secret_id,
+                mysterybox_property=mysterybox_property or secret_key,
             )
         )
     return tuple(specs)
+
+
+def soperator_notifier_mysterybox_secret_refs(
+    payload_or_config: Any,
+    *,
+    target_ref: str = "",
+) -> tuple[dict[str, str], ...]:
+    """Return MysteryBox-backed Secret refs required by Soperator notifier."""
+    refs: list[dict[str, str]] = []
+    target_refs = (target_ref,)
+    if not target_ref:
+        seen_targets: set[str] = set()
+        discovered: list[str] = []
+        for row in _active_notifier_rows(payload_or_config):
+            row_target_ref = _soperator_row_target_ref(row)
+            if row_target_ref in seen_targets:
+                continue
+            seen_targets.add(row_target_ref)
+            discovered.append(row_target_ref)
+        target_refs = tuple(discovered or [""])
+    for current_target_ref in target_refs:
+        specs = soperator_notifier_release_specs(payload_or_config, target_ref=current_target_ref)
+        for spec in specs:
+            if spec.webhook_source != SLACK_WEBHOOK_SOURCE_MYSTERYBOX:
+                continue
+            refs.append(
+                {
+                    "target_ref": spec.target_ref,
+                    "namespace": spec.namespace,
+                    "name": spec.secret_name,
+                    "target_name": spec.secret_name,
+                    "secret_key": spec.secret_key,
+                    "secret_id": spec.mysterybox_secret_id,
+                    "property": spec.mysterybox_property or spec.secret_key,
+                }
+            )
+    return tuple(refs)
 
 
 def soperator_notifier_enabled_for_target(
@@ -158,6 +271,9 @@ def _target_kube_context(extra_env: Mapping[str, str] | None) -> str:
     explicit_context = str((extra_env or {}).get(KUBE_CONTEXT_ENV) or "").strip()
     if explicit_context:
         return explicit_context
+    env_context = str(os.environ.get(KUBE_CONTEXT_ENV) or "").strip()
+    if env_context:
+        return env_context
     kubeconfig_value = str(
         (extra_env or {}).get("KUBECONFIG") or os.environ.get("KUBECONFIG") or ""
     )
@@ -324,14 +440,15 @@ def _validate_victoriametrics_crds(*, extra_env: Mapping[str, str] | None) -> No
         raise RuntimeError(
             "Soperator Slack notifier requires VictoriaMetrics Operator CRDs before deploy: "
             + ", ".join(missing)
-            + ". Install a VictoriaMetrics Operator stack first, or disable apps:soperator-notifier."
+            + ". Install a VictoriaMetrics Operator stack first, or disable apps:soperator "
+            + f"values.{SOPERATOR_NOTIFIER_VALUES_KEY}.enabled."
         )
 
 
 def _target_env_names(base_name: str, target_ref: str) -> tuple[str, ...]:
     suffix = re.sub(r"[^A-Z0-9]+", "_", str(target_ref or "").upper()).strip("_")
     if suffix:
-        return (f"{base_name}_{suffix}", base_name)
+        return (f"{base_name}_{suffix}",)
     return (base_name,)
 
 
@@ -478,16 +595,16 @@ def _existing_webhook_url(
         ).strip()
         if value:
             return _validate_webhook_url(value)
-    target_hint = (
-        f" or {_target_env_names(SLACK_WEBHOOK_URL_ENV, spec.target_ref)[0]}"
-        if spec.target_ref
-        else ""
-    )
+    webhook_env = _target_env_names(SLACK_WEBHOOK_URL_ENV, spec.target_ref)[0]
     raise RuntimeError(
         f"Soperator Slack notifier Secret {spec.namespace}/{spec.secret_name}:{spec.secret_key} "
-        f"is missing. Set {SLACK_WEBHOOK_URL_ENV}{target_hint}, rerun interactively, or precreate "
+        f"is missing. Set {webhook_env}, rerun interactively, or precreate "
         "the Kubernetes Secret."
     )
+
+
+def _runtime_secret_key(spec: SlackNotifierSpec) -> RuntimeSecretKey:
+    return (spec.namespace, spec.secret_name, spec.secret_key)
 
 
 def _oauth_webhook(
@@ -500,9 +617,15 @@ def _oauth_webhook(
     client_id = spec.oauth_client_id
     redirect_uri = spec.oauth_redirect_uri
     if not client_id:
-        raise RuntimeError("Soperator Slack notifier OAuth mode requires values.slack.oauth.clientId")
+        raise RuntimeError(
+            "Soperator Slack notifier OAuth mode requires "
+            "values.soperator-notifier.slack.oauth.clientId"
+        )
     if not redirect_uri:
-        raise RuntimeError("Soperator Slack notifier OAuth mode requires values.slack.oauth.redirectUri")
+        raise RuntimeError(
+            "Soperator Slack notifier OAuth mode requires "
+            "values.soperator-notifier.slack.oauth.redirectUri"
+        )
     redirect_uri = _validate_https_redirect_uri(redirect_uri)
     client_secret = _env_value(
         SLACK_CLIENT_SECRET_ENV,
@@ -559,6 +682,7 @@ def ensure_soperator_notifier_runtime_secrets(
     target_ref: str = "",
     prompt: bool = False,
     emit: Callable[[str], None] | None = None,
+    externally_managed_secret_keys: Collection[RuntimeSecretKey] | None = None,
 ) -> None:
     """Create runtime-only Kubernetes Secrets required by Soperator notifier."""
     specs = soperator_notifier_release_specs(payload_or_config, target_ref=target_ref)
@@ -567,6 +691,25 @@ def ensure_soperator_notifier_runtime_secrets(
     _validate_victoriametrics_crds(extra_env=extra_env)
     for spec in specs:
         _ensure_namespace(spec.namespace, extra_env=extra_env)
+        runtime_key = _runtime_secret_key(spec)
+        if spec.webhook_source == SLACK_WEBHOOK_SOURCE_MYSTERYBOX:
+            if runtime_key not in (externally_managed_secret_keys or ()):
+                raise RuntimeError(
+                    "Soperator Slack notifier is configured to read the incoming webhook "
+                    "from Nebius MysteryBox, but the generated MysteryBox ExternalSecret "
+                    f"does not manage `{spec.namespace}/{spec.secret_name}:{spec.secret_key}`. "
+                    "Render/apply the target MysteryBox ESO resources, or set "
+                    f"values.{SOPERATOR_NOTIFIER_VALUES_KEY}.slack.webhookSource="
+                    f"{SLACK_WEBHOOK_SOURCE_DEPLOY_TIME} to provide the webhook URL at deploy time."
+                )
+            if callable(emit):
+                emit(
+                    "Soperator Slack notifier Secret "
+                    f"`{spec.namespace}/{spec.secret_name}:{spec.secret_key}` "
+                    "is managed by MysteryBox External Secrets; skipping direct "
+                    "webhook materialization."
+                )
+            continue
         if _secret_has_keys(
             namespace=spec.namespace,
             name=spec.secret_name,
@@ -574,11 +717,25 @@ def ensure_soperator_notifier_runtime_secrets(
             extra_env=extra_env,
         ):
             continue
+        if (
+            spec.mode == "existing-webhook"
+            and runtime_key in (externally_managed_secret_keys or ())
+        ):
+            if callable(emit):
+                emit(
+                    "Soperator Slack notifier Secret "
+                    f"`{spec.namespace}/{spec.secret_name}:{spec.secret_key}` "
+                    "is managed by MysteryBox External Secrets; skipping direct "
+                    "webhook materialization."
+                )
+            continue
         if spec.mode == "oauth-webhook":
             webhook = _oauth_webhook(spec, extra_env=extra_env, prompt=prompt, emit=emit)
             webhook_url = webhook.url
             if callable(emit):
-                channel = webhook.channel or spec.channel_name or webhook.channel_id or spec.channel_id
+                channel = (
+                    webhook.channel or spec.channel_name or webhook.channel_id or spec.channel_id
+                )
                 if channel:
                     emit(f"Authorized Slack incoming webhook for channel `{channel}`.")
         else:
@@ -603,5 +760,6 @@ __all__ = [
     "ensure_soperator_notifier_runtime_secrets",
     "exchange_slack_oauth_code",
     "soperator_notifier_enabled_for_target",
+    "soperator_notifier_mysterybox_secret_refs",
     "soperator_notifier_release_specs",
 ]

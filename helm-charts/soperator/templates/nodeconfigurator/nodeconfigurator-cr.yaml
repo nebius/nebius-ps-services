@@ -19,6 +19,10 @@ spec:
       repository: {{ .Values.customContainer.image.repository | quote }}
       tag: {{ .Values.customContainer.image.tag | quote }}
       pullPolicy: {{ .Values.customContainer.image.pullPolicy | quote }}
+    {{- if .Values.customContainer.command }}
+    command:
+      {{- toYaml .Values.customContainer.command | nindent 6 }}
+    {{- end }}
     {{- if .Values.customContainer.nodeSelector }}
     nodeSelector:
       {{- toYaml .Values.customContainer.nodeSelector | nindent 6 }}

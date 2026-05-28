@@ -1,10 +1,21 @@
 # soperator-backup-config
 
-Companion chart that renders a K8up `Schedule` for Soperator jail backups.
+Child chart that renders a K8up `Schedule` for Soperator jail backups.
+
+## When To Use
+
+Use this chart only when the Soperator jail should be backed up to Object
+Storage. The main `soperator` umbrella chart enables both this schedule and the
+K8up dependency with `soperator-backup-config.enabled=true`; cxcli keeps it
+disabled by default and wires the runtime credentials only when backup is
+enabled for the deployment.
 
 ## Requirements
 
-- K8up CRDs must be installed before this schedule is applied.
+- The parent `soperator` chart installs K8up as an optional dependency when
+  `soperator-backup-config.enabled=true`.
+- Standalone use requires the operator to install the K8up controller and CRDs
+  before applying the rendered schedule.
 - `bucket.name` and `bucket.endpoint` must point to the Object Storage bucket.
 - Backup credentials must exist in a Kubernetes Secret referenced by
   `secret.name` and `secret.keys.*`.

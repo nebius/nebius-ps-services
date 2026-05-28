@@ -1,8 +1,7 @@
 repository: "https://github.com/nebius/soperator"
-release: "3.0.3"
-tag: "3.0.3"
-commit: "6ab9a812c91461ffe68299ad3ce6060f177c35a3"
-
+release: "3.0.4"
+tag: "3.0.4"
+commit: "e80e652f98826171d81675b21b05facdf4477a78"
 imports:
   exact:
     - name: slurm-cluster slurm_scripts
@@ -15,6 +14,25 @@ imports:
       upstream_path: helm/soperator-activechecks/scripts
       local_path: helm-charts/soperator-activechecks/scripts
       sync: true
+  chart_versions:
+    - name: parent soperator chart
+      upstream_file: helm/soperator/Chart.yaml
+      local_file: helm-charts/soperator/Chart.yaml
+    - name: soperator-activechecks chart
+      upstream_file: helm/soperator-activechecks/Chart.yaml
+      local_file: helm-charts/soperator-activechecks/Chart.yaml
+    - name: soperator-backup-config chart
+      upstream_file: helm/soperator-backup-config/Chart.yaml
+      local_file: helm-charts/soperator-backup-config/Chart.yaml
+    - name: soperator-checks chart
+      upstream_file: helm/soperatorchecks/Chart.yaml
+      local_file: helm-charts/soperator-checks/Chart.yaml
+    - name: soperator-dcgm-exporter chart
+      upstream_file: helm/soperator-dcgm-exporter/Chart.yaml
+      local_file: helm-charts/soperator-dcgm-exporter/Chart.yaml
+    - name: soperator-notifier chart
+      upstream_file: helm/soperator-notifier/Chart.yaml
+      local_file: helm-charts/soperator-notifier/Chart.yaml
   images:
     - name: operator kube-rbac-proxy image repository
       scope: images
@@ -328,38 +346,6 @@ imports:
       local_path: [daemonSet, nvidiaDcgmExporter, image, tag]
       yq_path: .daemonSet.nvidiaDcgmExporter.image.tag
       sync: true
-    - name: in-cluster NFS server image repository
-      scope: images
-      upstream_file: helm/nfs-server/values.yaml
-      upstream_path: [image, repository]
-      local_file: helm-charts/soperator-nfs-server/values.yaml
-      local_path: [image, repository]
-      yq_path: .image.repository
-      sync: true
-    - name: in-cluster NFS server image tag
-      scope: images
-      upstream_file: helm/nfs-server/values.yaml
-      upstream_path: [image, tag]
-      local_file: helm-charts/soperator-nfs-server/values.yaml
-      local_path: [image, tag]
-      yq_path: .image.tag
-      sync: true
-    - name: in-cluster NFS node exporter image repository
-      scope: images
-      upstream_file: helm/nfs-server/values.yaml
-      upstream_path: [monitoring, nodeExporter, image, repository]
-      local_file: helm-charts/soperator-nfs-server/values.yaml
-      local_path: [monitoring, nodeExporter, image, repository]
-      yq_path: .monitoring.nodeExporter.image.repository
-      sync: true
-    - name: in-cluster NFS node exporter image tag
-      scope: images
-      upstream_file: helm/nfs-server/values.yaml
-      upstream_path: [monitoring, nodeExporter, image, tag]
-      local_file: helm-charts/soperator-nfs-server/values.yaml
-      local_path: [monitoring, nodeExporter, image, tag]
-      yq_path: .monitoring.nodeExporter.image.tag
-      sync: true
   review:
     - name: core operator templates
       scope: logic
@@ -368,7 +354,7 @@ imports:
     - name: core operator CRDs
       scope: logic
       upstream_path: helm/soperator/crds
-      sha256: f46d85a38861cdac50c66242804efbef16f9f22afb407c79ca0451ca131307db
+      sha256: 0bbe5af6da05c558452a92922afdcd001eb7872be5374b967a6f554d5d244af8
     - name: SlurmCluster templates
       scope: logic
       upstream_path: helm/slurm-cluster/templates
@@ -380,7 +366,7 @@ imports:
     - name: NodeSet templates
       scope: logic
       upstream_path: helm/nodesets/templates
-      sha256: 108b6c93ce587356e7fb1dd263faa307722703f73930d98637821af3980cfbc1
+      sha256: 8273b3df5a8dfda84b0979cf9cf052961e7ac8b664ba293bd801caadcc5f2d19
     - name: NodeConfigurator templates
       scope: logic
       upstream_path: helm/nodeconfigurator/templates
@@ -401,10 +387,6 @@ imports:
       scope: logic
       upstream_path: helm/soperator-dcgm-exporter/templates
       sha256: fa32562160efe9ee2aa60243e24c23caec6b0900f6eb546fdbbe7b4aafa1711a
-    - name: in-cluster NFS templates
-      scope: logic
-      upstream_path: helm/nfs-server/templates
-      sha256: 16224a70323a77d19e98d6250bdd86a2579cee8dc0777b35ddd801682ce3849e
     - name: notifier templates
       scope: logic
       upstream_path: helm/soperator-notifier/templates
@@ -412,16 +394,15 @@ imports:
     - name: custom ConfigMaps chart
       scope: logic
       upstream_path: helm/soperator-custom-configmaps
-      sha256: 4c6ca751a34147c147edb27982720686f94e4bc49504afe8307b0d9bf568db71
+      sha256: 65affefffd28c9c789d461b8e23f395a345ee17d731018d8f45f8934bded8a36
     - name: monitoring dashboards chart
       scope: logic
       upstream_path: helm/soperator-monitoring-dashboards
-      sha256: eafbcdba1a1f7be6d957d64935d377a2cb1fc5f85eab93322692a050f612772d
+      sha256: 0d5653a9ad466b4190007ada09ede1c3d075732ad4a045bb816c6d9c8750d393
     - name: storageclasses chart
       scope: logic
       upstream_path: helm/storageclasses
-      sha256: 646090c8c273fd92de645a6d270603a1ec88b9486b290566e9937a88c816fad4
-
+      sha256: a1e4439ff88240a7c4fe9dd74f6cce94ccdd8a1eafe5b69697457a3b629e69a3
 local_owned_paths:
   - helm-charts/soperator/.helmignore
   - helm-charts/soperator/CHANGELOG.md
@@ -429,6 +410,7 @@ local_owned_paths:
   - helm-charts/soperator/Chart.lock
   - helm-charts/soperator/README.md
   - helm-charts/soperator/charts/
+  - helm-charts/soperator/local_slurm_scripts/
   - helm-charts/soperator/values.yaml
   - helm-charts/soperator/values.schema.json
   - helm-charts/soperator/scripts/
@@ -439,6 +421,7 @@ local_owned_paths:
   - helm-charts/soperator-activechecks/CHANGELOG.md
   - helm-charts/soperator-activechecks/Chart.yaml
   - helm-charts/soperator-activechecks/README.md
+  - helm-charts/soperator-activechecks/local_scripts/
   - helm-charts/soperator-activechecks/templates/
   - helm-charts/soperator-activechecks/tests/
   - helm-charts/soperator-activechecks/values.yaml
@@ -464,13 +447,6 @@ local_owned_paths:
   - helm-charts/soperator-dcgm-exporter/templates/
   - helm-charts/soperator-dcgm-exporter/values.yaml
   - helm-charts/soperator-dcgm-exporter/values.schema.json
-  - helm-charts/soperator-nfs-server/.helmignore
-  - helm-charts/soperator-nfs-server/CHANGELOG.md
-  - helm-charts/soperator-nfs-server/Chart.yaml
-  - helm-charts/soperator-nfs-server/README.md
-  - helm-charts/soperator-nfs-server/templates/
-  - helm-charts/soperator-nfs-server/values.yaml
-  - helm-charts/soperator-nfs-server/values.schema.json
   - helm-charts/soperator-notifier/.helmignore
   - helm-charts/soperator-notifier/CHANGELOG.md
   - helm-charts/soperator-notifier/Chart.yaml

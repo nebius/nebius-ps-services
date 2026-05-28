@@ -8,26 +8,38 @@ import pytest
 import nebius_cxcli.slack_notifier_runtime as slack_runtime
 
 
-def _notifier_payload(*, mode: str = "existing-webhook") -> dict[str, object]:
+def _notifier_payload(
+    *,
+    mode: str = "existing-webhook",
+    webhook_source: str = "deploy-time",
+) -> dict[str, object]:
     return {
         "apps": {
             "charts": [
                 {
-                    "id": "soperator-notifier",
+                    "id": "soperator",
                     "instance_id": "cluster1",
                     "target_ref": "cluster1",
                     "enabled": True,
                     "namespace": "soperator",
-                    "release-name": "soperator-notifier",
+                    "release-name": "soperator",
                     "values": {
-                        "slack": {
-                            "mode": mode,
-                            "existingSecret": "soperator-slack",
-                            "existingSecretKey": "url",
-                            "channelName": "slurm-alerts",
-                            "oauth": {
-                                "clientId": "123.456",
-                                "redirectUri": "https://example.com/slack/oauth",
+                        "soperator-notifier": {
+                            "enabled": True,
+                            "slack": {
+                                "mode": mode,
+                                "webhookSource": webhook_source,
+                                "existingSecret": "soperator-slack",
+                                "existingSecretKey": "url",
+                                "channelName": "slurm-alerts",
+                                "mysterybox": {
+                                    "secretId": "mbsec-e00slack",
+                                    "property": "url",
+                                },
+                                "oauth": {
+                                    "clientId": "123.456",
+                                    "redirectUri": "https://example.com/slack/oauth",
+                                },
                             },
                         }
                     },
@@ -40,7 +52,9 @@ def _notifier_payload(*, mode: str = "existing-webhook") -> dict[str, object]:
 def test_soperator_notifier_specs_reject_webhook_url_in_values() -> None:
     payload = _notifier_payload()
     chart = payload["apps"]["charts"][0]  # type: ignore[index]
-    chart["values"]["slack"]["webhookUrl"] = "https://hooks.slack.com/services/example"  # type: ignore[index]
+    chart["values"]["soperator-notifier"]["slack"]["webhookUrl"] = (  # type: ignore[index]
+        "https://hooks.slack.com/services/example"
+    )
 
     with pytest.raises(RuntimeError, match="webhookUrl"):
         slack_runtime.soperator_notifier_release_specs(payload, target_ref="cluster1")
@@ -79,6 +93,185 @@ def test_ensure_existing_webhook_creates_runtime_secret(monkeypatch: pytest.Monk
             "name": "soperator-slack",
             "string_data": {"url": "https://hooks.slack.com/services/example"},
         }
+    ]
+
+
+def test_target_kube_context_reads_process_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("NEBIUS_CXCLI_TARGET_KUBE_CONTEXT", "cluster1-context")
+
+    assert slack_runtime._target_kube_context({}) == "cluster1-context"
+
+
+def test_existing_webhook_requires_target_specific_env_for_target_ref(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(slack_runtime, "_validate_victoriametrics_crds", lambda *, extra_env: None)
+    monkeypatch.setattr(slack_runtime, "_ensure_namespace", lambda _namespace, *, extra_env: None)
+    monkeypatch.setattr(
+        slack_runtime,
+        "_secret_has_keys",
+        lambda *, namespace, name, keys, extra_env: False,
+    )
+    monkeypatch.setattr(
+        slack_runtime,
+        "_apply_secret",
+        lambda **_kwargs: pytest.fail("bare Slack webhook env var must not be accepted"),
+    )
+
+    with pytest.raises(RuntimeError, match="SLACK_WEBHOOK_URL_CLUSTER1"):
+        slack_runtime.ensure_soperator_notifier_runtime_secrets(
+            _notifier_payload(),
+            target_ref="cluster1",
+            extra_env={
+                "NEBIUS_CXCLI_SOPERATOR_SLACK_WEBHOOK_URL": (
+                    "https://hooks.slack.com/services/example"
+                )
+            },
+        )
+
+
+def test_soperator_notifier_mysterybox_refs_use_primary_version() -> None:
+    refs = slack_runtime.soperator_notifier_mysterybox_secret_refs(
+        _notifier_payload(webhook_source="mysterybox"),
+        target_ref="cluster1",
+    )
+
+    assert refs == (
+        {
+            "target_ref": "cluster1",
+            "namespace": "soperator",
+            "name": "soperator-slack",
+            "target_name": "soperator-slack",
+            "secret_key": "url",
+            "secret_id": "mbsec-e00slack",
+            "property": "url",
+        },
+    )
+
+
+def test_soperator_notifier_mysterybox_source_rejects_version_id() -> None:
+    payload = _notifier_payload(webhook_source="mysterybox")
+    chart = payload["apps"]["charts"][0]  # type: ignore[index]
+    chart["values"]["soperator-notifier"]["slack"]["mysterybox"]["secretId"] = (  # type: ignore[index]
+        "mbsecver-e00slack"
+    )
+
+    with pytest.raises(RuntimeError, match="not a Secret version ID"):
+        slack_runtime.soperator_notifier_release_specs(payload, target_ref="cluster1")
+
+
+def test_mysterybox_source_requires_rendered_external_secret(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(slack_runtime, "_validate_victoriametrics_crds", lambda *, extra_env: None)
+    monkeypatch.setattr(slack_runtime, "_ensure_namespace", lambda _namespace, *, extra_env: None)
+    monkeypatch.setattr(
+        slack_runtime,
+        "_secret_has_keys",
+        lambda *, namespace, name, keys, extra_env: False,
+    )
+
+    with pytest.raises(RuntimeError, match="generated MysteryBox ExternalSecret"):
+        slack_runtime.ensure_soperator_notifier_runtime_secrets(
+            _notifier_payload(webhook_source="mysterybox"),
+            target_ref="cluster1",
+            extra_env={
+                "NEBIUS_CXCLI_SOPERATOR_SLACK_WEBHOOK_URL_CLUSTER1": (
+                    "https://hooks.slack.com/services/ignored"
+                )
+            },
+            prompt=False,
+            externally_managed_secret_keys=set(),
+        )
+
+
+def test_mysterybox_source_rejects_stale_preexisting_kubernetes_secret(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(slack_runtime, "_validate_victoriametrics_crds", lambda *, extra_env: None)
+    monkeypatch.setattr(slack_runtime, "_ensure_namespace", lambda _namespace, *, extra_env: None)
+    monkeypatch.setattr(
+        slack_runtime,
+        "_secret_has_keys",
+        lambda *, namespace, name, keys, extra_env: True,
+    )
+
+    with pytest.raises(RuntimeError, match="generated MysteryBox ExternalSecret"):
+        slack_runtime.ensure_soperator_notifier_runtime_secrets(
+            _notifier_payload(webhook_source="mysterybox"),
+            target_ref="cluster1",
+            extra_env={},
+            prompt=False,
+            externally_managed_secret_keys=set(),
+        )
+
+
+def test_ensure_existing_webhook_skips_secret_when_mysterybox_eso_manages_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = _notifier_payload(webhook_source="mysterybox")
+    payload.update(
+        {
+            "infra": {
+                "components": [
+                    {
+                        "id": "mysterybox",
+                        "instance_id": "mysterybox",
+                        "enabled": True,
+                        "inputs": {
+                            "secrets": [
+                                {
+                                    "name": "soperator-slack-webhook",
+                                    "version_id": "n/a",
+                                    "kubernetes_secret_name": "soperator-slack",
+                                    "payload": {"url": {"type": "text"}},
+                                }
+                            ]
+                        },
+                    }
+                ]
+            },
+            "deploy": {
+                "targets": [
+                    {
+                        "instance_id": "cluster1",
+                        "secrets": {
+                            "mysterybox": {
+                                "enabled": True,
+                                "sync_namespaces": ["soperator"],
+                            }
+                        },
+                    }
+                ]
+            },
+        }
+    )
+    emitted: list[str] = []
+    monkeypatch.setattr(slack_runtime, "_validate_victoriametrics_crds", lambda *, extra_env: None)
+    monkeypatch.setattr(slack_runtime, "_ensure_namespace", lambda _namespace, *, extra_env: None)
+    monkeypatch.setattr(
+        slack_runtime,
+        "_secret_has_keys",
+        lambda *, namespace, name, keys, extra_env: False,
+    )
+    monkeypatch.setattr(
+        slack_runtime,
+        "_apply_secret",
+        lambda **_kwargs: pytest.fail("MysteryBox-managed Secret should not be applied directly"),
+    )
+
+    slack_runtime.ensure_soperator_notifier_runtime_secrets(
+        payload,
+        target_ref="cluster1",
+        extra_env={},
+        prompt=False,
+        emit=emitted.append,
+        externally_managed_secret_keys={("soperator", "soperator-slack", "url")},
+    )
+
+    assert emitted == [
+        "Soperator Slack notifier Secret `soperator/soperator-slack:url` is managed by "
+        "MysteryBox External Secrets; skipping direct webhook materialization."
     ]
 
 

@@ -17,6 +17,12 @@ The short version:
 - [Installation Boundary](#installation-boundary)
 - [Direct Helm Default Readiness](#direct-helm-default-readiness)
 - [Big Picture Flow](#big-picture-flow)
+- [Core Concepts And Architecture](#core-concepts-and-architecture)
+  - [Control And Reconcile Model](#control-and-reconcile-model)
+  - [Runtime Components And Roles](#runtime-components-and-roles)
+  - [Dependency Chart Responsibilities](#dependency-chart-responsibilities)
+  - [Standard SFS Filesystems](#standard-sfs-filesystems)
+  - [Placement And Sharing Rules](#placement-and-sharing-rules)
 - [Runtime Kubernetes Objects](#runtime-kubernetes-objects)
   - [Soperator Operator](#soperator-operator)
   - [Custom Resource Definitions](#custom-resource-definitions)
@@ -47,6 +53,7 @@ The short version:
     - [Partition Examples](#partition-examples)
     - [Feature Examples](#feature-examples)
   - [cxcli Profile Design](#cxcli-profile-design)
+  - [Scheduling And Preemption](#scheduling-and-preemption)
   - [Validation Rules](#validation-rules)
 - [Production Operations](#production-operations)
   - [Uninstall Model](#uninstall-model)
@@ -60,9 +67,11 @@ The short version:
 - [Helm Dependencies](#helm-dependencies)
   - [OpenKruise](#openkruise)
   - [MariaDB Operator](#mariadb-operator)
+  - [Optional Soperator-Family Child Charts](#optional-soperator-family-child-charts)
 - [cxcli Integration](#cxcli-integration)
 - [Install Flow](#install-flow)
 - [Change Guide](#change-guide)
+- [Optional Child Charts](#optional-child-charts)
 - [Explicit Non-Goals](#explicit-non-goals)
 - [Chart Release And OCI Publish](#chart-release-and-oci-publish)
 - [Upstream Release Contract](#upstream-release-contract)
@@ -84,6 +93,53 @@ The chart installs the in-cluster side of a Slurm on Kubernetes deployment:
 - Slurm scripts, health checks, prolog scripts, and epilog scripts.
 - OpenKruise and MariaDB Operator subcharts.
 
+The default chart values are sized for small-cluster portability first. For
+example, `kruise.manager.replicas` defaults to `1` so OpenKruise does not block
+single-node or small CPU-node installs, and
+`slurmConfig.topologyPlugin` defaults to empty so worker init does not wait for
+Soperator tier-label discovery on generic clusters. Production overlays can
+raise the replica count and enable topology with a provider-specific
+`controllerManager.manager.env.topologyLabelPrefix` when the target has
+matching `tier-*` labels.
+
+cxcli models that choice as `values.topologyProfile`. The default profile is
+`disabled`; the `nebius-tiered-tree-v1` profile explicitly sets
+`slurmConfig.topologyPlugin=topology/tree`,
+`slurmConfig.topologyParam=SwitchAsNodeRank`, and
+`controllerManager.manager.env.topologyLabelPrefix=topology.nebius.com`. This is
+separate from the five-role production node-group shape: `system`,
+`controller`, `login`, `accounting`, and `worker` can be created without
+turning on topology, and topology should be enabled only when worker nodes
+actually expose the matching `topology.nebius.com/tier-*` labels.
+
+The distinction matters:
+
+- The five-role production shape is operational placement: Soperator system
+  pods, Slurm controllers, login pods, accounting pods, and Slurm workers land
+  on the intended Kubernetes node groups.
+- Slurm topology is worker locality: it gives Slurm a physical or fabric
+  hierarchy for worker nodes so distributed jobs can prefer topologically close
+  nodes.
+
+Fresh Nebius production MK8s plus Soperator deployments should enable
+`nebius-tiered-tree-v1` only when the provisioning flow also prepares accurate
+`topology.nebius.com/tier-*` worker labels. Generic Kubernetes clusters,
+arbitrary existing clusters, and already-installed Nebius MK8s clusters should
+leave topology disabled until operators deliberately label and verify the
+worker nodes. Manual pre-labeling before a direct Helm install is fine when the
+labels are complete and truthful; misleading labels are worse than no topology
+because Slurm can wait for unavailable topology data or schedule distributed
+jobs across the wrong fabric domains.
+
+Topology can help NCCL/MPI workloads because it improves Slurm's node-placement
+input, not because it changes NCCL itself. Nebius documents
+[topology-aware NCCL AllReduce tests](https://docs.nebius.com/compute/clusters/gpu/topology)
+with gains up to 20% depending on cluster size, while Slurm's
+[topology guide](https://slurm.schedmd.com/topology.html) frames
+`topology/tree` as a way to minimize contention on hierarchical networks.
+Production validation should still run NCCL tests on the rendered cluster
+because topology benefits are workload and placement dependent.
+
 It does not create Nebius infrastructure. MK8s clusters, MK8s node groups, SFS
 filesystems, and optional NFS VMs are Terraform-owned.
 
@@ -95,9 +151,11 @@ Kubernetes 63-character label-style resource names.
 
 ## Direct Helm Default Readiness
 
-The README direct Helm command installs `values.yaml` as-is, plus the supplied
-SSH public key. That means the target cluster must already match the selectors,
-storage names, and worker capacity in those values before Helm install starts.
+The README direct Helm command first runs `helm dependency build` so the local
+checkout has dependency archives reconstructed from `Chart.lock`, then installs
+`values.yaml` as-is plus the supplied SSH public key. That means the target
+cluster must already match the selectors, storage names, and worker capacity in
+those values before Helm install starts.
 
 This is not a separate product mode. It is the "install exactly these values"
 path for operators who already prepared the cluster manually. If the cluster
@@ -111,15 +169,17 @@ Default role selectors:
   to `slurm.nebius.ai/nodeset-name=system`.
 - Controller, REST, and SConfigController use
   `k8sNodeFilterName: controller`, which points to
-  `slurm.nebius.ai/nodeset-name=controller`.
+  `slurm.nebius.ai/nodeset-name=controller` and tolerates the matching
+  `NoSchedule` taint.
 - Login uses `k8sNodeFilterName: login`, which points to
   `slurm.nebius.ai/nodeset-name=login`.
 - Accounting uses `k8sNodeFilterName: accounting`, which points to
-  `slurm.nebius.ai/nodeset-name=accounting`.
+  `slurm.nebius.ai/nodeset-name=accounting` and tolerates the matching
+  `NoSchedule` taint.
 - Exporter uses `k8sNodeFilterName: no-gpu`, which selects nodes where
   `nebius.com/gpu` is not `true`.
 - The default GPU worker uses `nodesets[].nodeSelector`, which points to
-  `slurm.nebius.ai/nodeset-name=worker-gpu`.
+  `slurm.nebius.ai/nodeset-name=worker`.
 
 Default storage expectations:
 
@@ -135,7 +195,7 @@ Default storage expectations:
 
 Default worker shape expectations:
 
-- The default worker NodeSet is `worker-gpu`.
+- The default worker NodeSet is `worker`.
 - `nodesets[].slurmd.resources` describes the `slurmd` worker pod resources,
   not the cloud VM shape itself.
 - The default `slurmd` container requests `8` GPUs, `64` CPU, `512Gi` memory,
@@ -170,6 +230,158 @@ Soperator
 Slurm
   runs controller, login, accounting, REST, and worker daemons
 ```
+
+## Core Concepts And Architecture
+
+The chart has three layers:
+
+1. Helm renders Kubernetes objects, CRDs, RBAC, storage glue, and Soperator
+   custom resources.
+2. The Soperator manager reconciles those custom resources into Slurm runtime
+   objects.
+3. Slurm daemons run on the Kubernetes node groups selected by chart values and
+   cxcli role mapping.
+
+The important boundary is that Helm does not create Nebius infrastructure. MK8s
+node groups and SFS filesystems come from Terraform or from an existing
+cluster. Helm only consumes the labels, taints, PV/PVC names, mount tags, and
+storage paths that describe those resources.
+
+### Control And Reconcile Model
+
+The parent chart renders these Soperator custom resources:
+
+- `SlurmCluster`: the root cluster specification. It declares the cluster name,
+  Slurm configuration, role placement filters, shared volume sources,
+  `populateJail`, controller/login/accounting/REST/exporter settings,
+  SConfigController settings, and Slurm partitions.
+- `NodeSet`: a homogeneous Slurm worker definition. A NodeSet defines
+  `slurmd`, MUNGE, GPU settings, resources, Slurm node features, GRES config,
+  worker volumes, node selectors, and tolerations. One logical NodeSet can be
+  backed by one or many MK8s node groups when those node groups share the same
+  worker label.
+- `NodeConfigurator`: the host-preparation and rebooter resource. It supports
+  node-level preparation and safe eviction/reboot workflows used by Soperator
+  runtime operations.
+
+The Soperator manager watches these resources and creates the lower-level
+runtime objects. Users should normally edit chart values or cxcli profile data,
+not the generated child objects directly.
+
+### Runtime Components And Roles
+
+Soperator uses role placement rather than one flat node pool.
+
+| Component | What It Does | Normal Placement |
+| --- | --- | --- |
+| Soperator manager | Kubernetes controller that watches `SlurmCluster`, `NodeSet`, and `NodeConfigurator` and reconciles Slurm runtime resources. | `system` CPU nodes in cxcli production profiles; configurable through `controllerManager.*`. |
+| `system` role | Operational placement role, not a Slurm daemon. It hosts `populateJail` and can host chart/system helpers such as the Soperator manager, checks controller, and MariaDB operator webhooks. | CPU system node group. |
+| Controller | Runs `slurmctld` and controller MUNGE. Owns Slurm scheduling/control-plane state. | CPU controller node group. |
+| Worker | Runs `slurmd` and worker MUNGE through one or more `NodeSet` resources. Executes user jobs. | GPU node groups for GPU clusters; CPU worker node groups for CPU clusters. |
+| Login | Runs SSH login pods and login-side MUNGE so users can submit and inspect jobs. | CPU login node group. |
+| Accounting | Runs `slurmdbd` and accounting MUNGE. Integrates with MariaDB for job/accounting history. | CPU accounting node group. |
+| REST | Runs `slurmrestd`. It is mainly a control-plane API used by SConfigController and can also serve Slurm API clients when exposed and secured by the operator. | CPU controller node group by default. |
+| SConfigController | Writes and reconciles generated Slurm config in the populated jail and triggers Slurm reconfiguration through REST. | CPU controller node group by default. |
+| Checks | Optional `soperator-checks` controller and `soperator-activechecks` jobs for readiness, health, GPU, NCCL, and maintenance checks. | System/control CPU nodes for controllers; checks may submit Slurm jobs to worker partitions. |
+| MariaDB | Database used by Slurm accounting when chart-managed accounting is enabled. The MariaDB Operator owns the database CR; Soperator references it from the accounting spec. | Operator/webhooks on system CPU nodes in cxcli profiles; database workload belongs to accounting. |
+| Kruise | OpenKruise controllers and CRDs used by Soperator workload patterns and lifecycle behavior. | System/control CPU nodes unless overridden by subchart values. |
+
+The chart also renders an exporter role. The Slurm exporter is a Slurm metrics
+collector and is separate from the optional DCGM exporter child chart.
+
+### Dependency Chart Responsibilities
+
+`Chart.yaml` packages dependency charts so a Soperator install has one parent
+release while feature behavior remains value-driven.
+
+The always-available operator dependencies are gated by
+`kruise.installOperator` and `mariadb-operator.installOperator`. Optional
+Soperator-family features are gated by their dependency names:
+`soperator-checks.enabled`, `soperator-activechecks.enabled`,
+`soperator-notifier.enabled`, `soperator-backup-config.enabled`, and
+`soperator-dcgm-exporter.enabled`. Parent values keep those optional feature
+gates disabled by default for production training installs.
+
+- `kruise`: installs OpenKruise CRDs and controllers required by Soperator's
+  workload and lifecycle model. It is enabled by `kruise.installOperator`.
+- `mariadb-operator`: installs the MariaDB Operator CRDs, controller, and
+  webhook used when `slurmNodes.accounting.mariadbOperator.enabled=true`.
+  The parent chart defaults the webhook certificate path to cert-manager and
+  disables the dependency chart's alternate cert-controller so the combined
+  release has one certificate authority path.
+- `soperator-checks`: installs the checks controller that reconciles
+  Soperator check resources and can drain or report unhealthy Slurm nodes based
+  on configured reactions.
+- `soperator-activechecks`: installs pinned ActiveCheck definitions and
+  PodTemplates for Slurm and Kubernetes checks, including NCCL, CUDA, DCGM,
+  memory, SSH, topology wait, and jail-management checks.
+- `soperator-dcgm-exporter`: installs a DCGM exporter wired to the Soperator
+  Slurm job-mapping directory so GPU metrics can be related back to Slurm jobs.
+- `soperator-notifier`: installs the notification path for Slurm job-state
+  alerts through VictoriaMetrics Alertmanager and an existing Slack webhook
+  Secret.
+- `soperator-backup-config`: installs K8up backup schedules for the jail when
+  object-storage backup is enabled.
+- `k8up`: installs the K8up controller as a dependency of
+  `soperator-backup-config`; it is enabled only when jail backup is enabled.
+
+`cert-manager` is a prerequisite app in cxcli-managed installs, not a subchart
+of this parent chart. The chart renders cert-manager `Issuer` and
+`Certificate` objects for Soperator webhooks when `certManager.enabled=true`,
+so cert-manager CRDs and controller must exist first.
+
+### Standard SFS Filesystems
+
+The Nebius production profile uses SFS for the shared Slurm filesystems:
+
+| Filesystem | Mount Tag | Host Path | Main Consumers |
+| --- | --- | --- | --- |
+| `jail` | `jail` | `/mnt/jail` | `populateJail`, controller, login, accounting, and workers. |
+| `controller-spool` | `controller-spool` | `/mnt/controller-spool` | Slurm controller pods and `slurmctld` state/spool. |
+| `accounting` | `accounting` | `/mnt/accounting` | Accounting/database persistence when the production profile enables accounting storage. |
+
+A mount tag is the Nebius SFS device name attached to the MK8s node group. It
+is not the final pod mount by itself. The flow is:
+
+1. Terraform attaches the SFS filesystem to the MK8s node-group template with a
+   mount tag such as `jail`.
+2. The chart's privileged mount DaemonSet uses that tag to mount the filesystem
+   on the Kubernetes host path, such as `/mnt/jail`.
+3. The chart renders PV/PVC objects that point at the host path.
+4. Soperator mounts the PVC into Slurm pods through `SlurmCluster.volumeSources`
+   or `NodeSet.slurmd.volumes`.
+
+Direct Helm values enable the jail and controller-spool storage glue by
+default. cxcli production profiles also seed an `accounting` SFS filesystem so
+the accounting layer can use dedicated persistent storage when that profile
+enables it.
+
+### Placement And Sharing Rules
+
+In the complete cxcli production profile, the five MK8s role groups share SFS
+like this:
+
+| MK8s Node Group | Soperator Role(s) | SFS Attached |
+| --- | --- | --- |
+| `system` | `populateJail`, Soperator manager, checks controller, MariaDB operator helpers | `jail` |
+| `controller` | Slurm controller, REST, SConfigController | `jail`, `controller-spool` |
+| `login` | Login pods | `jail` |
+| `accounting` | `slurmdbd`, accounting MUNGE, MariaDB database workload | `jail`, `accounting` |
+| `worker` or worker shards | Worker `NodeSet` pods and user jobs | `jail` |
+
+In an onboarded or compact cluster, several Soperator roles may map to the same
+CPU node group. In that case the node group must attach the union of the SFS
+filesystems required by those roles. For example:
+
+| Existing Node Group Mapping | Required SFS Attachments |
+| --- | --- |
+| GPU workers mapped to `worker` | `jail` |
+| CPU nodes mapped to `system`, `controller`, `login`, and `accounting` | `jail`, `controller-spool`, `accounting` |
+
+The chart still schedules by Kubernetes labels and filters. Sharing a node
+group does not collapse the Slurm roles; it only means the same hosts satisfy
+multiple role selectors and therefore need all storage attachments required by
+those selected roles.
 
 ## Runtime Kubernetes Objects
 
@@ -273,8 +485,12 @@ Configured mostly from:
 
 The default `k8sNodeFilters` are only for non-worker Slurm components and
 CPU-only service placement: `system`, `controller`, `login`, `accounting`, and
-`no-gpu`. Worker `NodeSet` resources schedule through their own `nodeSelector`
-and tolerations, including GPU workers.
+`no-gpu`. The controller, login, and accounting filters include matching
+tolerations for dedicated tainted service nodes. Worker `NodeSet` resources schedule
+through their own `nodeSelector` and tolerations, including GPU workers.
+
+The default SConfigController UID/GID is `0` because it writes generated Slurm
+configuration into the populated jail, whose `/etc` tree is root-owned.
 
 Short example of the rendered shape:
 
@@ -387,12 +603,12 @@ A `NodeSet` is not the same thing as an MK8s node group:
 - MK8s node group: cloud host pool created by Terraform.
 - Soperator `NodeSet`: in-cluster worker definition created by Helm.
 
-Our default logical worker NodeSet is `worker-gpu`. cxcli can create many MK8s
-node-group shards behind it, such as `worker-gpu-0`, `worker-gpu-1`, and so on.
+Our default logical worker NodeSet is `worker`. cxcli can create many MK8s
+node-group shards behind it with canonical node-group keys generated from the selected profile.
 Those host pools share this Kubernetes label:
 
 ```yaml
-slurm.nebius.ai/nodeset-name: worker-gpu
+slurm.nebius.ai/nodeset-name: worker
 ```
 
 The `NodeSet` uses that label to schedule worker pods onto the right hosts.
@@ -401,7 +617,7 @@ mixed clusters use the same pattern with different NodeSet names:
 
 ```text
 CPU-only:        worker-cpu -> slurm.nebius.ai/nodeset-name=worker-cpu
-GPU-only:        worker-gpu -> slurm.nebius.ai/nodeset-name=worker-gpu
+GPU-only:        worker -> slurm.nebius.ai/nodeset-name=worker
 Mixed CPU+GPU:   worker-cpu and worker-gpu, each with its own label
 H100/H200 split: worker-h100 and worker-h200, each with its own label
 ```
@@ -424,7 +640,7 @@ Short example of the rendered shape:
 apiVersion: slurm.nebius.ai/v1alpha1
 kind: NodeSet
 metadata:
-  name: worker-gpu
+  name: worker
   namespace: soperator
 spec:
   replicas: 1
@@ -447,7 +663,7 @@ spec:
   slurmd:
     image:
       repository: cr.eu-north1.nebius.cloud/soperator/worker_slurmd
-      tag: 3.0.3-slurm25.11.3
+      tag: 3.0.4-slurm25.11.3
     resources:
       cpu: "64"
       memory: 512Gi
@@ -476,10 +692,10 @@ spec:
   munge:
     image:
       repository: cr.eu-north1.nebius.cloud/soperator/munge
-      tag: 3.0.3-slurm25.11.3
+      tag: 3.0.4-slurm25.11.3
 
   nodeSelector:
-    slurm.nebius.ai/nodeset-name: worker-gpu
+    slurm.nebius.ai/nodeset-name: worker
   tolerations:
     - key: nvidia.com/gpu
       operator: Exists
@@ -514,17 +730,19 @@ slurm.nebius.ai/jail: "true"
 It means the Nebius SFS jail filesystem is attached to that MK8s node group and
 the chart is allowed to mount `/mnt/jail` on those Kubernetes hosts.
 
-The MK8s Terraform module adds this label from generic `node_groups` data when
-the group has `jail = true`:
+The MK8s Terraform module receives this label as typed node-group data from
+cxcli profile materialization or direct Terraform input:
 
 ```hcl
 node_groups = {
-  "worker-gpu-0" = {
-    nodeset_name     = "worker-gpu"
-    workload         = "worker"
-    fixed_node_count = 100
-    gpu              = true
-    jail             = true
+  worker = {
+    node_count = 100
+    gpu        = true
+    node_labels = {
+      "slurm.nebius.ai/nodeset-name" = "worker"
+      "slurm.nebius.ai/jail"         = "true"
+    }
+    sfs_filesystem_keys = ["jail"]
   }
 }
 ```
@@ -557,7 +775,7 @@ placement guardrail for the shared root filesystem.
 The NodeSet label is also a Kubernetes node label:
 
 ```yaml
-slurm.nebius.ai/nodeset-name: worker-gpu
+slurm.nebius.ai/nodeset-name: worker
 ```
 
 It maps MK8s host pools to a logical Soperator `NodeSet`.
@@ -565,9 +783,9 @@ It maps MK8s host pools to a logical Soperator `NodeSet`.
 Several MK8s node groups can share the same logical NodeSet label:
 
 ```text
-worker-gpu-0 -> slurm.nebius.ai/nodeset-name=worker-gpu
-worker-gpu-1 -> slurm.nebius.ai/nodeset-name=worker-gpu
-worker-gpu-2 -> slurm.nebius.ai/nodeset-name=worker-gpu
+worker-0 -> slurm.nebius.ai/nodeset-name=worker
+worker-1 -> slurm.nebius.ai/nodeset-name=worker
+worker-2 -> slurm.nebius.ai/nodeset-name=worker
 ```
 
 The rendered `NodeSet` uses this label through `spec.nodeSelector`:
@@ -576,11 +794,11 @@ The rendered `NodeSet` uses this label through `spec.nodeSelector`:
 apiVersion: slurm.nebius.ai/v1alpha1
 kind: NodeSet
 metadata:
-  name: worker-gpu
+  name: worker
 spec:
   replicas: 256
   nodeSelector:
-    slurm.nebius.ai/nodeset-name: worker-gpu
+    slurm.nebius.ai/nodeset-name: worker
   tolerations:
     - key: nvidia.com/gpu
       operator: Exists
@@ -621,13 +839,51 @@ The important rule is that storage placement and worker placement are separate:
 
 In plain terms, it is the host setup layer. It can run privileged init
 containers, configure host networking behavior, and enable Soperator helpers
-such as the rebooter.
+such as the rebooter. The chart keeps a no-op `customContainer` enabled by
+default so those initContainers have a valid long-running DaemonSet container.
+The rebooter stays disabled by default; enable `rebooter.enabled=true` only when
+the cluster should let NodeConfigurator run the worker-node reboot helper for
+operator-triggered drain/handoff or reboot maintenance. cxcli's normal wizard
+does not prompt this raw host-maintenance gate; set it deliberately in Helm
+values or `config.yaml` only when Soperator-managed node maintenance is wanted.
+This is a cluster-level
+NodeConfigurator switch, not a per-NodeSet setting, and it does not reboot nodes
+during chart install. The chart does not create a reboot schedule or CronJob by
+itself.
 
 In this chart it is used for:
 
 - host-level sysctl settings needed by the Slurm/GPU workload path.
 - optional custom host preparation container.
-- the rebooter helper.
+- optional rebooter helper.
+
+The bundled rebooter RBAC includes cluster-scoped pod watch access and a
+`pods/eviction` create grant, but the upstream 3.0.4 rebooter path drains by
+marking the node unschedulable, adding a `NoExecute` taint, and then checking
+that non-DaemonSet pods without matching tolerations have left the node. When
+worker nodes are tainted, `rebooter.tolerations` must cover the same taints as
+the worker `NodeSet` tolerations so NodeConfigurator can run on every Slurm
+worker host. Those tolerations affect helper placement only; a separate
+Soperator/operator maintenance flow must set the node's `SlurmNodeDrain` or
+`SlurmNodeReboot` condition before drain/handoff or reboot work starts. These are
+Kubernetes Node status conditions written by the Soperator checks controllers:
+maintenance starts from a condition such as `NebiusMaintenanceScheduled=True`,
+becomes `SoperatorChecksNodeMaintenance=True` after Slurm workers drain, and
+then becomes `SlurmNodeDrain=True`; reboot starts from a degraded Slurm reason
+such as `Kill task failed` or `[compute_maintenance] node reboot process`,
+becomes `SoperatorChecksNodeDegraded=True`, and then becomes
+`SlurmNodeReboot=True`.
+Advanced production-maintenance mode is an explicit operator opt-in to both
+`soperator-checks.enabled=true` and `rebooter.enabled=true`. It has two
+separate runtime intents. `NebiusMaintenanceScheduled=True` is graceful
+maintenance drain and node handoff: Soperator drains Slurm workers, the rebooter
+cordons and `NoExecute`-drains Kubernetes pods, and the checks controller can
+delete the Kubernetes Node object for the maintenance platform. It does not call
+the host `reboot now` path by itself. `SlurmNodeReboot=True` is the actual
+Soperator host reboot path after drain. Prefer the upstream degraded-node path
+that creates this condition from a Slurm reboot/degraded reason; direct external
+writes to `SlurmNodeReboot=True` must happen only after Slurm workloads are
+already drained.
 
 Rendered from:
 
@@ -652,17 +908,18 @@ spec:
   hostNetwork: true
 
   customContainer:
-    enabled: false
+    enabled: true
     image:
       repository: cr.eu-north1.nebius.cloud/soperator/busybox
       tag: latest
+    command: ["/bin/sh", "-c", "trap : TERM INT; sleep infinity & wait"]
 
   rebooter:
-    enabled: true
+    enabled: false
     evictionMethod: evict
     image:
       repository: cr.eu-north1.nebius.cloud/soperator/rebooter
-      tag: 3.0.3
+      tag: 3.0.4
 
   initContainers:
     - name: node-sysctl-params
@@ -697,12 +954,20 @@ Terraform creates and attaches:
 - optional jail submount filesystems.
 - optional VM-based NFS server.
 
-cxcli attaches SFS filesystems to MK8s node groups from profile data. The common
-path is label-driven: `jail: true` attaches the jail filesystem, `workload:
-controller` attaches `controller-spool`, and `workload: accounting` attaches
-the accounting filesystem. Compact or custom profiles can also set
-`sfs_filesystem_keys`, for example `["jail", "controller-spool"]`, when one CPU
-node group intentionally hosts multiple Slurm roles.
+cxcli attaches SFS filesystems to MK8s node groups from profile data. Profiles
+set `sfs_filesystem_keys`, for example `["jail", "controller-spool"]`, when one
+CPU node group intentionally hosts multiple Slurm roles. The bundled production
+profile also treats `jail: true` as a convenience signal for the jail filesystem,
+but role labels such as `workload: controller` or `workload: accounting` do not
+implicitly attach SFS unless the profile declares the matching filesystem keys.
+For already-created MK8s clusters, adding these SFS attachments to existing node
+groups is disruptive. Nebius documents
+[node-group template updates](https://docs.nebius.com/kubernetes/node-groups/manage#deployment-strategy-and-quotas)
+as a rolling update: create a replacement node, cordon the old node, drain the
+old node, and delete it. That can evict pods, restart Slurm workers, and
+interrupt active jobs. cxcli onboarding should therefore treat SFS attachment
+remediation as maintenance-window work and keep pure app/chart adoption
+separate when the cluster is already running workloads.
 
 Local Kubernetes learning clusters such as Kind, Minikube, or Docker Desktop
 Kubernetes must not use Nebius SFS. For that case only, the chart supports
@@ -827,6 +1092,32 @@ slurmNodes:
     k8sNodeFilterName: controller
 ```
 
+The `slurmctld` liveness probe and resource requests are part of the same
+typed value path and are intentionally configurable. Operators on busy
+clusters where the scheduler ping cycle takes longer than the default
+probe period (see Slack `#slurm-support` incident reports) should raise
+`slurmNodes.controller.slurmctld.livenessProbe.failureThreshold` or
+`periodSeconds` through normal value overrides instead of patching the
+operator's ConfigMap, which would be reconciled away.
+
+```yaml
+slurmNodes:
+  controller:
+    slurmctld:
+      livenessProbe:
+        httpGet:
+          path: /livez
+          port: 6817
+        initialDelaySeconds: 30
+        periodSeconds: 60
+        failureThreshold: 5
+        timeoutSeconds: 10
+      resources:
+        cpu: "4000m"
+        memory: "16Gi"
+        ephemeralStorage: "100Gi"
+```
+
 ### Login
 
 `login` is where users connect with SSH.
@@ -913,6 +1204,13 @@ reconcile Slurm configuration and accounting-related state. It can also serve
 Slurm API clients when the cluster exposes and secures that path, but it should
 be treated as a control-plane service, not a worker component.
 
+`slurmrestd` is not the request path for normal Slurm CLI commands. Users and
+automation that run `srun`, `sbatch`, `squeue`, `scontrol`, or similar Slurm
+commands from login pods use the native Slurm client path to the controller
+and, where applicable, accounting services. The ActiveChecks `srun` and
+`sbatch` scripts follow the same native Slurm client behavior from their
+check-job environment; they do not submit through the REST API.
+
 Chart value:
 
 ```yaml
@@ -924,7 +1222,7 @@ slurmNodes:
 
 ### Worker
 
-`worker-gpu` is the default Slurm worker NodeSet.
+`worker` is the default Slurm worker NodeSet.
 
 It runs `slurmd` and MUNGE. The default worker requests GPUs and mounts the
 jail, but worker NodeSets are configurable. CPU-only clusters normally use
@@ -936,20 +1234,20 @@ Chart value:
 
 ```yaml
 nodesets:
-  - name: worker-gpu
+  - name: worker
     gpu:
       enabled: true
     nodeSelector:
-      slurm.nebius.ai/nodeset-name: worker-gpu
+      slurm.nebius.ai/nodeset-name: worker
 ```
 
 Terraform can create one or more MK8s host pools behind that logical NodeSet.
 For example:
 
 ```text
-worker-gpu-0 -> label slurm.nebius.ai/nodeset-name=worker-gpu
-worker-gpu-1 -> label slurm.nebius.ai/nodeset-name=worker-gpu
-worker-gpu-2 -> label slurm.nebius.ai/nodeset-name=worker-gpu
+worker-0 -> label slurm.nebius.ai/nodeset-name=worker
+worker-1 -> label slurm.nebius.ai/nodeset-name=worker
+worker-2 -> label slurm.nebius.ai/nodeset-name=worker
 ```
 
 Slurm sees one logical worker group. Kubernetes may use many cloud node groups
@@ -964,7 +1262,7 @@ The chart supports three Slurm worker layouts:
 | Scenario | Worker NodeSets | Slurm partitions | Cluster type |
 | --- | --- | --- | --- |
 | CPU-only workers | `worker-cpu` | `cpu` | `cpu` |
-| GPU-only workers | `worker-gpu` | `gpu` | `gpu` |
+| GPU-only workers | `worker` | `gpu` | `gpu` |
 | Mixed CPU+GPU workers | `worker-cpu`, `worker-gpu` | `cpu`, `gpu` | `gpu` |
 
 The chart values model multiple worker `NodeSet` objects because
@@ -988,7 +1286,7 @@ Common NodeSet names:
 
 ```text
 worker-cpu      -> CPU worker nodes, no GPU resource request
-worker-gpu      -> default GPU worker nodes
+worker          -> default GPU worker nodes
 worker-h100     -> H100 GPU worker nodes
 worker-h200     -> H200 GPU worker nodes
 worker-gpu-ib   -> GPU workers with InfiniBand fabric
@@ -1049,12 +1347,14 @@ Key MK8s node group data:
 
 ```hcl
 node_groups = {
-  "worker-cpu-0" = {
-    nodeset_name     = "worker-cpu"
-    workload         = "worker"
-    fixed_node_count = 100
-    gpu              = false
-    jail             = true
+  "worker-cpu" = {
+    node_count = 100
+    gpu        = false
+    node_labels = {
+      "slurm.nebius.ai/nodeset-name" = "worker-cpu"
+      "slurm.nebius.ai/jail"         = "true"
+    }
+    sfs_filesystem_keys = ["jail"]
   }
 }
 ```
@@ -1096,11 +1396,11 @@ partitionConfiguration:
   partitions:
     - name: gpu
       nodeSetRefs:
-        - worker-gpu
+        - worker
       config: Default=YES MaxTime=INFINITE State=UP
 
 nodesets:
-  - name: worker-gpu
+  - name: worker
     gpu:
       enabled: true
       nvidia:
@@ -1125,7 +1425,7 @@ nodesets:
           persistentVolumeClaim:
             claimName: jail-pvc
     nodeSelector:
-      slurm.nebius.ai/nodeset-name: worker-gpu
+      slurm.nebius.ai/nodeset-name: worker
     tolerations:
       - key: nvidia.com/gpu
         operator: Exists
@@ -1245,9 +1545,14 @@ resources:
 - Partitions are configured on the `SlurmCluster`, not on the `NodeSet`.
   Chart values under `partitionConfiguration` render to
   `SlurmCluster.spec.partitionConfiguration`.
-- Structured partitions support `name`, `isAll`, `nodeSetRefs`, and `config`.
-  The `config` string is where Slurm partition settings such as `Default`,
-  `MaxTime`, `State`, `PriorityTier`, and `AllowGroups` belong.
+- Structured partitions support `name`, `isAll`, `nodeSetRefs`, `policy`, and
+  `config`. The typed `policy` block holds Slurm partition settings such as
+  `Default`, `MaxTime`, `State`, `PriorityTier`, `AllowAccounts`, `AllowQos`,
+  and `OverSubscribe` as typed fields. The free-form `config` string is an
+  escape hatch for any Slurm.conf partition token not modeled in `policy`.
+  At render time the chart joins typed `policy` tokens first, then appends
+  `config` verbatim. Setting the same key in both `policy` and `config`
+  fails the template render (see [Scheduling And Preemption](#scheduling-and-preemption)).
 - Features are configured on each worker `NodeSet`. Chart values under
   `nodesets[].nodeConfig.features` render to
   `NodeSet.spec.nodeConfig.features`.
@@ -1268,7 +1573,7 @@ Use shape partitions when the queue should target a hardware class:
 | Partition | NodeSet refs | Typical purpose |
 | --- | --- | --- |
 | `cpu` | `worker-cpu` | CPU-only jobs |
-| `gpu` | `worker-gpu`, `worker-h100`, `worker-a100` | Generic GPU jobs |
+| `gpu` | `worker`, `worker-h100`, `worker-a100` | Generic GPU jobs |
 | `h100` | `worker-h100` | NVIDIA H100 jobs |
 | `highmem` | `worker-highmem` | Large-memory CPU jobs |
 | `infiniband` | `worker-gpu-ib` | RDMA-capable jobs |
@@ -1280,7 +1585,7 @@ Use policy partitions when the queue should target a scheduling rule:
 | `debug` | selected worker NodeSets | Short jobs with low `MaxTime` |
 | `long` | selected worker NodeSets | Long-running jobs with longer `MaxTime` |
 
-Example:
+Example using the typed `policy` block (preferred):
 
 ```yaml
 partitionConfiguration:
@@ -1290,17 +1595,33 @@ partitionConfiguration:
       nodeSetRefs:
         - worker-h100
         - worker-a100
-      config: Default=YES MaxTime=INFINITE State=UP PriorityTier=10
+      policy:
+        default: true
+        state: UP
+        maxTime: INFINITE
+        priorityTier: 10
     - name: h100
       nodeSetRefs:
         - worker-h100
-      config: Default=NO MaxTime=INFINITE State=UP PriorityTier=20
+      policy:
+        default: false
+        state: UP
+        maxTime: INFINITE
+        priorityTier: 20
     - name: debug
       nodeSetRefs:
         - worker-h100
         - worker-a100
-      config: Default=NO MaxTime=00:30:00 State=UP PriorityTier=100
+      policy:
+        default: false
+        state: UP
+        maxTime: "00:30:00"
+        priorityTier: 100
 ```
+
+The free-form `config` string remains available for tokens not modeled in
+`policy` (for example `MaxNodes=` or vendor-specific options); typed tokens
+are emitted first, then `config` is appended.
 
 #### Feature Examples
 
@@ -1351,12 +1672,37 @@ hardcoding. The profile set should look like this:
 
 ```text
 nebius-cpu-v1    -> system, controller, login, accounting, worker-cpu
-nebius-gpu-v1    -> system, controller, login, accounting, worker-gpu
+nebius-gpu-v1    -> system, controller, login, accounting, worker
 nebius-mixed-v1  -> system, controller, login, accounting, worker-cpu, worker-gpu
 ```
 
 Each worker profile entry should own its own sizing fields. CPU and GPU workers
-must not share a single `gpu_node_groups` input.
+must not share shortcut-derived MK8s inputs.
+
+For an existing MK8s cluster, cxcli uses the same profile data as a role map
+instead of assuming the physical node groups are named after the Soperator
+roles. The persisted app value is:
+
+```yaml
+values:
+  nodeGroupMapping:
+    system: [cpu-a]
+    controller: [cpu-a]
+    login: [cpu-a]
+    accounting: [cpu-a]
+    worker: [h100]
+```
+
+The renderer converts that map into chart-native values: role
+`k8sNodeFilters[]` select `nebius.com/node-group`, worker `nodesets[]` select
+the mapped worker groups, storage `matchExpressions` select the same mapped
+node groups for jail, controller-spool, and accounting mounts, and partitions
+reference the generated NodeSet names. The mapped `system` filter also feeds
+the Soperator manager, checks controller, and MariaDB operator affinities so
+chart-owned helper pods stay on system/CPU nodes.
+The map is a cxcli convenience layer; direct Helm users can set
+`k8sNodeFilters[]`, `nodesets[]`, `storage.*`, and
+`partitionConfiguration` directly.
 
 Conceptual profile data:
 
@@ -1409,6 +1755,214 @@ Terraform stays generic. It should never contain fixed Soperator names such as
 `worker-gpu`, `worker-cpu`, `controller`, or `login` in module logic. Those
 names belong to cxcli profile data and direct Terraform caller input.
 
+#### Scheduling And Preemption
+
+Slurm scheduling, accounting enforcement, preemption, and per-partition policy
+are configured through typed value surfaces that the chart owns and translates
+into Slurm.conf content at template time. The Soperator CRD types only a small
+subset of Slurm.conf scheduling keys (`priorityWeightAge`,
+`priorityWeightFairshare`, `priorityWeightQOS`, `priorityWeightTRES`, under
+`slurmNodes.accounting.slurmConfig`). Other modeled Slurm.conf keys are emitted
+into `customSlurmConfig`; this chart wraps that escape hatch behind structured
+values so cxcli and operators do not concatenate Slurm.conf strings by hand.
+
+The public references for these fields are Slurm's scheduling, preemption, and
+accounting manuals. This chart documents the subset it models below so
+operators can keep scheduling policy in values instead of copying raw
+Slurm.conf snippets.
+
+##### Global Scheduling Surface
+
+The top-level `schedulingConfig` block defines cluster-wide scheduling and
+preemption keys. Each field is optional; absent keys keep Slurm's built-in
+defaults.
+
+```yaml
+schedulingConfig:
+  preemptType: preempt/partition_prio
+  accountingStorageEnforce:
+    - associations
+    - limits
+    - qos
+  enforcePartLimits: ANY
+  preemptMode: REQUEUE
+  preemptParameters:
+    - send_user_signal
+  jobRequeue: 1
+  schedulerType: sched/backfill
+  schedulerParameters:
+    - sched_min_interval=2000000
+    - bf_max_job_test=2000
+  priorityType: priority/multifactor
+  priorityWeights:
+    fairshare: 100
+    partition: 1000
+    jobSize: 500
+    qos: 1000
+```
+
+| Chart value | Slurm.conf key | Notes |
+| --- | --- | --- |
+| `preemptType` | `PreemptType` | One of `preempt/partition_prio`, `preempt/qos`, `preempt/none` |
+| `accountingStorageEnforce` | `AccountingStorageEnforce` | List; comma-joined. Common QOS/fairshare enforcement uses `associations,limits,qos` |
+| `enforcePartLimits` | `EnforcePartLimits` | `ALL`, `ANY`, or `NO` submit-time partition-limit behavior |
+| `preemptMode` | `PreemptMode` | One or more of `OFF`, `CANCEL`, `REQUEUE`, `SUSPEND`, `GANG`, comma-joined |
+| `preemptParameters` | `PreemptParameters` | List; emitted as comma-joined string |
+| `jobRequeue` | `JobRequeue` | `0` or `1`; required for `PreemptMode=REQUEUE` to apply without `--requeue` |
+| `schedulerType` | `SchedulerType` | Typical `sched/backfill` |
+| `schedulerParameters` | `SchedulerParameters` | List; comma-joined. Used for big-cluster tuning |
+| `priorityType` | `PriorityType` | Typical `priority/multifactor` |
+| `priorityWeights.age` | `PriorityWeightAge` | Multifactor priority weight |
+| `priorityWeights.assoc` | `PriorityWeightAssoc` | Multifactor priority weight |
+| `priorityWeights.fairshare` | `PriorityWeightFairshare` | Multifactor priority weight; requires Slurm accounting |
+| `priorityWeights.partition` | `PriorityWeightPartition` | Multifactor priority weight |
+| `priorityWeights.jobSize` | `PriorityWeightJobSize` | Multifactor priority weight |
+| `priorityWeights.qos` | `PriorityWeightQOS` | Multifactor priority weight; only affects QOS priority when non-zero |
+| `priorityWeights.tres` | `PriorityWeightTRES` | TRES priority weight string, for example `gres/gpu=1000,cpu=100` |
+
+Do not also put the same `PriorityWeight*` key in `customSlurmConfig`; the chart
+fails the render when a typed scheduling key overlaps the raw escape hatch.
+
+##### Per-Partition Policy Surface
+
+Each partition supports a typed `policy` block alongside the free-form
+`config` escape hatch:
+
+```yaml
+partitionConfiguration:
+  configType: structured
+  partitions:
+    - name: research
+      nodeSetRefs:
+        - worker-gpu
+      policy:
+        default: true
+        state: UP
+        maxTime: "8:00:00"
+        defaultTime: "02:00:00"
+        priorityTier: 10
+        preemptMode: REQUEUE
+        allowAccounts:
+          - research
+        allowQos:
+          - normal
+          - high
+        overSubscribe: "NO"
+```
+
+The renderer joins typed `policy` tokens first, then appends the free-form
+`config` value (if any). Supported typed fields:
+
+| Chart value | Slurm.conf token | Notes |
+| --- | --- | --- |
+| `default` | `Default=YES/NO` | Boolean |
+| `hidden` | `Hidden=YES/NO` | Boolean |
+| `state` | `State` | `UP`, `DOWN`, `DRAIN`, `INACTIVE` |
+| `maxTime` | `MaxTime` | Slurm time spec |
+| `defaultTime` | `DefaultTime` | Slurm time spec |
+| `priorityTier` | `PriorityTier` | Integer |
+| `preemptMode` | `PreemptMode` | Partition-level override |
+| `defMemPerNode` | `DefMemPerNode` | Integer (MB) |
+| `defMemPerCPU` | `DefMemPerCPU` | Integer (MB); mutually exclusive with `defMemPerNode` |
+| `defMemPerGPU` | `DefMemPerGPU` | Integer (MB) |
+| `defCpuPerGPU` | `DefCpuPerGPU` | Integer |
+| `overSubscribe` | `OverSubscribe` | `NO`, `YES`, `EXCLUSIVE`, or `FORCE[:N]` |
+| `allowAccounts` | `AllowAccounts` | List; comma-joined |
+| `allowQos` | `AllowQos` | List; comma-joined |
+| `denyAccounts` | `DenyAccounts` | List; comma-joined |
+| `denyQos` | `DenyQos` | List; comma-joined |
+
+Any Slurm.conf token not modeled here can still be provided through the
+partition's `config` string. The chart emits typed tokens first, then
+appends `config` verbatim. For example:
+
+```yaml
+- name: research
+  policy:
+    priorityTier: 10
+  config: "MaxNodes=128 OverTimeLimit=10"
+```
+
+renders as `PriorityTier=10 MaxNodes=128 OverTimeLimit=10`.
+
+##### Overlap Detection
+
+Setting the same Slurm.conf key in both the typed surface and the free-form
+raw string fails the template render with an actionable error. This applies
+to two layers:
+
+- `schedulingConfig.<field>` vs. raw `customSlurmConfig` content. The
+  validator scans `customSlurmConfig` for `^\s*<Key>=` on any line and
+  rejects the render when a typed field is also set.
+- `partitionConfiguration.partitions[].policy.<field>` vs. the same
+  partition's `config` string. The validator scans the partition's `config`
+  for the corresponding token and rejects the render on collision.
+
+The intent is to make the typed surface the single source of truth for
+modeled keys, while keeping the raw escape hatch available for unmodeled
+ones. The chart does not silently merge; users must pick one source per
+key.
+
+##### Practical Patterns
+
+Two well-known production patterns map directly onto these surfaces:
+
+- **Partition + preemption only** (deterministic scheduling). Set
+  `schedulingConfig.preemptType: preempt/partition_prio`, give each
+  partition a distinct `policy.priorityTier`, and set
+  `schedulingConfig.preemptMode` plus per-partition `policy.preemptMode`
+  overrides. Keep `priorityWeight*` zeroed so partition tier drives the
+  decision.
+- **QOS + fairshare** (multi-tenant fairness). Set
+  `schedulingConfig.preemptType: preempt/qos`, set non-zero
+  `schedulingConfig.priorityWeights.fairshare` / `qos` / `age` values when
+  those priority factors should matter, and reference QOS names from each
+  partition's `policy.allowQos` list. For self-managed clusters, enable
+  `qosConfiguration` to reconcile the matching accounts, QOS objects,
+  associations, fairshare values, and QOS preemption relationships through
+  `sacctmgr`. For Managed Soperator, keep `qosConfiguration.enabled=false`
+  because the chart hook cannot run in the managed operator namespace.
+
+##### Large-Cluster Tuning Notes
+
+For 2k-5k node deployments, three orthogonal tuning surfaces matter and
+they all live in the chart's typed values rather than in raw config
+strings or out-of-band patches:
+
+- `schedulingConfig.schedulerParameters` is the durable knob for slurmctld
+  scheduler performance. Common entries:
+  - `sched_min_interval=<microseconds>` — minimum interval between
+    scheduling cycles.
+  - `bf_max_job_test=<count>` — backfill scheduler test depth.
+  - `bf_continue` — keep backfilling across cycles.
+  - `max_depend_depth=<n>` — limit dependency-chain depth.
+  Values are workload-specific. The chart treats this field as opaque
+  list-of-strings input; cxcli profiles or per-cluster value overrides
+  should populate it based on the cluster's measured behavior on the
+  Slurm controller dashboard rather than chart defaults.
+- `controllerManager.manager.kubeClient.{qps,burst}` tunes the operator's
+  Kubernetes API client. The Big Cluster PoC findings showed that
+  client-go default rate limits throttle the manager on busy mk8s control
+  planes. These keys are emitted as `KUBE_API_QPS` and `KUBE_API_BURST`
+  environment variables on the operator container; leave them empty on
+  small clusters so client-go defaults apply.
+- `partitionConfiguration.includeFile` appends a single `Include=<path>`
+  line to `customSlurmConfig`. Use this to point Slurm at a partition
+  file mounted into the controller pod by external IaC. This lets a
+  customer with sufficient access edit their own partitions outside the
+  chart-managed list without re-rendering the chart, which is the
+  pattern requested by the support customer in `#slurm-support`. The
+  chart does not create the included file or its volume; that is an
+  operator responsibility (typically via a ConfigMap or external SFS
+  mount referenced under the controller's volume layout).
+
+Worker-storage tuning, controller storage class selection, MariaDB
+sizing, and HelmRelease timeouts are covered through their existing
+typed value paths under `slurmNodes.controller.*`,
+`slurmNodes.accounting.mariadbOperator.storage.*`, and FluxCD or other
+deployment-tool config respectively, and are intentionally left out of
+this chart's surface.
+
 #### Validation Rules
 
 The product should fail fast when these mappings are inconsistent:
@@ -1418,6 +1972,10 @@ The product should fail fast when these mappings are inconsistent:
 - Every Soperator role or worker that mounts the jail has an MK8s node group
   with `jail = true`, which becomes `slurm.nebius.ai/jail=true`.
 - CPU-only profiles set `clusterType: cpu` and do not enable GPU platform apps.
+- cxcli profiles keep an internal `hidden` partition for upstream ActiveChecks
+  while still rendering visible shape partitions such as `cpu` and `gpu`.
+  CPU-only profiles can set `soperator-activechecks.srunReadyPartition` to the
+  visible `cpu` partition for the readiness probe.
 - GPU-only and mixed profiles set `clusterType: gpu` and enable the cxcli GPU
   Operator path.
 - GPU NodeSets set `gpu.enabled=true`, request `slurmd.resources.gpu`, tolerate
@@ -1466,24 +2024,41 @@ cannot pull the default public `alpine/k8s` image.
 
 ### Persistent Slurm Config
 
-Global Slurm config belongs in chart values:
+Modeled scheduling, accounting enforcement, and preemption keys belong in
+`schedulingConfig`. Keep `customSlurmConfig` for Slurm.conf keys the chart does
+not model:
 
 ```yaml
-customSlurmConfig: |
-  PluginDir=/usr/lib/x86_64-linux-gnu/slurm
-  AccountingStorageEnforce=associations,limits,qos
-  EnforcePartLimits=Any
+schedulingConfig:
+  preemptType: preempt/qos
+  accountingStorageEnforce:
+    - associations
+    - limits
+    - qos
+  enforcePartLimits: ANY
+  preemptMode: REQUEUE
+  preemptParameters: [send_user_signal]
+  priorityWeights:
+    fairshare: 100
+    qos: 1000
 ```
 
-Partition-line config belongs in `partitionConfiguration`:
+Partition-line config belongs in `partitionConfiguration`. Use the structured
+typed `policy` block when the token is modeled, and reserve raw `config` or
+`rawConfig` for unmodeled Slurm partition tokens:
 
 ```yaml
 partitionConfiguration:
-  configType: custom
-  rawConfig:
-    - >-
-      PartitionName=high Nodes=ALL Default=NO MaxTime=INFINITE State=UP
-      PriorityTier=20 AllowQos=high
+  configType: structured
+  partitions:
+    - name: high
+      nodeSetRefs: [worker-gpu]
+      policy:
+        default: false
+        state: UP
+        maxTime: INFINITE
+        priorityTier: 20
+        allowQos: [high]
 ```
 
 The result is persisted on `SlurmCluster.spec.customSlurmConfig` and
@@ -1531,18 +2106,104 @@ have the required accounts, user associations, QoS objects, and service-user
 associations for active checks or automation. Otherwise jobs or health checks
 can be rejected by design.
 
-Partition QoS restrictions are part of the partition line:
+This chart can provision the QoS lifecycle declaratively through the
+`qosConfiguration` block. The block defines accounts, QoS objects, and
+user/account associations as typed values; a Helm hook Job runs after install
+and upgrade and reconciles them through `sacctmgr` against the live SlurmDBD.
+The reconcile script is idempotent and reuses the accounting pod's munge
+authentication by streaming the script into that pod via `kubectl exec -i`, so
+the Job does not need to mount the munge key, depend on `kubectl cp`/`tar`, or
+know the SlurmDBD endpoint directly. The default Job image is `alpine/k8s:1.33.5`,
+which provides both Bash and kubectl. The default active deadline is longer
+than the accounting-pod readiness wait plus the in-pod SlurmDBD readiness wait,
+so slow startup can fail from the explicit readiness checks rather than the
+Job deadline racing them. Reconcile order is fixed:
+accounts -> QoS base fields -> QoS preemption relationships -> associations.
+The separate preemption pass matters because Slurm rejects `Preempt=<qos>`
+references until every referenced QoS object exists.
 
 ```yaml
+schedulingConfig:
+  preemptType: preempt/qos
+  accountingStorageEnforce:
+    - associations
+    - limits
+    - qos
+  enforcePartLimits: ANY
+  preemptMode: REQUEUE
+  preemptParameters: [send_user_signal]
+  jobRequeue: 1
+  priorityWeights:
+    fairshare: 100
+    qos: 1000
+
+qosConfiguration:
+  enabled: true
+  accounts:
+    - name: research
+      organization: ai-team
+  qos:
+    - name: high
+      priority: 1000
+      maxJobs: 200
+      maxWallSeconds: 7200
+      preempt: [normal, low]
+    - name: normal
+      priority: 100
+    - name: low
+      priority: 10
+  associations:
+    - user: alice
+      account: research
+      defaultQos: high
+      qos: [normal, high]
+
 partitionConfiguration:
-  configType: custom
-  rawConfig:
-    - "PartitionName=gpu Nodes=ALL Default=YES MaxTime=INFINITE State=UP AllowQos=gpu"
+  configType: structured
+  partitions:
+    - name: gpu
+      nodeSetRefs: [worker-gpu]
+      policy:
+        default: true
+        state: UP
+        maxTime: INFINITE
+        priorityTier: 30
+        allowQos: [high, normal, low]
 ```
+
+The Job is disabled by default (`qosConfiguration.enabled: false`) so the
+chart's "no surprise side effects" contract continues to hold. Enabling it is
+a deliberate opt-in for environments where IaC ownership of SlurmDBD content
+is acceptable. Managed Soperator on the Nebius AI Cloud Console does not
+expose the operator namespace; the reconcile Job cannot run there, and QOS
+changes must go through Nebius support. For those targets keep
+`qosConfiguration.enabled` at the default and treat the typed surface as a
+documented schema only.
+
+`AllowQos` and per-partition QoS restrictions live in the typed partition
+policy (`partitions[].policy.allowQos` / `policy.denyQos`) and are emitted
+into Slurm.conf alongside the other partition tokens. See
+[Scheduling And Preemption](#scheduling-and-preemption) for the full mapping.
+
+### Enroot And Pyxis Cleanup
+
+The upstream cleanup scripts are kept as exact imports on disk. The parent chart
+overrides `cleanup_enroot.sh` through
+`slurmScripts.builtIn.*.customContentFile`, pointing at local-owned
+`local_slurm_scripts/cleanup_enroot.sh`. The Slurm job epilog removes only
+containers for the current job. The match covers both older
+`pyxis_<jobid>...` names and newer image-derived names that end with `_<jobid>`,
+such as `pyxis_<image>.sqsh_<jobid>`.
+
+The scheduled `enroot-cleanup` ActiveCheck points
+`slurmJobSpec.sbatchScriptFile` at local-owned
+`local_scripts/enroot-cleanup.sh` and removes only job-shaped Pyxis names. It is
+not a broad `pyxis_*` deletion policy because persistent named containers are a
+site-specific operational choice.
 
 ### Memory Defaults
 
-The Soperator 3.0.3 CRD defaults `slurmConfig.defMemPerNode` to `0`. Slurm
+The Soperator 3.0.4 CRD defaults `slurmConfig.defMemPerNode` to `0`. Slurm
 does not allow `DefMemPerCPU` and `DefMemPerNode` together, so the chart fails
 rendering when `customSlurmConfig` contains `DefMemPerCPU`.
 
@@ -1553,7 +2214,6 @@ slurmConfig:
   defCpuPerGPU: 8
 
 customSlurmConfig: |
-  PluginDir=/usr/lib/x86_64-linux-gnu/slurm
   DefMemPerGPU=131072
 ```
 
@@ -1567,7 +2227,7 @@ GPU worker NodeSets set container driver capabilities through
 
 ```yaml
 nodesets:
-  - name: worker-gpu
+  - name: worker
     slurmd:
       customEnv:
         - name: NVIDIA_DRIVER_CAPABILITIES
@@ -1600,7 +2260,17 @@ Slurm jobs and their container environment, not by direct worker SSH.
 
 ## Helm Dependencies
 
-`Chart.yaml` declares two dependencies.
+`Chart.yaml` declares the always-available operator dependencies plus optional
+Soperator-family child charts. The child chart source folders remain as
+siblings under `helm-charts/`; this parent chart consumes them through
+`file://../...` dependencies and exposes only curated integration overrides in
+the parent `values.yaml`.
+
+The sibling chart directories are the source of truth. Archives under
+`helm-charts/soperator/charts/` are generated dependency artifacts from
+`helm dependency build` / packaging. When validating a dirty checkout, prefer a
+disposable copy for dependency rebuilds so local archive churn does not obscure
+the actual chart, values, or documentation changes under review.
 
 ### OpenKruise
 
@@ -1611,7 +2281,11 @@ kruise:
   installOperator: true
 ```
 
-OpenKruise provides controllers used by Soperator workload patterns.
+OpenKruise provides controllers and CRDs used by Soperator workload and
+lifecycle patterns. It is a runtime dependency of the operator path, not a
+Slurm role. Keep it installed before the Soperator-managed workloads are
+created, and keep `uninstallCleanup.enabled=true` unless an operator has a
+separate cleanup process for Soperator-created Kruise resources.
 
 ### MariaDB Operator
 
@@ -1622,8 +2296,53 @@ mariadb-operator:
   installOperator: true
 ```
 
-This installs the MariaDB Operator. The Soperator `SlurmCluster` then uses
-`slurmNodes.accounting.mariadbOperator` to create the accounting database.
+This installs the MariaDB Operator CRDs, controller, and webhook. The
+Soperator `SlurmCluster` then uses
+`slurmNodes.accounting.mariadbOperator.enabled=true` to ask Soperator to create
+and wire the accounting database used by `slurmdbd`.
+
+There are two separate toggles on purpose:
+
+- `mariadb-operator.installOperator`: installs the Kubernetes operator.
+- `slurmNodes.accounting.mariadbOperator.enabled`: enables the Soperator
+  accounting database integration in the SlurmCluster spec.
+
+### Optional Soperator-Family Child Charts
+
+These dependencies are disabled by default and enabled only through their
+dependency-name value keys:
+
+- `soperator-checks.enabled`
+- `soperator-activechecks.enabled`
+- `soperator-notifier.enabled`
+- `soperator-backup-config.enabled`
+- `soperator-dcgm-exporter.enabled`
+
+The child charts keep their full defaults in their own folders. The parent
+values file carries only integration defaults that matter for the combined
+install, such as stable `fullnameOverride` values, runtime Secret references,
+and active-check safety toggles. For production training, the parent and cxcli
+profiles keep `soperator-activechecks.enabled=false`,
+`soperator-activechecks.waitForChecks.enabled=false`,
+`soperator-checks.enabled=false`, and `soperator-dcgm-exporter.enabled=false`.
+cxcli profiles keep an internal `hidden` partition for upstream ActiveChecks and can override
+`soperator-activechecks.srunReadyPartition` to a visible partition such as
+`cpu` when that is the better readiness target.
+
+Responsibilities:
+
+- `soperator-checks` runs the checks controller and optional node-health
+  automation.
+- `soperator-activechecks` defines the actual check workloads and dependencies
+  between them.
+- `soperator-notifier` owns Slack notification Alertmanager wiring and expects
+  the webhook URL to come from an existing runtime Secret.
+- `soperator-backup-config` owns K8up backup schedules for the jail and expects
+  object-storage credentials to come from an existing runtime Secret.
+- `k8up` is pulled in only when `soperator-backup-config.enabled=true`, because
+  the K8up controller is needed only for jail backup.
+- `soperator-dcgm-exporter` owns optional Slurm job-mapped GPU metrics and is
+  separate from the NVIDIA GPU Operator's default DCGM telemetry path.
 
 ## cxcli Integration
 
@@ -1640,7 +2359,8 @@ It seeds MK8s `node_groups` as data:
 - `controller`
 - `login`
 - `accounting`
-- `worker-gpu-0`, `worker-gpu-1`, and so on
+- `worker` for the default one-group production profile
+- `worker-0`, `worker-1`, and so on only when the profile is explicitly sharded
 
 The Terraform `mk8s` module does not hardcode those names. It accepts a generic
 `node_groups` map and creates one MK8s node group per enabled map entry.
@@ -1686,45 +2406,60 @@ Change in-cluster Slurm behavior in Helm values:
 - storage mounts in Slurm pods: `volumeSources`
 - storage glue: `volume`, `storage`, and `externalNfs`
 - scripts: `slurmScripts`
-- host preparation: `NodeConfigurator` values
+- host preparation and optional rebooter behavior: `hostNetwork`,
+  `customContainer`, `initContainers`, and `rebooter`. Rebooter ServiceAccount,
+  Role, and binding resources render only when `rebooter.enabled=true` and
+  `rebooter.generateRBAC=true`; no chart-owned schedule is rendered for
+  reboots.
 
-## Companion Charts
+## Optional Child Charts
 
-The core chart stays limited to Soperator and Slurm resources. Optional
-in-cluster features are separate charts and cxcli apps:
+The core templates stay limited to Soperator and Slurm resources. Optional
+in-cluster features are sibling chart sources packaged as child dependencies of
+this parent chart:
 
 - `soperator-notifier`: Slack job-state notifications through
-  VictoriaMetrics Alertmanager. Webhook URLs stay in runtime Kubernetes
-  Secrets.
+  VictoriaMetrics Alertmanager. Slack delivery uses a Slack App incoming
+  webhook as described in
+  <https://docs.slack.dev/messaging/sending-messages-using-incoming-webhooks/>.
+  Webhook URLs stay in runtime Kubernetes Secrets. Direct Helm users precreate
+  the referenced Secret; cxcli users can either provide the URL at deploy time
+  or point the notifier at an existing Nebius MysteryBox Secret ID and let ESO
+  sync the primary version into Kubernetes.
 - `soperator-checks`: controller for Soperator `ActiveCheck` resources.
 - `soperator-activechecks`: pinned upstream ActiveCheck definitions. The
   target SlurmCluster name is `slurmClusterRefName`; cxcli derives that value
   and the login-node SSH check count from the matching Soperator app row.
+  CPU-only deployments should set `srunReadyPartition` to a rendered partition
+  such as `cpu` when ActiveChecks are explicitly enabled for diagnostics.
 - `soperator-backup-config`: K8up `Schedule` for jail backups to Object
-  Storage. Credentials are referenced through an existing Secret.
+  Storage. Credentials are referenced through an existing Secret. The parent
+  chart installs K8up as an optional dependency when
+  `soperator-backup-config.enabled=true`, in the same release namespace.
 - `soperator-dcgm-exporter`: NVIDIA DCGM exporter configured with the
   Soperator Slurm job-mapping directory. This is optional; the default GPU
-  telemetry path remains the NVIDIA GPU Operator DCGM exporter.
-- `soperator-nfs-server`: in-cluster NFS server for test and learning
-  clusters. Production shared storage should use SFS or the Terraform-owned
-  VM NFS module.
+  telemetry path remains the NVIDIA GPU Operator DCGM exporter. For Nebius
+  GPU-image hosts, cxcli sets `validateToolkit=false` because the host NVIDIA
+  runtime stack is already present.
 
 ### Upstream Helm Chart Coverage
 
-The upstream `nebius/soperator/helm` tree is covered by this product through
-three paths:
+The upstream `nebius/soperator/helm` tree is handled by this product through
+four decisions:
 
 - Main chart: `soperator`, `soperator-crds`, `slurm-cluster`,
   `slurm-cluster-storage`, `nodesets`, and `nodeconfigurator`.
-- Companion charts: `soperatorchecks`, `soperator-activechecks`,
-  `soperator-backup-config`, `soperator-dcgm-exporter`, `soperator-notifier`,
-  and `nfs-server`.
+- Optional child dependencies: `soperator-checks`, `soperator-activechecks`,
+  `soperator-backup-config`, `k8up`, `soperator-dcgm-exporter`, and
+  `soperator-notifier`.
 - cxcli-owned orchestration: `soperator-fluxcd` and
   `soperator-fluxcd-bootstrap` are intentionally replaced by cxcli render and
   deploy ordering.
+- Excluded upstream chart: `nfs-server`. Production shared storage should use
+  Nebius SFS. The Terraform-owned VM NFS module remains available only as a
+  non-HA compatibility bridge when explicit NFS semantics are required.
 
-Three upstream charts are tracked as review-only imports instead of installed
-directly:
+Three upstream charts are tracked as review-only imports instead of installed:
 
 - `soperator-monitoring-dashboards`: cxcli owns Grafana dashboard import
   through generated Grafana values and dashboard ConfigMaps. Installing the
@@ -1747,9 +2482,22 @@ contract.
 - It does not create SFS filesystems.
 - It does not create the NFS VM.
 - It does not install upstream `soperator-fluxcd`.
-- It does not install Slack notifications, active checks, backup schedules,
-  Soperator DCGM job-mapping telemetry, or in-cluster NFS directly; use the
-  separate companion charts.
+- It does not enable Slack notifications, active checks, backup schedules,
+  or Soperator DCGM job-mapping telemetry by default; opt into the matching
+  child chart value only when that feature is required. Keep
+  `soperator-activechecks.enabled=false`,
+  `soperator-activechecks.waitForChecks.enabled=false`,
+  `soperator-checks.enabled=false`, `soperator-notifier.enabled=false`,
+  `soperator-backup-config.enabled=false`, and
+  `soperator-dcgm-exporter.enabled=false` for production training defaults.
+- It does not enable SSSD identity integration or the NodeConfigurator rebooter
+  by default; keep `slurmNodes.sssd.enabled=false`,
+  `nodesets[].sssd.enabled=false`, and `rebooter.enabled=false` unless those
+  service paths are intentionally configured. cxcli does not prompt the raw
+  rebooter gate in its normal wizard.
+- It does not block production Helm installs on ActiveChecks by default:
+  `soperator-activechecks.waitForChecks.enabled` stays `false` unless a
+  benchmark, diagnostic, or maintenance workflow intentionally enables it.
 - It does not own the full observability stack.
 
 Default GPU telemetry stays on the cxcli-managed NVIDIA GPU Operator DCGM
@@ -1764,7 +2512,7 @@ The chart package version is independent from the upstream Soperator release.
 
 ```yaml
 version: 0.1.0
-appVersion: "3.0.3"
+appVersion: "3.0.4"
 ```
 
 This separation lets the chart release packaging, docs, examples, cxcli wiring,
@@ -1816,7 +2564,7 @@ Versioning uses two fields on purpose:
 
 ```yaml
 version: 0.1.0
-appVersion: "3.0.3"
+appVersion: "3.0.4"
 ```
 
 `appVersion` is the upstream Soperator release. It should match the lock
@@ -1833,6 +2581,9 @@ The exact upstream-owned file imports are:
 ActiveChecks keeps the upstream script files exact. The chart applies the local
 SlurmCluster name and namespace at render time in the helper that embeds those
 scripts, so script sync does not carry local patches.
+Configured ActiveCheck script file references fail Helm rendering when the
+referenced file is not packaged with the chart, which keeps parent chart and
+cxcli renders from silently producing empty check payloads.
 
 Exact file sync does not own or overwrite:
 
@@ -1850,6 +2601,11 @@ Exact file sync does not own or overwrite:
 Those files are the local product layer. They contain the simplified values
 interface, MK8s/SFS/NFS ownership boundary, cxcli wiring, local learning
 profile, production guardrails, and the worker/partition design.
+
+The Helm dependency archive cache at `helm-charts/soperator/charts/` is
+generated from `Chart.lock` by `helm dependency build`. It is ignored by Git,
+but it is intentionally not excluded from chart packages because packaged
+releases need the resolved dependency archives.
 
 Image value sync is narrower: it may update only the exact value paths listed
 under `imports.images`, and the target file must be declared in

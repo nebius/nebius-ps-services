@@ -14,6 +14,9 @@ separate jobs.
 
 - GPU worker nodes must expose the configured `dcgmHpcJobMappingDir`.
 - The chart schedules on nodes matching `daemonSet.nodeSelector`.
+- `validateToolkit=true` waits for the GPU Operator toolkit validation file
+  before starting the exporter. Set it to `false` on Nebius GPU-image nodes
+  where the host NVIDIA runtime stack is already present.
 - `ServiceMonitor` rendering is disabled by default. Enable it only when the
   Prometheus Operator CRDs are installed.
 

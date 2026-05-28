@@ -33,8 +33,12 @@ data:
     mkdir -m 755 -p "$host_path"
 
     mount_virtiofs() {
-        mount -t virtiofs -o rw,relatime "$device_name" "$host_path"
-        echo "Mounted virtiofs device $device_name to $path"
+        if mount -t virtiofs -o rw,relatime "$device_name" "$host_path"; then
+            echo "Mounted virtiofs device $device_name to $path"
+            return 0
+        fi
+        echo "Failed to mount virtiofs device $device_name to $path; will retry" >&2
+        return 1
     }
 
     ensure_mounted() {
@@ -102,8 +106,12 @@ data:
         mkdir -m 755 -p "$host_path"
 
         mount_glusterfs() {
-            mount -t glusterfs $gluster_hostname:/stripe-volume "$host_path"
-            echo "Mounted glusterfs from host $gluster_hostname to $path"
+            if mount -t glusterfs $gluster_hostname:/stripe-volume "$host_path"; then
+                echo "Mounted glusterfs from host $gluster_hostname to $path"
+                return 0
+            fi
+            echo "Failed to mount glusterfs from host $gluster_hostname to $path; will retry" >&2
+            return 1
         }
 
         ensure_mounted() {

@@ -20,6 +20,19 @@ All notable changes to this project are documented in this file.
 
 ### Changed
 
+- Removed the deprecated Compute preemptible priority field from `modules/vm`:
+  preemptible VM instances now render `on_preemption = "STOP"` without exposing
+  or setting `preemptible_priority`, and the VM module now requires Nebius
+  Terraform provider `>= 0.5.217`.
+- Aligned `modules/mk8s` disabled object semantics and GPU stack defaults:
+  disabled `node_groups` / `gpu_clusters` entries may now omit enabled-only
+  fields, and GPU node groups default to the Nebius image stack while requiring
+  `gpu_stack_preset` only for enabled GPU groups on that path.
+- Redesigned `modules/mk8s` around required typed `cluster` and `node_groups`
+  inputs. The module now separates cluster provisioning from node-group shape,
+  reservation, SSH, service account, GPU cluster, and filesystem attachment
+  data, and removes the previous CPU/GPU shortcut variables without a
+  compatibility shim.
 - Clarified that `modules/nfs` is a non-HA, single-VM NFS bridge intended for
   tests, demos, short-lived environments, or explicit NFS compatibility cases;
   production or long-lived Kubernetes RWX storage should use direct Nebius SFS.

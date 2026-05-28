@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import time
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -398,15 +398,16 @@ def test_terraform_plan_and_apply_can_skip_init(monkeypatch) -> None:
 def test_stream_json_events_aborts_early_when_abort_check_requests_it(
     monkeypatch, tmp_path: Path
 ) -> None:
-    class _DelayedStream:
-        def __init__(self, delay_seconds: float) -> None:
-            self._delay_seconds = delay_seconds
+    release_streams = threading.Event()
+
+    class _BlockingStream:
+        def __init__(self) -> None:
             self._done = False
 
         def readline(self) -> str:
             if self._done:
                 return ""
-            time.sleep(self._delay_seconds)
+            release_streams.wait()
             self._done = True
             return ""
 
@@ -415,16 +416,18 @@ def test_stream_json_events_aborts_early_when_abort_check_requests_it(
 
     class _FakeProcess:
         def __init__(self) -> None:
-            self.stdout = _DelayedStream(0.5)
-            self.stderr = _DelayedStream(0.5)
+            self.stdout = _BlockingStream()
+            self.stderr = _BlockingStream()
             self.terminated = False
             self.killed = False
 
         def terminate(self) -> None:
             self.terminated = True
+            release_streams.set()
 
         def kill(self) -> None:
             self.killed = True
+            release_streams.set()
 
         def poll(self) -> int | None:
             return None if not (self.terminated or self.killed) else 1

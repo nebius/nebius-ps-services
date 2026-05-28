@@ -11,9 +11,21 @@ from collections.abc import Callable, Mapping
 from re import Pattern
 from typing import Any
 
-from .component_instances import component_instance_id, component_type_id
+from .component_instances import (
+    component_instance_id,
+    component_type_id,
+    normalize_component_token,
+)
+from .mk8s_node_groups import (
+    gpu_cluster_fabric,
+    gpu_enabled,
+    iter_node_groups,
+    legacy_mk8s_input_keys,
+)
 
 _LINUX_USER_PATTERN = re.compile(r"^[a-z_][a-z0-9_-]{0,31}$")
+_SOPERATOR_APP_ID = "soperator"
+_SOPERATOR_DEFAULT_PARTITION_PROFILE = "shape-default"
 
 
 def _coerce_int(value: Any, *, default: int = 0) -> int:
@@ -27,15 +39,6 @@ def _coerce_int(value: Any, *, default: int = 0) -> int:
         return int(str(value).strip())
     except (TypeError, ValueError):
         return default
-
-
-def _has_generic_gpu_node_group(node_groups: Any) -> bool:
-    if not isinstance(node_groups, Mapping):
-        return False
-    return any(
-        isinstance(group, Mapping) and bool(group.get("gpu", False))
-        for group in node_groups.values()
-    )
 
 
 def validate_component_runtime_rules(
@@ -61,7 +64,7 @@ def validate_component_runtime_rules(
         if profile == "postgresql_cluster":
             _validate_postgresql(payload, get_path, as_text, base)
         elif profile == "mk8s_cluster":
-            _validate_mk8s_gpu(payload, get_path, as_text, base)
+            _validate_mk8s_gpu(payload, get_path, as_text, base, component_id=entry.id)
         elif profile == "shared_filesystem":
             _validate_sfs_csi(payload, get_path, as_text, base)
         elif profile == "vm_instance":
@@ -69,7 +72,7 @@ def validate_component_runtime_rules(
         elif profile == "wireguard_gw":
             _validate_wireguard(payload, get_path, as_text, base, id_pattern)
         elif profile == "ssh_jumphost":
-            _validate_ssh_jumphost(payload, get_path, as_text, base)
+            _validate_ssh_jumphost(payload, get_path, as_text, base, id_pattern)
 
     for entry in component_entries("infra"):
         if getattr(entry, "validation_profile", "") == "mysterybox":
@@ -88,6 +91,7 @@ def validate_component_runtime_rules(
         if entry.id == "grafana" or str(entry.chart_name or "").strip().lower() == "grafana"
     }
     _validate_grafana_replicas(payload, grafana_component_ids)
+    validate_soperator_qos_partition_profiles(payload, as_text)
 
 
 def _validate_postgresql(
@@ -109,44 +113,258 @@ def _validate_linux_user_name(value: str, *, field_label: str) -> None:
         )
 
 
+def _mapping_segment_value(node: Mapping[str, Any], segment: str) -> Any:
+    for candidate in (segment, segment.replace("-", "_"), segment.replace("_", "-")):
+        if candidate in node:
+            return node[candidate]
+    return None
+
+
+def _mapping_path_value(node: Mapping[str, Any], dotted_path: str) -> Any:
+    current: Any = node
+    for raw_segment in dotted_path.split("."):
+        segment = raw_segment.strip()
+        if not segment or not isinstance(current, Mapping):
+            return None
+        current = _mapping_segment_value(current, segment)
+        if current is None:
+            return None
+    return current
+
+
+def _mapping_child(node: Mapping[str, Any], key: str) -> Mapping[str, Any]:
+    value = node.get(key)
+    return value if isinstance(value, Mapping) else {}
+
+
+def _soperator_nodesets_profiles() -> tuple[str, Mapping[str, Mapping[str, Any]]]:
+    from .component_sources import helm_chart_source_by_id
+
+    chart = helm_chart_source_by_id(_SOPERATOR_APP_ID)
+    settings = getattr(chart, "soperator_nodesets", None)
+    default = str(getattr(settings, "default", "") or "").strip() if settings is not None else ""
+    profiles = getattr(settings, "profiles", {}) if settings is not None else {}
+    if not isinstance(profiles, Mapping):
+        profiles = {}
+    return default, profiles
+
+
+def _soperator_profile_requires_qos_configuration(
+    partition_profile: Mapping[str, Any],
+    values: Mapping[str, Any],
+) -> bool:
+    wizard = _mapping_child(partition_profile, "wizard")
+    if wizard.get("requires_qos_configuration") is True:
+        return True
+    profile_values = _mapping_child(partition_profile, "values")
+    for source in (values, profile_values):
+        preempt_type = normalize_component_token(
+            _mapping_path_value(source, "schedulingConfig.preemptType")
+        )
+        if preempt_type == "preempt/qos":
+            return True
+    return False
+
+
+def _qos_names_from_partitions(values: Mapping[str, Any]) -> set[str]:
+    partitions = _mapping_path_value(values, "partitionConfiguration.partitions")
+    if not isinstance(partitions, list):
+        return set()
+    names: set[str] = set()
+    for partition in partitions:
+        if not isinstance(partition, Mapping):
+            continue
+        policy = _mapping_child(partition, "policy")
+        allow_qos = policy.get("allowQos")
+        if allow_qos is None:
+            allow_qos = policy.get("allowQOS")
+        if isinstance(allow_qos, str):
+            candidates = [item.strip() for item in allow_qos.split(",")]
+        elif isinstance(allow_qos, list):
+            candidates = [str(item).strip() for item in allow_qos]
+        else:
+            candidates = []
+        names.update(item for item in candidates if item)
+    return names
+
+
+def _configured_qos_names(qos_configuration: Mapping[str, Any]) -> set[str]:
+    raw_qos = qos_configuration.get("qos")
+    if not isinstance(raw_qos, list):
+        return set()
+    names: set[str] = set()
+    for item in raw_qos:
+        if not isinstance(item, Mapping):
+            continue
+        name = str(item.get("name", "") or "").strip()
+        if name:
+            names.add(name)
+    return names
+
+
+def validate_soperator_qos_partition_profiles(
+    payload: Mapping[str, Any],
+    as_text: Callable[[Any], str],
+) -> None:
+    apps_node = payload.get("apps")
+    chart_rows = apps_node.get("charts") if isinstance(apps_node, Mapping) else None
+    if not isinstance(chart_rows, list):
+        return
+
+    default_profile, profiles = _soperator_nodesets_profiles()
+    for index, row in enumerate(chart_rows):
+        if not isinstance(row, Mapping) or not bool(row.get("enabled", False)):
+            continue
+        if component_type_id(row) != _SOPERATOR_APP_ID:
+            continue
+
+        values = row.get("values")
+        values = values if isinstance(values, Mapping) else {}
+        profile_name = as_text(row.get("profile")) or default_profile
+        profile = profiles.get(profile_name)
+        if not isinstance(profile, Mapping):
+            continue
+
+        partition_profile_name = (
+            as_text(_mapping_path_value(values, "partitionProfile"))
+            or _SOPERATOR_DEFAULT_PARTITION_PROFILE
+        )
+        chart_profile = _mapping_child(profile, "chart")
+        partition_profiles = _mapping_child(chart_profile, "partition_profiles")
+        partition_profile = partition_profiles.get(partition_profile_name)
+        if not isinstance(partition_profile, Mapping):
+            continue
+        if not _soperator_profile_requires_qos_configuration(partition_profile, values):
+            continue
+
+        field_prefix = f"apps.charts[{index}].values"
+        qos_configuration = _mapping_path_value(values, "qosConfiguration")
+        if not isinstance(qos_configuration, Mapping) or qos_configuration.get("enabled") is not True:
+            raise ValueError(
+                f"{field_prefix}.partitionProfile='{partition_profile_name}' uses "
+                "Slurm preempt/qos and partition AllowQos lists. Matching SlurmDBD "
+                "QOS objects must exist before slurmctld starts; set "
+                f"{field_prefix}.qosConfiguration.enabled=true for cxcli-managed "
+                "self-deployment, or choose shape-default/with-debug-long."
+            )
+
+        profile_values = _mapping_child(partition_profile, "values")
+        required_qos = _qos_names_from_partitions(values) or _qos_names_from_partitions(
+            profile_values
+        )
+        if not required_qos:
+            continue
+        configured_qos = _configured_qos_names(qos_configuration)
+        missing_qos = sorted(required_qos - configured_qos)
+        if missing_qos:
+            raise ValueError(
+                f"{field_prefix}.qosConfiguration.qos is missing QOS objects required "
+                f"by partition profile '{partition_profile_name}': "
+                f"{', '.join(missing_qos)}"
+            )
+
+
 def _validate_mk8s_gpu(
     payload: Mapping[str, Any],
     get_path: Callable,
     as_text: Callable,
     base: str,
+    *,
+    component_id: str,
 ) -> None:
-    legacy_gpu_validation_overrides = get_path(payload, f"{base}.gpu_validation_overrides")
-    if legacy_gpu_validation_overrides is not None:
-        raise ValueError(
-            f"{base}.gpu_validation_overrides is no longer supported; use "
-            "deploy.targets[].validations.mk8s_gpu.*"
+    rows = _mk8s_validation_inputs(payload, get_path, base, component_id)
+    for inputs_label, inputs in rows:
+        legacy_gpu_validation_overrides = inputs.get("gpu_validation_overrides")
+        if legacy_gpu_validation_overrides is not None:
+            raise ValueError(
+                f"{inputs_label}.gpu_validation_overrides is no longer supported; use "
+                "deploy.targets[].validations.mk8s_gpu.*"
+            )
+        _validate_mk8s_inputs(
+            payload,
+            get_path,
+            as_text,
+            inputs_label,
+            inputs,
         )
 
-    gpu_enabled = bool(get_path(payload, f"{base}.gpu_enabled", False))
-    gpu_node_groups = get_path(payload, f"{base}.gpu_node_groups", 0)
-    gpu_nodes_count_per_group = get_path(payload, f"{base}.gpu_nodes_count_per_group", 0)
-    generic_gpu_node_group = _has_generic_gpu_node_group(get_path(payload, f"{base}.node_groups"))
-    gpu_platform = as_text(get_path(payload, f"{base}.gpu_nodes_platform"))
-    gpu_preset = as_text(get_path(payload, f"{base}.gpu_nodes_preset"))
-    gpu_autoscaling = get_path(
-        payload,
-        f"{base}.mk8s_gpu_node_group_overrides.autoscaling",
-    )
-    gpu_override_platform = as_text(
-        get_path(
-            payload,
-            f"{base}.mk8s_gpu_node_group_overrides.template.resources.platform",
+
+def _mk8s_validation_inputs(
+    payload: Mapping[str, Any],
+    get_path: Callable,
+    base: str,
+    component_id: str,
+) -> list[tuple[str, Mapping[str, Any]]]:
+    infra = payload.get("infra")
+    components = infra.get("components") if isinstance(infra, Mapping) else None
+    rows: list[tuple[str, Mapping[str, Any]]] = []
+    if isinstance(components, list):
+        for index, row in enumerate(components):
+            if not isinstance(row, Mapping) or component_type_id(row) != component_id:
+                continue
+            if row.get("enabled") is False:
+                continue
+            inputs = row.get("inputs")
+            rows.append(
+                (
+                    f"infra.components[{index}].inputs",
+                    inputs if isinstance(inputs, Mapping) else {},
+                )
+            )
+        return rows
+
+    flat_row = get_path(payload, base, None)
+    if not isinstance(flat_row, Mapping) or flat_row.get("enabled") is False:
+        return rows
+    inputs = flat_row.get("inputs")
+    if isinstance(inputs, Mapping):
+        return [(f"{base}.inputs", inputs)]
+    return [(base, flat_row)]
+
+
+def _mk8s_mig_configured(inputs: Mapping[str, Any], as_text: Callable) -> bool:
+    for key in ("mig_strategy", "mig_parted_config"):
+        if as_text(inputs.get(key)):
+            return True
+
+    defaults = inputs.get("node_group_defaults")
+    if isinstance(defaults, Mapping):
+        gpu_defaults = defaults.get("gpu")
+        if isinstance(gpu_defaults, Mapping):
+            for key in ("mig_strategy", "mig_parted_config"):
+                if as_text(gpu_defaults.get(key)):
+                    return True
+
+    node_groups = inputs.get("node_groups")
+    if isinstance(node_groups, Mapping):
+        for raw_group in node_groups.values():
+            if not isinstance(raw_group, Mapping):
+                continue
+            for key in ("mig_strategy", "mig_parted_config"):
+                if as_text(raw_group.get(key)):
+                    return True
+    return False
+
+
+def _validate_mk8s_inputs(
+    payload: Mapping[str, Any],
+    get_path: Callable,
+    as_text: Callable,
+    base: str,
+    inputs: Mapping[str, Any],
+) -> None:
+
+    legacy_keys = legacy_mk8s_input_keys(inputs)
+    if legacy_keys:
+        raise ValueError(
+            f"{base} uses removed MK8s shortcut input(s): {', '.join(legacy_keys)}. "
+            "Use inputs.cluster and inputs.node_groups."
         )
-    )
-    gpu_override_preset = as_text(
-        get_path(
-            payload,
-            f"{base}.mk8s_gpu_node_group_overrides.template.resources.preset",
-        )
-    )
-    infiniband_fabric = as_text(get_path(payload, f"{base}.infiniband_fabric"))
-    mig_strategy = as_text(get_path(payload, f"{base}.mig_strategy"))
-    mig_parted_config = as_text(get_path(payload, f"{base}.mig_parted_config"))
+
+    node_groups = iter_node_groups(inputs)
+    selected_gpu_enabled = gpu_enabled(inputs)
+    gpu_fabric_checks: list[tuple[str, str, str]] = []
+    mig_configured = _mk8s_mig_configured(inputs, as_text)
     project_gpu_validations_by_label: list[tuple[str, Mapping[str, Any]]] = []
     deploy = payload.get("deploy")
     targets = deploy.get("targets") if isinstance(deploy, Mapping) else None
@@ -163,50 +381,54 @@ def _validate_mk8s_gpu(
                     (f"deploy.targets[{index}].validations.mk8s_gpu", mk8s_gpu_validations)
                 )
 
-    if gpu_enabled:
-        if _coerce_int(gpu_node_groups) <= 0 and not generic_gpu_node_group:
-            raise ValueError(
-                "gpu_enabled=true requires either gpu_node_groups > 0 or at least one generic node_groups entry with gpu=true"
-            )
-        if (
-            _coerce_int(gpu_node_groups) > 0
-            and gpu_autoscaling is None
-            and _coerce_int(gpu_nodes_count_per_group) <= 0
-        ):
-            raise ValueError(
-                "gpu_nodes_count_per_group must be > 0 when built-in GPU node-group shortcut is enabled and autoscaling is not configured"
-            )
-        if not gpu_platform and not gpu_override_platform:
-            raise ValueError(
-                "gpu_nodes_platform is required when gpu_enabled=true unless mk8s_gpu_node_group_overrides.template.resources.platform is set"
-            )
-        if not gpu_preset and not gpu_override_preset:
-            raise ValueError(
-                "gpu_nodes_preset is required when gpu_enabled=true unless mk8s_gpu_node_group_overrides.template.resources.preset is set"
-            )
+    if not node_groups:
+        raise ValueError(f"{base}.node_groups must declare at least one enabled node group")
 
-    if infiniband_fabric and not gpu_enabled:
-        raise ValueError("infiniband_fabric requires gpu_enabled=true")
-    effective_gpu_platform = gpu_override_platform or gpu_platform
-    effective_gpu_preset = gpu_override_preset or gpu_preset
-    if infiniband_fabric and effective_gpu_platform and effective_gpu_preset:
+    if selected_gpu_enabled:
+        for group in node_groups:
+            if not group.gpu:
+                continue
+            if not group.platform:
+                raise ValueError("GPU node_groups entries require platform")
+            if not group.preset:
+                raise ValueError("GPU node_groups entries require preset")
+            if group.gpu_stack_source not in {"nebius_image", "operator_managed"}:
+                raise ValueError(
+                    "GPU node_groups entries require gpu_stack_source to be "
+                    "'nebius_image' or 'operator_managed' when set"
+                )
+            fabric = gpu_cluster_fabric(inputs, group)
+            if fabric:
+                gpu_fabric_checks.append((group.platform, group.preset, fabric))
+
+    if gpu_fabric_checks and not selected_gpu_enabled:
+        raise ValueError("GPU cluster fabric requires at least one GPU node_groups entry")
+    if gpu_fabric_checks:
         tenant_id = as_text(get_path(payload, "client_info.nebius.tenant_id"))
         project_id = as_text(get_path(payload, "client_info.nebius.project_id"))
         region_id = as_text(get_path(payload, "client_info.nebius.region_id"))
-        if project_id:
-            from .provider_options import ProviderOptionLookup
+        if not project_id:
+            raise ValueError(
+                "infiniband_fabric requires client_info.nebius.project_id so cxcli can confirm "
+                "that the selected GPU preset supports GPU clustering"
+            )
 
-            lookup = ProviderOptionLookup()
+        from .provider_options import ProviderOptionLookup
+
+        lookup = ProviderOptionLookup()
+        for effective_gpu_platform, effective_gpu_preset, infiniband_fabric in sorted(
+            set(gpu_fabric_checks)
+        ):
             allow_gpu_clustering = lookup.compute_platform_preset_allows_gpu_clustering(
                 project_id=project_id,
                 platform_name=effective_gpu_platform,
                 preset_name=effective_gpu_preset,
             )
-            if allow_gpu_clustering is False:
+            if allow_gpu_clustering is not True:
                 raise ValueError(
                     "infiniband_fabric requires a GPU preset whose live Nebius metadata allows "
                     f"GPU clustering; selected {effective_gpu_platform}/{effective_gpu_preset} "
-                    "does not support GPU clustering"
+                    "does not have confirmed GPU clustering support"
                 )
             live_fabrics = {
                 item.fabric
@@ -224,8 +446,8 @@ def _validate_mk8s_gpu(
                     "infiniband_fabric must match one of the live Capacity Dashboard fabrics for "
                     f"{effective_gpu_platform}/{effective_gpu_preset} in {region_id}: {allowed}"
                 )
-    if (mig_strategy or mig_parted_config) and not gpu_enabled:
-        raise ValueError("mig_strategy/mig_parted_config require gpu_enabled=true")
+    if mig_configured and not selected_gpu_enabled:
+        raise ValueError("mig_strategy/mig_parted_config require at least one GPU node group")
 
     for validation_label, project_gpu_validations in project_gpu_validations_by_label:
         operator_readiness = project_gpu_validations.get("operator_readiness", {})
@@ -459,10 +681,15 @@ def _validate_wireguard(
                 f"{base}.create_public_ip_allocation must be false "
                 "when public_ip_allocation_id is set"
             )
-
-        tunnel_cidr = as_text(
-            get_path(payload, f"{base}.wireguard_tunnel_cidr", "10.8.0.1/22")
+        public_ip_allocation_name = as_text(
+            get_path(payload, f"{base}.public_ip_allocation_name")
         )
+        if public_ip_allocation_name and not id_pattern.fullmatch(public_ip_allocation_name):
+            raise ValueError(
+                f"{base}.public_ip_allocation_name must use lowercase letters, digits, and hyphens"
+            )
+
+        tunnel_cidr = as_text(get_path(payload, f"{base}.wireguard_tunnel_cidr", "10.8.0.1/22"))
         try:
             interface = ipaddress.ip_interface(tunnel_cidr)
         except ValueError as exc:
@@ -484,9 +711,7 @@ def _validate_wireguard(
                 f"{base}.wireguard_listen_port must be an integer between 1 and 65535"
             ) from exc
         if listen_port_int < 1 or listen_port_int > 65535:
-            raise ValueError(
-                f"{base}.wireguard_listen_port must be an integer between 1 and 65535"
-            )
+            raise ValueError(f"{base}.wireguard_listen_port must be an integer between 1 and 65535")
 
         local_subnets = get_path(payload, f"{base}.local_subnets", None)
         if local_subnets is None:
@@ -546,7 +771,10 @@ def _validate_wireguard(
                         raise ValueError(
                             f"{base}.clients[{index}].client_wg_tunnel_address must be an IPv4 /32"
                         )
-                    if client_interface.ip == interface.ip or client_interface.ip not in interface.network:
+                    if (
+                        client_interface.ip == interface.ip
+                        or client_interface.ip not in interface.network
+                    ):
                         raise ValueError(
                             f"{base}.clients[{index}].client_wg_tunnel_address must be inside "
                             "wireguard_tunnel_cidr and cannot be the server address"
@@ -594,11 +822,19 @@ def _validate_ssh_jumphost(
     get_path: Callable,
     as_text: Callable,
     base: str,
+    id_pattern: Pattern[str],
 ) -> None:
     ssh_jump_enabled = bool(get_path(payload, f"{base}.enabled", False))
     if ssh_jump_enabled:
         ssh_user_name = as_text(get_path(payload, f"{base}.ssh_user_name"))
         _validate_linux_user_name(ssh_user_name, field_label=f"{base}.ssh_user_name")
+        public_ip_allocation_name = as_text(
+            get_path(payload, f"{base}.public_ip_allocation_name")
+        )
+        if public_ip_allocation_name and not id_pattern.fullmatch(public_ip_allocation_name):
+            raise ValueError(
+                f"{base}.public_ip_allocation_name must use lowercase letters, digits, and hyphens"
+            )
         allowed_cidrs = get_path(payload, f"{base}.allowed_cidrs", [])
         if not isinstance(allowed_cidrs, list) or not allowed_cidrs:
             raise ValueError(
@@ -695,9 +931,7 @@ def _validate_mysterybox_secrets(
         }
         unknown_keys = sorted(str(key) for key in secret if str(key) not in supported_keys)
         if unknown_keys:
-            raise ValueError(
-                f"{secret_label} has unsupported field(s): " + ", ".join(unknown_keys)
-            )
+            raise ValueError(f"{secret_label} has unsupported field(s): " + ", ".join(unknown_keys))
         secret_name = as_text(secret.get("name"))
         if not secret_name:
             raise ValueError(f"{secret_label}.name is required")
@@ -725,9 +959,7 @@ def _validate_mysterybox_secrets(
 
             if eso_version_policy not in MYSTERYBOX_ESO_VERSION_POLICIES:
                 allowed = ", ".join(sorted(MYSTERYBOX_ESO_VERSION_POLICIES))
-                raise ValueError(
-                    f"{secret_label}.eso_version_policy must be one of: {allowed}"
-                )
+                raise ValueError(f"{secret_label}.eso_version_policy must be one of: {allowed}")
         payload = secret.get("payload")
         if not isinstance(payload, Mapping) or not payload:
             raise ValueError(f"{secret_label}.payload must be a non-empty mapping")

@@ -118,6 +118,7 @@ class StatusWatcher:
     kind: str
     parent_input: str = "parent_id"
     name_input: str = "name"
+    name_inputs: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -232,6 +233,7 @@ class Mk8sGpuAppPolicy:
     post_render_patch_sets: tuple[Mk8sGpuAppPostRenderPatchSet, ...] = ()
     rules: tuple[Mk8sGpuAppRule, ...] = ()
     install_after: tuple[str, ...] = ()
+    disable_target_validations: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -1746,6 +1748,7 @@ def _parse_mk8s_gpu_app_policy(
         "post_render_patch_sets",
         "rules",
         "install_after",
+        "disable_target_validations",
     }
     unknown = sorted(str(key) for key in raw if str(key) not in supported_keys)
     if unknown:
@@ -1764,6 +1767,24 @@ def _parse_mk8s_gpu_app_policy(
         raw.get("post_render_patch_sets"),
         field_label=f"{field_label}.post_render_patch_sets",
     )
+    disabled_target_validations = _parse_string_list(
+        raw.get("disable_target_validations"),
+        field_label=f"{field_label}.disable_target_validations",
+    )
+    supported_target_validations = {
+        "operator_readiness",
+        "gpu_visibility",
+        "nccl",
+        "health_checker",
+    }
+    unknown_target_validations = sorted(
+        item for item in disabled_target_validations if item not in supported_target_validations
+    )
+    if unknown_target_validations:
+        raise ValueError(
+            f"{field_label}.disable_target_validations has unsupported value(s): "
+            + ", ".join(unknown_target_validations)
+        )
     return Mk8sGpuAppPolicy(
         role=role,
         default_sets=default_sets,
@@ -1778,6 +1799,7 @@ def _parse_mk8s_gpu_app_policy(
             raw.get("install_after"),
             field_label=f"{field_label}.install_after",
         ),
+        disable_target_validations=disabled_target_validations,
     )
 
 
@@ -3234,6 +3256,18 @@ def _parse_wizard_fields(
         if not isinstance(spec_raw, dict):
             raise ValueError(f"{field_label} wizard['{field_path}'] must be a mapping when set")
         spec = copy.deepcopy(dict(spec_raw))
+        if "materialize_default" in spec:
+            raise ValueError(
+                f"{field_label} wizard['{field_path}'] uses unsupported field "
+                "'materialize_default'; use 'write_default_to_config' instead"
+            )
+        if "write_default_to_config" in spec and not isinstance(
+            spec.get("write_default_to_config"), bool
+        ):
+            raise ValueError(
+                f"{field_label} wizard['{field_path}'] write_default_to_config "
+                "must be a boolean when set"
+            )
         options = spec.get("options")
         if isinstance(options, dict):
             normalized_options: dict[str, Any] = {}
@@ -3312,24 +3346,42 @@ def _derived_mk8s_gpu_validation_wizard_fields(
     return {
         "deploy.targets[].validations.mk8s_gpu.operator_readiness.enabled": {
             "default": validations.operator_readiness.enabled_by_default,
+            "write_default_to_config": True,
+            "required": True,
+            "type_hint": "bool",
         },
         "deploy.targets[].validations.mk8s_gpu.gpu_visibility.enabled": {
             "default": validations.gpu_visibility.enabled_by_default,
+            "write_default_to_config": True,
+            "required": True,
+            "type_hint": "bool",
         },
         "deploy.targets[].validations.mk8s_gpu.gpu_visibility.max_nodes": {
             "default": validations.gpu_visibility.max_nodes,
+            "write_default_to_config": True,
+            "type_hint": "number",
         },
         "deploy.targets[].validations.mk8s_gpu.nccl.enabled": {
             "default": validations.nccl.enabled_by_default,
+            "write_default_to_config": True,
+            "required": True,
+            "type_hint": "bool",
         },
         "deploy.targets[].validations.mk8s_gpu.nccl.max_nodes": {
             "default": validations.nccl.max_nodes,
+            "write_default_to_config": True,
+            "type_hint": "number",
         },
         "deploy.targets[].validations.mk8s_gpu.nccl.average_bus_bandwidth_threshold_gbps": {
             "default": validations.nccl.average_bus_bandwidth_threshold_gbps,
+            "write_default_to_config": True,
+            "type_hint": "number",
         },
         "deploy.targets[].validations.mk8s_gpu.health_checker.enabled": {
             "default": validations.health_checker.enabled_by_default,
+            "write_default_to_config": True,
+            "required": True,
+            "type_hint": "bool",
         },
     }
 
@@ -3416,7 +3468,7 @@ def _parse_status_watcher(raw: Any) -> StatusWatcher | None:
     if not isinstance(raw, dict):
         raise ValueError("status must be a mapping")
 
-    supported_status_keys = {"kind", "parent_input", "name_input"}
+    supported_status_keys = {"kind", "parent_input", "name_input", "name_inputs"}
     unknown_status_keys = sorted(str(key) for key in raw if str(key) not in supported_status_keys)
     if unknown_status_keys:
         raise ValueError("status has unsupported field(s): " + ", ".join(unknown_status_keys))
@@ -3427,6 +3479,7 @@ def _parse_status_watcher(raw: Any) -> StatusWatcher | None:
 
     parent_input = _as_text(raw.get("parent_input")) or "parent_id"
     name_input = _as_text(raw.get("name_input")) or "name"
+    name_inputs = _parse_string_list(raw.get("name_inputs"), field_label="status.name_inputs")
     if not parent_input:
         raise ValueError("status.parent_input cannot be empty")
     if not name_input:
@@ -3435,6 +3488,7 @@ def _parse_status_watcher(raw: Any) -> StatusWatcher | None:
         kind=kind,
         parent_input=parent_input,
         name_input=name_input,
+        name_inputs=name_inputs,
     )
 
 
@@ -3844,6 +3898,7 @@ def _parse_sources_payload(
             "ui",
             "release",
             "defaults",
+            "wizard_profile",
             "wizard",
             "input",
         }
@@ -3891,7 +3946,7 @@ def _parse_sources_payload(
         )
         wizard_fields = _parse_component_wizard_fields(
             component_id=component_id,
-            raw_profile=None,
+            raw_profile=raw.get("wizard_profile"),
             raw_wizard=raw.get("wizard"),
             field_label=f"components.apps.{component_id}",
         )

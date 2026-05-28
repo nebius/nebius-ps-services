@@ -208,6 +208,15 @@ def _first_non_empty_line(text: str) -> str:
     return ""
 
 
+def _json_error_snippet(text: str, *, limit: int = 240) -> str:
+    snippet = " ".join(str(text or "").strip().split())
+    if not snippet:
+        return "(empty response)"
+    if len(snippet) > limit:
+        return snippet[: limit - 3] + "..."
+    return snippet
+
+
 def _run_kubectl(
     args: Sequence[str],
     *,
@@ -241,7 +250,8 @@ def _kubectl_json(
         payload = json.loads(completed.stdout or "{}")
     except json.JSONDecodeError as exc:
         raise RuntimeError(
-            f"{_kubectl_command_text(args, extra_env=extra_env)} returned invalid JSON"
+            f"{_kubectl_command_text(args, extra_env=extra_env)} returned invalid JSON: "
+            f"{_json_error_snippet(completed.stdout)}"
         ) from exc
     if not isinstance(payload, dict):
         raise RuntimeError(
@@ -289,7 +299,8 @@ def _secret_has_keys(
         payload = json.loads(completed.stdout or "{}")
     except json.JSONDecodeError as exc:
         raise RuntimeError(
-            f"{' '.join(command)} returned invalid JSON"
+            f"{' '.join(command)} returned invalid JSON: "
+            f"{_json_error_snippet(completed.stdout)}"
         ) from exc
     data = payload.get("data")
     if not isinstance(data, Mapping):
@@ -708,7 +719,10 @@ def _post_grafana_short_url(
     try:
         payload = json.loads(body or "{}")
     except json.JSONDecodeError as exc:
-        raise RuntimeError("Grafana short URL API returned invalid JSON") from exc
+        raise RuntimeError(
+            "Grafana short URL API returned invalid JSON: "
+            f"{_json_error_snippet(body)}"
+        ) from exc
     if not isinstance(payload, dict):
         raise RuntimeError("Grafana short URL API did not return a JSON object")
     return payload
@@ -740,7 +754,9 @@ def _get_grafana_json(
     try:
         return json.loads(body or "{}")
     except json.JSONDecodeError as exc:
-        raise RuntimeError("Grafana API returned invalid JSON") from exc
+        raise RuntimeError(
+            f"Grafana API returned invalid JSON: {_json_error_snippet(body)}"
+        ) from exc
 
 
 def _public_grafana_url(base_url: str, grafana_url: str) -> str:
@@ -1044,15 +1060,20 @@ def _wait_for_grafana_public_root_url(
     poll_interval_seconds: float = 5.0,
 ) -> bool:
     deadline = time.monotonic() + max(0.0, timeout_seconds)
+    last_error: RuntimeError | None = None
     while True:
         try:
             if _grafana_configmap_has_root_url(spec, root_url, extra_env=extra_env):
                 break
-        except RuntimeError:
-            pass
+        except RuntimeError as exc:
+            last_error = exc
         remaining = deadline - time.monotonic()
         if remaining <= 0:
-            return False
+            detail = f" Last probe error: {last_error}" if last_error is not None else ""
+            raise RuntimeError(
+                f"Timed out waiting for Grafana ConfigMap {spec.namespace}/{spec.release_name} "
+                f"to contain root_url {root_url!r}.{detail}"
+            )
         time.sleep(min(max(0.1, poll_interval_seconds), remaining))
     try:
         _run_kubectl(
@@ -1067,8 +1088,11 @@ def _wait_for_grafana_public_root_url(
             extra_env=extra_env,
             timeout=210,
         )
-    except RuntimeError:
-        return False
+    except RuntimeError as exc:
+        raise RuntimeError(
+            f"Grafana ConfigMap {spec.namespace}/{spec.release_name} contains root_url "
+            f"{root_url!r}, but deployment rollout did not become ready: {exc}"
+        ) from exc
     return True
 
 
@@ -1079,17 +1103,14 @@ def _ensure_grafana_public_root_url(
     extra_env: Mapping[str, str] | None,
 ) -> bool:
     root_url = base_url.rstrip("/") + "/"
-    try:
-        current_root_url = _grafana_helm_release_root_url(spec, extra_env=extra_env)
-        if current_root_url != root_url:
-            _patch_grafana_helm_release_root_url(spec, root_url, extra_env=extra_env)
-        elif _grafana_configmap_has_root_url(spec, root_url, extra_env=extra_env):
-            return True
-        else:
-            _patch_grafana_helm_release_root_url(spec, root_url, extra_env=extra_env)
-        return _wait_for_grafana_public_root_url(spec, root_url, extra_env=extra_env)
-    except RuntimeError:
-        return False
+    current_root_url = _grafana_helm_release_root_url(spec, extra_env=extra_env)
+    if current_root_url != root_url:
+        _patch_grafana_helm_release_root_url(spec, root_url, extra_env=extra_env)
+    elif _grafana_configmap_has_root_url(spec, root_url, extra_env=extra_env):
+        return True
+    else:
+        _patch_grafana_helm_release_root_url(spec, root_url, extra_env=extra_env)
+    return _wait_for_grafana_public_root_url(spec, root_url, extra_env=extra_env)
 
 
 def _public_goto_url(base_url: str, uid: str, *, org_id: int) -> str:
@@ -1192,7 +1213,16 @@ def collect_grafana_runtime_status(
                 explore_queries=explore_queries,
                 org_id=grafana_settings.org_id,
             )
-            if _ensure_grafana_public_root_url(spec, base_url, extra_env=extra_env):
+            try:
+                root_url_ready = _ensure_grafana_public_root_url(
+                    spec,
+                    base_url,
+                    extra_env=extra_env,
+                )
+            except RuntimeError as exc:
+                root_url_ready = False
+                status["root_url_warning"] = str(exc)
+            if root_url_ready:
                 for signal, binding in dashboard_signal_bindings.items():
                     url_key = f"{signal}_url"
                     if url_key not in explore_urls:

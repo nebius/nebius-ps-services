@@ -194,7 +194,7 @@ def _module_dir_from_probe_manifest(tmp_root: Path) -> Path | None:
     if manifest_path.exists() and manifest_path.is_file():
         try:
             payload = json.loads(manifest_path.read_text(encoding="utf-8"))
-        except Exception:
+        except (OSError, json.JSONDecodeError):
             payload = {}
         modules = payload.get("Modules", []) if isinstance(payload, dict) else []
         if isinstance(modules, list):
@@ -236,7 +236,7 @@ def _module_inspection_path(module_source: str) -> tuple[str | None, str | None]
 
     try:
         terraform_bin = resolve_terraform_binary()
-    except Exception as exc:
+    except (OSError, RuntimeError, ValueError) as exc:
         return (None, f"terraform is required to inspect module source '{source}': {exc}")
 
     tmp_root = Path(tempfile.mkdtemp(prefix="nebius-cxcli-module-probe-"))
@@ -268,7 +268,7 @@ def _module_inspection_path(module_source: str) -> tuple[str | None, str | None]
             f"terraform init timed out while validating module source '{source}'. "
             "Confirm the source address, credentials, and network reachability.",
         )
-    except Exception as exc:
+    except (OSError, subprocess.SubprocessError) as exc:
         return None, f"terraform init could not validate module source '{source}': {exc}"
 
     if result.returncode == 0:
@@ -359,7 +359,7 @@ def _parse_hcl_default(raw: str) -> Any:
             return yaml.safe_load(yaml_candidate)
     try:
         return ast.literal_eval(token)
-    except Exception:
+    except (SyntaxError, ValueError):
         return token
 
 
@@ -574,7 +574,7 @@ def _terraform_config_inspect_payload(path: Path) -> tuple[dict[str, Any] | None
             text=True,
             timeout=30,
         )
-    except Exception:
+    except (OSError, subprocess.SubprocessError):
         return None, None
     if result.returncode != 0:
         error_text = (result.stderr or result.stdout or "").strip() or None
@@ -582,7 +582,7 @@ def _terraform_config_inspect_payload(path: Path) -> tuple[dict[str, Any] | None
 
     try:
         payload = json.loads(result.stdout)
-    except Exception:
+    except json.JSONDecodeError:
         payload = yaml.safe_load(result.stdout) or {}
     if not isinstance(payload, dict):
         return None, "terraform-config-inspect returned a non-mapping payload"
@@ -720,7 +720,7 @@ def _module_variables_from_tf_files(path: Path) -> tuple[ModuleVariable, ...]:
     for file_path in sorted(path.glob("*.tf")):
         try:
             text = file_path.read_text(encoding="utf-8")
-        except Exception:
+        except (OSError, UnicodeDecodeError):
             continue
         for match in variable_block_pattern.finditer(text):
             name = _normalize_variable_name(match.group(1))
@@ -989,7 +989,7 @@ def _local_chart_values_payload(
     if not raw_candidate.is_absolute():
         try:
             sources_file = resolve_component_sources_file()
-        except Exception:
+        except (OSError, RuntimeError, ValueError):
             sources_file = None
         if sources_file is not None:
             candidates.append((sources_file.parent / raw_candidate).resolve())
@@ -1033,7 +1033,7 @@ def helm_chart_default_values(
                 chart_version=chart_version,
             )
         )
-    except Exception:
+    except (OSError, RuntimeError, ValueError):
         payload = _local_chart_values_payload(
             chart_name_or_ref=chart_name_or_ref,
             chart_repo=chart_repo,

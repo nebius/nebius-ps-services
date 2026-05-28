@@ -30,20 +30,23 @@ def test_provider_payload_value_supports_list_index_path_notation() -> None:
             "components": [
                 {
                     "inputs": {
-                        "cpu_nodes_platform": "cpu-d3",
+                        "node_group_defaults": {"cpu": {"platform": "cpu-d3"}},
                     }
                 }
             ]
         }
     }
-    assert _payload_value(payload, "infra.components[0].inputs.cpu_nodes_platform") == "cpu-d3"
+    assert (
+        _payload_value(payload, "infra.components[0].inputs.node_group_defaults.cpu.platform")
+        == "cpu-d3"
+    )
 
 
 def test_explicit_wizard_field_relative_path_overrides_dynamic_component_path() -> None:
     entry = _infra_entry(
         "mk8s",
         wizard_fields={
-            "inputs.gpu_nodes_platform": {
+            "inputs.node_group_defaults.gpu.platform": {
                 "options": {
                     "from": "mk8s_compatible_platforms",
                     "args": {"platform_prefix": "gpu-"},
@@ -54,7 +57,7 @@ def test_explicit_wizard_field_relative_path_overrides_dynamic_component_path() 
 
     spec = _resolve_wizard_field_spec(
         entry=entry,
-        full_path_label="infra.components[0].inputs.gpu_nodes_platform",
+        full_path_label="infra.components[0].inputs.node_group_defaults.gpu.platform",
     )
 
     assert spec == {
@@ -69,10 +72,10 @@ def test_provider_specs_normalize_relative_depends_on_paths() -> None:
     entry = _infra_entry(
         "mk8s",
         wizard_fields={
-            "inputs.cpu_nodes_preset": {
+            "inputs.node_group_defaults.cpu.preset": {
                 "options": {
                     "from": "compute_platform_presets",
-                    "args": {"platform_path": "inputs.cpu_nodes_platform"},
+                    "args": {"platform_path": "inputs.node_group_defaults.cpu.platform"},
                 }
             }
         },
@@ -80,13 +83,13 @@ def test_provider_specs_normalize_relative_depends_on_paths() -> None:
 
     specs = _provider_source_specs_for_field(
         entry=entry,
-        full_path_label="infra.components[0].inputs.cpu_nodes_preset",
+        full_path_label="infra.components[0].inputs.node_group_defaults.cpu.preset",
     )
 
     assert specs == (
         (
             "compute_platform_presets",
-            {"platform_path": "infra.components[0].inputs.cpu_nodes_platform"},
+            {"platform_path": "infra.components[0].inputs.node_group_defaults.cpu.platform"},
         ),
     )
 
@@ -96,7 +99,7 @@ def test_provider_specs_return_empty_for_undeclared_field() -> None:
 
     specs = _provider_source_specs_for_field(
         entry=entry,
-        full_path_label="infra.components[0].inputs.cpu_nodes_platform",
+        full_path_label="infra.components[0].inputs.node_group_defaults.cpu.platform",
     )
 
     assert specs == ()
@@ -125,7 +128,7 @@ def test_dynamic_choices_do_not_run_provider_lookup_for_undeclared_field() -> No
     choices = _resolve_dynamic_field_choices(
         payload={"infra": {"components": [{"inputs": {}}]}},
         entry=entry,
-        full_path_label="infra.components[0].inputs.cpu_nodes_platform",
+        full_path_label="infra.components[0].inputs.node_group_defaults.cpu.platform",
         provider_lookup=provider_lookup,
     )
 
@@ -137,7 +140,7 @@ def test_dynamic_choices_use_explicit_wizard_wiring_for_declared_field() -> None
     entry = _infra_entry(
         "mk8s",
         wizard_fields={
-            "inputs.cpu_nodes_platform": {
+            "inputs.node_group_defaults.cpu.platform": {
                 "options": {
                     "from": "mk8s_compatible_platforms",
                     "args": {"platform_prefix": "cpu-"},
@@ -150,7 +153,7 @@ def test_dynamic_choices_use_explicit_wizard_wiring_for_declared_field() -> None
     choices = _resolve_dynamic_field_choices(
         payload={"infra": {"components": [{"inputs": {}}]}},
         entry=entry,
-        full_path_label="infra.components[0].inputs.cpu_nodes_platform",
+        full_path_label="infra.components[0].inputs.node_group_defaults.cpu.platform",
         provider_lookup=provider_lookup,
     )
 
@@ -159,7 +162,7 @@ def test_dynamic_choices_use_explicit_wizard_wiring_for_declared_field() -> None
         (
             "mk8s_compatible_platforms",
             {"platform_prefix": "cpu-"},
-            "infra.components[0].inputs.cpu_nodes_platform",
+            "infra.components[0].inputs.node_group_defaults.cpu.platform",
         )
     ]
 
@@ -168,10 +171,10 @@ def test_dynamic_choices_normalize_relative_depends_on_paths() -> None:
     entry = _infra_entry(
         "mk8s",
         wizard_fields={
-            "inputs.cpu_nodes_preset": {
+            "inputs.node_group_defaults.cpu.preset": {
                 "options": {
                     "from": "compute_platform_presets",
-                    "args": {"platform_path": "inputs.cpu_nodes_platform"},
+                    "args": {"platform_path": "inputs.node_group_defaults.cpu.platform"},
                 }
             }
         },
@@ -179,17 +182,23 @@ def test_dynamic_choices_normalize_relative_depends_on_paths() -> None:
     provider_lookup = _StubProviderLookup()
 
     _resolve_dynamic_field_choices(
-        payload={"infra": {"components": [{"inputs": {"cpu_nodes_platform": "cpu-d3"}}]}},
+        payload={
+            "infra": {
+                "components": [
+                    {"inputs": {"node_group_defaults": {"cpu": {"platform": "cpu-d3"}}}}
+                ]
+            }
+        },
         entry=entry,
-        full_path_label="infra.components[0].inputs.cpu_nodes_preset",
+        full_path_label="infra.components[0].inputs.node_group_defaults.cpu.preset",
         provider_lookup=provider_lookup,
     )
 
     assert provider_lookup.calls == [
         (
             "compute_platform_presets",
-            {"platform_path": "infra.components[0].inputs.cpu_nodes_platform"},
-            "infra.components[0].inputs.cpu_nodes_preset",
+            {"platform_path": "infra.components[0].inputs.node_group_defaults.cpu.platform"},
+            "infra.components[0].inputs.node_group_defaults.cpu.preset",
         )
     ]
 

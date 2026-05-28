@@ -89,3 +89,15 @@ tests:
             drainSlurmNode: null
     asserts:
       - notFailedTemplate: {}
+
+  - it: should fail when an enabled check depends on a disabled check
+    template: templates/active-checks.yaml
+    set:
+      checks:
+        mem-perf:
+          enabled: true
+        prepull-container-image:
+          enabled: false
+    asserts:
+      - failedTemplate:
+          errorMessage: 'checks.mem-perf.dependsOn references disabled check "prepull-container-image"'

@@ -65,7 +65,12 @@ def _align_infra_resource_name(
     row["instance_id"] = resource_name
     inputs = row.setdefault("inputs", {})
     assert isinstance(inputs, dict)
-    inputs[name_input or ("cluster_name" if component_id == "mk8s" else "name")] = resource_name
+    if component_id == "mk8s":
+        cluster = inputs.setdefault("cluster", {})
+        assert isinstance(cluster, dict)
+        cluster[name_input or "cluster_name"] = resource_name
+    else:
+        inputs[name_input or "name"] = resource_name
     if component_id != "mk8s" or not old_instance_id or old_instance_id == resource_name:
         return
     for chart in payload.get("apps", {}).get("charts", []):
@@ -138,9 +143,14 @@ def test_write_inventory_handles_dynamic_component_model(tmp_path: Path) -> None
     _align_infra_resource_name(payload, mk8s, "vm-observability")
     mk8s_inputs = mk8s.setdefault("inputs", {})
     assert isinstance(mk8s_inputs, dict)
-    mk8s_inputs["cpu_nodes_count"] = 1
-    mk8s_inputs["cpu_nodes_platform"] = "cpu-d3"
-    mk8s_inputs["cpu_nodes_preset"] = "4vcpu-16gb"
+    mk8s_inputs["node_groups"] = {
+        "cpu": {
+            "node_count": 1,
+            "gpu": False,
+            "platform": "cpu-d3",
+            "preset": "4vcpu-16gb",
+        }
+    }
 
     n8n_release = _chart_row(payload, "n8n")
     n8n_values = n8n_release.get("values", {})
@@ -166,9 +176,12 @@ def test_write_inventory_handles_dynamic_component_model(tmp_path: Path) -> None
     assert "### Infra Component Reports" in markdown
     assert "- `mk8s` (Managed Kubernetes baseline cluster)" in markdown
     assert (
-        "  - Resource: `nebius.mk8s.cluster` with `cluster_name` = `vm-observability`" in markdown
+        "  - Resource: `nebius.mk8s.cluster` with `cluster.cluster_name` = `vm-observability`"
+        in markdown
     )
-    assert "  - Inputs: `cluster_name=vm-observability`" in markdown
+    assert "`cluster.cluster_name=vm-observability`" in markdown
+    assert "`cluster.public_endpoint=true`" in markdown
+    assert "`cluster=3 key(s)`" not in markdown
     assert "### MK8s Clusters" in markdown
     assert "## Apps\n\n### App Component Status" in markdown
     assert "### App Component Reports" in markdown
@@ -264,23 +277,34 @@ def test_write_inventory_lists_each_mk8s_cluster(
     assert isinstance(mk8s_inputs, dict)
     mk8s_inputs.update(
         {
-            "cpu_nodes_count": 2,
-            "cpu_nodes_platform": "cpu-d3",
-            "cpu_nodes_preset": "32vcpu-128gb",
-            "gpu_enabled": True,
-            "gpu_node_groups": 1,
-            "gpu_nodes_count_per_group": 2,
-            "gpu_nodes_platform": "gpu-h100-sxm",
-            "gpu_nodes_preset": "8gpu-128vcpu-1600gb",
-            "mk8s_cluster_public_endpoint": True,
-            "infiniband_fabric": "fabric-6",
+            "cluster": {
+                **mk8s_inputs.get("cluster", {}),
+                "public_endpoint": True,
+            },
+            "node_groups": {
+                "cpu": {
+                    "node_count": 2,
+                    "gpu": False,
+                    "platform": "cpu-d3",
+                    "preset": "32vcpu-128gb",
+                },
+                "worker": {
+                    "node_count": 2,
+                    "gpu": True,
+                    "platform": "gpu-h100-sxm",
+                    "preset": "8gpu-128vcpu-1600gb",
+                    "gpu_cluster_key": "workers",
+                },
+            },
+            "gpu_clusters": {"workers": {"infiniband_fabric": "fabric-6"}},
         }
     )
     cluster2 = yaml.safe_load(yaml.safe_dump(mk8s, sort_keys=False))
     cluster2["instance_id"] = "cluster2"
-    cluster2["inputs"]["cluster_name"] = "cluster2"
-    cluster2["inputs"]["gpu_nodes_preset"] = "1gpu-16vcpu-200gb"
-    cluster2["inputs"].pop("infiniband_fabric", None)
+    cluster2["inputs"]["cluster"]["cluster_name"] = "cluster2"
+    cluster2["inputs"]["node_groups"]["worker"]["preset"] = "1gpu-16vcpu-200gb"
+    cluster2["inputs"]["node_groups"]["worker"].pop("gpu_cluster_key", None)
+    cluster2["inputs"].pop("gpu_clusters", None)
     payload["infra"]["components"].append(cluster2)
     payload["apps"]["charts"].append(
         {
@@ -311,20 +335,20 @@ def test_write_inventory_lists_each_mk8s_cluster(
     markdown = artifacts.markdown.read_text(encoding="utf-8")
 
     assert "- `cluster1` (`cluster1`)" in markdown
-    assert "  - CPU nodes: `2` node(s) at `cpu-d3/32vcpu-128gb`" in markdown
+    assert "  - CPU node groups: `cpu`: `2` node(s) at `cpu-d3/32vcpu-128gb`" in markdown
     assert (
-        "  - GPU nodes: `2` node(s) (`1` group(s) x `2` node(s)/group) "
-        "at `gpu-h100-sxm/8gpu-128vcpu-1600gb`"
-    ) in markdown
+        "  - GPU node groups: `worker`: `2` node(s) at `gpu-h100-sxm/8gpu-128vcpu-1600gb`"
+        in markdown
+    )
     assert "  - InfiniBand fabric: `fabric-6`" in markdown
     assert "  - Public endpoint: `enabled`" in markdown
     assert "  - Cluster ID: `mk8scluster-111`" in markdown
     assert "  - Kube context: `nebius-cluster1-mk8scluster-111-external`" in markdown
     assert "- `cluster2` (`cluster2`)" in markdown
     assert (
-        "  - GPU nodes: `2` node(s) (`1` group(s) x `2` node(s)/group) "
-        "at `gpu-h100-sxm/1gpu-16vcpu-200gb`"
-    ) in markdown
+        "  - GPU node groups: `worker`: `2` node(s) at `gpu-h100-sxm/1gpu-16vcpu-200gb`"
+        in markdown
+    )
     assert "  - InfiniBand fabric: `none`" in markdown
     assert "  - Cluster ID: `mk8scluster-222`" in markdown
     assert "  - Kube context: `nebius-cluster2-mk8scluster-222-external`" in markdown
@@ -342,7 +366,7 @@ def test_write_inventory_uses_grafana_status_target_metadata_when_tf_outputs_una
     mk8s["instance_id"] = "cluster1"
     mk8s_inputs = mk8s.setdefault("inputs", {})
     assert isinstance(mk8s_inputs, dict)
-    mk8s_inputs["cluster_name"] = "cluster1"
+    mk8s_inputs.setdefault("cluster", {})["cluster_name"] = "cluster1"
     payload["deploy"] = {"targets": [{"instance_id": "cluster1"}]}
     config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
 
@@ -379,7 +403,15 @@ def test_write_inventory_includes_observability_endpoint_contract(tmp_path: Path
     mk8s = _infra_component_row(payload, "mk8s")
     mk8s_inputs = mk8s.setdefault("inputs", {})
     assert isinstance(mk8s_inputs, dict)
-    mk8s_inputs["gpu_enabled"] = True
+    mk8s_inputs["node_groups"] = {
+        "worker": {
+            "node_count": 1,
+            "gpu": True,
+            "platform": "gpu-h100-sxm",
+            "preset": "8gpu-128vcpu-1600gb",
+            "gpu_stack_source": "nebius_image",
+        }
+    }
     config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
 
     config = load_config(config_path)
@@ -498,6 +530,7 @@ def test_write_inventory_includes_live_grafana_urls_when_status_exists(tmp_path:
                         "traces_url_kind": "dashboard",
                         "traces_url": "http://203.0.113.10/goto/traces123?orgId=1",
                         "dashboards_url": "http://203.0.113.10/dashboards",
+                        "root_url_warning": "Timed out waiting for Grafana root_url",
                     }
                 ]
             }
@@ -534,6 +567,7 @@ def test_write_inventory_includes_live_grafana_urls_when_status_exists(tmp_path:
         "  - [Nebius VM Logs](http://203.0.113.10/d/cxcli-vm-logs?orgId=1) (`nebius-vm/vm-logs`)"
     ) in markdown
     assert "- Credentials: user `admin`; password command:" in markdown
+    assert "- Root URL note: `Timed out waiting for Grafana root_url`" in markdown
     assert (
         "- Credentials: user `admin`; password command:\n\n"
         "```bash\n"

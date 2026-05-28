@@ -47,8 +47,8 @@ def wrap_runtime_config(payload: Mapping[str, Any]) -> AttrDict:
 
 
 def to_plain_data(value: Any) -> Any:
-    """Convert runtime wrappers (AttrDict) to plain Python data."""
-    if isinstance(value, AttrDict):
+    """Convert runtime and YAML wrapper types to plain Python data."""
+    if isinstance(value, Mapping):
         return {key: to_plain_data(item) for key, item in value.items()}
     if isinstance(value, list):
         return [to_plain_data(item) for item in value]

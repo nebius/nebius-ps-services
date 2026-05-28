@@ -1,0 +1,69 @@
+suite: NodeSet topologyLabels passthrough
+templates:
+  - templates/nodesets/nodeset.yaml
+tests:
+  - it: appends topologyLabels to nodeConfig.features
+    set:
+      nodesets:
+        - name: worker-gb300
+          slurmd: {}
+          topologyLabels:
+            - rack-a
+            - su-1
+          nodeConfig:
+            features:
+              - gpu
+              - cuda
+              - gb300
+            static: Boards=1 SocketsPerBoard=1 CoresPerSocket=64 ThreadsPerCore=1
+            dynamic: InstanceId={{ .PodName }}
+            gresConfig:
+              - AutoDetect=nvidia
+    asserts:
+      - equal:
+          path: spec.nodeConfig.features
+          value: [gpu, cuda, gb300, rack-a, su-1]
+
+  - it: works when only topologyLabels is provided
+    set:
+      nodesets:
+        - name: worker-rack-only
+          slurmd: {}
+          topologyLabels:
+            - rack-b
+          nodeConfig:
+            static: Boards=1 SocketsPerBoard=1 CoresPerSocket=8 ThreadsPerCore=1
+            dynamic: InstanceId={{ .PodName }}
+    asserts:
+      - equal:
+          path: spec.nodeConfig.features
+          value: [rack-b]
+
+  - it: keeps the existing features list when topologyLabels is empty
+    set:
+      nodesets:
+        - name: worker
+          slurmd: {}
+          topologyLabels: []
+          nodeConfig:
+            features:
+              - gpu
+              - cuda
+            static: Boards=1 SocketsPerBoard=1 CoresPerSocket=8 ThreadsPerCore=1
+            dynamic: InstanceId={{ .PodName }}
+    asserts:
+      - equal:
+          path: spec.nodeConfig.features
+          value: [gpu, cuda]
+
+  - it: omits features entirely when both lists are empty
+    set:
+      nodesets:
+        - name: worker
+          slurmd: {}
+          nodeConfig:
+            static: Boards=1 SocketsPerBoard=1 CoresPerSocket=8 ThreadsPerCore=1
+            dynamic: InstanceId={{ .PodName }}
+    asserts:
+      - notExists:
+          path: spec.nodeConfig.features

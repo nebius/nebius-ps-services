@@ -10,5 +10,5 @@ partitionConfiguration:
   partitions:
     - name: gpu
       nodeSetRefs:
-        - worker-gpu
+        - worker
       config: Default=YES MaxTime=INFINITE State=UP PriorityTier=10

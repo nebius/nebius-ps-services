@@ -201,6 +201,60 @@ def test_strict_validation_rejects_unknown_custom_module_inputs(tmp_path: Path) 
     ) in str(exc_info.value)
 
 
+def test_strict_validation_allows_mk8s_wizard_helper_inputs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = _starter_payload(selected_infra={"mk8s"}, selected_apps=set())
+    mk8s = _infra_component_row(payload, "mk8s")
+    _align_infra_resource_name(payload, mk8s, "demo-cluster")
+    mk8s["inputs"] = {
+        "cluster": {
+            "parent_id": "project-456",
+            "cluster_name": "demo-cluster",
+            "network_id": "network-123",
+            "subnet_id": "subnet-123",
+            "k8s_version": "1.32",
+            "public_endpoint": True,
+        },
+        "node_groups": {
+            "system": {
+                "node_count": 1,
+                "platform": "cpu-d3",
+                "preset": "16vcpu-64gb",
+            }
+        },
+        "node_group_defaults": {
+            "cpu": {
+                "platform": "cpu-d3",
+                "preset": "16vcpu-64gb",
+            }
+        },
+        "soperator": {
+            "worker_total_nodes": 2,
+            "worker_nodes_per_group": 100,
+        },
+    }
+
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+    config = load_config(config_path)
+
+    monkeypatch.setattr(
+        "nebius_cxcli.cli.module_required_variables",
+        lambda _source: ("cluster", "node_groups"),
+    )
+    monkeypatch.setattr(
+        "nebius_cxcli.cli.module_output_names",
+        lambda _source: ("cluster_id", "cluster_ca_certificate", "instance_id"),
+    )
+    monkeypatch.setattr(
+        "nebius_cxcli.cli._validate_enabled_chart_sources", lambda _config, **_kw: []
+    )
+
+    _validate_strict_config(config)
+
+
 def test_strict_validation_requires_managed_postgresql_name_when_enabled(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -237,9 +291,14 @@ def test_strict_validation_requires_mk8s_cpu_shape_when_baseline_pool_is_enabled
     mk8s = _infra_component_row(payload, "mk8s")
     _align_infra_resource_name(payload, mk8s, "demo-cluster")
     mk8s["inputs"] = {
-        "parent_id": "project-456",
-        "cluster_name": "demo-cluster",
-        "subnet_id": "subnet-123",
+        "cluster": {
+            "parent_id": "project-456",
+            "cluster_name": "demo-cluster",
+            "network_id": "network-123",
+            "subnet_id": "subnet-123",
+            "k8s_version": "1.32",
+            "public_endpoint": True,
+        },
     }
 
     config_path = tmp_path / "config.yaml"
@@ -248,7 +307,11 @@ def test_strict_validation_requires_mk8s_cpu_shape_when_baseline_pool_is_enabled
 
     monkeypatch.setattr(
         "nebius_cxcli.cli.module_required_variables",
-        lambda _source: ("parent_id", "cluster_name", "subnet_id"),
+        lambda _source: ("cluster", "node_groups"),
+    )
+    monkeypatch.setattr(
+        "nebius_cxcli.cli.module_output_names",
+        lambda _source: ("cluster_id", "cluster_ca_certificate", "instance_id"),
     )
     monkeypatch.setattr(
         "nebius_cxcli.cli._validate_enabled_chart_sources", lambda _config, **_kw: []
@@ -258,11 +321,10 @@ def test_strict_validation_requires_mk8s_cpu_shape_when_baseline_pool_is_enabled
         _validate_strict_config(config)
     message = str(exc_info.value)
     mk8s_path = _infra_component_path("mk8s", "demo-cluster")
-    assert f"{mk8s_path}.inputs.cpu_nodes_platform is required" in message
-    assert f"{mk8s_path}.inputs.cpu_nodes_preset is required" in message
+    assert f"{mk8s_path}.inputs.node_groups is required" in message
 
 
-def test_strict_validation_requires_mk8s_gpu_shape_when_gpu_enabled(
+def test_strict_validation_rejects_removed_mk8s_gpu_shortcut_inputs(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -279,6 +341,8 @@ def test_strict_validation_requires_mk8s_gpu_shape_when_gpu_enabled(
         "cpu_nodes_platform": "cpu-d3",
         "cpu_nodes_preset": "4vcpu-16gb",
         "gpu_enabled": True,
+        "gpu_nodes_platform": "gpu-h100-sxm",
+        "gpu_nodes_preset": "8gpu-128vcpu-1600gb",
     }
 
     config_path = tmp_path / "config.yaml"
@@ -287,20 +351,27 @@ def test_strict_validation_requires_mk8s_gpu_shape_when_gpu_enabled(
 
     monkeypatch.setattr(
         "nebius_cxcli.cli.module_required_variables",
-        lambda _source: ("parent_id", "cluster_name", "subnet_id"),
+        lambda _source: ("cluster", "node_groups"),
+    )
+    monkeypatch.setattr(
+        "nebius_cxcli.cli.module_variable_names",
+        lambda _source: ("cluster", "node_groups"),
+    )
+    monkeypatch.setattr(
+        "nebius_cxcli.cli.module_output_names",
+        lambda _source: ("cluster_id", "cluster_ca_certificate", "instance_id"),
     )
     monkeypatch.setattr(
         "nebius_cxcli.cli._validate_enabled_chart_sources", lambda _config, **_kw: []
     )
 
     with pytest.raises(RuntimeError) as exc_info:
-        _validate_strict_config(config)
+        _validate_strict_config(config, include_common_checks=False)
     message = str(exc_info.value)
     mk8s_path = _infra_component_path("mk8s", "demo-cluster")
-    assert f"{mk8s_path}.inputs.gpu_node_groups is required" in message
-    assert f"{mk8s_path}.inputs.gpu_nodes_count_per_group is required" in message
-    assert f"{mk8s_path}.inputs.gpu_nodes_platform is required" in message
-    assert f"{mk8s_path}.inputs.gpu_nodes_preset is required" in message
+    assert f"{mk8s_path}.inputs.cluster_name is not declared" in message
+    assert f"{mk8s_path}.inputs.gpu_enabled is not declared" in message
+    assert f"{mk8s_path}.inputs.gpu_nodes_platform is not declared" in message
 
 
 def test_strict_validation_requires_object_storage_name_when_enabled(
@@ -567,6 +638,49 @@ def test_strict_validation_rejects_public_ip_allocation_id_when_jump_host_create
     assert (
         f"{_infra_component_path(component_id, instance_name)}.inputs.create_public_ip_allocation must be false "
         "when inputs.public_ip_allocation_id is set"
+    ) in str(exc_info.value)
+
+
+@pytest.mark.parametrize(
+    ("component_id", "instance_name", "extra_inputs"),
+    [
+        ("wireguard-gw", "wg-gw", {"local_subnets": ["10.0.0.0/8"]}),
+        ("ssh-jumphost", "ssh-jh", {"allowed_cidrs": ["203.0.113.10/32"]}),
+    ],
+)
+def test_strict_validation_rejects_invalid_public_ip_allocation_name_for_jump_host(
+    tmp_path: Path,
+    component_id: str,
+    instance_name: str,
+    extra_inputs: dict[str, object],
+) -> None:
+    payload = _starter_payload(selected_infra={component_id}, selected_apps=set())
+    jumphost = _infra_component_row(payload, component_id)
+    _align_infra_resource_name(payload, jumphost, instance_name)
+    jumphost["inputs"] = {
+        "parent_id": "project-456",
+        "subnet_id": "subnet-123",
+        "name": instance_name,
+        "platform": "cpu-d3",
+        "preset": "4vcpu-16gb",
+        "source_image_family": "ubuntu24.04-driverless",
+        "ssh_user_name": "ubuntu",
+        "ssh_public_key": _VALID_ED25519_PUBLIC_KEY,
+        "create_public_ip_allocation": True,
+        "public_ip_allocation_name": "jumpHost_Ip",
+        **extra_inputs,
+    }
+
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+    config = load_config(config_path)
+
+    with pytest.raises(RuntimeError) as exc_info:
+        _validate_strict_config(config)
+
+    assert (
+        f"{_infra_component_path(component_id, instance_name)}.inputs.public_ip_allocation_name "
+        "must use lowercase letters, digits, and hyphens"
     ) in str(exc_info.value)
 
 

@@ -526,21 +526,6 @@ variable "preemptible_enabled" {
   nullable    = false
 }
 
-variable "preemptible_priority" {
-  description = "Preemptible VM priority from 1 to 5."
-  type        = number
-  default     = 3
-  nullable    = false
-  validation {
-    condition = (
-      floor(var.preemptible_priority) == var.preemptible_priority &&
-      var.preemptible_priority >= 1 &&
-      var.preemptible_priority <= 5
-    )
-    error_message = "preemptible_priority must be an integer from 1 to 5."
-  }
-}
-
 variable "gpu_cluster_enabled" {
   description = "Attach the VM to a GPU cluster."
   type        = bool

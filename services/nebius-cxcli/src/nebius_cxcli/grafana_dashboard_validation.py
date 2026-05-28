@@ -160,11 +160,22 @@ def _dashboard_json_uid(dashboard_json: str) -> str:
     return str(payload.get("uid") or "").strip()
 
 
+def _json_error_snippet(text: str, *, limit: int = 240) -> str:
+    snippet = " ".join(str(text or "").strip().split())
+    if not snippet:
+        return "(empty response)"
+    if len(snippet) > limit:
+        return snippet[: limit - 3] + "..."
+    return snippet
+
+
 def _dashboard_payload(dashboard_json: str) -> Mapping[str, Any]:
     try:
         payload = json.loads(dashboard_json)
     except json.JSONDecodeError as exc:
-        raise RuntimeError("dashboard JSON is invalid") from exc
+        raise RuntimeError(
+            f"dashboard JSON is invalid: {_json_error_snippet(dashboard_json)}"
+        ) from exc
     if not isinstance(payload, Mapping):
         raise RuntimeError("dashboard JSON is not an object")
     return payload
@@ -375,7 +386,9 @@ def _grafana_get_json(
     try:
         return json.loads(body or "{}")
     except json.JSONDecodeError as exc:
-        raise RuntimeError("Grafana API returned invalid JSON") from exc
+        raise RuntimeError(
+            f"Grafana API returned invalid JSON: {_json_error_snippet(body)}"
+        ) from exc
 
 
 def _proxy_get_json(

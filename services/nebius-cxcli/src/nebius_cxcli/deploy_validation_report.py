@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -10,6 +11,9 @@ from typing import Any
 
 DEPLOY_REPORT_FILENAME = "deploy-report.md"
 _LEGACY_VALIDATION_MARKDOWN_FILENAME = "deploy-validation-report.md"
+_NCCL_AVG_BUS_BANDWIDTH_MARKDOWN_RE = re.compile(
+    r"(average bus bandwidth )([0-9]+(?:\.[0-9]+)?)( Gbps)"
+)
 
 
 @dataclass(frozen=True)
@@ -27,6 +31,8 @@ class DeployValidationResult:
     report_path: Path
     report_exists: bool
     summary: str
+    target_ref: str = ""
+    footer_summary: str = ""
     checks: tuple[DeployValidationCheck, ...] = ()
 
 
@@ -95,6 +101,7 @@ def build_deploy_validation_report(
 def format_deploy_validation_summary_lines(
     report: DeployValidationReport,
 ) -> list[str]:
+    """Format a detailed text summary for diagnostics, not the deploy CLI footer."""
     lines = [
         "Deploy validation summary:",
         (
@@ -126,22 +133,21 @@ def validation_section_lines(report: DeployValidationReport) -> list[str]:
     ]
     for item in report.results:
         detail_name = item.report_path.name if item.report_exists else "n/a"
+        summary = _validation_markdown_summary(item)
         lines.extend(
             [
                 f"### {item.name}",
                 "",
                 f"- Status: `{status_label(item.status)}`",
                 f"- Detail report: `{detail_name}`",
-                f"- Summary: {item.summary}",
+                f"- Summary: {summary}",
             ]
         )
         if item.checks:
             lines.append(f"- Checks ({len(item.checks)}):")
             for index, check in enumerate(item.checks, start=1):
                 suffix = f": {check.summary}" if check.summary else ""
-                lines.append(
-                    f"  {index}. `{status_label(check.status)}` {check.name}{suffix}"
-                )
+                lines.append(f"  {index}. `{status_label(check.status)}` {check.name}{suffix}")
         lines.append("")
     return lines
 
@@ -155,12 +161,36 @@ def status_label(status: str) -> str:
     }.get(status, status.upper() if status else "UNKNOWN")
 
 
+def _validation_markdown_summary(item: DeployValidationResult) -> str:
+    if item.kind != "mk8s_nccl":
+        return item.summary
+    return _NCCL_AVG_BUS_BANDWIDTH_MARKDOWN_RE.sub(
+        r"\1**\2**\3",
+        item.summary,
+        count=1,
+    )
+
+
 def _validation_report_path(spec: Mapping[str, Any], *, inventory_dir: Path) -> Path:
     report_file = str(spec.get("report_file", "") or "").strip()
     if report_file:
         return inventory_dir / report_file
     kind = str(spec.get("kind", "") or "").strip() or "validation"
     return inventory_dir / f"{kind}-report.json"
+
+
+def _validation_target_ref(
+    spec: Mapping[str, Any],
+    *,
+    payload: Mapping[str, Any] | None = None,
+) -> str:
+    for source in (payload, spec):
+        if not isinstance(source, Mapping):
+            continue
+        target_ref = str(source.get("target_ref") or "").strip()
+        if target_ref:
+            return target_ref
+    return ""
 
 
 def _build_validation_result(
@@ -170,6 +200,7 @@ def _build_validation_result(
 ) -> DeployValidationResult:
     kind = str(spec.get("kind", "") or "").strip()
     report_path = _validation_report_path(spec, inventory_dir=inventory_dir)
+    target_ref = _validation_target_ref(spec)
     if not report_path.exists():
         return DeployValidationResult(
             kind=kind,
@@ -178,26 +209,35 @@ def _build_validation_result(
             report_path=report_path,
             report_exists=False,
             summary="No deploy validation results recorded yet.",
+            target_ref=target_ref,
+            footer_summary="No deploy validation results recorded yet.",
         )
     try:
         payload = json.loads(report_path.read_text(encoding="utf-8"))
     except Exception as exc:
+        summary = f"Report could not be loaded: {exc}"
         return DeployValidationResult(
             kind=kind,
             name=_validation_display_name(kind, spec=spec),
             status="failed",
             report_path=report_path,
             report_exists=True,
-            summary=f"Report could not be loaded: {exc}",
+            summary=summary,
+            target_ref=target_ref,
+            footer_summary=summary,
         )
     passed = bool(payload.get("passed"))
+    target_ref = _validation_target_ref(spec, payload=payload)
+    summary = _validation_summary(kind, payload)
     return DeployValidationResult(
         kind=kind,
         name=_validation_display_name(kind, spec=spec, payload=payload),
         status="passed" if passed else "failed",
         report_path=report_path,
         report_exists=True,
-        summary=_validation_summary(kind, payload),
+        summary=summary,
+        target_ref=target_ref,
+        footer_summary=_validation_footer_summary(kind, payload, fallback=summary),
         checks=_validation_checks(payload),
     )
 
@@ -252,6 +292,76 @@ def _validation_summary(kind: str, payload: Mapping[str, Any]) -> str:
         return _mysterybox_eso_connectivity_summary(payload)
     validation_name = str(payload.get("validation", "") or "").strip() or "Validation"
     return f"{validation_name} completed with passed={bool(payload.get('passed'))}."
+
+
+def _validation_footer_summary(
+    kind: str,
+    payload: Mapping[str, Any],
+    *,
+    fallback: str,
+) -> str:
+    error = str(payload.get("error", "") or "").strip()
+    if error or bool(payload.get("skipped")):
+        return fallback
+    if kind == "mk8s_gpu_operator_readiness":
+        return _operator_readiness_footer_summary(payload)
+    if kind == "mk8s_nccl":
+        return _nccl_footer_summary(payload)
+    return fallback
+
+
+def _plural_word(count: int, singular: str, plural: str | None = None) -> str:
+    return singular if count == 1 else (plural or f"{singular}s")
+
+
+def _operator_readiness_footer_summary(payload: Mapping[str, Any]) -> str:
+    gpu_operator = _mapping(payload.get("gpu_operator"))
+    network_operator = _mapping(payload.get("network_operator"))
+    gpu_nodes = _list(gpu_operator.get("gpu_nodes"))
+    gpu_node_count = len(gpu_nodes)
+    node_label = f"{gpu_node_count} GPU {_plural_word(gpu_node_count, 'node')}"
+    if bool(network_operator.get("required")):
+        parts = [f"GPU/Network operators ready on {node_label}"]
+    else:
+        parts = [f"GPU Operator ready on {node_label}"]
+    if bool(network_operator.get("required")):
+        snapshot = _mapping(network_operator.get("device_plugin_snapshot"))
+        rdma_keys = [
+            str(item).strip()
+            for item in _list(snapshot.get("rdma_resource_keys"))
+            if str(item).strip()
+        ]
+        if bool(network_operator.get("rdma_required")) and rdma_keys:
+            parts.append(f"RDMA {', '.join(rdma_keys)}")
+    gpudirect_mode = str(payload.get("gpudirect_mode", "") or "").strip()
+    if gpudirect_mode:
+        parts.append(f"GPUDirect {gpudirect_mode}")
+    return "; ".join(parts) + "."
+
+
+def _nccl_footer_summary(payload: Mapping[str, Any]) -> str:
+    phase = str(payload.get("launcher_phase", "") or "").strip() or "unknown"
+    avg = float(payload.get("avg_bus_bandwidth_gbps", 0.0) or 0.0)
+    threshold = float(payload.get("threshold_gbps", 0.0) or 0.0)
+    worker_count = int(payload.get("selected_worker_node_count", 0) or 0)
+    worker_label = f"{worker_count} {_plural_word(worker_count, 'worker')}"
+    transport = str(payload.get("transport_label", "") or "").strip() or "auto"
+    parts = [phase]
+    if bool(payload.get("threshold_enforced", True)):
+        parts.append(
+            f"{transport} {avg:.1f} Gbps (threshold {threshold:.1f}) across {worker_label}"
+        )
+    else:
+        parts.append(f"{transport} {avg:.1f} Gbps across {worker_label}")
+        parts.append("RDMA threshold not enforced")
+    env_name = str(payload.get("nccl_dmabuf_env_name", "") or "").strip()
+    env_value = str(payload.get("nccl_dmabuf_enable", "") or "").strip()
+    gpudirect_mode = str(payload.get("gpudirect_mode", "") or "").strip()
+    if env_name == "NCCL_DMABUF_ENABLE" and env_value == "1":
+        parts.append("DMA-BUF enabled")
+    elif gpudirect_mode:
+        parts.append(f"GPUDirect {gpudirect_mode}")
+    return "; ".join(parts) + "."
 
 
 def _validation_display_name(

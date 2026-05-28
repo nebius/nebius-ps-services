@@ -7,16 +7,19 @@ import base64
 import copy
 import getpass
 import json
+import math
 import os
 import re
 import shlex
 import shutil
 import socket
+import string
 import subprocess
 import sys
 import tempfile
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from collections import deque
 from collections.abc import Callable, Mapping, Sequence
@@ -97,15 +100,22 @@ from .compute_boot_disks import (
     compute_disk_type_allocation_unit_gib,
     materialize_compute_boot_disk_defaults,
     refresh_compute_boot_disk_defaults,
+    resolve_compute_boot_disk_recommendation,
 )
 from .config_loader import load_config, normalize_runtime_config_payload, validate_config
 from .config_template import starter_config_yaml
 from .deploy_targets import (
+    DEPLOY_TARGET_KIND_FIELD,
+    DEPLOY_TARGET_OWNERSHIP_FIELD,
+    EXTERNAL_MK8S_TARGET_KIND,
+    EXTERNAL_TARGET_OWNERSHIP,
     TARGET_REF_FIELD,
     app_chart_target_ref,
+    deploy_target_is_external_mk8s,
     enabled_cluster_target_refs,
     flux_target_dir,
     is_auto_target_scoped_app_instance_id,
+    materialize_app_chart_target_refs,
     normalize_generated_deploy_target,
     strip_app_chart_target_refs,
     target_scoped_app_instance_id,
@@ -162,6 +172,25 @@ from .github_secrets import (
     upsert_environment_secrets,
     upsert_environment_variables,
 )
+from .grafana_dashboard_export import (
+    CatalogDatasource,
+    ExportedDashboard,
+    GrafanaAuth,
+    GrafanaDashboard,
+    GrafanaFolder,
+    attach_dashboards_to_catalog,
+    basic_auth_candidate,
+    bearer_auth_candidates,
+    catalog_datasources,
+    dashboard_json,
+    dashboard_json_from_file,
+    list_dashboards,
+    list_folders,
+    rewrite_dashboard_datasources,
+    safe_slug,
+    select_catalog_datasource,
+    write_dashboard_file,
+)
 from .grafana_dashboard_validation import validate_grafana_dashboard_fits
 from .grafana_runtime import (
     GRAFANA_TARGET_CLUSTER_ID_ENV,
@@ -200,10 +229,22 @@ from .mk8s_gpu import (
     has_mk8s_gpu_health_checker_app,
     materialize_mk8s_gpu_app_values,
     mk8s_gpu_dependency_issues,
+    mk8s_gpu_disabled_target_validations,
     mk8s_gpu_validation_specs,
     mk8s_gpu_validation_warnings,
+    prune_inactive_mk8s_gpu_app_rows,
     resolve_mk8s_gpu_app_selection,
     run_mk8s_gpu_validations,
+)
+from .mk8s_node_group_defaults import prune_inactive_mk8s_node_group_defaults
+from .mk8s_node_groups import (
+    gpu_cluster_enabled as mk8s_gpu_cluster_enabled,
+)
+from .mk8s_node_groups import (
+    gpu_enabled as mk8s_gpu_enabled,
+)
+from .mk8s_node_groups import (
+    iter_node_groups as iter_mk8s_node_groups,
 )
 from .mk8s_preflight import (
     has_mk8s_resource_name_preflight_targets,
@@ -221,14 +262,17 @@ from .mysterybox_eso import (
     mysterybox_eso_runtime_secret_specs,
     mysterybox_eso_terraform_output_specs,
     mysterybox_eso_validation_specs,
+    normalize_mysterybox_eso_project_settings,
 )
 from .nfs_csi import (
+    NFS_CSI_APP_ID,
     ensure_nfs_csi_app_rows,
     nfs_csi_binding_issues,
     nfs_csi_terraform_output_specs,
 )
 from .notify_ops import DeployReportEmailResult, send_deploy_report_email
 from .observability import (
+    ensure_observability_app_rows,
     materialize_observability_app_values,
     materialize_observability_infra_values,
     observability_dependency_issues,
@@ -289,7 +333,17 @@ from .soperator_backup_runtime import (
     ensure_soperator_backup_runtime_secrets,
     soperator_backup_enabled_for_target,
 )
-from .soperator_companions import materialize_soperator_companion_app_values
+from .soperator_child_charts import (
+    materialize_soperator_child_chart_values,
+    soperator_child_chart_warnings,
+)
+from .soperator_onboarding import (
+    analyze_soperator_onboarding_snapshot,
+    collect_kubectl_soperator_snapshot,
+    soperator_onboarding_fingerprint,
+    soperator_onboarding_report_path,
+    write_soperator_onboarding_reports,
+)
 from .ssh_jumphost import (
     SshJumphostAllowedCidrRequest,
     normalize_allowed_cidr_csv,
@@ -334,12 +388,29 @@ from .wireguard_clients import (
 )
 
 console = Console()
+
+_SOPERATOR_CHILD_CHART_VALUE_KEYS = frozenset(
+    {
+        "soperator-activechecks",
+        "soperator-backup-config",
+        "soperator-checks",
+        "soperator-dcgm-exporter",
+        "soperator-notifier",
+    }
+)
+_SOPERATOR_ACTIVECHECKS_READY_PARTITION_PATH = "soperator-activechecks.srunReadyPartition"
+_SOPERATOR_ACTIVECHECKS_HIDDEN_PARTITION_NAME = "hidden"
+_SOPERATOR_GUIDED_SSSD_ENABLED_PATH = "sssd.enabled"
 GRAFANA_STATUS_POLL_INTERVAL_SECONDS = 15.0
 GRAFANA_STATUS_TIMEOUT_SECONDS = 300.0
 
 
 def _console_is_terminal() -> bool:
     return bool(console.is_terminal)
+
+
+def _print_deployment_status_message(message: str) -> None:
+    console.print(message, highlight=False)
 
 
 def _quota_failure_message(report: QuotaReport, *, phase: str) -> str:
@@ -615,34 +686,40 @@ def _state_node_group_count(values: Mapping[str, Any]) -> tuple[int | None, dict
     return None, autoscaling
 
 
-def _state_node_group_inputs(values: Mapping[str, Any], *, gpu: bool) -> dict[str, Any]:
+def _state_node_group_config(values: Mapping[str, Any]) -> dict[str, Any]:
     template = _state_mapping(values.get("template"))
     resources = _state_mapping(template.get("resources"))
     count, autoscaling = _state_node_group_count(values)
-    prefix = "gpu" if gpu else "cpu"
-    inputs: dict[str, Any] = {}
+    group: dict[str, Any] = {}
     if count is not None:
-        inputs[f"{prefix}_nodes_count_per_group" if gpu else f"{prefix}_nodes_count"] = count
+        group["node_count"] = count
     if autoscaling is not None:
-        inputs[f"mk8s_{prefix}_node_group_overrides"] = {"autoscaling": autoscaling}
+        group["autoscaling"] = autoscaling
     platform = _state_text(resources.get("platform"))
     preset = _state_text(resources.get("preset"))
+    gpu = platform.startswith("gpu-") or bool(
+        _state_mapping(template.get("gpu_settings")) or _state_mapping(template.get("gpu_cluster"))
+    )
+    group["gpu"] = gpu
     if platform:
-        inputs[f"{prefix}_nodes_platform"] = platform
+        group["platform"] = platform
     if preset:
-        inputs[f"{prefix}_nodes_preset"] = preset
+        group["preset"] = preset
     if template.get("preemptible") is not None:
-        inputs[f"{prefix}_nodes_preemptible"] = True
+        group["preemptible"] = True
     if _state_public_ips_enabled(template):
-        inputs[f"{prefix}_nodes_public_ips"] = True
+        group["public_ips"] = True
     boot_disk = _state_mapping(template.get("boot_disk"))
     disk_type = _state_text(boot_disk.get("type"))
+    group_boot_disk: dict[str, Any] = {}
     if disk_type:
-        inputs[f"{prefix}_nodes_boot_disk_type"] = disk_type
+        group_boot_disk["type"] = disk_type
     disk_size_gib = _state_boot_disk_size_gib(template)
     if disk_size_gib is not None:
-        inputs[f"{prefix}_nodes_boot_disk_size_gib"] = disk_size_gib
-    return inputs
+        group_boot_disk["size_gibibytes"] = disk_size_gib
+    if group_boot_disk:
+        group["boot_disk"] = group_boot_disk
+    return group
 
 
 def _component_region_for_instance(
@@ -733,8 +810,7 @@ def _managed_mk8s_quota_requirements_from_terraform_state(
                     component_id=component_id,
                     instance_id=instance_id,
                 ),
-                "cpu_groups": [],
-                "gpu_groups": [],
+                "node_groups": [],
                 "gpu_fabric": "",
             },
         )
@@ -747,10 +823,7 @@ def _managed_mk8s_quota_requirements_from_terraform_state(
         elif resource_type == "nebius_compute_v1_gpu_cluster":
             state_bucket["gpu_fabric"] = _state_text(values.get("infiniband_fabric"))
         elif resource_type == "nebius_mk8s_v1_node_group":
-            if ".nebius_mk8s_v1_node_group.cpu" in address:
-                state_bucket["cpu_groups"].append(values)
-            elif ".nebius_mk8s_v1_node_group.gpu" in address:
-                state_bucket["gpu_groups"].append(values)
+            state_bucket["node_groups"].append(values)
 
     collected: list[Any] = []
     default_project_id = ""
@@ -768,18 +841,15 @@ def _managed_mk8s_quota_requirements_from_terraform_state(
         region = _state_text(state_bucket["region"])
         if not project_id or not region:
             continue
-        inputs: dict[str, Any] = {}
-        cpu_groups = list(state_bucket["cpu_groups"])
-        if cpu_groups:
-            inputs.update(_state_node_group_inputs(_state_mapping(cpu_groups[0]), gpu=False))
-        gpu_groups = list(state_bucket["gpu_groups"])
-        if gpu_groups:
-            inputs["gpu_enabled"] = True
-            inputs["gpu_node_groups"] = len(gpu_groups)
-            inputs.update(_state_node_group_inputs(_state_mapping(gpu_groups[0]), gpu=True))
-            gpu_fabric = _state_text(state_bucket["gpu_fabric"])
-            if gpu_fabric:
-                inputs["infiniband_fabric"] = gpu_fabric
+        inputs: dict[str, Any] = {"node_groups": {}}
+        gpu_fabric = _state_text(state_bucket["gpu_fabric"])
+        if gpu_fabric:
+            inputs["gpu_clusters"] = {"state": {"infiniband_fabric": gpu_fabric}}
+        for index, node_group_values in enumerate(list(state_bucket["node_groups"])):
+            group = _state_node_group_config(_state_mapping(node_group_values))
+            if gpu_fabric and bool(group.get("gpu", False)):
+                group["gpu_cluster_key"] = "state"
+            inputs["node_groups"][f"state-{index}"] = group
         try:
             requirements, _gaps = estimate_mk8s_quota_requirements(
                 project_id=project_id,
@@ -938,6 +1008,7 @@ WIZARD_ABORT_TOKEN = "qq"
 _WIZARD_BACK_CHOICE = "__wizard_back__"
 _WIZARD_QUIT_CHOICE = "__wizard_quit__"
 PayloadPath = tuple[str | int, ...]
+_MAX_COLLECT_LEAF_DEPTH = 128
 _TEMP_PRIVATE_KEY_FILES: list[Path] = []
 _RUNTIME_TF_SERVICE_ACCOUNT_NAME = "nebius-cxcli-tf-sa"
 _MYSTERYBOX_ESO_SERVICE_ACCOUNT_NAME = "mysterybox-sa"
@@ -950,6 +1021,24 @@ _RUNTIME_AUTH_TOKEN_READY_TIMEOUT_SECONDS = 60.0
 _RUNTIME_AUTH_TOKEN_READY_POLL_SECONDS = 2.0
 _MYSTERYBOX_ESO_ROLE_IDS = ("mysterybox.payload-viewer",)
 _SOPERATOR_APP_ID = "soperator"
+_SOPERATOR_INSTALL_MODE_FIELD = "install_mode"
+_SOPERATOR_INSTALL_MODE_PRODUCTION = "production-cluster"
+_SOPERATOR_INSTALL_MODE_ONBOARD_EXISTING_CLUSTER = "onboard-existing-cluster"
+_SOPERATOR_INSTALL_MODES = (
+    _SOPERATOR_INSTALL_MODE_PRODUCTION,
+    _SOPERATOR_INSTALL_MODE_ONBOARD_EXISTING_CLUSTER,
+)
+_SOPERATOR_SERVICE_ROLE_NODE_COUNT_FIELDS = (
+    "system_node_count",
+    "controller_node_count",
+    "login_node_count",
+    "accounting_node_count",
+)
+_SOPERATOR_ONBOARDING_STORAGE_MODES = (
+    "adopt-existing-storage",
+    "use-existing-pvc-or-storageclass",
+    "create-sfs",
+)
 _SOPERATOR_REQUIRED_INFRA_COMPONENT_IDS = ("mk8s", "sfs")
 _SOPERATOR_REQUIRED_APP_COMPONENT_IDS = ("cert-manager",)
 _BENIGN_KUBECTL_OUTPUT_MARKERS = (
@@ -960,7 +1049,7 @@ _BENIGN_KUBECTL_OUTPUT_MARKERS = (
     "reflector.go:",
     "context canceled",
 )
-_POST_FLUX_WEBHOOK_TRANSIENT_MARKERS = (
+_KUBECTL_TRANSIENT_FAILURE_MARKERS = (
     "failed calling webhook",
     "connect: connection refused",
     "connection reset by peer",
@@ -1040,8 +1129,10 @@ app = typer.Typer(
         "name-based tenant/project folder from a deployments root directory and overwrites existing "
         "resolved project folders only with confirmation; component list/add/remove use "
         "--config CONFIG_YAML as the day-2 config.yaml editing surface; "
-        "discover uses a deployment-scope directory; validate, validate-dashboards, "
-        "quota-check, quota-request, render, deploy, and bootstrap-ci use config.yaml; "
+        "discover uses a deployment-scope directory; grafana exports dashboard JSON from a "
+        "Grafana API or local JSON file and only edits component_sources.yaml with --attach; "
+        "validate, validate-dashboards, quota-check, quota-request, render, deploy, "
+        "and bootstrap-ci use config.yaml; "
         "destroy uses config.yaml to tear down all rendered project resources from sibling generated/; "
         "email also uses config.yaml and resolves sibling generated/ automatically; "
         "wireguard uses config.yaml to generate client configs and manage VM-local "
@@ -1049,7 +1140,23 @@ app = typer.Typer(
         "ssh-jumphost uses config.yaml to manage VM-local SSH source CIDR allowlists; "
         "validate-generated uses generated/, terraform uses generated/infra, flux uses generated/flux, "
         "validate-sources accepts optional component_sources.yaml plus its sibling settings file, and "
-        "auth has no positional path."
+        "auth has no positional path. "
+        "Soperator: the create/component wizards expose typed Slurm scheduling surfaces "
+        "(schedulingConfig, partitionConfiguration.partitions[].policy, qosConfiguration) "
+        "and catalog choices for partition_profile (shape-default, with-debug-long, "
+        "with-qos-preemption, with-h100-infiniband-debug-long) and topology_profile "
+        "(disabled, nebius-tiered-tree-v1, nebius-nvl-rack-v1 for GB300/NVL). The chart "
+        "hard-fails on typed-vs-raw key overlap to prevent silent slurm.conf overrides."
+    ),
+    epilog=(
+        "Quickstart: nebius-cxcli create ./deployments --client-name acme "
+        "--tenant-id TENANT --project-id PROJECT  |  "
+        "nebius-cxcli component add apps:soperator --config ./deployments/acme/config.yaml  |  "
+        "nebius-cxcli render ./deployments/acme/config.yaml  |  "
+        "nebius-cxcli deploy ./deployments/acme/config.yaml. "
+        "Soperator wizards expose schedulingConfig, partitionConfiguration.partitions[].policy, "
+        "qosConfiguration plus catalog choices for partition_profile and topology_profile "
+        "(nebius-nvl-rack-v1 covers GB300/NVL)."
     ),
 )
 component_app = typer.Typer(
@@ -1514,6 +1621,8 @@ def _run_runtime_validation(
 def _print_mk8s_gpu_validation_warnings(payload_or_config: Any) -> None:
     for warning in mk8s_gpu_validation_warnings(payload_or_config):
         console.print(f"{warning_markup('Deploy validation warning:')} {warning}")
+    for warning in soperator_child_chart_warnings(payload_or_config):
+        console.print(f"{warning_markup('Deploy validation warning:')} {warning}")
 
 
 def _configure_quiet_native_logs() -> None:
@@ -1812,6 +1921,74 @@ def _ask_questionary_with_wizard_navigation(question: Any) -> Any:
     return question.ask()
 
 
+def _questionary_choice_title(choice: Any) -> str:
+    title = getattr(choice, "title", "")
+    if isinstance(title, list):
+        return "".join(str(part[1]) for part in title if isinstance(part, tuple) and len(part) > 1)
+    return str(title or "")
+
+
+def _find_questionary_inquirer_control(container: Any) -> Any | None:
+    stack = [container]
+    seen: set[int] = set()
+    while stack:
+        current = stack.pop()
+        current_id = id(current)
+        if current_id in seen:
+            continue
+        seen.add(current_id)
+        if (
+            hasattr(current, "choices")
+            and hasattr(current, "pointed_at")
+            and callable(getattr(current, "is_selection_valid", None))
+        ):
+            return current
+        children = getattr(current, "children", None)
+        if children:
+            stack.extend(reversed(list(children)))
+        for attr in ("content", "container"):
+            child = getattr(current, attr, None)
+            if child is not None and child is not current:
+                stack.append(child)
+    return None
+
+
+def _register_questionary_prefix_jump_keys(question: Any) -> None:
+    application = getattr(question, "application", None)
+    bindings = getattr(application, "key_bindings", None)
+    layout = getattr(application, "layout", None)
+    control = _find_questionary_inquirer_control(getattr(layout, "container", None))
+    if bindings is None or control is None:
+        return
+
+    def _jump_to_prefix(event: Any) -> None:
+        key_event = event.key_sequence[0] if getattr(event, "key_sequence", None) else None
+        key = str(getattr(key_event, "key", "") or "").casefold()
+        if not key:
+            return
+        choices = list(
+            getattr(control, "filtered_choices", None) or getattr(control, "choices", ())
+        )
+        for index, choice in enumerate(choices):
+            if getattr(choice, "disabled", False):
+                continue
+            if _questionary_choice_title(choice).strip().casefold().startswith(key):
+                control.pointed_at = index
+                return
+
+    try:
+        for key in string.ascii_letters + string.digits:
+            bindings.add(key, eager=True)(_jump_to_prefix)
+    except Exception:
+        # Keep the prompt usable if questionary/prompt-toolkit internals change.
+        return
+
+
+def _ask_questionary_with_prefix_jumps(question: Any) -> Any:
+    _register_questionary_prefix_jump_keys(question)
+    return question.ask()
+
+
 def _split_multi_value_tokens(raw_values: list[str] | None) -> list[str]:
     if not raw_values:
         return []
@@ -1870,11 +2047,21 @@ def _component_source_validation_failure_message(
     source_issues: Sequence[str],
     *,
     include_skip_guidance: bool = False,
+    selected_app_ids: set[str] | None = None,
+    include_infra: bool = True,
 ) -> str:
+    if selected_app_ids is None:
+        scope_text = "the full component catalog, including optional app charts"
+    elif selected_app_ids:
+        app_list = ", ".join(sorted(selected_app_ids))
+        infra_text = "all infra sources and " if include_infra else ""
+        scope_text = f"{infra_text}the selected app chart source(s): {app_list}"
+    else:
+        scope_text = "all infra component sources"
     message = (
         f"Component catalog/settings validation failed for {source_path}:\n  - "
         + "\n  - ".join(source_issues)
-        + "\n\nThis validation checks the full component catalog, including optional app charts. "
+        + f"\n\nThis validation checks {scope_text}. "
         "If the failure is a transient Helm repository, OCI registry, or network timeout, "
         "retry or increase NEBIUS_CXCLI_HELM_TIMEOUT_SECONDS."
     )
@@ -1886,9 +2073,20 @@ def _component_source_validation_failure_message(
     return message
 
 
-def _validate_component_sources_or_raise() -> None:
+def _validate_component_sources_or_raise(
+    *,
+    selected_app_ids: set[str] | None = None,
+    include_infra: bool = True,
+) -> None:
     with console.status("[cyan]Validating component catalog/settings...[/cyan]"):
-        source_path, source_issues, source_warnings = _validate_component_sources_registry()
+        registry_kwargs: dict[str, Any] = {}
+        if selected_app_ids is not None:
+            registry_kwargs["selected_app_ids"] = selected_app_ids
+        if not include_infra:
+            registry_kwargs["include_infra"] = include_infra
+        source_path, source_issues, source_warnings = _validate_component_sources_registry(
+            **registry_kwargs,
+        )
     for warning in source_warnings:
         console.print(f"{warning_markup('Source validation warning:')} {warning}")
     if source_issues:
@@ -1897,57 +2095,33 @@ def _validate_component_sources_or_raise() -> None:
                 source_path,
                 source_issues,
                 include_skip_guidance=True,
+                selected_app_ids=selected_app_ids,
+                include_infra=include_infra,
             )
         )
 
 
-def _format_component_id_sample(component_ids: Sequence[str], *, limit: int = 8) -> str:
-    sample = list(component_ids[:limit])
-    suffix = ""
-    remaining = len(component_ids) - len(sample)
-    if remaining > 0:
-        suffix = f", and {remaining} more"
-    return ", ".join(sample) + suffix
-
-
-def _component_source_tool_preflight_issues(*, explicit: Path | None = None) -> tuple[str, ...]:
-    """Return missing-tool issues that can be checked before interactive prompts."""
-    source_path = resolve_component_sources_file(explicit=explicit)
-    sources = load_component_sources(explicit=explicit)
-    issues: list[str] = []
-
-    helm_chart_ids = sorted(
-        _non_empty_text(chart.name) for chart in sources.helm_charts if _non_empty_text(chart.name)
+def _validate_final_enabled_app_sources_or_raise(
+    *,
+    payload: dict[str, Any],
+    app_entries: tuple[ComponentEntry, ...],
+    already_validated_app_ids: set[str],
+    candidate_app_ids: set[str] | None = None,
+) -> set[str]:
+    enabled_app_ids = _enabled_ids_from_runtime_payload(
+        payload=payload,
+        entries=app_entries,
     )
-    if helm_chart_ids and not shutil.which("helm"):
-        issues.append(
-            "helm is required for component source validation because "
-            f"{source_path} declares Helm app charts: "
-            f"{_format_component_id_sample(helm_chart_ids)}. "
-            "Install helm or rerun with --no-validate-sources."
+    app_ids_to_validate = set(enabled_app_ids)
+    if candidate_app_ids is not None:
+        app_ids_to_validate &= candidate_app_ids
+    app_ids_to_validate -= already_validated_app_ids
+    if app_ids_to_validate:
+        _validate_component_sources_or_raise(
+            selected_app_ids=app_ids_to_validate,
+            include_infra=False,
         )
-    git_tree_chart_ids = sorted(
-        _non_empty_text(chart.name)
-        for chart in sources.helm_charts
-        if _non_empty_text(chart.name) and _is_github_tree_chart_repo(_non_empty_text(chart.repo))
-    )
-    if git_tree_chart_ids and not shutil.which("git"):
-        issues.append(
-            "git is required for component source validation because "
-            f"{source_path} declares Git tree Helm app charts: "
-            f"{_format_component_id_sample(git_tree_chart_ids)}. "
-            "Install git or rerun with --no-validate-sources."
-        )
-    return tuple(issues)
-
-
-def _preflight_component_source_tools_or_raise() -> None:
-    issues = _component_source_tool_preflight_issues()
-    if issues:
-        raise RuntimeError(
-            "Component source validation requires missing external tool(s):\n  - "
-            + "\n  - ".join(issues)
-        )
+    return enabled_app_ids
 
 
 def _identity_values_from_payload(
@@ -2536,6 +2710,12 @@ def _resolve_component_ids_from_tokens(
 
         entry = lookup.get(token)
         if entry is None:
+            internal_message = _internal_component_selector_message(
+                scope=scope,
+                component_id=token,
+            )
+            if internal_message:
+                raise RuntimeError(internal_message)
             available = ", ".join(entry.id for entry in selectable_entries)
             raise RuntimeError(
                 f"Unknown {scope} component id '{token}'. Available ids: {available}"
@@ -2546,6 +2726,33 @@ def _resolve_component_ids_from_tokens(
         selected.add(entry.id)
 
     return selected
+
+
+def _internal_component_selector_message(*, scope: ComponentScope, component_id: str) -> str:
+    if scope != "apps":
+        return ""
+    normalized = normalize_component_token(component_id)
+    if not normalized:
+        return ""
+    sources = load_component_sources()
+    for chart in sources.helm_charts:
+        if normalize_component_token(chart.name) != normalized:
+            continue
+        if chart.selectable:
+            return ""
+        if normalized == "nccl-test":
+            return (
+                "apps component id 'nccl-test' exists in the active catalog but is "
+                "internal to deploy-time NCCL validation. Enable "
+                "deploy.targets[].validations.mk8s_gpu.nccl.enabled with the MK8s "
+                "create wizard or config.yaml instead of selecting it with --app "
+                "or component add."
+            )
+        return (
+            f"{scope} component id '{normalized}' exists in the active catalog but "
+            "is internal and cannot be selected directly."
+        )
+    return ""
 
 
 def _component_selector_label(entry: ComponentEntry, *, scope: ComponentScope) -> str:
@@ -2607,7 +2814,7 @@ def _component_selection_block(
             f"[bold green]{escape(current_label)}[/bold green]"
         )
 
-    lines = ["Current component selections:"]
+    lines = ["Component selections:"]
 
     def _append_section(
         title: str,
@@ -2654,16 +2861,84 @@ def _print_component_selection_summary(
     selected_apps: set[str],
     infra_entries: tuple[ComponentEntry, ...],
     app_entries: tuple[ComponentEntry, ...],
+    payload: dict[str, Any] | None = None,
 ) -> None:
-    infra_labels = _component_selection_labels(
-        selected=selected_infra,
-        entries=infra_entries,
-    )
-    app_labels = _component_selection_labels(
-        selected=selected_apps,
-        entries=app_entries,
-    )
+    if payload is None:
+        infra_labels = _component_selection_labels(
+            selected=selected_infra,
+            entries=infra_entries,
+        )
+        app_labels = _component_selection_labels(
+            selected=selected_apps,
+            entries=app_entries,
+        )
+    else:
+        infra_labels, app_labels = _payload_component_selection_labels(
+            payload=payload,
+            selected_infra=selected_infra,
+            selected_apps=selected_apps,
+            infra_entries=infra_entries,
+            app_entries=app_entries,
+        )
     console.print(_component_selection_block(infra_labels=infra_labels, app_labels=app_labels))
+
+
+def _app_display_target_ref(payload: Mapping[str, Any], row: Mapping[str, Any]) -> str:
+    target_ref = app_chart_target_ref(row)
+    if target_ref:
+        return target_ref
+    instance_id = component_instance_id(row)
+    return instance_id if instance_id in set(enabled_cluster_target_refs(payload)) else ""
+
+
+def _app_component_selection_label(payload: Mapping[str, Any], row: Mapping[str, Any]) -> str:
+    app_id = component_type_id(row)
+    instance_id = component_instance_id(row)
+    target_ref = _app_display_target_ref(payload, row)
+    if app_id and target_ref:
+        return f"{app_id} on {target_ref}"
+    return component_instance_label(app_id, instance_id)
+
+
+def _payload_component_selection_labels(
+    *,
+    payload: dict[str, Any],
+    selected_infra: set[str],
+    selected_apps: set[str],
+    infra_entries: tuple[ComponentEntry, ...],
+    app_entries: tuple[ComponentEntry, ...],
+) -> tuple[list[str], list[str]]:
+    infra_entry_ids = {entry.id for entry in infra_entries if entry.id}
+    app_entry_ids = {entry.id for entry in app_entries if entry.id}
+    selected_infra_ids = {normalize_component_token(item) for item in selected_infra}
+    infra_labels: list[str] = []
+    for row in _dynamic_enabled_infra_component_rows(payload):
+        component_id = component_type_id(row)
+        if infra_entry_ids and component_id not in infra_entry_ids:
+            continue
+        instance_id = component_instance_id(row)
+        exact_selector = component_instance_label(component_id, instance_id)
+        if exact_selector not in selected_infra_ids and instance_id not in selected_infra_ids:
+            continue
+        infra_labels.append(exact_selector)
+
+    selected_app_ids = {normalize_component_token(item) for item in selected_apps}
+    exact_selector_mode = any("@" in token for token in selected_app_ids)
+    app_labels: list[str] = []
+    for row in _dynamic_enabled_app_chart_rows(payload):
+        app_id = component_type_id(row)
+        if app_entry_ids and app_id not in app_entry_ids:
+            continue
+        instance_id = component_instance_id(row)
+        exact_selector = component_instance_label(app_id, instance_id)
+        if (
+            exact_selector not in selected_app_ids
+            and app_id not in selected_app_ids
+            and (exact_selector_mode or instance_id not in selected_app_ids)
+        ):
+            continue
+        app_labels.append(_app_component_selection_label(payload, row))
+    return infra_labels, app_labels
 
 
 def _enabled_app_instance_labels(
@@ -2694,6 +2969,80 @@ def _enabled_app_instance_labels(
         labels.append(label)
         seen.add(label)
     return tuple(labels)
+
+
+def _new_enabled_app_instance_labels(
+    payload: dict[str, Any],
+    *,
+    before_labels: set[str],
+    app_ids: Sequence[str],
+) -> tuple[str, ...]:
+    normalized_app_ids = {
+        normalize_component_token(item) for item in app_ids if normalize_component_token(item)
+    }
+    if not normalized_app_ids:
+        return ()
+    apps = payload.get("apps")
+    charts = apps.get("charts") if isinstance(apps, Mapping) else None
+    if not isinstance(charts, list):
+        return ()
+    labels: list[str] = []
+    target_scoped_labels: list[str] = []
+    seen: set[str] = set()
+    target_refs = tuple(enabled_cluster_target_refs(payload))
+    for row in charts:
+        if not isinstance(row, Mapping) or not bool(row.get("enabled", False)):
+            continue
+        app_id = component_type_id(row)
+        if app_id not in normalized_app_ids:
+            continue
+        instance_id = component_instance_id(row)
+        if instance_id == app_id and len(target_refs) == 1:
+            label = component_instance_label(app_id, target_refs[0])
+        else:
+            label = component_instance_label(app_id, instance_id)
+        if not label or label in before_labels or label in seen:
+            continue
+        labels.append(label)
+        if "@" in label:
+            target_scoped_labels.append(label)
+        seen.add(label)
+    return tuple(target_scoped_labels or labels)
+
+
+def _target_aware_added_app_labels(
+    payload: dict[str, Any],
+    labels: Sequence[str],
+) -> list[str]:
+    apps = payload.get("apps")
+    charts = apps.get("charts") if isinstance(apps, Mapping) else None
+    if not isinstance(charts, list):
+        return list(labels)
+
+    enabled_labels_by_app: dict[str, list[str]] = {}
+    for row in charts:
+        if not isinstance(row, Mapping) or not bool(row.get("enabled", False)):
+            continue
+        app_id = component_type_id(row)
+        instance_id = component_instance_id(row)
+        label = component_instance_label(app_id, instance_id)
+        if not app_id or not label:
+            continue
+        enabled_labels_by_app.setdefault(app_id, []).append(label)
+
+    resolved: list[str] = []
+    for raw_label in labels:
+        label = normalize_component_token(raw_label)
+        if "@" in label:
+            replacement = label
+        else:
+            scoped = [
+                candidate for candidate in enabled_labels_by_app.get(label, []) if "@" in candidate
+            ]
+            replacement = scoped[0] if len(scoped) == 1 else label
+        if replacement and replacement not in resolved:
+            resolved.append(replacement)
+    return resolved
 
 
 def _ensure_mysterybox_eso_app_dependency_selection(
@@ -2728,8 +3077,56 @@ def _print_mysterybox_eso_app_dependency_adjustment(app_labels: tuple[str, ...])
     console.print(
         f"{warning_markup('Adjusted component selection:')} enabling "
         + ", ".join(f"'apps:{label}'" for label in app_labels)
-        + " because selected MysteryBox with MK8s requires the External Secrets "
+        + " because selected MysteryBox-to-Kubernetes sync requires the External Secrets "
         "Operator controller."
+    )
+
+
+def _ensure_nfs_csi_app_dependency_selection(
+    payload: dict[str, Any],
+    *,
+    selected_apps: set[str],
+    app_entries: tuple[ComponentEntry, ...],
+) -> tuple[set[str], tuple[str, ...]]:
+    before_selected_apps = set(selected_apps)
+    before_labels = set(_enabled_app_instance_labels(payload, app_id=NFS_CSI_APP_ID))
+    changed = ensure_nfs_csi_app_rows(payload, app_entries=app_entries)
+    after_selected_apps = _enabled_ids_from_runtime_payload(payload=payload, entries=app_entries)
+    nfs_csi_was_auto_selected = (
+        NFS_CSI_APP_ID in after_selected_apps and NFS_CSI_APP_ID not in before_selected_apps
+    )
+    if not changed and not nfs_csi_was_auto_selected:
+        return selected_apps, ()
+    after_labels = set(_enabled_app_instance_labels(payload, app_id=NFS_CSI_APP_ID))
+    auto_enabled_labels = after_labels - before_labels
+    if nfs_csi_was_auto_selected and not auto_enabled_labels:
+        auto_enabled_labels = after_labels
+    return after_selected_apps, tuple(sorted(auto_enabled_labels))
+
+
+def _print_nfs_csi_app_dependency_adjustment(app_labels: tuple[str, ...]) -> None:
+    if not app_labels:
+        return
+    console.print(
+        f"{warning_markup('Adjusted component selection:')} enabling "
+        + ", ".join(f"'apps:{label}'" for label in app_labels)
+        + " because VM-backed NFS for MK8s requires the NFS CSI driver."
+    )
+
+
+def _materialize_soperator_child_chart_secret_dependencies(
+    payload: dict[str, Any],
+    *,
+    selected_apps: set[str],
+    app_entries: tuple[ComponentEntry, ...],
+) -> tuple[set[str], tuple[str, ...]]:
+    """Materialize Soperator child values, then persist any ESO app dependency."""
+    materialize_soperator_child_chart_values(payload)
+    normalize_mysterybox_eso_project_settings(payload)
+    return _ensure_mysterybox_eso_app_dependency_selection(
+        payload,
+        selected_apps=selected_apps,
+        app_entries=app_entries,
     )
 
 
@@ -2738,8 +3135,13 @@ def _expand_soperator_component_selection(
     selected_infra: set[str],
     selected_apps: set[str],
     infra_entries: tuple[ComponentEntry, ...],
+    install_mode: str | None = None,
 ) -> set[str]:
     if _SOPERATOR_APP_ID not in selected_apps:
+        return selected_infra
+    if (
+        install_mode or _default_soperator_install_mode()
+    ) == _SOPERATOR_INSTALL_MODE_ONBOARD_EXISTING_CLUSTER:
         return selected_infra
     available_infra = {entry.id for entry in infra_entries}
     expanded = set(selected_infra)
@@ -2747,6 +3149,46 @@ def _expand_soperator_component_selection(
         if component_id in available_infra:
             expanded.add(component_id)
     return expanded
+
+
+def _prune_soperator_onboarding_infra_selection(
+    *,
+    selected_infra: set[str],
+    selected_apps: set[str],
+    install_mode: str | None,
+    new_infra: set[str],
+    existing_infra: set[str] | None = None,
+) -> tuple[set[str], tuple[str, ...]]:
+    if _SOPERATOR_APP_ID not in selected_apps:
+        return selected_infra, ()
+    if install_mode != _SOPERATOR_INSTALL_MODE_ONBOARD_EXISTING_CLUSTER:
+        return selected_infra, ()
+
+    existing = existing_infra or set()
+    skipped = tuple(
+        component_id
+        for component_id in _SOPERATOR_REQUIRED_INFRA_COMPONENT_IDS
+        if component_id in new_infra
+    )
+    if not skipped:
+        return selected_infra, ()
+
+    pruned = set(selected_infra)
+    for component_id in skipped:
+        if component_id not in existing:
+            pruned.discard(component_id)
+    return pruned, skipped
+
+
+def _print_soperator_onboarding_infra_adjustment(component_ids: tuple[str, ...]) -> None:
+    if not component_ids:
+        return
+    console.print(
+        f"{warning_markup('Adjusted component selection:')} skipping "
+        + ", ".join(f"'infra:{component_id}'" for component_id in component_ids)
+        + " because 'apps:soperator' install_mode=onboard-existing-cluster "
+        "uses an external MK8s target and does not create Terraform MK8s/SFS resources."
+    )
 
 
 def _expand_soperator_app_selection(
@@ -2764,21 +3206,839 @@ def _expand_soperator_app_selection(
     return expanded
 
 
+def _print_soperator_selection_adjustments(
+    *,
+    selected_infra_before: set[str],
+    selected_apps_before: set[str],
+    selected_infra_after: set[str],
+    selected_apps_after: set[str],
+    install_mode: str | None = None,
+) -> None:
+    if _SOPERATOR_APP_ID not in selected_apps_after:
+        return
+    resolved_install_mode = install_mode or _default_soperator_install_mode()
+    added_required_infra = tuple(
+        component_id
+        for component_id in _SOPERATOR_REQUIRED_INFRA_COMPONENT_IDS
+        if component_id in selected_infra_after and component_id not in selected_infra_before
+    )
+    if added_required_infra and resolved_install_mode == _SOPERATOR_INSTALL_MODE_PRODUCTION:
+        console.print(
+            f"{warning_markup('Adjusted component selection:')} enabling "
+            + ", ".join(f"'infra:{component_id}'" for component_id in added_required_infra)
+            + " because 'apps:soperator' install_mode=production-cluster creates "
+            "the complete MK8s+SFS+Soperator bundle."
+        )
+
+    added_required_apps = tuple(
+        app_id
+        for app_id in _SOPERATOR_REQUIRED_APP_COMPONENT_IDS
+        if app_id in selected_apps_after and app_id not in selected_apps_before
+    )
+    if added_required_apps:
+        console.print(
+            f"{warning_markup('Adjusted component selection:')} enabling "
+            + ", ".join(f"'apps:{app_id}'" for app_id in added_required_apps)
+            + " because 'apps:soperator' requires cert-manager for webhook "
+            "certificate automation."
+        )
+
+
+def _soperator_install_mode_choices() -> list[OptionChoice]:
+    chart = helm_chart_source_by_id(_SOPERATOR_APP_ID)
+    wizard_fields = getattr(chart, "wizard_fields", {}) or {}
+    install_mode_spec = wizard_fields.get(_SOPERATOR_INSTALL_MODE_FIELD)
+    choices: list[OptionChoice] = []
+    sources = install_mode_spec.get("sources") if isinstance(install_mode_spec, Mapping) else None
+    if isinstance(sources, list):
+        for source in sources:
+            if not isinstance(source, Mapping):
+                continue
+            if str(source.get("source", "")).strip().lower() != "static":
+                continue
+            values = source.get("values")
+            if not isinstance(values, list):
+                continue
+            for raw in values:
+                if isinstance(raw, Mapping):
+                    value = normalize_component_token(raw.get("value"))
+                    label = _non_empty_text(raw.get("label")) or value
+                else:
+                    value = normalize_component_token(raw)
+                    label = value
+                if value in _SOPERATOR_INSTALL_MODES:
+                    choices.append(OptionChoice(value=value, label=label))
+    if choices:
+        return choices
+    return [
+        OptionChoice(
+            value=_SOPERATOR_INSTALL_MODE_PRODUCTION,
+            label="Create complete production Soperator cluster (MK8s + SFS + Soperator)",
+        ),
+        OptionChoice(
+            value=_SOPERATOR_INSTALL_MODE_ONBOARD_EXISTING_CLUSTER,
+            label="Onboard existing Nebius MK8s cluster",
+        ),
+    ]
+
+
+def _prompt_soperator_install_mode(*, default: str | None = None) -> str:
+    current = default or _default_soperator_install_mode()
+    while True:
+        updated, should_stop = _prompt_scalar_override(
+            _SOPERATOR_INSTALL_MODE_FIELD,
+            current,
+            choices=_soperator_install_mode_choices(),
+            type_hint="string",
+            required=True,
+        )
+        if should_stop:
+            raise _WizardQuitRequested
+        if _wizard_backtrack_requested(updated):
+            return (
+                current
+                if current in _SOPERATOR_INSTALL_MODES
+                else _default_soperator_install_mode()
+            )
+        mode = normalize_component_token(updated)
+        if mode in _SOPERATOR_INSTALL_MODES:
+            return mode
+        console.print(
+            f"{error_markup('Invalid value')} for '{_SOPERATOR_INSTALL_MODE_FIELD}'. "
+            "Choose one of the listed Soperator install modes."
+        )
+
+
+def _soperator_profile_choices() -> list[OptionChoice]:
+    current_default = _default_soperator_profile_name()
+    _settings_default, profiles = _soperator_nodesets_profiles()
+    choices: list[OptionChoice] = []
+    for name, profile in profiles.items():
+        profile_name = str(name).strip()
+        if not profile_name:
+            continue
+        wizard = profile.get("wizard") if isinstance(profile, Mapping) else None
+        label = (
+            _non_empty_text(wizard.get("label")) if isinstance(wizard, Mapping) else ""
+        ) or profile_name
+        choices.append(
+            OptionChoice(
+                value=profile_name,
+                label=label,
+                recommended=profile_name == current_default,
+            )
+        )
+    return choices
+
+
+def _prompt_soperator_profile(*, default: str | None = None) -> str:
+    current = default or _default_soperator_profile_name()
+    _settings_default, profiles = _soperator_nodesets_profiles()
+    while True:
+        updated, should_stop = _prompt_scalar_override(
+            "profile",
+            current,
+            choices=_soperator_profile_choices(),
+            type_hint="string",
+            required=True,
+        )
+        if should_stop:
+            raise _WizardQuitRequested
+        if _wizard_backtrack_requested(updated):
+            return current if current in profiles else _default_soperator_profile_name()
+        profile = _non_empty_text(updated)
+        if profile in profiles:
+            return profile
+        available = ", ".join(sorted(str(name) for name in profiles)) or "(none)"
+        console.print(
+            f"{error_markup('Invalid value')} for 'profile'. "
+            f"Choose one of the listed Soperator profiles: {available}."
+        )
+
+
+def _apply_soperator_install_mode_to_payload(payload: dict[str, Any], *, mode: str) -> None:
+    if mode not in _SOPERATOR_INSTALL_MODES:
+        return
+    apps_node = payload.get("apps")
+    charts = apps_node.get("charts") if isinstance(apps_node, Mapping) else None
+    if not isinstance(charts, list):
+        return
+    for row in charts:
+        if not isinstance(row, dict) or not bool(row.get("enabled", False)):
+            continue
+        if component_type_id(row) == _SOPERATOR_APP_ID:
+            row[_SOPERATOR_INSTALL_MODE_FIELD] = mode
+
+
+def _apply_soperator_profile_to_payload(payload: dict[str, Any], *, profile: str) -> None:
+    if not profile:
+        return
+    _settings_default, profiles = _soperator_nodesets_profiles()
+    if profile not in profiles:
+        return
+    apps_node = payload.get("apps")
+    charts = apps_node.get("charts") if isinstance(apps_node, Mapping) else None
+    if not isinstance(charts, list):
+        return
+    for row in charts:
+        if not isinstance(row, dict) or not bool(row.get("enabled", False)):
+            continue
+        if component_type_id(row) == _SOPERATOR_APP_ID:
+            row["profile"] = profile
+
+
+def _soperator_catalog_pinned_versions() -> tuple[str, str]:
+    chart = helm_chart_source_by_id(_SOPERATOR_APP_ID)
+    chart_version = _non_empty_text(getattr(chart, "version", ""))
+    app_version = ""
+    local_source = getattr(chart, "local_source", None)
+    local_path = _non_empty_text(getattr(local_source, "path", ""))
+    if local_path:
+        chart_yaml = (resolve_component_sources_file().parent / local_path / "Chart.yaml").resolve()
+        if chart_yaml.exists():
+            with suppress(Exception):
+                payload = yaml.safe_load(chart_yaml.read_text(encoding="utf-8")) or {}
+                if isinstance(payload, Mapping):
+                    chart_version = chart_version or _non_empty_text(payload.get("version"))
+                    app_version = _non_empty_text(payload.get("appVersion"))
+    return chart_version, app_version
+
+
+def _print_soperator_onboarding_report_summary(report: Any) -> None:
+    console.print(f"[dim]Soperator onboarding state: {report.state}[/dim]")
+    for finding in report.findings:
+        if finding.severity in {"required", "blocked", "recommended"}:
+            console.print(f"[dim]- {finding.layer}: {finding.status} - {finding.message}[/dim]")
+    selected_actions = [action.id for action in report.actions if action.selected]
+    if selected_actions:
+        console.print("[dim]Selected onboarding actions: " + ", ".join(selected_actions) + "[/dim]")
+
+
+def _soperator_onboarding_storage_mode_choices(default: str) -> list[OptionChoice]:
+    labels = {
+        "adopt-existing-storage": "Adopt existing Soperator storage",
+        "use-existing-pvc-or-storageclass": "Use chart-local one-node storage",
+        "create-sfs": "Create Nebius SFS filesystems",
+    }
+    return [
+        OptionChoice(value=value, label=labels[value], recommended=value == default)
+        for value in _SOPERATOR_ONBOARDING_STORAGE_MODES
+    ]
+
+
+def _soperator_onboarding_target_defaults(
+    target_ref: str,
+    *,
+    kube_context: str,
+    storage_mode: str = "adopt-existing-storage",
+    snapshot: Mapping[str, Any] | None = None,
+    pinned_chart_version: str = "",
+    pinned_app_version: str = "",
+) -> dict[str, Any]:
+    normalized_target = normalize_component_token(target_ref) or "mk8s"
+    if snapshot is None:
+        snapshot = (
+            collect_kubectl_soperator_snapshot(kube_context=kube_context)
+            if _non_empty_text(kube_context)
+            else {"node_groups": {}, "helm_releases": [], "crds": [], "collection_errors": []}
+        )
+    if not pinned_chart_version and not pinned_app_version:
+        pinned_chart_version, pinned_app_version = _soperator_catalog_pinned_versions()
+    report = analyze_soperator_onboarding_snapshot(
+        snapshot,
+        target_ref=normalized_target,
+        pinned_chart_version=pinned_chart_version,
+        pinned_app_version=pinned_app_version,
+    )
+    return {
+        "instance_id": normalized_target,
+        DEPLOY_TARGET_KIND_FIELD: EXTERNAL_MK8S_TARGET_KIND,
+        DEPLOY_TARGET_OWNERSHIP_FIELD: EXTERNAL_TARGET_OWNERSHIP,
+        "access": "external",
+        "kube_context": kube_context,
+        "inventory": {"node_groups": snapshot.get("node_groups", {})},
+        "soperator_onboarding": {
+            "accepted": report.state in {"vanilla-mk8s", "existing-soperator"},
+            "analysis_fingerprint": "",
+            "analysis_report": soperator_onboarding_report_path(normalized_target),
+            "state": report.state,
+            "storage_mode": storage_mode,
+            "actions": [action.id for action in report.actions if action.selected],
+            "helm_releases": snapshot.get("helm_releases", []),
+            "crds": snapshot.get("crds", []),
+            "namespaces": snapshot.get("namespaces", []),
+            "collection_errors": snapshot.get("collection_errors", []),
+        },
+    }
+
+
+def _prompt_soperator_onboarding_target_row() -> dict[str, Any]:
+    default_context = _current_kube_context_name()
+    default_target = "mk8s"
+    if default_context:
+        match = re.match(r"^nebius-(?P<target>.+)-mk8scluster-[^-]+(?:-.+)?$", default_context)
+        if match is not None:
+            default_target = normalize_component_token(match.group("target")) or "mk8s"
+    target_ref, should_stop = _prompt_scalar_override(
+        "deploy.targets[].instance_id",
+        default_target,
+        type_hint="string",
+        required=True,
+    )
+    if should_stop:
+        raise _WizardQuitRequested
+    if _wizard_backtrack_requested(target_ref):
+        target_ref = default_target
+    kube_context, should_stop = _prompt_scalar_override(
+        "deploy.targets[].kube_context",
+        default_context,
+        choices=[
+            OptionChoice(value=name, label=name, recommended=name == default_context)
+            for name in _known_kube_context_names()
+        ]
+        or None,
+        type_hint="string",
+        required=True,
+    )
+    if should_stop:
+        raise _WizardQuitRequested
+    if _wizard_backtrack_requested(kube_context):
+        kube_context = default_context
+    normalized_target = normalize_component_token(target_ref) or "mk8s"
+    context = _non_empty_text(kube_context)
+    snapshot = (
+        collect_kubectl_soperator_snapshot(kube_context=context)
+        if context
+        else {"node_groups": {}, "helm_releases": [], "crds": [], "collection_errors": []}
+    )
+    chart_version, app_version = _soperator_catalog_pinned_versions()
+    target_row = _soperator_onboarding_target_defaults(
+        normalized_target,
+        kube_context=context,
+        snapshot=snapshot,
+        pinned_chart_version=chart_version,
+        pinned_app_version=app_version,
+    )
+    report = analyze_soperator_onboarding_snapshot(
+        snapshot,
+        target_ref=normalized_target,
+        pinned_chart_version=chart_version,
+        pinned_app_version=app_version,
+    )
+    _print_soperator_onboarding_report_summary(report)
+    storage_mode, should_stop = _prompt_scalar_override(
+        "deploy.targets[].soperator_onboarding.storage_mode",
+        "adopt-existing-storage",
+        choices=_soperator_onboarding_storage_mode_choices("adopt-existing-storage"),
+        type_hint="string",
+        required=True,
+    )
+    if should_stop:
+        raise _WizardQuitRequested
+    if _wizard_backtrack_requested(storage_mode):
+        storage_mode = "adopt-existing-storage"
+    if normalize_component_token(storage_mode) not in _SOPERATOR_ONBOARDING_STORAGE_MODES:
+        storage_mode = "adopt-existing-storage"
+    target_row["soperator_onboarding"]["storage_mode"] = normalize_component_token(storage_mode)
+    return target_row
+
+
+def _ensure_soperator_onboarding_target(
+    payload: dict[str, Any],
+    *,
+    interactive: bool,
+) -> None:
+    apps_node = payload.get("apps")
+    charts = apps_node.get("charts") if isinstance(apps_node, Mapping) else None
+    if not isinstance(charts, list):
+        return
+    onboarding_rows = [
+        row
+        for row in charts
+        if isinstance(row, dict)
+        and bool(row.get("enabled", False))
+        and component_type_id(row) == _SOPERATOR_APP_ID
+        and _soperator_install_mode_for_row(row) == _SOPERATOR_INSTALL_MODE_ONBOARD_EXISTING_CLUSTER
+    ]
+    if not onboarding_rows:
+        return
+    deploy = payload.setdefault("deploy", {})
+    if not isinstance(deploy, dict):
+        return
+    targets = deploy.setdefault("targets", [])
+    if not isinstance(targets, list):
+        return
+    existing_targets = {
+        normalize_component_token(row.get(INSTANCE_ID_FIELD)): row
+        for row in targets
+        if isinstance(row, dict) and deploy_target_is_external_mk8s(row)
+    }
+    empty_ref_rows = 0
+    for row in onboarding_rows:
+        requested_ref = app_chart_target_ref(row) or component_instance_id(row)
+        if requested_ref == _SOPERATOR_APP_ID:
+            requested_ref = ""
+        if not requested_ref:
+            empty_ref_rows += 1
+    if empty_ref_rows > 1:
+        raise RuntimeError(
+            "Multiple Soperator onboard-existing-cluster rows require an explicit "
+            "target_ref or target-scoped instance_id on each row."
+        )
+    resolved_targets: dict[int, str] = {}
+    for row in onboarding_rows:
+        requested_ref = app_chart_target_ref(row) or component_instance_id(row)
+        if requested_ref == _SOPERATOR_APP_ID:
+            requested_ref = ""
+        target_row: dict[str, Any] | None = None
+        if requested_ref:
+            target_row = cast(dict[str, Any] | None, existing_targets.get(requested_ref))
+        elif len(existing_targets) == 1:
+            target_row = cast(dict[str, Any], next(iter(existing_targets.values())))
+        if target_row is None and interactive:
+            target_row = _prompt_soperator_onboarding_target_row()
+            targets.append(target_row)
+            existing_targets[component_instance_id(target_row)] = target_row
+        if target_row is None:
+            target_hint = f" for target '{requested_ref}'" if requested_ref else ""
+            raise RuntimeError(
+                "Soperator onboard-existing-cluster requires deploy.targets[]"
+                f"{target_hint} with kind: external-mk8s and kube_context or cluster_id."
+            )
+        target_ref = component_instance_id(target_row)
+        if target_ref:
+            resolved_targets[id(row)] = target_ref
+            row[INSTANCE_ID_FIELD] = target_ref
+
+    if not resolved_targets:
+        return
+    dependency_app_ids = {_SOPERATOR_APP_ID, *_SOPERATOR_REQUIRED_APP_COMPONENT_IDS}
+    unique_target_refs = set(resolved_targets.values())
+    for row in charts:
+        if not isinstance(row, dict) or not bool(row.get("enabled", False)):
+            continue
+        chart_id = component_type_id(row)
+        if chart_id not in dependency_app_ids:
+            continue
+        if id(row) in resolved_targets:
+            row[INSTANCE_ID_FIELD] = resolved_targets[id(row)]
+            continue
+        target_ref = app_chart_target_ref(row) or component_instance_id(row)
+        if target_ref in unique_target_refs:
+            row[INSTANCE_ID_FIELD] = target_ref
+            continue
+        if target_ref == chart_id and len(unique_target_refs) == 1:
+            resolved_target_ref = next(iter(unique_target_refs))
+            duplicate_target_row = any(
+                other is not row
+                and isinstance(other, Mapping)
+                and bool(other.get("enabled", False))
+                and component_type_id(other) == chart_id
+                and component_instance_id(other) == resolved_target_ref
+                for other in charts
+            )
+            if not duplicate_target_row:
+                row[INSTANCE_ID_FIELD] = resolved_target_ref
+
+
+def _external_mk8s_target_refs(payload: Mapping[str, Any]) -> set[str]:
+    deploy = payload.get("deploy")
+    targets = deploy.get("targets") if isinstance(deploy, Mapping) else None
+    if not isinstance(targets, list):
+        return set()
+    return {
+        target_ref
+        for row in targets
+        if isinstance(row, Mapping) and deploy_target_is_external_mk8s(row)
+        if (target_ref := normalize_component_token(row.get(INSTANCE_ID_FIELD)))
+    }
+
+
+def _enabled_soperator_onboarding_target_refs(payload: Mapping[str, Any]) -> set[str]:
+    apps_node = payload.get("apps")
+    charts = apps_node.get("charts") if isinstance(apps_node, Mapping) else None
+    if not isinstance(charts, list):
+        return set()
+    return {
+        target_ref
+        for row in charts
+        if isinstance(row, Mapping)
+        and bool(row.get("enabled", False))
+        and component_type_id(row) == _SOPERATOR_APP_ID
+        and _soperator_install_mode_for_row(row) == _SOPERATOR_INSTALL_MODE_ONBOARD_EXISTING_CLUSTER
+        if (target_ref := component_instance_id(row))
+    }
+
+
+def _soperator_onboarding_component_add_target_refs(
+    *,
+    payload: Mapping[str, Any],
+    add_targets: Sequence[_ComponentAddTarget],
+) -> set[str]:
+    external_targets = _external_mk8s_target_refs(payload)
+    existing_onboarding_targets = _enabled_soperator_onboarding_target_refs(payload)
+    refs: set[str] = set()
+    for target in add_targets:
+        if target.scope != "apps" or target.component_id != _SOPERATOR_APP_ID:
+            continue
+        requested_target = normalize_component_token(target.requested_instance_id)
+        if requested_target:
+            if requested_target in external_targets or requested_target in existing_onboarding_targets:
+                refs.add(requested_target)
+            continue
+        refs.update(existing_onboarding_targets)
+    return refs
+
+
+def _infer_soperator_component_add_install_mode(
+    *,
+    payload: Mapping[str, Any],
+    add_targets: Sequence[_ComponentAddTarget],
+) -> str | None:
+    external_targets = _external_mk8s_target_refs(payload)
+    onboarding_soperator_targets = _enabled_soperator_onboarding_target_refs(payload)
+    for target in add_targets:
+        if target.scope != "apps" or target.component_id != _SOPERATOR_APP_ID:
+            continue
+        requested_target = normalize_component_token(target.requested_instance_id)
+        if requested_target and (
+            requested_target in external_targets or requested_target in onboarding_soperator_targets
+        ):
+            return _SOPERATOR_INSTALL_MODE_ONBOARD_EXISTING_CLUSTER
+        if not requested_target and onboarding_soperator_targets:
+            return _SOPERATOR_INSTALL_MODE_ONBOARD_EXISTING_CLUSTER
+    return None
+
+
+def _retarget_added_soperator_onboarding_dependency_rows(
+    payload: dict[str, Any],
+    *,
+    added_app_rows: list[dict[str, Any]],
+) -> bool:
+    if not added_app_rows:
+        return False
+    apps_node = payload.get("apps")
+    charts = apps_node.get("charts") if isinstance(apps_node, Mapping) else None
+    if not isinstance(charts, list):
+        return False
+
+    onboarding_target_refs = {
+        component_instance_id(row)
+        for row in charts
+        if isinstance(row, dict)
+        and bool(row.get("enabled", False))
+        and component_type_id(row) == _SOPERATOR_APP_ID
+        and _soperator_install_mode_for_row(row) == _SOPERATOR_INSTALL_MODE_ONBOARD_EXISTING_CLUSTER
+    }
+    if len(onboarding_target_refs) != 1:
+        return False
+    target_ref = next(iter(onboarding_target_refs))
+
+    changed = False
+    for row in added_app_rows:
+        chart_id = component_type_id(row)
+        if chart_id not in _SOPERATOR_REQUIRED_APP_COMPONENT_IDS:
+            continue
+        if component_instance_id(row) == target_ref:
+            continue
+        duplicate_target_row = any(
+            other is not row
+            and isinstance(other, Mapping)
+            and bool(other.get("enabled", False))
+            and component_type_id(other) == chart_id
+            and component_instance_id(other) == target_ref
+            for other in charts
+        )
+        if duplicate_target_row:
+            with suppress(ValueError):
+                charts.remove(row)
+            with suppress(ValueError):
+                added_app_rows.remove(row)
+            changed = True
+            continue
+        row[INSTANCE_ID_FIELD] = target_ref
+        row.pop(TARGET_REF_FIELD, None)
+        changed = True
+    return changed
+
+
+def _ensure_soperator_onboarding_required_app_rows(
+    payload: dict[str, Any],
+    *,
+    app_entries: tuple[ComponentEntry, ...],
+) -> list[dict[str, Any]]:
+    apps_node = payload.get("apps")
+    charts = apps_node.get("charts") if isinstance(apps_node, Mapping) else None
+    if not isinstance(charts, list):
+        return []
+
+    onboarding_target_refs = {
+        component_instance_id(row)
+        for row in charts
+        if isinstance(row, dict)
+        and bool(row.get("enabled", False))
+        and component_type_id(row) == _SOPERATOR_APP_ID
+        and _soperator_install_mode_for_row(row) == _SOPERATOR_INSTALL_MODE_ONBOARD_EXISTING_CLUSTER
+    }
+    if not onboarding_target_refs:
+        return []
+
+    entry_by_id = {entry.id: entry for entry in app_entries}
+    added_rows: list[dict[str, Any]] = []
+    for target_ref in sorted(onboarding_target_refs):
+        for app_id in _SOPERATOR_REQUIRED_APP_COMPONENT_IDS:
+            if any(
+                isinstance(row, Mapping)
+                and bool(row.get("enabled", False))
+                and component_type_id(row) == app_id
+                and component_instance_id(row) == target_ref
+                for row in charts
+            ):
+                continue
+            entry = entry_by_id.get(app_id)
+            if entry is None:
+                continue
+            added_rows.append(
+                _append_component_instance_row(
+                    payload=payload,
+                    entry=entry,
+                    requested_instance_id=target_ref,
+                    allow_unassigned_app_target=True,
+                )
+            )
+    return added_rows
+
+
+def _refresh_soperator_onboarding_fingerprints(payload: dict[str, Any]) -> None:
+    fingerprint_payload = copy.deepcopy(payload)
+    _materialize_soperator_component_defaults(fingerprint_payload)
+    deploy = payload.get("deploy")
+    targets = deploy.get("targets") if isinstance(deploy, Mapping) else None
+    if not isinstance(targets, list):
+        return
+    for row in targets:
+        if not isinstance(row, dict) or not deploy_target_is_external_mk8s(row):
+            continue
+        target_ref = component_instance_id(row)
+        onboarding = row.get("soperator_onboarding")
+        if (
+            not target_ref
+            or not isinstance(onboarding, dict)
+            or onboarding.get("accepted") is not True
+        ):
+            continue
+        onboarding["analysis_fingerprint"] = soperator_onboarding_fingerprint(
+            fingerprint_payload,
+            target_ref=target_ref,
+        )
+        onboarding.setdefault("analysis_report", soperator_onboarding_report_path(target_ref))
+
+
 def _merge_missing_mapping(target: dict[str, Any], defaults: Mapping[str, Any]) -> None:
     for key, value in defaults.items():
+        plain_value = to_plain_data(value)
         if key not in target:
-            target[key] = copy.deepcopy(value)
+            target[key] = copy.deepcopy(plain_value)
             continue
-        if isinstance(target[key], dict) and isinstance(value, Mapping):
-            _merge_missing_mapping(target[key], value)
+        if isinstance(target[key], dict) and isinstance(plain_value, Mapping):
+            _merge_missing_mapping(target[key], plain_value)
 
 
 def _merge_replace_mapping(target: dict[str, Any], values: Mapping[str, Any]) -> None:
     for key, value in values.items():
-        if isinstance(target.get(key), dict) and isinstance(value, Mapping):
-            _merge_replace_mapping(target[key], value)
+        plain_value = to_plain_data(value)
+        if isinstance(target.get(key), dict) and isinstance(plain_value, Mapping):
+            _merge_replace_mapping(target[key], plain_value)
             continue
-        target[key] = copy.deepcopy(value)
+        target[key] = copy.deepcopy(plain_value)
+
+
+_MISSING_PROFILE_VALUE = object()
+
+
+def _soperator_named_mapping_list_names(value: Any) -> set[str]:
+    if not isinstance(value, list) or not value:
+        return set()
+    names: set[str] = set()
+    for item in value:
+        if not isinstance(item, Mapping):
+            return set()
+        name = _non_empty_text(item.get("name"))
+        if not name:
+            return set()
+        names.add(name)
+    return names
+
+
+def _soperator_merge_profile_nodesets_with_existing(
+    existing_nodesets: Any,
+    profile_nodesets: list[Any],
+    *,
+    replaceable_nodeset_lists: Sequence[Any] = (),
+) -> list[Any]:
+    if not isinstance(existing_nodesets, list):
+        existing_nodesets = []
+    existing_by_name = {
+        _non_empty_text(item.get("name")): item
+        for item in existing_nodesets
+        if isinstance(item, Mapping)
+        if _non_empty_text(item.get("name"))
+    }
+    merged_nodesets: list[Any] = []
+    for item in profile_nodesets:
+        if not isinstance(item, Mapping):
+            merged_nodesets.append(copy.deepcopy(item))
+            continue
+        name = _non_empty_text(item.get("name"))
+        existing = existing_by_name.get(name)
+        if isinstance(existing, Mapping):
+            merged = _soperator_merge_nodeset_with_generated(existing, item)
+            generated_node_config = item.get("nodeConfig")
+            existing_node_config = existing.get("nodeConfig")
+            if isinstance(generated_node_config, Mapping) and isinstance(
+                existing_node_config,
+                Mapping,
+            ):
+                generated_features = generated_node_config.get("features")
+                existing_features = existing_node_config.get("features")
+                replaceable_features = [
+                    candidate_features
+                    for candidate_list in replaceable_nodeset_lists
+                    if isinstance(candidate_list, list)
+                    for candidate in candidate_list
+                    if isinstance(candidate, Mapping)
+                    and _non_empty_text(candidate.get("name")) == name
+                    if isinstance(candidate_node_config := candidate.get("nodeConfig"), Mapping)
+                    if isinstance(candidate_features := candidate_node_config.get("features"), list)
+                ]
+                if isinstance(generated_features, list) and any(
+                    existing_features == candidate for candidate in replaceable_features
+                ):
+                    node_config = merged.setdefault("nodeConfig", {})
+                    if isinstance(node_config, dict):
+                        node_config["features"] = copy.deepcopy(generated_features)
+            merged_nodesets.append(merged)
+        else:
+            merged_nodesets.append(copy.deepcopy(dict(item)))
+    return merged_nodesets
+
+
+def _merge_soperator_profile_values(
+    target: dict[str, Any],
+    profile_values: Mapping[str, Any],
+    base_values: Mapping[str, Any],
+    *,
+    replaceable_base_values: Sequence[Mapping[str, Any]] = (),
+) -> None:
+    replaceable_bases = tuple(
+        to_plain_data(item) for item in replaceable_base_values if isinstance(item, Mapping)
+    )
+    for key, value in profile_values.items():
+        plain_value = to_plain_data(value)
+        target_value = target.get(key, _MISSING_PROFILE_VALUE)
+        base_value = (
+            to_plain_data(base_values.get(key, _MISSING_PROFILE_VALUE))
+            if isinstance(base_values, Mapping)
+            else _MISSING_PROFILE_VALUE
+        )
+        replaceable_values = [
+            to_plain_data(item[key])
+            for item in replaceable_bases
+            if isinstance(item, Mapping) and key in item
+        ]
+        if isinstance(target_value, dict) and isinstance(plain_value, Mapping):
+            base_child = base_value if isinstance(base_value, Mapping) else {}
+            replaceable_children = [
+                item[key]
+                for item in replaceable_bases
+                if isinstance(item, Mapping) and isinstance(item.get(key), Mapping)
+            ]
+            _merge_soperator_profile_values(
+                target_value,
+                plain_value,
+                base_child,
+                replaceable_base_values=replaceable_children,
+            )
+            continue
+        target_names = _soperator_named_mapping_list_names(target_value)
+        if target_names and isinstance(plain_value, list):
+            replaceable_name_sets = [
+                candidate_names
+                for candidate in replaceable_values
+                if (candidate_names := _soperator_named_mapping_list_names(candidate))
+            ]
+            if any(target_names <= candidate_names for candidate_names in replaceable_name_sets):
+                if key == "nodesets":
+                    base_nodeset_lists = [base_value] if isinstance(base_value, list) else []
+                    target[key] = _soperator_merge_profile_nodesets_with_existing(
+                        target_value,
+                        plain_value,
+                        replaceable_nodeset_lists=(*base_nodeset_lists, *replaceable_values),
+                    )
+                else:
+                    target[key] = copy.deepcopy(plain_value)
+                continue
+        if (
+            target_value is _MISSING_PROFILE_VALUE
+            or target_value == base_value
+            or any(target_value == candidate for candidate in replaceable_values)
+        ):
+            target[key] = copy.deepcopy(plain_value)
+
+    selected_keys = set(profile_values)
+    generated_keys: set[str] = set()
+    for base in replaceable_bases:
+        generated_keys.update(str(key) for key in base)
+    for key in generated_keys - selected_keys:
+        if key not in target:
+            continue
+        target_value = target[key]
+        replaceable_values = [
+            to_plain_data(item[key])
+            for item in replaceable_bases
+            if isinstance(item, Mapping) and key in item
+        ]
+        if any(target_value == candidate for candidate in replaceable_values):
+            target.pop(key, None)
+
+
+def _merge_missing_soperator_profile_partitions(
+    values: dict[str, Any],
+    chart_profile: Mapping[str, Any],
+) -> None:
+    profile_partition_config = chart_profile.get("partitionConfiguration")
+    if not isinstance(profile_partition_config, Mapping):
+        return
+    profile_partitions = profile_partition_config.get("partitions")
+    if not isinstance(profile_partitions, list) or not profile_partitions:
+        return
+
+    partition_config = values.get("partitionConfiguration")
+    if not isinstance(partition_config, dict):
+        return
+    config_type = _non_empty_text(partition_config.get("configType")) or _non_empty_text(
+        profile_partition_config.get("configType")
+    )
+    if config_type and config_type != "structured":
+        return
+    partitions = partition_config.get("partitions")
+    if not isinstance(partitions, list):
+        return
+
+    existing_names = {
+        name
+        for partition in partitions
+        if isinstance(partition, Mapping)
+        if (name := _non_empty_text(partition.get("name")))
+    }
+    missing = [
+        copy.deepcopy(partition)
+        for partition in profile_partitions
+        if isinstance(partition, Mapping)
+        if (name := _non_empty_text(partition.get("name"))) and name not in existing_names
+    ]
+    if missing:
+        partition_config["partitions"] = [*missing, *partitions]
 
 
 def _soperator_app_target_refs(payload: Mapping[str, Any]) -> tuple[str, ...]:
@@ -2801,6 +4061,113 @@ def _soperator_app_target_refs(payload: Mapping[str, Any]) -> tuple[str, ...]:
             refs.append(target_ref)
             seen.add(target_ref)
     return tuple(refs)
+
+
+def _external_mk8s_inputs_by_target(payload: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
+    deploy = payload.get("deploy")
+    targets = deploy.get("targets") if isinstance(deploy, Mapping) else None
+    if not isinstance(targets, list):
+        return {}
+    result: dict[str, dict[str, Any]] = {}
+    for row in targets:
+        if not isinstance(row, Mapping) or not deploy_target_is_external_mk8s(row):
+            continue
+        target_ref = normalize_component_token(row.get(INSTANCE_ID_FIELD))
+        if not target_ref:
+            continue
+        inventory = row.get("inventory")
+        node_groups = inventory.get("node_groups") if isinstance(inventory, Mapping) else None
+        if isinstance(node_groups, Mapping):
+            result[target_ref] = {"node_groups": copy.deepcopy(dict(node_groups))}
+    return result
+
+
+def _soperator_onboarding_storage_mode_by_target(payload: Mapping[str, Any]) -> dict[str, str]:
+    deploy = payload.get("deploy")
+    targets = deploy.get("targets") if isinstance(deploy, Mapping) else None
+    if not isinstance(targets, list):
+        return {}
+    result: dict[str, str] = {}
+    for row in targets:
+        if not isinstance(row, Mapping) or not deploy_target_is_external_mk8s(row):
+            continue
+        target_ref = normalize_component_token(row.get(INSTANCE_ID_FIELD))
+        if not target_ref:
+            continue
+        onboarding = row.get("soperator_onboarding")
+        storage_mode = (
+            normalize_component_token(onboarding.get("storage_mode"))
+            if isinstance(onboarding, Mapping)
+            else ""
+        )
+        if storage_mode in _SOPERATOR_ONBOARDING_STORAGE_MODES:
+            result[target_ref] = storage_mode
+    return result
+
+
+def _default_soperator_install_mode() -> str:
+    chart = helm_chart_source_by_id(_SOPERATOR_APP_ID)
+    wizard_fields = getattr(chart, "wizard_fields", {}) or {}
+    install_mode_spec = wizard_fields.get(_SOPERATOR_INSTALL_MODE_FIELD)
+    if isinstance(install_mode_spec, Mapping):
+        mode = normalize_component_token(install_mode_spec.get("default"))
+        if mode in _SOPERATOR_INSTALL_MODES:
+            return mode
+    return _SOPERATOR_INSTALL_MODE_PRODUCTION
+
+
+def _default_soperator_wizard_text(field_path: str, *, fallback: str) -> str:
+    chart = helm_chart_source_by_id(_SOPERATOR_APP_ID)
+    wizard_fields = getattr(chart, "wizard_fields", {}) or {}
+    spec = wizard_fields.get(field_path)
+    if isinstance(spec, Mapping) and "default" in spec:
+        return _non_empty_text(spec.get("default")) or fallback
+    return fallback
+
+
+def _default_soperator_profile_name() -> str:
+    settings_default, _profiles = _soperator_nodesets_profiles()
+    return _default_soperator_wizard_text("profile", fallback=settings_default)
+
+
+def _default_soperator_partition_profile_name() -> str:
+    return _default_soperator_wizard_text("values.partitionProfile", fallback="shape-default")
+
+
+def _default_soperator_topology_profile_name() -> str:
+    return _default_soperator_wizard_text("values.topologyProfile", fallback="disabled")
+
+
+def _soperator_install_mode_for_row(row: Mapping[str, Any]) -> str:
+    raw_mode = normalize_component_token(row.get(_SOPERATOR_INSTALL_MODE_FIELD))
+    if not raw_mode:
+        return _default_soperator_install_mode()
+    if raw_mode not in _SOPERATOR_INSTALL_MODES:
+        available = ", ".join(_SOPERATOR_INSTALL_MODES)
+        target_ref = app_chart_target_ref(row) or component_instance_id(row) or _SOPERATOR_APP_ID
+        raise ValueError(
+            f"apps.charts[{target_ref}].{_SOPERATOR_INSTALL_MODE_FIELD} references "
+            f"unknown Soperator install mode '{raw_mode}'. Available modes: {available}"
+        )
+    return raw_mode
+
+
+def _soperator_install_mode_by_target(payload: Mapping[str, Any]) -> dict[str, str]:
+    apps_node = payload.get("apps")
+    charts = apps_node.get("charts") if isinstance(apps_node, Mapping) else None
+    if not isinstance(charts, list):
+        return {}
+    selected: dict[str, str] = {}
+    for row in charts:
+        if not isinstance(row, Mapping) or not bool(row.get("enabled", False)):
+            continue
+        if component_type_id(row) != _SOPERATOR_APP_ID:
+            continue
+        target_ref = app_chart_target_ref(row) or component_instance_id(row)
+        if not target_ref:
+            continue
+        selected[target_ref] = _soperator_install_mode_for_row(row)
+    return selected
 
 
 def _soperator_nodesets_profiles() -> tuple[str, Mapping[str, Mapping[str, Any]]]:
@@ -2849,9 +4216,158 @@ def _profile_mapping(profile: Mapping[str, Any], key: str) -> Mapping[str, Any]:
     return value if isinstance(value, Mapping) else {}
 
 
+def _soperator_profile_activechecks_ready_partition(profile: Mapping[str, Any]) -> str:
+    activechecks = _profile_mapping(_profile_mapping(profile, "chart"), "activechecks")
+    return _non_empty_text(activechecks.get("srunReadyPartition"))
+
+
+def _soperator_internal_activechecks_partition() -> dict[str, Any]:
+    return {
+        "name": _SOPERATOR_ACTIVECHECKS_HIDDEN_PARTITION_NAME,
+        "isAll": True,
+        "policy": {
+            "default": False,
+            "hidden": True,
+            "state": "UP",
+            "maxTime": "INFINITE",
+            "priorityTier": 10,
+            "preemptMode": "OFF",
+            "overSubscribe": "YES",
+        },
+    }
+
+
+def _remove_internal_activechecks_partition(values: dict[str, Any]) -> bool:
+    partition_config = values.get("partitionConfiguration")
+    if not isinstance(partition_config, dict):
+        return False
+    partitions = partition_config.get("partitions")
+    if not isinstance(partitions, list):
+        return False
+    filtered = [
+        partition
+        for partition in partitions
+        if not (
+            isinstance(partition, Mapping)
+            and _non_empty_text(partition.get("name"))
+            == _SOPERATOR_ACTIVECHECKS_HIDDEN_PARTITION_NAME
+        )
+    ]
+    if len(filtered) == len(partitions):
+        return False
+    partition_config["partitions"] = filtered
+    return True
+
+
+def _prepend_internal_activechecks_partition(values: dict[str, Any]) -> bool:
+    partition_config = values.setdefault("partitionConfiguration", {})
+    if not isinstance(partition_config, dict):
+        return False
+    config_type = _non_empty_text(partition_config.get("configType"))
+    if config_type and config_type != "structured":
+        return False
+    partition_config["configType"] = "structured"
+    existing = partition_config.get("partitions")
+    partitions = list(existing) if isinstance(existing, list) else []
+    internal_partition = _soperator_internal_activechecks_partition()
+    filtered = [
+        partition
+        for partition in partitions
+        if not (
+            isinstance(partition, Mapping)
+            and _non_empty_text(partition.get("name"))
+            == _SOPERATOR_ACTIVECHECKS_HIDDEN_PARTITION_NAME
+        )
+    ]
+    next_partitions = [internal_partition, *filtered]
+    if partitions == next_partitions:
+        return False
+    partition_config["partitions"] = next_partitions
+    return True
+
+
+def _remove_guided_sssd_helper(values: dict[str, Any]) -> bool:
+    changed = _delete_mapping_path_value(values, _SOPERATOR_GUIDED_SSSD_ENABLED_PATH)
+    helper = values.get("sssd")
+    if isinstance(helper, dict) and not helper:
+        values.pop("sssd", None)
+        changed = True
+    return changed
+
+
+def _materialize_soperator_render_only_values(payload: dict[str, Any]) -> bool:
+    """Materialize Soperator values that should not be source-config knobs."""
+    profile_by_target = _soperator_profile_by_target(payload)
+    apps_node = payload.get("apps")
+    charts = apps_node.get("charts") if isinstance(apps_node, Mapping) else None
+    if not isinstance(charts, list):
+        return False
+
+    changed = False
+    for row in charts:
+        if not isinstance(row, dict) or not bool(row.get("enabled", False)):
+            continue
+        if component_type_id(row) != _SOPERATOR_APP_ID:
+            continue
+        target_ref = app_chart_target_ref(row) or component_instance_id(row)
+        if not target_ref:
+            continue
+        values = row.get("values")
+        if not isinstance(values, dict):
+            continue
+        before = copy.deepcopy(values)
+        _materialize_soperator_guided_sssd_values(values)
+        _remove_guided_sssd_helper(values)
+        _remove_internal_activechecks_partition(values)
+        activechecks_enabled = (
+            _mapping_path_value(values, "soperator-activechecks.enabled") is True
+        )
+        if activechecks_enabled:
+            partition = _soperator_profile_activechecks_ready_partition(
+                profile_by_target.get(target_ref, {})
+            )
+            if partition:
+                _set_mapping_path_value(
+                    values,
+                    _SOPERATOR_ACTIVECHECKS_READY_PARTITION_PATH,
+                    partition,
+                )
+                if partition == _SOPERATOR_ACTIVECHECKS_HIDDEN_PARTITION_NAME:
+                    _prepend_internal_activechecks_partition(values)
+        else:
+            _delete_mapping_path_value(values, _SOPERATOR_ACTIVECHECKS_READY_PARTITION_PATH)
+        if values != before:
+            changed = True
+    return changed
+
+
 def _profile_list(profile: Mapping[str, Any], key: str) -> list[Any]:
     value = profile.get(key)
     return list(value) if isinstance(value, list) else []
+
+
+def _soperator_all_profile_jail_node_group_keys() -> list[str]:
+    _default_profile, profiles = _soperator_nodesets_profiles()
+    selected: list[str] = []
+
+    def _remember(value: Any) -> None:
+        key = _non_empty_text(value)
+        if key and key not in selected:
+            selected.append(key)
+
+    for profile in profiles.values():
+        if not isinstance(profile, Mapping):
+            continue
+        mk8s_profile = _profile_mapping(profile, "mk8s")
+        for group_key, group in _profile_mapping(mk8s_profile, "node_groups").items():
+            if isinstance(group, Mapping) and group.get("jail") is True:
+                _remember(group_key)
+        for worker in _profile_list(mk8s_profile, "worker_nodesets"):
+            if not isinstance(worker, Mapping) or worker.get("jail") is not True:
+                continue
+            _remember(worker.get("node_group_key_prefix"))
+            _remember(worker.get("name"))
+    return selected
 
 
 def _render_soperator_profile_value(value: Any, *, target_ref: str) -> Any:
@@ -2895,21 +4411,159 @@ def _required_profile_positive_int(value: Any, *, field: str) -> int:
     return parsed
 
 
-def _soperator_existing_nodeset_group(
+def _soperator_nodeset_group_keys(
     node_groups: Mapping[str, Any],
     *,
     nodeset_name: str,
     key_prefix: str,
-) -> bool:
+) -> list[str]:
+    keys: list[str] = []
     for key, group in node_groups.items():
         key_text = str(key)
-        if key_text == key_prefix or key_text.startswith(f"{key_prefix}-"):
-            return True
+        if key_text == key_prefix or re.fullmatch(rf"{re.escape(key_prefix)}-[0-9]+", key_text):
+            keys.append(key_text)
+            continue
         if (
             isinstance(group, Mapping)
             and str(group.get("nodeset_name", "")).strip() == nodeset_name
         ):
+            keys.append(key_text)
+    return keys
+
+
+def _soperator_profile_managed_node_group_keys(profile: Mapping[str, Any]) -> set[str]:
+    mk8s_profile = _profile_mapping(profile, "mk8s")
+    managed = {str(key) for key in _profile_mapping(mk8s_profile, "node_groups")}
+    for raw_worker in _profile_list(mk8s_profile, "worker_nodesets"):
+        if not isinstance(raw_worker, Mapping):
+            continue
+        nodeset_name = _non_empty_text(raw_worker.get("nodeset_name")) or _non_empty_text(
+            raw_worker.get("name")
+        )
+        key_prefix = _non_empty_text(raw_worker.get("node_group_key_prefix")) or nodeset_name
+        if key_prefix:
+            managed.add(key_prefix)
+    return managed
+
+
+def _soperator_node_group_key_matches_managed(key: str, managed_keys: set[str]) -> bool:
+    if key in managed_keys:
+        return True
+    return any(re.fullmatch(rf"{re.escape(prefix)}-[0-9]+", key) for prefix in managed_keys)
+
+
+def _soperator_all_profile_managed_node_group_keys() -> set[str]:
+    _default_profile, profiles = _soperator_nodesets_profiles()
+    managed: set[str] = set()
+    for profile in profiles.values():
+        if isinstance(profile, Mapping):
+            managed.update(_soperator_profile_managed_node_group_keys(profile))
+    return managed
+
+
+def _soperator_profile_managed_gpu_cluster_keys(profile: Mapping[str, Any]) -> set[str]:
+    mk8s_profile = _profile_mapping(profile, "mk8s")
+    managed = {str(key) for key in _profile_mapping(mk8s_profile, "gpu_clusters")}
+    gpu_cluster_key = _non_empty_text(mk8s_profile.get("gpu_cluster_key"))
+    if gpu_cluster_key:
+        managed.add(gpu_cluster_key)
+    for raw_worker in _profile_list(mk8s_profile, "worker_nodesets"):
+        if not isinstance(raw_worker, Mapping):
+            continue
+        node_group = raw_worker.get("node_group")
+        if not isinstance(node_group, Mapping):
+            continue
+        gpu_cluster_key = _non_empty_text(node_group.get("gpu_cluster_key"))
+        if gpu_cluster_key:
+            managed.add(gpu_cluster_key)
+    return managed
+
+
+def _soperator_profile_uses_gpu(profile: Mapping[str, Any]) -> bool:
+    mk8s_profile = _profile_mapping(profile, "mk8s")
+    for group in _profile_mapping(mk8s_profile, "node_groups").values():
+        if isinstance(group, Mapping) and bool(group.get("gpu", False)):
             return True
+    for raw_worker in _profile_list(mk8s_profile, "worker_nodesets"):
+        if not isinstance(raw_worker, Mapping):
+            continue
+        node_group = raw_worker.get("node_group")
+        if isinstance(node_group, Mapping) and bool(node_group.get("gpu", False)):
+            return True
+        if raw_worker.get("gpu", True) is not False:
+            return True
+    return False
+
+
+def _soperator_all_profile_managed_gpu_cluster_keys() -> set[str]:
+    _default_profile, profiles = _soperator_nodesets_profiles()
+    managed: set[str] = set()
+    for profile in profiles.values():
+        if isinstance(profile, Mapping):
+            managed.update(_soperator_profile_managed_gpu_cluster_keys(profile))
+    return managed
+
+
+def _soperator_prune_stale_profile_node_groups(
+    *,
+    inputs: dict[str, Any],
+    profile: Mapping[str, Any],
+) -> None:
+    node_groups = inputs.get("node_groups")
+    if not isinstance(node_groups, dict) or not node_groups:
+        return
+    all_managed = _soperator_all_profile_managed_node_group_keys()
+    selected_managed = _soperator_profile_managed_node_group_keys(profile)
+    if not all_managed or not selected_managed:
+        return
+    for raw_key in list(node_groups):
+        key = str(raw_key)
+        if not _soperator_node_group_key_matches_managed(key, all_managed):
+            continue
+        if _soperator_node_group_key_matches_managed(key, selected_managed):
+            continue
+        node_groups.pop(raw_key, None)
+
+
+def _soperator_prune_stale_profile_gpu_clusters(
+    *,
+    inputs: dict[str, Any],
+    profile: Mapping[str, Any],
+) -> None:
+    gpu_clusters = inputs.get("gpu_clusters")
+    if not isinstance(gpu_clusters, dict) or not gpu_clusters:
+        return
+    all_managed = _soperator_all_profile_managed_gpu_cluster_keys()
+    selected_managed = _soperator_profile_managed_gpu_cluster_keys(profile)
+    if not all_managed:
+        return
+    for raw_key in list(gpu_clusters):
+        key = str(raw_key)
+        if key in all_managed and key not in selected_managed:
+            gpu_clusters.pop(raw_key, None)
+    if not gpu_clusters:
+        inputs.pop("gpu_clusters", None)
+
+
+def _soperator_has_external_node_groups(
+    *,
+    inputs: Mapping[str, Any],
+    profile: Mapping[str, Any],
+) -> bool:
+    node_groups = inputs.get("node_groups")
+    if not isinstance(node_groups, Mapping) or not node_groups:
+        return False
+    mk8s_profile = _profile_mapping(profile, "mk8s")
+    static_role_keys = {str(key) for key in _profile_mapping(mk8s_profile, "node_groups")}
+    present_keys = {str(key) for key in node_groups}
+    if static_role_keys and not static_role_keys.issubset(present_keys):
+        return True
+    managed_keys = _soperator_profile_managed_node_group_keys(profile)
+    for raw_key in node_groups:
+        key = str(raw_key)
+        if _soperator_node_group_key_matches_managed(key, managed_keys):
+            continue
+        return True
     return False
 
 
@@ -2924,18 +4578,1349 @@ def _soperator_worker_profile_total_nodes(
     node_groups_input = _non_empty_text(raw_worker.get("node_groups_input"))
     nodes_per_group_input = _non_empty_text(raw_worker.get("nodes_per_group_input"))
     if total_nodes_input:
-        return _positive_int(inputs.get(total_nodes_input), default=default_total_nodes)
+        return _positive_int(
+            _mapping_path_value(inputs, total_nodes_input),
+            default=default_total_nodes,
+        )
     if node_groups_input or nodes_per_group_input:
         requested_groups = _positive_int(
-            inputs.get(node_groups_input),
+            _mapping_path_value(inputs, node_groups_input),
             default=1,
         )
         requested_nodes_per_group = _positive_int(
-            inputs.get(nodes_per_group_input),
+            _mapping_path_value(inputs, nodes_per_group_input),
             default=default_nodes_per_group,
         )
         return requested_groups * requested_nodes_per_group
     return default_total_nodes
+
+
+def _soperator_worker_profile_nodes_per_group(
+    *,
+    inputs: Mapping[str, Any],
+    raw_worker: Mapping[str, Any],
+    default_nodes_per_group: int,
+    max_nodes_per_group: int,
+) -> int:
+    nodes_per_group_input = _non_empty_text(raw_worker.get("nodes_per_group_input"))
+    requested_nodes_per_group = _positive_int(
+        _mapping_path_value(inputs, nodes_per_group_input),
+        default=default_nodes_per_group,
+    )
+    return min(requested_nodes_per_group, max_nodes_per_group)
+
+
+def _soperator_node_group_shape_defaults(
+    *,
+    inputs: Mapping[str, Any],
+    gpu: bool,
+) -> Mapping[str, Any]:
+    defaults = inputs.get("node_group_defaults")
+    if not isinstance(defaults, Mapping):
+        return {}
+    shape_key = "gpu" if gpu else "cpu"
+    value = defaults.get(shape_key)
+    return value if isinstance(value, Mapping) else {}
+
+
+def _materialize_soperator_node_group_shape(
+    *,
+    group: dict[str, Any],
+    inputs: Mapping[str, Any],
+    gpu: bool,
+    prefer_shape_defaults: bool = False,
+) -> None:
+    defaults = _soperator_node_group_shape_defaults(inputs=inputs, gpu=gpu)
+    for key in ("platform", "preset", "os", "boot_disk", "public_ips", "preemptible"):
+        if key not in defaults:
+            continue
+        if key == "boot_disk" and isinstance(defaults[key], Mapping):
+            current = group.get("boot_disk")
+            merged = dict(current) if isinstance(current, Mapping) else {}
+            for disk_key, disk_value in defaults[key].items():
+                if disk_value is None:
+                    continue
+                if prefer_shape_defaults:
+                    merged[str(disk_key)] = copy.deepcopy(disk_value)
+                else:
+                    merged.setdefault(str(disk_key), copy.deepcopy(disk_value))
+            if merged:
+                group["boot_disk"] = merged
+            continue
+        if prefer_shape_defaults:
+            group[key] = copy.deepcopy(defaults[key])
+        else:
+            group.setdefault(key, copy.deepcopy(defaults[key]))
+    if gpu:
+        default_stack_source = _non_empty_text(defaults.get("gpu_stack_source"))
+        if prefer_shape_defaults and default_stack_source:
+            group["gpu_stack_source"] = default_stack_source
+        else:
+            group.setdefault("gpu_stack_source", default_stack_source or "nebius_image")
+        if _non_empty_text(defaults.get("gpu_stack_preset")):
+            if prefer_shape_defaults:
+                group["gpu_stack_preset"] = defaults["gpu_stack_preset"]
+            else:
+                group.setdefault("gpu_stack_preset", defaults["gpu_stack_preset"])
+
+
+def _materialize_soperator_node_group_labels(group: dict[str, Any], *, group_key: str) -> None:
+    node_labels = group.setdefault("node_labels", {})
+    if not isinstance(node_labels, dict):
+        return
+    nodeset_name = _non_empty_text(group.get("nodeset_name"))
+    workload = _non_empty_text(group.get("workload"))
+    if group_key:
+        node_labels.setdefault("nebius.com/node-group", group_key)
+    if nodeset_name:
+        node_labels.setdefault("slurm.nebius.ai/nodeset-name", nodeset_name)
+    if workload:
+        node_labels.setdefault("slurm.nebius.ai/workload", workload)
+    if bool(group.get("jail", False)):
+        node_labels.setdefault("slurm.nebius.ai/jail", "true")
+    if bool(group.get("gpu", False)):
+        node_labels.setdefault("nebius.com/gpu", "true")
+
+
+def _materialize_soperator_node_group_filesystems(group: dict[str, Any]) -> None:
+    filesystem_keys: list[str] = []
+    if bool(group.get("jail", False)):
+        filesystem_keys.append("jail")
+    explicit_keys = group.get("sfs_filesystem_keys", group.get("filesystem_keys"))
+    if isinstance(explicit_keys, str):
+        filesystem_keys.extend(key.strip() for key in explicit_keys.split(",") if key.strip())
+    elif isinstance(explicit_keys, list):
+        filesystem_keys.extend(str(key).strip() for key in explicit_keys if str(key).strip())
+    if filesystem_keys:
+        group["sfs_filesystem_keys"] = list(dict.fromkeys(filesystem_keys))
+
+
+def _soperator_string_list(value: Any) -> list[str]:
+    if isinstance(value, str):
+        return [item.strip() for item in value.split(",") if item.strip()]
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    return []
+
+
+def _soperator_profile_role_mapping(profile: Mapping[str, Any]) -> Mapping[str, Any]:
+    raw = profile.get("role_mapping")
+    if not isinstance(raw, Mapping):
+        return {}
+    roles = raw.get("roles")
+    return roles if isinstance(roles, Mapping) else {}
+
+
+def _soperator_values_node_group_mapping(values: Mapping[str, Any]) -> dict[str, list[str]]:
+    raw = values.get("nodeGroupMapping")
+    if not isinstance(raw, Mapping):
+        return {}
+    mapping: dict[str, list[str]] = {}
+    for raw_role, raw_groups in raw.items():
+        role = str(raw_role).strip()
+        groups = _soperator_string_list(raw_groups)
+        if role and groups:
+            mapping[role] = list(dict.fromkeys(groups))
+    return mapping
+
+
+def _soperator_set_node_group_mapping(
+    values: dict[str, Any],
+    mapping: Mapping[str, list[str]],
+    *,
+    replace: bool = False,
+) -> None:
+    if not mapping:
+        return
+    if replace:
+        values["nodeGroupMapping"] = {
+            str(role): list(groups) for role, groups in mapping.items() if groups
+        }
+        return
+    target = values.setdefault("nodeGroupMapping", {})
+    if not isinstance(target, dict):
+        target = {}
+        values["nodeGroupMapping"] = target
+    for role, groups in mapping.items():
+        if role not in target and groups:
+            target[role] = list(groups)
+
+
+def _soperator_node_group_keys_by_kind(
+    inputs: Mapping[str, Any],
+    *,
+    kind: str,
+) -> list[str]:
+    groups = iter_mk8s_node_groups(inputs)
+    normalized_kind = kind.strip().lower()
+    if normalized_kind == "gpu":
+        selected = [group.key for group in groups if group.gpu]
+    elif normalized_kind == "cpu":
+        selected = [group.key for group in groups if not group.gpu]
+    else:
+        selected = [group.key for group in groups]
+    return list(dict.fromkeys(selected))
+
+
+def _soperator_role_nodeset_template_names(raw_role_config: Mapping[str, Any]) -> list[str]:
+    template_names = _soperator_string_list(raw_role_config.get("nodeset_templates"))
+    if not template_names:
+        template_name = _non_empty_text(raw_role_config.get("nodeset_template"))
+        template_names = [template_name] if template_name else []
+    return list(dict.fromkeys(template_names))
+
+
+def _soperator_worker_nodeset_key_prefixes(profile: Mapping[str, Any]) -> dict[str, str]:
+    mk8s_profile = _profile_mapping(profile, "mk8s")
+    prefixes: dict[str, str] = {}
+    for raw_worker in _profile_list(mk8s_profile, "worker_nodesets"):
+        if not isinstance(raw_worker, Mapping):
+            continue
+        nodeset_name = _non_empty_text(raw_worker.get("nodeset_name")) or _non_empty_text(
+            raw_worker.get("name")
+        )
+        worker_name = _non_empty_text(raw_worker.get("name"))
+        key_prefix = _non_empty_text(raw_worker.get("node_group_key_prefix")) or nodeset_name
+        if nodeset_name and key_prefix:
+            prefixes[nodeset_name] = key_prefix
+        if worker_name and key_prefix:
+            prefixes.setdefault(worker_name, key_prefix)
+    return prefixes
+
+
+def _soperator_node_group_keys_by_nodeset_templates(
+    inputs: Mapping[str, Any],
+    *,
+    profile: Mapping[str, Any],
+    template_names: Sequence[str],
+) -> list[str]:
+    node_groups = inputs.get("node_groups")
+    if not isinstance(node_groups, Mapping) or not template_names:
+        return []
+    key_prefixes = _soperator_worker_nodeset_key_prefixes(profile)
+    selected: list[str] = []
+    for template_name in template_names:
+        selected.extend(
+            _soperator_nodeset_group_keys(
+                node_groups,
+                nodeset_name=template_name,
+                key_prefix=key_prefixes.get(template_name, template_name),
+            )
+        )
+    return list(dict.fromkeys(selected))
+
+
+def _soperator_infer_node_group_mapping(
+    *,
+    inputs: Mapping[str, Any],
+    profile: Mapping[str, Any],
+) -> dict[str, list[str]]:
+    role_mapping = _soperator_profile_role_mapping(profile)
+    if not role_mapping or not iter_mk8s_node_groups(inputs):
+        return {}
+
+    inferred: dict[str, list[str]] = {}
+    all_keys = _soperator_node_group_keys_by_kind(inputs, kind="all")
+    for role, raw_role_config in role_mapping.items():
+        if not isinstance(raw_role_config, Mapping):
+            continue
+        role_name = str(role).strip()
+        if not role_name:
+            continue
+        exact = [key for key in all_keys if key == role_name]
+        if exact:
+            inferred[role_name] = exact
+            continue
+        template_selected = _soperator_node_group_keys_by_nodeset_templates(
+            inputs,
+            profile=profile,
+            template_names=_soperator_role_nodeset_template_names(raw_role_config),
+        )
+        if template_selected:
+            inferred[role_name] = template_selected
+            continue
+        selector = _non_empty_text(raw_role_config.get("default_node_group_kind")) or "all"
+        selected = _soperator_node_group_keys_by_kind(inputs, kind=selector)
+        if not selected:
+            fallback_selector = _non_empty_text(raw_role_config.get("fallback_node_group_kind"))
+            if fallback_selector:
+                selected = _soperator_node_group_keys_by_kind(inputs, kind=fallback_selector)
+        if selected:
+            inferred[role_name] = selected
+    return inferred
+
+
+def _soperator_node_group_mapping_matches_generated_profile(
+    *,
+    values: Mapping[str, Any],
+    inputs: Mapping[str, Any],
+) -> bool:
+    mapping = _soperator_values_node_group_mapping(values)
+    if not mapping:
+        return False
+    _default_profile, profiles = _soperator_nodesets_profiles()
+    for profile in profiles.values():
+        if not isinstance(profile, Mapping):
+            continue
+        inferred = _soperator_infer_node_group_mapping(inputs=inputs, profile=profile)
+        if inferred and mapping == inferred:
+            return True
+    return False
+
+
+def _soperator_role_filesystem_keys(raw_role_config: Mapping[str, Any]) -> list[str]:
+    keys = _soperator_string_list(raw_role_config.get("filesystem_keys"))
+    return list(dict.fromkeys(keys))
+
+
+def _soperator_append_filesystem_keys(group: dict[str, Any], keys: Sequence[str]) -> None:
+    if not keys:
+        return
+    existing = _soperator_string_list(
+        group.get("sfs_filesystem_keys", group.get("filesystem_keys"))
+    )
+    group["sfs_filesystem_keys"] = list(dict.fromkeys([*existing, *keys]))
+
+
+def _soperator_apply_filesystem_node_labels(group: dict[str, Any], keys: Sequence[str]) -> None:
+    if "jail" not in keys:
+        return
+    labels = group.setdefault("node_labels", {})
+    if isinstance(labels, dict):
+        labels.setdefault("slurm.nebius.ai/jail", "true")
+
+
+def _soperator_apply_node_group_label(group: dict[str, Any], *, group_key: str) -> None:
+    if not group_key:
+        return
+    labels = group.setdefault("node_labels", {})
+    if isinstance(labels, dict):
+        labels.setdefault("nebius.com/node-group", group_key)
+
+
+def _soperator_node_group_selector_expression(
+    inputs: Mapping[str, Any],
+    group_key: str,
+) -> dict[str, Any]:
+    node_groups = inputs.get("node_groups")
+    group = node_groups.get(group_key) if isinstance(node_groups, Mapping) else None
+    if isinstance(group, Mapping):
+        selector = group.get("selector")
+        if isinstance(selector, Mapping):
+            selector_key = _non_empty_text(selector.get("key"))
+            selector_operator = _non_empty_text(selector.get("operator")) or "In"
+            selector_values = _soperator_string_list(selector.get("values"))
+            selector_value = _non_empty_text(selector.get("value"))
+            if selector_value and not selector_values:
+                selector_values = [selector_value]
+            if selector_key and selector_values:
+                return {
+                    "key": selector_key,
+                    "operator": selector_operator,
+                    "values": selector_values,
+                }
+        labels = group.get("labels")
+        if isinstance(labels, Mapping):
+            value = _non_empty_text(labels.get("nebius.com/node-group"))
+            if value:
+                return {"key": "nebius.com/node-group", "operator": "In", "values": [value]}
+            for fallback_key in ("yandex.cloud/node-group-id", "node.kubernetes.io/instance-type"):
+                fallback_value = _non_empty_text(labels.get(fallback_key))
+                if fallback_value:
+                    return {"key": fallback_key, "operator": "In", "values": [fallback_value]}
+        labels = group.get("node_labels")
+        if isinstance(labels, Mapping):
+            value = _non_empty_text(labels.get("nebius.com/node-group"))
+            if value:
+                return {"key": "nebius.com/node-group", "operator": "In", "values": [value]}
+    return {"key": "nebius.com/node-group", "operator": "In", "values": [group_key]}
+
+
+def _soperator_node_group_selector_terms(
+    inputs: Mapping[str, Any],
+    group_keys: Sequence[str],
+) -> list[dict[str, Any]]:
+    grouped: dict[tuple[str, str], list[str]] = {}
+    expressions: list[dict[str, Any]] = []
+    for group_key in dict.fromkeys(key for key in group_keys if key):
+        expression = _soperator_node_group_selector_expression(inputs, group_key)
+        key = _non_empty_text(expression.get("key"))
+        operator = _non_empty_text(expression.get("operator")) or "In"
+        values = _soperator_string_list(expression.get("values"))
+        if key and operator == "In" and values:
+            bucket = grouped.setdefault((key, operator), [])
+            for value in values:
+                if value not in bucket:
+                    bucket.append(value)
+            continue
+        if expression not in expressions:
+            expressions.append(expression)
+    for (key, operator), values in grouped.items():
+        expressions.append({"key": key, "operator": operator, "values": values})
+    return [{"matchExpressions": expressions}] if expressions else []
+
+
+def _materialize_soperator_existing_node_group_mapping(
+    *,
+    inputs: dict[str, Any],
+    profile: Mapping[str, Any],
+    mapping: Mapping[str, list[str]],
+) -> None:
+    node_groups = inputs.get("node_groups")
+    if not isinstance(node_groups, dict):
+        return
+    role_mapping = _soperator_profile_role_mapping(profile)
+    groups_with_explicit_sfs_keys = {
+        str(group_key)
+        for group_key, group in node_groups.items()
+        if isinstance(group, dict)
+        and _soperator_string_list(group.get("sfs_filesystem_keys", group.get("filesystem_keys")))
+    }
+    for role, group_keys in mapping.items():
+        raw_role_config = role_mapping.get(role)
+        if not isinstance(raw_role_config, Mapping):
+            continue
+        filesystem_keys = _soperator_role_filesystem_keys(raw_role_config)
+        for group_key in group_keys:
+            group = node_groups.get(group_key)
+            if isinstance(group, dict):
+                _soperator_apply_node_group_label(group, group_key=group_key)
+                if group_key in groups_with_explicit_sfs_keys:
+                    explicit_keys = _soperator_string_list(
+                        group.get("sfs_filesystem_keys", group.get("filesystem_keys"))
+                    )
+                    group["sfs_filesystem_keys"] = list(dict.fromkeys(explicit_keys))
+                else:
+                    _soperator_append_filesystem_keys(group, filesystem_keys)
+                _soperator_apply_filesystem_node_labels(group, filesystem_keys)
+
+
+def _soperator_toleration_effect(value: Any) -> str | None:
+    text = _non_empty_text(value)
+    if not text:
+        return None
+    normalized = text.replace("-", "_").replace(" ", "_").upper()
+    return {
+        "NO_SCHEDULE": "NoSchedule",
+        "PREFER_NO_SCHEDULE": "PreferNoSchedule",
+        "NO_EXECUTE": "NoExecute",
+    }.get(normalized, text)
+
+
+def _soperator_toleration_from_taint(taint: Mapping[str, Any]) -> dict[str, Any] | None:
+    key = _non_empty_text(taint.get("key"))
+    if not key:
+        return None
+    value = _non_empty_text(taint.get("value"))
+    toleration: dict[str, Any] = {
+        "key": key,
+        "operator": "Equal" if value else "Exists",
+    }
+    if value:
+        toleration["value"] = value
+    effect = _soperator_toleration_effect(taint.get("effect"))
+    if effect:
+        toleration["effect"] = effect
+    return toleration
+
+
+def _soperator_node_group_tolerations(
+    inputs: Mapping[str, Any],
+    group_keys: Sequence[str],
+) -> list[dict[str, Any]]:
+    node_groups = inputs.get("node_groups")
+    if not isinstance(node_groups, Mapping):
+        return []
+    collected: list[dict[str, Any]] = []
+    seen: set[tuple[tuple[str, str], ...]] = set()
+    for group_key in group_keys:
+        group = node_groups.get(group_key)
+        if not isinstance(group, Mapping):
+            continue
+        taints = group.get("taints")
+        if not isinstance(taints, list):
+            continue
+        for taint in taints:
+            if not isinstance(taint, Mapping):
+                continue
+            toleration = _soperator_toleration_from_taint(taint)
+            if not toleration:
+                continue
+            identity = _soperator_toleration_identity(toleration)
+            if identity in seen:
+                continue
+            collected.append(toleration)
+            seen.add(identity)
+    return collected
+
+
+def _soperator_merge_tolerations(
+    existing: Any,
+    additions: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    merged = (
+        [to_plain_data(item) for item in existing if isinstance(item, Mapping)]
+        if isinstance(existing, list)
+        else []
+    )
+    seen = {_soperator_toleration_identity(item) for item in merged}
+    for addition in additions:
+        item = to_plain_data(addition)
+        identity = _soperator_toleration_identity(item)
+        if identity in seen:
+            continue
+        merged.append(item)
+        seen.add(identity)
+    return merged
+
+
+def _soperator_profile_node_group_count_input(
+    *,
+    inputs: Mapping[str, Any],
+    raw_group: Mapping[str, Any],
+) -> int | None:
+    node_count_input = _non_empty_text(raw_group.get("node_count_input"))
+    if not node_count_input:
+        return None
+    raw_value = _mapping_path_value(inputs, node_count_input)
+    if raw_value is None:
+        return None
+    default_node_count = _positive_int(raw_group.get("node_count"), default=1)
+    return _positive_int(raw_value, default=default_node_count)
+
+
+def _soperator_profile_node_group_defaults(
+    profile_node_groups: Mapping[str, Any],
+) -> dict[str, Any]:
+    materialized: dict[str, Any] = {}
+    for group_key, raw_group in profile_node_groups.items():
+        if not isinstance(raw_group, Mapping):
+            materialized[group_key] = copy.deepcopy(to_plain_data(raw_group))
+            continue
+        group = copy.deepcopy(to_plain_data(raw_group))
+        if isinstance(group, dict):
+            group.pop("node_count_input", None)
+        materialized[group_key] = group
+    return materialized
+
+
+def _soperator_apply_profile_node_group_count_inputs(
+    *,
+    inputs: Mapping[str, Any],
+    node_groups: dict[str, Any],
+    profile_node_groups: Mapping[str, Any],
+) -> None:
+    for group_key, raw_group in profile_node_groups.items():
+        if not isinstance(raw_group, Mapping):
+            continue
+        group = node_groups.get(group_key)
+        if isinstance(group, dict):
+            group.pop("node_count_input", None)
+        node_count = _soperator_profile_node_group_count_input(
+            inputs=inputs,
+            raw_group=raw_group,
+        )
+        if node_count is None:
+            continue
+        if isinstance(group, dict):
+            group["node_count"] = node_count
+
+
+def _soperator_node_group_filter(
+    *,
+    name: str,
+    group_keys: Sequence[str],
+    inputs: Mapping[str, Any],
+    tolerations: Sequence[Mapping[str, Any]] | None = None,
+) -> dict[str, Any]:
+    filter_item: dict[str, Any] = {
+        "name": name,
+        "affinity": {
+            "nodeAffinity": {
+                "requiredDuringSchedulingIgnoredDuringExecution": {
+                    "nodeSelectorTerms": _soperator_node_group_selector_terms(inputs, group_keys)
+                }
+            }
+        },
+    }
+    merged_tolerations = _soperator_merge_tolerations([], tolerations or [])
+    if merged_tolerations:
+        filter_item["tolerations"] = merged_tolerations
+    return filter_item
+
+
+def _soperator_storage_value_key(filesystem_key: str) -> str | None:
+    return {
+        "accounting": "accounting",
+        "controller-spool": "controllerSpool",
+        "jail": "jail",
+    }.get(filesystem_key)
+
+
+def _soperator_set_storage_node_group_selector(
+    values: dict[str, Any],
+    *,
+    filesystem_key: str,
+    group_keys: Sequence[str],
+    inputs: Mapping[str, Any],
+    tolerations: Sequence[Mapping[str, Any]] | None = None,
+    include_profile_jail_aliases: bool = False,
+) -> None:
+    storage_key = _soperator_storage_value_key(filesystem_key)
+    selected_group_keys = list(group_keys)
+    if filesystem_key == "jail" and include_profile_jail_aliases:
+        selected_group_keys.extend(_soperator_all_profile_jail_node_group_keys())
+    selected_groups = [group for group in dict.fromkeys(selected_group_keys) if group]
+    if not storage_key or not selected_groups:
+        return
+    storage = values.setdefault("storage", {})
+    if not isinstance(storage, dict):
+        storage = {}
+        values["storage"] = storage
+    storage_section = storage.setdefault(storage_key, {})
+    if not isinstance(storage_section, dict):
+        storage_section = {}
+        storage[storage_key] = storage_section
+    storage_section["matchExpressions"] = [
+        expression
+        for term in _soperator_node_group_selector_terms(inputs, selected_groups)
+        for expression in term.get("matchExpressions", [])
+    ]
+    merged_tolerations = _soperator_merge_tolerations(
+        storage_section.get("tolerations"),
+        tolerations or [],
+    )
+    if merged_tolerations:
+        storage_section["tolerations"] = merged_tolerations
+
+
+def _soperator_upsert_filter(
+    values: dict[str, Any],
+    *,
+    filter_item: Mapping[str, Any],
+) -> None:
+    filters = values.setdefault("k8sNodeFilters", [])
+    if not isinstance(filters, list):
+        filters = []
+        values["k8sNodeFilters"] = filters
+    name = _non_empty_text(filter_item.get("name"))
+    if not name:
+        return
+    for index, existing in enumerate(filters):
+        if isinstance(existing, Mapping) and _non_empty_text(existing.get("name")) == name:
+            merged = copy.deepcopy(dict(existing))
+            _merge_missing_mapping(merged, filter_item)
+            for field in ("affinity", "nodeSelector", "tolerations"):
+                if field in filter_item:
+                    merged[field] = copy.deepcopy(filter_item[field])
+            if "affinity" in filter_item:
+                merged.pop("nodeSelector", None)
+            if "nodeSelector" in filter_item:
+                merged.pop("affinity", None)
+            filters[index] = merged
+            return
+    filters.append(copy.deepcopy(dict(filter_item)))
+
+
+def _soperator_filter_by_name(values: Mapping[str, Any], name: str) -> Mapping[str, Any] | None:
+    filters = values.get("k8sNodeFilters")
+    if not isinstance(filters, list):
+        return None
+    for item in filters:
+        if isinstance(item, Mapping) and _non_empty_text(item.get("name")) == name:
+            return item
+    return None
+
+
+def _soperator_set_mapping_path(values: dict[str, Any], path: str, value: Any) -> None:
+    current = values
+    parts = [part for part in path.split(".") if part]
+    if not parts:
+        return
+    for part in parts[:-1]:
+        child = current.get(part)
+        if not isinstance(child, dict):
+            child = {}
+            current[part] = child
+        current = child
+    current[parts[-1]] = copy.deepcopy(value)
+
+
+def _soperator_parse_preset_resources(preset: str) -> dict[str, int]:
+    match = re.search(
+        r"(?:(?P<gpu>[0-9]+)gpu-)?(?P<vcpu>[0-9]+)vcpu-(?P<memory>[0-9]+)gb",
+        preset,
+    )
+    if not match:
+        return {}
+    parsed: dict[str, int] = {}
+    for key in ("gpu", "vcpu", "memory"):
+        value = match.group(key)
+        if value:
+            parsed[key] = int(value)
+    return parsed
+
+
+def _soperator_node_group_resource_preset(group: Mapping[str, Any]) -> str:
+    preset = _non_empty_text(group.get("preset"))
+    if preset:
+        return preset
+    labels = group.get("labels")
+    if isinstance(labels, Mapping):
+        return _non_empty_text(labels.get("nebius.com/resource-preset"))
+    return ""
+
+
+def _soperator_allocatable_gpu_count(group: Mapping[str, Any]) -> int | None:
+    allocatable = group.get("allocatable")
+    if not isinstance(allocatable, Mapping):
+        return None
+    value = allocatable.get("nvidia.com/gpu")
+    if value is None:
+        return None
+    with suppress(TypeError, ValueError):
+        gpu_count = int(str(value).strip())
+        if gpu_count >= 0:
+            return gpu_count
+    return None
+
+
+def _soperator_parse_cpu_millicores(value: Any) -> int | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    if text.endswith("m"):
+        with suppress(ValueError):
+            millicores = int(text[:-1])
+            return millicores if millicores >= 0 else None
+        return None
+    with suppress(ValueError):
+        cores = float(text)
+        if cores >= 0:
+            return int(cores * 1000)
+    return None
+
+
+def _soperator_parse_memory_mib(value: Any) -> int | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    match = re.fullmatch(r"([0-9]+)([KMGTE]i?|[kmgte]i?|[KMGTE]B?|[kmgte]b?)?", text)
+    if not match:
+        return None
+    amount = int(match.group(1))
+    unit = (match.group(2) or "Mi").lower()
+    if unit in {"ki", "k", "kb"}:
+        return max(1, amount // 1024)
+    if unit in {"mi", "m", "mb"}:
+        return amount
+    if unit in {"gi", "g", "gb"}:
+        return amount * 1024
+    if unit in {"ti", "t", "tb"}:
+        return amount * 1024 * 1024
+    if unit in {"ei", "e", "eb"}:
+        return amount * 1024 * 1024 * 1024
+    return None
+
+
+def _soperator_allocatable_cpu_millicores(group: Mapping[str, Any]) -> int | None:
+    allocatable = group.get("allocatable")
+    if not isinstance(allocatable, Mapping):
+        return None
+    return _soperator_parse_cpu_millicores(allocatable.get("cpu"))
+
+
+def _soperator_allocatable_memory_mib(group: Mapping[str, Any]) -> int | None:
+    allocatable = group.get("allocatable")
+    if not isinstance(allocatable, Mapping):
+        return None
+    return _soperator_parse_memory_mib(allocatable.get("memory"))
+
+
+def _soperator_node_group_resources(group: Mapping[str, Any]) -> dict[str, int]:
+    resources = _soperator_parse_preset_resources(_soperator_node_group_resource_preset(group))
+    gpu_count = _soperator_allocatable_gpu_count(group)
+    if gpu_count is not None:
+        resources["gpu"] = gpu_count
+    cpu_millicores = _soperator_allocatable_cpu_millicores(group)
+    if cpu_millicores is not None:
+        resources["vcpu_millicores"] = cpu_millicores
+    elif "vcpu" in resources:
+        resources["vcpu_millicores"] = resources["vcpu"] * 1000
+    memory_mib = _soperator_allocatable_memory_mib(group)
+    if memory_mib is not None:
+        resources["memory_mib"] = memory_mib
+    elif "memory" in resources:
+        resources["memory_mib"] = resources["memory"] * 1024
+    return resources
+
+
+def _soperator_resource_cpu_value(value: Any) -> int | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    if text.endswith("m"):
+        with suppress(ValueError):
+            return max(1, int(text[:-1]) // 1000)
+        return None
+    with suppress(ValueError):
+        return int(float(text))
+    return None
+
+
+def _soperator_format_cpu_millicores(value: int) -> str:
+    if value % 1000 == 0:
+        return str(value // 1000)
+    return f"{value}m"
+
+
+def _soperator_format_memory_mib(value: int) -> str:
+    if value % 1024 == 0:
+        return f"{value // 1024}Gi"
+    return f"{value}Mi"
+
+
+def _soperator_cpu_node_config_static(cpu_millicores: int | None) -> str:
+    if cpu_millicores is None or cpu_millicores <= 0:
+        cpu_count = 1
+    else:
+        cpu_count = max(1, math.ceil(cpu_millicores / 1000))
+    if cpu_count > 1 and cpu_count % 2 == 0:
+        cores_per_socket = max(1, cpu_count // 2)
+        threads_per_core = 2
+    else:
+        cores_per_socket = cpu_count
+        threads_per_core = 1
+    return (
+        "Boards=1 SocketsPerBoard=1 "
+        f"CoresPerSocket={cores_per_socket} ThreadsPerCore={threads_per_core}"
+    )
+
+
+def _soperator_resource_memory_gib(value: Any) -> int | None:
+    text = str(value or "").strip()
+    match = re.fullmatch(r"([0-9]+)(?:Gi|G|GB|gb)?", text)
+    if not match:
+        return None
+    return int(match.group(1))
+
+
+def _soperator_fit_nodeset_resources_to_group(
+    nodeset: dict[str, Any],
+    *,
+    group_key: str,
+    inputs: Mapping[str, Any],
+    install_mode: str = "",
+) -> None:
+    node_groups = inputs.get("node_groups")
+    group = node_groups.get(group_key) if isinstance(node_groups, Mapping) else None
+    if not isinstance(group, Mapping):
+        return
+    resources = _soperator_node_group_resources(group)
+    slurmd = nodeset.get("slurmd")
+    slurmd_resources = slurmd.get("resources") if isinstance(slurmd, Mapping) else None
+    if not isinstance(slurmd_resources, dict):
+        return
+
+    gpu_count = resources.get("gpu")
+    gpu_config = nodeset.get("gpu")
+    gpu_enabled = isinstance(gpu_config, Mapping) and bool(gpu_config.get("enabled", False))
+    if gpu_enabled and gpu_count is not None:
+        slurmd_resources["gpu"] = gpu_count
+
+    cpu_millicores = resources.get("vcpu_millicores")
+    current_cpu = _soperator_parse_cpu_millicores(slurmd_resources.get("cpu"))
+    if install_mode == _SOPERATOR_INSTALL_MODE_ONBOARD_EXISTING_CLUSTER:
+        if current_cpu is not None and current_cpu > 500:
+            slurmd_resources["cpu"] = "500m"
+        current_memory = _soperator_parse_memory_mib(slurmd_resources.get("memory"))
+        if current_memory is not None and current_memory > 1024:
+            slurmd_resources["memory"] = "1024Mi"
+        if not gpu_enabled:
+            node_config = nodeset.setdefault("nodeConfig", {})
+            if isinstance(node_config, dict):
+                node_config["static"] = _soperator_cpu_node_config_static(cpu_millicores)
+        return
+
+    if (
+        cpu_millicores is not None
+        and current_cpu is not None
+        and current_cpu > cpu_millicores
+    ):
+        slurmd_resources["cpu"] = _soperator_format_cpu_millicores(
+            max(1000, int(cpu_millicores * 0.75))
+        )
+
+    memory_mib = resources.get("memory_mib")
+    current_memory = _soperator_parse_memory_mib(slurmd_resources.get("memory"))
+    if memory_mib is not None and current_memory is not None and current_memory > memory_mib:
+        slurmd_resources["memory"] = _soperator_format_memory_mib(
+            max(1024, int(memory_mib * 0.75))
+        )
+
+    # Keep the legacy whole-node fallback for managed profile presets that do
+    # not expose allocatable data.
+    if "vcpu_millicores" not in resources:
+        vcpu_count = resources.get("vcpu")
+        legacy_current_cpu = _soperator_resource_cpu_value(slurmd_resources.get("cpu"))
+        if (
+            vcpu_count is not None
+            and legacy_current_cpu is not None
+            and legacy_current_cpu > vcpu_count
+        ):
+            slurmd_resources["cpu"] = str(max(1, vcpu_count // 2))
+    if "memory_mib" not in resources:
+        memory_gib = resources.get("memory")
+        legacy_current_memory = _soperator_resource_memory_gib(slurmd_resources.get("memory"))
+        if (
+            memory_gib is not None
+            and legacy_current_memory is not None
+            and legacy_current_memory > memory_gib
+        ):
+            slurmd_resources["memory"] = f"{max(1, memory_gib // 4)}Gi"
+
+
+def _soperator_template_nodesets_by_name(values: Mapping[str, Any]) -> dict[str, Mapping[str, Any]]:
+    nodesets = values.get("nodesets")
+    if not isinstance(nodesets, list):
+        return {}
+    templates: dict[str, Mapping[str, Any]] = {}
+    for item in nodesets:
+        if not isinstance(item, Mapping):
+            continue
+        name = _non_empty_text(item.get("name"))
+        if name:
+            templates[name] = item
+    return templates
+
+
+def _soperator_toleration_identity(toleration: Mapping[str, Any]) -> tuple[tuple[str, str], ...]:
+    return tuple(
+        sorted((str(key), str(value)) for key, value in toleration.items() if value is not None)
+    )
+
+
+def _soperator_extend_nodeconfigurator_tolerations_from_nodesets(values: dict[str, Any]) -> None:
+    nodesets = values.get("nodesets")
+    if not isinstance(nodesets, list):
+        return
+
+    collected: list[dict[str, Any]] = []
+    for nodeset in nodesets:
+        if not isinstance(nodeset, Mapping):
+            continue
+        tolerations = nodeset.get("tolerations")
+        if not isinstance(tolerations, list):
+            continue
+        for toleration in tolerations:
+            if isinstance(toleration, Mapping) and toleration:
+                collected.append(to_plain_data(toleration))
+    if not collected:
+        return
+
+    for key in ("customContainer", "rebooter"):
+        section = values.setdefault(key, {})
+        if not isinstance(section, dict):
+            section = {}
+            values[key] = section
+        existing = section.get("tolerations")
+        existing_items = existing if isinstance(existing, list) else []
+        merged = [
+            to_plain_data(item) for item in existing_items if isinstance(item, Mapping) and item
+        ]
+        seen = {_soperator_toleration_identity(item) for item in merged}
+        for item in collected:
+            identity = _soperator_toleration_identity(item)
+            if identity in seen:
+                continue
+            merged.append(item)
+            seen.add(identity)
+        if merged:
+            section["tolerations"] = merged
+
+
+def _soperator_guided_sssd_enabled(values: Mapping[str, Any]) -> bool | None:
+    helper = values.get("sssd")
+    if not isinstance(helper, Mapping) or "enabled" not in helper:
+        return None
+    enabled = helper.get("enabled")
+    return enabled if isinstance(enabled, bool) else None
+
+
+def _materialize_soperator_guided_sssd_values(values: dict[str, Any]) -> None:
+    enabled = _soperator_guided_sssd_enabled(values)
+    if enabled is None:
+        return
+
+    slurm_nodes = values.setdefault("slurmNodes", {})
+    if isinstance(slurm_nodes, dict):
+        slurm_sssd = slurm_nodes.setdefault("sssd", {})
+        if not isinstance(slurm_sssd, dict):
+            slurm_sssd = {}
+            slurm_nodes["sssd"] = slurm_sssd
+        slurm_sssd["enabled"] = enabled
+
+    nodesets = values.get("nodesets")
+    if not isinstance(nodesets, list):
+        return
+    for nodeset in nodesets:
+        if not isinstance(nodeset, dict):
+            continue
+        nodeset_sssd = nodeset.setdefault("sssd", {})
+        if not isinstance(nodeset_sssd, dict):
+            nodeset_sssd = {}
+            nodeset["sssd"] = nodeset_sssd
+        nodeset_sssd["enabled"] = enabled
+
+
+def _soperator_merge_nodeset_with_generated(
+    existing: Mapping[str, Any],
+    generated: Mapping[str, Any],
+) -> dict[str, Any]:
+    merged = copy.deepcopy(dict(existing))
+    _merge_missing_mapping(merged, generated)
+
+    for nodeset_field in ("replicas", "nodeSelector", "affinity", "nodeConfig"):
+        if nodeset_field in generated:
+            merged[nodeset_field] = copy.deepcopy(generated[nodeset_field])
+    if "nodeSelector" in generated:
+        merged.pop("affinity", None)
+    if "affinity" in generated:
+        merged.pop("nodeSelector", None)
+
+    generated_tolerations = generated.get("tolerations")
+    if isinstance(generated_tolerations, list):
+        merged["tolerations"] = _soperator_merge_tolerations(
+            merged.get("tolerations"),
+            [item for item in generated_tolerations if isinstance(item, Mapping)],
+        )
+
+    generated_slurmd = generated.get("slurmd")
+    if isinstance(generated_slurmd, Mapping):
+        generated_resources = generated_slurmd.get("resources")
+        if isinstance(generated_resources, Mapping):
+            slurmd = merged.setdefault("slurmd", {})
+            if not isinstance(slurmd, dict):
+                slurmd = {}
+                merged["slurmd"] = slurmd
+            resources = slurmd.setdefault("resources", {})
+            if not isinstance(resources, dict):
+                resources = {}
+                slurmd["resources"] = resources
+            resources.update(copy.deepcopy(dict(generated_resources)))
+
+    return merged
+
+
+def _soperator_profile_chart_values(profile: Mapping[str, Any]) -> Mapping[str, Any]:
+    return _profile_mapping(_profile_mapping(profile, "chart"), "values")
+
+
+def _soperator_all_profile_chart_values() -> tuple[Mapping[str, Any], ...]:
+    _default_profile, profiles = _soperator_nodesets_profiles()
+    return tuple(
+        _soperator_profile_chart_values(profile)
+        for profile in profiles.values()
+        if isinstance(profile, Mapping) and _soperator_profile_chart_values(profile)
+    )
+
+
+def _soperator_profile_partition_values(
+    profile: Mapping[str, Any],
+) -> tuple[Mapping[str, Any], ...]:
+    chart_profile = _profile_mapping(profile, "chart")
+    partition_profiles = _profile_mapping(chart_profile, "partition_profiles")
+    return tuple(
+        values
+        for partition_profile in partition_profiles.values()
+        if isinstance(partition_profile, Mapping)
+        if (values := _profile_mapping(partition_profile, "values"))
+    )
+
+
+def _soperator_all_profile_partition_values() -> tuple[Mapping[str, Any], ...]:
+    _default_profile, profiles = _soperator_nodesets_profiles()
+    return tuple(
+        values
+        for profile in profiles.values()
+        if isinstance(profile, Mapping)
+        for values in _soperator_profile_partition_values(profile)
+    )
+
+
+def _soperator_profile_topology_values(profile: Mapping[str, Any]) -> tuple[Mapping[str, Any], ...]:
+    chart_profile = _profile_mapping(profile, "chart")
+    topology_profiles = _profile_mapping(chart_profile, "topology_profiles")
+    return tuple(
+        values
+        for topology_profile in topology_profiles.values()
+        if isinstance(topology_profile, Mapping)
+        if (values := _profile_mapping(topology_profile, "values"))
+    )
+
+
+def _soperator_all_profile_topology_values() -> tuple[Mapping[str, Any], ...]:
+    _default_profile, profiles = _soperator_nodesets_profiles()
+    return tuple(
+        values
+        for profile in profiles.values()
+        if isinstance(profile, Mapping)
+        for values in _soperator_profile_topology_values(profile)
+    )
+
+
+def _soperator_profile_install_mode_chart_values(
+    profile: Mapping[str, Any],
+    *,
+    install_mode: str,
+) -> Mapping[str, Any]:
+    if install_mode != _SOPERATOR_INSTALL_MODE_ONBOARD_EXISTING_CLUSTER:
+        return {}
+    return _profile_mapping(_profile_mapping(profile, "chart"), "onboarding_values")
+
+
+def _soperator_nodeset_templates(
+    *,
+    profile: Mapping[str, Any],
+    values: Mapping[str, Any],
+) -> dict[str, Mapping[str, Any]]:
+    templates = {
+        name: to_plain_data(template)
+        for name, template in _soperator_template_nodesets_by_name(
+            _soperator_profile_chart_values(profile)
+        ).items()
+    }
+    for name, override in _soperator_template_nodesets_by_name(values).items():
+        if name in templates and isinstance(templates[name], dict):
+            _merge_replace_mapping(templates[name], to_plain_data(override))
+        else:
+            templates[name] = to_plain_data(override)
+    return templates
+
+
+def _materialize_soperator_mapping_chart_values(
+    *,
+    values: dict[str, Any],
+    profile: Mapping[str, Any],
+    inputs: Mapping[str, Any],
+    install_mode: str,
+) -> None:
+    mapping = _soperator_values_node_group_mapping(values)
+    role_mapping = _soperator_profile_role_mapping(profile)
+    if not role_mapping:
+        return
+    use_profile_filters = not mapping
+
+    existing_filters = values.get("k8sNodeFilters")
+    if isinstance(existing_filters, list):
+        values["k8sNodeFilters"] = [
+            item
+            for item in existing_filters
+            if isinstance(item, Mapping) and _non_empty_text(item.get("name"))
+        ]
+
+    cpu_keys = _soperator_node_group_keys_by_kind(inputs, kind="cpu")
+    all_keys = _soperator_node_group_keys_by_kind(inputs, kind="all")
+    if cpu_keys or all_keys:
+        _soperator_upsert_filter(
+            values,
+            filter_item=_soperator_node_group_filter(
+                name="no-gpu",
+                group_keys=cpu_keys or all_keys,
+                inputs=inputs,
+            ),
+        )
+
+    template_nodesets = _soperator_nodeset_templates(profile=profile, values=values)
+    generated_nodesets: list[dict[str, Any]] = []
+    nodeset_ref_replacements: dict[str, list[str]] = {}
+    storage_groups: dict[str, list[str]] = {}
+
+    for role, raw_role_config in role_mapping.items():
+        if not isinstance(raw_role_config, Mapping):
+            continue
+        role_name = str(role).strip()
+        group_keys = mapping.get(role_name, [])
+        filter_name = _non_empty_text(raw_role_config.get("k8s_node_filter_name"))
+        filter_item: dict[str, Any] | None = None
+        if group_keys and filter_name:
+            role_tolerations = _soperator_node_group_tolerations(inputs, group_keys)
+            filter_item = _soperator_node_group_filter(
+                name=filter_name,
+                group_keys=group_keys,
+                inputs=inputs,
+                tolerations=role_tolerations,
+            )
+            _soperator_upsert_filter(
+                values,
+                filter_item=filter_item,
+            )
+        elif use_profile_filters and filter_name:
+            existing_filter = _soperator_filter_by_name(values, filter_name)
+            if isinstance(existing_filter, Mapping):
+                filter_item = dict(existing_filter)
+        if filter_item is not None and filter_name:
+            for path in _soperator_string_list(raw_role_config.get("chart_filter_paths")):
+                _soperator_set_mapping_path(values, path, filter_name)
+        if filter_item is not None:
+            affinity = filter_item.get("affinity")
+            if isinstance(affinity, Mapping):
+                for path in _soperator_string_list(raw_role_config.get("chart_affinity_paths")):
+                    _soperator_set_mapping_path(values, path, affinity)
+        if not group_keys:
+            continue
+        for filesystem_key in _soperator_role_filesystem_keys(raw_role_config):
+            storage_groups.setdefault(filesystem_key, [])
+            storage_groups[filesystem_key].extend(group_keys)
+
+        template_names = _soperator_string_list(raw_role_config.get("nodeset_templates"))
+        if not template_names:
+            template_name = _non_empty_text(raw_role_config.get("nodeset_template"))
+            template_names = [template_name] if template_name else []
+        for template_name in template_names:
+            template = template_nodesets.get(template_name)
+            if not isinstance(template, Mapping):
+                continue
+            replacement_names: list[str] = []
+            for group_key in group_keys:
+                nodeset = copy.deepcopy(to_plain_data(template))
+                nodeset_name = (
+                    template_name
+                    if len(group_keys) == 1
+                    else normalize_component_token(f"{template_name}-{group_key}")
+                )
+                nodeset["name"] = nodeset_name
+                node_group = next(
+                    (
+                        group
+                        for group in iter_mk8s_node_groups(inputs)
+                        if group.key == group_key and group.node_count is not None
+                    ),
+                    None,
+                )
+                if node_group is not None:
+                    nodeset["replicas"] = node_group.node_count
+                selector_expression = _soperator_node_group_selector_expression(inputs, group_key)
+                if (
+                    selector_expression.get("operator") == "In"
+                    and len(selector_expression.get("values", [])) == 1
+                ):
+                    nodeset["nodeSelector"] = {
+                        str(selector_expression["key"]): str(selector_expression["values"][0])
+                    }
+                else:
+                    nodeset["affinity"] = {
+                        "nodeAffinity": {
+                            "requiredDuringSchedulingIgnoredDuringExecution": {
+                                "nodeSelectorTerms": [{"matchExpressions": [selector_expression]}]
+                            }
+                        }
+                    }
+                nodeset_tolerations = _soperator_merge_tolerations(
+                    nodeset.get("tolerations"),
+                    _soperator_node_group_tolerations(inputs, [group_key]),
+                )
+                if nodeset_tolerations:
+                    nodeset["tolerations"] = nodeset_tolerations
+                _soperator_fit_nodeset_resources_to_group(
+                    nodeset,
+                    group_key=group_key,
+                    inputs=inputs,
+                    install_mode=install_mode,
+                )
+                generated_nodesets.append(nodeset)
+                replacement_names.append(nodeset_name)
+            nodeset_ref_replacements[template_name] = replacement_names
+
+    for filesystem_key, group_keys in storage_groups.items():
+        _soperator_set_storage_node_group_selector(
+            values,
+            filesystem_key=filesystem_key,
+            group_keys=group_keys,
+            inputs=inputs,
+            tolerations=_soperator_node_group_tolerations(inputs, group_keys),
+            include_profile_jail_aliases=(
+                install_mode != _SOPERATOR_INSTALL_MODE_ONBOARD_EXISTING_CLUSTER
+            ),
+        )
+
+    if generated_nodesets:
+        existing_nodesets = values.get("nodesets")
+        existing_nodesets_list = existing_nodesets if isinstance(existing_nodesets, list) else []
+        existing_nodesets_by_name = {
+            _non_empty_text(item.get("name")): item
+            for item in existing_nodesets_list
+            if isinstance(item, Mapping) and _non_empty_text(item.get("name"))
+        }
+        all_profile_template_names: set[str] = set()
+        _default_profile, all_profiles = _soperator_nodesets_profiles()
+        for candidate_profile in all_profiles.values():
+            if not isinstance(candidate_profile, Mapping):
+                continue
+            all_profile_template_names.update(
+                _soperator_template_nodesets_by_name(
+                    _soperator_profile_chart_values(candidate_profile)
+                )
+            )
+        selected_template_names = set(template_nodesets)
+        merged_generated_nodesets: list[dict[str, Any]] = []
+        for nodeset in generated_nodesets:
+            existing_nodeset = existing_nodesets_by_name.get(_non_empty_text(nodeset.get("name")))
+            if isinstance(existing_nodeset, Mapping):
+                merged_generated_nodesets.append(
+                    _soperator_merge_nodeset_with_generated(existing_nodeset, nodeset)
+                )
+            else:
+                merged_generated_nodesets.append(nodeset)
+        generated_names = {_non_empty_text(item.get("name")) for item in generated_nodesets}
+        replaced_template_names = set(nodeset_ref_replacements)
+        preserved = [
+            item
+            for item in existing_nodesets_list
+            if isinstance(item, Mapping)
+            and _non_empty_text(item.get("name"))
+            and _non_empty_text(item.get("name")) not in generated_names
+            and _non_empty_text(item.get("name")) not in replaced_template_names
+            and not (
+                _non_empty_text(item.get("name")) in all_profile_template_names
+                and _non_empty_text(item.get("name")) not in selected_template_names
+            )
+        ]
+        values["nodesets"] = [*preserved, *merged_generated_nodesets]
+
+    partition_config = values.get("partitionConfiguration")
+    partitions = (
+        partition_config.get("partitions") if isinstance(partition_config, Mapping) else None
+    )
+    if isinstance(partitions, list):
+        for partition in partitions:
+            if not isinstance(partition, dict):
+                continue
+            refs = _soperator_string_list(partition.get("nodeSetRefs"))
+            if not refs:
+                continue
+            resolved_refs: list[str] = []
+            for ref in refs:
+                resolved_refs.extend(nodeset_ref_replacements.get(ref, [ref]))
+            partition["nodeSetRefs"] = list(dict.fromkeys(resolved_refs))
+
+
+def _materialize_soperator_node_group(
+    *,
+    group_key: str,
+    group: dict[str, Any],
+    inputs: Mapping[str, Any],
+    prefer_shape_defaults: bool = False,
+) -> None:
+    gpu = bool(group.get("gpu", False))
+    _materialize_soperator_node_group_shape(
+        group=group,
+        inputs=inputs,
+        gpu=gpu,
+        prefer_shape_defaults=prefer_shape_defaults,
+    )
+    _materialize_soperator_node_group_labels(group, group_key=group_key)
+    _materialize_soperator_node_group_filesystems(group)
 
 
 def _materialize_soperator_worker_node_groups(
@@ -2953,13 +5938,6 @@ def _materialize_soperator_worker_node_groups(
         if not nodeset_name:
             continue
         key_prefix = _non_empty_text(raw_worker.get("node_group_key_prefix")) or nodeset_name
-        if _soperator_existing_nodeset_group(
-            node_groups,
-            nodeset_name=nodeset_name,
-            key_prefix=key_prefix,
-        ):
-            continue
-
         default_total_nodes = _required_profile_positive_int(
             raw_worker.get("default_total_nodes"),
             field=f"worker_nodesets[{nodeset_name}].default_total_nodes",
@@ -2981,7 +5959,20 @@ def _materialize_soperator_worker_node_groups(
             raw_worker.get("max_nodes_per_group"),
             field=f"worker_nodesets[{nodeset_name}].max_nodes_per_group",
         )
-        shard_count = max(1, (total_nodes + max_nodes_per_group - 1) // max_nodes_per_group)
+        nodes_per_group = _soperator_worker_profile_nodes_per_group(
+            inputs=inputs,
+            raw_worker=raw_worker,
+            default_nodes_per_group=default_nodes_per_group,
+            max_nodes_per_group=max_nodes_per_group,
+        )
+        shard_count = max(1, (total_nodes + nodes_per_group - 1) // nodes_per_group)
+        desired_counts: dict[str, int] = {}
+        for index in range(shard_count):
+            remaining = total_nodes - (index * nodes_per_group)
+            shard_size = min(nodes_per_group, remaining)
+            group_key = key_prefix if shard_count == 1 else f"{key_prefix}-{index}"
+            desired_counts[group_key] = shard_size
+
         base_group = raw_worker.get("node_group")
         base_group = copy.deepcopy(base_group) if isinstance(base_group, Mapping) else {}
         gpu_cluster_key = _non_empty_text(base_group.get("gpu_cluster_key"))
@@ -2990,31 +5981,101 @@ def _materialize_soperator_worker_node_groups(
             isinstance(gpu_clusters, Mapping) and gpu_cluster_key in gpu_clusters
         ):
             base_group.pop("gpu_cluster_key", None)
-        for index in range(shard_count):
-            remaining = total_nodes - (index * max_nodes_per_group)
-            shard_size = min(max_nodes_per_group, remaining)
-            group_key = f"{key_prefix}-{index}"
-            node_groups.setdefault(
+
+        existing_group_keys = _soperator_nodeset_group_keys(
+            node_groups,
+            nodeset_name=nodeset_name,
+            key_prefix=key_prefix,
+        )
+        if existing_group_keys:
+            existing_key_set = set(existing_group_keys)
+            desired_key_set = set(desired_counts)
+            rebuild = existing_key_set != desired_key_set
+            if not rebuild:
+                for group_key, desired_count in desired_counts.items():
+                    group = node_groups.get(group_key)
+                    if not isinstance(group, dict) or group.get("node_count") != desired_count:
+                        rebuild = True
+                        break
+            if rebuild:
+                for group_key in existing_group_keys:
+                    node_groups.pop(group_key, None)
+            else:
+                for group_key, desired_count in desired_counts.items():
+                    group = node_groups.get(group_key)
+                    if isinstance(group, dict):
+                        _merge_missing_mapping(group, base_group)
+                        current_gpu_cluster_key = _non_empty_text(group.get("gpu_cluster_key"))
+                        if current_gpu_cluster_key and not (
+                            isinstance(gpu_clusters, Mapping)
+                            and current_gpu_cluster_key in gpu_clusters
+                        ):
+                            group.pop("gpu_cluster_key", None)
+                        group.setdefault("node_count", desired_count)
+                        _materialize_soperator_node_group(
+                            group_key=group_key,
+                            group=group,
+                            inputs=inputs,
+                            prefer_shape_defaults=True,
+                        )
+                continue
+
+        for group_key, shard_size in desired_counts.items():
+            group = node_groups.setdefault(
                 group_key,
                 {
                     **base_group,
                     "nodeset_name": nodeset_name,
                     "workload": _non_empty_text(raw_worker.get("workload")) or "worker",
-                    "fixed_node_count": shard_size,
+                    "node_count": shard_size,
                     "gpu": bool(raw_worker.get("gpu", True)),
                     "jail": bool(raw_worker.get("jail", True)),
                 },
             )
+            if isinstance(group, dict):
+                group.setdefault("node_count", shard_size)
+                _materialize_soperator_node_group(
+                    group_key=group_key,
+                    group=group,
+                    inputs=inputs,
+                    prefer_shape_defaults=True,
+                )
 
 
 def _materialize_soperator_mk8s_profile(
     *,
     inputs: dict[str, Any],
     profile: Mapping[str, Any],
+    values: Mapping[str, Any],
+    install_mode: str,
+    replace_profile_managed_groups: bool = False,
 ) -> None:
     mk8s_profile = _profile_mapping(profile, "mk8s")
     defaults = _profile_mapping(mk8s_profile, "inputs")
     _merge_missing_mapping(inputs, defaults)
+
+    node_groups = inputs.setdefault("node_groups", {})
+    explicit_mapping = _soperator_values_node_group_mapping(values)
+    existing_mode = install_mode == _SOPERATOR_INSTALL_MODE_ONBOARD_EXISTING_CLUSTER
+    if not isinstance(node_groups, dict):
+        return
+    if replace_profile_managed_groups and not existing_mode:
+        _soperator_prune_stale_profile_node_groups(inputs=inputs, profile=profile)
+        _soperator_prune_stale_profile_gpu_clusters(inputs=inputs, profile=profile)
+    if existing_mode or (
+        explicit_mapping
+        and _soperator_has_external_node_groups(
+            inputs=inputs,
+            profile=profile,
+        )
+    ):
+        if explicit_mapping:
+            _materialize_soperator_existing_node_group_mapping(
+                inputs=inputs,
+                profile=profile,
+                mapping=explicit_mapping,
+            )
+        return
 
     gpu_clusters = _profile_mapping(mk8s_profile, "gpu_clusters")
     if gpu_clusters:
@@ -3023,7 +6084,8 @@ def _materialize_soperator_mk8s_profile(
             _merge_missing_mapping(target_gpu_clusters, gpu_clusters)
 
     gpu_cluster_key = _non_empty_text(mk8s_profile.get("gpu_cluster_key"))
-    infiniband_fabric = _non_empty_text(inputs.get("infiniband_fabric"))
+    gpu_defaults = _soperator_node_group_shape_defaults(inputs=inputs, gpu=True)
+    infiniband_fabric = _non_empty_text(gpu_defaults.get("infiniband_fabric"))
     if gpu_cluster_key and infiniband_fabric:
         target_gpu_clusters = inputs.setdefault("gpu_clusters", {})
         if isinstance(target_gpu_clusters, dict):
@@ -3031,20 +6093,29 @@ def _materialize_soperator_mk8s_profile(
             if isinstance(cluster, dict):
                 cluster.setdefault("infiniband_fabric", infiniband_fabric)
 
-    node_groups = inputs.setdefault("node_groups", {})
-    if isinstance(node_groups, dict):
-        profile_node_groups = _profile_mapping(mk8s_profile, "node_groups")
-        _merge_missing_mapping(node_groups, profile_node_groups)
-        _materialize_soperator_worker_node_groups(
-            inputs=inputs,
-            node_groups=node_groups,
-            worker_profiles=_profile_list(mk8s_profile, "worker_nodesets"),
-        )
-
-    if bool(mk8s_profile.get("use_generic_gpu_node_groups", False)):
-        inputs["gpu_node_groups"] = 0
-        inputs["gpu_nodes_count_per_group"] = 0
-        inputs.pop("mk8s_gpu_node_group_overrides", None)
+    profile_node_groups = _profile_mapping(mk8s_profile, "node_groups")
+    _merge_missing_mapping(
+        node_groups,
+        _soperator_profile_node_group_defaults(profile_node_groups),
+    )
+    _soperator_apply_profile_node_group_count_inputs(
+        inputs=inputs,
+        node_groups=node_groups,
+        profile_node_groups=profile_node_groups,
+    )
+    for group_key, group in node_groups.items():
+        if isinstance(group, dict):
+            _materialize_soperator_node_group(
+                group_key=str(group_key),
+                group=group,
+                inputs=inputs,
+                prefer_shape_defaults=True,
+            )
+    _materialize_soperator_worker_node_groups(
+        inputs=inputs,
+        node_groups=node_groups,
+        worker_profiles=_profile_list(mk8s_profile, "worker_nodesets"),
+    )
 
 
 def _materialize_soperator_sfs_profile(
@@ -3072,19 +6143,181 @@ def _materialize_soperator_partition_profile(
     profile: Mapping[str, Any],
 ) -> None:
     profile_name = _non_empty_text(values.get("partitionProfile"))
-    if not profile_name or profile_name == "shape-default":
-        return
     chart_profile = _profile_mapping(profile, "chart")
+    base_values = _profile_mapping(chart_profile, "values")
     partition_profiles = _profile_mapping(chart_profile, "partition_profiles")
-    partition_profile = partition_profiles.get(profile_name)
-    if not isinstance(partition_profile, Mapping):
+    partition_value_sets = _soperator_all_profile_partition_values()
+    if not profile_name or profile_name == "shape-default":
+        _merge_soperator_profile_values(
+            values,
+            base_values,
+            {},
+            replaceable_base_values=partition_value_sets,
+        )
+        return
+    selected_partition_profile = partition_profiles.get(profile_name)
+    if not isinstance(selected_partition_profile, Mapping):
         available = ", ".join(sorted(str(name) for name in partition_profiles)) or "(none)"
         raise ValueError(
             f"values.partitionProfile references unknown Soperator partition "
             f"profile '{profile_name}'. Available profiles for this nodesets profile: {available}"
         )
-    profile_values = _profile_mapping(partition_profile, "values")
-    _merge_replace_mapping(values, profile_values)
+    profile_values = _profile_mapping(selected_partition_profile, "values")
+    _merge_soperator_profile_values(
+        values,
+        profile_values,
+        base_values,
+        replaceable_base_values=partition_value_sets,
+    )
+
+
+def _materialize_soperator_topology_profile(
+    *,
+    values: dict[str, Any],
+    profile: Mapping[str, Any],
+) -> None:
+    profile_name = _non_empty_text(values.get("topologyProfile"))
+    chart_profile = _profile_mapping(profile, "chart")
+    base_values = _profile_mapping(chart_profile, "values")
+    topology_profiles = _profile_mapping(chart_profile, "topology_profiles")
+    topology_value_sets = _soperator_all_profile_topology_values()
+    if not profile_name or profile_name == "disabled":
+        _merge_soperator_profile_values(
+            values,
+            {},
+            {},
+            replaceable_base_values=topology_value_sets,
+        )
+        return
+    topology_profile = topology_profiles.get(profile_name)
+    if not isinstance(topology_profile, Mapping):
+        available = ", ".join(sorted(str(name) for name in topology_profiles)) or "(none)"
+        raise ValueError(
+            f"values.topologyProfile references unknown Soperator topology "
+            f"profile '{profile_name}'. Available profiles for this nodesets profile: {available}"
+        )
+    profile_values = _profile_mapping(topology_profile, "values")
+    _merge_soperator_profile_values(
+        values,
+        profile_values,
+        base_values,
+        replaceable_base_values=topology_value_sets,
+    )
+
+
+def _materialize_soperator_dcgm_exporter_values(
+    *,
+    values: dict[str, Any],
+    inputs: Mapping[str, Any],
+) -> None:
+    node_groups = iter_mk8s_node_groups(inputs)
+    dcgm_exporter = values.setdefault("soperator-dcgm-exporter", {})
+    if not any(group.gpu for group in node_groups):
+        if isinstance(dcgm_exporter, dict):
+            dcgm_exporter["enabled"] = False
+        return
+    if not any(group.gpu and group.gpu_stack_source == "nebius_image" for group in node_groups):
+        return
+    if isinstance(dcgm_exporter, dict):
+        dcgm_exporter.setdefault("validateToolkit", False)
+
+
+def _materialize_soperator_onboarding_storage_mode(
+    *,
+    values: dict[str, Any],
+    inputs: dict[str, Any],
+    install_mode: str,
+    storage_mode: str,
+) -> None:
+    if install_mode != _SOPERATOR_INSTALL_MODE_ONBOARD_EXISTING_CLUSTER:
+        return
+    if storage_mode != "use-existing-pvc-or-storageclass":
+        return
+
+    _materialize_soperator_onboarding_local_inputs(inputs)
+
+    volume_values = values.setdefault("volume", {})
+    if not isinstance(volume_values, dict):
+        volume_values = {}
+        values["volume"] = volume_values
+    for storage_key in ("jail", "controllerSpool"):
+        section = volume_values.setdefault(storage_key, {})
+        if isinstance(section, dict):
+            section.setdefault("type", "local")
+    accounting_volume = volume_values.setdefault("accounting", {})
+    if isinstance(accounting_volume, dict):
+        accounting_volume["enabled"] = False
+        accounting_volume.setdefault("type", "local")
+    populate_jail = values.setdefault("populateJail", {})
+    if isinstance(populate_jail, dict):
+        populate_jail.setdefault("overwrite", True)
+        populate_jail.setdefault("k8sNodeFilterName", "system")
+
+    values.setdefault("customSlurmConfig", "PlugStackConfig=/dev/null")
+
+    controller_manager = values.setdefault("controllerManager", {})
+    if isinstance(controller_manager, dict):
+        manager = controller_manager.setdefault("manager", {})
+        if isinstance(manager, dict):
+            env = manager.setdefault("env", {})
+            if isinstance(env, dict):
+                env["isMariadbCrdInstalled"] = "false"
+
+    mariadb_operator = values.setdefault("mariadb-operator", {})
+    if isinstance(mariadb_operator, dict):
+        mariadb_operator["installOperator"] = False
+
+    slurm_nodes = values.setdefault("slurmNodes", {})
+    if isinstance(slurm_nodes, dict):
+        accounting = slurm_nodes.setdefault("accounting", {})
+        if isinstance(accounting, dict):
+            accounting["enabled"] = False
+            mariadb = accounting.setdefault("mariadbOperator", {})
+            if isinstance(mariadb, dict):
+                mariadb["enabled"] = False
+        rest = slurm_nodes.setdefault("rest", {})
+        if isinstance(rest, dict):
+            rest["enabled"] = False
+        exporter = slurm_nodes.setdefault("exporter", {})
+        if isinstance(exporter, dict):
+            exporter["enabled"] = False
+
+
+def _soperator_onboarding_local_storage_node(inputs: Mapping[str, Any]) -> str:
+    node_groups = inputs.get("node_groups")
+    if not isinstance(node_groups, Mapping):
+        return ""
+    groups = [group for group in node_groups.values() if isinstance(group, Mapping)]
+    for prefer_gpu in (False, True):
+        for group in groups:
+            if bool(group.get("gpu", False)) is not prefer_gpu:
+                continue
+            nodes = _soperator_string_list(group.get("nodes"))
+            if nodes:
+                return nodes[0]
+    return ""
+
+
+def _materialize_soperator_onboarding_local_inputs(inputs: dict[str, Any]) -> None:
+    node_name = _soperator_onboarding_local_storage_node(inputs)
+    if not node_name:
+        return
+    node_groups = inputs.get("node_groups")
+    if not isinstance(node_groups, dict):
+        return
+    selector = {
+        "key": "kubernetes.io/hostname",
+        "operator": "In",
+        "values": [node_name],
+    }
+    for group in node_groups.values():
+        if not isinstance(group, dict):
+            continue
+        group["node_count"] = 1
+        group["selector"] = copy.deepcopy(selector)
+        labels = group.setdefault("labels", {})
+        if isinstance(labels, dict):
+            labels.setdefault("kubernetes.io/hostname", node_name)
 
 
 def _materialize_soperator_component_defaults(payload: dict[str, Any]) -> bool:
@@ -3092,11 +6325,63 @@ def _materialize_soperator_component_defaults(payload: dict[str, Any]) -> bool:
     if not soperator_targets:
         return False
     changed = False
-    primary_target = soperator_targets[0]
-    soperator_filesystems: dict[str, Any] = {}
+    soperator_filesystems_by_target: dict[str, dict[str, Any]] = {}
     profile_by_target = _soperator_profile_by_target(payload)
+    install_mode_by_target = _soperator_install_mode_by_target(payload)
+    onboarding_storage_mode_by_target = _soperator_onboarding_storage_mode_by_target(payload)
 
     infra_rows = _scope_rows(payload, scope="infra")
+    apps_rows = _scope_rows(payload, scope="apps")
+    mk8s_inputs_by_target: dict[str, dict[str, Any]] = _external_mk8s_inputs_by_target(payload)
+    for row in infra_rows:
+        if not isinstance(row, dict) or not bool(row.get("enabled", False)):
+            continue
+        if component_type_id(row) != "mk8s" or component_instance_id(row) not in soperator_targets:
+            continue
+        inputs = row.setdefault("inputs", {})
+        if isinstance(inputs, dict):
+            mk8s_inputs_by_target[component_instance_id(row)] = inputs
+    enabled_sfs_rows = [
+        row
+        for row in infra_rows
+        if isinstance(row, dict)
+        and bool(row.get("enabled", False))
+        and component_type_id(row) == "sfs"
+    ]
+
+    soperator_values_by_target: dict[str, dict[str, Any]] = {}
+    generated_node_group_mapping_by_target: dict[str, bool] = {}
+    for row in apps_rows:
+        if not isinstance(row, dict) or not bool(row.get("enabled", False)):
+            continue
+        if component_type_id(row) != _SOPERATOR_APP_ID:
+            continue
+        target_ref = app_chart_target_ref(row) or component_instance_id(row)
+        if target_ref not in soperator_targets:
+            continue
+        before = copy.deepcopy(row)
+        row.setdefault(_SOPERATOR_INSTALL_MODE_FIELD, _default_soperator_install_mode())
+        row.setdefault("profile", _default_soperator_profile_name())
+        values = row.setdefault("values", {})
+        if isinstance(values, dict):
+            values.setdefault("partitionProfile", _default_soperator_partition_profile_name())
+            values.setdefault("topologyProfile", _default_soperator_topology_profile_name())
+            soperator_values_by_target[target_ref] = values
+            generated_node_group_mapping_by_target[target_ref] = (
+                _soperator_node_group_mapping_matches_generated_profile(
+                    values=values,
+                    inputs=mk8s_inputs_by_target.get(target_ref, {}),
+                )
+            )
+            if not _soperator_values_node_group_mapping(values):
+                inferred_mapping = _soperator_infer_node_group_mapping(
+                    inputs=mk8s_inputs_by_target.get(target_ref, {}),
+                    profile=profile_by_target.get(target_ref, {}),
+                )
+                _soperator_set_node_group_mapping(values, inferred_mapping)
+        if row != before:
+            changed = True
+
     for row in infra_rows:
         if not isinstance(row, dict) or not bool(row.get("enabled", False)):
             continue
@@ -3110,17 +6395,32 @@ def _materialize_soperator_component_defaults(payload: dict[str, Any]) -> bool:
             _materialize_soperator_mk8s_profile(
                 inputs=inputs,
                 profile=profile_by_target.get(target_ref, {}),
+                values=soperator_values_by_target.get(target_ref, {}),
+                install_mode=install_mode_by_target.get(
+                    target_ref,
+                    _default_soperator_install_mode(),
+                ),
+                replace_profile_managed_groups=generated_node_group_mapping_by_target.get(
+                    target_ref,
+                    False,
+                ),
             )
         elif component_id == "sfs":
-            soperator_filesystems = _materialize_soperator_sfs_profile(
-                inputs=inputs,
-                profile=profile_by_target.get(primary_target, {}),
-                target_ref=primary_target,
-            )
+            sfs_instance_id = component_instance_id(row)
+            target_ref = ""
+            if sfs_instance_id in soperator_targets:
+                target_ref = sfs_instance_id
+            elif len(enabled_sfs_rows) == 1 and len(soperator_targets) == 1:
+                target_ref = soperator_targets[0]
+            if target_ref:
+                soperator_filesystems_by_target[target_ref] = _materialize_soperator_sfs_profile(
+                    inputs=inputs,
+                    profile=profile_by_target.get(target_ref, {}),
+                    target_ref=target_ref,
+                )
         if row != before:
             changed = True
 
-    apps_rows = _scope_rows(payload, scope="apps")
     for row in apps_rows:
         if not isinstance(row, dict) or not bool(row.get("enabled", False)):
             continue
@@ -3132,15 +6432,70 @@ def _materialize_soperator_component_defaults(payload: dict[str, Any]) -> bool:
         before = copy.deepcopy(row)
         values = row.setdefault("values", {})
         if isinstance(values, dict):
+            _delete_mapping_path_value(values, _SOPERATOR_ACTIVECHECKS_READY_PARTITION_PATH)
+            inferred_mapping = _soperator_infer_node_group_mapping(
+                inputs=mk8s_inputs_by_target.get(target_ref, {}),
+                profile=profile_by_target.get(target_ref, {}),
+            )
+            _soperator_set_node_group_mapping(
+                values,
+                inferred_mapping,
+                replace=generated_node_group_mapping_by_target.get(target_ref, False),
+            )
             chart_profile = _profile_mapping(
                 _profile_mapping(profile_by_target.get(target_ref, {}), "chart"),
                 "values",
             )
-            _merge_missing_mapping(values, chart_profile)
+            _merge_soperator_profile_values(
+                values,
+                chart_profile,
+                {},
+                replaceable_base_values=_soperator_all_profile_chart_values(),
+            )
+            _merge_missing_mapping(
+                values,
+                _soperator_profile_install_mode_chart_values(
+                    profile_by_target.get(target_ref, {}),
+                    install_mode=install_mode_by_target.get(
+                        target_ref,
+                        _default_soperator_install_mode(),
+                    ),
+                ),
+            )
+            _merge_missing_soperator_profile_partitions(values, chart_profile)
             _materialize_soperator_partition_profile(
                 values=values,
                 profile=profile_by_target.get(target_ref, {}),
             )
+            _materialize_soperator_topology_profile(
+                values=values,
+                profile=profile_by_target.get(target_ref, {}),
+            )
+            _materialize_soperator_dcgm_exporter_values(
+                values=values,
+                inputs=mk8s_inputs_by_target.get(target_ref, {}),
+            )
+            _materialize_soperator_onboarding_storage_mode(
+                values=values,
+                inputs=mk8s_inputs_by_target.get(target_ref, {}),
+                install_mode=install_mode_by_target.get(
+                    target_ref,
+                    _default_soperator_install_mode(),
+                ),
+                storage_mode=onboarding_storage_mode_by_target.get(target_ref, ""),
+            )
+            _materialize_soperator_mapping_chart_values(
+                values=values,
+                profile=profile_by_target.get(target_ref, {}),
+                inputs=mk8s_inputs_by_target.get(target_ref, {}),
+                install_mode=install_mode_by_target.get(
+                    target_ref,
+                    _default_soperator_install_mode(),
+                ),
+            )
+            _materialize_soperator_guided_sssd_values(values)
+            _soperator_extend_nodeconfigurator_tolerations_from_nodesets(values)
+            _remove_internal_activechecks_partition(values)
             current_cluster_name = str(values.get("clusterName", "") or "").strip()
             if not current_cluster_name or (
                 current_cluster_name == "mk8s" and target_ref != "mk8s"
@@ -3151,6 +6506,7 @@ def _materialize_soperator_component_defaults(payload: dict[str, Any]) -> bool:
                 login = slurm_nodes.setdefault("login", {})
                 if isinstance(login, dict):
                     login.setdefault("sshRootPublicKeys", [])
+            soperator_filesystems = soperator_filesystems_by_target.get(target_ref, {})
             if soperator_filesystems:
                 sfs_values = values.setdefault("sfs", {})
                 if isinstance(sfs_values, dict):
@@ -3298,6 +6654,21 @@ def _set_mapping_path_value(node: dict[str, Any], dotted_path: str, value: Any) 
     current[segments[-1]] = value
 
 
+def _delete_mapping_path_value(node: dict[str, Any], dotted_path: str) -> bool:
+    current: Any = node
+    segments = [segment.strip() for segment in dotted_path.split(".") if segment.strip()]
+    if not segments:
+        return False
+    for segment in segments[:-1]:
+        if not isinstance(current, dict):
+            return False
+        current = current.get(segment)
+    if not isinstance(current, dict) or segments[-1] not in current:
+        return False
+    del current[segments[-1]]
+    return True
+
+
 def _entry_scalar_resource_name_input(entry: ComponentEntry) -> str:
     if entry.scope != "infra" or entry.status is None:
         return ""
@@ -3306,6 +6677,7 @@ def _entry_scalar_resource_name_input(entry: ComponentEntry) -> str:
         return ""
 
     wizard_fields = getattr(entry, "wizard_fields", {}) or {}
+    declared_scalar_name_field = False
     for candidate in (name_input, f"inputs.{name_input}"):
         field = wizard_fields.get(candidate)
         if not isinstance(field, Mapping):
@@ -3314,10 +6686,15 @@ def _entry_scalar_resource_name_input(entry: ComponentEntry) -> str:
             _non_empty_text(field.get("type_hint"))
         ):
             return ""
+        declared_scalar_name_field = True
 
     root_input = name_input.split(".", 1)[0]
     module_var = _module_variable_specs_for_entry(entry).get(_normalize_leaf_name(root_input))
-    if module_var is not None and _is_complex_type_hint(module_var.type_hint):
+    if (
+        module_var is not None
+        and _is_complex_type_hint(module_var.type_hint)
+        and not declared_scalar_name_field
+    ):
         return ""
     return name_input
 
@@ -3432,10 +6809,12 @@ def _align_new_infra_instance_ids_with_resource_names(
     for row in apps_rows:
         if not isinstance(row, dict):
             continue
-        target_ref = component_instance_id(row)
+        target_ref = app_chart_target_ref(row) or component_instance_id(row)
         if target_ref not in target_renames:
             continue
         new_target_ref = target_renames[target_ref]
+        if app_chart_target_ref(row) in target_renames:
+            row[TARGET_REF_FIELD] = new_target_ref
         app_id = component_type_id(row)
         if app_id and is_auto_target_scoped_app_instance_id(
             row.get(INSTANCE_ID_FIELD),
@@ -3446,6 +6825,10 @@ def _align_new_infra_instance_ids_with_resource_names(
                 app_id,
                 target_ref=new_target_ref,
             )
+        if app_id == _SOPERATOR_APP_ID:
+            values = row.get("values")
+            if isinstance(values, dict) and str(values.get("clusterName", "")).strip() == target_ref:
+                values["clusterName"] = new_target_ref
     deploy = payload.get("deploy")
     targets = deploy.get("targets") if isinstance(deploy, Mapping) else None
     if isinstance(targets, list):
@@ -4104,6 +7487,7 @@ def _declared_wizard_prompt_path(
             return None
     elif entry.scope == "apps":
         if relative not in {
+            "install_mode",
             "namespace",
             "profile",
             "release-name",
@@ -4257,34 +7641,106 @@ def _delete_payload_value(payload: object, path: PayloadPath) -> None:
     _delete(payload, path)
 
 
-def _collect_scalar_leaf_paths(node: object, *, prefix: PayloadPath = ()) -> list[PayloadPath]:
+def _collect_scalar_leaf_paths(
+    node: object,
+    *,
+    prefix: PayloadPath = (),
+    _seen: set[int] | None = None,
+    _depth: int = 0,
+) -> list[PayloadPath]:
     if isinstance(node, dict):
+        if _depth >= _MAX_COLLECT_LEAF_DEPTH:
+            return []
+        seen = set() if _seen is None else _seen
+        node_id = id(node)
+        if node_id in seen:
+            return []
+        seen.add(node_id)
         leaf_paths: list[PayloadPath] = []
         for key, value in node.items():
-            leaf_paths.extend(_collect_scalar_leaf_paths(value, prefix=prefix + (key,)))
+            leaf_paths.extend(
+                _collect_scalar_leaf_paths(
+                    value,
+                    prefix=prefix + (key,),
+                    _seen=seen,
+                    _depth=_depth + 1,
+                )
+            )
+        seen.discard(node_id)
         return leaf_paths
     if isinstance(node, list):
+        if _depth >= _MAX_COLLECT_LEAF_DEPTH:
+            return []
+        seen = set() if _seen is None else _seen
+        node_id = id(node)
+        if node_id in seen:
+            return []
+        seen.add(node_id)
         leaf_paths: list[PayloadPath] = []
         for index, value in enumerate(node):
-            leaf_paths.extend(_collect_scalar_leaf_paths(value, prefix=prefix + (index,)))
+            leaf_paths.extend(
+                _collect_scalar_leaf_paths(
+                    value,
+                    prefix=prefix + (index,),
+                    _seen=seen,
+                    _depth=_depth + 1,
+                )
+            )
+        seen.discard(node_id)
         return leaf_paths
     return [prefix]
 
 
-def _collect_promptable_leaf_paths(node: object, *, prefix: PayloadPath = ()) -> list[PayloadPath]:
+def _collect_promptable_leaf_paths(
+    node: object,
+    *,
+    prefix: PayloadPath = (),
+    _seen: set[int] | None = None,
+    _depth: int = 0,
+) -> list[PayloadPath]:
     if isinstance(node, dict):
         if not node:
             return [prefix]
+        if _depth >= _MAX_COLLECT_LEAF_DEPTH:
+            return []
+        seen = set() if _seen is None else _seen
+        node_id = id(node)
+        if node_id in seen:
+            return []
+        seen.add(node_id)
         leaf_paths: list[PayloadPath] = []
         for key, value in node.items():
-            leaf_paths.extend(_collect_promptable_leaf_paths(value, prefix=prefix + (key,)))
+            leaf_paths.extend(
+                _collect_promptable_leaf_paths(
+                    value,
+                    prefix=prefix + (key,),
+                    _seen=seen,
+                    _depth=_depth + 1,
+                )
+            )
+        seen.discard(node_id)
         return leaf_paths
     if isinstance(node, list):
         if not node:
             return [prefix]
+        if _depth >= _MAX_COLLECT_LEAF_DEPTH:
+            return []
+        seen = set() if _seen is None else _seen
+        node_id = id(node)
+        if node_id in seen:
+            return []
+        seen.add(node_id)
         leaf_paths: list[PayloadPath] = []
         for index, value in enumerate(node):
-            leaf_paths.extend(_collect_promptable_leaf_paths(value, prefix=prefix + (index,)))
+            leaf_paths.extend(
+                _collect_promptable_leaf_paths(
+                    value,
+                    prefix=prefix + (index,),
+                    _seen=seen,
+                    _depth=_depth + 1,
+                )
+            )
+        seen.discard(node_id)
         return leaf_paths
     return [prefix]
 
@@ -4428,6 +7884,7 @@ _PROVIDER_ARG_PATH_KEYS = frozenset(
         "project_id_path",
         "fallback_project_id_path",
         "gpu_cluster_required_path",
+        "network_id_path",
     }
 )
 
@@ -4472,6 +7929,7 @@ def _normalize_provider_arg_path(
         "instance_id",
         "group",
         "enabled",
+        "install_mode",
         "repo",
         "profile",
         "version",
@@ -4509,29 +7967,70 @@ def _resolve_wizard_field_spec(
     full_path_label: str,
 ) -> dict[str, Any] | None:
     if entry.wizard_fields:
-        direct = entry.wizard_fields.get(full_path_label)
-        if isinstance(direct, dict):
-            return direct
-
-        target_match = re.match(r"^deploy\.targets\[[0-9]+\]\.(.+)$", full_path_label)
-        if target_match:
-            placeholder = f"deploy.targets[].{target_match.group(1)}"
-            placeholder_spec = entry.wizard_fields.get(placeholder)
-            if isinstance(placeholder_spec, dict):
-                return placeholder_spec
-
-        prefix = f"{entry.config_path}."
-        if full_path_label.startswith(prefix):
-            relative = full_path_label[len(prefix) :]
-            relative_spec = entry.wizard_fields.get(relative)
-            if isinstance(relative_spec, dict):
-                return relative_spec
-
-        for relative in _relative_wizard_field_paths(entry=entry, full_path_label=full_path_label):
-            relative_spec = entry.wizard_fields.get(relative)
-            if isinstance(relative_spec, dict):
-                return relative_spec
+        for candidate in _wizard_field_spec_candidates(
+            entry=entry,
+            full_path_label=full_path_label,
+        ):
+            spec = entry.wizard_fields.get(candidate)
+            if isinstance(spec, dict):
+                return spec
     return None
+
+
+def _wizard_field_spec_candidates(
+    *,
+    entry: ComponentEntry,
+    full_path_label: str,
+) -> tuple[str, ...]:
+    candidates: list[str] = []
+    seen: set[str] = set()
+
+    def _remember(value: str) -> None:
+        token = value.strip()
+        if not token or token in seen:
+            return
+        seen.add(token)
+        candidates.append(token)
+
+    _remember(full_path_label)
+
+    target_match = re.match(r"^deploy\.targets\[[0-9]+\]\.(.+)$", full_path_label)
+    if target_match:
+        _remember(f"deploy.targets[].{target_match.group(1)}")
+
+    prefix = f"{entry.config_path}."
+    if full_path_label.startswith(prefix):
+        _remember(full_path_label[len(prefix) :])
+
+    for relative in _relative_wizard_field_paths(entry=entry, full_path_label=full_path_label):
+        _remember(relative)
+
+    return tuple(candidates)
+
+
+def _wizard_parent_field_specs(
+    *,
+    entry: ComponentEntry,
+    full_path_label: str,
+) -> tuple[dict[str, Any], ...]:
+    if not entry.wizard_fields:
+        return ()
+    specs: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for candidate in _wizard_field_spec_candidates(
+        entry=entry,
+        full_path_label=full_path_label,
+    ):
+        parent = candidate
+        while "." in parent:
+            parent = parent.rsplit(".", maxsplit=1)[0]
+            if parent in seen:
+                continue
+            seen.add(parent)
+            spec = entry.wizard_fields.get(parent)
+            if isinstance(spec, dict):
+                specs.append(spec)
+    return tuple(specs)
 
 
 def _wizard_field_prompt_enabled(
@@ -4540,11 +8039,15 @@ def _wizard_field_prompt_enabled(
     full_path_label: str,
 ) -> bool:
     spec = _resolve_wizard_field_spec(entry=entry, full_path_label=full_path_label)
-    if spec is None:
+    if spec is not None:
+        prompt = spec.get("prompt")
+        if isinstance(prompt, bool):
+            return prompt
         return True
-    prompt = spec.get("prompt")
-    if isinstance(prompt, bool):
-        return prompt
+    for parent_spec in _wizard_parent_field_specs(entry=entry, full_path_label=full_path_label):
+        parent_prompt = parent_spec.get("prompt")
+        if isinstance(parent_prompt, bool):
+            return parent_prompt
     return True
 
 
@@ -4559,13 +8062,13 @@ def _wizard_field_default_value(
     return copy.deepcopy(spec.get("default"))
 
 
-def _wizard_field_materialize_default(
+def _wizard_field_write_default_to_config(
     *,
     entry: ComponentEntry,
     full_path_label: str,
 ) -> bool:
     spec = _resolve_wizard_field_spec(entry=entry, full_path_label=full_path_label)
-    return bool(isinstance(spec, dict) and spec.get("materialize_default") is True)
+    return bool(isinstance(spec, dict) and spec.get("write_default_to_config") is True)
 
 
 def _wizard_field_provider_default_value(
@@ -4815,7 +8318,7 @@ def _provider_prompt_dependencies_ready(
         entry=entry,
         full_path_label=full_path_label,
     ):
-        for key in ("platform_path", "preset_path"):
+        for key in ("platform_path", "preset_path", "network_id_path"):
             dependency_path = _non_empty_text(resolved_args.get(key))
             if dependency_path and not _non_empty_text(
                 _read_payload_field(payload, dependency_path)
@@ -5174,21 +8677,20 @@ def _prompt_path_sort_key(
     required_prompt_labels: set[str] | None = None,
 ) -> tuple[int, int, int, str]:
     leaf_order_hints = {
-        "cpu_nodes_platform": 10,
-        "cpu_nodes_preset": 11,
-        "cpu_nodes_os": 12,
-        "cpu_nodes_boot_disk_type": 13,
-        "cpu_nodes_boot_disk_size_gib": 14,
-        "gpu_node_groups": 10,
-        "gpu_nodes_count_per_group": 11,
-        "gpu_nodes_platform": 12,
-        "gpu_nodes_preset": 13,
+        "install_mode": 0,
+        "profile": 1,
+        "partitionprofile": 2,
+        "topologyprofile": 3,
+        "nodegroupmapping": 4,
+        "node_groups": 10,
+        "node_group_defaults": 11,
         "gpu_stack_preset": 14,
-        "gpu_nodes_os": 15,
         "infiniband_fabric": 16,
-        "gpu_nodes_boot_disk_type": 17,
-        "gpu_nodes_boot_disk_size_gib": 18,
-        "subnet_id": 20,
+        "cluster_name": 16,
+        "network_id": 17,
+        "subnet_id": 18,
+        "k8s_version": 19,
+        "public_endpoint": 20,
         "platform": 21,
         "preset": 22,
         "source_image_family": 23,
@@ -5206,25 +8708,31 @@ def _prompt_path_sort_key(
         "data_disk_encryption_enabled": 35,
         "data_disk_deletion_protection": 36,
         "data_disk_size_gib": 37,
+        "system_node_count": 38,
+        "controller_node_count": 39,
+        "login_node_count": 40,
+        "accounting_node_count": 41,
+        "worker_total_nodes": 42,
+        "worker_nodes_per_group": 43,
     }
     full_label = _format_payload_path(path)
     nested_order_hints = {
         "deploy.observability.enabled": 19,
-        "deploy.targets[].observability.enabled": 19,
-        "deploy.targets[].observability.kubernetes.logs.enabled": 20,
-        "deploy.targets[].observability.kubernetes.metrics.enabled": 21,
-        "deploy.targets[].observability.kubernetes.metrics.collect_k8s_cluster_metrics": 22,
-        "deploy.targets[].observability.kubernetes.traces.enabled": 23,
-        "deploy.targets[].validations.mk8s_gpu.operator_readiness.enabled": 30,
-        "deploy.targets[].validations.mk8s_gpu.gpu_visibility.enabled": 31,
-        "deploy.targets[].validations.mk8s_gpu.gpu_visibility.max_nodes": 32,
-        "deploy.targets[].validations.mk8s_gpu.nccl.enabled": 33,
-        "deploy.targets[].validations.mk8s_gpu.nccl.max_nodes": 34,
-        "deploy.targets[].validations.mk8s_gpu.nccl.average_bus_bandwidth_threshold_gbps": 35,
-        "deploy.targets[].validations.mk8s_gpu.health_checker.enabled": 36,
-        "deploy.targets[].secrets.mysterybox.enabled": 40,
-        "deploy.targets[].secrets.mysterybox.allow_all_namespaces": 41,
-        "deploy.targets[].secrets.mysterybox.sync_namespaces": 42,
+        "deploy.targets[].observability.enabled": 200,
+        "deploy.targets[].observability.kubernetes.logs.enabled": 201,
+        "deploy.targets[].observability.kubernetes.metrics.enabled": 202,
+        "deploy.targets[].observability.kubernetes.metrics.collect_k8s_cluster_metrics": 203,
+        "deploy.targets[].observability.kubernetes.traces.enabled": 204,
+        "deploy.targets[].validations.mk8s_gpu.operator_readiness.enabled": 220,
+        "deploy.targets[].validations.mk8s_gpu.gpu_visibility.enabled": 221,
+        "deploy.targets[].validations.mk8s_gpu.gpu_visibility.max_nodes": 222,
+        "deploy.targets[].validations.mk8s_gpu.nccl.enabled": 223,
+        "deploy.targets[].validations.mk8s_gpu.nccl.max_nodes": 224,
+        "deploy.targets[].validations.mk8s_gpu.nccl.average_bus_bandwidth_threshold_gbps": 225,
+        "deploy.targets[].validations.mk8s_gpu.health_checker.enabled": 226,
+        "deploy.targets[].secrets.mysterybox.enabled": 240,
+        "deploy.targets[].secrets.mysterybox.allow_all_namespaces": 241,
+        "deploy.targets[].secrets.mysterybox.sync_namespaces": 242,
     }
     leaf = path[-1] if path else ""
     leaf_name = _normalize_leaf_name(str(leaf)) if isinstance(leaf, str) else ""
@@ -5235,11 +8743,15 @@ def _prompt_path_sort_key(
         or (leaf_name and leaf_name in required_leaf_names)
         else 1
     )
+    if re.search(r"\.inputs\.cluster\.public_endpoint$", full_label):
+        required_rank = 0
+    if normalized_full_label.startswith("deploy.targets[]."):
+        required_rank = 1
     if normalized_full_label.startswith("deploy.targets[].secrets.mysterybox."):
         required_rank = 1
     toggle_rank = (
         0
-        if leaf_name.endswith("_enabled")
+        if (leaf_name == "enabled" or leaf_name.endswith("_enabled"))
         and leaf_name not in {"boot_disk_encryption_enabled", "data_disk_encryption_enabled"}
         else 1
     )
@@ -5247,7 +8759,7 @@ def _prompt_path_sort_key(
         (rank for suffix, rank in nested_order_hints.items() if normalized_full_label == suffix),
         leaf_order_hints.get(leaf_name, 100),
     )
-    return required_rank, toggle_rank, leaf_rank, full_label
+    return required_rank, leaf_rank, toggle_rank, full_label
 
 
 def _maybe_clear_gpu_cluster_fabric_after_shape_change(
@@ -5263,17 +8775,31 @@ def _maybe_clear_gpu_cluster_fabric_after_shape_change(
     disabled_reason = ""
     if entry.id == "mk8s":
         if not full_path_label.endswith(
-            (".gpu_enabled", ".gpu_nodes_platform", ".gpu_nodes_preset")
+            (
+                ".node_group_defaults.gpu.platform",
+                ".node_group_defaults.gpu.preset",
+            )
         ):
             return
         component_prefix = _dynamic_component_prefix(entry=entry, full_path_label=full_path_label)
         if not component_prefix:
             return
-        fabric_label = f"{component_prefix}.inputs.infiniband_fabric"
+        fabric_label = f"{component_prefix}.inputs.node_group_defaults.gpu.infiniband_fabric"
         gpu_shape_enabled = bool(
-            _read_payload_field(payload, f"{component_prefix}.inputs.gpu_enabled")
+            _non_empty_text(
+                _read_payload_field(
+                    payload,
+                    f"{component_prefix}.inputs.node_group_defaults.gpu.platform",
+                )
+            )
+            and _non_empty_text(
+                _read_payload_field(
+                    payload,
+                    f"{component_prefix}.inputs.node_group_defaults.gpu.preset",
+                )
+            )
         )
-        disabled_reason = "GPU is no longer enabled"
+        disabled_reason = "the selected GPU shape is incomplete"
     elif entry.id == "vm":
         if not full_path_label.endswith((".gpu_cluster_enabled", ".platform", ".preset")):
             return
@@ -5327,8 +8853,10 @@ def _maybe_clear_gpu_cluster_fabric_after_shape_change(
 def _is_compute_boot_disk_type_field(full_path_label: str) -> bool:
     return full_path_label.endswith(
         (
-            ".cpu_nodes_boot_disk_type",
-            ".gpu_nodes_boot_disk_type",
+            ".node_group_defaults.cpu.boot_disk.type",
+            ".node_group_defaults.gpu.boot_disk.type",
+            ".node_groups.system.boot_disk.type",
+            ".boot_disk.type",
             ".boot_disk_type",
             ".data_disk_type",
         )
@@ -5372,9 +8900,12 @@ def _gpu_preset_field_context(
     if not component_prefix:
         return None
 
-    if full_path_label.endswith(".gpu_nodes_preset"):
-        platform_label = f"{component_prefix}.inputs.gpu_nodes_platform"
-        preset_label = f"{component_prefix}.inputs.gpu_nodes_preset"
+    if full_path_label.endswith(".node_group_defaults.gpu.preset"):
+        platform_label = f"{component_prefix}.inputs.node_group_defaults.gpu.platform"
+        preset_label = full_path_label
+    elif ".inputs.node_groups." in full_path_label and full_path_label.endswith(".preset"):
+        platform_label = f"{full_path_label[: -len('.preset')]}.platform"
+        preset_label = full_path_label
     elif full_path_label.endswith(".preset"):
         platform_label = f"{component_prefix}.inputs.platform"
         preset_label = full_path_label
@@ -5489,7 +9020,7 @@ def _payload_has_enabled_mk8s_gpu(payload: dict[str, Any]) -> bool:
         if component_type_id(item) != "mk8s":
             continue
         inputs = item.get("inputs")
-        if isinstance(inputs, dict) and bool(inputs.get("gpu_enabled", False)):
+        if isinstance(inputs, Mapping) and mk8s_gpu_enabled(inputs):
             return True
     return False
 
@@ -5505,9 +9036,7 @@ def _payload_has_enabled_mk8s_gpu_cluster(payload: dict[str, Any]) -> bool:
         if component_type_id(item) != "mk8s":
             continue
         inputs = item.get("inputs")
-        if not isinstance(inputs, dict) or not bool(inputs.get("gpu_enabled", False)):
-            continue
-        if _non_empty_text(inputs.get("infiniband_fabric")):
+        if isinstance(inputs, Mapping) and mk8s_gpu_cluster_enabled(inputs):
             return True
     return False
 
@@ -5683,6 +9212,459 @@ def _maybe_print_mysterybox_secrets_prompt_guidance(
     emitted_guidance.add(guidance_key)
 
 
+def _maybe_print_soperator_mk8s_sizing_prompt_guidance(
+    *,
+    entry: ComponentEntry,
+    full_path_label: str,
+    emitted_guidance: set[str],
+) -> None:
+    if entry.scope != "infra" or entry.id != "mk8s":
+        return
+    if ".inputs.soperator." not in full_path_label:
+        return
+    if "soperator_mk8s_sizing" in emitted_guidance:
+        return
+    console.print(
+        "[dim]Soperator production sizing: system, controller, login, and "
+        "accounting counts size the CPU service role node groups. "
+        "worker_total_nodes sizes Slurm worker capacity, and "
+        "worker_nodes_per_group controls generated worker group sharding.[/dim]"
+    )
+    emitted_guidance.add("soperator_mk8s_sizing")
+
+
+def _maybe_print_soperator_prompt_guidance(
+    *,
+    entry: ComponentEntry,
+    full_path_label: str,
+    emitted_guidance: set[str],
+) -> None:
+    if entry.scope != "apps" or entry.id != _SOPERATOR_APP_ID:
+        return
+    if "soperator_guided_defaults" not in emitted_guidance:
+        console.print(
+            "[dim]Soperator guided mode asks for layout and policy choices only. "
+            "The chart internals stay on cxcli defaults and can still be edited "
+            "directly in config.yaml when you need an advanced override.[/dim]"
+        )
+        emitted_guidance.add("soperator_guided_defaults")
+
+    guidance: dict[str, str] = {
+        "profile": (
+            "Profile chooses the production node layout: system, controller, "
+            "login, accounting, and worker roles are mapped to MK8s node groups."
+        ),
+        "values.partitionProfile": (
+            "Partition profile chooses Slurm queues and scheduling policy. "
+            "The baseline creates the worker partition; debug/long adds tiered "
+            "queues; QoS preemption needs SlurmDBD QOS/account setup."
+        ),
+        "values.topologyProfile": (
+            "Topology profile controls Slurm locality scheduling. Keep disabled "
+            "unless worker nodes have accurate topology labels for the selected fabric."
+        ),
+        "values.soperator-activechecks.enabled": (
+            "Soperator ActiveChecks run the Soperator-owned CUDA, NCCL, storage, "
+            "and health probes as recurring Slurm workloads. Keep disabled for "
+            "production training clusters; enable only for benchmarking, diagnostics, "
+            "or maintenance windows."
+        ),
+        "values.soperator-activechecks.waitForChecks.enabled": (
+            "Wait for ActiveChecks is meaningful only when ActiveChecks are enabled. "
+            "It makes install readiness depend on those benchmark/diagnostic checks "
+            "finishing instead of only Helm release readiness."
+        ),
+        "values.soperator-checks.enabled": (
+            "The Soperator checks controller reconciles ActiveCheck resources and "
+            "node maintenance/degraded conditions. Keep disabled unless you "
+            "intentionally enable Soperator ActiveChecks or advanced "
+            "Soperator-managed node maintenance; cxcli will enable the controller "
+            "when ActiveChecks are enabled. Maintenance conditions drain and hand "
+            "off nodes; actual host reboot uses the SlurmNodeReboot path."
+        ),
+        "values.soperator-dcgm-exporter.enabled": (
+            "The standard cxcli GPU telemetry path uses the NVIDIA GPU Operator DCGM "
+            "exporter plus the Nebius Observability Agent. Enable the Soperator DCGM "
+            "exporter only when Slurm per-job GPU labels are required."
+        ),
+        "values.soperator-notifier.enabled": (
+            "Notifier sends Soperator alerts to Slack. It is disabled unless you "
+            "provide a deploy-time webhook or MysteryBox secret."
+        ),
+        "values.soperator-backup-config.enabled": (
+            "Backup config schedules jail backup/prune jobs. It is disabled until "
+            "you provide backup storage credentials."
+        ),
+        "values.qosConfiguration.enabled": (
+            "QoS configuration runs the chart job that reconciles SlurmDBD accounts, "
+            "QOS, and associations. Keep disabled unless you selected a QoS partition "
+            "profile and want the chart to manage those objects."
+        ),
+        "values.sssd.enabled": (
+            "SSSD is the System Security Services Daemon for LDAP/AD-style identity "
+            "lookup. When enabled, cxcli applies it to Slurm controller/login and "
+            "generated worker NodeSets. Keep disabled unless you provide the "
+            "directory integration secret/config."
+        ),
+    }
+    relative_paths = _relative_wizard_field_paths(entry=entry, full_path_label=full_path_label)
+    for relative in relative_paths:
+        message = guidance.get(relative)
+        if not message:
+            continue
+        guidance_key = f"soperator:{relative}"
+        if guidance_key in emitted_guidance:
+            return
+        console.print(f"[dim]{escape(message)}[/dim]")
+        emitted_guidance.add(guidance_key)
+        return
+
+
+_APP_SKIP_PREVIEW_TOP_LEVEL_KEYS = (
+    "namespace",
+    "release-name",
+    "version",
+    _SOPERATOR_INSTALL_MODE_FIELD,
+    "profile",
+)
+_APP_SKIP_PREVIEW_VALUES_PRIORITY = (
+    "clusterName",
+    "partitionProfile",
+    "topologyProfile",
+    "volume",
+    "sfs",
+    "nodeGroupMapping",
+    "nodesets",
+    "slurmNodes",
+    "k8sNodeFilters",
+)
+_APP_SKIP_PREVIEW_MAPPING_KEY_PRIORITY = {
+    "jail": 0,
+    "controllerSpool": 1,
+    "controller-spool": 1,
+    "accounting": 2,
+    "enabled": 3,
+    "size": 4,
+    "size_gib": 5,
+    "replicas": 6,
+    "replicaCount": 7,
+    "name": 8,
+    "filestoreDeviceName": 9,
+    "k8sNodeFilterName": 10,
+}
+_APP_SKIP_PREVIEW_SENSITIVE_TOKENS = (
+    "password",
+    "passwd",
+    "secret",
+    "token",
+    "private",
+    "credential",
+    "webhook",
+)
+
+
+def _app_skip_preview_has_value(value: object) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return bool(value.strip())
+    if isinstance(value, Mapping):
+        return bool(value)
+    if isinstance(value, (list, tuple, set)):
+        return bool(value)
+    return True
+
+
+def _app_skip_preview_path_is_sensitive(path: Sequence[str]) -> bool:
+    lowered = ".".join(path).lower()
+    if not lowered:
+        return False
+    return any(token in lowered for token in _APP_SKIP_PREVIEW_SENSITIVE_TOKENS)
+
+
+def _app_skip_preview_format_scalar(value: object, *, path: Sequence[str]) -> str:
+    if _app_skip_preview_path_is_sensitive(path):
+        return "<redacted>"
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if value is None:
+        return "null"
+    text = str(value).strip()
+    if len(text) > 56:
+        return f"{text[:53]}..."
+    return text
+
+
+def _app_skip_preview_ordered_mapping_keys(mapping: Mapping[str, Any]) -> list[str]:
+    return sorted(
+        (str(key) for key in mapping),
+        key=lambda key: (
+            _APP_SKIP_PREVIEW_MAPPING_KEY_PRIORITY.get(key, 100),
+            key.lower(),
+        ),
+    )
+
+
+def _app_skip_preview_leaf_items(
+    value: object,
+    *,
+    path: tuple[str, ...] = (),
+    max_items: int = 4,
+) -> list[str]:
+    if len(path) >= 4:
+        return []
+    if isinstance(value, Mapping):
+        items: list[str] = []
+        for key in _app_skip_preview_ordered_mapping_keys(value):
+            if key not in value:
+                continue
+            child = value[key]
+            if not _app_skip_preview_has_value(child):
+                continue
+            child_path = (*path, key)
+            if isinstance(child, Mapping):
+                items.extend(
+                    _app_skip_preview_leaf_items(
+                        child,
+                        path=child_path,
+                        max_items=max_items - len(items),
+                    )
+                )
+            elif isinstance(child, list):
+                items.append(
+                    f"{'.'.join(child_path)}="
+                    f"{_app_skip_preview_format_value(child, path=child_path)}"
+                )
+            else:
+                items.append(
+                    f"{'.'.join(child_path)}="
+                    f"{_app_skip_preview_format_scalar(child, path=child_path)}"
+                )
+            if len(items) >= max_items:
+                break
+        return items[:max_items]
+    return []
+
+
+def _app_skip_preview_format_value(value: object, *, path: Sequence[str]) -> str:
+    if isinstance(value, Mapping):
+        if path and path[-1] == "volume":
+            items = []
+            for key in ("jail", "controllerSpool", "controller-spool", "accounting"):
+                child = value.get(key)
+                if not isinstance(child, Mapping) or not _app_skip_preview_has_value(child):
+                    continue
+                size = child.get("size")
+                if _app_skip_preview_has_value(size):
+                    items.append(
+                        f"{key}.size="
+                        f"{_app_skip_preview_format_scalar(size, path=(*path, key, 'size'))}"
+                    )
+            if items:
+                return "{" + ", ".join(items) + "}"
+        if path and path[-1] == "sfs":
+            filesystems = value.get("filesystems")
+            if isinstance(filesystems, Mapping):
+                items = []
+                for key in ("jail", "controller-spool", "controllerSpool", "accounting"):
+                    child = filesystems.get(key)
+                    if not isinstance(child, Mapping) or not _app_skip_preview_has_value(child):
+                        continue
+                    size = child.get("size_gib")
+                    if _app_skip_preview_has_value(size):
+                        items.append(
+                            f"{key}.size_gib="
+                            f"{_app_skip_preview_format_scalar(size, path=(*path, key, 'size'))}"
+                        )
+                if items:
+                    return "{" + ", ".join(items) + "}"
+        leaf_items = _app_skip_preview_leaf_items(value, max_items=4)
+        if not leaf_items:
+            return "{...}"
+        suffix = ", ..." if len(leaf_items) < len(value) else ""
+        return "{" + ", ".join(leaf_items) + suffix + "}"
+    if isinstance(value, list):
+        if not value:
+            return "[]"
+        if all(not isinstance(item, (Mapping, list)) for item in value[:3]):
+            rendered = [
+                _app_skip_preview_format_scalar(item, path=path)
+                for item in value[:3]
+                if _app_skip_preview_has_value(item)
+            ]
+            suffix = ", ..." if len(value) > len(rendered) else ""
+            return "[" + ", ".join(rendered) + suffix + "]"
+        return f"[{len(value)} item{'s' if len(value) != 1 else ''}]"
+    return _app_skip_preview_format_scalar(value, path=path)
+
+
+def _app_skip_preview_chunk_items(
+    items: Sequence[str],
+    *,
+    max_lines: int,
+    line_width: int = 116,
+) -> tuple[str, ...]:
+    if max_lines <= 0:
+        return ()
+    lines: list[str] = []
+    current = ""
+    consumed = 0
+    for item in items:
+        candidate = item if not current else f"{current}; {item}"
+        if current and len(candidate) > line_width:
+            lines.append(current)
+            if len(lines) >= max_lines:
+                break
+            current = item
+        else:
+            current = candidate
+        consumed += 1
+    if len(lines) < max_lines and current:
+        lines.append(current)
+
+    if consumed < len(items) and lines:
+        omitted = len(items) - consumed
+        suffix = f"; ... {omitted} more default value{'s' if omitted != 1 else ''}"
+        if len(lines[-1]) + len(suffix) <= line_width:
+            lines[-1] = f"{lines[-1]}{suffix}"
+        else:
+            lines[-1] = (
+                f"... {omitted} more default value{'s' if omitted != 1 else ''}; "
+                "answer y to review/edit"
+            )
+    return tuple(lines[:max_lines])
+
+
+def _app_chart_skip_defaults_preview_lines(
+    component_node: Mapping[str, Any] | None,
+    *,
+    entry: ComponentEntry,
+    max_lines: int = 4,
+) -> tuple[str, ...]:
+    if entry.scope != "apps":
+        return ()
+    resolved = resolve_component_defaults(
+        component_node=dict(component_node or {}),
+        entry=entry,
+        preserve_existing_literal=True,
+        include_shared=False,
+    )
+    items: list[str] = []
+    for key in _APP_SKIP_PREVIEW_TOP_LEVEL_KEYS:
+        value = resolved.get(key)
+        if _app_skip_preview_has_value(value):
+            items.append(
+                f"{key}={_app_skip_preview_format_value(value, path=(key,))}"
+            )
+    if entry.default_release_timeout:
+        items.append(f"timeout={entry.default_release_timeout}")
+
+    values = resolved.get("values")
+    if isinstance(values, Mapping):
+        ordered_value_keys = [
+            key for key in _APP_SKIP_PREVIEW_VALUES_PRIORITY if key in values
+        ]
+        ordered_value_keys.extend(
+            key
+            for key in values
+            if str(key) not in set(_APP_SKIP_PREVIEW_VALUES_PRIORITY)
+        )
+        for raw_key in ordered_value_keys:
+            key = str(raw_key)
+            value = values.get(raw_key)
+            if not _app_skip_preview_has_value(value):
+                continue
+            items.append(
+                f"values.{key}="
+                f"{_app_skip_preview_format_value(value, path=('values', key))}"
+            )
+    return _app_skip_preview_chunk_items(items, max_lines=max_lines)
+
+
+def _print_app_chart_skip_defaults_preview(
+    component_node: Mapping[str, Any] | None,
+    *,
+    entry: ComponentEntry,
+) -> None:
+    lines = _app_chart_skip_defaults_preview_lines(component_node, entry=entry)
+    if not lines:
+        return
+    console.print("[dim]Default values if skipped:[/dim]")
+    for line in lines:
+        console.print(f"[dim]  {escape(line)}[/dim]")
+
+
+def _observability_prompt_target_ref(
+    payload: Mapping[str, Any],
+    full_path_label: str,
+) -> str:
+    match = re.match(
+        r"^(deploy\.targets\[[0-9]+\])\.observability\.enabled$",
+        full_path_label,
+    )
+    if not match:
+        return ""
+    return normalize_component_token(
+        _read_payload_field(dict(payload), f"{match.group(1)}.{INSTANCE_ID_FIELD}")
+    )
+
+
+def _selected_observability_app_ids(
+    app_entries: tuple[ComponentEntry, ...],
+) -> set[str]:
+    return {
+        normalize_component_token(entry.id)
+        for entry in app_entries
+        if normalize_component_token(entry.id)
+        and normalize_component_token(entry.group) == "observability"
+    }
+
+
+def _selected_observability_app_targets(
+    payload: dict[str, Any],
+    *,
+    app_entries: tuple[ComponentEntry, ...],
+) -> set[str]:
+    app_ids = _selected_observability_app_ids(app_entries)
+    if not app_ids:
+        return set()
+    materialize_app_chart_target_refs(payload)
+    cluster_targets = {
+        normalize_component_token(target_ref)
+        for target_ref in enabled_cluster_target_refs(payload)
+        if normalize_component_token(target_ref)
+    }
+    selected_targets: set[str] = set()
+    for row in _dynamic_enabled_app_chart_rows(payload):
+        if normalize_component_token(component_type_id(row)) not in app_ids:
+            continue
+        row_target_ref = normalize_component_token(app_chart_target_ref(row))
+        if row_target_ref:
+            selected_targets.add(row_target_ref)
+            continue
+        row_instance_id = normalize_component_token(component_instance_id(row))
+        if row_instance_id in cluster_targets:
+            selected_targets.add(row_instance_id)
+            continue
+        if len(cluster_targets) == 1:
+            selected_targets.update(cluster_targets)
+    return selected_targets
+
+
+def _observability_prompt_default_from_selected_apps(
+    *,
+    payload: dict[str, Any],
+    app_entries: tuple[ComponentEntry, ...],
+    full_path_label: str,
+) -> object:
+    target_ref = _observability_prompt_target_ref(payload, full_path_label)
+    if not target_ref:
+        return _WIZARD_DEFAULT_MISSING
+    if target_ref in _selected_observability_app_targets(payload, app_entries=app_entries):
+        return True
+    return _WIZARD_DEFAULT_MISSING
+
+
 def _skip_observability_prompt(
     *,
     payload: dict[str, Any],
@@ -5764,6 +9746,128 @@ def _skip_mysterybox_eso_prompt(
     return not bool(_read_payload_field(payload, f"{target_prefix}.enabled"))
 
 
+def _skip_soperator_child_chart_prompt(
+    *,
+    payload: dict[str, Any],
+    entry: ComponentEntry,
+    full_path_label: str,
+) -> bool:
+    if entry.scope != "apps" or entry.id != "soperator":
+        return False
+    child_key = next(
+        (
+            key
+            for key in _SOPERATOR_CHILD_CHART_VALUE_KEYS
+            if f".values.{key}." in full_path_label or full_path_label.startswith(f"values.{key}.")
+        ),
+        "",
+    )
+    if not child_key:
+        return False
+
+    prefix = full_path_label.split(f"values.{child_key}.", maxsplit=1)[0]
+    enabled_path = f"{prefix}values.{child_key}.enabled"
+    if full_path_label == enabled_path:
+        return False
+    if _read_payload_field(payload, enabled_path) is not True:
+        return True
+    if (
+        child_key == "soperator-notifier"
+        and ".values.soperator-notifier.slack.mysterybox." in full_path_label
+    ):
+        source_path = f"{prefix}values.soperator-notifier.slack.webhookSource"
+        return _read_payload_field(payload, source_path) != "mysterybox"
+    return _resolve_wizard_field_spec(entry=entry, full_path_label=full_path_label) is None
+
+
+def _skip_soperator_install_mode_dependent_prompt(
+    *,
+    payload: dict[str, Any],
+    entry: ComponentEntry,
+    full_path_label: str,
+) -> bool:
+    if entry.scope != "apps" or entry.id != _SOPERATOR_APP_ID:
+        return False
+    if full_path_label.endswith(f".{_SOPERATOR_INSTALL_MODE_FIELD}"):
+        return True
+    if ".values.nodeGroupMapping." not in full_path_label:
+        return False
+    component_prefix = _dynamic_component_prefix(entry=entry, full_path_label=full_path_label)
+    if not component_prefix:
+        return False
+    mode = _non_empty_text(
+        _read_payload_field(payload, f"{component_prefix}.{_SOPERATOR_INSTALL_MODE_FIELD}")
+    )
+    if not mode:
+        mode = _default_soperator_install_mode()
+    return mode != _SOPERATOR_INSTALL_MODE_ONBOARD_EXISTING_CLUSTER
+
+
+def _soperator_partition_profile_requires_qos_configuration(
+    partition_profile: Mapping[str, Any],
+) -> bool:
+    wizard = _profile_mapping(partition_profile, "wizard")
+    if wizard.get("requires_qos_configuration") is True:
+        return True
+    values = _profile_mapping(partition_profile, "values")
+    return (
+        normalize_component_token(_mapping_path_value(values, "schedulingConfig.preemptType"))
+        == "preempt/qos"
+    )
+
+
+def _soperator_selected_partition_profile_requires_qos_configuration(
+    *,
+    payload: dict[str, Any],
+    entry: ComponentEntry,
+    full_path_label: str,
+) -> bool:
+    if entry.scope != "apps" or entry.id != _SOPERATOR_APP_ID:
+        return False
+    component_prefix = _component_prefix_for_prompt_field(
+        entry=entry,
+        full_path_label=full_path_label,
+    )
+    if not component_prefix:
+        return False
+    default_profile, profiles = _soperator_nodesets_profiles()
+    profile_name = (
+        _non_empty_text(_read_payload_field(payload, f"{component_prefix}.profile"))
+        or default_profile
+    )
+    profile = profiles.get(profile_name)
+    if not isinstance(profile, Mapping):
+        return True
+    profile_values_prefix = f"{component_prefix}.values"
+    partition_profile_name = (
+        _non_empty_text(_read_payload_field(payload, f"{profile_values_prefix}.partitionProfile"))
+        or "shape-default"
+    )
+    chart_profile = _profile_mapping(profile, "chart")
+    partition_profiles = _profile_mapping(chart_profile, "partition_profiles")
+    partition_profile = partition_profiles.get(partition_profile_name)
+    if not isinstance(partition_profile, Mapping):
+        return True
+    return _soperator_partition_profile_requires_qos_configuration(partition_profile)
+
+
+def _skip_soperator_qos_configuration_prompt(
+    *,
+    payload: dict[str, Any],
+    entry: ComponentEntry,
+    full_path_label: str,
+) -> bool:
+    if entry.scope != "apps" or entry.id != _SOPERATOR_APP_ID:
+        return False
+    if not full_path_label.endswith(".values.qosConfiguration.enabled"):
+        return False
+    return not _soperator_selected_partition_profile_requires_qos_configuration(
+        payload=payload,
+        entry=entry,
+        full_path_label=full_path_label,
+    )
+
+
 def _skip_vm_service_account_prompt(
     *,
     entry: ComponentEntry,
@@ -5782,7 +9886,7 @@ def _skip_vm_preemptible_prompt(
 ) -> bool:
     if entry.scope != "infra" or entry.id != "vm":
         return False
-    if not full_path_label.endswith((".preemptible_enabled", ".preemptible_priority")):
+    if not full_path_label.endswith(".preemptible_enabled"):
         return False
     component_prefix = _dynamic_component_prefix(entry=entry, full_path_label=full_path_label)
     if not component_prefix:
@@ -5969,6 +10073,191 @@ def _skip_jump_host_public_ip_allocation_prompt(
     return False
 
 
+def _component_prefix_for_prompt_field(
+    *,
+    entry: ComponentEntry,
+    full_path_label: str,
+) -> str:
+    return _dynamic_component_prefix(entry=entry, full_path_label=full_path_label)
+
+
+def _component_instance_id_for_prompt_field(
+    *,
+    payload: dict[str, Any],
+    entry: ComponentEntry,
+    full_path_label: str,
+) -> str:
+    component_prefix = _component_prefix_for_prompt_field(
+        entry=entry,
+        full_path_label=full_path_label,
+    )
+    if not component_prefix:
+        return ""
+    component_path = _parse_payload_path_label(component_prefix)
+    if component_path is None or not _payload_path_exists(payload, component_path):
+        return ""
+    component_node = _get_payload_value(payload, component_path)
+    return component_instance_id(component_node) if isinstance(component_node, Mapping) else ""
+
+
+def _mk8s_soperator_prompt_context(
+    *,
+    payload: Mapping[str, Any],
+    entry: ComponentEntry,
+    full_path_label: str,
+) -> tuple[bool, str]:
+    if entry.scope != "infra" or entry.id != "mk8s":
+        return False, _default_soperator_install_mode()
+    target_ref = _component_instance_id_for_prompt_field(
+        payload=dict(payload),
+        entry=entry,
+        full_path_label=full_path_label,
+    )
+    has_soperator_target = bool(
+        target_ref and target_ref in set(_soperator_app_target_refs(payload))
+    )
+    install_mode = _soperator_install_mode_by_target(payload).get(
+        target_ref,
+        _default_soperator_install_mode(),
+    )
+    return has_soperator_target, install_mode
+
+
+def _skip_soperator_managed_mk8s_prompt(
+    *,
+    payload: dict[str, Any],
+    entry: ComponentEntry,
+    full_path_label: str,
+) -> bool:
+    if entry.scope != "infra" or entry.id != "mk8s":
+        return False
+    has_soperator_target, install_mode = _mk8s_soperator_prompt_context(
+        payload=payload,
+        entry=entry,
+        full_path_label=full_path_label,
+    )
+    soperator_count_field_suffixes = tuple(
+        f".inputs.soperator.{field}"
+        for field in (
+            *_SOPERATOR_SERVICE_ROLE_NODE_COUNT_FIELDS,
+            "worker_total_nodes",
+            "worker_nodes_per_group",
+        )
+    )
+    if full_path_label.endswith(soperator_count_field_suffixes):
+        return not has_soperator_target or install_mode != _SOPERATOR_INSTALL_MODE_PRODUCTION
+    if ".inputs.node_group_defaults." in full_path_label:
+        if not has_soperator_target or install_mode != _SOPERATOR_INSTALL_MODE_PRODUCTION:
+            return True
+        if ".inputs.node_group_defaults.gpu." in full_path_label:
+            target_ref = _component_instance_id_for_prompt_field(
+                payload=payload,
+                entry=entry,
+                full_path_label=full_path_label,
+            )
+            profile = _soperator_profile_by_target(payload).get(target_ref, {})
+            return bool(profile) and not _soperator_profile_uses_gpu(profile)
+        return False
+    if ".inputs.node_groups." in full_path_label:
+        return has_soperator_target
+    return False
+
+
+def _prune_mk8s_node_group_defaults_without_soperator(
+    payload: dict[str, Any],
+    *,
+    infra_entries: tuple[ComponentEntry, ...],
+) -> None:
+    prune_inactive_mk8s_node_group_defaults(payload, infra_entries=infra_entries)
+
+
+def _skip_sfs_single_filesystem_prompt(
+    *,
+    payload: dict[str, Any],
+    entry: ComponentEntry,
+    full_path_label: str,
+) -> bool:
+    if entry.scope != "infra" or entry.id != "sfs":
+        return False
+    if not full_path_label.endswith(
+        (
+            ".inputs.name",
+            ".inputs.size_gib",
+            ".inputs.block_size_kib",
+            ".inputs.mount_tag",
+            ".inputs.forbid_deletion",
+        )
+    ):
+        return False
+    component_prefix = _component_prefix_for_prompt_field(
+        entry=entry,
+        full_path_label=full_path_label,
+    )
+    if not component_prefix:
+        return False
+    filesystems = _read_payload_field(payload, f"{component_prefix}.inputs.filesystems")
+    return isinstance(filesystems, Mapping) and bool(filesystems)
+
+
+def _skip_sfs_multi_filesystem_prompt(
+    *,
+    payload: dict[str, Any],
+    entry: ComponentEntry,
+    full_path_label: str,
+) -> bool:
+    if entry.scope != "infra" or entry.id != "sfs":
+        return False
+    if ".inputs.filesystems." not in full_path_label:
+        return False
+    component_prefix = _component_prefix_for_prompt_field(
+        entry=entry,
+        full_path_label=full_path_label,
+    )
+    if not component_prefix:
+        return False
+    filesystems = _read_payload_field(payload, f"{component_prefix}.inputs.filesystems")
+    return not (isinstance(filesystems, Mapping) and bool(filesystems))
+
+
+def _mk8s_gpu_validation_prompt_section(full_path_label: str) -> str:
+    match = re.match(
+        r"^deploy\.targets\[[0-9]+\]\.validations\.mk8s_gpu\.([^.]+)\.",
+        full_path_label,
+    )
+    return match.group(1) if match else ""
+
+
+def _mk8s_gpu_validation_prompt_target_ref(
+    payload: Mapping[str, Any],
+    full_path_label: str,
+) -> str:
+    match = re.match(r"^deploy\.targets\[([0-9]+)\]\.", full_path_label)
+    if match is None:
+        return ""
+    deploy = payload.get("deploy")
+    targets = deploy.get("targets") if isinstance(deploy, Mapping) else None
+    if not isinstance(targets, list):
+        return ""
+    index = int(match.group(1))
+    if index >= len(targets):
+        return ""
+    row = targets[index]
+    if not isinstance(row, Mapping):
+        return ""
+    return normalize_component_token(row.get(INSTANCE_ID_FIELD))
+
+
+def _mk8s_gpu_validation_section_enabled(
+    payload: dict[str, Any],
+    *,
+    full_path_label: str,
+    section: str,
+) -> bool:
+    prefix = full_path_label.split(f".{section}.", maxsplit=1)[0]
+    enabled = _read_payload_field(payload, f"{prefix}.{section}.enabled")
+    return enabled is not False
+
+
 def _dynamic_required_prompt(
     *,
     payload: dict[str, Any],
@@ -5983,6 +10272,20 @@ def _dynamic_required_prompt(
                 full_path_label=full_path_label,
             )
             is False
+        )
+    if (
+        entry.scope == "infra"
+        and entry.id == "mk8s"
+        and full_path_label.endswith((".gpu_visibility.max_nodes", ".nccl.max_nodes"))
+    ):
+        section = _mk8s_gpu_validation_prompt_section(full_path_label)
+        return bool(
+            section
+            and _mk8s_gpu_validation_section_enabled(
+                payload,
+                full_path_label=full_path_label,
+                section=section,
+            )
         )
     return False
 
@@ -6033,6 +10336,21 @@ def _skip_mk8s_gpu_validation_prompt(
         return False
     if not _payload_has_enabled_mk8s_gpu(payload):
         return True
+    section = _mk8s_gpu_validation_prompt_section(full_path_label)
+    target_ref = _mk8s_gpu_validation_prompt_target_ref(payload, full_path_label)
+    disabled_sections = set(mk8s_gpu_disabled_target_validations(payload).get(target_ref, ()))
+    if section and section in disabled_sections:
+        return True
+    if (
+        section in {"gpu_visibility", "nccl"}
+        and not full_path_label.endswith(f".{section}.enabled")
+        and not _mk8s_gpu_validation_section_enabled(
+            payload,
+            full_path_label=full_path_label,
+            section=section,
+        )
+    ):
+        return True
     if (
         full_path_label.endswith(".validations.mk8s_gpu.health_checker.enabled")
         and not has_mk8s_gpu_health_checker_app()
@@ -6057,20 +10375,27 @@ def _maybe_refresh_compute_boot_disk_defaults_after_shape_change(
         or previous_component_inputs is None
     ):
         return
-    watched_suffixes = (
-        (
-            ".cpu_nodes_platform",
-            ".cpu_nodes_preset",
-            ".cpu_nodes_boot_disk_type",
-            ".gpu_enabled",
-            ".gpu_nodes_platform",
-            ".gpu_nodes_preset",
-            ".gpu_nodes_boot_disk_type",
+    if entry.id == "mk8s":
+        helper_watched_suffixes = (
+            ".node_group_defaults.cpu.platform",
+            ".node_group_defaults.cpu.preset",
+            ".node_group_defaults.cpu.boot_disk.type",
+            ".node_group_defaults.gpu.platform",
+            ".node_group_defaults.gpu.preset",
+            ".node_group_defaults.gpu.boot_disk.type",
         )
-        if entry.id == "mk8s"
-        else (".platform", ".preset", ".boot_disk_type", ".boot_disk_existing_id")
-    )
-    if not full_path_label.endswith(watched_suffixes):
+        node_group_watched_suffixes = (".platform", ".preset", ".boot_disk.type")
+        if not (
+            full_path_label.endswith(helper_watched_suffixes)
+            or (
+                ".node_groups." in full_path_label
+                and full_path_label.endswith(node_group_watched_suffixes)
+            )
+        ):
+            return
+    elif not full_path_label.endswith(
+        (".platform", ".preset", ".boot_disk_type", ".boot_disk_existing_id")
+    ):
         return
 
     component_prefix = _dynamic_component_prefix(entry=entry, full_path_label=full_path_label)
@@ -6160,6 +10485,8 @@ def _prune_redundant_app_chart_default_values(
         if not _payload_path_exists(payload, values_path):
             continue
         for relative_path in _collect_scalar_leaf_paths(chart_defaults):
+            if any(isinstance(segment, int) for segment in relative_path):
+                continue
             full_path = values_path + relative_path
             if not _payload_path_exists(payload, full_path):
                 continue
@@ -6449,7 +10776,15 @@ def _skip_remaining_prompt_paths_for_prefix(
     ]
 
 
-def _prompt_choice_override(
+def _choice_current_values(current: object) -> list[str]:
+    if isinstance(current, list):
+        return [str(item).strip() for item in current if str(item).strip()]
+    if isinstance(current, str):
+        return [item.strip() for item in current.split(",") if item.strip()]
+    return []
+
+
+def _prompt_multi_choice_override(
     *,
     path_label: str,
     current: object,
@@ -6457,6 +10792,122 @@ def _prompt_choice_override(
     type_hint: str | None = None,
     required: bool = False,
 ) -> tuple[object, bool]:
+    rendered_label = _prompt_label_with_type(
+        path_label,
+        type_hint=type_hint,
+        required=required,
+    )
+    prompt_suffix = _wizard_field_prompt_suffix(rendered_label)
+    option_values = [choice.value for choice in choices]
+    option_values_by_text = {str(choice.value).strip(): choice.value for choice in choices}
+    current_values = [value for value in _choice_current_values(current) if value in option_values]
+    recommended_values = [choice.value for choice in choices if choice.recommended]
+    prompt_values = current_values or recommended_values or (option_values if required else [])
+
+    if _is_tty_session():
+        try:
+            import questionary
+
+            selected = _ask_questionary_with_wizard_navigation(
+                questionary.checkbox(
+                    rendered_label,
+                    choices=[
+                        questionary.Choice(
+                            title=choice.label,
+                            value=choice.value,
+                            checked=choice.value in prompt_values,
+                        )
+                        for choice in choices
+                    ],
+                    instruction="Space=toggle; q=back; qq=quit; Enter=select.",
+                    qmark="",
+                )
+            )
+            if selected is None:
+                return current, True
+            if selected == _WIZARD_QUIT_CHOICE:
+                return current, True
+            if selected == _WIZARD_BACK_CHOICE:
+                return _WIZARD_BACKTRACK, False
+            selected_values = [str(item).strip() for item in selected if str(item).strip()]
+            if required and not selected_values:
+                return prompt_values, False
+            return selected_values or current, False
+        except (KeyboardInterrupt, EOFError, typer.Abort):
+            return current, True
+        except Exception:
+            pass
+
+    console.print(f"[cyan]{path_label} options:[/cyan]")
+    default_indexes: list[str] = []
+    for index, choice in enumerate(choices, start=1):
+        selected = choice.value in prompt_values
+        marker = "*" if selected else " "
+        if selected:
+            default_indexes.append(str(index))
+        console.print(f"  {marker} [{index}] {choice.label}")
+
+    prompt_default = ",".join(default_indexes)
+    prompt_detail = "comma-separated indexes or values"
+    if not required:
+        prompt_detail = f"{prompt_detail}; blank keeps current"
+
+    while True:
+        try:
+            raw = typer.prompt(
+                f"{prompt_suffix} ({prompt_detail})",
+                default=prompt_default,
+            ).strip()
+        except (KeyboardInterrupt, EOFError, typer.Abort):
+            return current, True
+        if raw == WIZARD_ABORT_TOKEN:
+            return current, True
+        if raw == WIZARD_EXIT_TOKEN:
+            return _WIZARD_BACKTRACK, False
+        if not raw:
+            if required and prompt_values:
+                return prompt_values, False
+            return current, False
+        selected_values: list[str] = []
+        valid = True
+        for token in [item.strip() for item in raw.split(",") if item.strip()]:
+            if token.isdigit():
+                index = int(token)
+                if 1 <= index <= len(choices):
+                    selected_values.append(choices[index - 1].value)
+                    continue
+            if token in option_values_by_text:
+                selected_values.append(option_values_by_text[token])
+                continue
+            console.print(f"{error_markup('Invalid option value')}: {token}")
+            valid = False
+            break
+        if not valid:
+            continue
+        selected_values = list(dict.fromkeys(selected_values))
+        if required and not selected_values:
+            console.print(f"{error_markup('Invalid value')}. Select at least one option.")
+            continue
+        return selected_values, False
+
+
+def _prompt_choice_override(
+    *,
+    path_label: str,
+    current: object,
+    choices: list[OptionChoice],
+    type_hint: str | None = None,
+    required: bool = False,
+    unset_on_skip: bool = False,
+) -> tuple[object, bool]:
+    if _is_string_sequence_type_hint(type_hint):
+        return _prompt_multi_choice_override(
+            path_label=path_label,
+            current=current,
+            choices=choices,
+            type_hint=type_hint,
+            required=required,
+        )
     rendered_label = _prompt_label_with_type(
         path_label,
         type_hint=type_hint,
@@ -6487,10 +10938,15 @@ def _prompt_choice_override(
             rendered_choices = [
                 questionary.Choice(title=choice.label, value=choice.value) for choice in choices
             ]
-            if not required and not has_explicit_current:
+            if not required:
+                skip_title = (
+                    "<skip / keep unset>"
+                    if unset_on_skip or not has_explicit_current
+                    else "<keep current / skip>"
+                )
                 rendered_choices.insert(
                     0,
-                    questionary.Choice(title="<skip / keep unset>", value="__skip__"),
+                    questionary.Choice(title=skip_title, value="__skip__"),
                 )
             selected = _ask_questionary_with_wizard_navigation(
                 questionary.select(
@@ -6498,7 +10954,7 @@ def _prompt_choice_override(
                     choices=rendered_choices,
                     instruction="Use arrows; q=back; qq=quit; Enter=select.",
                     default=prompt_default
-                    or ("__skip__" if not required and not has_explicit_current else None),
+                    or ("__skip__" if not required and unset_on_skip else None),
                     qmark="",
                 )
             )
@@ -6509,7 +10965,7 @@ def _prompt_choice_override(
             if selected == _WIZARD_BACK_CHOICE:
                 return _WIZARD_BACKTRACK, False
             if selected == "__skip__":
-                return current, False
+                return (None if unset_on_skip else current), False
             return str(selected).strip(), False
         except (KeyboardInterrupt, EOFError, typer.Abort):
             return current, True
@@ -6523,15 +10979,19 @@ def _prompt_choice_override(
 
     prompt_detail = "index or value"
     if not required:
-        prompt_detail = (
-            "index or value; blank keeps current"
-            if has_explicit_current
-            else "index or value; blank keeps unset"
-        )
+        if unset_on_skip:
+            prompt_detail = "index or value; blank keeps unset"
+        elif has_explicit_current:
+            prompt_detail = "index or value; blank keeps current"
+        else:
+            prompt_detail = "index or value; blank keeps unset"
 
     while True:
         try:
-            raw = typer.prompt(f"{prompt_suffix} ({prompt_detail})", default=prompt_default).strip()
+            raw = typer.prompt(
+                f"{prompt_suffix} ({prompt_detail})",
+                default="" if unset_on_skip else prompt_default,
+            ).strip()
         except (KeyboardInterrupt, EOFError, typer.Abort):
             return current, True
         if raw == WIZARD_ABORT_TOKEN:
@@ -6539,6 +10999,8 @@ def _prompt_choice_override(
         if raw == WIZARD_EXIT_TOKEN:
             return _WIZARD_BACKTRACK, False
         if not raw:
+            if unset_on_skip:
+                return None, False
             if has_explicit_current or required:
                 return prompt_default, False
             return current, False
@@ -6965,6 +11427,7 @@ def _prompt_scalar_override(
     choices: list[OptionChoice] | None = None,
     type_hint: str | None = None,
     required: bool = False,
+    unset_on_skip: bool = False,
 ) -> tuple[object, bool]:
     if _is_ssh_public_key_prompt(path_label):
         return _prompt_ssh_public_key_override(
@@ -6979,6 +11442,7 @@ def _prompt_scalar_override(
             choices=choices,
             type_hint=type_hint,
             required=required,
+            unset_on_skip=unset_on_skip,
         )
     if _is_mysterybox_secrets_guided_prompt(path_label, type_hint):
         return _prompt_mysterybox_secrets_override(
@@ -6992,6 +11456,7 @@ def _prompt_scalar_override(
         required=required,
     )
     prompt_suffix = _wizard_field_prompt_suffix(rendered_label)
+    skip_unsets = unset_on_skip and not required
     if _is_complex_type_hint(type_hint) or isinstance(current, (dict, list)):
         default_value = _serialize_complex_prompt_default(current)
         if _is_string_sequence_type_hint(type_hint):
@@ -6999,12 +11464,16 @@ def _prompt_scalar_override(
         else:
             prompt_suffix = f"{prompt_suffix}; enter a single-line YAML/JSON value"
         blank_hint = _empty_complex_value_label(current, type_hint=type_hint)
-        blank_keep_text = (
-            f"blank keeps current {blank_hint}"
-            if blank_hint is not None and not required
-            else "blank keeps current"
-        )
-        prompt_default = "" if blank_hint is not None and not required else default_value
+        if skip_unsets:
+            blank_keep_text = "blank keeps unset"
+            prompt_default = ""
+        else:
+            blank_keep_text = (
+                f"blank keeps current {blank_hint}"
+                if blank_hint is not None and not required
+                else "blank keeps current"
+            )
+            prompt_default = "" if blank_hint is not None and not required else default_value
         while True:
             try:
                 raw = typer.prompt(
@@ -7021,7 +11490,7 @@ def _prompt_scalar_override(
                 if required and not _has_required_prompt_value(current, type_hint=type_hint):
                     console.print(f"{error_markup('Invalid value')}. This field is required.")
                     continue
-                return current, False
+                return (None if skip_unsets else current), False
             try:
                 coerced = _parse_complex_prompt_value(raw, type_hint=type_hint)
             except ValueError as exc:
@@ -7037,10 +11506,13 @@ def _prompt_scalar_override(
     while True:
         if isinstance(current, bool):
             try:
+                prompt_text = f"{prompt_suffix} [true/false]"
+                if skip_unsets:
+                    prompt_text = f"{prompt_text} (blank keeps unset)"
                 raw = (
                     typer.prompt(
-                        f"{prompt_suffix} [true/false]",
-                        default="true" if current else "false",
+                        prompt_text,
+                        default="" if skip_unsets else ("true" if current else "false"),
                     )
                     .strip()
                     .lower()
@@ -7051,6 +11523,8 @@ def _prompt_scalar_override(
                 return current, True
             if raw == WIZARD_EXIT_TOKEN:
                 return _WIZARD_BACKTRACK, False
+            if not raw and skip_unsets:
+                return None, False
             if raw in {"true", "t", "1", "yes", "y"}:
                 return True, False
             if raw in {"false", "f", "0", "no", "n"}:
@@ -7060,13 +11534,21 @@ def _prompt_scalar_override(
 
         if isinstance(current, int):
             try:
-                raw = typer.prompt(prompt_suffix, default=str(current)).strip()
+                prompt_text = (
+                    f"{prompt_suffix} (blank keeps unset)" if skip_unsets else prompt_suffix
+                )
+                raw = typer.prompt(
+                    prompt_text,
+                    default="" if skip_unsets else str(current),
+                ).strip()
             except (KeyboardInterrupt, EOFError, typer.Abort):
                 return current, True
             if raw == WIZARD_ABORT_TOKEN:
                 return current, True
             if raw == WIZARD_EXIT_TOKEN:
                 return _WIZARD_BACKTRACK, False
+            if not raw and skip_unsets:
+                return None, False
             try:
                 return int(raw), False
             except ValueError:
@@ -7075,13 +11557,21 @@ def _prompt_scalar_override(
 
         if isinstance(current, float):
             try:
-                raw = typer.prompt(prompt_suffix, default=str(current)).strip()
+                prompt_text = (
+                    f"{prompt_suffix} (blank keeps unset)" if skip_unsets else prompt_suffix
+                )
+                raw = typer.prompt(
+                    prompt_text,
+                    default="" if skip_unsets else str(current),
+                ).strip()
             except (KeyboardInterrupt, EOFError, typer.Abort):
                 return current, True
             if raw == WIZARD_ABORT_TOKEN:
                 return current, True
             if raw == WIZARD_EXIT_TOKEN:
                 return _WIZARD_BACKTRACK, False
+            if not raw and skip_unsets:
+                return None, False
             try:
                 return float(raw), False
             except ValueError:
@@ -7090,7 +11580,8 @@ def _prompt_scalar_override(
 
         if current is None:
             try:
-                raw = typer.prompt(f"{prompt_suffix} (blank keeps null)", default="").strip()
+                blank_text = "blank keeps unset" if skip_unsets else "blank keeps null"
+                raw = typer.prompt(f"{prompt_suffix} ({blank_text})", default="").strip()
             except (KeyboardInterrupt, EOFError, typer.Abort):
                 return current, True
             if raw == WIZARD_ABORT_TOKEN:
@@ -7113,13 +11604,19 @@ def _prompt_scalar_override(
             return coerced, False
 
         try:
-            raw = typer.prompt(prompt_suffix, default=str(current)).strip()
+            prompt_text = f"{prompt_suffix} (blank keeps unset)" if skip_unsets else prompt_suffix
+            raw = typer.prompt(
+                prompt_text,
+                default="" if skip_unsets else str(current),
+            ).strip()
         except (KeyboardInterrupt, EOFError, typer.Abort):
             return current, True
         if raw == WIZARD_ABORT_TOKEN:
             return current, True
         if raw == WIZARD_EXIT_TOKEN:
             return _WIZARD_BACKTRACK, False
+        if not raw and skip_unsets:
+            return None, False
         try:
             coerced = _coerce_raw_value_from_type_hint(raw, type_hint)
         except ValueError as exc:
@@ -7139,18 +11636,34 @@ def _run_component_field_wizard(
     infra_entries: tuple[ComponentEntry, ...],
     app_entries: tuple[ComponentEntry, ...],
     provider_lookup: ProviderOptionLookup | None = None,
+    skip_soperator_profile_prompt: bool = False,
+    align_infra_resource_names_before_apps: bool = False,
 ) -> tuple[str, bool]:
     payload = yaml.safe_load(config_yaml) or {}
     if not isinstance(payload, dict):
         raise RuntimeError("Generated config template is not a YAML mapping")
+    selected_infra = {
+        token for item in selected_infra if (token := normalize_component_token(item))
+    }
 
     infra_lookup = {entry.id: entry for entry in infra_entries}
     app_lookup = {entry.id: entry for entry in app_entries}
-    active_selected_apps = set(selected_apps)
+    active_selected_apps = {
+        normalize_component_token(item) for item in selected_apps if normalize_component_token(item)
+    }
     wizard_auto_enabled_observability_apps: set[str] = set()
+    wizard_auto_enabled_observability_app_rows: set[tuple[str, str]] = set()
+    wizard_auto_enabled_app_rows: set[tuple[str, str]] = set()
 
     warned_provider_fallbacks: set[str] = set()
     provider_allowed_cache: dict[str, tuple[set[str], tuple[str, ...]]] = {}
+
+    def _wizard_payload_yaml() -> str:
+        _prune_mk8s_node_group_defaults_without_soperator(
+            payload,
+            infra_entries=infra_entries,
+        )
+        return yaml.safe_dump(payload, sort_keys=False)
 
     def _selected_infra_component_ids() -> set[str]:
         selected_component_ids: set[str] = set()
@@ -7191,6 +11704,166 @@ def _run_component_field_wizard(
                 selected_components.append((entry, instance_id))
         return selected_components
 
+    def _selection_token_component_id(token: str) -> str:
+        return normalize_component_token(str(token).split("@", 1)[0])
+
+    def _active_selected_app_component_ids() -> set[str]:
+        return {
+            _selection_token_component_id(token)
+            for token in active_selected_apps
+            if _selection_token_component_id(token)
+        }
+
+    def _selected_mk8s_target_refs() -> tuple[str, ...]:
+        selected_tokens = {
+            normalize_component_token(item)
+            for item in selected_infra
+            if normalize_component_token(item)
+        }
+        refs: list[str] = []
+        seen: set[str] = set()
+        for row in _dynamic_enabled_infra_component_rows(payload):
+            component_id = component_type_id(row)
+            instance_id = component_instance_id(row)
+            if component_id != "mk8s" or not instance_id:
+                continue
+            if instance_id not in selected_tokens and component_id not in selected_tokens:
+                continue
+            if instance_id in seen:
+                continue
+            refs.append(instance_id)
+            seen.add(instance_id)
+        return tuple(refs)
+
+    def _target_scoped_auto_app_selection(
+        *,
+        selected_app_ids: Sequence[str],
+        auto_enabled_app_ids: Sequence[str],
+    ) -> set[str]:
+        selected = {
+            normalize_component_token(item)
+            for item in selected_app_ids
+            if normalize_component_token(item)
+        }
+        auto_ids = {
+            normalize_component_token(item)
+            for item in auto_enabled_app_ids
+            if normalize_component_token(item)
+        }
+        target_refs = _selected_mk8s_target_refs()
+        if not target_refs or not auto_ids:
+            return selected
+        scoped = {
+            token for token in selected if _selection_token_component_id(token) not in auto_ids
+        }
+        for app_id in sorted(auto_ids):
+            for target_ref in target_refs:
+                scoped.add(component_instance_label(app_id, target_ref))
+        return scoped
+
+    def _ordered_app_ids(app_ids: Sequence[str]) -> tuple[str, ...]:
+        normalized_ids = {
+            normalize_component_token(item) for item in app_ids if normalize_component_token(item)
+        }
+        ordered = [entry.id for entry in app_entries if entry.id in normalized_ids]
+        ordered.extend(sorted(normalized_ids - set(ordered)))
+        return tuple(ordered)
+
+    def _auto_enabled_app_notice_labels(app_ids: Sequence[str]) -> tuple[str, ...]:
+        target_refs = _selected_mk8s_target_refs()
+        normalized_ids = _ordered_app_ids(app_ids)
+        if not target_refs:
+            return tuple(normalized_ids)
+        return tuple(
+            component_instance_label(app_id, target_ref)
+            for app_id in normalized_ids
+            for target_ref in target_refs
+        )
+
+    def _enabled_app_row_identities() -> set[tuple[str, str]]:
+        identities: set[tuple[str, str]] = set()
+        apps_node = payload.get("apps")
+        charts = apps_node.get("charts") if isinstance(apps_node, Mapping) else None
+        if not isinstance(charts, list):
+            return identities
+        for row in charts:
+            if not isinstance(row, Mapping) or not bool(row.get("enabled", False)):
+                continue
+            app_id = component_type_id(row)
+            instance_id = component_instance_id(row)
+            if app_id and instance_id:
+                identities.add((app_id, instance_id))
+        return identities
+
+    def _record_new_auto_enabled_app_rows(
+        *,
+        before: set[tuple[str, str]],
+        auto_enabled_app_ids: Sequence[str],
+    ) -> None:
+        auto_ids = {
+            normalize_component_token(item)
+            for item in auto_enabled_app_ids
+            if normalize_component_token(item)
+        }
+        if not auto_ids:
+            return
+        for app_id, instance_id in _enabled_app_row_identities() - before:
+            if app_id in auto_ids:
+                wizard_auto_enabled_app_rows.add((app_id, instance_id))
+
+    def _align_infra_resource_names_for_app_section() -> None:
+        if not align_infra_resource_names_before_apps:
+            return
+        renames = _align_new_infra_instance_ids_with_resource_names(payload)
+        if not renames:
+            return
+        for old, new in renames.items():
+            if old in selected_infra:
+                selected_infra.remove(old)
+                selected_infra.add(new)
+        _materialize_single_target_app_bindings(payload)
+        _materialize_soperator_component_defaults(payload)
+
+    def _ensure_target_scoped_auto_app_rows(auto_enabled_app_ids: Sequence[str]) -> None:
+        target_refs = _selected_mk8s_target_refs()
+        if not target_refs:
+            return
+        existing = _enabled_app_row_identities()
+        for app_id in _ordered_app_ids(auto_enabled_app_ids):
+            entry = app_lookup.get(app_id)
+            if entry is None:
+                continue
+            for target_ref in target_refs:
+                instance_id = target_scoped_app_instance_id(app_id, target_ref=target_ref)
+                if (app_id, instance_id) in existing:
+                    continue
+                _append_component_instance_row(
+                    payload=payload,
+                    entry=entry,
+                    requested_instance_id=target_ref,
+                )
+                existing.add((app_id, instance_id))
+        materialize_app_chart_target_refs(payload)
+
+    def _app_row_matches_active_selection(row: Mapping[str, Any]) -> bool:
+        app_id = component_type_id(row)
+        instance_id = component_instance_id(row)
+        exact_selector = component_instance_label(app_id, instance_id)
+        exact_selector_mode = any("@" in token for token in active_selected_apps)
+        return (
+            exact_selector in active_selected_apps
+            or app_id in active_selected_apps
+            or (not exact_selector_mode and instance_id in active_selected_apps)
+        )
+
+    def _drop_active_app_component_ids(app_ids: set[str]) -> None:
+        nonlocal active_selected_apps
+        active_selected_apps = {
+            token
+            for token in active_selected_apps
+            if _selection_token_component_id(token) not in app_ids
+        }
+
     def _app_target_ref_for_instance(component_id: str, instance_id: str) -> str:
         for row in _dynamic_enabled_app_chart_rows(payload):
             if component_type_id(row) != component_id:
@@ -7202,7 +11875,9 @@ def _run_component_field_wizard(
 
     def _wizard_component_label(entry: ComponentEntry, instance_id: str) -> str:
         if entry.scope == "apps":
-            target_ref = _app_target_ref_for_instance(entry.id, instance_id)
+            target_ref = _app_target_ref_for_instance(entry.id, instance_id) or (
+                instance_id if instance_id in set(enabled_cluster_target_refs(payload)) else ""
+            )
             if target_ref:
                 return f"{entry.id} on {target_ref}"
         return component_instance_label(entry.id, instance_id)
@@ -7279,6 +11954,748 @@ def _run_component_field_wizard(
             return deploy_context
         return entry.scope, component_label
 
+    def _plain_mk8s_node_group_loop_enabled(
+        *,
+        entry: ComponentEntry,
+        component_path: PayloadPath | None,
+    ) -> bool:
+        if entry.scope != "infra" or entry.id != "mk8s" or component_path is None:
+            return False
+        if "inputs.node_groups" not in entry.wizard_fields:
+            return False
+        full_path_label = f"{_format_payload_path(component_path)}.inputs.node_groups"
+        has_soperator_target, _install_mode = _mk8s_soperator_prompt_context(
+            payload=payload,
+            entry=entry,
+            full_path_label=full_path_label,
+        )
+        return not has_soperator_target
+
+    def _mk8s_provider_choices(
+        *,
+        provider: str,
+        args: dict[str, Any],
+        field_path: str,
+        required: bool = False,
+    ) -> list[OptionChoice]:
+        if provider_lookup is None:
+            return []
+        choices = provider_lookup.resolve(
+            provider=provider,
+            args=args,
+            payload=payload,
+            field_path=field_path,
+        )
+        if not choices and provider_lookup.last_error():
+            console.print(
+                _provider_fallback_warning(
+                    field_path_label=field_path,
+                    provider_names=provider,
+                    required=required,
+                    provider_lookup=provider_lookup,
+                )
+            )
+        return choices
+
+    def _mk8s_node_group_sfs_choices(*, target_ref: str) -> list[OptionChoice]:
+        sfs_rows = [
+            row
+            for row in _dynamic_enabled_infra_component_rows(payload)
+            if component_type_id(row) == "sfs"
+        ]
+        if not sfs_rows:
+            return []
+        target_sfs_rows = [row for row in sfs_rows if component_instance_id(row) == target_ref]
+        if target_sfs_rows:
+            candidate_rows = target_sfs_rows
+        elif len(sfs_rows) == 1:
+            candidate_rows = sfs_rows
+        else:
+            return []
+
+        choices: list[OptionChoice] = []
+        seen: set[str] = set()
+        for row in candidate_rows:
+            row_label = component_instance_label("sfs", component_instance_id(row) or "sfs")
+            inputs = row.get("inputs")
+            filesystems = inputs.get("filesystems") if isinstance(inputs, Mapping) else None
+            if isinstance(filesystems, Mapping) and filesystems:
+                keys = [str(key).strip() for key in filesystems if str(key).strip()]
+            else:
+                keys = ["default"]
+            for key in keys:
+                if key in seen:
+                    continue
+                seen.add(key)
+                choices.append(OptionChoice(value=key, label=f"{key}  ({row_label})"))
+        return choices
+
+    def _choice_by_value(
+        choices: Sequence[OptionChoice] | None,
+        value: object,
+    ) -> OptionChoice | None:
+        selected = str(value).strip()
+        if not selected:
+            return None
+        for choice in choices or ():
+            if choice.value == selected:
+                return choice
+        return None
+
+    def _choice_reserved_vm_count(choice: OptionChoice | None) -> int:
+        if choice is None:
+            return 0
+        metadata_count = choice.metadata.get("reserved_vms")
+        if isinstance(metadata_count, int | float):
+            return int(metadata_count)
+        if isinstance(metadata_count, str) and metadata_count.strip().isdigit():
+            return int(metadata_count.strip())
+        match = re.search(r"reserved VMs=(\d+)", choice.label)
+        if not match:
+            return 0
+        return int(match.group(1))
+
+    def _run_plain_mk8s_node_group_loop(
+        *,
+        entry: ComponentEntry,
+        instance_id: str,
+        component_path: PayloadPath,
+        component_label: str,
+        emitted_guidance: set[str],
+    ) -> tuple[object, bool]:
+        component_node = _get_payload_value(payload, component_path)
+        if not isinstance(component_node, dict):
+            return None, False
+        inputs = component_node.setdefault("inputs", {})
+        if not isinstance(inputs, dict):
+            inputs = {}
+            component_node["inputs"] = inputs
+        node_groups = inputs.setdefault("node_groups", {})
+        if not isinstance(node_groups, dict):
+            node_groups = {}
+            inputs["node_groups"] = node_groups
+
+        component_path_label = _format_payload_path(component_path)
+        context_label = f"{component_label} / node groups"
+
+        def _prompt_loop_value(
+            path_label: str,
+            current: object,
+            *,
+            choices: list[OptionChoice] | None = None,
+            type_hint: str | None = None,
+            required: bool = False,
+            unset_on_skip: bool = False,
+        ) -> tuple[object, str]:
+            _print_wizard_component_selection_context(
+                current_label=context_label,
+                current_scope=entry.scope,
+            )
+            updated, should_stop = _prompt_scalar_override(
+                path_label,
+                current,
+                choices=choices,
+                type_hint=type_hint,
+                required=required,
+                unset_on_skip=unset_on_skip,
+            )
+            if should_stop:
+                return current, "quit"
+            if _wizard_backtrack_requested(updated):
+                return current, "back"
+            _print_wizard_selected_field(path_label, updated)
+            return updated, "ok"
+
+        def _prompt_required_text(path_label: str, current: str) -> tuple[str, str]:
+            while True:
+                updated, status = _prompt_loop_value(
+                    path_label,
+                    current,
+                    type_hint="string",
+                    required=True,
+                )
+                if status != "ok":
+                    return "", status
+                text = _non_empty_text(updated)
+                if text:
+                    return text, "ok"
+                console.print(f"{error_markup('Invalid value')}. This field is required.")
+
+        def _node_group_boot_disk_defaults(
+            *,
+            group: dict[str, Any],
+            gpu: bool,
+            disk_type_override: str | None = None,
+        ) -> tuple[str, int]:
+            project_id = _non_empty_text(
+                _read_payload_field(payload, "client_info.nebius.project_id")
+            )
+            field_scope = "gpu" if gpu else "cpu"
+            defaults: dict[str, Any] = {
+                "platform": group.get("platform"),
+                "preset": group.get("preset"),
+            }
+            gpu_cluster_key = _non_empty_text(group.get("gpu_cluster_key"))
+            if gpu and gpu_cluster_key:
+                fabric = _non_empty_text(
+                    _read_payload_field(
+                        payload,
+                        f"{component_path_label}.inputs.gpu_clusters.{gpu_cluster_key}.infiniband_fabric",
+                    )
+                )
+                if fabric:
+                    defaults["infiniband_fabric"] = fabric
+            recommendation_inputs = {"node_group_defaults": {field_scope: defaults}}
+            recommendation = resolve_compute_boot_disk_recommendation(
+                component_id="mk8s",
+                instance_id=instance_id,
+                inputs=recommendation_inputs,
+                project_id=project_id,
+                field_scope=field_scope,
+                provider_lookup=provider_lookup,
+                disk_type_override=disk_type_override,
+            )
+            if recommendation is not None:
+                return recommendation.disk_type, recommendation.size_gib
+            return "NETWORK_SSD", 128
+
+        def _restart_group_creation(group_key: str) -> None:
+            nonlocal pending_group_key
+            node_groups.pop(group_key, None)
+            gpu_clusters = inputs.get("gpu_clusters")
+            if isinstance(gpu_clusters, dict):
+                gpu_clusters.pop(group_key, None)
+                if not gpu_clusters:
+                    inputs.pop("gpu_clusters", None)
+            pending_group_key = group_key
+
+        created_any = bool(node_groups)
+        pending_group_key: str | None = None
+        while True:
+            if created_any and pending_group_key is None:
+                add_label = f"{component_path_label}.inputs.node_groups.add_another"
+                add_more, status = _prompt_loop_value(
+                    add_label,
+                    False,
+                    type_hint="bool",
+                )
+                if status == "quit":
+                    return None, True
+                if status == "back":
+                    return _WIZARD_BACKTRACK, False
+                if not bool(add_more):
+                    return None, False
+
+            name_label = f"{component_path_label}.inputs.node_groups.<new>.name"
+            default_name = pending_group_key or (
+                "system" if not node_groups else f"node-{len(node_groups) + 1}"
+            )
+            group_key, status = _prompt_required_text(name_label, default_name)
+            if status == "quit":
+                return None, True
+            if status == "back":
+                return _WIZARD_BACKTRACK, False
+            group_key = normalize_component_token(group_key)
+            if not INSTANCE_ID_PATTERN.fullmatch(group_key):
+                console.print(
+                    f"{error_markup('Invalid value')}. Node group names must use lowercase "
+                    "letters, digits, and hyphens."
+                )
+                continue
+            if group_key in node_groups:
+                console.print(
+                    f"{error_markup('Invalid value')}. Node group '{group_key}' already exists."
+                )
+                continue
+            pending_group_key = None
+
+            group: dict[str, Any] = {}
+            node_groups[group_key] = group
+            group_prefix = f"{component_path_label}.inputs.node_groups.{group_key}"
+
+            autoscaling_enabled, status = _prompt_loop_value(
+                f"{group_prefix}.autoscaling.enabled",
+                False,
+                type_hint="bool",
+            )
+            if status == "quit":
+                return None, True
+            if status == "back":
+                _restart_group_creation(group_key)
+                continue
+            if bool(autoscaling_enabled):
+                min_count, status = _prompt_loop_value(
+                    f"{group_prefix}.autoscaling.min_node_count",
+                    1,
+                    type_hint="number",
+                    required=True,
+                )
+                if status == "quit":
+                    return None, True
+                if status == "back":
+                    _restart_group_creation(group_key)
+                    continue
+                max_count, status = _prompt_loop_value(
+                    f"{group_prefix}.autoscaling.max_node_count",
+                    max(1, int(min_count) if isinstance(min_count, int | float) else 1),
+                    type_hint="number",
+                    required=True,
+                )
+                if status == "quit":
+                    return None, True
+                if status == "back":
+                    _restart_group_creation(group_key)
+                    continue
+                group["autoscaling"] = {
+                    "min_node_count": int(min_count),
+                    "max_node_count": int(max_count),
+                }
+            else:
+                node_count, status = _prompt_loop_value(
+                    f"{group_prefix}.node_count",
+                    2 if group_key == "system" else 1,
+                    type_hint="number",
+                    required=True,
+                )
+                if status == "quit":
+                    return None, True
+                if status == "back":
+                    _restart_group_creation(group_key)
+                    continue
+                group["node_count"] = int(node_count)
+
+            resource, status = _prompt_loop_value(
+                f"{group_prefix}.resource",
+                "cpu",
+                choices=[
+                    OptionChoice(value="cpu", label="CPU"),
+                    OptionChoice(value="gpu", label="GPU"),
+                ],
+                required=True,
+            )
+            if status == "quit":
+                return None, True
+            if status == "back":
+                _restart_group_creation(group_key)
+                continue
+            gpu = str(resource).strip().lower() == "gpu"
+            group["gpu"] = gpu
+
+            preemptible, status = _prompt_loop_value(
+                f"{group_prefix}.preemptible",
+                False,
+                type_hint="bool",
+            )
+            if status == "quit":
+                return None, True
+            if status == "back":
+                _restart_group_creation(group_key)
+                continue
+            if bool(preemptible):
+                group["preemptible"] = True
+
+            platform_label = f"{group_prefix}.platform"
+            platform_choices = _mk8s_provider_choices(
+                provider="mk8s_compatible_platforms",
+                args={"platform_prefix": "gpu-" if gpu else "cpu-"},
+                field_path=platform_label,
+                required=True,
+            )
+            platform, status = _prompt_loop_value(
+                platform_label,
+                None,
+                choices=platform_choices,
+                required=True,
+            )
+            if status == "quit":
+                return None, True
+            if status == "back":
+                _restart_group_creation(group_key)
+                continue
+            group["platform"] = str(platform).strip()
+
+            preset_label = f"{group_prefix}.preset"
+            preset_choices = _mk8s_provider_choices(
+                provider="compute_platform_presets",
+                args={"platform_path": platform_label},
+                field_path=preset_label,
+                required=True,
+            )
+            _maybe_print_gpu_preset_prompt_guidance(
+                payload=payload,
+                entry=entry,
+                full_path_label=preset_label,
+                emitted_guidance=emitted_guidance,
+            )
+            preset, status = _prompt_loop_value(
+                preset_label,
+                None,
+                choices=preset_choices,
+                required=True,
+            )
+            if status == "quit":
+                return None, True
+            if status == "back":
+                _restart_group_creation(group_key)
+                continue
+            group["preset"] = str(preset).strip()
+            selected_capacity_has_reservations = (
+                _choice_reserved_vm_count(_choice_by_value(preset_choices, group["preset"])) > 0
+            )
+            _maybe_print_selected_gpu_preset_guidance(
+                payload=payload,
+                entry=entry,
+                full_path_label=preset_label,
+                provider_lookup=provider_lookup,
+                emitted_guidance=emitted_guidance,
+            )
+
+            stack_preset_label = f"{group_prefix}.gpu_stack_preset"
+            if gpu:
+                group.setdefault("node_labels", {})["nebius.com/gpu"] = "true"
+                stack_source, status = _prompt_loop_value(
+                    f"{group_prefix}.gpu_stack_source",
+                    "nebius_image",
+                    choices=[
+                        OptionChoice(
+                            value="nebius_image",
+                            label=(
+                                "nebius_image  (Nebius GPU image includes the host "
+                                "NVIDIA driver/toolkit)"
+                            ),
+                            recommended=True,
+                        ),
+                        OptionChoice(
+                            value="operator_managed",
+                            label="operator_managed  (GPU Operator manages host driver/toolkit)",
+                        ),
+                    ],
+                    required=True,
+                )
+                if status == "quit":
+                    return None, True
+                if status == "back":
+                    _restart_group_creation(group_key)
+                    continue
+                group["gpu_stack_source"] = str(stack_source).strip()
+
+                if group["gpu_stack_source"] == "nebius_image":
+                    stack_choices = _mk8s_provider_choices(
+                        provider="mk8s_gpu_stack_presets",
+                        args={"platform_path": platform_label},
+                        field_path=stack_preset_label,
+                        required=True,
+                    )
+                    stack_default = stack_choices[0].value if stack_choices else None
+                    stack_preset, status = _prompt_loop_value(
+                        stack_preset_label,
+                        stack_default,
+                        choices=stack_choices,
+                        required=True,
+                    )
+                    if status == "quit":
+                        return None, True
+                    if status == "back":
+                        _restart_group_creation(group_key)
+                        continue
+                    group["gpu_stack_preset"] = str(stack_preset).strip()
+
+                project_id = _non_empty_text(
+                    _read_payload_field(payload, "client_info.nebius.project_id")
+                )
+                allow_gpu_cluster = None
+                if provider_lookup is not None and project_id:
+                    allow_gpu_cluster = (
+                        provider_lookup.compute_platform_preset_allows_gpu_clustering(
+                            project_id=project_id,
+                            platform_name=group["platform"],
+                            preset_name=group["preset"],
+                        )
+                    )
+                if allow_gpu_cluster is True:
+                    enable_gpu_cluster, status = _prompt_loop_value(
+                        f"{group_prefix}.gpu_cluster.enabled",
+                        True,
+                        type_hint="bool",
+                    )
+                    if status == "quit":
+                        return None, True
+                    if status == "back":
+                        _restart_group_creation(group_key)
+                        continue
+                    if bool(enable_gpu_cluster):
+                        fabric_label = (
+                            f"{component_path_label}.inputs.gpu_clusters.{group_key}"
+                            ".infiniband_fabric"
+                        )
+                        fabric_choices = _mk8s_provider_choices(
+                            provider="mk8s_infiniband_fabrics",
+                            args={
+                                "platform_path": platform_label,
+                                "preset_path": preset_label,
+                            },
+                            field_path=fabric_label,
+                            required=True,
+                        )
+                        fabric, status = _prompt_loop_value(
+                            fabric_label,
+                            None,
+                            choices=fabric_choices,
+                            required=True,
+                        )
+                        if status == "quit":
+                            return None, True
+                        if status == "back":
+                            _restart_group_creation(group_key)
+                            continue
+                        selected_fabric_choice = _choice_by_value(fabric_choices, fabric)
+                        if selected_fabric_choice is not None:
+                            selected_capacity_has_reservations = (
+                                _choice_reserved_vm_count(selected_fabric_choice) > 0
+                            )
+                        gpu_clusters = inputs.setdefault("gpu_clusters", {})
+                        if isinstance(gpu_clusters, dict):
+                            gpu_clusters[group_key] = {"infiniband_fabric": str(fabric).strip()}
+                            group["gpu_cluster_key"] = group_key
+
+                reservation_default = "AUTO" if selected_capacity_has_reservations else "FORBID"
+                if selected_capacity_has_reservations:
+                    guidance_key = f"{group_prefix}.reservation.policy.reserved-default"
+                    if guidance_key not in emitted_guidance:
+                        console.print(
+                            "[dim]Reservation guidance: the selected GPU shape/fabric has "
+                            "live reserved capacity, so cxcli defaults reservation.policy "
+                            "to AUTO. Choose FORBID only when you intentionally want "
+                            "on-demand capacity.[/dim]"
+                        )
+                        emitted_guidance.add(guidance_key)
+                reservation_policy, status = _prompt_loop_value(
+                    f"{group_prefix}.reservation.policy",
+                    reservation_default,
+                    choices=[
+                        OptionChoice(value="FORBID", label="FORBID  (do not use reservations)"),
+                        OptionChoice(
+                            value="AUTO",
+                            label="AUTO  (try selected reservations, then suitable capacity)",
+                        ),
+                        OptionChoice(
+                            value="STRICT",
+                            label="STRICT  (use only selected/suitable reservations)",
+                        ),
+                    ],
+                    required=True,
+                )
+                if status == "quit":
+                    return None, True
+                if status == "back":
+                    _restart_group_creation(group_key)
+                    continue
+                reservation_policy = str(reservation_policy).strip().upper()
+                if reservation_policy != "FORBID":
+                    reservation: dict[str, Any] = {"policy": reservation_policy}
+                    reservation_choices = _mk8s_provider_choices(
+                        provider="capacity_block_groups",
+                        args={
+                            "platform_path": platform_label,
+                            "fabric_path": f"{component_path_label}.inputs.gpu_clusters.{group_key}.infiniband_fabric",
+                        },
+                        field_path=f"{group_prefix}.reservation.reservation_ids",
+                    )
+                    reservation_ids, status = _prompt_loop_value(
+                        f"{group_prefix}.reservation.reservation_ids",
+                        [],
+                        choices=reservation_choices,
+                        type_hint="list(string)",
+                        unset_on_skip=True,
+                    )
+                    if status == "quit":
+                        return None, True
+                    if status == "back":
+                        _restart_group_creation(group_key)
+                        continue
+                    selected_reservations = _choice_current_values(reservation_ids)
+                    if selected_reservations:
+                        reservation["reservation_ids"] = selected_reservations
+                    group["reservation"] = reservation
+
+            os_label = f"{group_prefix}.os"
+            os_choices = _mk8s_provider_choices(
+                provider="mk8s_node_group_os_values",
+                args={
+                    "platform_path": platform_label,
+                    "stack_preset_path": stack_preset_label,
+                },
+                field_path=os_label,
+            )
+            if len(os_choices) == 1:
+                os_value = os_choices[0].value
+                group["os"] = str(os_value).strip()
+                _print_wizard_component_selection_context(
+                    current_label=context_label,
+                    current_scope=entry.scope,
+                )
+                _print_wizard_selected_field(os_label, os_value)
+            else:
+                os_default = os_choices[0].value if os_choices else None
+                os_value, status = _prompt_loop_value(
+                    os_label,
+                    os_default,
+                    choices=os_choices,
+                    unset_on_skip=True,
+                )
+                if status == "quit":
+                    return None, True
+                if status == "back":
+                    _restart_group_creation(group_key)
+                    continue
+                if _non_empty_text(os_value):
+                    group["os"] = str(os_value).strip()
+
+            boot_disk_type_label = f"{group_prefix}.boot_disk.type"
+            _maybe_print_compute_boot_disk_prompt_guidance(
+                full_path_label=boot_disk_type_label,
+                emitted_guidance=emitted_guidance,
+            )
+            disk_type_default, disk_size_default = _node_group_boot_disk_defaults(
+                group=group,
+                gpu=gpu,
+            )
+            disk_type_choices = _mk8s_provider_choices(
+                provider="compute_boot_disk_types",
+                args={},
+                field_path=boot_disk_type_label,
+            )
+            disk_type, status = _prompt_loop_value(
+                boot_disk_type_label,
+                disk_type_default,
+                choices=disk_type_choices,
+                unset_on_skip=True,
+            )
+            if status == "quit":
+                return None, True
+            if status == "back":
+                _restart_group_creation(group_key)
+                continue
+            selected_disk_type = _non_empty_text(disk_type)
+            if selected_disk_type:
+                group.setdefault("boot_disk", {})["type"] = selected_disk_type
+                _recommended_type, disk_size_default = _node_group_boot_disk_defaults(
+                    group=group,
+                    gpu=gpu,
+                    disk_type_override=selected_disk_type,
+                )
+
+                disk_size, status = _prompt_loop_value(
+                    f"{group_prefix}.boot_disk.size_gibibytes",
+                    disk_size_default,
+                    type_hint="number",
+                )
+                if status == "quit":
+                    return None, True
+                if status == "back":
+                    _restart_group_creation(group_key)
+                    continue
+                if isinstance(disk_size, int | float) and int(disk_size) > 0:
+                    group.setdefault("boot_disk", {})["size_gibibytes"] = int(disk_size)
+
+            sfs_choices = _mk8s_node_group_sfs_choices(target_ref=instance_id)
+            if sfs_choices:
+                filesystem_keys, status = _prompt_loop_value(
+                    f"{group_prefix}.sfs_filesystem_keys",
+                    [],
+                    choices=sfs_choices,
+                    type_hint="list(string)",
+                    unset_on_skip=True,
+                )
+                if status == "quit":
+                    return None, True
+                if status == "back":
+                    _restart_group_creation(group_key)
+                    continue
+                selected_keys = _choice_current_values(filesystem_keys)
+                if selected_keys:
+                    group["sfs_filesystem_keys"] = selected_keys
+
+            attach_ssh, status = _prompt_loop_value(
+                f"{group_prefix}.ssh.enabled",
+                True,
+                type_hint="bool",
+            )
+            if status == "quit":
+                return None, True
+            if status == "back":
+                _restart_group_creation(group_key)
+                continue
+            if bool(attach_ssh):
+                username, status = _prompt_required_text(f"{group_prefix}.ssh.username", "ubuntu")
+                if status == "quit":
+                    return None, True
+                if status == "back":
+                    _restart_group_creation(group_key)
+                    continue
+                _print_wizard_component_selection_context(
+                    current_label=context_label,
+                    current_scope=entry.scope,
+                )
+                ssh_key, should_stop = _prompt_ssh_public_key_override(
+                    f"{group_prefix}.ssh.public_keys[0]",
+                    "",
+                    required=True,
+                )
+                if should_stop:
+                    return None, True
+                if _wizard_backtrack_requested(ssh_key):
+                    _restart_group_creation(group_key)
+                    continue
+                group["ssh"] = {"username": username, "public_keys": [str(ssh_key).strip()]}
+                _print_wizard_selected_field(f"{group_prefix}.ssh.public_keys[0]", ssh_key)
+
+            service_account_mode, status = _prompt_loop_value(
+                f"{group_prefix}.service_account.mode",
+                "none",
+                choices=[
+                    OptionChoice(value="none", label="none"),
+                    OptionChoice(value="existing_id", label="existing_id"),
+                    OptionChoice(value="create_name", label="create_name"),
+                ],
+            )
+            if status == "quit":
+                return None, True
+            if status == "back":
+                _restart_group_creation(group_key)
+                continue
+            service_account_mode = str(service_account_mode).strip()
+            if service_account_mode == "existing_id":
+                service_account_id, status = _prompt_required_text(
+                    f"{group_prefix}.service_account.id",
+                    "",
+                )
+                if status == "quit":
+                    return None, True
+                if status == "back":
+                    _restart_group_creation(group_key)
+                    continue
+                group["service_account"] = {"id": service_account_id}
+            elif service_account_mode == "create_name":
+                default_sa_name = f"{instance_id}-{group_key}-nodes"
+                service_account_name, status = _prompt_required_text(
+                    f"{group_prefix}.service_account.name",
+                    default_sa_name,
+                )
+                if status == "quit":
+                    return None, True
+                if status == "back":
+                    _restart_group_creation(group_key)
+                    continue
+                group["service_account"] = {"name": service_account_name}
+
+            console.print(
+                f"[dim]Added MK8s node group {escape(group_key)} "
+                f"({escape('GPU' if gpu else 'CPU')}, {escape(group['platform'])}/"
+                f"{escape(group['preset'])}).[/dim]"
+            )
+            created_any = True
+
     def _materialize_wizard_auto_enabled_gpu_apps() -> None:
         nonlocal payload, active_selected_apps
         if not selected_infra or not app_entries:
@@ -7287,73 +12704,122 @@ def _run_component_field_wizard(
             return
         gpu_app_selection = resolve_mk8s_gpu_app_selection(
             payload,
-            selected_app_ids=active_selected_apps,
+            selected_app_ids=_active_selected_app_component_ids(),
             app_entries=app_entries,
         )
         if not gpu_app_selection.auto_enabled_app_ids:
             return
-        active_selected_apps = set(gpu_app_selection.selected_app_ids)
-        (
-            identity_client_name,
-            identity_tenant_id,
-            identity_project_id,
-            identity_region_id,
-            identity_email,
-        ) = _identity_values_from_payload(payload)
-        auto_enabled_seed = _starter_component_payload(
-            client_name=identity_client_name,
-            tenant_id=identity_tenant_id,
-            project_id=identity_project_id,
-            region_id=identity_region_id,
-            email=identity_email,
-            selected_infra=selected_infra,
-            selected_apps=active_selected_apps,
-            infra_entries=infra_entries,
-            app_entries=app_entries,
+        active_selected_apps = _target_scoped_auto_app_selection(
+            selected_app_ids=active_selected_apps,
+            auto_enabled_app_ids=gpu_app_selection.auto_enabled_app_ids,
         )
-        _ensure_payload_contains_component_rows(
-            payload=payload,
-            seed_payload=auto_enabled_seed,
+        materialize_app_chart_target_refs(payload)
+        before_rows = _enabled_app_row_identities()
+        ensure_mk8s_gpu_app_rows(payload, app_entries=app_entries)
+        _ensure_target_scoped_auto_app_rows(gpu_app_selection.auto_enabled_app_ids)
+        _record_new_auto_enabled_app_rows(
+            before=before_rows,
+            auto_enabled_app_ids=gpu_app_selection.auto_enabled_app_ids,
         )
-        payload = _filter_runtime_payload_for_selected_components(
-            payload=payload,
-            selected_infra=selected_infra,
-            selected_apps=active_selected_apps,
-            infra_entries=infra_entries,
-            app_entries=app_entries,
-        )
+        notice_labels = _auto_enabled_app_notice_labels(gpu_app_selection.auto_enabled_app_ids)
         console.print(
             f"{warning_markup('Adjusted component selection:')} enabling "
-            + ", ".join(f"'apps:{item}'" for item in gpu_app_selection.auto_enabled_app_ids)
+            + ", ".join(f"'apps:{item}'" for item in notice_labels)
             + " because the selected MK8s GPU configuration requires them."
         )
         _print_wizard_component_selection_context()
 
     def _filter_wizard_selected_app_rows() -> None:
-        nonlocal payload
-        payload = _filter_runtime_payload_for_selected_components(
-            payload=payload,
-            selected_infra=selected_infra,
-            selected_apps=active_selected_apps,
-            infra_entries=infra_entries,
-            app_entries=app_entries,
-        )
+        if not wizard_auto_enabled_app_rows:
+            return
+        apps_node = payload.get("apps")
+        charts = apps_node.get("charts") if isinstance(apps_node, dict) else None
+        if not isinstance(charts, list):
+            return
+        retained: list[Any] = []
+        removed: set[tuple[str, str]] = set()
+        for row in charts:
+            if not isinstance(row, Mapping):
+                retained.append(row)
+                continue
+            identity = (component_type_id(row), component_instance_id(row))
+            if identity in wizard_auto_enabled_app_rows and not _app_row_matches_active_selection(
+                row
+            ):
+                removed.add(identity)
+                continue
+            retained.append(row)
+        if removed:
+            apps_node["charts"] = retained
+            wizard_auto_enabled_app_rows.difference_update(removed)
+
+    def _observability_enabled_for_target(target_ref: str) -> bool:
+        deploy = payload.get("deploy")
+        targets = deploy.get("targets") if isinstance(deploy, Mapping) else None
+        if not isinstance(targets, list):
+            return False
+        for row in targets:
+            if not isinstance(row, Mapping):
+                continue
+            if normalize_component_token(row.get(INSTANCE_ID_FIELD)) != target_ref:
+                continue
+            observability = row.get("observability")
+            return bool(isinstance(observability, Mapping) and observability.get("enabled") is True)
+        return False
+
+    def _top_level_observability_enabled() -> bool:
+        deploy = payload.get("deploy")
+        observability = deploy.get("observability") if isinstance(deploy, Mapping) else None
+        return bool(isinstance(observability, Mapping) and observability.get("enabled") is True)
+
+    def _observability_enabled_for_selected_mk8s_target() -> bool:
+        target_refs = _selected_mk8s_target_refs()
+        if any(_observability_enabled_for_target(target_ref) for target_ref in target_refs):
+            return True
+        return _top_level_observability_enabled()
 
     def _remove_stale_wizard_observability_apps() -> None:
         nonlocal active_selected_apps
-        if not wizard_auto_enabled_observability_apps:
-            return
-        required_selection = resolve_observability_app_selection(
-            payload,
-            selected_app_ids=set(),
-            app_entries=app_entries,
+        candidate_rows = set(wizard_auto_enabled_observability_app_rows)
+        candidate_rows.update(
+            (app_id, instance_id)
+            for app_id, instance_id in wizard_auto_enabled_app_rows
+            if app_id in wizard_auto_enabled_observability_apps
         )
-        required_app_ids = set(required_selection.selected_app_ids)
-        stale_app_ids = wizard_auto_enabled_observability_apps - required_app_ids
-        if not stale_app_ids:
+        if not candidate_rows:
             return
-        active_selected_apps -= stale_app_ids
-        wizard_auto_enabled_observability_apps.difference_update(stale_app_ids)
+        stale_rows: set[tuple[str, str]] = set()
+        cluster_targets = set(enabled_cluster_target_refs(payload))
+        for app_id, instance_id in candidate_rows:
+            target_ref = _app_target_ref_for_instance(app_id, instance_id) or (
+                instance_id if instance_id in cluster_targets else ""
+            )
+            if not target_ref or not _observability_enabled_for_target(target_ref):
+                stale_rows.add((app_id, instance_id))
+        if not stale_rows:
+            return
+        apps_node = payload.get("apps")
+        charts = apps_node.get("charts") if isinstance(apps_node, dict) else None
+        if isinstance(charts, list):
+            apps_node["charts"] = [
+                row
+                for row in charts
+                if not (
+                    isinstance(row, Mapping)
+                    and (component_type_id(row), component_instance_id(row)) in stale_rows
+                )
+            ]
+        stale_tokens = {
+            component_instance_label(app_id, instance_id) for app_id, instance_id in stale_rows
+        }
+        active_selected_apps = {
+            token for token in active_selected_apps if token not in stale_tokens
+        }
+        wizard_auto_enabled_observability_app_rows.difference_update(stale_rows)
+        wizard_auto_enabled_app_rows.difference_update(stale_rows)
+        wizard_auto_enabled_observability_apps.intersection_update(
+            {app_id for app_id, _instance_id in wizard_auto_enabled_observability_app_rows}
+        )
         _filter_wizard_selected_app_rows()
 
     def _materialize_wizard_auto_enabled_observability_apps() -> None:
@@ -7363,41 +12829,48 @@ def _run_component_field_wizard(
         if "mk8s" not in _selected_infra_component_ids():
             return
         _remove_stale_wizard_observability_apps()
+        if not _observability_enabled_for_selected_mk8s_target():
+            return
         observability_selection = resolve_observability_app_selection(
             payload,
-            selected_app_ids=active_selected_apps,
+            selected_app_ids=_active_selected_app_component_ids(),
             app_entries=app_entries,
         )
         if observability_selection.issues or not observability_selection.auto_enabled_app_ids:
             return
-        active_selected_apps = set(observability_selection.selected_app_ids)
+        active_selected_apps = _target_scoped_auto_app_selection(
+            selected_app_ids=active_selected_apps,
+            auto_enabled_app_ids=observability_selection.auto_enabled_app_ids,
+        )
         wizard_auto_enabled_observability_apps.update(observability_selection.auto_enabled_app_ids)
-        (
-            identity_client_name,
-            identity_tenant_id,
-            identity_project_id,
-            identity_region_id,
-            identity_email,
-        ) = _identity_values_from_payload(payload)
-        auto_enabled_seed = _starter_component_payload(
-            client_name=identity_client_name,
-            tenant_id=identity_tenant_id,
-            project_id=identity_project_id,
-            region_id=identity_region_id,
-            email=identity_email,
-            selected_infra=selected_infra,
-            selected_apps=active_selected_apps,
-            infra_entries=infra_entries,
+        materialize_app_chart_target_refs(payload)
+        before_rows = _enabled_app_row_identities()
+        ensure_observability_app_rows(
+            payload,
             app_entries=app_entries,
         )
-        _ensure_payload_contains_component_rows(
-            payload=payload,
-            seed_payload=auto_enabled_seed,
+        _ensure_target_scoped_auto_app_rows(observability_selection.auto_enabled_app_ids)
+        _record_new_auto_enabled_app_rows(
+            before=before_rows,
+            auto_enabled_app_ids=observability_selection.auto_enabled_app_ids,
+        )
+        auto_ids = {
+            normalize_component_token(item)
+            for item in observability_selection.auto_enabled_app_ids
+            if normalize_component_token(item)
+        }
+        wizard_auto_enabled_observability_app_rows.update(
+            (app_id, instance_id)
+            for app_id, instance_id in _enabled_app_row_identities() - before_rows
+            if app_id in auto_ids
         )
         _filter_wizard_selected_app_rows()
+        notice_labels = _auto_enabled_app_notice_labels(
+            observability_selection.auto_enabled_app_ids
+        )
         console.print(
             f"{warning_markup('Adjusted component selection:')} enabling "
-            + ", ".join(f"'apps:{item}'" for item in observability_selection.auto_enabled_app_ids)
+            + ", ".join(f"'apps:{item}'" for item in notice_labels)
             + " because observability is enabled for MK8s. The later app field prompt "
             "only controls chart value customization; answering 'n' keeps the selected app defaults."
         )
@@ -7405,10 +12878,25 @@ def _run_component_field_wizard(
 
     def _run_component(entry: ComponentEntry, instance_id: str) -> str:
         component_label = _wizard_component_label(entry, instance_id)
+        component_path = (
+            _dynamic_infra_component_path(payload, entry.id, instance_id=instance_id)
+            if entry.scope == "infra"
+            else _dynamic_app_chart_path(payload, entry.id, instance_id=instance_id)
+        )
         _print_wizard_component_selection_context(
             current_label=component_label,
             current_scope=entry.scope,
         )
+        if entry.scope == "apps":
+            component_node = (
+                _get_payload_value(payload, component_path)
+                if component_path is not None
+                else None
+            )
+            _print_app_chart_skip_defaults_preview(
+                component_node if isinstance(component_node, Mapping) else None,
+                entry=entry,
+            )
         decision = _wizard_continue_phase(
             f"Configure '{component_label}' component fields now?",
             default=entry.scope == "infra",
@@ -7430,11 +12918,6 @@ def _run_component_field_wizard(
             instance_id=instance_id,
         )
 
-        component_path = (
-            _dynamic_infra_component_path(payload, entry.id, instance_id=instance_id)
-            if entry.scope == "infra"
-            else _dynamic_app_chart_path(payload, entry.id, instance_id=instance_id)
-        )
         if component_path is not None and entry.defaults:
             component_node = _get_payload_value(payload, component_path)
             resolved_component_node = resolve_component_defaults(
@@ -7529,6 +13012,23 @@ def _run_component_field_wizard(
                     default_project_scope_id = _non_empty_text(
                         _read_payload_field(payload, "client_info.nebius.project_id")
                     )
+                    status_parent_input = (
+                        str(entry.status.parent_input or "").strip()
+                        if entry.status is not None
+                        else ""
+                    )
+                    if (
+                        status_parent_input
+                        and default_project_scope_id
+                        and _normalize_leaf_name(status_parent_input.split(".", 1)[0])
+                        in module_specs_by_leaf
+                        and _mapping_path_value(module_inputs, status_parent_input) is None
+                    ):
+                        _set_mapping_path_value(
+                            module_inputs,
+                            status_parent_input,
+                            default_project_scope_id,
+                        )
                     dependent_prefixes = tuple(
                         sorted(
                             {
@@ -7678,6 +13178,8 @@ def _run_component_field_wizard(
                         virtual_prompt_defaults: dict[
                             PayloadPath, object
                         ] = virtual_prompt_defaults,
+                        declared_prompt_paths: list[PayloadPath] = declared_prompt_paths,
+                        current_entry: ComponentEntry = current_entry,
                     ) -> None:
                         full_path = module_inputs_path + (leaf_name,)
                         current_value = _resolve_mapping_segment(module_inputs, leaf_name)
@@ -7696,6 +13198,27 @@ def _run_component_field_wizard(
                             leaf_name,
                             required_only=spec.required if spec is not None else is_required,
                         )
+                        if spec is not None and _is_complex_type_hint(spec.type_hint):
+                            label = _format_payload_path(full_path)
+                            wizard_spec = _resolve_wizard_field_spec(
+                                entry=current_entry,
+                                full_path_label=label,
+                            )
+                            if not (
+                                isinstance(wizard_spec, Mapping)
+                                and wizard_spec.get("prompt_complex") is True
+                            ) and (
+                                not _wizard_field_prompt_enabled(
+                                    entry=current_entry,
+                                    full_path_label=label,
+                                )
+                                or any(
+                                    len(path) > len(full_path)
+                                    and path[: len(full_path)] == full_path
+                                    for path in declared_prompt_paths
+                                )
+                            ):
+                                return
                         _append_field_prompt(leaf_name, spec, required=is_required)
 
                     for leaf_name, spec in sorted(
@@ -7907,6 +13430,12 @@ def _run_component_field_wizard(
             ),
         )
 
+        plain_mk8s_node_group_prefix = (
+            component_path + ("inputs", "node_groups")
+            if _plain_mk8s_node_group_loop_enabled(entry=entry, component_path=component_path)
+            else None
+        )
+        plain_mk8s_node_group_loop_done = False
         prompt_index = 0
         prompt_history: list[PayloadPath] = []
         while True:
@@ -7914,6 +13443,35 @@ def _run_component_field_wizard(
                 full_path = prompt_paths[prompt_index]
                 prompt_index += 1
                 full_path_label = _format_payload_path(full_path)
+                if plain_mk8s_node_group_prefix is not None and _payload_path_has_prefix(
+                    full_path, plain_mk8s_node_group_prefix
+                ):
+                    if not plain_mk8s_node_group_loop_done:
+                        updated, should_stop = _run_plain_mk8s_node_group_loop(
+                            entry=entry,
+                            instance_id=instance_id,
+                            component_path=component_path,
+                            component_label=component_label,
+                            emitted_guidance=emitted_prompt_guidance,
+                        )
+                        if should_stop:
+                            return _WizardComponentOutcome.QUIT
+                        if _wizard_backtrack_requested(updated):
+                            prompt_index = _wizard_backtrack_target_index(
+                                prompt_paths=prompt_paths,
+                                prompt_history=prompt_history,
+                                current_path=full_path,
+                            )
+                            if prompt_index is None:
+                                return _WizardComponentOutcome.BACK
+                            continue
+                        plain_mk8s_node_group_loop_done = True
+                        _skip_remaining_prompt_paths_for_prefix(
+                            prompt_paths=prompt_paths,
+                            prompt_index=prompt_index,
+                            prefix=plain_mk8s_node_group_prefix,
+                        )
+                    continue
                 if (
                     module_prompt_path_prefix is not None
                     and module_field_is_enabled is not None
@@ -7936,6 +13494,35 @@ def _run_component_field_wizard(
                 ):
                     continue
                 if _skip_mysterybox_eso_prompt(
+                    payload=payload,
+                    entry=entry,
+                    full_path_label=full_path_label,
+                ):
+                    continue
+                if _skip_soperator_child_chart_prompt(
+                    payload=payload,
+                    entry=entry,
+                    full_path_label=full_path_label,
+                ):
+                    continue
+                if _skip_soperator_install_mode_dependent_prompt(
+                    payload=payload,
+                    entry=entry,
+                    full_path_label=full_path_label,
+                ):
+                    continue
+                if (
+                    skip_soperator_profile_prompt
+                    and entry.scope == "apps"
+                    and entry.id == _SOPERATOR_APP_ID
+                    and "profile"
+                    in _relative_wizard_field_paths(
+                        entry=entry,
+                        full_path_label=full_path_label,
+                    )
+                ):
+                    continue
+                if _skip_soperator_qos_configuration_prompt(
                     payload=payload,
                     entry=entry,
                     full_path_label=full_path_label,
@@ -7970,6 +13557,29 @@ def _run_component_field_wizard(
                     full_path_label=full_path_label,
                 ):
                     continue
+                if _skip_soperator_managed_mk8s_prompt(
+                    payload=payload,
+                    entry=entry,
+                    full_path_label=full_path_label,
+                ):
+                    continue
+                if _skip_sfs_single_filesystem_prompt(
+                    payload=payload,
+                    entry=entry,
+                    full_path_label=full_path_label,
+                ):
+                    continue
+                if _skip_sfs_multi_filesystem_prompt(
+                    payload=payload,
+                    entry=entry,
+                    full_path_label=full_path_label,
+                ):
+                    continue
+                if not _wizard_field_prompt_enabled(
+                    entry=entry,
+                    full_path_label=full_path_label,
+                ):
+                    continue
                 if not _provider_prompt_dependencies_ready(
                     payload=payload,
                     entry=entry,
@@ -7978,8 +13588,24 @@ def _run_component_field_wizard(
                     continue
                 if _payload_path_exists(payload, full_path):
                     current = _get_payload_value(payload, full_path)
+                    context_default = _observability_prompt_default_from_selected_apps(
+                        payload=payload,
+                        app_entries=app_entries,
+                        full_path_label=full_path_label,
+                    )
+                    if context_default is not _WIZARD_DEFAULT_MISSING and current is False:
+                        current = copy.deepcopy(context_default)
                 else:
-                    current = copy.deepcopy(virtual_prompt_defaults.get(full_path))
+                    context_default = _observability_prompt_default_from_selected_apps(
+                        payload=payload,
+                        app_entries=app_entries,
+                        full_path_label=full_path_label,
+                    )
+                    if context_default is not _WIZARD_DEFAULT_MISSING:
+                        current = copy.deepcopy(context_default)
+                        virtual_prompt_defaults[full_path] = copy.deepcopy(context_default)
+                    else:
+                        current = copy.deepcopy(virtual_prompt_defaults.get(full_path))
                     if current is None:
                         provider_default = _wizard_field_provider_default_value(
                             payload=payload,
@@ -8113,6 +13739,16 @@ def _run_component_field_wizard(
                     full_path_label=full_path_label,
                     emitted_guidance=emitted_prompt_guidance,
                 )
+                _maybe_print_soperator_mk8s_sizing_prompt_guidance(
+                    entry=entry,
+                    full_path_label=full_path_label,
+                    emitted_guidance=emitted_prompt_guidance,
+                )
+                _maybe_print_soperator_prompt_guidance(
+                    entry=entry,
+                    full_path_label=full_path_label,
+                    emitted_guidance=emitted_prompt_guidance,
+                )
                 context_scope, context_label = _wizard_prompt_context(
                     full_path_label,
                     entry=entry,
@@ -8123,12 +13759,24 @@ def _run_component_field_wizard(
                     current_label=context_label,
                     current_scope=context_scope,
                 )
+                write_default_to_config = (
+                    full_path in virtual_prompt_defaults
+                    and _wizard_field_write_default_to_config(
+                        entry=entry,
+                        full_path_label=full_path_label,
+                    )
+                )
                 updated, should_stop = _prompt_scalar_override(
                     full_path_label,
                     current,
                     choices=field_choices,
                     type_hint=field_type_hints.get(full_path_label),
                     required=prompt_required,
+                    unset_on_skip=(
+                        not prompt_required
+                        and not path_existed_before_prompt
+                        and not write_default_to_config
+                    ),
                 )
                 if should_stop:
                     return _WizardComponentOutcome.QUIT
@@ -8148,8 +13796,17 @@ def _run_component_field_wizard(
                         type_hint=field_type_hints.get(full_path_label),
                     ):
                         break
-                    updated_value = str(updated).strip()
-                    if updated_value in allowed_provider_values:
+                    if _is_string_sequence_type_hint(field_type_hints.get(full_path_label)):
+                        updated_values = _choice_current_values(updated)
+                        if updated_values and all(
+                            value in allowed_provider_values for value in updated_values
+                        ):
+                            break
+                    else:
+                        updated_value = str(updated).strip()
+                        if updated_value in allowed_provider_values:
+                            break
+                    if not prompt_required and not updated:
                         break
                     console.print(
                         f"{error_markup('Invalid value')} for "
@@ -8171,6 +13828,11 @@ def _run_component_field_wizard(
                         choices=field_choices,
                         type_hint=field_type_hints.get(full_path_label),
                         required=prompt_required,
+                        unset_on_skip=(
+                            not prompt_required
+                            and not path_existed_before_prompt
+                            and not write_default_to_config
+                        ),
                     )
                     if should_stop:
                         return _WizardComponentOutcome.QUIT
@@ -8190,10 +13852,14 @@ def _run_component_field_wizard(
                     prompt_history.append(full_path)
                 if full_path in virtual_prompt_defaults:
                     default_value = virtual_prompt_defaults[full_path]
-                    if updated == default_value and not _wizard_field_materialize_default(
-                        entry=entry,
-                        full_path_label=full_path_label,
-                    ):
+                    if updated is None:
+                        if write_default_to_config:
+                            _set_payload_value_creating_containers(
+                                payload, full_path, default_value
+                            )
+                        elif _payload_path_exists(payload, full_path):
+                            _delete_payload_value(payload, full_path)
+                    elif updated == default_value and not write_default_to_config:
                         if _payload_path_exists(payload, full_path):
                             _delete_payload_value(payload, full_path)
                     else:
@@ -8309,18 +13975,20 @@ def _run_component_field_wizard(
             entry, instance_id = infra_components[infra_index]
             outcome = _run_component(entry, instance_id)
             if outcome == _WizardComponentOutcome.QUIT:
-                return yaml.safe_dump(payload, sort_keys=False), False
+                return _wizard_payload_yaml(), False
             if outcome == _WizardComponentOutcome.BACK:
                 if infra_index > 0:
                     infra_index -= 1
                     continue
                 if _confirm_exit_from_first_step():
-                    return yaml.safe_dump(payload, sort_keys=False), False
+                    return _wizard_payload_yaml(), False
                 continue
             infra_index += 1
             if infra_index < len(infra_components):
                 continue
 
+            _align_infra_resource_names_for_app_section()
+            infra_components = _selected_components_for_scope("infra")
             _materialize_wizard_auto_enabled_gpu_apps()
             _materialize_wizard_auto_enabled_observability_apps()
             app_components = _selected_components_for_scope("apps")
@@ -8333,11 +14001,11 @@ def _run_component_field_wizard(
             _print_wizard_section_banner(title="Apps", components=app_components)
             active_section = "apps"
         if not app_components:
-            return yaml.safe_dump(payload, sort_keys=False), True
+            return _wizard_payload_yaml(), True
         entry, instance_id = app_components[app_index]
         outcome = _run_component(entry, instance_id)
         if outcome == _WizardComponentOutcome.QUIT:
-            return yaml.safe_dump(payload, sort_keys=False), False
+            return _wizard_payload_yaml(), False
         if outcome == _WizardComponentOutcome.BACK:
             if app_index > 0:
                 app_index -= 1
@@ -8348,13 +14016,13 @@ def _run_component_field_wizard(
                 active_section = None
                 continue
             if _confirm_exit_from_first_step():
-                return yaml.safe_dump(payload, sort_keys=False), False
+                return _wizard_payload_yaml(), False
             continue
         app_index += 1
         if app_index >= len(app_components):
-            return yaml.safe_dump(payload, sort_keys=False), True
+            return _wizard_payload_yaml(), True
 
-    return yaml.safe_dump(payload, sort_keys=False), True
+    return _wizard_payload_yaml(), True
 
 
 @dataclass(frozen=True)
@@ -9257,13 +14925,26 @@ def _validate_component_sources_registry(
     *,
     explicit: Path | None = None,
     progress_callback: Callable[[str, int, int], None] | None = None,
+    selected_app_ids: set[str] | None = None,
+    include_infra: bool = True,
 ) -> tuple[Path, list[str], list[str]]:
     source_path = resolve_component_sources_file(explicit=explicit)
     sources = load_component_sources(explicit=explicit)
     chart_meta_cache: _ChartMetaCache = {}
     issues: list[str] = []
     warnings: list[str] = []
-    total_items = len(sources.tf_modules) + len(sources.helm_charts)
+    selected_app_filter = (
+        None
+        if selected_app_ids is None
+        else {normalize_component_token(value) for value in selected_app_ids if str(value).strip()}
+    )
+    selected_charts = [
+        chart
+        for chart in sources.helm_charts
+        if selected_app_filter is None
+        or normalize_component_token(chart.name) in selected_app_filter
+    ]
+    total_items = (len(sources.tf_modules) if include_infra else 0) + len(selected_charts)
     processed_items = 0
 
     def _advance(label: str) -> None:
@@ -9278,24 +14959,35 @@ def _validate_component_sources_registry(
     declared_entries: dict[str, tuple[str, Any]] = {}
     duplicate_ids: set[str] = set()
 
+    active_entry_ids: set[str] = set()
+
     for module in sources.tf_modules:
         module_id = module.module.strip().lower()
         module_source = module.source.strip()
-        _advance(f"infra:{module_id or '?'}")
+        validate_module_source = include_infra
+        if validate_module_source:
+            _advance(f"infra:{module_id or '?'}")
         if not module_id:
-            issues.append("components.infra entry has empty component id")
+            if validate_module_source:
+                issues.append("components.infra entry has empty component id")
             continue
         if not COMPONENT_ID_PATTERN.fullmatch(module_id):
-            issues.append(
-                f"components.infra.{module_id} component id must use lowercase letters, digits, and hyphens"
-            )
+            if validate_module_source:
+                issues.append(
+                    f"components.infra.{module_id} component id must use lowercase letters, digits, and hyphens"
+                )
             continue
+        if validate_module_source:
+            active_entry_ids.add(module_id)
         if module_id in declared_entries:
             duplicate_ids.add(module_id)
         else:
             declared_entries[module_id] = ("infra", module)
         if not module_source:
-            issues.append(f"components.infra.{module_id} is missing source")
+            if validate_module_source:
+                issues.append(f"components.infra.{module_id} is missing source")
+            continue
+        if not validate_module_source:
             continue
         source_issues = module_source_validation_issues(module_source)
         for issue in source_issues:
@@ -9332,15 +15024,22 @@ def _validate_component_sources_registry(
         repo = str(chart.repo or "").strip()
         version = str(chart.version or "").strip()
         chart_label = f"components.apps.{chart_component_id}"
-        _advance(f"apps:{chart_component_id or '?'}")
+        validate_chart_source = selected_app_filter is None or chart_id in selected_app_filter
+        if validate_chart_source:
+            _advance(f"apps:{chart_component_id or '?'}")
 
         if not chart_component_id:
-            issues.append("components.apps entry has empty component id")
+            if validate_chart_source:
+                issues.append("components.apps entry has empty component id")
             continue
         if chart_id in declared_entries:
             duplicate_ids.add(chart_id)
         else:
             declared_entries[chart_id] = ("apps", chart)
+        if validate_chart_source:
+            active_entry_ids.add(chart_id)
+        else:
+            continue
         if not chart_path and not repo:
             issues.append(
                 f"{chart_label} source.portable is required for portable validation; "
@@ -9367,11 +15066,23 @@ def _validate_component_sources_registry(
             for warning in chart_contract_warnings:
                 warnings.append(f"{chart_label} {warning}")
 
+    if selected_app_filter is not None:
+        selected_chart_ids = {
+            normalize_component_token(chart.name)
+            for chart in sources.helm_charts
+            if str(chart.name).strip()
+        }
+        for missing_app_id in sorted(selected_app_filter - selected_chart_ids):
+            issues.append(
+                f"components.apps.{missing_app_id} was selected for source validation but is not declared"
+            )
+
     for component_id in sorted(duplicate_ids):
-        issues.append(
-            f"component id '{component_id}' is declared more than once across infra/apps. "
-            "Cross-component bindings require globally unique component ids."
-        )
+        if selected_app_filter is None or component_id in active_entry_ids:
+            issues.append(
+                f"component id '{component_id}' is declared more than once across infra/apps. "
+                "Cross-component bindings require globally unique component ids."
+            )
 
     declared_app_ids = {
         component_id
@@ -9388,7 +15099,12 @@ def _validate_component_sources_registry(
     )
     mk8s_gpu_settings = getattr(mk8s_entry, "mk8s_gpu", None)
     role_to_app_ids: dict[str, list[str]] = {}
-    for app_id in sorted(declared_app_ids):
+    active_app_ids = {
+        component_id
+        for component_id in active_entry_ids
+        if declared_entries.get(component_id, (None,))[0] == "apps"
+    }
+    for app_id in sorted(active_app_ids):
         app_entry = declared_entries[app_id][1]
         app_policy = getattr(app_entry, "mk8s_gpu", None)
         role_name = _non_empty_text(getattr(app_policy, "role", ""))
@@ -9405,7 +15121,7 @@ def _validate_component_sources_registry(
             issues.append(
                 f"mk8s gpu app role '{role_name}' is declared more than once: {', '.join(sorted(app_ids))}"
             )
-    if mk8s_gpu_settings is not None:
+    if mk8s_gpu_settings is not None and "mk8s" in active_entry_ids:
         gpu_visibility_settings = mk8s_gpu_settings.validations.gpu_visibility
         if gpu_visibility_settings.enabled_by_default and (
             not gpu_visibility_settings.namespace
@@ -9427,6 +15143,8 @@ def _validate_component_sources_registry(
             )
 
     for component_id, (scope, source_entry) in declared_entries.items():
+        if selected_app_filter is not None and component_id not in active_entry_ids:
+            continue
         output_by_name = {output.name: output for output in source_entry.outputs}
         default_targets = default_target_paths(source_entry)
         declared_module_input_names: set[str] = set()
@@ -9656,62 +15374,7 @@ def _mk8s_conditionally_required_input_leaf_names(component_node: Mapping[str, A
     inputs = component_node.get("inputs", {})
     if not isinstance(inputs, Mapping):
         return set()
-
-    required: set[str] = set()
-
-    cpu_count = _positive_number_value(_resolve_mapping_segment(inputs, "cpu_nodes_count"))
-    cpu_overrides = _resolve_mapping_segment(inputs, "mk8s_cpu_node_group_overrides")
-    cpu_autoscaling = (
-        _mapping_path_value(cpu_overrides, "autoscaling")
-        if isinstance(cpu_overrides, Mapping)
-        else None
-    )
-    cpu_override_platform = (
-        _non_empty_text(_mapping_path_value(cpu_overrides, "template.resources.platform"))
-        if isinstance(cpu_overrides, Mapping)
-        else ""
-    )
-    cpu_override_preset = (
-        _non_empty_text(_mapping_path_value(cpu_overrides, "template.resources.preset"))
-        if isinstance(cpu_overrides, Mapping)
-        else ""
-    )
-    cpu_group_enabled = (cpu_count is not None and cpu_count > 0) or cpu_autoscaling is not None
-    if cpu_group_enabled:
-        if not cpu_override_platform:
-            required.add("cpu_nodes_platform")
-        if not cpu_override_preset:
-            required.add("cpu_nodes_preset")
-
-    gpu_enabled = bool(_resolve_mapping_segment(inputs, "gpu_enabled"))
-    gpu_overrides = _resolve_mapping_segment(inputs, "mk8s_gpu_node_group_overrides")
-    gpu_autoscaling = (
-        _mapping_path_value(gpu_overrides, "autoscaling")
-        if isinstance(gpu_overrides, Mapping)
-        else None
-    )
-    gpu_override_platform = (
-        _non_empty_text(_mapping_path_value(gpu_overrides, "template.resources.platform"))
-        if isinstance(gpu_overrides, Mapping)
-        else ""
-    )
-    gpu_override_preset = (
-        _non_empty_text(_mapping_path_value(gpu_overrides, "template.resources.preset"))
-        if isinstance(gpu_overrides, Mapping)
-        else ""
-    )
-    if gpu_enabled:
-        generic_gpu_node_group = _has_generic_gpu_node_group(inputs)
-        if not generic_gpu_node_group:
-            required.add("gpu_node_groups")
-        if not generic_gpu_node_group and gpu_autoscaling is None:
-            required.add("gpu_nodes_count_per_group")
-        if not gpu_override_platform:
-            required.add("gpu_nodes_platform")
-        if not gpu_override_preset:
-            required.add("gpu_nodes_preset")
-
-    return required
+    return set()
 
 
 def _vm_conditionally_required_input_leaf_names(component_node: Mapping[str, Any]) -> set[str]:
@@ -9737,6 +15400,13 @@ def _jump_host_public_ip_allocation_inputs(component_node: Mapping[str, Any]) ->
     create_allocation = bool(raw_create) if raw_create is not None else True
     allocation_id = _non_empty_text(_resolve_mapping_segment(inputs, "public_ip_allocation_id"))
     return create_allocation, allocation_id
+
+
+def _jump_host_public_ip_allocation_name(component_node: Mapping[str, Any]) -> str:
+    inputs = component_node.get("inputs", {})
+    if not isinstance(inputs, Mapping):
+        return ""
+    return _non_empty_text(_resolve_mapping_segment(inputs, "public_ip_allocation_name"))
 
 
 def _jump_host_conditionally_required_input_leaf_names(
@@ -9984,16 +15654,21 @@ def _materialize_mk8s_image_defaults(
             continue
         component_path_label = _format_payload_path(component_path)
 
-        cpu_os_field = f"{component_path_label}.inputs.cpu_nodes_os"
+        cpu_os_field = f"{component_path_label}.inputs.node_group_defaults.cpu.os"
         _set_first_provider_choice(entry=entry, full_path_label=cpu_os_field)
 
-        gpu_enabled = bool(
-            _read_payload_field(payload, f"{component_path_label}.inputs.gpu_enabled")
+        gpu_platform = _non_empty_text(
+            _read_payload_field(
+                payload,
+                f"{component_path_label}.inputs.node_group_defaults.gpu.platform",
+            )
         )
-        if not gpu_enabled:
+        if not gpu_platform:
             continue
 
-        stack_source_field = f"{component_path_label}.inputs.gpu_stack_source"
+        stack_source_field = (
+            f"{component_path_label}.inputs.node_group_defaults.gpu.gpu_stack_source"
+        )
         stack_source = (
             _non_empty_text(_read_payload_field(payload, stack_source_field)) or "nebius_image"
         ).lower()
@@ -10006,7 +15681,9 @@ def _materialize_mk8s_image_defaults(
             if target_path is not None:
                 _set_payload_value_creating_containers(payload, target_path, stack_source)
 
-        gpu_stack_preset_field = f"{component_path_label}.inputs.gpu_stack_preset"
+        gpu_stack_preset_field = (
+            f"{component_path_label}.inputs.node_group_defaults.gpu.gpu_stack_preset"
+        )
         if stack_source == "nebius_image":
             _set_first_provider_choice(
                 entry=entry,
@@ -10017,7 +15694,7 @@ def _materialize_mk8s_image_defaults(
             if target_path is not None:
                 _delete_payload_value(payload, target_path)
 
-        gpu_os_field = f"{component_path_label}.inputs.gpu_nodes_os"
+        gpu_os_field = f"{component_path_label}.inputs.node_group_defaults.gpu.os"
         _set_first_provider_choice(
             entry=entry,
             full_path_label=gpu_os_field,
@@ -10323,6 +16000,28 @@ def _dynamic_enabled_app_chart_rows(payload: dict[str, Any]) -> list[dict[str, A
     return rows
 
 
+def _enabled_app_row_identities_from_payload(payload: dict[str, Any]) -> set[tuple[str, str]]:
+    return {
+        (component_type_id(row), component_instance_id(row))
+        for row in _dynamic_enabled_app_chart_rows(payload)
+        if component_type_id(row) and component_instance_id(row)
+    }
+
+
+def _enabled_app_ids_for_new_rows(
+    *,
+    payload: dict[str, Any],
+    previous_identities: set[tuple[str, str]],
+) -> set[str]:
+    return {
+        app_id
+        for app_id, _instance_id in (
+            _enabled_app_row_identities_from_payload(payload) - previous_identities
+        )
+        if app_id
+    }
+
+
 def _enabled_custom_module_source_issues(
     *,
     payload: dict[str, Any],
@@ -10550,6 +16249,12 @@ def _jump_host_public_ip_allocation_issues(payload: dict[str, Any]) -> list[str]
                 f"{component_label}.inputs.create_public_ip_allocation must be false "
                 "when inputs.public_ip_allocation_id is set"
             )
+        allocation_name = _jump_host_public_ip_allocation_name(row)
+        if allocation_name and not INSTANCE_ID_PATTERN.fullmatch(allocation_name):
+            issues.append(
+                f"{component_label}.inputs.public_ip_allocation_name must use lowercase "
+                "letters, digits, and hyphens"
+            )
     return issues
 
 
@@ -10666,6 +16371,28 @@ def _enabled_custom_module_input_schema_issues(
     helper_input_names = {
         "module_name",
     }
+
+    def _wizard_input_helper_roots(entry: ComponentEntry | None) -> set[str]:
+        if entry is None:
+            return set()
+        roots: set[str] = set()
+        for raw_path in entry.wizard_fields:
+            field_path = str(raw_path).strip()
+            if not field_path:
+                continue
+            if field_path.startswith("inputs."):
+                relative = field_path[len("inputs.") :]
+            elif field_path.startswith(f"{entry.config_path}.inputs."):
+                relative = field_path[len(f"{entry.config_path}.inputs.") :]
+            else:
+                continue
+            if "." not in relative:
+                continue
+            root = relative.split(".", maxsplit=1)[0].strip().replace("-", "_").lower()
+            if root:
+                roots.add(root)
+        return roots
+
     for row in _dynamic_enabled_infra_component_rows(payload):
         component_id = str(row["id"])
         instance_id = str(row["instance_id"])
@@ -10685,10 +16412,13 @@ def _enabled_custom_module_input_schema_issues(
         }
         if not declared_leaf_names:
             continue
+        wizard_helper_roots = _wizard_input_helper_roots(entry) - declared_leaf_names
         for raw_name in sorted(inputs.keys()):
             input_name = str(raw_name).strip()
             normalized_name = _normalize_leaf_name(input_name)
             if not normalized_name or normalized_name in helper_input_names:
+                continue
+            if normalized_name in wizard_helper_roots:
                 continue
             if normalized_name not in declared_leaf_names:
                 issues.append(
@@ -13177,6 +18907,15 @@ def _requires_flux_terraform_state(config: Any) -> bool:
     )
 
 
+def _config_has_enabled_infra_components(config: Any) -> bool:
+    payload = to_plain_data(config)
+    infra = payload.get("infra") if isinstance(payload, Mapping) else None
+    components = infra.get("components") if isinstance(infra, Mapping) else None
+    if not isinstance(components, list):
+        return False
+    return any(isinstance(row, Mapping) and bool(row.get("enabled", False)) for row in components)
+
+
 def _enabled_deploy_targets(config: Any, paths: ProjectPaths) -> list[dict[str, str]]:
     targets: list[dict[str, str]] = []
     for handoff in _enabled_cluster_handoffs(config):
@@ -13184,6 +18923,15 @@ def _enabled_deploy_targets(config: Any, paths: ProjectPaths) -> list[dict[str, 
         targets.append(
             {
                 **handoff,
+                "target_ref": target_ref,
+                "flux_dir": str(flux_target_dir(paths, target_ref)),
+            }
+        )
+    for external_target in _enabled_external_cluster_targets(config):
+        target_ref = str(external_target.get("instance_id", "")).strip().lower()
+        targets.append(
+            {
+                **external_target,
                 "target_ref": target_ref,
                 "flux_dir": str(flux_target_dir(paths, target_ref)),
             }
@@ -13205,6 +18953,14 @@ def _manifest_deploy_targets(manifest: Mapping[str, Any]) -> list[dict[str, str]
     return [
         normalize_generated_deploy_target(item, index=index)
         for index, item in enumerate(raw_targets)
+    ]
+
+
+def _manifest_managed_deploy_targets(manifest: Mapping[str, Any]) -> list[dict[str, str]]:
+    return [
+        target
+        for target in _manifest_deploy_targets(manifest)
+        if str(target.get(DEPLOY_TARGET_OWNERSHIP_FIELD, "")).strip() != EXTERNAL_TARGET_OWNERSHIP
     ]
 
 
@@ -13333,6 +19089,24 @@ def _resolve_selected_deploy_targets(
         "Multiple cluster targets are declared in this generated bundle: "
         f"{available}. Select one with --target or use --all-targets."
     )
+
+
+def _resolve_deploy_run_targets(
+    manifest: Mapping[str, Any],
+    *,
+    requested_target_ref: str | None,
+    all_targets: bool,
+) -> list[dict[str, str]]:
+    if requested_target_ref or all_targets:
+        return _resolve_selected_deploy_targets(
+            manifest,
+            requested_target_ref=requested_target_ref,
+            all_targets=all_targets,
+        )
+    manifest_targets = _manifest_deploy_targets(manifest)
+    # A plain deploy is project-wide: apply infra once, then reconcile every generated
+    # target that needs Kubernetes handoff/app/validation work.
+    return manifest_targets
 
 
 def _filter_validations_for_target(
@@ -13524,7 +19298,8 @@ def _manifest_missing_deploy_validations(manifest: Mapping[str, Any]) -> bool:
 
 def _manifest_requires_flux_terraform_state(manifest: Mapping[str, Any]) -> bool:
     return bool(
-        _manifest_deploy_targets(manifest) or _manifest_required_component_output_specs(manifest)
+        _manifest_managed_deploy_targets(manifest)
+        or _manifest_required_component_output_specs(manifest)
     )
 
 
@@ -13588,6 +19363,44 @@ def _enabled_cluster_handoffs(config: Any) -> list[dict[str, str]]:
             }
         )
     return handoffs
+
+
+def _enabled_external_cluster_targets(config: Any) -> list[dict[str, str]]:
+    payload = to_plain_data(config)
+    if not isinstance(payload, Mapping):
+        return []
+    deploy = payload.get("deploy")
+    targets = deploy.get("targets") if isinstance(deploy, Mapping) else None
+    if not isinstance(targets, list):
+        return []
+    resolved: list[dict[str, str]] = []
+    for row in targets:
+        if not isinstance(row, Mapping) or not deploy_target_is_external_mk8s(row):
+            continue
+        target_ref = normalize_component_token(row.get(INSTANCE_ID_FIELD))
+        if not target_ref:
+            continue
+        access = _normalize_handoff_access_value(
+            row.get("access") or "external",
+            component_label=f"deploy target '{target_ref}'",
+            source_label="deploy.targets[].access",
+        )
+        target = {
+            DEPLOY_TARGET_KIND_FIELD: EXTERNAL_MK8S_TARGET_KIND,
+            DEPLOY_TARGET_OWNERSHIP_FIELD: EXTERNAL_TARGET_OWNERSHIP,
+            "component_id": EXTERNAL_MK8S_TARGET_KIND,
+            "instance_id": target_ref,
+            "target_ref": target_ref,
+            "access": access,
+        }
+        kube_context = _non_empty_text(row.get("kube_context"))
+        cluster_id = _non_empty_text(row.get("cluster_id"))
+        if kube_context:
+            target["kube_context"] = kube_context
+        if cluster_id:
+            target["cluster_id"] = cluster_id
+        resolved.append(target)
+    return resolved
 
 
 def _resolve_mapping_path_text(node: Mapping[str, Any], path: str) -> str:
@@ -13762,9 +19575,16 @@ def _enabled_status_watcher_specs(config: Any) -> list[dict[str, str]]:
         if not isinstance(inputs, Mapping):
             continue
         parent_id = _resolve_mapping_path_text(inputs, entry.status.parent_input)
-        resource_names = _status_resource_names_from_value(
-            _mapping_path_value(inputs, entry.status.name_input)
-        )
+        name_inputs = tuple(getattr(entry.status, "name_inputs", ()) or ())
+        if not name_inputs:
+            name_inputs = (entry.status.name_input,)
+        resource_names: tuple[str, ...] = ()
+        for name_input in name_inputs:
+            resource_names = _status_resource_names_from_value(
+                _mapping_path_value(inputs, name_input)
+            )
+            if resource_names:
+                break
         if not parent_id or not resource_names:
             continue
         for resource_name in resource_names:
@@ -14075,6 +19895,56 @@ def _prepare_cluster_handoff_kube_env(
     if not resolved_target:
         return None
 
+    if str(resolved_target.get(DEPLOY_TARGET_KIND_FIELD, "")).strip() == EXTERNAL_MK8S_TARGET_KIND:
+        target_ref = str(
+            resolved_target.get("target_ref") or resolved_target.get("instance_id") or ""
+        )
+        kube_context = _non_empty_text(resolved_target.get("kube_context"))
+        cluster_id = _non_empty_text(resolved_target.get("cluster_id"))
+        if kube_context:
+            env = _kubeconfig_target_env(
+                target_ref,
+                stack=stack,
+                preferred_context=kube_context,
+                preferred_cluster_id=cluster_id,
+            )
+            if not env:
+                raise RuntimeError(
+                    f"External MK8s target '{target_ref}' references kube_context "
+                    f"'{kube_context}', but that context was not found in the local kubeconfig."
+                )
+            env[CLUSTER_HANDOFF_ACCESS_ENV] = str(resolved_target.get("access") or "external")
+            return env
+        if not cluster_id:
+            raise RuntimeError(
+                f"External MK8s target '{target_ref}' requires kube_context or cluster_id."
+            )
+        if not _runtime_auth_env_available():
+            project_id = str(config.client_info.nebius.project_id).strip()
+            client_name = str(config.client_info.client_name).strip()
+            _runtime_auth_cache_load(project_id=project_id, client_name=client_name)
+        spec = _mk8s_cluster_handoff_spec(
+            config,
+            cluster_id=cluster_id,
+            access=str(resolved_target.get("access") or "external"),
+        )
+        kube_root = Path(
+            stack.enter_context(tempfile.TemporaryDirectory(prefix="nebius-cxcli-kube-"))
+        )
+        kubeconfig_path = kube_root / "config"
+        _write_kubeconfig_file(kubeconfig_path, spec)
+        if persist_local_kubeconfig:
+            _persist_cluster_handoff_kubeconfig(
+                spec=spec,
+                set_current_context=set_current_context,
+            )
+        return {
+            "KUBECONFIG": str(kubeconfig_path),
+            CLUSTER_HANDOFF_ACCESS_ENV: str(resolved_target.get("access") or "external"),
+            GRAFANA_TARGET_CLUSTER_ID_ENV: cluster_id,
+            GRAFANA_TARGET_KUBE_CONTEXT_ENV: spec.context_name,
+        }
+
     cluster_id = terraform_output_raw(
         paths.infra_dir,
         str(resolved_target["cluster_id_output_name"]),
@@ -14113,7 +19983,7 @@ def _prepare_cluster_handoff_kube_env(
     }
 
 
-def _run_post_flux_kubectl(
+def _run_kubectl_with_transient_retries(
     cmd: list[str],
     *,
     env: Mapping[str, str],
@@ -14126,7 +19996,7 @@ def _run_post_flux_kubectl(
     for attempt in range(1, max_attempts + 1):
         completed = subprocess.run(
             cmd,
-            env=dict(env),
+            env=_post_flux_subprocess_env(env),
             timeout=timeout,
             capture_output=True,
             text=True,
@@ -14163,6 +20033,31 @@ def _run_post_flux_kubectl(
         )
 
 
+def _run_post_flux_kubectl(
+    cmd: list[str],
+    *,
+    env: Mapping[str, str],
+    timeout: int = 300,
+    retries: int = 0,
+    retry_delay_seconds: float = 5.0,
+    retry_stderr_markers: Sequence[str] = (),
+) -> None:
+    _run_kubectl_with_transient_retries(
+        cmd,
+        env=env,
+        timeout=timeout,
+        retries=retries,
+        retry_delay_seconds=retry_delay_seconds,
+        retry_stderr_markers=retry_stderr_markers,
+    )
+
+
+def _post_flux_subprocess_env(env: Mapping[str, str]) -> dict[str, str]:
+    merged = os.environ.copy()
+    merged.update(dict(env))
+    return merged
+
+
 def _write_post_flux_docs(path: Path, docs: Sequence[Mapping[str, Any]]) -> None:
     path.write_text(
         yaml.safe_dump_all(
@@ -14192,7 +20087,7 @@ def _rendered_priority_class_value(doc: Mapping[str, Any]) -> int | None:
 def _current_priority_class_value(name: str, *, env: Mapping[str, str]) -> int | None:
     completed = subprocess.run(
         ["kubectl", "get", "priorityclass", name, "-o", "jsonpath={.value}"],
-        env=dict(env),
+        env=_post_flux_subprocess_env(env),
         timeout=60,
         capture_output=True,
         text=True,
@@ -14250,6 +20145,14 @@ def _metadata_name_namespace(doc: Mapping[str, Any]) -> tuple[str, str] | None:
     return name.strip(), namespace.strip() if isinstance(namespace, str) else ""
 
 
+def _metadata_annotations(doc: Mapping[str, Any]) -> Mapping[str, Any]:
+    metadata = doc.get("metadata")
+    if not isinstance(metadata, Mapping):
+        return {}
+    annotations = metadata.get("annotations")
+    return annotations if isinstance(annotations, Mapping) else {}
+
+
 def _as_nonempty_str(value: Any) -> str:
     if not isinstance(value, str):
         return ""
@@ -14274,6 +20177,117 @@ def _post_flux_custom_resource_priority(doc: Mapping[str, Any]) -> int:
         "JailedConfig": 50,
         "ActiveCheck": 60,
     }.get(kind, 100)
+
+
+def _post_flux_hook_delete_before_creation_docs(
+    docs: Sequence[Mapping[str, Any]],
+) -> list[Mapping[str, Any]]:
+    selected: list[Mapping[str, Any]] = []
+    for doc in docs:
+        annotations = _metadata_annotations(doc)
+        hook = _as_nonempty_str(annotations.get("helm.sh/hook"))
+        if not hook:
+            continue
+        delete_policy = _as_nonempty_str(annotations.get("helm.sh/hook-delete-policy"))
+        policies = {part.strip() for part in delete_policy.split(",") if part.strip()}
+        if "before-hook-creation" in policies:
+            selected.append(doc)
+    return selected
+
+
+def _post_flux_helm_hook_docs(
+    docs: Sequence[Mapping[str, Any]],
+) -> list[Mapping[str, Any]]:
+    return [doc for doc in docs if _as_nonempty_str(_metadata_annotations(doc).get("helm.sh/hook"))]
+
+
+def _delete_post_flux_hooks_before_creation(
+    docs: Sequence[Mapping[str, Any]],
+    *,
+    temp_path: Path,
+    manifest_stem: str,
+    env: Mapping[str, str],
+) -> None:
+    hook_docs = _post_flux_hook_delete_before_creation_docs(docs)
+    if not hook_docs:
+        return
+    hook_path = temp_path / f"{manifest_stem}-hooks-before-creation.yaml"
+    _write_post_flux_docs(hook_path, hook_docs)
+    _run_post_flux_kubectl(
+        [
+            "kubectl",
+            "delete",
+            "-f",
+            str(hook_path),
+            "--ignore-not-found=true",
+            "--wait=true",
+            "--timeout=120s",
+        ],
+        env=env,
+        timeout=180,
+    )
+
+
+def _post_flux_hook_job_timeout_seconds(doc: Mapping[str, Any]) -> int:
+    spec = doc.get("spec")
+    active_deadline = spec.get("activeDeadlineSeconds") if isinstance(spec, Mapping) else None
+    try:
+        seconds = int(str(active_deadline).strip())
+    except (TypeError, ValueError):
+        seconds = 1200
+    if seconds < 1:
+        seconds = 1200
+    return seconds + 60
+
+
+def _debug_failed_post_flux_hook_job(
+    *,
+    name: str,
+    namespace: str,
+    env: Mapping[str, str],
+) -> None:
+    base_cmd = ["kubectl"]
+    if namespace:
+        base_cmd.extend(["-n", namespace])
+    for suffix in (
+        ["describe", f"job/{name}"],
+        ["logs", f"job/{name}", "--all-containers=true", "--tail=-1"],
+    ):
+        try:
+            _run_post_flux_kubectl([*base_cmd, *suffix], env=env, timeout=120)
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+            continue
+
+
+def _wait_for_post_flux_hook_jobs(
+    docs: Sequence[Mapping[str, Any]],
+    *,
+    env: Mapping[str, str],
+) -> None:
+    for doc in docs:
+        if doc.get("apiVersion") != "batch/v1" or doc.get("kind") != "Job":
+            continue
+        name_namespace = _metadata_name_namespace(doc)
+        if name_namespace is None:
+            continue
+        name, namespace = name_namespace
+        wait_timeout = _post_flux_hook_job_timeout_seconds(doc)
+        cmd = ["kubectl"]
+        if namespace:
+            cmd.extend(["-n", namespace])
+        cmd.extend(
+            [
+                "wait",
+                "--for=condition=complete",
+                f"--timeout={wait_timeout}s",
+                f"job/{name}",
+            ]
+        )
+        try:
+            _run_post_flux_kubectl(cmd, env=env, timeout=wait_timeout + 60)
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+            _debug_failed_post_flux_hook_job(name=name, namespace=namespace, env=env)
+            raise
 
 
 def _metadata_labels(doc: Mapping[str, Any]) -> Mapping[str, Any]:
@@ -14318,7 +20332,7 @@ def _delete_stale_nodeconfigurators(
                 "-o",
                 "json",
             ],
-            env=dict(env),
+            env=_post_flux_subprocess_env(env),
             timeout=60,
             capture_output=True,
             text=True,
@@ -14438,7 +20452,7 @@ def _wait_for_post_flux_webhook_services(
             timeout=150,
             retries=2,
             retry_delay_seconds=5.0,
-            retry_stderr_markers=_POST_FLUX_WEBHOOK_TRANSIENT_MARKERS,
+            retry_stderr_markers=_KUBECTL_TRANSIENT_FAILURE_MARKERS,
         )
 
 
@@ -14476,8 +20490,10 @@ def _apply_post_flux_manifest(manifest_path: Path, *, env: Mapping[str, str]) ->
         and doc.get("kind") == "CustomResourceDefinition"
     ]
     non_crd_docs = [doc for doc in docs if doc not in crd_docs]
-    custom_resource_docs = [doc for doc in non_crd_docs if _is_post_flux_custom_resource(doc)]
-    base_resource_docs = [doc for doc in non_crd_docs if doc not in custom_resource_docs]
+    hook_docs = _post_flux_helm_hook_docs(non_crd_docs)
+    non_hook_docs = [doc for doc in non_crd_docs if doc not in hook_docs]
+    custom_resource_docs = [doc for doc in non_hook_docs if _is_post_flux_custom_resource(doc)]
+    base_resource_docs = [doc for doc in non_hook_docs if doc not in custom_resource_docs]
     with tempfile.TemporaryDirectory(prefix="nebius-cxcli-post-flux-") as temp_dir:
         temp_path = Path(temp_dir)
         if crd_docs:
@@ -14551,8 +20567,349 @@ def _apply_post_flux_manifest(manifest_path: Path, *, env: Mapping[str, str]) ->
                     env=env,
                     retries=5,
                     retry_delay_seconds=5.0,
-                    retry_stderr_markers=_POST_FLUX_WEBHOOK_TRANSIENT_MARKERS,
+                    retry_stderr_markers=_KUBECTL_TRANSIENT_FAILURE_MARKERS,
                 )
+        if hook_docs:
+            hook_path = temp_path / f"{manifest_path.stem}-hooks.yaml"
+            _write_post_flux_docs(hook_path, hook_docs)
+            _delete_post_flux_hooks_before_creation(
+                hook_docs,
+                temp_path=temp_path,
+                manifest_stem=manifest_path.stem,
+                env=env,
+            )
+            _run_post_flux_kubectl(
+                [
+                    "kubectl",
+                    "apply",
+                    "--server-side",
+                    "--force-conflicts",
+                    "-f",
+                    str(hook_path),
+                ],
+                env=env,
+            )
+            _wait_for_post_flux_hook_jobs(hook_docs, env=env)
+
+
+def _post_flux_manifest_sort_key(path: Path) -> tuple[int, str]:
+    # MysteryBox ExternalSecrets may provide runtime Secrets consumed by local
+    # chart manifests rendered as post-Flux YAML.
+    if path.name == "post-flux-mysterybox-eso.yaml":
+        return (0, path.name)
+    return (1, path.name)
+
+
+def _post_flux_manifest_paths(paths: ProjectPaths) -> list[Path]:
+    return sorted(
+        paths.flux_dir.glob("post-flux-*.yaml"),
+        key=_post_flux_manifest_sort_key,
+    )
+
+
+def _apply_post_flux_manifests(paths: ProjectPaths, *, env: Mapping[str, str]) -> None:
+    for manifest_path in _post_flux_manifest_paths(paths):
+        _apply_post_flux_manifest(manifest_path, env=env)
+
+
+def _is_admission_webhook_doc(doc: Mapping[str, Any]) -> bool:
+    return doc.get("apiVersion") == "admissionregistration.k8s.io/v1" and doc.get("kind") in {
+        "MutatingWebhookConfiguration",
+        "ValidatingWebhookConfiguration",
+    }
+
+
+def _is_crd_doc(doc: Mapping[str, Any]) -> bool:
+    return (
+        doc.get("apiVersion") == "apiextensions.k8s.io/v1"
+        and doc.get("kind") == "CustomResourceDefinition"
+    )
+
+
+def _is_namespace_doc(doc: Mapping[str, Any]) -> bool:
+    return doc.get("apiVersion") == "v1" and doc.get("kind") == "Namespace"
+
+
+def _namespace_names_from_docs(docs: Sequence[Mapping[str, Any]]) -> set[str]:
+    names: set[str] = set()
+    for doc in docs:
+        if not _is_namespace_doc(doc):
+            continue
+        name_namespace = _metadata_name_namespace(doc)
+        if name_namespace is None:
+            continue
+        name, _namespace = name_namespace
+        names.add(name)
+    return names
+
+
+def _delete_post_flux_docs(
+    docs: Sequence[Mapping[str, Any]],
+    *,
+    temp_path: Path,
+    manifest_stem: str,
+    suffix: str,
+    env: Mapping[str, str],
+    wait: bool,
+    timeout_arg: str | None,
+    timeout_seconds: int,
+) -> None:
+    if not docs:
+        return
+    delete_path = temp_path / f"{manifest_stem}-{suffix}.yaml"
+    _write_post_flux_docs(delete_path, docs)
+    cmd = [
+        "kubectl",
+        "delete",
+        "-f",
+        str(delete_path),
+        "--ignore-not-found=true",
+        f"--wait={'true' if wait else 'false'}",
+    ]
+    if timeout_arg:
+        cmd.append(f"--timeout={timeout_arg}")
+    _run_post_flux_kubectl(cmd, env=env, timeout=timeout_seconds)
+
+
+def _delete_admission_webhooks_for_namespaces(
+    namespaces: set[str],
+    *,
+    env: Mapping[str, str],
+) -> None:
+    if not namespaces:
+        return
+    completed = subprocess.run(
+        [
+            "kubectl",
+            "get",
+            "validatingwebhookconfigurations,mutatingwebhookconfigurations",
+            "-o",
+            "json",
+        ],
+        env=_post_flux_subprocess_env(env),
+        timeout=60,
+        capture_output=True,
+        text=True,
+    )
+    if completed.returncode != 0:
+        return
+    try:
+        payload = json.loads(completed.stdout or "{}")
+    except json.JSONDecodeError:
+        return
+    items = payload.get("items")
+    if not isinstance(items, list):
+        return
+    for item in items:
+        if not isinstance(item, Mapping):
+            continue
+        kind = _as_nonempty_str(item.get("kind"))
+        if kind not in {"MutatingWebhookConfiguration", "ValidatingWebhookConfiguration"}:
+            continue
+        name_namespace = _metadata_name_namespace(item)
+        if name_namespace is None:
+            continue
+        name, _namespace = name_namespace
+        webhooks = item.get("webhooks")
+        if not isinstance(webhooks, list):
+            continue
+        references_rendered_namespace = False
+        for webhook in webhooks:
+            if not isinstance(webhook, Mapping):
+                continue
+            client_config = webhook.get("clientConfig")
+            if not isinstance(client_config, Mapping):
+                continue
+            service = client_config.get("service")
+            if not isinstance(service, Mapping):
+                continue
+            namespace = _as_nonempty_str(service.get("namespace"))
+            if namespace in namespaces:
+                references_rendered_namespace = True
+                break
+        if not references_rendered_namespace:
+            continue
+        resource = (
+            "mutatingwebhookconfiguration"
+            if kind == "MutatingWebhookConfiguration"
+            else "validatingwebhookconfiguration"
+        )
+        _run_post_flux_kubectl(
+            [
+                "kubectl",
+                "delete",
+                resource,
+                name,
+                "--ignore-not-found=true",
+                "--wait=false",
+            ],
+            env=env,
+            timeout=120,
+        )
+
+
+def _delete_post_flux_manifest(manifest_path: Path, *, env: Mapping[str, str]) -> None:
+    docs = [
+        doc
+        for doc in yaml.safe_load_all(manifest_path.read_text(encoding="utf-8"))
+        if isinstance(doc, dict)
+    ]
+    if not docs:
+        return
+    webhook_docs = [doc for doc in docs if _is_admission_webhook_doc(doc)]
+    namespace_docs = [doc for doc in docs if _is_namespace_doc(doc)]
+    crd_docs = [doc for doc in docs if _is_crd_doc(doc)]
+    custom_resource_docs = [doc for doc in docs if _is_post_flux_custom_resource(doc)]
+    remaining_docs = [
+        doc
+        for doc in docs
+        if doc not in webhook_docs
+        and doc not in namespace_docs
+        and doc not in crd_docs
+        and doc not in custom_resource_docs
+    ]
+    namespaces = _namespace_names_from_docs(namespace_docs)
+    with tempfile.TemporaryDirectory(prefix="nebius-cxcli-post-flux-destroy-") as temp_dir:
+        temp_path = Path(temp_dir)
+        _delete_post_flux_docs(
+            webhook_docs,
+            temp_path=temp_path,
+            manifest_stem=manifest_path.stem,
+            suffix="webhooks",
+            env=env,
+            wait=False,
+            timeout_arg=None,
+            timeout_seconds=120,
+        )
+        _delete_admission_webhooks_for_namespaces(namespaces, env=env)
+        if custom_resource_docs:
+            custom_docs_by_priority: dict[int, list[Mapping[str, Any]]] = {}
+            for doc in custom_resource_docs:
+                custom_docs_by_priority.setdefault(
+                    _post_flux_custom_resource_priority(doc),
+                    [],
+                ).append(doc)
+            for priority in sorted(custom_docs_by_priority, reverse=True):
+                _delete_post_flux_docs(
+                    custom_docs_by_priority[priority],
+                    temp_path=temp_path,
+                    manifest_stem=manifest_path.stem,
+                    suffix=f"custom-resources-{priority}",
+                    env=env,
+                    wait=True,
+                    timeout_arg="5m",
+                    timeout_seconds=360,
+                )
+        _delete_post_flux_docs(
+            remaining_docs,
+            temp_path=temp_path,
+            manifest_stem=manifest_path.stem,
+            suffix="resources",
+            env=env,
+            wait=False,
+            timeout_arg=None,
+            timeout_seconds=300,
+        )
+        _delete_post_flux_docs(
+            namespace_docs,
+            temp_path=temp_path,
+            manifest_stem=manifest_path.stem,
+            suffix="namespaces",
+            env=env,
+            wait=True,
+            timeout_arg="15m",
+            timeout_seconds=960,
+        )
+        _delete_post_flux_docs(
+            crd_docs,
+            temp_path=temp_path,
+            manifest_stem=manifest_path.stem,
+            suffix="crds",
+            env=env,
+            wait=False,
+            timeout_arg=None,
+            timeout_seconds=300,
+        )
+
+
+def _delete_post_flux_manifests(paths: ProjectPaths, *, env: Mapping[str, str]) -> None:
+    for manifest_path in reversed(_post_flux_manifest_paths(paths)):
+        _delete_post_flux_manifest(manifest_path, env=env)
+
+
+def _rendered_flux_namespace_docs(paths: ProjectPaths) -> list[Mapping[str, Any]]:
+    docs: list[Mapping[str, Any]] = []
+    for manifest_path in sorted(paths.flux_dir.glob("*.yaml")):
+        if manifest_path.name == "kustomization.yaml":
+            continue
+        loaded_docs = yaml.safe_load_all(manifest_path.read_text(encoding="utf-8"))
+        for doc in loaded_docs:
+            if isinstance(doc, dict) and _is_namespace_doc(doc):
+                docs.append(doc)
+    return docs
+
+
+def _delete_rendered_flux_namespaces(paths: ProjectPaths, *, env: Mapping[str, str]) -> None:
+    namespace_docs = _rendered_flux_namespace_docs(paths)
+    if not namespace_docs:
+        return
+    namespaces = _namespace_names_from_docs(namespace_docs)
+    with tempfile.TemporaryDirectory(prefix="nebius-cxcli-flux-namespace-destroy-") as temp_dir:
+        temp_path = Path(temp_dir)
+        _delete_admission_webhooks_for_namespaces(namespaces, env=env)
+        _delete_post_flux_docs(
+            namespace_docs,
+            temp_path=temp_path,
+            manifest_stem="rendered-flux",
+            suffix="namespaces",
+            env=env,
+            wait=True,
+            timeout_arg="10m",
+            timeout_seconds=660,
+        )
+
+
+def _mysterybox_eso_rendered_secret_keys(
+    paths_or_flux_dir: ProjectPaths | Path,
+) -> set[tuple[str, str, str]]:
+    flux_dir = (
+        paths_or_flux_dir if isinstance(paths_or_flux_dir, Path) else paths_or_flux_dir.flux_dir
+    )
+    manifest_path = flux_dir / "post-flux-mysterybox-eso.yaml"
+    if not manifest_path.exists():
+        return set()
+    try:
+        docs = yaml.safe_load_all(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError):
+        return set()
+    keys: set[tuple[str, str, str]] = set()
+    for doc in docs:
+        if not isinstance(doc, Mapping) or doc.get("kind") != "ExternalSecret":
+            continue
+        metadata = doc.get("metadata")
+        if not isinstance(metadata, Mapping):
+            continue
+        namespace = str(metadata.get("namespace") or "").strip()
+        fallback_name = str(metadata.get("name") or "").strip()
+        spec = doc.get("spec")
+        if not namespace or not isinstance(spec, Mapping):
+            continue
+        target = spec.get("target")
+        secret_name = (
+            str(target.get("name") or "").strip() if isinstance(target, Mapping) else ""
+        ) or fallback_name
+        if not secret_name:
+            continue
+        data = spec.get("data")
+        if not isinstance(data, list):
+            continue
+        for item in data:
+            if not isinstance(item, Mapping):
+                continue
+            secret_key = str(item.get("secretKey") or "").strip()
+            if secret_key:
+                keys.add((namespace, secret_name, secret_key))
+    return keys
 
 
 def _apply_rendered_flux(paths: ProjectPaths, *, extra_env: dict[str, str] | None = None) -> None:
@@ -14613,37 +20970,32 @@ def _apply_rendered_flux(paths: ProjectPaths, *, extra_env: dict[str, str] | Non
 
             # Local deploy mode does not require a Git repository; apply generated manifests directly.
             _set_phase("[cyan]Applying rendered Flux manifests to the target cluster...[/cyan]")
-            completed = subprocess.run(
-                ["kubectl", "--cache-dir", str(cache_path), "apply", "-k", str(paths.flux_dir)],
+            kubectl_apply_cmd = [
+                "kubectl",
+                "--cache-dir",
+                str(cache_path),
+                "apply",
+                "-k",
+                str(paths.flux_dir),
+            ]
+            _run_kubectl_with_transient_retries(
+                kubectl_apply_cmd,
                 env=env,
                 timeout=1800,
-                capture_output=True,
-                text=True,
+                retries=2,
+                retry_delay_seconds=5.0,
+                retry_stderr_markers=_KUBECTL_TRANSIENT_FAILURE_MARKERS,
             )
-            stdout = _filter_benign_kubectl_output(completed.stdout or "")
-            stderr = _filter_benign_kubectl_output(completed.stderr or "")
-            if stdout:
-                sys.stdout.write(stdout + ("\n" if not stdout.endswith("\n") else ""))
-            if stderr:
-                sys.stderr.write(stderr + ("\n" if not stderr.endswith("\n") else ""))
-            if completed.returncode != 0:
-                raise subprocess.CalledProcessError(
-                    completed.returncode,
-                    ["kubectl", "--cache-dir", str(cache_path), "apply", "-k", str(paths.flux_dir)],
-                    output=stdout,
-                    stderr=stderr,
-                )
         _set_phase("[cyan]Waiting for rendered Flux resources to become Ready...[/cyan]")
         wait_for_rendered_flux_resources(
             paths,
             extra_env=extra_env,
             emit=lambda message: console.print(message),
         )
-        post_flux_manifests = sorted(paths.flux_dir.glob("post-flux-*.yaml"))
+        post_flux_manifests = _post_flux_manifest_paths(paths)
         if post_flux_manifests:
             _set_phase("[cyan]Applying post-Flux manifests to the target cluster...[/cyan]")
-        for manifest_path in post_flux_manifests:
-            _apply_post_flux_manifest(manifest_path, env=env)
+            _apply_post_flux_manifests(paths, env=env)
 
 
 def _node_readiness_summary(*, extra_env: dict[str, str]) -> tuple[bool, str]:
@@ -14829,6 +21181,7 @@ def _ensure_soperator_notifier_runtime_before_flux(
     *,
     extra_env: dict[str, str] | None,
     target_ref: str = "",
+    externally_managed_secret_keys: set[tuple[str, str, str]] | None = None,
 ) -> None:
     if not soperator_notifier_enabled_for_target(config, target_ref=target_ref):
         return
@@ -14838,6 +21191,7 @@ def _ensure_soperator_notifier_runtime_before_flux(
         target_ref=target_ref,
         prompt=_console_is_terminal(),
         emit=lambda message: console.print(message),
+        externally_managed_secret_keys=externally_managed_secret_keys,
     )
 
 
@@ -14929,46 +21283,31 @@ def _deploy_generated_artifacts(
     all_targets: bool = False,
 ) -> DeployRunSummary:
     """Deploy an existing generated artifact bundle without rerendering it."""
-    mysterybox_payload_env = _run_deploy_preflight(
-        config,
-        paths,
-        auto_auth_bootstrap=auto_auth_bootstrap,
-        manifest=manifest,
-    )
     if _manifest_missing_deploy_validations(manifest):
         raise RuntimeError(
             "Generated manifest is missing deploy.validations metadata. "
             f"Rerender with `nebius-cxcli render {paths.config_path}` before deploy."
         )
-    runtime_payload = manifest.get("runtime_config")
-    if isinstance(runtime_payload, Mapping):
-        _print_mk8s_gpu_validation_warnings(runtime_config_from_manifest(manifest))
-    status_watchers = _manifest_status_watchers(manifest) or _enabled_status_watcher_specs(config)
     declared_validations = _manifest_deploy_validations(manifest)
     deploy_validations = _filter_deploy_validations(
         declared_validations,
         skip_validations=skip_validations,
         skip_kinds=skip_validation_kinds,
     )
+    selected_targets = _resolve_deploy_run_targets(
+        manifest,
+        requested_target_ref=requested_target_ref,
+        all_targets=all_targets,
+    )
+    mysterybox_payload_env = _run_deploy_preflight(
+        config,
+        paths,
+        auto_auth_bootstrap=auto_auth_bootstrap,
+        manifest=manifest,
+    )
+    status_watchers = _manifest_status_watchers(manifest) or _enabled_status_watcher_specs(config)
     has_enabled_app_charts = _active_chart_count(config) > 0
     manifest_targets = _manifest_deploy_targets(manifest)
-    if not manifest_targets:
-        selected_targets: list[dict[str, str]] = []
-    elif (
-        not has_enabled_app_charts
-        and not deploy_validations
-        and not requested_target_ref
-        and not all_targets
-    ):
-        # Infra-only multi-target deploys do not need one execution target. Refresh every local
-        # kubeconfig handoff so operators can switch contexts after Terraform finishes.
-        selected_targets = manifest_targets
-    else:
-        selected_targets = _resolve_selected_deploy_targets(
-            manifest,
-            requested_target_ref=requested_target_ref,
-            all_targets=all_targets,
-        )
     report_validations = [dict(item) for item in declared_validations]
     if manifest_targets and selected_targets and len(selected_targets) < len(manifest_targets):
         report_validations = _filter_validations_for_target_refs(
@@ -14986,31 +21325,35 @@ def _deploy_generated_artifacts(
     apply_kwargs["run_mk8s_preflight"] = False
     if mysterybox_payload_env:
         apply_kwargs["extra_env"] = mysterybox_payload_env
-    try:
-        _run_terraform_apply_with_status(config, paths, **apply_kwargs)
-    except RuntimeError:
-        with suppress(Exception):
-            if _sync_mysterybox_primary_version_ids_to_config(
-                config,
-                paths,
-                initialize=False,
-                manifest=manifest,
-                require_all=False,
-            ):
-                console.print(
-                    "Recovered MysteryBox primary version_id values from Terraform state; "
-                    "retry deploy to continue from the refreshed generated bundle."
-                )
-        raise
-    if _sync_mysterybox_primary_version_ids_to_config(
-        config,
-        paths,
-        initialize=False,
-        manifest=manifest,
-    ):
-        manifest = load_generated_manifest(paths.generated_dir)
-        config = runtime_config_from_manifest(manifest)
-    _refresh_mysterybox_eso_flux_after_terraform(config, paths)
+    terraform_required = _config_has_enabled_infra_components(config)
+    if terraform_required:
+        try:
+            _run_terraform_apply_with_status(config, paths, **apply_kwargs)
+        except RuntimeError:
+            with suppress(Exception):
+                if _sync_mysterybox_primary_version_ids_to_config(
+                    config,
+                    paths,
+                    initialize=False,
+                    manifest=manifest,
+                    require_all=False,
+                ):
+                    console.print(
+                        "Recovered MysteryBox primary version_id values from Terraform state; "
+                        "retry deploy to continue from the refreshed generated bundle."
+                    )
+            raise
+        if _sync_mysterybox_primary_version_ids_to_config(
+            config,
+            paths,
+            initialize=False,
+            manifest=manifest,
+        ):
+            manifest = load_generated_manifest(paths.generated_dir)
+            config = runtime_config_from_manifest(manifest)
+        _refresh_mysterybox_eso_flux_after_terraform(config, paths)
+    else:
+        console.print("No cxcli-managed Terraform infra is enabled; skipping Terraform apply.")
     write_inventory(config, paths, validations=report_validations)
     if skip_validations and declared_validations:
         if deploy_validations:
@@ -15080,6 +21423,9 @@ def _deploy_generated_artifacts(
                         config,
                         extra_env=kube_env,
                         target_ref=target_ref,
+                        externally_managed_secret_keys=_mysterybox_eso_rendered_secret_keys(
+                            target_paths
+                        ),
                     )
                     _ensure_soperator_backup_runtime_before_flux(
                         config,
@@ -15143,7 +21489,11 @@ def _deploy_generated_artifacts(
                 auto_auth_bootstrap=auto_auth_bootstrap,
             )
             _ensure_grafana_runtime_before_flux(config, extra_env=None)
-            _ensure_soperator_notifier_runtime_before_flux(config, extra_env=None)
+            _ensure_soperator_notifier_runtime_before_flux(
+                config,
+                extra_env=None,
+                externally_managed_secret_keys=_mysterybox_eso_rendered_secret_keys(paths),
+            )
             _ensure_soperator_backup_runtime_before_flux(config, extra_env=None)
             _apply_rendered_flux(paths, extra_env=None)
             grafana_statuses.extend(_collect_grafana_status_after_flux(config, extra_env=None))
@@ -15188,10 +21538,12 @@ def _deploy_generated_artifacts(
                 and len(selected_targets) < len(manifest_targets)
             ),
         )
-        write_inventory(config, paths, validations=report_validations)
     validation_report: DeployValidationReport | None = None
-    if report_validations:
+    if grafana_statuses or report_validations:
         artifacts = write_inventory(config, paths, validations=report_validations)
+    else:
+        artifacts = None
+    if report_validations and artifacts is not None:
         validation_report = build_deploy_validation_report(
             report_validations,
             inventory_dir=paths.inventory_dir,
@@ -15224,17 +21576,17 @@ def _print_deploy_command_footer(
     summary = summary or DeployRunSummary()
     console.print("")
     console.print("[bold]Deployment summary[/bold]")
-    console.print("Validation:")
+    console.print("[bright_magenta]Validation:[/bright_magenta]")
     for line in _deploy_footer_validation_lines(summary.validation_report):
         console.print(line)
-    console.print("Copy/paste commands:")
+    console.print("[bright_magenta]Copy/paste commands:[/bright_magenta]")
     for line in _deploy_footer_command_lines(config, paths, summary):
         console.print(line, soft_wrap=True)
-    console.print("Important paths:")
+    console.print("[bright_magenta]Important paths:[/bright_magenta]")
     for line in _deploy_footer_path_lines(paths, summary):
         console.print(line, soft_wrap=True)
-    status_text = "completed" if succeeded else "failed"
-    console.print(f"Deploy {status_text} from {paths.generated_dir}", soft_wrap=True)
+    status_markup = "[green]Deploy completed[/green]" if succeeded else "[red]Deploy failed[/red]"
+    console.print(status_markup)
 
 
 def _deploy_footer_validation_lines(report: DeployValidationReport | None) -> list[str]:
@@ -15243,14 +21595,48 @@ def _deploy_footer_validation_lines(report: DeployValidationReport | None) -> li
     lines = [
         (
             "  Overall: "
-            f"{status_label(report.overall_status)} "
+            f"{_deploy_footer_status_markup(report.overall_status)} "
             f"({report.completed_count}/{report.total_count} completed, "
             f"{report.not_run_count} not run)"
         )
     ]
+    grouped_results: dict[str, list[Any]] = {}
     for item in report.results:
-        lines.append(f"  {status_label(item.status)} {item.name}: {item.summary}")
+        grouped_results.setdefault(item.target_ref, []).append(item)
+    show_target_groups = len(grouped_results) > 1 or any(grouped_results)
+    for target_ref, items in grouped_results.items():
+        indent = "  "
+        if show_target_groups:
+            target_label = target_ref or "unscoped"
+            lines.append(f"  {escape(target_label)}:")
+            indent = "    "
+        for item in items:
+            name = _deploy_footer_validation_name(item.name, item.target_ref)
+            summary = item.footer_summary or item.summary
+            lines.append(
+                f"{indent}{_deploy_footer_status_markup(item.status)} "
+                f"{escape(name)}: {escape(summary)}"
+            )
     return lines
+
+
+def _deploy_footer_status_markup(status: str) -> str:
+    label = status_label(status)
+    if status == "passed":
+        return f"[green]{label}[/green]"
+    if status == "failed":
+        return f"[red]{label}[/red]"
+    return label
+
+
+def _deploy_footer_validation_name(name: str, target_ref: str) -> str:
+    label = str(name or "").strip()
+    target = str(target_ref or "").strip()
+    if target:
+        suffix = f" ({target})"
+        if label.endswith(suffix):
+            label = label[: -len(suffix)].rstrip()
+    return label or "Validation"
 
 
 def _deploy_footer_command_lines(
@@ -15276,17 +21662,10 @@ def _deploy_footer_command_lines(
 
 
 def _deploy_footer_path_lines(paths: ProjectPaths, summary: DeployRunSummary) -> list[str]:
-    lines = [
+    return [
         f"  Generated bundle: {paths.generated_dir}",
         f"  Deploy report: {paths.inventory_dir / DEPLOY_REPORT_FILENAME}",
-        f"  Generated manifest: {manifest_path_for_generated_dir(paths.generated_dir)}",
     ]
-    report = summary.validation_report
-    if report is not None:
-        for item in report.results:
-            if item.report_exists:
-                lines.append(f"  Validation JSON: {item.report_path}")
-    return lines
 
 
 def _unique_texts(values: Sequence[str]) -> tuple[str, ...]:
@@ -15372,6 +21751,9 @@ def _run_generated_bundle_validation(
     phase_defs = [
         _ValidationPhase("strict-readiness", "Validate strict deployment readiness"),
     ]
+    terraform_required = _config_has_enabled_infra_components(config) or bool(
+        _required_runtime_component_output_specs(config)
+    )
     if mysterybox_payload_requirements:
         phase_defs.append(
             _ValidationPhase(
@@ -15379,14 +21761,15 @@ def _run_generated_bundle_validation(
                 "Validate MysteryBox runtime payload values",
             )
         )
-    phase_defs.extend(
-        [
-            _ValidationPhase("mk8s-preflight", "Validate MK8s network preflight"),
-            _ValidationPhase("backend", "Prepare Terraform backend auth"),
-            _ValidationPhase("quota-readiness", "Validate live Nebius quota/capacity"),
-            _ValidationPhase("terraform", "Validate generated Terraform bundle"),
-        ]
-    )
+    phase_defs.append(_ValidationPhase("mk8s-preflight", "Validate MK8s network preflight"))
+    if terraform_required:
+        phase_defs.extend(
+            [
+                _ValidationPhase("backend", "Prepare Terraform backend auth"),
+                _ValidationPhase("quota-readiness", "Validate live Nebius quota/capacity"),
+                _ValidationPhase("terraform", "Validate generated Terraform bundle"),
+            ]
+        )
     active_chart_count = _active_chart_count(config)
     if active_chart_count > 0:
         phase_defs.append(_ValidationPhase("flux", "Validate rendered Flux manifests"))
@@ -15419,41 +21802,42 @@ def _run_generated_bundle_validation(
                 _prepare_mysterybox_payload_values,
             )
         progress.run("mk8s-preflight", lambda: validate_mk8s_network_preflight(config))
-        progress.run(
-            "backend",
-            lambda: _ensure_terraform_backend_ready(
-                config,
-                auto_auth_bootstrap=auto_auth_bootstrap,
-            ),
-        )
-        runtime_env = _terraform_runtime_env(config)
-        progress.run(
-            "quota-readiness",
-            lambda: _raise_on_generated_bundle_live_quota_issues(
-                config,
-                paths,
-                manifest=manifest,
-                runtime_env=runtime_env,
-                phase=quota_phase,
-            ),
-        )
-
-        def _validate_generated_terraform_bundle() -> None:
-            _validate_generated_mk8s_resource_name_preflight(
-                config,
-                paths,
-                runtime_env=runtime_env,
+        if terraform_required:
+            progress.run(
+                "backend",
+                lambda: _ensure_terraform_backend_ready(
+                    config,
+                    auto_auth_bootstrap=auto_auth_bootstrap,
+                ),
             )
-            terraform_validate(
-                paths.infra_dir,
-                extra_env=runtime_env,
-                initialize=False,
+            runtime_env = _terraform_runtime_env(config)
+            progress.run(
+                "quota-readiness",
+                lambda: _raise_on_generated_bundle_live_quota_issues(
+                    config,
+                    paths,
+                    manifest=manifest,
+                    runtime_env=runtime_env,
+                    phase=quota_phase,
+                ),
             )
 
-        progress.run(
-            "terraform",
-            _validate_generated_terraform_bundle,
-        )
+            def _validate_generated_terraform_bundle() -> None:
+                _validate_generated_mk8s_resource_name_preflight(
+                    config,
+                    paths,
+                    runtime_env=runtime_env,
+                )
+                terraform_validate(
+                    paths.infra_dir,
+                    extra_env=runtime_env,
+                    initialize=False,
+                )
+
+            progress.run(
+                "terraform",
+                _validate_generated_terraform_bundle,
+            )
         if active_chart_count > 0:
             progress.run(
                 "flux",
@@ -15555,30 +21939,64 @@ def _destroy_rendered_flux_bundle(
             requested_target_ref=requested_target_ref,
             all_targets=all_targets,
         )
+        target_errors: list[tuple[str, Exception]] = []
         for target in selected_targets:
             target_ref = str(target["target_ref"])
             target_paths = _paths_for_target_flux_dir(paths, target)
             if len(selected_targets) > 1:
                 console.print(f"[bold]Target {target_ref}[/bold]")
-            with ExitStack() as stack:
-                kube_env = _prepare_cluster_handoff_kube_env(
-                    config,
-                    paths,
-                    stack=stack,
-                    target=target,
-                    persist_local_kubeconfig=False,
+            try:
+                with ExitStack() as stack:
+                    kube_env = _prepare_cluster_handoff_kube_env(
+                        config,
+                        paths,
+                        stack=stack,
+                        target=target,
+                        persist_local_kubeconfig=False,
+                    )
+                    _delete_post_flux_manifests(target_paths, env=kube_env)
+                    delete_rendered_flux(target_paths, extra_env=kube_env, emit=console.print)
+                    _delete_rendered_flux_namespaces(target_paths, env=kube_env)
+            except Exception as exc:
+                if len(selected_targets) == 1:
+                    raise
+                target_errors.append((target_ref, exc))
+                console.print(
+                    f"{warning_markup('WARNING:', bold=True)} "
+                    f"Rendered app teardown failed for target {target_ref}; "
+                    "continuing with remaining targets before reporting the error. "
+                    f"Reason: {exc}"
                 )
-                delete_rendered_flux(target_paths, extra_env=kube_env, emit=console.print)
+        if target_errors:
+            details = "; ".join(f"{target_ref}: {exc}" for target_ref, exc in target_errors)
+            raise RuntimeError(
+                "Rendered app teardown failed for one or more deploy targets after "
+                f"attempting all selected targets: {details}"
+            )
         return
+    _delete_post_flux_manifests(paths, env=os.environ.copy())
     delete_rendered_flux(paths, extra_env=None, emit=console.print)
+    _delete_rendered_flux_namespaces(paths, env=os.environ.copy())
 
 
 def _destroy_uses_cluster_teardown_for_apps(config: Any, manifest: Mapping[str, Any]) -> bool:
-    return _active_chart_count(config) > 0 and bool(_manifest_deploy_targets(manifest))
+    targets = _manifest_deploy_targets(manifest)
+    if _active_chart_count(config) == 0 or not targets:
+        return False
+    managed_targets = _manifest_managed_deploy_targets(manifest)
+    return bool(managed_targets) and len(managed_targets) == len(targets)
+
+
+def _manifest_has_external_deploy_targets(manifest: Mapping[str, Any]) -> bool:
+    return any(
+        str(target.get(DEPLOY_TARGET_OWNERSHIP_FIELD, "")).strip() == EXTERNAL_TARGET_OWNERSHIP
+        for target in _manifest_deploy_targets(manifest)
+    )
 
 
 def _destroy_should_delete_rendered_flux_first(config: Any, manifest: Mapping[str, Any]) -> bool:
-    return _active_chart_count(config) > 0 and not bool(_manifest_deploy_targets(manifest))
+    _ = manifest
+    return _active_chart_count(config) > 0
 
 
 def _destroy_confirmation_text(
@@ -15597,10 +22015,18 @@ def _destroy_confirmation_text(
         return (
             "Continue and destroy all rendered app and infra resources for this project?",
             "Destroy will remove all rendered project resources represented by the generated "
-            "manifest by running Terraform destroy against the rendered infra bundle under "
-            f"{paths.infra_dir}. Because this bundle destroys the handed-off cluster directly, "
-            "it will not delete the rendered app resources under "
-            f"{paths.flux_dir} separately first.",
+            "manifest by deleting rendered app resources from the handed-off MK8s target first "
+            "so Kubernetes finalizers and CSI cleanup can run, then running Terraform destroy "
+            f"against the rendered infra bundle under {paths.infra_dir}. This generated bundle "
+            "still destroys the handed-off MK8s cluster directly after app teardown.",
+        )
+    if _manifest_has_external_deploy_targets(manifest):
+        return (
+            "Continue and delete rendered app resources and destroy only cxcli-owned infra?",
+            "Destroy will delete the rendered app resources from the external MK8s target first. "
+            "The existing MK8s cluster and node groups are external to cxcli and will not be "
+            f"destroyed. Any cxcli-managed infra under {paths.infra_dir} is still destroyed "
+            "after app teardown.",
         )
     return (
         "Continue and destroy all rendered app and infra resources for this project?",
@@ -15619,31 +22045,63 @@ def _destroy_generated_artifacts(
     auto_auth_bootstrap: bool,
     yes: bool = False,
 ) -> None:
-    _ensure_terraform_backend_ready(config, auto_auth_bootstrap=auto_auth_bootstrap)
+    terraform_required = _config_has_enabled_infra_components(config)
+    if terraform_required:
+        _ensure_terraform_backend_ready(config, auto_auth_bootstrap=auto_auth_bootstrap)
+    flux_teardown_error: Exception | None = None
     if _destroy_should_delete_rendered_flux_first(config, manifest):
         try:
-            _destroy_rendered_flux_bundle(config, paths, manifest)
+            _destroy_rendered_flux_bundle(config, paths, manifest, all_targets=True)
         except Exception as exc:
-            console.print(
-                f"{warning_markup('WARNING:', bold=True)} "
-                "Rendered app teardown failed before infra destroy. "
-                "Continuing with Terraform destroy because the generated infra bundle "
-                f"remains the authoritative teardown path. Reason: {exc}"
-            )
-    elif _destroy_uses_cluster_teardown_for_apps(config, manifest):
-        console.print(
-            "Skipping rendered app teardown before infra destroy because this generated bundle "
-            "destroys the handed-off cluster directly."
-        )
+            flux_teardown_error = exc
+            if terraform_required:
+                console.print(
+                    (
+                        f"{warning_markup('WARNING:', bold=True)} "
+                        "Rendered app teardown failed before infra destroy. "
+                        "Continuing with Terraform destroy because the generated infra bundle "
+                        f"remains the authoritative teardown path. Reason: {exc}"
+                    )
+                    if not _manifest_has_external_deploy_targets(manifest)
+                    else (
+                        f"{warning_markup('WARNING:', bold=True)} "
+                        "Rendered app teardown failed for an external MK8s target. "
+                        "No Terraform cluster destroy fallback is available for that target."
+                    )
+                )
+            else:
+                console.print(
+                    f"{warning_markup('WARNING:', bold=True)} "
+                    "Rendered app teardown failed for an external MK8s target. "
+                    "No Terraform cluster destroy fallback is available."
+                )
     status_watchers = _manifest_status_watchers(manifest) or _enabled_status_watcher_specs(config)
-    _run_terraform_destroy_with_recovery(
-        config,
-        paths,
-        auto_auth_bootstrap=auto_auth_bootstrap,
-        yes=yes,
-        initialize=True,
-        status_watchers=status_watchers or None,
-    )
+    if terraform_required:
+        if flux_teardown_error is not None and _manifest_has_external_deploy_targets(manifest):
+            raise RuntimeError(
+                "Rendered app teardown failed for an external MK8s target and there is no "
+                "Terraform cluster destroy fallback for that target. App resources may still "
+                f"be installed. Reason: {flux_teardown_error}"
+            ) from flux_teardown_error
+        _run_terraform_destroy_with_recovery(
+            config,
+            paths,
+            auto_auth_bootstrap=auto_auth_bootstrap,
+            yes=yes,
+            initialize=True,
+            status_watchers=status_watchers or None,
+        )
+    else:
+        if flux_teardown_error is not None:
+            raise RuntimeError(
+                "Rendered app teardown failed for an external MK8s target and there is no "
+                "cxcli-managed Terraform cluster destroy fallback. App resources may still "
+                f"be installed. Reason: {flux_teardown_error}"
+            ) from flux_teardown_error
+        console.print(
+            "No cxcli-managed Terraform infra is enabled; skipping Terraform destroy. "
+            "External MK8s cluster and node groups were not destroyed."
+        )
 
 
 def _run_terraform_apply_with_status(
@@ -15664,7 +22122,7 @@ def _run_terraform_apply_with_status(
     if run_mk8s_preflight:
         validate_mk8s_network_preflight(config)
     reporting_kwargs: dict[str, Any] = {
-        "emit": lambda message: console.print(message),
+        "emit": _print_deployment_status_message,
     }
     if status_watchers:
         reporting_kwargs["status_watchers"] = status_watchers
@@ -15697,7 +22155,7 @@ def _run_terraform_destroy_with_status(
 ) -> None:
     runtime_env = _terraform_runtime_env(config)
     reporting_kwargs: dict[str, Any] = {
-        "emit": lambda message: console.print(message),
+        "emit": _print_deployment_status_message,
         "operation": "destroy",
     }
     if status_watchers:
@@ -16746,6 +23204,8 @@ def _app_selection_without_cluster_target_issue(
         return None
     if _selected_cluster_target_component_ids(selected_infra, infra_entries):
         return None
+    if _SOPERATOR_APP_ID in selected_apps:
+        return None
     return _app_selection_requires_cluster_target_message()
 
 
@@ -16917,6 +23377,15 @@ def _seed_infra_project_scope_defaults(
         }
         if not leaf_names:
             continue
+        if entry is not None and entry.status is not None:
+            parent_input = str(entry.status.parent_input or "").strip()
+            parent_root = _normalize_leaf_name(parent_input.split(".", 1)[0])
+            if (
+                parent_input
+                and parent_root in leaf_names
+                and _mapping_path_value(inputs, parent_input) is None
+            ):
+                _set_mapping_path_value(inputs, parent_input, project_id)
         if "parent_id" in leaf_names and "parent_id" not in inputs:
             inputs["parent_id"] = project_id
         if "project_id" in leaf_names and "project_id" not in inputs:
@@ -17099,6 +23568,29 @@ def _scaffold_instance(
 @app.command(
     "create",
     short_help="Use DEPLOYMENTS_ROOT to bootstrap one name-based tenant/project folder with config.yaml plus generated/ skeleton.",
+    epilog=(
+        "Examples: "
+        "nebius-cxcli create ./deployments (full interactive wizard); "
+        "nebius-cxcli create ./deployments --client-name acme --tenant-id TENANT --project-id PROJECT --region-id eu-north1; "
+        "nebius-cxcli create /path/to/deployments-root --client-name client-slug "
+        "--tenant-id TENANT_ID --project-id PROJECT_ID "
+        "--infra mk8s,vm,wireguard-gw,ssh-jumphost "
+        "--no-validate-sources --no-validate-config "
+        "(guided infra create with identity and components preselected; add --app none to skip app selection); "
+        "nebius-cxcli create /path/to/deployments-root --client-name client-slug "
+        "--tenant-id TENANT_ID --project-id PROJECT_ID "
+        "--infra mk8s,vm --infra wireguard-gw,ssh-jumphost "
+        "--app n8n,gateway-helm --app cert-manager "
+        "--no-validate-sources --no-validate-config "
+        "(guided create with multiple infra and app choices preselected); "
+        "nebius-cxcli create ./deployments --client-name acme --infra mk8s,sfs --app soperator --no-interactive "
+        "(non-interactive Soperator production cluster with default GPU nodesets profile); "
+        "nebius-cxcli create ./deployments --client-name acme --infra mk8s --app soperator "
+        "(onboarded mode prompts for existing MK8s target). "
+        "Soperator wizard picks soperator_nodesets_profile (nebius-cpu/gpu/mixed-v1), "
+        "partition_profile (shape-default | with-debug-long | with-qos-preemption | with-h100-infiniband-debug-long), "
+        "and topology_profile (disabled | nebius-tiered-tree-v1 | nebius-nvl-rack-v1 for GB300/NVL)."
+    ),
 )
 def create_command(
     target_path: Annotated[
@@ -17149,8 +23641,10 @@ def create_command(
             help=(
                 "Apps component id(s) to enable (repeat option or pass comma-separated ids; "
                 "supports ids or numeric indexes in interactive mode; "
-                "requires an enabled MK8s infra target in the same project; "
-                "app chart dependencies are auto-resolved when chart metadata is available)"
+                "requires a managed or onboarded MK8s target in the same project; "
+                "app chart dependencies are auto-resolved when chart metadata is available; "
+                "selecting soperator prompts for either an onboard-existing-cluster "
+                "role-mapping install or a complete production MK8s+SFS+Soperator cluster)"
             ),
         ),
     ] = None,
@@ -17179,8 +23673,10 @@ def create_command(
         typer.Option(
             "--validate-sources/--no-validate-sources",
             help=(
-                "Validate the full component catalog and source settings before create "
-                "continues (enabled by default)."
+                "Validate infra sources first, then only selected app chart sources "
+                "and auto-enabled app dependencies, with a final check for apps "
+                "auto-enabled after the wizard before create writes config "
+                "(enabled by default)."
             ),
         ),
     ] = True,
@@ -17231,8 +23727,6 @@ def create_command(
         deployments_root = _resolve_deployments_root(base_path)
         _assert_not_nested_deployments_root(deployments_root)
         interactive_mode = not no_interactive
-        if validate_sources:
-            _preflight_component_source_tools_or_raise()
         resolved_tenant_id = _value_or_prompt(
             tenant_id,
             option_name="--tenant-id",
@@ -17266,7 +23760,7 @@ def create_command(
             project_folder=resolved_project_folder,
         )
         had_existing_config = existing_config_path.exists()
-        source_validation_ran = False
+        infra_source_validation_ran = False
         if had_existing_config:
             with existing_config_path.open("r", encoding="utf-8") as handle:
                 loaded_payload = yaml.safe_load(handle) or {}
@@ -17299,8 +23793,8 @@ def create_command(
                     "`--force` to overwrite this one project folder from scratch."
                 )
             if validate_sources:
-                _validate_component_sources_or_raise()
-                source_validation_ran = True
+                _validate_component_sources_or_raise(selected_app_ids=set())
+                infra_source_validation_ran = True
             if interactive_mode:
                 if not _confirm_existing_project_overwrite(config_path=existing_config_path):
                     console.print("No changes applied.")
@@ -17311,8 +23805,8 @@ def create_command(
                     "[dim]`--force` confirms the overwrite in non-interactive mode. "
                     "This only affects that one resolved project folder.[/dim]"
                 )
-        if validate_sources and not source_validation_ran:
-            _validate_component_sources_or_raise()
+        if validate_sources and not infra_source_validation_ran:
+            _validate_component_sources_or_raise(selected_app_ids=set())
 
         resolved_client_name = _client_name_or_prompt(
             client_name,
@@ -17434,14 +23928,58 @@ def create_command(
             raw_values=app_releasename_opt,
             option_name="--app-releasename",
         )
+        soperator_install_mode: str | None = None
+        soperator_profile: str | None = None
+        if interactive_mode and optional_wizard_mode and _SOPERATOR_APP_ID in selected_apps_raw:
+            console.print(
+                "[dim]Soperator install mode controls whether cxcli creates the full "
+                "production MK8s+SFS bundle or onboards an external Nebius MK8s "
+                "target for role mapping.[/dim]"
+            )
+            try:
+                soperator_install_mode = _prompt_soperator_install_mode()
+            except _WizardQuitRequested:
+                optional_wizard_mode = False
+                soperator_install_mode = _default_soperator_install_mode()
+            if (
+                optional_wizard_mode
+                and soperator_install_mode == _SOPERATOR_INSTALL_MODE_PRODUCTION
+            ):
+                console.print(
+                    "[dim]Soperator worker profile controls whether the fresh "
+                    "production bundle uses CPU-only, GPU-only, or mixed worker "
+                    "NodeSets before MK8s fields and validations are prompted.[/dim]"
+                )
+                try:
+                    soperator_profile = _prompt_soperator_profile()
+                except _WizardQuitRequested:
+                    optional_wizard_mode = False
+                    soperator_profile = _default_soperator_profile_name()
+        selected_infra_before_soperator_expansion = set(selected_infra_raw)
+        selected_apps_before_soperator_expansion = set(selected_apps_raw)
+        selected_infra_raw, skipped_onboarding_infra = _prune_soperator_onboarding_infra_selection(
+            selected_infra=selected_infra_raw,
+            selected_apps=selected_apps_raw,
+            install_mode=soperator_install_mode,
+            new_infra=selected_infra_before_soperator_expansion,
+        )
+        _print_soperator_onboarding_infra_adjustment(skipped_onboarding_infra)
         selected_infra_raw = _expand_soperator_component_selection(
             selected_infra=selected_infra_raw,
             selected_apps=selected_apps_raw,
             infra_entries=infra_entries,
+            install_mode=soperator_install_mode,
         )
         selected_apps_raw = _expand_soperator_app_selection(
             selected_apps=selected_apps_raw,
             app_entries=app_entries,
+        )
+        _print_soperator_selection_adjustments(
+            selected_infra_before=selected_infra_before_soperator_expansion,
+            selected_apps_before=selected_apps_before_soperator_expansion,
+            selected_infra_after=selected_infra_raw,
+            selected_apps_after=selected_apps_raw,
+            install_mode=soperator_install_mode,
         )
         app_target_issue = _app_selection_without_cluster_target_issue(
             selected_infra=selected_infra_raw,
@@ -17489,6 +24027,13 @@ def create_command(
                 "[dim]App dependency resolution finished in "
                 f"{dependency_resolution_elapsed:.1f}s[/dim]"
             )
+        source_validated_app_ids: set[str] = set()
+        if validate_sources and selected_apps:
+            _validate_component_sources_or_raise(
+                selected_app_ids=selected_apps,
+                include_infra=False,
+            )
+            source_validated_app_ids.update(selected_apps)
 
         wizard_completed = True
         starter_payload = _starter_component_payload(
@@ -17503,6 +24048,20 @@ def create_command(
             app_entries=app_entries,
             app_namespace_overrides=app_namespace_overrides,
             app_releasename_overrides=app_releasename_overrides,
+        )
+        if soperator_install_mode is not None:
+            _apply_soperator_install_mode_to_payload(
+                starter_payload,
+                mode=soperator_install_mode,
+            )
+        if soperator_profile is not None:
+            _apply_soperator_profile_to_payload(
+                starter_payload,
+                profile=soperator_profile,
+            )
+        _ensure_soperator_onboarding_target(
+            starter_payload,
+            interactive=interactive_mode and optional_wizard_mode,
         )
         final_payload = starter_payload
         _materialize_singleton_provider_defaults(
@@ -17527,6 +24086,8 @@ def create_command(
             final_payload,
             provider_lookup=provider_lookup,
         )
+        _materialize_soperator_component_defaults(final_payload)
+        _refresh_soperator_onboarding_fingerprints(final_payload)
         selected_apps, mysterybox_eso_app_labels = _ensure_mysterybox_eso_app_dependency_selection(
             final_payload,
             selected_apps=selected_apps,
@@ -17539,9 +24100,14 @@ def create_command(
                 selected_apps=selected_apps,
                 infra_entries=infra_entries,
                 app_entries=app_entries,
+                payload=final_payload,
             )
 
         if interactive_mode and optional_wizard_mode:
+            field_wizard_kwargs: dict[str, Any] = {}
+            if soperator_profile is not None:
+                field_wizard_kwargs["skip_soperator_profile_prompt"] = True
+            field_wizard_kwargs["align_infra_resource_names_before_apps"] = True
             config_yaml_override, wizard_completed = _run_component_field_wizard(
                 config_yaml=yaml.safe_dump(final_payload, sort_keys=False),
                 selected_infra=selected_infra,
@@ -17549,6 +24115,7 @@ def create_command(
                 infra_entries=infra_entries,
                 app_entries=app_entries,
                 provider_lookup=provider_lookup,
+                **field_wizard_kwargs,
             )
             parsed_override = yaml.safe_load(config_yaml_override) or {}
             if not isinstance(parsed_override, dict):
@@ -17560,6 +24127,14 @@ def create_command(
             )
 
         _materialize_soperator_component_defaults(final_payload)
+        selected_apps, mysterybox_eso_app_labels = (
+            _materialize_soperator_child_chart_secret_dependencies(
+                final_payload,
+                selected_apps=selected_apps,
+                app_entries=app_entries,
+            )
+        )
+        _print_mysterybox_eso_app_dependency_adjustment(mysterybox_eso_app_labels)
         _materialize_mk8s_image_defaults(
             payload=final_payload,
             selected_infra=selected_infra,
@@ -17659,19 +24234,28 @@ def create_command(
             )
         _align_new_infra_instance_ids_with_resource_names(final_payload)
         _materialize_soperator_component_defaults(final_payload)
+        materialize_compute_boot_disk_defaults(
+            final_payload,
+            provider_lookup=provider_lookup,
+        )
         if ensure_mysterybox_eso_app_rows(final_payload, app_entries=app_entries):
             selected_apps = _enabled_ids_from_runtime_payload(
                 payload=final_payload,
                 entries=app_entries,
             )
-        if ensure_nfs_csi_app_rows(final_payload, app_entries=app_entries):
-            selected_apps = _enabled_ids_from_runtime_payload(
-                payload=final_payload,
-                entries=app_entries,
-            )
+        selected_apps, nfs_csi_app_labels = _ensure_nfs_csi_app_dependency_selection(
+            final_payload,
+            selected_apps=selected_apps,
+            app_entries=app_entries,
+        )
+        _print_nfs_csi_app_dependency_adjustment(nfs_csi_app_labels)
         materialize_mk8s_gpu_app_values(final_payload)
-        materialize_soperator_companion_app_values(final_payload)
         materialize_observability_infra_values(final_payload)
+        _prune_mk8s_node_group_defaults_without_soperator(
+            final_payload,
+            infra_entries=infra_entries,
+        )
+        _refresh_soperator_onboarding_fingerprints(final_payload)
 
         create_required_field_issues = (
             _wizard_followup_required_field_issues(
@@ -17692,6 +24276,21 @@ def create_command(
         _prune_redundant_app_chart_default_values(
             payload=final_payload,
             app_entries=app_entries,
+        )
+        _refresh_soperator_onboarding_fingerprints(final_payload)
+        if validate_sources:
+            selected_apps = _validate_final_enabled_app_sources_or_raise(
+                payload=final_payload,
+                app_entries=app_entries,
+                already_validated_app_ids=source_validated_app_ids,
+            )
+        selected_infra = _enabled_ids_from_runtime_payload(
+            payload=final_payload,
+            entries=infra_entries,
+        )
+        selected_apps = _enabled_ids_from_runtime_payload(
+            payload=final_payload,
+            entries=app_entries,
         )
 
         result = _scaffold_instance(
@@ -17748,13 +24347,26 @@ def create_command(
             _print_quota_remediation_hint(result.config_path, quota_report)
         if not validate_config:
             _print_mk8s_gpu_validation_warnings(final_payload)
+        display_payload = final_payload
+        with suppress(Exception):
+            persisted_payload = yaml.safe_load(result.config_path.read_text(encoding="utf-8"))
+            if isinstance(persisted_payload, dict):
+                display_payload = persisted_payload
+        display_selected_infra = _enabled_ids_from_runtime_payload(
+            payload=display_payload,
+            entries=infra_entries,
+        )
+        display_selected_apps = _enabled_ids_from_runtime_payload(
+            payload=display_payload,
+            entries=app_entries,
+        )
         console.print(
             "Enabled infra components: "
-            + (", ".join(sorted(selected_infra)) if selected_infra else "(none)")
+            + (", ".join(sorted(display_selected_infra)) if display_selected_infra else "(none)")
         )
         console.print(
             "Enabled apps components: "
-            + (", ".join(sorted(selected_apps)) if selected_apps else "(none)")
+            + (", ".join(sorted(display_selected_apps)) if display_selected_apps else "(none)")
         )
         if _active_chart_count(final_payload) > 0 and _config_uses_private_cluster_handoff(
             final_payload
@@ -17778,6 +24390,12 @@ def create_command(
 @component_app.command(
     "list",
     short_help="Use --config CONFIG_YAML to inspect enabled instances and available catalog components.",
+    epilog=(
+        "Examples: "
+        "nebius-cxcli component list --config ./deployments/acme/config.yaml "
+        "(shows enabled mk8s/sfs/soperator instances and their target_ref bindings); "
+        "from the project folder: nebius-cxcli component list (auto-resolves ./config.yaml)."
+    ),
 )
 def component_list_command(
     config_path: Annotated[
@@ -17867,6 +24485,17 @@ def component_list_command(
 @component_app.command(
     "add",
     short_help="Add component selectors to --config CONFIG_YAML.",
+    epilog=(
+        "Examples: "
+        "nebius-cxcli component add apps:soperator --config ./deployments/acme/config.yaml "
+        "(adds Soperator and prompts for install mode + nodesets/partition/topology profiles); "
+        "nebius-cxcli component add 'apps:soperator@target-mk8s-prod' (binds Soperator to a specific MK8s target_ref); "
+        "nebius-cxcli component add managed-postgresql object-storage@logs-bucket "
+        "--config ./deployments/acme/config.yaml --no-interactive "
+        "(adds multiple components in one call); "
+        "nebius-cxcli component add apps:soperator --no-interactive "
+        "(uses catalog defaults: nebius-gpu-v1 / shape-default / topology disabled)."
+    ),
 )
 def component_add_command(
     component_ids: Annotated[
@@ -17886,7 +24515,10 @@ def component_add_command(
                 "For target-bound app charts, use '<app-id>@<target-id>'; one chart row "
                 "is allowed per app id and cluster target, and the suffix becomes the "
                 "app row instance_id. Apps are Helm charts and require an enabled MK8s "
-                "target in the same project."
+                "target in the same project. For apps:soperator, the wizard first asks "
+                "for an install mode: onboarding registers an external Nebius MK8s target "
+                "and maps roles onto discovered node groups, while production cluster "
+                "creates the MK8s+SFS+Soperator bundle."
             ),
         ),
     ] = None,
@@ -17910,8 +24542,10 @@ def component_add_command(
         typer.Option(
             "--validate-sources/--no-validate-sources",
             help=(
-                "Validate the full component catalog and source settings before "
-                "component add continues (enabled by default)."
+                "Validate infra sources first, then only app chart sources selected "
+                "or auto-enabled by this add, with a final check for apps "
+                "auto-enabled after the wizard before component add writes config "
+                "(enabled by default)."
             ),
         ),
     ] = True,
@@ -17934,14 +24568,16 @@ def component_add_command(
 
       nebius-cxcli component add managed-postgresql object-storage@logs-bucket --config <config.yaml> --no-interactive
 
+      nebius-cxcli component add soperator@training-cluster --config <config.yaml>
+
       nebius-cxcli component add gateway-helm@serving-cluster --config <config.yaml> --no-interactive
     """
     try:
         config_path = _require_component_config_option(config_path)
         _config, _paths = _load_context(config_path)
-        if validate_sources:
-            _validate_component_sources_or_raise()
         payload = _load_config_payload(config_path.resolve())
+        if validate_sources:
+            _validate_component_sources_or_raise(selected_app_ids=set())
         interactive_mode = not no_interactive
         client_name, tenant_id, project_id, region_id, email = _identity_values_from_payload(
             payload
@@ -17970,6 +24606,8 @@ def component_add_command(
         app_entries = component_entries("apps")
         enabled_infra = _enabled_ids_from_runtime_payload(payload=payload, entries=infra_entries)
         enabled_apps = _enabled_ids_from_runtime_payload(payload=payload, entries=app_entries)
+        initially_enabled_app_rows = _enabled_app_row_identities_from_payload(payload)
+        source_validated_app_ids: set[str] = set()
 
         raw_tokens = _split_multi_value_tokens(component_ids)
         if not raw_tokens and interactive_mode:
@@ -18055,15 +24693,78 @@ def component_add_command(
         }
         selected_infra_raw = set(enabled_infra) | requested_infra_types
         selected_apps_raw = set(enabled_apps) | requested_apps_types
-        selected_infra_raw = _expand_soperator_component_selection(
+        soperator_install_mode: str | None = None
+        soperator_profile: str | None = None
+        if interactive_mode and _SOPERATOR_APP_ID in requested_apps_types:
+            console.print(
+                "[dim]Soperator install mode controls whether cxcli creates the full "
+                "production MK8s+SFS bundle or onboards an external Nebius MK8s "
+                "target for role mapping.[/dim]"
+            )
+            try:
+                soperator_install_mode = _prompt_soperator_install_mode()
+            except _WizardQuitRequested:
+                console.print("No component changes applied.")
+                return
+            if soperator_install_mode == _SOPERATOR_INSTALL_MODE_PRODUCTION:
+                console.print(
+                    "[dim]Soperator worker profile controls whether the production "
+                    "bundle uses CPU-only, GPU-only, or mixed worker NodeSets before "
+                    "MK8s fields and validations are prompted.[/dim]"
+                )
+                try:
+                    soperator_profile = _prompt_soperator_profile()
+                except _WizardQuitRequested:
+                    console.print("No component changes applied.")
+                    return
+        if soperator_install_mode is None and _SOPERATOR_APP_ID in requested_apps_types:
+            inferred_install_mode = _infer_soperator_component_add_install_mode(
+                payload=payload,
+                add_targets=add_targets,
+            )
+            if inferred_install_mode is not None:
+                soperator_install_mode = inferred_install_mode
+                console.print(
+                    f"{warning_markup('Adjusted component selection:')} using "
+                    "'apps:soperator' install_mode=onboard-existing-cluster because "
+                    "the requested Soperator target is an existing external MK8s target."
+                )
+        selected_infra_raw, skipped_onboarding_infra = _prune_soperator_onboarding_infra_selection(
             selected_infra=selected_infra_raw,
             selected_apps=selected_apps_raw,
-            infra_entries=infra_entries,
+            install_mode=soperator_install_mode,
+            new_infra=requested_infra_types,
+            existing_infra=set(enabled_infra),
         )
-        selected_apps_raw = _expand_soperator_app_selection(
-            selected_apps=selected_apps_raw,
-            app_entries=app_entries,
-        )
+        if skipped_onboarding_infra:
+            skipped_set = set(skipped_onboarding_infra)
+            add_targets = [
+                target
+                for target in add_targets
+                if not (target.scope == "infra" and target.component_id in skipped_set)
+            ]
+            requested_infra_types -= skipped_set
+            _print_soperator_onboarding_infra_adjustment(skipped_onboarding_infra)
+        if _SOPERATOR_APP_ID in requested_apps_types:
+            selected_infra_before_soperator_expansion = set(selected_infra_raw)
+            selected_apps_before_soperator_expansion = set(selected_apps_raw)
+            selected_infra_raw = _expand_soperator_component_selection(
+                selected_infra=selected_infra_raw,
+                selected_apps=selected_apps_raw,
+                infra_entries=infra_entries,
+                install_mode=soperator_install_mode,
+            )
+            selected_apps_raw = _expand_soperator_app_selection(
+                selected_apps=selected_apps_raw,
+                app_entries=app_entries,
+            )
+            _print_soperator_selection_adjustments(
+                selected_infra_before=selected_infra_before_soperator_expansion,
+                selected_apps_before=selected_apps_before_soperator_expansion,
+                selected_infra_after=selected_infra_raw,
+                selected_apps_after=selected_apps_raw,
+                install_mode=soperator_install_mode,
+            )
         app_target_issue = _app_selection_without_cluster_target_issue(
             selected_infra=selected_infra_raw,
             selected_apps=selected_apps_raw,
@@ -18102,14 +24803,55 @@ def component_add_command(
 
         auto_added_infra_types = (selected_infra - enabled_infra) - requested_infra_types
         auto_added_apps_types = (selected_apps - enabled_apps) - requested_apps_types
+        apps_to_validate = (selected_apps - enabled_apps) | requested_apps_types
+        if validate_sources and apps_to_validate:
+            _validate_component_sources_or_raise(
+                selected_app_ids=apps_to_validate,
+                include_infra=False,
+            )
+            source_validated_app_ids.update(apps_to_validate)
         add_targets.extend(
             _ComponentAddTarget(scope="infra", component_id=component_id)
             for component_id in sorted(auto_added_infra_types)
         )
-        add_targets.extend(
-            _ComponentAddTarget(scope="apps", component_id=component_id)
-            for component_id in sorted(auto_added_apps_types)
+        soperator_onboarding_add_target_refs = (
+            _soperator_onboarding_component_add_target_refs(
+                payload=payload,
+                add_targets=add_targets,
+            )
+            if soperator_install_mode == _SOPERATOR_INSTALL_MODE_ONBOARD_EXISTING_CLUSTER
+            else set()
         )
+        if soperator_onboarding_add_target_refs:
+            add_targets = [
+                target
+                for target in add_targets
+                if not (
+                    target.scope == "apps"
+                    and target.component_id
+                    in {_SOPERATOR_APP_ID, *_SOPERATOR_REQUIRED_APP_COMPONENT_IDS}
+                    and not normalize_component_token(target.requested_instance_id)
+                )
+            ]
+        auto_added_app_targets: list[_ComponentAddTarget] = []
+        for component_id in sorted(auto_added_apps_types):
+            if (
+                component_id in _SOPERATOR_REQUIRED_APP_COMPONENT_IDS
+                and soperator_onboarding_add_target_refs
+            ):
+                auto_added_app_targets.extend(
+                    _ComponentAddTarget(
+                        scope="apps",
+                        component_id=component_id,
+                        requested_instance_id=target_ref,
+                    )
+                    for target_ref in sorted(soperator_onboarding_add_target_refs)
+                )
+                continue
+            auto_added_app_targets.append(
+                _ComponentAddTarget(scope="apps", component_id=component_id)
+            )
+        add_targets.extend(auto_added_app_targets)
 
         if interactive_mode:
             resolved_add_targets = _prompt_infra_add_resource_names(
@@ -18138,6 +24880,7 @@ def component_add_command(
         added_apps_selectors: list[str] = []
         added_infra_labels: list[str] = []
         added_apps_labels: list[str] = []
+        added_app_rows: list[dict[str, Any]] = []
         skipped_add_labels: list[str] = []
         infra_lookup = {entry.id: entry for entry in infra_entries}
         app_lookup = {entry.id: entry for entry in app_entries}
@@ -18175,19 +24918,51 @@ def component_add_command(
                 requested_instance_id=target.requested_instance_id,
                 allow_unassigned_app_target=interactive_mode,
             )
+            if (
+                soperator_install_mode is not None
+                and target.scope == "apps"
+                and entry.id == _SOPERATOR_APP_ID
+            ):
+                row[_SOPERATOR_INSTALL_MODE_FIELD] = soperator_install_mode
+            if (
+                soperator_profile is not None
+                and target.scope == "apps"
+                and entry.id == _SOPERATOR_APP_ID
+            ):
+                row["profile"] = soperator_profile
             instance_id = component_instance_id(row)
             if target.scope == "infra":
                 added_infra_instances.append(instance_id)
                 added_infra_labels.append(component_instance_label(entry.id, instance_id))
             else:
                 added_apps_instances.append(instance_id)
+                added_app_rows.append(row)
                 app_label = component_instance_label(entry.id, instance_id)
                 added_apps_selectors.append(app_label)
                 added_apps_labels.append(app_label)
         if not added_infra_instances and not added_apps_instances:
+            _ensure_soperator_onboarding_target(
+                next_payload,
+                interactive=interactive_mode,
+            )
+            repaired_onboarding_dependency_rows = _ensure_soperator_onboarding_required_app_rows(
+                next_payload,
+                app_entries=app_entries,
+            )
+            if repaired_onboarding_dependency_rows:
+                added_app_rows.extend(repaired_onboarding_dependency_rows)
+                added_apps_instances = [component_instance_id(row) for row in added_app_rows]
+                added_apps_selectors = [
+                    component_instance_label(component_type_id(row), component_instance_id(row))
+                    for row in added_app_rows
+                ]
+                added_apps_labels = list(dict.fromkeys(added_apps_selectors))
+                selected_apps = _enabled_ids_from_runtime_payload(
+                    payload=next_payload,
+                    entries=app_entries,
+                )
+        if not added_infra_instances and not added_apps_instances:
             console.print(f"Config up-to-date: {config_path.resolve()}")
-            console.print("Added infra components: (none)")
-            console.print("Added apps components: (none)")
             if skipped_add_labels:
                 console.print(
                     f"{warning_markup('Skipped already-enabled components:')} "
@@ -18197,6 +24972,33 @@ def component_add_command(
             _print_component_edit_next_steps(config_path)
             return
 
+        _materialize_single_target_app_bindings(next_payload)
+        _ensure_soperator_onboarding_target(
+            next_payload,
+            interactive=interactive_mode,
+        )
+        if _retarget_added_soperator_onboarding_dependency_rows(
+            next_payload,
+            added_app_rows=added_app_rows,
+        ):
+            added_apps_instances = [component_instance_id(row) for row in added_app_rows]
+            added_apps_selectors = [
+                component_instance_label(component_type_id(row), component_instance_id(row))
+                for row in added_app_rows
+            ]
+            added_apps_labels = list(dict.fromkeys(added_apps_selectors))
+        onboarding_dependency_rows = _ensure_soperator_onboarding_required_app_rows(
+            next_payload,
+            app_entries=app_entries,
+        )
+        if onboarding_dependency_rows:
+            added_app_rows.extend(onboarding_dependency_rows)
+            added_apps_instances = [component_instance_id(row) for row in added_app_rows]
+            added_apps_selectors = [
+                component_instance_label(component_type_id(row), component_instance_id(row))
+                for row in added_app_rows
+            ]
+            added_apps_labels = list(dict.fromkeys(added_apps_selectors))
         _ensure_provider_scope_validated()
         _seed_infra_project_scope_defaults(
             payload=next_payload,
@@ -18234,6 +25036,7 @@ def component_add_command(
             next_payload,
             provider_lookup=provider_lookup,
         )
+        _materialize_soperator_component_defaults(next_payload)
         selected_apps, mysterybox_eso_app_labels = _ensure_mysterybox_eso_app_dependency_selection(
             next_payload,
             selected_apps=selected_apps,
@@ -18248,6 +25051,9 @@ def component_add_command(
             _print_mysterybox_eso_app_dependency_adjustment(mysterybox_eso_app_labels)
         config_yaml_override = yaml.safe_dump(next_payload, sort_keys=False)
         if interactive_mode:
+            field_wizard_kwargs: dict[str, Any] = {}
+            if soperator_profile is not None:
+                field_wizard_kwargs["skip_soperator_profile_prompt"] = True
             config_yaml_override, wizard_completed = _run_component_field_wizard(
                 config_yaml=config_yaml_override,
                 selected_infra=set(added_infra_instances),
@@ -18255,6 +25061,7 @@ def component_add_command(
                 infra_entries=infra_entries,
                 app_entries=app_entries,
                 provider_lookup=provider_lookup,
+                **field_wizard_kwargs,
             )
             parsed_override = yaml.safe_load(config_yaml_override) or {}
             if not isinstance(parsed_override, dict):
@@ -18266,6 +25073,20 @@ def component_add_command(
             )
 
         _materialize_soperator_component_defaults(next_payload)
+        selected_apps, mysterybox_eso_app_labels = (
+            _materialize_soperator_child_chart_secret_dependencies(
+                next_payload,
+                selected_apps=selected_apps,
+                app_entries=app_entries,
+            )
+        )
+        if mysterybox_eso_app_labels:
+            for app_label in mysterybox_eso_app_labels:
+                if app_label not in added_apps_selectors:
+                    added_apps_selectors.append(app_label)
+                if app_label not in added_apps_labels:
+                    added_apps_labels.append(app_label)
+            _print_mysterybox_eso_app_dependency_adjustment(mysterybox_eso_app_labels)
         _materialize_mk8s_image_defaults(
             payload=next_payload,
             selected_infra=set(added_infra_instances),
@@ -18298,6 +25119,7 @@ def component_add_command(
                 "MK8s GPU app defaults are incomplete:\n  - "
                 + "\n  - ".join(gpu_app_selection.issues)
             )
+        before_gpu_app_labels = set(_enabled_app_instance_labels(next_payload))
         if gpu_app_selection.auto_enabled_app_ids:
             selected_apps = set(gpu_app_selection.selected_app_ids)
             (
@@ -18329,8 +25151,6 @@ def component_add_command(
                 infra_entries=infra_entries,
                 app_entries=app_entries,
             )
-            for component_id in gpu_app_selection.auto_enabled_app_ids:
-                added_apps_labels.append(component_instance_label(component_id, component_id))
             console.print(
                 f"{warning_markup('Adjusted component selection:')} enabling "
                 + ", ".join(f"'apps:{item}'" for item in gpu_app_selection.auto_enabled_app_ids)
@@ -18352,9 +25172,19 @@ def component_add_command(
                 instance_id = component_instance_id(row)
                 if instance_id in before_gpu_app_instances:
                     continue
-                added_apps_labels.append(
-                    component_instance_label(component_type_id(row), instance_id)
-                )
+                label = component_instance_label(component_type_id(row), instance_id)
+                if label not in added_apps_labels:
+                    added_apps_labels.append(label)
+        for label in _new_enabled_app_instance_labels(
+            next_payload,
+            before_labels=before_gpu_app_labels,
+            app_ids=gpu_app_selection.auto_enabled_app_ids,
+        ):
+            if "@" in label:
+                with suppress(ValueError):
+                    added_apps_labels.remove(label.split("@", maxsplit=1)[0])
+            if label not in added_apps_labels:
+                added_apps_labels.append(label)
         observability_selection = resolve_observability_app_selection(
             next_payload,
             selected_app_ids=selected_apps,
@@ -18365,6 +25195,7 @@ def component_add_command(
                 "Observability app defaults are incomplete:\n  - "
                 + "\n  - ".join(observability_selection.issues)
             )
+        before_observability_app_labels = set(_enabled_app_instance_labels(next_payload))
         if observability_selection.auto_enabled_app_ids:
             selected_apps = set(observability_selection.selected_app_ids)
             (
@@ -18396,8 +25227,6 @@ def component_add_command(
                 infra_entries=infra_entries,
                 app_entries=app_entries,
             )
-            for component_id in observability_selection.auto_enabled_app_ids:
-                added_apps_labels.append(component_instance_label(component_id, component_id))
             console.print(
                 f"{warning_markup('Adjusted component selection:')} enabling "
                 + ", ".join(
@@ -18405,6 +25234,16 @@ def component_add_command(
                 )
                 + " because the selected observability configuration requires them."
             )
+        for label in _new_enabled_app_instance_labels(
+            next_payload,
+            before_labels=before_observability_app_labels,
+            app_ids=observability_selection.auto_enabled_app_ids,
+        ):
+            if "@" in label:
+                with suppress(ValueError):
+                    added_apps_labels.remove(label.split("@", maxsplit=1)[0])
+            if label not in added_apps_labels:
+                added_apps_labels.append(label)
         infra_renames = _align_new_infra_instance_ids_with_resource_names(
             next_payload,
             selected_instance_ids=set(added_infra_instances),
@@ -18420,41 +25259,31 @@ def component_add_command(
             ]
         _materialize_single_target_app_bindings(next_payload)
         _materialize_soperator_component_defaults(next_payload)
+        materialize_compute_boot_disk_defaults(
+            next_payload,
+            provider_lookup=provider_lookup,
+        )
         if ensure_mysterybox_eso_app_rows(next_payload, app_entries=app_entries):
             selected_apps = _enabled_ids_from_runtime_payload(
                 payload=next_payload,
                 entries=app_entries,
             )
-        before_nfs_csi_app_instances = {
-            (component_type_id(row), component_instance_id(row))
-            for row in next_payload.get("apps", {}).get("charts", [])
-            if isinstance(row, dict)
-        }
-        if ensure_nfs_csi_app_rows(next_payload, app_entries=app_entries):
-            selected_apps = _enabled_ids_from_runtime_payload(
-                payload=next_payload,
-                entries=app_entries,
-            )
-            new_nfs_csi_labels: list[str] = []
-            for row in next_payload.get("apps", {}).get("charts", []):
-                if not isinstance(row, dict):
-                    continue
-                key = (component_type_id(row), component_instance_id(row))
-                if key in before_nfs_csi_app_instances or key[0] != "csi-driver-nfs":
-                    continue
-                label = component_instance_label(key[0], key[1])
-                if label not in added_apps_labels:
-                    added_apps_labels.append(label)
-                new_nfs_csi_labels.append(label)
-            if new_nfs_csi_labels:
-                console.print(
-                    f"{warning_markup('Adjusted component selection:')} enabling "
-                    + ", ".join(new_nfs_csi_labels)
-                    + " because VM-backed NFS for MK8s requires the NFS CSI driver."
-                )
+        selected_apps, nfs_csi_app_labels = _ensure_nfs_csi_app_dependency_selection(
+            next_payload,
+            selected_apps=selected_apps,
+            app_entries=app_entries,
+        )
+        for label in nfs_csi_app_labels:
+            if label not in added_apps_labels:
+                added_apps_labels.append(label)
+        _print_nfs_csi_app_dependency_adjustment(nfs_csi_app_labels)
         materialize_mk8s_gpu_app_values(next_payload)
-        materialize_soperator_companion_app_values(next_payload)
         materialize_observability_infra_values(next_payload)
+        _prune_mk8s_node_group_defaults_without_soperator(
+            next_payload,
+            infra_entries=infra_entries,
+        )
+        _refresh_soperator_onboarding_fingerprints(next_payload)
 
         add_required_field_issues = (
             _wizard_followup_required_field_issues(
@@ -18485,20 +25314,32 @@ def component_add_command(
             payload=next_payload,
             app_entries=app_entries,
         )
+        _refresh_soperator_onboarding_fingerprints(next_payload)
+        if validate_sources:
+            final_app_ids_to_validate = _enabled_app_ids_for_new_rows(
+                payload=next_payload,
+                previous_identities=initially_enabled_app_rows,
+            )
+            selected_apps = _validate_final_enabled_app_sources_or_raise(
+                payload=next_payload,
+                app_entries=app_entries,
+                already_validated_app_ids=source_validated_app_ids,
+                candidate_app_ids=final_app_ids_to_validate,
+            )
 
         wrote_config = _write_runtime_payload_config(config_path.resolve(), next_payload)
         if wrote_config:
             console.print(f"Updated: {config_path.resolve()}")
         else:
             console.print(f"Config up-to-date: {config_path.resolve()}")
-        console.print(
-            "Added infra components: "
-            + (", ".join(added_infra_labels) if added_infra_labels else "(none)")
-        )
-        console.print(
-            "Added apps components: "
-            + (", ".join(added_apps_labels) if added_apps_labels else "(none)")
-        )
+        if not interactive_mode:
+            if added_infra_labels:
+                console.print("Added infra components: " + ", ".join(added_infra_labels))
+            if added_apps_labels:
+                console.print(
+                    "Added apps components: "
+                    + ", ".join(_target_aware_added_app_labels(next_payload, added_apps_labels))
+                )
         if skipped_add_labels:
             console.print(
                 f"{warning_markup('Skipped already-enabled components:')} "
@@ -18522,6 +25363,15 @@ def component_add_command(
 @component_app.command(
     "remove",
     short_help="Remove component selectors from --config CONFIG_YAML.",
+    epilog=(
+        "Examples: "
+        "nebius-cxcli component remove apps:soperator --config ./deployments/acme/config.yaml "
+        "(removes a Soperator app; cascades target_ref cleanup on MK8s deploy.targets[]); "
+        "nebius-cxcli component remove 'apps:soperator@target-mk8s-prod' "
+        "(removes only the binding for a specific MK8s target_ref, keeps other Soperator instances); "
+        "nebius-cxcli component remove infra:mk8s --no-interactive "
+        "(non-interactive; removes the MK8s row and any apps bound to its target_ref)."
+    ),
 )
 def component_remove_command(
     component_ids: Annotated[
@@ -18720,6 +25570,15 @@ def component_remove_command(
 @app.command(
     "bootstrap-ci",
     short_help="Use CONFIG_YAML to reconcile the customer GitHub workflow, email settings, and optional CI auth.",
+    epilog=(
+        "Examples: "
+        "nebius-cxcli bootstrap-ci ./deployments/acme/config.yaml "
+        "(reconciles .github/workflows + email config); "
+        "nebius-cxcli bootstrap-ci ./deployments/acme/config.yaml --auth-bootstrap "
+        "(also provisions a CI service account, auth key, and OS access key); "
+        "nebius-cxcli bootstrap-ci ./config.yaml --github-repo acme/cluster-config --cli-ref main "
+        "(customizes the CI workflow's repo and cxcli branch ref)."
+    ),
 )
 def bootstrap_ci_command(
     config_path: Annotated[
@@ -18871,6 +25730,13 @@ def bootstrap_ci_command(
 @app.command(
     "validate",
     short_help="Use CONFIG_YAML to validate source config, deployment readiness, and live quota/capacity.",
+    epilog=(
+        "Examples: "
+        "nebius-cxcli validate ./deployments/acme/config.yaml "
+        "(runs the full validator suite: config model, component sources, MK8s readiness, quota, Soperator onboarding gates). "
+        "Validation runs the helm chart's schema check on Soperator values; "
+        "typed-vs-raw overlap in schedulingConfig or partition policy is flagged here before render."
+    ),
 )
 def validate_command(
     config_path: Annotated[
@@ -18895,6 +25761,13 @@ def validate_command(
 @app.command(
     "quota-check",
     short_help="Use CONFIG_YAML to run a live Nebius quota/capacity assessment for enabled infra components.",
+    epilog=(
+        "Examples: "
+        "nebius-cxcli quota-check ./deployments/acme/config.yaml "
+        "(checks quotas in the project's region only); "
+        "nebius-cxcli quota-check ./deployments/acme/config.yaml --all-regions "
+        "(aggregates quotas across every Nebius region for cross-region planning)."
+    ),
 )
 def quota_check_command(
     config_path: Annotated[
@@ -18953,6 +25826,12 @@ def quota_check_command(
 @app.command(
     "quota-request",
     short_help="Use CONFIG_YAML to plan and submit quota requests for confirmed insufficient Nebius quotas.",
+    epilog=(
+        "Examples: "
+        "nebius-cxcli quota-request ./deployments/acme/config.yaml "
+        "(reads the latest quota-check result, prompts for each gap, and submits Nebius quota requests). "
+        "Run quota-check first; quota-request only acts on confirmed insufficient quotas."
+    ),
 )
 def quota_request_command(
     config_path: Annotated[
@@ -19059,6 +25938,15 @@ def quota_request_command(
 @app.command(
     "ssh-jumphost",
     short_help="Use CONFIG_YAML to manage SSH jump-host source CIDRs.",
+    epilog=(
+        "Examples: "
+        "nebius-cxcli ssh-jumphost --list-allowed-cidrs ./config.yaml --component infra:vm-jumphost "
+        "(shows current /etc/ssh/sshd_config Match allow rules on the running VM); "
+        "nebius-cxcli ssh-jumphost --add-allowed-cidrs ./config.yaml --component infra:vm-jumphost --allowed-cidr 10.0.0.0/24,192.168.1.0/24 "
+        "(appends two CIDRs and reloads sshd); "
+        "nebius-cxcli ssh-jumphost --remove-allowed-cidrs ./config.yaml --component infra:vm-jumphost --allowed-cidr 10.0.0.0/24 --ssh-user ubuntu "
+        "(removes a CIDR; --ssh-user and --ssh-private-key override the defaults from the VM config)."
+    ),
 )
 def ssh_jumphost_command(
     add_allowed_cidrs: Annotated[
@@ -19230,6 +26118,16 @@ def ssh_jumphost_command(
 @app.command(
     "wireguard",
     short_help="Use CONFIG_YAML to manage WireGuard clients and routed local subnets.",
+    epilog=(
+        "Examples: "
+        "nebius-cxcli wireguard --gen-client-conf ./config.yaml --component infra:vm-vpn-gateway --client-name alice "
+        "(generates a client .conf file under ./generated/.../wireguard/); "
+        "nebius-cxcli wireguard --gen-client-conf ./config.yaml --component infra:vm-vpn-gateway --client-name alice --dns 10.0.0.10 --persistent-keepalive 25 --output-dir ./out "
+        "(custom DNS, keepalive interval, and output location); "
+        "nebius-cxcli wireguard --add-local-subnets ./config.yaml --component infra:vm-vpn-gateway --local-subnet 10.10.0.0/16 "
+        "(adds a routed subnet to the deployed gateway VM); "
+        "nebius-cxcli wireguard --remove-local-subnets ./config.yaml --component infra:vm-vpn-gateway --local-subnet 10.10.0.0/16."
+    ),
 )
 def wireguard_command(
     gen_client_conf: Annotated[
@@ -19527,6 +26425,15 @@ def wireguard_command(
 @app.command(
     "validate-generated",
     short_help="Use GENERATED_PATH to validate rendered-bundle readiness, manifests, and portability without rerendering.",
+    epilog=(
+        "Examples: "
+        "nebius-cxcli validate-generated ./deployments/acme/generated "
+        "(checks state-derived readiness on already-rendered artifacts; runs Soperator schema + chart-render checks); "
+        "nebius-cxcli validate-generated ./deployments/acme/generated --portable "
+        "(extra portability checks for shipping the bundle to a different host); "
+        "nebius-cxcli validate-generated ./deployments/acme/generated --no-auto-auth-bootstrap "
+        "(skips silent service-account refresh, fails fast on missing auth)."
+    ),
 )
 def validate_generated_command(
     generated_path: Annotated[
@@ -20046,9 +26953,545 @@ def _grafana_dashboard_validation_target_envs(
     return target_envs
 
 
+def _grafana_export_url_parts(
+    raw_url: str,
+    *,
+    folder_uid: str,
+    dashboard_uids: Sequence[str],
+) -> tuple[str, str, tuple[str, ...]]:
+    parsed = urllib.parse.urlparse(str(raw_url or "").strip())
+    if not parsed.scheme or not parsed.netloc:
+        raise RuntimeError(
+            "--export-dashboard must be a Grafana URL such as https://grafana.example/"
+        )
+    base_url = urllib.parse.urlunparse((parsed.scheme, parsed.netloc, "/", "", "", ""))
+    path_parts = [urllib.parse.unquote(part) for part in parsed.path.split("/") if part]
+    inferred_folder_uid = ""
+    inferred_dashboard_uid = ""
+    for index, part in enumerate(path_parts[:-1]):
+        if part == "f" and index + 1 < len(path_parts):
+            inferred_folder_uid = path_parts[index + 1]
+        if part == "d" and index + 1 < len(path_parts):
+            inferred_dashboard_uid = path_parts[index + 1]
+    resolved_dashboard_uids = tuple(dashboard_uids)
+    if inferred_dashboard_uid and not resolved_dashboard_uids:
+        resolved_dashboard_uids = (inferred_dashboard_uid,)
+    return base_url, str(folder_uid or inferred_folder_uid).strip(), resolved_dashboard_uids
+
+
+def _grafana_export_auth_candidates(
+    *,
+    token_env: str,
+    username: str,
+    password_env: str,
+) -> tuple[GrafanaAuth, ...]:
+    username = str(username or "").strip()
+    candidates = bearer_auth_candidates(
+        token_env=str(token_env or "").strip(),
+        on_warning=(
+            None
+            if username
+            else lambda message: console.print(
+                f"{warning_markup('WARNING:', bold=True)} {escape(message)}"
+            )
+        ),
+    )
+    if username:
+        password_env = str(password_env or "GRAFANA_PASSWORD").strip()
+        password = str(os.environ.get(password_env) or "") if password_env else ""
+        if not password:
+            if not _is_tty_session():
+                raise RuntimeError(
+                    f"Grafana Basic auth password is missing. Set {password_env} or run "
+                    "interactively so cxcli can prompt securely."
+                )
+            password = getpass.getpass(f"Grafana password for {username}: ")
+        candidates.append(
+            basic_auth_candidate(username, password, source=f"Basic auth user {username}")
+        )
+    return tuple(candidates)
+
+
+def _grafana_prompt_sort_key(item: GrafanaFolder | GrafanaDashboard) -> tuple[str, str]:
+    return (item.title.casefold(), item.uid.casefold())
+
+
+def _prompt_grafana_folder(folders: Sequence[GrafanaFolder]) -> GrafanaFolder:
+    ordered_folders = tuple(sorted(folders, key=_grafana_prompt_sort_key))
+    if not ordered_folders:
+        raise RuntimeError("No Grafana dashboard folders were returned by the API.")
+    if not _is_tty_session():
+        raise RuntimeError("Pass --folder-uid when exporting dashboards non-interactively.")
+    try:
+        import questionary
+
+        question = questionary.select(
+            "Grafana folder",
+            choices=[
+                questionary.Choice(title=f"{folder.title} ({folder.uid})", value=folder)
+                for folder in ordered_folders
+            ],
+            instruction="Select the folder to export from. Type a letter to jump.",
+            qmark="",
+            use_jk_keys=False,
+        )
+        selected = _ask_questionary_with_prefix_jumps(question)
+        if isinstance(selected, GrafanaFolder):
+            return selected
+    except Exception:
+        pass
+    for index, folder in enumerate(ordered_folders, start=1):
+        console.print(f"{index}. {folder.title} ({folder.uid})")
+    while True:
+        raw = typer.prompt("Grafana folder number", default="1").strip()
+        try:
+            selected_index = int(raw)
+        except ValueError:
+            selected_index = 0
+        if 1 <= selected_index <= len(ordered_folders):
+            return ordered_folders[selected_index - 1]
+        console.print(error_markup("Invalid folder selection"))
+
+
+def _prompt_grafana_dashboards(
+    dashboards: Sequence[GrafanaDashboard],
+) -> tuple[GrafanaDashboard, ...]:
+    ordered_dashboards = tuple(sorted(dashboards, key=_grafana_prompt_sort_key))
+    if not ordered_dashboards:
+        raise RuntimeError("No dashboards were returned for the selected Grafana folder.")
+    if not _is_tty_session():
+        raise RuntimeError(
+            "Pass at least one --dashboard-uid when exporting dashboards non-interactively."
+        )
+    try:
+        import questionary
+
+        _configure_questionary_checkbox_symbols()
+        question = questionary.checkbox(
+            "Grafana dashboards",
+            choices=[
+                questionary.Choice(title=f"{dashboard.title} ({dashboard.uid})", value=dashboard)
+                for dashboard in ordered_dashboards
+            ],
+            instruction=(
+                "Select one or more dashboards to export. Type a letter to jump; "
+                "space selects; Ctrl-A toggles all; enter confirms."
+            ),
+            qmark="",
+            use_search_filter=True,
+            use_jk_keys=False,
+        )
+        selected = _ask_questionary_with_prefix_jumps(question)
+        if selected:
+            return tuple(item for item in selected if isinstance(item, GrafanaDashboard))
+    except Exception:
+        pass
+    for index, dashboard in enumerate(ordered_dashboards, start=1):
+        console.print(f"{index}. {dashboard.title} ({dashboard.uid})")
+    while True:
+        raw = typer.prompt("Dashboard numbers, comma-separated or all", default="all").strip()
+        if raw.lower() == "all":
+            return tuple(ordered_dashboards)
+        selected: list[GrafanaDashboard] = []
+        valid = True
+        for token in [item.strip() for item in raw.split(",") if item.strip()]:
+            try:
+                selected_index = int(token)
+            except ValueError:
+                valid = False
+                break
+            if not 1 <= selected_index <= len(ordered_dashboards):
+                valid = False
+                break
+            selected.append(ordered_dashboards[selected_index - 1])
+        if valid and selected:
+            return tuple(selected)
+        console.print(error_markup("Invalid dashboard selection"))
+
+
+def _prompt_grafana_catalog_datasource(
+    datasources: Sequence[CatalogDatasource],
+) -> CatalogDatasource:
+    if not datasources:
+        raise RuntimeError(
+            "The Grafana app has no configured datasources in component_cli_settings."
+        )
+    if not _is_tty_session():
+        raise RuntimeError("Pass --datasource when datasource mapping is ambiguous.")
+    try:
+        import questionary
+
+        selected = questionary.select(
+            "cxcli Grafana datasource",
+            choices=[
+                questionary.Choice(
+                    title=f"{datasource.name} ({datasource.datasource_type}/{datasource.uid})",
+                    value=datasource,
+                )
+                for datasource in datasources
+            ],
+            instruction="Select the datasource that this dashboard should use after deploy.",
+            qmark="",
+        ).ask()
+        if isinstance(selected, CatalogDatasource):
+            return selected
+    except Exception:
+        pass
+    for index, datasource in enumerate(datasources, start=1):
+        console.print(f"{index}. {datasource.name} ({datasource.datasource_type}/{datasource.uid})")
+    while True:
+        raw = typer.prompt("Datasource number", default="1").strip()
+        try:
+            selected_index = int(raw)
+        except ValueError:
+            selected_index = 0
+        if 1 <= selected_index <= len(datasources):
+            return datasources[selected_index - 1]
+        console.print(error_markup("Invalid datasource selection"))
+
+
+def _grafana_export_datasource(
+    dashboard: Mapping[str, object],
+    datasources: Sequence[CatalogDatasource],
+    *,
+    datasource: str,
+) -> CatalogDatasource:
+    try:
+        return select_catalog_datasource(dashboard, datasources, requested=datasource)
+    except RuntimeError:
+        if datasource or not _is_tty_session():
+            raise
+    selected = _prompt_grafana_catalog_datasource(datasources)
+    return select_catalog_datasource(dashboard, datasources, requested=selected.name)
+
+
+def _grafana_dashboard_key(
+    dashboard: GrafanaDashboard,
+    *,
+    used_keys: set[str],
+) -> str:
+    base = safe_slug(dashboard.title, fallback=safe_slug(dashboard.uid, fallback="dashboard"))
+    key = base
+    if key in used_keys:
+        key = f"{base}-{safe_slug(dashboard.uid, fallback='dashboard')}"
+    counter = 2
+    while key in used_keys:
+        key = f"{base}-{counter}"
+        counter += 1
+    used_keys.add(key)
+    return key
+
+
+@app.command(
+    "grafana",
+    short_help="Export or attach Grafana dashboard JSON.",
+    epilog=(
+        "Examples: "
+        "nebius-cxcli grafana --export-dashboard https://grafana.example.com --dashboard-uid abc123,def456 --output-dir ./dashboards "
+        "(exports two dashboards by UID; auth uses --token-env or interactive login); "
+        "nebius-cxcli grafana --export-dashboard https://grafana.example.com --folder-uid soperator "
+        "(exports every dashboard in a folder); "
+        "nebius-cxcli grafana --dashboard-json ./my-dashboard.json --attach --dashboard-folder soperator --datasource user-metrics "
+        "(normalizes a local dashboard JSON and attaches it to component_sources.yaml under the chosen folder/datasource binding). "
+        "Use `--attach` to write to component_sources.yaml; without it, this command is read-only."
+    ),
+)
+def grafana_command(
+    export_dashboard: Annotated[
+        str | None,
+        typer.Option(
+            "--export-dashboard",
+            metavar="GRAFANA_URL",
+            help=(
+                "Grafana base URL or folder URL to export from. "
+                "The command uses Grafana API endpoints under this host."
+            ),
+        ),
+    ] = None,
+    dashboard_json_path: Annotated[
+        list[Path] | None,
+        typer.Option(
+            "--dashboard-json",
+            help=(
+                "Local Grafana dashboard JSON file to normalize and optionally attach. "
+                "Repeat to process multiple files."
+            ),
+        ),
+    ] = None,
+    output_dir: Annotated[
+        Path,
+        typer.Option(
+            "--output-dir",
+            help="Directory for exported dashboard JSON files. Defaults to ./dashboards.",
+        ),
+    ] = Path("dashboards"),
+    folder_uid: Annotated[
+        str,
+        typer.Option(
+            "--folder-uid",
+            help="Grafana folder UID to export from. Omit in a TTY to select interactively.",
+        ),
+    ] = "",
+    dashboard_uid: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--dashboard-uid",
+            help=(
+                "Grafana dashboard UID to export. Repeat the flag or use comma-separated "
+                "values. Omit in a TTY to select interactively."
+            ),
+        ),
+    ] = None,
+    overwrite: Annotated[
+        bool,
+        typer.Option("--overwrite", help="Overwrite existing exported JSON/catalog entries."),
+    ] = False,
+    attach: Annotated[
+        bool,
+        typer.Option(
+            "--attach/--no-attach",
+            help=(
+                "Also add exported dashboard JSON entries to component_sources.yaml. "
+                "Export-only is the default and does not mutate the catalog."
+            ),
+        ),
+    ] = False,
+    component_sources_path: Annotated[
+        Path | None,
+        typer.Option(
+            "--component-sources",
+            help=(
+                "component_sources.yaml to update with --attach. Defaults to the active "
+                "catalog resolution order."
+            ),
+        ),
+    ] = None,
+    dashboard_folder: Annotated[
+        str,
+        typer.Option(
+            "--dashboard-folder",
+            help=(
+                "Dashboard folder/provider key to use for exported JSON and --attach. "
+                "Defaults to the source folder slug."
+            ),
+        ),
+    ] = "",
+    datasource: Annotated[
+        str,
+        typer.Option(
+            "--datasource",
+            help=(
+                "cxcli Grafana datasource name, UID, or unique type to use with --attach "
+                "when automatic mapping is ambiguous."
+            ),
+        ),
+    ] = "",
+    token_env: Annotated[
+        str,
+        typer.Option(
+            "--token-env",
+            help="Environment variable containing a Grafana service-account or bearer token.",
+        ),
+    ] = "",
+    username: Annotated[
+        str,
+        typer.Option("--username", help="Grafana Basic auth username."),
+    ] = "",
+    password_env: Annotated[
+        str,
+        typer.Option(
+            "--password-env",
+            help="Environment variable containing the Grafana Basic auth password.",
+        ),
+    ] = "GRAFANA_PASSWORD",
+) -> None:
+    """Export Grafana dashboards through the API or local JSON, with optional attachment.
+
+    Use exactly one source mode per invocation:
+
+    - --export-dashboard reads a Grafana API.
+    - --dashboard-json reads one or more local dashboard JSON files.
+
+    Export-only writes normalized JSON files and does not change component_sources.yaml.
+    Add --attach to update the active component_sources.yaml with json_file entries.
+
+    Examples:
+
+    Interactive API export:
+    nebius-cxcli grafana --export-dashboard https://grafana.example.invalid/
+
+    Non-interactive API export:
+    nebius-cxcli grafana --export-dashboard https://grafana.example.invalid/ --folder-uid folder-uid --dashboard-uid dashboard-uid --output-dir ./dashboards
+
+    API export with catalog attach:
+    nebius-cxcli grafana --export-dashboard https://grafana.example.invalid/ --folder-uid folder-uid --dashboard-uid dashboard-uid --dashboard-folder mk8s --datasource "Nebius User Metrics" --attach
+
+    Local JSON attach without Grafana API credentials:
+    nebius-cxcli grafana --dashboard-json ./dashboards/mk8s/custom.json --dashboard-folder mk8s --datasource "Nebius User Metrics" --attach
+
+    Multiple local JSON files with an explicit catalog:
+    nebius-cxcli grafana --dashboard-json ./dashboards/mk8s/cluster.json --dashboard-json ./dashboards/mk8s/nodes.json --component-sources ./component_sources.yaml --dashboard-folder mk8s --datasource "Nebius User Metrics" --attach
+    """
+    try:
+        local_dashboard_paths = tuple(
+            path.expanduser().resolve() for path in dashboard_json_path or []
+        )
+        if bool(export_dashboard) == bool(local_dashboard_paths):
+            raise RuntimeError("Pass exactly one of --export-dashboard or --dashboard-json.")
+        requested_dashboard_uids = _split_multi_value_tokens(dashboard_uid or [])
+        dashboard_payloads: list[tuple[GrafanaDashboard, dict[str, object]]] = []
+
+        if export_dashboard:
+            base_url, resolved_folder_uid, requested_dashboard_uids = _grafana_export_url_parts(
+                export_dashboard,
+                folder_uid=folder_uid,
+                dashboard_uids=requested_dashboard_uids,
+            )
+            auth_candidates = _grafana_export_auth_candidates(
+                token_env=token_env,
+                username=username,
+                password_env=password_env,
+            )
+            folders = list_folders(base_url, auth_candidates)
+            if resolved_folder_uid:
+                selected_folder = next(
+                    (folder for folder in folders if folder.uid == resolved_folder_uid),
+                    GrafanaFolder(uid=resolved_folder_uid, title=resolved_folder_uid),
+                )
+            else:
+                selected_folder = _prompt_grafana_folder(folders)
+
+            dashboards = list_dashboards(
+                base_url,
+                auth_candidates,
+                folder_uid=selected_folder.uid,
+                folder_title=selected_folder.title,
+            )
+            dashboards_by_uid = {dashboard.uid: dashboard for dashboard in dashboards}
+            if requested_dashboard_uids:
+                selected_dashboards = tuple(
+                    dashboards_by_uid.get(uid)
+                    or GrafanaDashboard(
+                        uid=uid,
+                        title=uid,
+                        folder_uid=selected_folder.uid,
+                        folder_title=selected_folder.title,
+                    )
+                    for uid in requested_dashboard_uids
+                )
+            else:
+                selected_dashboards = _prompt_grafana_dashboards(dashboards)
+            for selected_dashboard in selected_dashboards:
+                dashboard_payloads.append(
+                    (
+                        selected_dashboard,
+                        dashboard_json(
+                            base_url,
+                            auth_candidates,
+                            dashboard_uid=selected_dashboard.uid,
+                        ),
+                    )
+                )
+        else:
+            if folder_uid or requested_dashboard_uids:
+                raise RuntimeError(
+                    "--folder-uid and --dashboard-uid are only valid with --export-dashboard."
+                )
+            default_folder_title = (
+                dashboard_folder
+                or (local_dashboard_paths[0].parent.name if local_dashboard_paths else "")
+                or "dashboards"
+            )
+            selected_folder = GrafanaFolder(
+                uid=safe_slug(default_folder_title, fallback="dashboards"),
+                title=default_folder_title,
+            )
+            for dashboard_path in local_dashboard_paths:
+                local_dashboard = dashboard_json_from_file(dashboard_path)
+                uid = str(local_dashboard.get("uid") or "").strip()
+                title = str(local_dashboard.get("title") or "").strip() or dashboard_path.stem
+                dashboard_payloads.append(
+                    (
+                        GrafanaDashboard(
+                            uid=uid,
+                            title=title,
+                            folder_uid=selected_folder.uid,
+                            folder_title=selected_folder.title,
+                        ),
+                        local_dashboard,
+                    )
+                )
+
+        resolved_catalog_path: Path | None = None
+        grafana_component_id = ""
+        catalog_datasource_specs: tuple[CatalogDatasource, ...] = ()
+        if attach:
+            resolved_catalog_path = resolve_component_sources_file(explicit=component_sources_path)
+            grafana_component_id, catalog_datasource_specs = catalog_datasources(
+                resolved_catalog_path
+            )
+
+        output_root = output_dir.expanduser().resolve()
+        catalog_folder_key = safe_slug(
+            dashboard_folder or selected_folder.title,
+            fallback=safe_slug(selected_folder.uid, fallback="grafana"),
+        )
+        used_keys: set[str] = set()
+        exports: list[ExportedDashboard] = []
+        for selected_dashboard, exported_dashboard in dashboard_payloads:
+            datasource_name = ""
+            if attach:
+                catalog_datasource = _grafana_export_datasource(
+                    exported_dashboard,
+                    catalog_datasource_specs,
+                    datasource=datasource,
+                )
+                exported_dashboard = cast(
+                    dict[str, object],
+                    rewrite_dashboard_datasources(exported_dashboard, catalog_datasource),
+                )
+                datasource_name = catalog_datasource.name
+            dashboard_key = _grafana_dashboard_key(selected_dashboard, used_keys=used_keys)
+            output_path = output_root / catalog_folder_key / f"{dashboard_key}.json"
+            write_dashboard_file(output_path, exported_dashboard, overwrite=overwrite)
+            exports.append(
+                ExportedDashboard(
+                    uid=selected_dashboard.uid,
+                    title=selected_dashboard.title,
+                    folder_uid=selected_dashboard.folder_uid,
+                    folder_title=selected_dashboard.folder_title,
+                    catalog_folder=catalog_folder_key,
+                    dashboard_key=dashboard_key,
+                    datasource_name=datasource_name,
+                    path=output_path,
+                )
+            )
+            console.print(f"[green]Exported[/green] {selected_dashboard.title} -> {output_path}")
+
+        if attach and resolved_catalog_path is not None:
+            attach_dashboards_to_catalog(
+                resolved_catalog_path,
+                grafana_component_id=grafana_component_id,
+                exports=exports,
+                overwrite=overwrite,
+            )
+            console.print(
+                f"[green]Attached[/green] {len(exports)} dashboard(s) to {resolved_catalog_path}"
+            )
+    except Exception as exc:  # pragma: no cover - CLI surface
+        _exit_with_error(exc)
+
+
 @app.command(
     "validate-dashboards",
     short_help="Use CONFIG_YAML to validate Grafana dashboard datasource/read-endpoint fit.",
+    epilog=(
+        "Examples: "
+        "nebius-cxcli validate-dashboards ./deployments/acme/config.yaml "
+        "(checks every dashboard's datasource refs against live Nebius observability endpoints for all enabled targets); "
+        "nebius-cxcli validate-dashboards ./deployments/acme/config.yaml --target mk8s-prod "
+        "(restricts the check to one deploy.targets[] row)."
+    ),
 )
 def validate_dashboards_command(
     config_path: Annotated[
@@ -20141,6 +27584,15 @@ def validate_dashboards_command(
 @app.command(
     "validate-sources",
     short_help="Validate component_sources.yaml, paired CLI settings, and resolved Terraform/Helm source contracts.",
+    epilog=(
+        "Examples: "
+        "nebius-cxcli validate-sources "
+        "(uses the bundled component_sources.yaml + component_cli_settings.yaml); "
+        "nebius-cxcli validate-sources ./component_sources.yaml "
+        "(validates an alternate sources file plus its sibling settings); "
+        "nebius-cxcli --source-profile local validate-sources "
+        "(checks that every source.local path resolves on the local filesystem)."
+    ),
 )
 def validate_sources_command(
     component_sources_path: Annotated[
@@ -20244,6 +27696,17 @@ def validate_sources_command(
     short_help=(
         "Manage runtime auth profile actions; use --project-config CONFIG_YAML or "
         "--project-id, or omit both for global --validate-profile."
+    ),
+    epilog=(
+        "Examples: "
+        "nebius-cxcli auth --validate-profile "
+        "(checks the active Nebius SDK profile against $NEBIUS_SDK_PROFILE / nb config); "
+        "nebius-cxcli auth --project-config ./deployments/acme/config.yaml --create "
+        "(provisions a per-project Terraform runtime service account, auth key, and OS access key, then writes back to config.yaml); "
+        "nebius-cxcli auth --project-id project-xxxx --recreate "
+        "(rotates the per-project runtime credentials); "
+        "nebius-cxcli auth --project-config ./config.yaml --bootstrap-ci --github-repo acme/cluster-config --github-token-env GITHUB_TOKEN "
+        "(also pushes the credentials to the GitHub repo secrets used by bootstrap-ci)."
     ),
 )
 def auth_command(
@@ -20506,6 +27969,18 @@ def auth_command(
 @app.command(
     "render",
     short_help="Use CONFIG_YAML to render and transactionally replace generated/ artifacts.",
+    epilog=(
+        "Examples: "
+        "nebius-cxcli render ./deployments/acme/config.yaml "
+        "(re-renders generated/infra and generated/flux; transactional swap, prompts on existing artifacts); "
+        "nebius-cxcli render ./deployments/acme/config.yaml --force "
+        "(overwrites without prompting); "
+        "nebius-cxcli --source-profile local render ./deployments/acme/config.yaml "
+        "(uses source.local Terraform/Helm paths from component_sources.yaml during development). "
+        "Soperator render materializes catalog defaults: schedulingConfig + partitionConfiguration.partitions[].policy, "
+        "qosConfiguration (off by default), nodesets[].topologyLabels from the selected topology profile, "
+        "and per-target soperator-* child chart values."
+    ),
 )
 def render_command(
     config_path: Annotated[
@@ -20526,8 +28001,13 @@ def render_command(
     """Render and transactionally replace generated artifacts from one project config.yaml, prompting before overwrite unless --force is provided."""
     try:
         config, paths = _load_runtime_context(config_path)
+        if isinstance(config, dict):
+            _materialize_soperator_component_defaults(config)
+            _materialize_soperator_render_only_values(config)
+            materialize_compute_boot_disk_defaults(config)
+        prune_inactive_mk8s_gpu_app_rows(config)
         materialize_mk8s_gpu_app_values(config)
-        materialize_soperator_companion_app_values(config)
+        materialize_soperator_child_chart_values(config)
         materialize_observability_infra_values(config)
         materialize_observability_app_values(config)
         materialize_mysterybox_eso_app_values(config)
@@ -20560,6 +28040,15 @@ def render_command(
                     config,
                     staged_paths,
                     component_output_values=component_output_values,
+                )
+            )
+            soperator_chart_version, soperator_app_version = _soperator_catalog_pinned_versions()
+            written.extend(
+                write_soperator_onboarding_reports(
+                    config,
+                    staged_paths.generated_dir,
+                    pinned_chart_version=soperator_chart_version,
+                    pinned_app_version=soperator_app_version,
                 )
             )
             _print_mk8s_gpu_validation_warnings(config)
@@ -20660,6 +28149,20 @@ def mk8s_token_command(
 @app.command(
     "deploy",
     short_help="Use CONFIG_YAML to deploy locally from the sibling rendered bundle.",
+    epilog=(
+        "Examples: "
+        "nebius-cxcli deploy ./deployments/acme/config.yaml "
+        "(runs terraform apply for infra then Flux bootstrap+apply for apps on every deploy target); "
+        "nebius-cxcli deploy ./deployments/acme/config.yaml --target mk8s-prod "
+        "(restricts the run to a single deploy.targets[] row by id); "
+        "nebius-cxcli deploy ./deployments/acme/config.yaml --skip-validation operator-readiness "
+        "(skips a single MK8s GPU validation kind; repeatable; --skip-validations skips all); "
+        "nebius-cxcli deploy ./deployments/acme/config.yaml --no-auto-auth-bootstrap "
+        "(fails on missing service-account credentials instead of refreshing them). "
+        "When qosConfiguration.enabled=true the Soperator chart runs a post-install Helm hook Job "
+        "(kubectl exec into the accounting pod) that reconciles sacctmgr "
+        "accounts/QOS/associations."
+    ),
 )
 def deploy_command(
     config_path: Annotated[
@@ -20702,8 +28205,8 @@ def deploy_command(
         typer.Option(
             "--target",
             help=(
-                f"Explicit {_MK8S_TARGET_ID_HELP} for Flux/app work and deploy-time "
-                "validations when the bundle declares more than one built-in cluster target."
+                f"Limit Flux/app work and deploy-time validations to one {_MK8S_TARGET_ID_HELP}. "
+                "When omitted, deploy reconciles every built-in cluster target in the bundle."
             ),
         ),
     ] = None,
@@ -20711,7 +28214,10 @@ def deploy_command(
         bool,
         typer.Option(
             "--all-targets",
-            help="Run target-scoped Flux/app work and deploy-time validations for every built-in cluster target in the bundle.",
+            help=(
+                "Explicitly run target-scoped Flux/app work and deploy-time validations "
+                "for every built-in cluster target in the bundle."
+            ),
         ),
     ] = False,
 ) -> None:
@@ -20733,12 +28239,14 @@ def deploy_command(
     generated bundle onto live infrastructure and workloads. When a built-in
     cluster handoff such as MK8s is enabled, deploy also refreshes local
     kubeconfig access for that cluster even if no app charts are configured.
-    When more than one built-in cluster target is present, use `--target
-    <target-id>` or `--all-targets` for Flux/app work and deploy-time
-    validations. The target id is the normalized cluster resource name stored as
-    that MK8s row's `instance_id`. For a single-target run, the refreshed
-    validation summary and deploy report include only validations for that
-    selected target; `--all-targets` reports every selected target.
+    When more than one built-in cluster target is present, deploy reconciles
+    every target by default. Use `--target <target-id>` to narrow Flux/app work
+    and deploy-time validations to one target, or `--all-targets` to spell out
+    the default all-target behavior. The target id is the normalized cluster
+    resource name stored as that MK8s row's `instance_id`. For a single-target
+    run, the refreshed validation summary and deploy report include only
+    validations for that selected target; the default multi-target run and
+    `--all-targets` report every selected target.
     Existing managed resources may be updated when the bundle differs from live
     state. Use `nebius-cxcli terraform plan
     <generated>` first when you need a non-mutating preview. It does not run
@@ -20755,8 +28263,8 @@ def deploy_command(
     MysteryBox sync targets. When deploy-time validations are configured, deploy
     keeps the machine-readable JSON detail files under `generated/inventory/`
     and refreshes the combined `generated/inventory/deploy-report.md`. The final
-    terminal footer groups validation PASS/FAIL, copy-paste commands, and
-    important generated paths.
+    terminal footer groups validation PASS/FAIL by target, copy-paste commands,
+    and important generated paths limited to the generated bundle plus deploy report.
     """
     try:
         config, paths, manifest = _load_deploy_context(config_path)
@@ -20779,6 +28287,15 @@ def deploy_command(
 @app.command(
     "destroy",
     short_help="Use CONFIG_YAML to destroy all rendered project resources.",
+    epilog=(
+        "Examples: "
+        "nebius-cxcli destroy ./deployments/acme/config.yaml "
+        "(prompts for confirmation, then removes rendered app resources followed by Terraform destroy across all deploy targets); "
+        "nebius-cxcli destroy ./deployments/acme/config.yaml --yes "
+        "(skips the confirmation prompt; use only in scripted teardowns). "
+        "Soperator: the chart's pre-delete hook removes SlurmCluster + NodeSet CRs before OpenKruise's finalizer "
+        "so Advanced StatefulSets terminate cleanly."
+    ),
 )
 def destroy_command(
     config_path: Annotated[
@@ -20809,13 +28326,12 @@ def destroy_command(
     This command is the destructive inverse of `deploy`: it resolves the
     sibling `generated/` directory from the project `config.yaml`, then uses
     `generated/nebius-cxcli-manifest.json` as the authoritative teardown
-    contract for the whole rendered project. When apps target an external or
-    current cluster, it deletes the rendered Flux manifests first and then runs
-    Terraform destroy against the rendered infra bundle. When the generated
-    bundle destroys the handed-off cluster directly, it skips the separate Flux
-    delete step and relies on cluster teardown instead. It does not rerender
-    from `config.yaml`, and it does not uninstall Flux controllers or bootstrap
-    GitHub/CI state.
+    contract for the whole rendered project. When app charts are enabled,
+    destroy deletes rendered Flux and locally applied post-Flux app resources
+    first so Kubernetes finalizers and CSI cleanup can run before Terraform
+    removes any managed MK8s cluster. It then runs Terraform destroy against
+    the rendered infra bundle. It does not rerender from `config.yaml`, and it
+    does not uninstall Flux controllers or bootstrap GitHub/CI state.
     """
     try:
         config, paths, manifest = _load_destroy_context(config_path)
@@ -20843,6 +28359,12 @@ def destroy_command(
 @terraform_app.command(
     "plan",
     short_help="Use GENERATED_PATH to run Terraform plan from generated/infra.",
+    epilog=(
+        "Examples: "
+        "nebius-cxcli terraform plan ./deployments/acme/generated "
+        "(equivalent to `terraform -chdir=generated/infra plan` with cxcli's runtime env wiring). "
+        "Run after `nebius-cxcli render` to preview infra diffs (MK8s, SFS, VMs) before `deploy`."
+    ),
 )
 def terraform_plan_command(
     generated_path: Annotated[
@@ -20886,6 +28408,12 @@ def terraform_plan_command(
 @terraform_app.command(
     "apply",
     short_help="Use GENERATED_PATH to run Terraform apply from generated/infra.",
+    epilog=(
+        "Examples: "
+        "nebius-cxcli terraform apply ./deployments/acme/generated "
+        "(provisions only the infra layer; does not touch Flux/apps); "
+        "useful for staged rollouts when you want to bring infra up first and apply Flux later via `flux apply`."
+    ),
 )
 def terraform_apply_command(
     generated_path: Annotated[
@@ -20940,6 +28468,13 @@ def terraform_apply_command(
 @terraform_app.command(
     "destroy",
     short_help="Use GENERATED_PATH to run Terraform destroy from generated/infra.",
+    epilog=(
+        "Examples: "
+        "nebius-cxcli terraform destroy ./deployments/acme/generated "
+        "(infra-only destroy; useful when Flux already cleaned up apps); "
+        "nebius-cxcli terraform destroy ./deployments/acme/generated --yes "
+        "(skips the confirmation prompt). For a full teardown including Flux, prefer top-level `nebius-cxcli destroy`."
+    ),
 )
 def terraform_destroy_command(
     generated_path: Annotated[
@@ -20999,6 +28534,13 @@ def terraform_destroy_command(
 @terraform_app.command(
     "unlock",
     short_help="Use GENERATED_PATH to inspect or clear a Terraform lock in generated/infra.",
+    epilog=(
+        "Examples: "
+        "nebius-cxcli terraform unlock ./deployments/acme/generated "
+        "(shows current lock metadata and prompts for confirmation before clearing); "
+        "nebius-cxcli terraform unlock ./deployments/acme/generated --force "
+        "(non-interactive force-unlock for CI recovery; use only when no other apply is running)."
+    ),
 )
 def terraform_unlock_command(
     generated_path: Annotated[
@@ -21056,6 +28598,15 @@ def terraform_unlock_command(
 @flux_app.command(
     "destroy",
     short_help="Use GENERATED_PATH to delete rendered Flux resources from generated/flux.",
+    epilog=(
+        "Examples: "
+        "nebius-cxcli flux destroy ./deployments/acme/generated "
+        "(deletes all Flux resources rendered for every deploy target; prompts per target); "
+        "nebius-cxcli flux destroy ./deployments/acme/generated --target mk8s-prod "
+        "(restricts to one target); "
+        "nebius-cxcli flux destroy ./deployments/acme/generated --yes --all-targets "
+        "(non-interactive teardown across every target). Removes Soperator CRs first via the chart's pre-delete hook."
+    ),
 )
 def flux_destroy_command(
     generated_path: Annotated[
@@ -21131,6 +28682,15 @@ def flux_destroy_command(
 @flux_app.command(
     "bootstrap",
     short_help="Use GENERATED_PATH to bootstrap or reconcile Flux from generated/flux.",
+    epilog=(
+        "Examples: "
+        "nebius-cxcli flux bootstrap ./deployments/acme/generated "
+        "(installs Flux on each deploy target and stages runtime secrets such as Soperator notifier webhook and backup-config keys); "
+        "nebius-cxcli flux bootstrap ./deployments/acme/generated --target mk8s-prod "
+        "(single target); "
+        "nebius-cxcli flux bootstrap ./deployments/acme/generated --all-targets --no-auto-auth-bootstrap "
+        "(no silent service-account refresh)."
+    ),
 )
 def flux_bootstrap_command(
     generated_path: Annotated[
@@ -21215,7 +28775,29 @@ def flux_bootstrap_command(
                         extra_env=kube_env,
                         target_ref=target_ref_value,
                     )
+                    _ensure_soperator_notifier_runtime_before_flux(
+                        config,
+                        extra_env=kube_env,
+                        target_ref=target_ref_value,
+                        externally_managed_secret_keys=_mysterybox_eso_rendered_secret_keys(
+                            target_paths
+                        ),
+                    )
+                    _ensure_soperator_backup_runtime_before_flux(
+                        config,
+                        extra_env=kube_env,
+                        target_ref=target_ref_value,
+                    )
                     action = ensure_flux(target_paths, extra_env=kube_env)
+                    if _post_flux_manifest_paths(target_paths):
+                        wait_for_rendered_flux_resources(
+                            target_paths,
+                            extra_env=kube_env,
+                            emit=lambda message: console.print(message),
+                        )
+                        post_flux_env = os.environ.copy()
+                        post_flux_env.update(kube_env)
+                        _apply_post_flux_manifests(target_paths, env=post_flux_env)
                 console.print(f"Flux {action} for {target_paths.flux_dir}")
         else:
             _report_cluster_nodes_status(
@@ -21227,7 +28809,20 @@ def flux_bootstrap_command(
                 auto_auth_bootstrap=auto_auth_bootstrap,
             )
             _ensure_grafana_runtime_before_flux(config, extra_env=None)
+            _ensure_soperator_notifier_runtime_before_flux(
+                config,
+                extra_env=None,
+                externally_managed_secret_keys=_mysterybox_eso_rendered_secret_keys(paths),
+            )
+            _ensure_soperator_backup_runtime_before_flux(config, extra_env=None)
             action = ensure_flux(paths, extra_env=None)
+            if _post_flux_manifest_paths(paths):
+                wait_for_rendered_flux_resources(
+                    paths,
+                    extra_env=None,
+                    emit=lambda message: console.print(message),
+                )
+                _apply_post_flux_manifests(paths, env=os.environ.copy())
             console.print(f"Flux {action} for {paths.flux_dir}")
     except Exception as exc:  # pragma: no cover - CLI surface
         _exit_with_error(exc)
@@ -21236,6 +28831,15 @@ def flux_bootstrap_command(
 @flux_app.command(
     "apply",
     short_help="Use GENERATED_PATH to apply Flux directly from generated/flux.",
+    epilog=(
+        "Examples: "
+        "nebius-cxcli flux apply ./deployments/acme/generated "
+        "(reconciles HelmReleases and child charts on every target); "
+        "nebius-cxcli flux apply ./deployments/acme/generated --target mk8s-prod "
+        "(reconciles one target only). "
+        "Use after `nebius-cxcli render` to push catalog changes (new partition_profile, topology profile, qosConfiguration) "
+        "without rerunning the full deploy."
+    ),
 )
 def flux_apply_command(
     generated_path: Annotated[
@@ -21317,6 +28921,19 @@ def flux_apply_command(
                         extra_env=kube_env,
                         target_ref=target_ref_value,
                     )
+                    _ensure_soperator_notifier_runtime_before_flux(
+                        config,
+                        extra_env=kube_env,
+                        target_ref=target_ref_value,
+                        externally_managed_secret_keys=_mysterybox_eso_rendered_secret_keys(
+                            target_paths
+                        ),
+                    )
+                    _ensure_soperator_backup_runtime_before_flux(
+                        config,
+                        extra_env=kube_env,
+                        target_ref=target_ref_value,
+                    )
                     _apply_rendered_flux(target_paths, extra_env=kube_env)
                     grafana_statuses.extend(
                         _collect_grafana_status_after_flux(
@@ -21342,6 +28959,12 @@ def flux_apply_command(
                 auto_auth_bootstrap=auto_auth_bootstrap,
             )
             _ensure_grafana_runtime_before_flux(config, extra_env=None)
+            _ensure_soperator_notifier_runtime_before_flux(
+                config,
+                extra_env=None,
+                externally_managed_secret_keys=_mysterybox_eso_rendered_secret_keys(paths),
+            )
+            _ensure_soperator_backup_runtime_before_flux(config, extra_env=None)
             _apply_rendered_flux(paths, extra_env=None)
             grafana_statuses.extend(_collect_grafana_status_after_flux(config, extra_env=None))
             _warn_if_flux_gitops_not_bootstrapped(
@@ -21368,6 +28991,13 @@ def flux_apply_command(
 @app.command(
     "discover",
     short_help="Use DEPLOYMENT_SCOPE to emit changed-project discovery JSON for CI.",
+    epilog=(
+        "Examples: "
+        "nebius-cxcli discover ./deployments "
+        "(emits JSON listing only projects with changes since the last git commit, for CI matrix builds); "
+        "nebius-cxcli discover ./deployments --all "
+        "(emits every project under the scope regardless of git diff, for full sweeps)."
+    ),
 )
 def discover_command(
     target_path: Annotated[
@@ -21466,6 +29096,13 @@ def _interactive_email_settings_setup(*, config_path: Path | None) -> tuple[Emai
 @app.command(
     "email",
     short_help="Use CONFIG_YAML to send the deploy report email, or omit it with --setup.",
+    epilog=(
+        "Examples: "
+        "nebius-cxcli email ./deployments/acme/config.yaml "
+        "(sends the post-deploy report email to the notifications address declared in config.yaml); "
+        "nebius-cxcli email --setup "
+        "(interactive setup of SMTP credentials in the user-global cxcli profile; runs before the first email send)."
+    ),
 )
 def email_command(
     config_path: Annotated[

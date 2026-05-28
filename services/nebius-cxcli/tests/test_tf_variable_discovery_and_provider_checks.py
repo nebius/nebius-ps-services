@@ -13,8 +13,9 @@ from nebius_cxcli.cli import (
     _materialize_vm_image_defaults,
     _run_component_field_wizard,
 )
-from nebius_cxcli.component_sources import ComponentDefault
+from nebius_cxcli.component_sources import ComponentDefault, StatusWatcher
 from nebius_cxcli.components import ComponentEntry
+from nebius_cxcli.compute_boot_disks import ComputeBootDiskRecommendationError
 from nebius_cxcli.provider_options import OptionChoice
 from nebius_cxcli.runtime_introspection import (
     ModuleVariable,
@@ -24,6 +25,7 @@ from nebius_cxcli.runtime_introspection import (
     module_variables,
     resolve_module_source_path,
 )
+from nebius_cxcli.wizard_profiles import BUILTIN_WIZARD_PROFILES
 
 
 def test_module_variable_discovery_includes_optional_and_required(tmp_path: Path) -> None:
@@ -151,9 +153,13 @@ def test_mk8s_gpu_module_uses_explicit_stack_source_contract() -> None:
     mk8s_dir = repo_root / "platform-infra" / "modules" / "mk8s"
     specs = {item.name: item for item in module_variables(str(mk8s_dir))}
 
-    assert specs["gpu_stack_source"].default == "nebius_image"
-    assert specs["cpu_nodes_os"].required is False
-    assert specs["gpu_nodes_os"].required is False
+    assert specs["cluster"].required is True
+    assert specs["node_groups"].required is True
+    assert "gpu_stack_source" in specs["node_groups"].type_hint
+    assert "gpu_stack_preset" in specs["node_groups"].type_hint
+    assert "gpu_stack_source" not in specs
+    assert "cpu_nodes_os" not in specs
+    assert "gpu_nodes_os" not in specs
     assert "gpu_driver_preset_map" not in specs
     assert "gpu_default_drivers_preset" not in specs
     assert "mig_strategy" not in specs
@@ -234,7 +240,17 @@ def test_wizard_prompts_required_and_optional_tf_variables_in_interactive_mode(
                     }
                 ],
             },
-            "apps": {"charts": []},
+            "apps": {
+                "charts": [
+                    {
+                        "id": "soperator",
+                        "instance_id": "mk8s",
+                        "enabled": True,
+                        "install_mode": "production-cluster",
+                        "values": {},
+                    }
+                ]
+            },
         },
         sort_keys=False,
     )
@@ -283,8 +299,9 @@ def test_wizard_prompts_required_and_optional_tf_variables_in_interactive_mode(
         choices=None,
         type_hint=None,
         required=False,
+        unset_on_skip=False,
     ) -> tuple[object, bool]:
-        _ = choices, required
+        _ = choices, required, unset_on_skip
         prompted_paths.append(path_label)
         prompt_type_hints[path_label] = type_hint
         return current, False
@@ -313,6 +330,904 @@ def test_wizard_prompts_required_and_optional_tf_variables_in_interactive_mode(
     assert "infra.components[0].inputs.optional_field" in prompted_paths
     assert prompt_type_hints["infra.components[0].inputs.required_field"] == "string"
     assert prompt_type_hints["infra.components[0].inputs.optional_field"] == "string"
+
+
+def test_wizard_uses_guided_mk8s_cluster_and_node_group_fields(
+    monkeypatch,
+) -> None:
+    config_yaml = yaml.safe_dump(
+        {
+            "version": "v1",
+            "client_info": {
+                "client_name": "demo",
+                "nebius": {
+                    "tenant_id": "tenant-1",
+                    "project_id": "project-1",
+                    "region_id": "us-central1",
+                },
+                "notifications": {"email_enabled": True, "email": None},
+            },
+            "infra": {
+                "components": [
+                    {
+                        "id": "mk8s",
+                        "instance_id": "mk8s",
+                        "enabled": True,
+                        "source": "../../platform-infra/modules/mk8s",
+                        "inputs": {},
+                    }
+                ],
+            },
+            "apps": {"charts": []},
+        },
+        sort_keys=False,
+    )
+
+    entry = ComponentEntry(
+        id="mk8s",
+        scope="infra",
+        config_path="infra.mk8s",
+        description="Managed Kubernetes",
+        source="../../platform-infra/modules/mk8s",
+        wizard_fields=BUILTIN_WIZARD_PROFILES["mk8s"],
+        status=StatusWatcher(
+            kind="nebius.mk8s.cluster",
+            parent_input="cluster.parent_id",
+            name_input="cluster.cluster_name",
+        ),
+    )
+
+    monkeypatch.setattr(
+        "nebius_cxcli.cli.module_required_variables",
+        lambda _source: ("cluster", "node_groups"),
+    )
+    monkeypatch.setattr(
+        "nebius_cxcli.cli.module_variables",
+        lambda _source: (
+            ModuleVariable(
+                name="cluster",
+                required=True,
+                type_hint=(
+                    "object({ parent_id = string, cluster_name = string, "
+                    "network_id = string, subnet_id = string, k8s_version = string, "
+                    "public_endpoint = bool })"
+                ),
+            ),
+            ModuleVariable(
+                name="node_groups",
+                required=True,
+                type_hint="map(object({ platform = string, preset = string }))",
+            ),
+        ),
+    )
+    monkeypatch.setattr("nebius_cxcli.cli._wizard_continue_phase", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(
+        "nebius_cxcli.cli._runtime_required_input_leaf_names",
+        lambda _entry: set(),
+    )
+
+    prompted_paths: list[str] = []
+
+    def _fake_prompt(
+        path_label: str,
+        current: object,
+        *,
+        choices=None,
+        type_hint=None,
+        required=False,
+        unset_on_skip=False,
+    ) -> tuple[object, bool]:
+        _ = choices, type_hint, required, unset_on_skip
+        prompted_paths.append(path_label)
+        if path_label.endswith(".inputs.cluster.cluster_name"):
+            return "demo-cluster", False
+        if path_label.endswith(".inputs.cluster.network_id"):
+            return "vpcnetwork-1", False
+        if path_label.endswith(".inputs.cluster.subnet_id"):
+            return "vpcsubnet-1", False
+        if path_label.endswith(".inputs.cluster.k8s_version"):
+            return "1.33", False
+        if path_label.endswith(".inputs.cluster.public_endpoint"):
+            return current if current is not None else True, False
+        if path_label.endswith(".inputs.node_groups.<new>.name"):
+            return "system", False
+        if path_label.endswith(".inputs.node_groups.system.autoscaling.enabled"):
+            return False, False
+        if path_label.endswith(".inputs.node_groups.system.node_count"):
+            return current if current is not None else 2, False
+        if path_label.endswith(".inputs.node_groups.system.resource"):
+            return "cpu", False
+        if path_label.endswith(".inputs.node_groups.system.preemptible"):
+            return False, False
+        if path_label.endswith(".inputs.node_groups.system.platform"):
+            return "cpu-d3", False
+        if path_label.endswith(".inputs.node_groups.system.preset"):
+            return "4vcpu-16gb", False
+        if path_label.endswith(".inputs.node_groups.system.boot_disk.type"):
+            return "NETWORK_SSD", False
+        if path_label.endswith(".inputs.node_groups.system.boot_disk.size_gibibytes"):
+            assert current == 64
+            return current, False
+        if path_label.endswith(".inputs.node_groups.system.ssh.enabled"):
+            assert current is True
+            return True, False
+        if path_label.endswith(".inputs.node_groups.system.ssh.username"):
+            return "ubuntu", False
+        if path_label.endswith(".inputs.node_groups.system.service_account.mode"):
+            return "none", False
+        if path_label.endswith(".inputs.node_groups.add_another"):
+            return False, False
+        return current, False
+
+    monkeypatch.setattr("nebius_cxcli.cli._prompt_scalar_override", _fake_prompt)
+    monkeypatch.setattr(
+        "nebius_cxcli.cli._prompt_ssh_public_key_override",
+        lambda *_args, **_kwargs: ("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFakeKey test", False),
+    )
+
+    updated_yaml, completed = _run_component_field_wizard(
+        config_yaml=config_yaml,
+        selected_infra={"mk8s"},
+        selected_apps=set(),
+        infra_entries=(entry,),
+        app_entries=(),
+        provider_lookup=None,
+    )
+
+    assert completed is True
+    assert "infra.components[0].inputs.cluster" not in prompted_paths
+    assert "infra.components[0].inputs.node_groups" not in prompted_paths
+    assert "infra.components[0].inputs.cluster.cluster_name" in prompted_paths
+    assert "infra.components[0].inputs.cluster.network_id" in prompted_paths
+    assert "infra.components[0].inputs.cluster.subnet_id" in prompted_paths
+    assert "infra.components[0].inputs.cluster.k8s_version" in prompted_paths
+    assert "infra.components[0].inputs.node_groups.<new>.name" in prompted_paths
+    assert "infra.components[0].inputs.node_groups.system.resource" in prompted_paths
+    assert "infra.components[0].inputs.node_groups.system.autoscaling.enabled" in prompted_paths
+    assert "infra.components[0].inputs.node_groups.system.platform" in prompted_paths
+    assert "infra.components[0].inputs.node_groups.system.preset" in prompted_paths
+    assert "infra.components[0].inputs.node_groups.add_another" in prompted_paths
+
+    payload = yaml.safe_load(updated_yaml)
+    inputs = payload["infra"]["components"][0]["inputs"]
+    assert inputs["cluster"]["parent_id"] == "project-1"
+    assert inputs["cluster"]["cluster_name"] == "demo-cluster"
+    assert inputs["cluster"]["network_id"] == "vpcnetwork-1"
+    assert inputs["cluster"]["subnet_id"] == "vpcsubnet-1"
+    assert inputs["cluster"]["k8s_version"] == "1.33"
+    assert inputs["cluster"]["public_endpoint"] is True
+    assert "node_group_defaults" not in inputs
+    assert inputs["node_groups"]["system"]["node_count"] == 2
+    assert inputs["node_groups"]["system"]["gpu"] is False
+    assert inputs["node_groups"]["system"]["platform"] == "cpu-d3"
+    assert inputs["node_groups"]["system"]["preset"] == "4vcpu-16gb"
+    assert inputs["node_groups"]["system"]["boot_disk"] == {
+        "type": "NETWORK_SSD",
+        "size_gibibytes": 64,
+    }
+    assert inputs["node_groups"]["system"]["ssh"] == {
+        "username": "ubuntu",
+        "public_keys": ["ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFakeKey test"],
+    }
+
+
+def test_wizard_auto_enables_gpu_apps_after_plain_mk8s_gpu_node_group_loop(
+    monkeypatch,
+) -> None:
+    config_yaml = yaml.safe_dump(
+        {
+            "version": "v1",
+            "client_info": {
+                "client_name": "demo",
+                "nebius": {
+                    "tenant_id": "tenant-1",
+                    "project_id": "project-1",
+                    "region_id": "us-central1",
+                },
+                "notifications": {"email_enabled": True, "email": None},
+            },
+            "infra": {
+                "components": [
+                    {
+                        "id": "mk8s",
+                        "instance_id": "mk8s",
+                        "enabled": True,
+                        "source": "../../platform-infra/modules/mk8s",
+                        "inputs": {},
+                    }
+                ],
+            },
+            "apps": {"charts": []},
+        },
+        sort_keys=False,
+    )
+
+    infra_entry = ComponentEntry(
+        id="mk8s",
+        scope="infra",
+        config_path="infra.mk8s",
+        description="Managed Kubernetes",
+        source="../../platform-infra/modules/mk8s",
+        wizard_fields=BUILTIN_WIZARD_PROFILES["mk8s"],
+        status=StatusWatcher(
+            kind="nebius.mk8s.cluster",
+            parent_input="cluster.parent_id",
+            name_input="cluster.cluster_name",
+        ),
+    )
+    gpu_entry = ComponentEntry(
+        id="nvidia-gpu-operator",
+        scope="apps",
+        config_path="apps.platform.nvidia-gpu-operator",
+        description="GPU operator",
+        group="platform",
+        source="oci://example.invalid/gpu-operator",
+        version="1.0.0",
+        default_namespace="nvidia-gpu-operator",
+        default_release_name="gpu-operator",
+    )
+
+    monkeypatch.setattr(
+        "nebius_cxcli.cli.module_required_variables",
+        lambda _source: ("cluster", "node_groups"),
+    )
+    monkeypatch.setattr(
+        "nebius_cxcli.cli.module_variables",
+        lambda _source: (
+            ModuleVariable(
+                name="cluster",
+                required=True,
+                type_hint=(
+                    "object({ parent_id = string, cluster_name = string, "
+                    "network_id = string, subnet_id = string, k8s_version = string, "
+                    "public_endpoint = bool })"
+                ),
+            ),
+            ModuleVariable(
+                name="node_groups",
+                required=True,
+                type_hint="map(object({ platform = string, preset = string }))",
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        "nebius_cxcli.cli._runtime_required_input_leaf_names",
+        lambda _entry: set(),
+    )
+    monkeypatch.setattr("nebius_cxcli.cli._app_chart_default_values", lambda **_kwargs: {})
+
+    phase_prompts: list[tuple[str, bool]] = []
+
+    def _capture_continue_phase(
+        label: str, *, default: bool = True, allow_back: bool = False
+    ) -> bool:
+        _ = allow_back
+        phase_prompts.append((label, default))
+        return default
+
+    monkeypatch.setattr("nebius_cxcli.cli._wizard_continue_phase", _capture_continue_phase)
+
+    def _fake_gpu_selection(payload, *, selected_app_ids=None, app_entries=None):
+        _ = selected_app_ids, app_entries
+        inputs = payload["infra"]["components"][0]["inputs"]
+        node_groups = inputs.get("node_groups", {})
+        if any(isinstance(group, dict) and group.get("gpu") for group in node_groups.values()):
+            return SimpleNamespace(
+                selected_app_ids=("nvidia-gpu-operator",),
+                auto_enabled_app_ids=("nvidia-gpu-operator",),
+                issues=(),
+            )
+        return SimpleNamespace(
+            selected_app_ids=tuple(sorted(selected_app_ids or ())),
+            auto_enabled_app_ids=(),
+            issues=(),
+        )
+
+    monkeypatch.setattr("nebius_cxcli.cli.resolve_mk8s_gpu_app_selection", _fake_gpu_selection)
+
+    prompted_paths: list[str] = []
+
+    def _fake_prompt(
+        path_label: str,
+        current: object,
+        *,
+        choices=None,
+        type_hint=None,
+        required=False,
+        unset_on_skip=False,
+    ) -> tuple[object, bool]:
+        _ = choices, type_hint, required, unset_on_skip
+        prompted_paths.append(path_label)
+        if path_label.endswith(".inputs.cluster.cluster_name"):
+            return "demo-cluster", False
+        if path_label.endswith(".inputs.cluster.network_id"):
+            return "vpcnetwork-1", False
+        if path_label.endswith(".inputs.cluster.subnet_id"):
+            return "vpcsubnet-1", False
+        if path_label.endswith(".inputs.cluster.k8s_version"):
+            return "1.33", False
+        if path_label.endswith(".inputs.cluster.public_endpoint"):
+            return current if current is not None else True, False
+        if path_label.endswith(".inputs.node_groups.<new>.name"):
+            return "gpu", False
+        if path_label.endswith(".inputs.node_groups.gpu.autoscaling.enabled"):
+            return False, False
+        if path_label.endswith(".inputs.node_groups.gpu.node_count"):
+            return 1, False
+        if path_label.endswith(".inputs.node_groups.gpu.resource"):
+            return "gpu", False
+        if path_label.endswith(".inputs.node_groups.gpu.preemptible"):
+            return False, False
+        if path_label.endswith(".inputs.node_groups.gpu.platform"):
+            return "gpu-h100-sxm", False
+        if path_label.endswith(".inputs.node_groups.gpu.preset"):
+            return "1gpu-16vcpu-200gb", False
+        if path_label.endswith(".inputs.node_groups.gpu.gpu_stack_source"):
+            return "nebius_image", False
+        if path_label.endswith(".inputs.node_groups.gpu.gpu_stack_preset"):
+            return "cuda12", False
+        if path_label.endswith(".inputs.node_groups.gpu.gpu_cluster.enabled"):
+            return False, False
+        if path_label.endswith(".inputs.node_groups.gpu.reservation.policy"):
+            assert current == "FORBID"
+            return "FORBID", False
+        if path_label.endswith(".inputs.node_groups.gpu.boot_disk.type"):
+            return "NETWORK_SSD", False
+        if path_label.endswith(".inputs.node_groups.gpu.boot_disk.size_gibibytes"):
+            assert current == 256
+            return current, False
+        if path_label.endswith(".inputs.node_groups.gpu.ssh.enabled"):
+            assert current is True
+            return False, False
+        if path_label.endswith(".inputs.node_groups.gpu.service_account.mode"):
+            return "none", False
+        if path_label.endswith(".inputs.node_groups.add_another"):
+            return False, False
+        return current, False
+
+    monkeypatch.setattr("nebius_cxcli.cli._prompt_scalar_override", _fake_prompt)
+
+    class _Lookup:
+        def resolve(self, *, provider, args, payload, field_path):
+            _ = args, payload, field_path
+            if provider == "mk8s_gpu_stack_presets":
+                return [OptionChoice(value="cuda13.0", label="cuda13.0  (ubuntu24.04)")]
+            if provider == "mk8s_node_group_os_values":
+                return [OptionChoice(value="ubuntu24.04", label="ubuntu24.04")]
+            if provider == "compute_boot_disk_types":
+                return [OptionChoice(value="NETWORK_SSD", label="NETWORK_SSD")]
+            return []
+
+        def last_error(self):
+            return ""
+
+        def compute_platform_preset_allows_gpu_clustering(self, **_kwargs):
+            return False
+
+    updated_yaml, completed = _run_component_field_wizard(
+        config_yaml=config_yaml,
+        selected_infra={"mk8s"},
+        selected_apps=set(),
+        infra_entries=(infra_entry,),
+        app_entries=(gpu_entry,),
+        provider_lookup=_Lookup(),
+    )
+
+    assert completed is True
+    assert phase_prompts == [
+        ("Configure 'mk8s' component fields now?", True),
+        ("Configure 'nvidia-gpu-operator on mk8s' component fields now?", False),
+    ]
+    assert "infra.components[0].inputs.node_groups.gpu.resource" in prompted_paths
+    assert "infra.components[0].inputs.node_groups.gpu.gpu_stack_source" in prompted_paths
+    assert "infra.components[0].inputs.node_groups.gpu.os" not in prompted_paths
+    payload = yaml.safe_load(updated_yaml)
+    inputs = payload["infra"]["components"][0]["inputs"]
+    assert inputs["node_groups"]["gpu"]["gpu"] is True
+    assert inputs["node_groups"]["gpu"]["platform"] == "gpu-h100-sxm"
+    assert inputs["node_groups"]["gpu"]["gpu_stack_source"] == "nebius_image"
+    assert inputs["node_groups"]["gpu"]["os"] == "ubuntu24.04"
+    assert inputs["node_groups"]["gpu"]["boot_disk"] == {
+        "type": "NETWORK_SSD",
+        "size_gibibytes": 256,
+    }
+    assert [item["id"] for item in payload["apps"]["charts"]] == ["nvidia-gpu-operator"]
+
+
+def test_wizard_back_inside_plain_mk8s_node_group_stays_in_group_loop(
+    monkeypatch,
+) -> None:
+    config_yaml = yaml.safe_dump(
+        {
+            "version": "v1",
+            "client_info": {
+                "client_name": "demo",
+                "nebius": {
+                    "tenant_id": "tenant-1",
+                    "project_id": "project-1",
+                    "region_id": "eu-north1",
+                },
+                "notifications": {"email_enabled": True, "email": None},
+            },
+            "infra": {
+                "components": [
+                    {
+                        "id": "mk8s",
+                        "instance_id": "mk8s",
+                        "enabled": True,
+                        "source": "../../platform-infra/modules/mk8s",
+                        "inputs": {
+                            "cluster": {
+                                "parent_id": "project-1",
+                                "cluster_name": "demo-cluster",
+                                "network_id": "vpcnetwork-1",
+                                "subnet_id": "vpcsubnet-1",
+                                "k8s_version": "1.33",
+                                "public_endpoint": True,
+                            },
+                            "node_groups": {
+                                "cpu": {
+                                    "node_count": 2,
+                                    "gpu": False,
+                                    "platform": "cpu-d3",
+                                    "preset": "4vcpu-16gb",
+                                }
+                            },
+                        },
+                    }
+                ],
+            },
+            "apps": {"charts": []},
+        },
+        sort_keys=False,
+    )
+
+    entry = ComponentEntry(
+        id="mk8s",
+        scope="infra",
+        config_path="infra.mk8s",
+        description="Managed Kubernetes",
+        source="../../platform-infra/modules/mk8s",
+        wizard_fields=BUILTIN_WIZARD_PROFILES["mk8s"],
+        status=StatusWatcher(
+            kind="nebius.mk8s.cluster",
+            parent_input="cluster.parent_id",
+            name_input="cluster.cluster_name",
+        ),
+    )
+
+    monkeypatch.setattr(
+        "nebius_cxcli.cli.module_required_variables",
+        lambda _source: ("cluster", "node_groups"),
+    )
+    monkeypatch.setattr(
+        "nebius_cxcli.cli.module_variables",
+        lambda _source: (
+            ModuleVariable(name="cluster", required=True, type_hint="object({})"),
+            ModuleVariable(name="node_groups", required=True, type_hint="map(object({}))"),
+        ),
+    )
+    monkeypatch.setattr(
+        "nebius_cxcli.cli._runtime_required_input_leaf_names",
+        lambda _entry: set(),
+    )
+    monkeypatch.setattr("nebius_cxcli.cli._wizard_continue_phase", lambda *_args, **_kwargs: True)
+
+    prompted_paths: list[str] = []
+    add_another_count = 0
+    stack_preset_back_once = True
+
+    def _fake_prompt(
+        path_label: str,
+        current: object,
+        *,
+        choices=None,
+        type_hint=None,
+        required=False,
+        unset_on_skip=False,
+    ) -> tuple[object, bool]:
+        nonlocal add_another_count, stack_preset_back_once
+        _ = choices, type_hint, required, unset_on_skip
+        prompted_paths.append(path_label)
+        if ".inputs.cluster." in path_label:
+            return current, False
+        if path_label.endswith(".inputs.node_groups.add_another"):
+            add_another_count += 1
+            return add_another_count == 1, False
+        if path_label.endswith(".inputs.node_groups.<new>.name"):
+            return "gpu-nodeg2", False
+        if path_label.endswith(".inputs.node_groups.gpu-nodeg2.autoscaling.enabled"):
+            return False, False
+        if path_label.endswith(".inputs.node_groups.gpu-nodeg2.node_count"):
+            return 1, False
+        if path_label.endswith(".inputs.node_groups.gpu-nodeg2.resource"):
+            return "gpu", False
+        if path_label.endswith(".inputs.node_groups.gpu-nodeg2.preemptible"):
+            return False, False
+        if path_label.endswith(".inputs.node_groups.gpu-nodeg2.platform"):
+            return "gpu-h100-sxm", False
+        if path_label.endswith(".inputs.node_groups.gpu-nodeg2.preset"):
+            return "1gpu-16vcpu-200gb", False
+        if path_label.endswith(".inputs.node_groups.gpu-nodeg2.gpu_stack_source"):
+            return "nebius_image", False
+        if path_label.endswith(".inputs.node_groups.gpu-nodeg2.gpu_stack_preset"):
+            if stack_preset_back_once:
+                stack_preset_back_once = False
+                return cli._WIZARD_BACKTRACK, False
+            return "cuda13.0", False
+        if path_label.endswith(".inputs.node_groups.gpu-nodeg2.gpu_cluster.enabled"):
+            return False, False
+        if path_label.endswith(".inputs.node_groups.gpu-nodeg2.reservation.policy"):
+            return "FORBID", False
+        if path_label.endswith(".inputs.node_groups.gpu-nodeg2.os"):
+            return current, False
+        if path_label.endswith(".inputs.node_groups.gpu-nodeg2.boot_disk.type"):
+            return "NETWORK_SSD", False
+        if path_label.endswith(".inputs.node_groups.gpu-nodeg2.boot_disk.size_gibibytes"):
+            return current, False
+        if path_label.endswith(".inputs.node_groups.gpu-nodeg2.ssh.enabled"):
+            return False, False
+        if path_label.endswith(".inputs.node_groups.gpu-nodeg2.service_account.mode"):
+            return "none", False
+        return current, False
+
+    monkeypatch.setattr("nebius_cxcli.cli._prompt_scalar_override", _fake_prompt)
+
+    updated_yaml, completed = _run_component_field_wizard(
+        config_yaml=config_yaml,
+        selected_infra={"mk8s"},
+        selected_apps=set(),
+        infra_entries=(entry,),
+        app_entries=(),
+        provider_lookup=None,
+    )
+
+    assert completed is True
+    stack_prompt_index = prompted_paths.index(
+        "infra.components[0].inputs.node_groups.gpu-nodeg2.gpu_stack_preset"
+    )
+    assert prompted_paths[stack_prompt_index + 1].endswith(".inputs.node_groups.<new>.name")
+    payload = yaml.safe_load(updated_yaml)
+    inputs = payload["infra"]["components"][0]["inputs"]
+    assert inputs["node_groups"]["gpu-nodeg2"]["gpu_stack_preset"] == "cuda13.0"
+    assert "infra.components[0].inputs.node_groups.gpu-nodeg2.gpu_cluster.enabled" not in (
+        prompted_paths
+    )
+
+
+def test_wizard_back_after_plain_mk8s_gpu_cluster_removes_orphan_fabric(
+    monkeypatch,
+) -> None:
+    config_yaml = yaml.safe_dump(
+        {
+            "version": "v1",
+            "client_info": {
+                "client_name": "demo",
+                "nebius": {
+                    "tenant_id": "tenant-1",
+                    "project_id": "project-1",
+                    "region_id": "eu-north1",
+                },
+                "notifications": {"email_enabled": True, "email": None},
+            },
+            "infra": {
+                "components": [
+                    {
+                        "id": "mk8s",
+                        "instance_id": "mk8s",
+                        "enabled": True,
+                        "source": "../../platform-infra/modules/mk8s",
+                        "inputs": {
+                            "cluster": {
+                                "parent_id": "project-1",
+                                "cluster_name": "demo-cluster",
+                                "network_id": "vpcnetwork-1",
+                                "subnet_id": "vpcsubnet-1",
+                                "k8s_version": "1.33",
+                                "public_endpoint": True,
+                            },
+                        },
+                    }
+                ],
+            },
+            "apps": {"charts": []},
+        },
+        sort_keys=False,
+    )
+    entry = ComponentEntry(
+        id="mk8s",
+        scope="infra",
+        config_path="infra.mk8s",
+        description="Managed Kubernetes",
+        source="../../platform-infra/modules/mk8s",
+        wizard_fields=BUILTIN_WIZARD_PROFILES["mk8s"],
+        status=StatusWatcher(
+            kind="nebius.mk8s.cluster",
+            parent_input="cluster.parent_id",
+            name_input="cluster.cluster_name",
+        ),
+    )
+    monkeypatch.setattr(
+        "nebius_cxcli.cli.module_required_variables",
+        lambda _source: ("cluster", "node_groups"),
+    )
+    monkeypatch.setattr(
+        "nebius_cxcli.cli.module_variables",
+        lambda _source: (
+            ModuleVariable(name="cluster", required=True, type_hint="object({})"),
+            ModuleVariable(name="node_groups", required=True, type_hint="map(object({}))"),
+        ),
+    )
+    monkeypatch.setattr(
+        "nebius_cxcli.cli._runtime_required_input_leaf_names",
+        lambda _entry: set(),
+    )
+    monkeypatch.setattr("nebius_cxcli.cli._wizard_continue_phase", lambda *_args, **_kwargs: True)
+
+    resource_prompt_count = 0
+    reservation_back_once = True
+    prompted_paths: list[str] = []
+
+    def _fake_prompt(
+        path_label: str,
+        current: object,
+        *,
+        choices=None,
+        type_hint=None,
+        required=False,
+        unset_on_skip=False,
+    ) -> tuple[object, bool]:
+        nonlocal resource_prompt_count, reservation_back_once
+        _ = choices, type_hint, required, unset_on_skip
+        prompted_paths.append(path_label)
+        if ".inputs.cluster." in path_label:
+            return current, False
+        if path_label.endswith(".inputs.node_groups.add_another"):
+            return False, False
+        if path_label.endswith(".inputs.node_groups.<new>.name"):
+            return "gpu-nodeg2", False
+        if path_label.endswith(".autoscaling.enabled"):
+            return False, False
+        if path_label.endswith(".node_count"):
+            return 1, False
+        if path_label.endswith(".resource"):
+            resource_prompt_count += 1
+            return ("gpu" if resource_prompt_count == 1 else "cpu"), False
+        if path_label.endswith(".preemptible"):
+            return False, False
+        if path_label.endswith(".platform"):
+            return ("gpu-h100-sxm" if resource_prompt_count == 1 else "cpu-d3"), False
+        if path_label.endswith(".preset"):
+            return ("8gpu-128vcpu-1600gb" if resource_prompt_count == 1 else "4vcpu-16gb"), False
+        if path_label.endswith(".gpu_stack_source"):
+            return "nebius_image", False
+        if path_label.endswith(".gpu_stack_preset"):
+            return "cuda13.0", False
+        if path_label.endswith(".gpu_cluster.enabled"):
+            assert current is True
+            return True, False
+        if path_label.endswith(".infiniband_fabric"):
+            return "fabric-2", False
+        if path_label.endswith(".reservation.policy"):
+            assert current == "AUTO"
+            if reservation_back_once:
+                reservation_back_once = False
+                return cli._WIZARD_BACKTRACK, False
+            return "FORBID", False
+        if path_label.endswith(".boot_disk.type"):
+            return "NETWORK_SSD", False
+        if path_label.endswith(".boot_disk.size_gibibytes"):
+            return current, False
+        if path_label.endswith(".ssh.enabled"):
+            return False, False
+        if path_label.endswith(".service_account.mode"):
+            return "none", False
+        return current, False
+
+    monkeypatch.setattr("nebius_cxcli.cli._prompt_scalar_override", _fake_prompt)
+
+    class _Lookup:
+        def resolve(self, *, provider, args, payload, field_path):
+            _ = args, payload, field_path
+            if provider == "mk8s_gpu_stack_presets":
+                return [OptionChoice(value="cuda13.0", label="cuda13.0  (ubuntu24.04)")]
+            if provider == "mk8s_node_group_os_values":
+                return [OptionChoice(value="ubuntu24.04", label="ubuntu24.04")]
+            if provider == "mk8s_infiniband_fabrics":
+                return [
+                    OptionChoice(
+                        value="fabric-2",
+                        label=(
+                            "fabric-2  (gpu-h100-sxm, eu-north1), live on-demand VMs=0, "
+                            "reserved VMs=1, recommended for reservations"
+                        ),
+                    )
+                ]
+            if provider == "compute_boot_disk_types":
+                return [OptionChoice(value="NETWORK_SSD", label="NETWORK_SSD")]
+            return []
+
+        def last_error(self):
+            return ""
+
+        def compute_platform_preset_allows_gpu_clustering(self, **_kwargs):
+            return True
+
+        def compute_platform_preset_resources(self, *, project_id, platform_name, preset_name):
+            _ = project_id
+            if platform_name.startswith("gpu-"):
+                return (128, 1600, 8)
+            if preset_name == "4vcpu-16gb":
+                return (4, 16, 0)
+            return None
+
+    updated_yaml, completed = _run_component_field_wizard(
+        config_yaml=config_yaml,
+        selected_infra={"mk8s"},
+        selected_apps=set(),
+        infra_entries=(entry,),
+        app_entries=(),
+        provider_lookup=_Lookup(),
+    )
+
+    assert completed is True
+    assert "infra.components[0].inputs.gpu_clusters.gpu-nodeg2.infiniband_fabric" in prompted_paths
+    payload = yaml.safe_load(updated_yaml)
+    inputs = payload["infra"]["components"][0]["inputs"]
+    assert "gpu_clusters" not in inputs
+    assert inputs["node_groups"]["gpu-nodeg2"]["gpu"] is False
+    assert inputs["node_groups"]["gpu-nodeg2"]["platform"] == "cpu-d3"
+
+
+def test_wizard_plain_mk8s_boot_disk_policy_errors_are_not_hidden(
+    monkeypatch,
+) -> None:
+    config_yaml = yaml.safe_dump(
+        {
+            "version": "v1",
+            "client_info": {
+                "client_name": "demo",
+                "nebius": {
+                    "tenant_id": "tenant-1",
+                    "project_id": "project-1",
+                    "region_id": "eu-north1",
+                },
+                "notifications": {"email_enabled": True, "email": None},
+            },
+            "infra": {
+                "components": [
+                    {
+                        "id": "mk8s",
+                        "instance_id": "mk8s",
+                        "enabled": True,
+                        "source": "../../platform-infra/modules/mk8s",
+                        "inputs": {
+                            "cluster": {
+                                "parent_id": "project-1",
+                                "cluster_name": "demo-cluster",
+                                "network_id": "vpcnetwork-1",
+                                "subnet_id": "vpcsubnet-1",
+                                "k8s_version": "1.33",
+                                "public_endpoint": True,
+                            },
+                        },
+                    }
+                ],
+            },
+            "apps": {"charts": []},
+        },
+        sort_keys=False,
+    )
+    entry = ComponentEntry(
+        id="mk8s",
+        scope="infra",
+        config_path="infra.mk8s",
+        description="Managed Kubernetes",
+        source="../../platform-infra/modules/mk8s",
+        wizard_fields=BUILTIN_WIZARD_PROFILES["mk8s"],
+        status=StatusWatcher(
+            kind="nebius.mk8s.cluster",
+            parent_input="cluster.parent_id",
+            name_input="cluster.cluster_name",
+        ),
+    )
+    monkeypatch.setattr(
+        "nebius_cxcli.cli.module_required_variables",
+        lambda _source: ("cluster", "node_groups"),
+    )
+    monkeypatch.setattr(
+        "nebius_cxcli.cli.module_variables",
+        lambda _source: (
+            ModuleVariable(name="cluster", required=True, type_hint="object({})"),
+            ModuleVariable(name="node_groups", required=True, type_hint="map(object({}))"),
+        ),
+    )
+    monkeypatch.setattr(
+        "nebius_cxcli.cli._runtime_required_input_leaf_names",
+        lambda _entry: set(),
+    )
+    monkeypatch.setattr("nebius_cxcli.cli._wizard_continue_phase", lambda *_args, **_kwargs: True)
+
+    def _fake_prompt(
+        path_label: str,
+        current: object,
+        *,
+        choices=None,
+        type_hint=None,
+        required=False,
+        unset_on_skip=False,
+    ) -> tuple[object, bool]:
+        _ = choices, type_hint, required, unset_on_skip
+        if ".inputs.cluster." in path_label:
+            return current, False
+        if path_label.endswith(".inputs.node_groups.<new>.name"):
+            return "system", False
+        if path_label.endswith(".autoscaling.enabled"):
+            return False, False
+        if path_label.endswith(".node_count"):
+            return 1, False
+        if path_label.endswith(".resource"):
+            return "cpu", False
+        if path_label.endswith(".preemptible"):
+            return False, False
+        if path_label.endswith(".platform"):
+            return "cpu-d3", False
+        if path_label.endswith(".preset"):
+            return "custom-unmatched", False
+        return current, False
+
+    monkeypatch.setattr("nebius_cxcli.cli._prompt_scalar_override", _fake_prompt)
+
+    class _Lookup:
+        def resolve(self, *, provider, args, payload, field_path):
+            _ = provider, args, payload, field_path
+            return []
+
+        def last_error(self):
+            return ""
+
+        def compute_platform_preset_resources(self, *, project_id, platform_name, preset_name):
+            _ = project_id, platform_name, preset_name
+            return (None, None, None)
+
+    with pytest.raises(ComputeBootDiskRecommendationError, match="No compute.boot_disk_defaults"):
+        _run_component_field_wizard(
+            config_yaml=config_yaml,
+            selected_infra={"mk8s"},
+            selected_apps=set(),
+            infra_entries=(entry,),
+            app_entries=(),
+            provider_lookup=_Lookup(),
+        )
+
+
+def test_nested_status_name_input_can_seed_complex_module_object(
+    monkeypatch,
+) -> None:
+    entry = ComponentEntry(
+        id="mk8s",
+        scope="infra",
+        config_path="infra.mk8s",
+        description="Managed Kubernetes",
+        source="../../platform-infra/modules/mk8s",
+        wizard_fields=BUILTIN_WIZARD_PROFILES["mk8s"],
+        status=StatusWatcher(
+            kind="nebius.mk8s.cluster",
+            parent_input="cluster.parent_id",
+            name_input="cluster.cluster_name",
+        ),
+    )
+    monkeypatch.setattr(
+        "nebius_cxcli.cli.module_variables",
+        lambda _source: (ModuleVariable(name="cluster", required=True, type_hint="object({})"),),
+    )
+
+    assert cli._entry_scalar_resource_name_input(entry) == "cluster.cluster_name"
+
+    row = {"id": "mk8s", "instance_id": "demo-cluster", "enabled": True, "inputs": {}}
+    cli._seed_infra_resource_name_from_instance_id(row, entry)
+
+    assert row["inputs"] == {"cluster": {"cluster_name": "demo-cluster"}}
 
 
 def test_wizard_declared_infra_field_does_not_warn_when_input_key_is_not_seeded(
@@ -385,8 +1300,9 @@ def test_wizard_declared_infra_field_does_not_warn_when_input_key_is_not_seeded(
         choices=None,
         type_hint=None,
         required=False,
+        unset_on_skip=False,
     ) -> tuple[object, bool]:
-        _ = current, choices, type_hint, required
+        _ = current, choices, type_hint, required, unset_on_skip
         prompted_paths.append(path_label)
         return "cpu-d3", False
 
@@ -473,8 +1389,9 @@ def test_wizard_declared_nested_app_value_path_is_prompted_and_created(
         choices=None,
         type_hint=None,
         required=False,
+        unset_on_skip=False,
     ) -> tuple[object, bool]:
-        _ = current, choices, type_hint, required
+        _ = current, choices, type_hint, required, unset_on_skip
         prompted_paths.append(path_label)
         return "1.2.3", False
 
@@ -553,8 +1470,9 @@ def test_wizard_declared_target_observability_path_is_prompted(
         choices=None,
         type_hint=None,
         required=False,
+        unset_on_skip=False,
     ) -> tuple[object, bool]:
-        _ = current, choices, type_hint, required
+        _ = current, choices, type_hint, required, unset_on_skip
         prompted_paths.append(path_label)
         return True, False
 
@@ -574,6 +1492,462 @@ def test_wizard_declared_target_observability_path_is_prompted(
     assert not any("Skipping wizard field" in message for message in rendered_messages)
     payload = yaml.safe_load(updated_yaml)
     assert payload["deploy"]["targets"][0]["observability"]["enabled"] is True
+
+
+def test_wizard_auto_enabled_observability_apps_stay_scoped_to_added_mk8s_target(
+    monkeypatch,
+) -> None:
+    app_ids = ("nebius-observability-agent", "grafana", "gateway-helm")
+    config_yaml = yaml.safe_dump(
+        {
+            "version": "v1",
+            "client_info": {
+                "client_name": "demo",
+                "nebius": {
+                    "tenant_id": "tenant-1",
+                    "project_id": "project-1",
+                    "region_id": "eu-north1",
+                },
+                "notifications": {"email_enabled": False, "email": None},
+            },
+            "infra": {
+                "components": [
+                    {
+                        "id": "mk8s",
+                        "instance_id": "cluster1",
+                        "enabled": True,
+                        "inputs": {},
+                    },
+                    {
+                        "id": "mk8s",
+                        "instance_id": "cluster2",
+                        "enabled": True,
+                        "inputs": {},
+                    },
+                ]
+            },
+            "apps": {
+                "charts": [
+                    {
+                        "id": app_id,
+                        "instance_id": "cluster1",
+                        "enabled": True,
+                        "namespace": "observability",
+                        "release-name": app_id,
+                        "values": {},
+                    }
+                    for app_id in app_ids
+                ]
+            },
+            "deploy": {
+                "targets": [
+                    {
+                        "instance_id": "cluster1",
+                        "observability": {
+                            "enabled": True,
+                            "kubernetes": {"logs": {"enabled": True}},
+                        },
+                    },
+                    {
+                        "instance_id": "cluster2",
+                        "observability": {
+                            "enabled": False,
+                            "kubernetes": {"logs": {"enabled": True}},
+                        },
+                    },
+                ]
+            },
+        },
+        sort_keys=False,
+    )
+    entry = ComponentEntry(
+        id="mk8s",
+        scope="infra",
+        config_path="infra.components.mk8s",
+        description="MK8s",
+        source="../../platform-infra/modules/mk8s",
+        wizard_fields={
+            "deploy.targets[].observability.enabled": {"type_hint": "bool"},
+            "deploy.targets[].observability.kubernetes.logs.enabled": {"type_hint": "bool"},
+        },
+    )
+    app_entries = tuple(
+        ComponentEntry(
+            id=app_id,
+            scope="apps",
+            config_path=f"apps.charts.{app_id}",
+            description=app_id,
+            chart_name=app_id,
+            default_namespace="observability",
+            default_release_name=app_id,
+        )
+        for app_id in app_ids
+    )
+
+    monkeypatch.setattr("nebius_cxcli.cli.module_required_variables", lambda _source: ())
+    monkeypatch.setattr("nebius_cxcli.cli.module_variables", lambda _source: ())
+    monkeypatch.setattr(
+        "nebius_cxcli.cli._runtime_required_input_leaf_names",
+        lambda _entry: set(),
+    )
+    monkeypatch.setattr("nebius_cxcli.cli._wizard_continue_phase", lambda *_args, **_kwargs: True)
+
+    rendered_messages: list[str] = []
+    prompted_paths: list[str] = []
+    monkeypatch.setattr(
+        "nebius_cxcli.cli.console.print",
+        lambda *args, **_kwargs: rendered_messages.append(" ".join(str(arg) for arg in args)),
+    )
+
+    def _fake_prompt(
+        path_label: str,
+        current: object,
+        *,
+        choices=None,
+        type_hint=None,
+        required=False,
+        unset_on_skip=False,
+    ) -> tuple[object, bool]:
+        _ = current, choices, type_hint, required, unset_on_skip
+        prompted_paths.append(path_label)
+        if path_label == "deploy.targets[1].observability.enabled":
+            return True, False
+        if path_label == "deploy.targets[1].observability.kubernetes.logs.enabled":
+            return True, False
+        return current, False
+
+    monkeypatch.setattr("nebius_cxcli.cli._prompt_scalar_override", _fake_prompt)
+
+    updated_yaml, completed = _run_component_field_wizard(
+        config_yaml=config_yaml,
+        selected_infra={"cluster2"},
+        selected_apps=set(),
+        infra_entries=(entry,),
+        app_entries=app_entries,
+        provider_lookup=None,
+    )
+
+    assert completed is True
+    assert "deploy.targets[1].observability.kubernetes.logs.enabled" in prompted_paths
+    rendered = "\n".join(rendered_messages)
+    assert "mk8s@cluster2" in rendered
+    assert "nebius-observability-agent on cluster2" in rendered
+    assert "nebius-observability-agent on cluster1" not in rendered
+
+    payload = yaml.safe_load(updated_yaml)
+    chart_targets = sorted(
+        (row["id"], row["instance_id"])
+        for row in payload["apps"]["charts"]
+        if isinstance(row, dict) and row.get("id") in app_ids and row.get("enabled") is True
+    )
+    assert chart_targets == sorted(
+        (app_id, target_ref) for app_id in app_ids for target_ref in ("cluster1", "cluster2")
+    )
+    assert not any(
+        row["id"] == row["instance_id"]
+        for row in payload["apps"]["charts"]
+        if isinstance(row, dict) and row.get("id") in app_ids
+    )
+
+
+def test_wizard_removes_backtracked_observability_apps_for_added_target_only(
+    monkeypatch,
+) -> None:
+    app_ids = ("nebius-observability-agent", "grafana", "gateway-helm")
+    config_yaml = yaml.safe_dump(
+        {
+            "version": "v1",
+            "client_info": {
+                "client_name": "demo",
+                "nebius": {
+                    "tenant_id": "tenant-1",
+                    "project_id": "project-1",
+                    "region_id": "eu-north1",
+                },
+                "notifications": {"email_enabled": False, "email": None},
+            },
+            "infra": {
+                "components": [
+                    {
+                        "id": "mk8s",
+                        "instance_id": "cluster1",
+                        "enabled": True,
+                        "inputs": {},
+                    },
+                    {
+                        "id": "mk8s",
+                        "instance_id": "cluster2",
+                        "enabled": True,
+                        "inputs": {},
+                    },
+                ]
+            },
+            "apps": {
+                "charts": [
+                    {
+                        "id": app_id,
+                        "instance_id": "cluster1",
+                        "enabled": True,
+                        "namespace": "observability",
+                        "release-name": app_id,
+                        "values": {},
+                    }
+                    for app_id in app_ids
+                ]
+            },
+            "deploy": {
+                "targets": [
+                    {
+                        "instance_id": "cluster1",
+                        "observability": {
+                            "enabled": True,
+                            "kubernetes": {"logs": {"enabled": True}},
+                        },
+                    },
+                    {
+                        "instance_id": "cluster2",
+                        "observability": {
+                            "enabled": False,
+                            "kubernetes": {"logs": {"enabled": True}},
+                        },
+                    },
+                ]
+            },
+        },
+        sort_keys=False,
+    )
+    entry = ComponentEntry(
+        id="mk8s",
+        scope="infra",
+        config_path="infra.components.mk8s",
+        description="MK8s",
+        source="../../platform-infra/modules/mk8s",
+        wizard_fields={
+            "deploy.targets[].observability.enabled": {"type_hint": "bool"},
+            "deploy.targets[].observability.kubernetes.logs.enabled": {"type_hint": "bool"},
+        },
+    )
+    app_entries = tuple(
+        ComponentEntry(
+            id=app_id,
+            scope="apps",
+            config_path=f"apps.charts.{app_id}",
+            description=app_id,
+            chart_name=app_id,
+            default_namespace="observability",
+            default_release_name=app_id,
+        )
+        for app_id in app_ids
+    )
+
+    monkeypatch.setattr("nebius_cxcli.cli.module_required_variables", lambda _source: ())
+    monkeypatch.setattr("nebius_cxcli.cli.module_variables", lambda _source: ())
+    monkeypatch.setattr(
+        "nebius_cxcli.cli._runtime_required_input_leaf_names",
+        lambda _entry: set(),
+    )
+    monkeypatch.setattr("nebius_cxcli.cli.helm_chart_default_values", lambda **_kwargs: {})
+    monkeypatch.setattr("nebius_cxcli.cli.console.print", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        "nebius_cxcli.cli._wizard_continue_phase",
+        lambda label, *_args, **_kwargs: label == "Configure 'mk8s@cluster2' component fields now?",
+    )
+
+    answers = {
+        "deploy.targets[1].observability.enabled": [True, False],
+        "deploy.targets[1].observability.kubernetes.logs.enabled": [cli._WIZARD_BACKTRACK],
+    }
+
+    def _fake_prompt(
+        path_label: str,
+        current: object,
+        *,
+        choices=None,
+        type_hint=None,
+        required=False,
+        unset_on_skip=False,
+    ) -> tuple[object, bool]:
+        _ = choices, type_hint, required, unset_on_skip
+        pending = answers.get(path_label)
+        if pending:
+            return pending.pop(0), False
+        return current, False
+
+    monkeypatch.setattr("nebius_cxcli.cli._prompt_scalar_override", _fake_prompt)
+
+    updated_yaml, completed = _run_component_field_wizard(
+        config_yaml=config_yaml,
+        selected_infra={"cluster2"},
+        selected_apps=set(),
+        infra_entries=(entry,),
+        app_entries=app_entries,
+        provider_lookup=None,
+    )
+
+    assert completed is True
+    payload = yaml.safe_load(updated_yaml)
+    assert payload["deploy"]["targets"][1]["observability"]["enabled"] is False
+    chart_targets = sorted(
+        (row["id"], row["instance_id"])
+        for row in payload["apps"]["charts"]
+        if isinstance(row, dict) and row.get("id") in app_ids and row.get("enabled") is True
+    )
+    assert chart_targets == sorted((app_id, "cluster1") for app_id in app_ids)
+
+
+def test_wizard_gpu_auto_apps_preserve_target_scoped_app_selection(
+    monkeypatch,
+) -> None:
+    existing_app_ids = ("nebius-observability-agent", "grafana", "gateway-helm")
+    gpu_app_ids = ("nvidia-gpu-operator", "nvidia-network-operator")
+    config_yaml = yaml.safe_dump(
+        {
+            "version": "v1",
+            "client_info": {
+                "client_name": "demo",
+                "nebius": {
+                    "tenant_id": "tenant-1",
+                    "project_id": "project-1",
+                    "region_id": "eu-north1",
+                },
+                "notifications": {"email_enabled": False, "email": None},
+            },
+            "infra": {
+                "components": [
+                    {
+                        "id": "mk8s",
+                        "instance_id": "cluster1",
+                        "enabled": True,
+                        "inputs": {},
+                    },
+                    {
+                        "id": "mk8s",
+                        "instance_id": "cluster2",
+                        "enabled": True,
+                        "inputs": {},
+                    },
+                ]
+            },
+            "apps": {
+                "charts": [
+                    {
+                        "id": app_id,
+                        "instance_id": target_ref,
+                        "enabled": True,
+                        "namespace": "observability",
+                        "release-name": app_id,
+                        "values": {},
+                    }
+                    for target_ref in ("cluster1", "cluster2")
+                    for app_id in existing_app_ids
+                ]
+            },
+            "deploy": {
+                "targets": [
+                    {
+                        "instance_id": "cluster1",
+                        "observability": {"enabled": True},
+                    },
+                    {
+                        "instance_id": "cluster2",
+                        "observability": {"enabled": True},
+                    },
+                ]
+            },
+        },
+        sort_keys=False,
+    )
+    infra_entry = ComponentEntry(
+        id="mk8s",
+        scope="infra",
+        config_path="infra.components.mk8s",
+        description="MK8s",
+        source="../../platform-infra/modules/mk8s",
+    )
+    app_entries = tuple(
+        ComponentEntry(
+            id=app_id,
+            scope="apps",
+            config_path=f"apps.charts.{app_id}",
+            description=app_id,
+            chart_name=app_id,
+            default_namespace="platform",
+            default_release_name=app_id,
+        )
+        for app_id in (*existing_app_ids, *gpu_app_ids)
+    )
+
+    monkeypatch.setattr("nebius_cxcli.cli.module_required_variables", lambda _source: ())
+    monkeypatch.setattr("nebius_cxcli.cli.module_variables", lambda _source: ())
+    monkeypatch.setattr(
+        "nebius_cxcli.cli._runtime_required_input_leaf_names",
+        lambda _entry: set(),
+    )
+
+    phase_prompts: list[str] = []
+
+    def _capture_continue_phase(
+        label: str, *, default: bool = True, allow_back: bool = False
+    ) -> bool:
+        _ = default, allow_back
+        phase_prompts.append(label)
+        return label == "Configure 'mk8s@cluster2' component fields now?"
+
+    monkeypatch.setattr("nebius_cxcli.cli._wizard_continue_phase", _capture_continue_phase)
+
+    def _fake_gpu_selection(payload, *, selected_app_ids=None, app_entries=None):
+        _ = payload, app_entries
+        selected = set(selected_app_ids or ())
+        return SimpleNamespace(
+            selected_app_ids=tuple(sorted(selected | set(gpu_app_ids))),
+            auto_enabled_app_ids=gpu_app_ids,
+            issues=(),
+        )
+
+    monkeypatch.setattr("nebius_cxcli.cli.resolve_mk8s_gpu_app_selection", _fake_gpu_selection)
+
+    rendered_messages: list[str] = []
+    monkeypatch.setattr(
+        "nebius_cxcli.cli.console.print",
+        lambda *args, **_kwargs: rendered_messages.append(" ".join(str(arg) for arg in args)),
+    )
+
+    updated_yaml, completed = _run_component_field_wizard(
+        config_yaml=config_yaml,
+        selected_infra={"cluster2"},
+        selected_apps={f"{app_id}@cluster2" for app_id in existing_app_ids},
+        infra_entries=(infra_entry,),
+        app_entries=app_entries,
+        provider_lookup=None,
+    )
+
+    assert completed is True
+    assert not any(" on cluster1" in prompt for prompt in phase_prompts)
+    for app_id in (*existing_app_ids, *gpu_app_ids):
+        assert f"Configure '{app_id} on cluster2' component fields now?" in phase_prompts
+
+    rendered = "\n".join(rendered_messages)
+    assert "nebius-observability-agent on cluster2" in rendered
+    assert "nvidia-gpu-operator on cluster2" in rendered
+    assert "nebius-observability-agent on cluster1" not in rendered
+    assert "nvidia-gpu-operator on cluster1" not in rendered
+
+    payload = yaml.safe_load(updated_yaml)
+    enabled_targets = sorted(
+        (row["id"], row["instance_id"])
+        for row in payload["apps"]["charts"]
+        if isinstance(row, dict) and row.get("enabled") is True
+    )
+    assert enabled_targets == sorted(
+        [
+            *[
+                (app_id, target_ref)
+                for target_ref in ("cluster1", "cluster2")
+                for app_id in existing_app_ids
+            ],
+            *[(app_id, "cluster2") for app_id in gpu_app_ids],
+        ]
+    )
 
 
 def test_wizard_prints_section_banners_and_selected_values(monkeypatch) -> None:
@@ -640,17 +2014,17 @@ def test_wizard_prints_section_banners_and_selected_values(monkeypatch) -> None:
         wizard_fields={
             "deploy.targets[].secrets.mysterybox.enabled": {
                 "default": True,
-                "materialize_default": True,
+                "write_default_to_config": True,
             },
             "deploy.targets[].secrets.mysterybox.allow_all_namespaces": {
                 "default": True,
-                "materialize_default": True,
+                "write_default_to_config": True,
             },
             "deploy.targets[].secrets.mysterybox.sync_namespaces": {
                 "default": ["default"],
                 "type_hint": "list(string)",
                 "prompt_complex": True,
-                "materialize_default": True,
+                "write_default_to_config": True,
                 "required": True,
             },
         },
@@ -694,8 +2068,9 @@ def test_wizard_prints_section_banners_and_selected_values(monkeypatch) -> None:
         choices=None,
         type_hint=None,
         required=False,
+        unset_on_skip=False,
     ) -> tuple[object, bool]:
-        _ = choices, type_hint, required
+        _ = choices, type_hint, required, unset_on_skip
         if path_label == "infra.components[0].inputs.required_field":
             return "infra-value", False
         if path_label == "deploy.targets[0].secrets.mysterybox.enabled":
@@ -770,7 +2145,7 @@ def test_wizard_prints_section_banners_and_selected_values(monkeypatch) -> None:
     )
 
 
-def test_vm_preemptible_wizard_sets_required_recovery_policy_and_prompts_priority(
+def test_vm_preemptible_wizard_sets_required_recovery_policy(
     monkeypatch,
 ) -> None:
     config_yaml = yaml.safe_dump(
@@ -823,13 +2198,6 @@ def test_vm_preemptible_wizard_sets_required_recovery_policy_and_prompts_priorit
                 default=False,
             ),
             ModuleVariable(
-                name="preemptible_priority",
-                required=False,
-                type_hint="number",
-                has_default=True,
-                default=3,
-            ),
-            ModuleVariable(
                 name="recovery_policy",
                 required=False,
                 type_hint="string",
@@ -854,8 +2222,9 @@ def test_vm_preemptible_wizard_sets_required_recovery_policy_and_prompts_priorit
         choices=None,
         type_hint=None,
         required=False,
+        unset_on_skip=False,
     ) -> tuple[object, bool]:
-        _ = choices, type_hint, required
+        _ = choices, type_hint, required, unset_on_skip
         prompted_paths.append(path_label)
         if path_label == "infra.components[0].inputs.preemptible_enabled":
             return True, False
@@ -878,7 +2247,6 @@ def test_vm_preemptible_wizard_sets_required_recovery_policy_and_prompts_priorit
     assert inputs["preemptible_enabled"] is True
     assert inputs["recovery_policy"] == "FAIL"
     assert "infra.components[0].inputs.recovery_policy" not in prompted_paths
-    assert "infra.components[0].inputs.preemptible_priority" in prompted_paths
     assert any("Adjusted VM preemptible settings:" in message for message in rendered_messages)
 
 
@@ -933,13 +2301,6 @@ def test_vm_preemptible_wizard_hides_preemptible_fields_for_cpu_platform(
                 has_default=True,
                 default=False,
             ),
-            ModuleVariable(
-                name="preemptible_priority",
-                required=False,
-                type_hint="number",
-                has_default=True,
-                default=3,
-            ),
         ),
     )
     monkeypatch.setattr("nebius_cxcli.cli._wizard_continue_phase", lambda *_args, **_kwargs: True)
@@ -953,8 +2314,9 @@ def test_vm_preemptible_wizard_hides_preemptible_fields_for_cpu_platform(
         choices=None,
         type_hint=None,
         required=False,
+        unset_on_skip=False,
     ) -> tuple[object, bool]:
-        _ = choices, type_hint, required
+        _ = choices, type_hint, required, unset_on_skip
         prompted_paths.append(path_label)
         return current, False
 
@@ -971,7 +2333,6 @@ def test_vm_preemptible_wizard_hides_preemptible_fields_for_cpu_platform(
 
     assert completed is True
     assert "infra.components[0].inputs.preemptible_enabled" not in prompted_paths
-    assert "infra.components[0].inputs.preemptible_priority" not in prompted_paths
 
 
 def test_wizard_prompts_vm_observability_without_duplicate_root_prompt(monkeypatch) -> None:
@@ -1039,8 +2400,9 @@ def test_wizard_prompts_vm_observability_without_duplicate_root_prompt(monkeypat
         choices=None,
         type_hint=None,
         required=False,
+        unset_on_skip=False,
     ) -> tuple[object, bool]:
-        _ = current, choices, type_hint, required
+        _ = current, choices, type_hint, required, unset_on_skip
         prompted_paths.append(path_label)
         return True, False
 
@@ -1126,8 +2488,9 @@ def test_vm_service_account_prompt_is_hidden_for_built_in_observability(
         choices=None,
         type_hint=None,
         required=False,
+        unset_on_skip=False,
     ) -> tuple[object, bool]:
-        _ = current, choices, type_hint, required
+        _ = current, choices, type_hint, required, unset_on_skip
         prompted_paths.append(path_label)
         return True, False
 
@@ -1209,8 +2572,9 @@ def test_vm_observability_true_prompts_builtin_journald_logs_only(
         choices=None,
         type_hint=None,
         required=False,
+        unset_on_skip=False,
     ) -> tuple[object, bool]:
-        _ = choices, type_hint, required
+        _ = choices, type_hint, required, unset_on_skip
         prompted[path_label] = current
         if path_label == "deploy.observability.enabled":
             return True, False
@@ -1273,15 +2637,15 @@ def test_vm_wizard_prefills_boot_disk_size_after_preset_selection(monkeypatch) -
         description="VM",
         source="../../platform-infra/modules/vm",
         wizard_fields={
-            "inputs.data_disk_enabled": {"materialize_default": True},
+            "inputs.data_disk_enabled": {"write_default_to_config": True},
             "inputs.data_disk_type": {
                 "options": {
                     "from": "compute_boot_disk_types",
                     "auto_select_first": True,
                 },
-                "materialize_default": True,
+                "write_default_to_config": True,
             },
-            "inputs.data_disk_size_gib": {"materialize_default": True},
+            "inputs.data_disk_size_gib": {"write_default_to_config": True},
         },
     )
 
@@ -1372,8 +2736,9 @@ def test_vm_wizard_prefills_boot_disk_size_after_preset_selection(monkeypatch) -
         choices=None,
         type_hint=None,
         required=False,
+        unset_on_skip=False,
     ) -> tuple[object, bool]:
-        _ = choices, type_hint, required
+        _ = choices, type_hint, required, unset_on_skip
         prompted_defaults[path_label] = current
         prompted_paths.append(path_label)
         if path_label.endswith(".subnet_id"):
@@ -1462,15 +2827,15 @@ def test_vm_wizard_prompts_secondary_data_disk_shape_when_enabled(monkeypatch) -
         description="VM",
         source="../../platform-infra/modules/vm",
         wizard_fields={
-            "inputs.data_disk_enabled": {"materialize_default": True},
+            "inputs.data_disk_enabled": {"write_default_to_config": True},
             "inputs.data_disk_type": {
                 "options": {
                     "from": "compute_boot_disk_types",
                     "auto_select_first": True,
                 },
-                "materialize_default": True,
+                "write_default_to_config": True,
             },
-            "inputs.data_disk_size_gib": {"materialize_default": True},
+            "inputs.data_disk_size_gib": {"write_default_to_config": True},
         },
     )
 
@@ -1568,8 +2933,9 @@ def test_vm_wizard_prompts_secondary_data_disk_shape_when_enabled(monkeypatch) -
         choices=None,
         type_hint=None,
         required=False,
+        unset_on_skip=False,
     ) -> tuple[object, bool]:
-        _ = choices, type_hint, required
+        _ = choices, type_hint, required, unset_on_skip
         prompted_defaults[path_label] = current
         prompted_paths.append(path_label)
         if path_label.endswith(".subnet_id"):
@@ -1669,7 +3035,7 @@ def test_jump_host_wizard_prefills_boot_disk_size_and_skips_created_public_ip_id
         description=description,
         source=f"../../platform-infra/modules/{component_id}",
         wizard_fields=(
-            {"inputs.wireguard_tunnel_cidr": {"materialize_default": True}}
+            {"inputs.wireguard_tunnel_cidr": {"write_default_to_config": True}}
             if component_id == "wireguard-gw"
             else {}
         ),
@@ -1769,8 +3135,9 @@ def test_jump_host_wizard_prefills_boot_disk_size_and_skips_created_public_ip_id
         choices=None,
         type_hint=None,
         required=False,
+        unset_on_skip=False,
     ) -> tuple[object, bool]:
-        _ = choices, type_hint, required
+        _ = choices, type_hint, required, unset_on_skip
         prompted_defaults[path_label] = current
         prompted_paths.append(path_label)
         if path_label.endswith(".subnet_id"):
@@ -1932,8 +3299,9 @@ def test_vm_style_wizard_prompts_boot_disk_encryption_for_supported_disk_types(
         choices=None,
         type_hint=None,
         required=False,
+        unset_on_skip=False,
     ) -> tuple[object, bool]:
-        _ = choices, type_hint, required
+        _ = choices, type_hint, required, unset_on_skip
         prompted_defaults[path_label] = current
         prompted_paths.append(path_label)
         if path_label.endswith(".subnet_id"):
@@ -2074,6 +3442,7 @@ def test_jump_host_wizard_requires_existing_public_ip_id_when_create_is_false(
         choices=None,
         type_hint=None,
         required=False,
+        unset_on_skip=False,
     ) -> tuple[object, bool]:
         _ = current, choices, type_hint
         prompted_required[path_label] = required
@@ -2185,8 +3554,9 @@ def test_wizard_q_revisits_previous_nested_app_value_prompt(monkeypatch) -> None
         choices=None,
         type_hint=None,
         required=False,
+        unset_on_skip=False,
     ) -> tuple[object, bool]:
-        _ = current, choices, type_hint, required
+        _ = current, choices, type_hint, required, unset_on_skip
         prompted_paths.append(path_label)
         prompt_counts[path_label] = prompt_counts.get(path_label, 0) + 1
         if path_label.endswith(".certManager.enable") and prompt_counts[path_label] == 1:
@@ -2316,20 +3686,21 @@ def test_wizard_q_revisits_previous_flat_module_prompt(monkeypatch) -> None:
         choices=None,
         type_hint=None,
         required=False,
+        unset_on_skip=False,
     ) -> tuple[object, bool]:
-        _ = current, choices, type_hint, required
+        _ = current, choices, type_hint, required, unset_on_skip
         prompted_paths.append(path_label)
         prompt_counts[path_label] = prompt_counts.get(path_label, 0) + 1
         if path_label.endswith(".cluster_name"):
             return "cluster1", False
         if path_label.endswith(".gpu_enabled"):
             return prompt_counts[path_label] > 1, False
-        if path_label.endswith(".cpu_nodes_boot_disk_type"):
+        if path_label.endswith(".cpu_nodes_boot_disk_size_gib"):
             if prompt_counts[path_label] == 1:
                 return cli._WIZARD_BACKTRACK, False
-            return "NETWORK_SSD", False
-        if path_label.endswith(".cpu_nodes_boot_disk_size_gib"):
             return 93, False
+        if path_label.endswith(".cpu_nodes_boot_disk_type"):
+            return "NETWORK_SSD", False
         return current, False
 
     monkeypatch.setattr("nebius_cxcli.cli._prompt_scalar_override", _fake_prompt)
@@ -2347,10 +3718,10 @@ def test_wizard_q_revisits_previous_flat_module_prompt(monkeypatch) -> None:
     assert prompted_paths == [
         "infra.components[0].inputs.cluster_name",
         "infra.components[0].inputs.gpu_enabled",
-        "infra.components[0].inputs.cpu_nodes_boot_disk_type",
-        "infra.components[0].inputs.gpu_enabled",
-        "infra.components[0].inputs.cpu_nodes_boot_disk_type",
         "infra.components[0].inputs.cpu_nodes_boot_disk_size_gib",
+        "infra.components[0].inputs.gpu_enabled",
+        "infra.components[0].inputs.cpu_nodes_boot_disk_size_gib",
+        "infra.components[0].inputs.cpu_nodes_boot_disk_type",
     ]
     payload = yaml.safe_load(updated_yaml)
     assert payload["infra"]["components"][0]["inputs"]["gpu_enabled"] is True
@@ -2433,8 +3804,9 @@ def test_wizard_auto_selects_single_provider_option_for_optional_field(
         choices=None,
         type_hint=None,
         required=False,
+        unset_on_skip=False,
     ) -> tuple[object, bool]:
-        _ = choices, type_hint, required
+        _ = choices, type_hint, required, unset_on_skip
         prompted.append((path_label, current))
         return current, False
 
@@ -2729,8 +4101,9 @@ def test_wizard_skips_empty_top_level_app_values_prompt_without_known_leaf_field
         choices=None,
         type_hint=None,
         required=False,
+        unset_on_skip=False,
     ) -> tuple[object, bool]:
-        _ = current, choices, type_hint, required
+        _ = current, choices, type_hint, required, unset_on_skip
         prompted_paths.append(path_label)
         return "demo", False
 
@@ -2834,8 +4207,9 @@ def test_wizard_prompts_optional_complex_defaults_but_keeps_them_virtual(
         choices=None,
         type_hint=None,
         required=False,
+        unset_on_skip=False,
     ) -> tuple[object, bool]:
-        _ = current, choices, type_hint, required
+        _ = current, choices, type_hint, required, unset_on_skip
         prompted_paths.append(path_label)
         return current, False
 
@@ -3000,8 +4374,9 @@ def test_wizard_prompts_literal_component_defaults_for_custom_module_fields(
         choices=None,
         type_hint=None,
         required=False,
+        unset_on_skip=False,
     ) -> tuple[object, bool]:
-        _ = choices, type_hint, required
+        _ = choices, type_hint, required, unset_on_skip
         prompted_values[path_label] = current
         return current, False
 
@@ -3097,8 +4472,9 @@ def test_wizard_skips_optional_module_field_marked_prompt_false(
         choices=None,
         type_hint=None,
         required=False,
+        unset_on_skip=False,
     ) -> tuple[object, bool]:
-        _ = current, choices, type_hint, required
+        _ = current, choices, type_hint, required, unset_on_skip
         prompted_paths.append(path_label)
         return current, False
 
@@ -3184,8 +4560,9 @@ def test_wizard_uses_declared_default_for_nested_helper_field_without_persisting
         choices=None,
         type_hint=None,
         required=False,
+        unset_on_skip=False,
     ) -> tuple[object, bool]:
-        _ = choices, type_hint, required
+        _ = choices, type_hint, required, unset_on_skip
         prompted_values[path_label] = current
         return current, False
 
@@ -3204,6 +4581,87 @@ def test_wizard_uses_declared_default_for_nested_helper_field_without_persisting
     assert prompted_values["infra.components[0].inputs.demo_toggle_group.enabled"] is False
     payload = yaml.safe_load(updated_yaml)
     assert "demo_toggle_group" not in payload["infra"]["components"][0]["inputs"]
+
+
+def test_wizard_writes_declared_default_when_config_write_is_enabled(
+    monkeypatch,
+) -> None:
+    config_yaml = yaml.safe_dump(
+        {
+            "version": "v1",
+            "client_info": {
+                "client_name": "demo",
+                "nebius": {
+                    "tenant_id": "tenant-1",
+                    "project_id": "project-1",
+                    "region_id": "us-central1",
+                },
+                "notifications": {"email_enabled": True, "email": None},
+            },
+            "infra": {
+                "components": [
+                    {
+                        "id": "demo-module",
+                        "enabled": True,
+                        "source": "../../platform-infra/modules/demo-module",
+                        "inputs": {},
+                    }
+                ],
+            },
+            "apps": {"charts": []},
+        },
+        sort_keys=False,
+    )
+
+    entry = ComponentEntry(
+        id="demo-module",
+        scope="infra",
+        config_path="infra.demo-module",
+        description="Demo module",
+        source="../../platform-infra/modules/demo-module",
+        wizard_fields={
+            "inputs.demo_toggle_group.enabled": {
+                "default": False,
+                "write_default_to_config": True,
+            }
+        },
+    )
+
+    monkeypatch.setattr(
+        "nebius_cxcli.cli.module_required_variables",
+        lambda _source: (),
+    )
+    monkeypatch.setattr(
+        "nebius_cxcli.cli._runtime_required_input_leaf_names",
+        lambda _entry: set(),
+    )
+    monkeypatch.setattr(
+        "nebius_cxcli.cli.module_variables",
+        lambda _source: (),
+    )
+    monkeypatch.setattr("nebius_cxcli.cli._wizard_continue_phase", lambda *_args, **_kwargs: True)
+
+    prompt_defaults: list[object] = []
+
+    def _fake_typer_prompt(_prompt_text: str, *, default: object = "", **_kwargs) -> object:
+        prompt_defaults.append(default)
+        return default
+
+    monkeypatch.setattr("nebius_cxcli.cli.typer.prompt", _fake_typer_prompt)
+
+    updated_yaml, completed = _run_component_field_wizard(
+        config_yaml=config_yaml,
+        selected_infra={"demo-module"},
+        selected_apps=set(),
+        infra_entries=(entry,),
+        app_entries=(),
+        provider_lookup=None,
+    )
+
+    assert completed is True
+    assert prompt_defaults == ["false"]
+    payload = yaml.safe_load(updated_yaml)
+    assert payload["infra"]["components"][0]["inputs"]["demo_toggle_group"] == {"enabled": False}
 
 
 def test_wizard_skips_irrelevant_mk8s_gpu_validation_prompts_until_gpu_cluster_is_enabled(
@@ -3228,7 +4686,14 @@ def test_wizard_skips_irrelevant_mk8s_gpu_validation_prompts_until_gpu_cluster_i
                         "enabled": True,
                         "source": "../../platform-infra/modules/mk8s",
                         "inputs": {
-                            "gpu_enabled": True,
+                            "node_groups": {
+                                "worker": {
+                                    "gpu": True,
+                                    "platform": "gpu-h100-sxm",
+                                    "preset": "8gpu-128vcpu-1600gb",
+                                    "node_count": 1,
+                                }
+                            },
                         },
                     }
                 ],
@@ -3259,7 +4724,7 @@ def test_wizard_skips_irrelevant_mk8s_gpu_validation_prompts_until_gpu_cluster_i
 
     monkeypatch.setattr(
         "nebius_cxcli.cli.module_required_variables",
-        lambda _source: ("cluster_name",),
+        lambda _source: (),
     )
     monkeypatch.setattr(
         "nebius_cxcli.cli._runtime_required_input_leaf_names",
@@ -3267,11 +4732,7 @@ def test_wizard_skips_irrelevant_mk8s_gpu_validation_prompts_until_gpu_cluster_i
     )
     monkeypatch.setattr(
         "nebius_cxcli.cli.module_variables",
-        lambda _source: (
-            ModuleVariable(name="cluster_name", required=True, type_hint="string"),
-            ModuleVariable(name="gpu_enabled", required=False, type_hint="bool"),
-            ModuleVariable(name="infiniband_fabric", required=False, type_hint="string"),
-        ),
+        lambda _source: (),
     )
     monkeypatch.setattr("nebius_cxcli.cli._wizard_continue_phase", lambda *_args, **_kwargs: True)
 
@@ -3284,8 +4745,9 @@ def test_wizard_skips_irrelevant_mk8s_gpu_validation_prompts_until_gpu_cluster_i
         choices=None,
         type_hint=None,
         required=False,
+        unset_on_skip=False,
     ) -> tuple[object, bool]:
-        _ = choices, type_hint, required
+        _ = choices, type_hint, required, unset_on_skip
         prompted_paths.append(path_label)
         return current, False
 
@@ -3425,8 +4887,9 @@ def test_wizard_auto_enabled_mk8s_gpu_apps_are_prompted_in_same_pass(monkeypatch
         choices=None,
         type_hint=None,
         required=False,
+        unset_on_skip=False,
     ) -> tuple[object, bool]:
-        _ = current, choices, type_hint, required
+        _ = current, choices, type_hint, required, unset_on_skip
         if path_label.endswith(".cluster_name"):
             return "cluster1", False
         if path_label.endswith(".gpu_enabled"):
@@ -3572,8 +5035,9 @@ def test_wizard_skipping_one_auto_enabled_app_still_prompts_the_next_app(
         choices=None,
         type_hint=None,
         required=False,
+        unset_on_skip=False,
     ) -> tuple[object, bool]:
-        _ = current, choices, type_hint, required
+        _ = current, choices, type_hint, required, unset_on_skip
         if path_label.endswith(".cluster_name"):
             return "cluster1", False
         if path_label.endswith(".gpu_enabled"):
@@ -3674,8 +5138,9 @@ def test_wizard_keeps_optional_provider_field_unset_without_reprompt(
         choices=None,
         type_hint=None,
         required=False,
+        unset_on_skip=False,
     ) -> tuple[object, bool]:
-        _ = current, choices, type_hint, required
+        _ = current, choices, type_hint, required, unset_on_skip
         prompt_calls.append(path_label)
         if len(prompt_calls) > 1:
             raise AssertionError("Optional skipped provider-backed field should not re-prompt.")
@@ -3787,8 +5252,9 @@ def test_wizard_skips_dependent_fields_when_enabled_toggle_is_false(
         choices=None,
         type_hint=None,
         required=False,
+        unset_on_skip=False,
     ) -> tuple[object, bool]:
-        _ = current, choices, type_hint, required
+        _ = current, choices, type_hint, required, unset_on_skip
         prompted_paths.append(path_label)
         return False if path_label.endswith(".gpu_enabled") else current, False
 
@@ -3895,8 +5361,9 @@ def test_wizard_prompts_dependent_fields_when_enabled_toggle_is_true(
         choices=None,
         type_hint=None,
         required=False,
+        unset_on_skip=False,
     ) -> tuple[object, bool]:
-        _ = choices, type_hint, required
+        _ = choices, type_hint, required, unset_on_skip
         prompted_paths.append(path_label)
         if path_label.endswith(".gpu_enabled"):
             return True, False
@@ -4011,8 +5478,9 @@ def test_wizard_prompts_gpu_preset_only_after_platform_is_selected(
         choices=None,
         type_hint=None,
         required=False,
+        unset_on_skip=False,
     ) -> tuple[object, bool]:
-        _ = current, choices, type_hint, required
+        _ = current, choices, type_hint, required, unset_on_skip
         prompted_paths.append(path_label)
         if path_label.endswith(".gpu_enabled"):
             return True, False
@@ -4084,6 +5552,11 @@ def test_wizard_expands_mk8s_gpu_followup_prompts_immediately(
                     "args": {"platform_path": "inputs.gpu_nodes_platform"},
                 }
             },
+            "inputs.cluster.k8s_version": {
+                "options": {
+                    "from": "mk8s_control_plane_versions",
+                }
+            },
         },
     )
     monkeypatch.setattr(
@@ -4133,13 +5606,6 @@ def test_wizard_expands_mk8s_gpu_followup_prompts_immediately(
                 has_default=True,
                 default="",
             ),
-            ModuleVariable(
-                name="k8s_version",
-                required=False,
-                type_hint="string",
-                has_default=True,
-                default=None,
-            ),
         ),
     )
     monkeypatch.setattr("nebius_cxcli.cli._wizard_continue_phase", lambda *_args, **_kwargs: True)
@@ -4153,8 +5619,9 @@ def test_wizard_expands_mk8s_gpu_followup_prompts_immediately(
         choices=None,
         type_hint=None,
         required=False,
+        unset_on_skip=False,
     ) -> tuple[object, bool]:
-        _ = current, choices, type_hint, required
+        _ = current, choices, type_hint, required, unset_on_skip
         prompted_paths.append(path_label)
         if path_label.endswith(".gpu_enabled"):
             return True, False
@@ -4176,12 +5643,12 @@ def test_wizard_expands_mk8s_gpu_followup_prompts_immediately(
     assert completed is True
     assert prompted_paths == [
         "infra.components[0].inputs.cluster_name",
+        "infra.components[0].inputs.cluster.k8s_version",
         "infra.components[0].inputs.gpu_enabled",
         "infra.components[0].inputs.gpu_node_groups",
         "infra.components[0].inputs.gpu_nodes_count_per_group",
         "infra.components[0].inputs.gpu_nodes_platform",
         "infra.components[0].inputs.gpu_nodes_preset",
-        "infra.components[0].inputs.k8s_version",
     ]
 
 
@@ -4296,8 +5763,9 @@ def test_wizard_prompts_infiniband_after_clusterable_gpu_preset(
         choices=None,
         type_hint=None,
         required=False,
+        unset_on_skip=False,
     ) -> tuple[object, bool]:
-        _ = choices, type_hint, required
+        _ = choices, type_hint, required, unset_on_skip
         prompted.append((path_label, current))
         if path_label.endswith(".gpu_enabled"):
             return True, False
@@ -4454,8 +5922,9 @@ def test_wizard_skips_infiniband_for_non_clusterable_gpu_preset(
         choices=None,
         type_hint=None,
         required=False,
+        unset_on_skip=False,
     ) -> tuple[object, bool]:
-        _ = current, choices, type_hint, required
+        _ = current, choices, type_hint, required, unset_on_skip
         prompted_paths.append(path_label)
         if path_label.endswith(".gpu_enabled"):
             return True, False
@@ -4515,19 +5984,32 @@ def test_wizard_clears_stale_infiniband_when_gpu_preset_loses_cluster_support(
                 "components": [
                     {
                         "id": "mk8s",
+                        "instance_id": "mk8s",
                         "enabled": True,
                         "source": "../../platform-infra/modules/mk8s",
                         "inputs": {
-                            "cluster_name": "cluster1",
-                            "gpu_enabled": True,
-                            "gpu_nodes_platform": "gpu-b200-sxm",
-                            "gpu_nodes_preset": "8gpu-160vcpu-1792gb",
-                            "infiniband_fabric": "us-central1-b",
+                            "node_group_defaults": {
+                                "gpu": {
+                                    "platform": "gpu-b200-sxm",
+                                    "preset": "8gpu-160vcpu-1792gb",
+                                    "infiniband_fabric": "us-central1-b",
+                                }
+                            },
                         },
                     }
                 ],
             },
-            "apps": {"charts": []},
+            "apps": {
+                "charts": [
+                    {
+                        "id": "soperator",
+                        "instance_id": "mk8s",
+                        "enabled": True,
+                        "install_mode": "production-cluster",
+                        "values": {},
+                    }
+                ]
+            },
         },
         sort_keys=False,
     )
@@ -4538,18 +6020,18 @@ def test_wizard_clears_stale_infiniband_when_gpu_preset_loses_cluster_support(
         description="Managed Kubernetes",
         source="../../platform-infra/modules/mk8s",
         wizard_fields={
-            "inputs.gpu_nodes_preset": {
+            "inputs.node_group_defaults.gpu.preset": {
                 "options": {
                     "from": "compute_platform_presets",
-                    "args": {"platform_path": "inputs.gpu_nodes_platform"},
+                    "args": {"platform_path": "inputs.node_group_defaults.gpu.platform"},
                 }
             },
-            "inputs.infiniband_fabric": {
+            "inputs.node_group_defaults.gpu.infiniband_fabric": {
                 "options": {
                     "from": "mk8s_infiniband_fabrics",
                     "args": {
-                        "platform_path": "inputs.gpu_nodes_platform",
-                        "preset_path": "inputs.gpu_nodes_preset",
+                        "platform_path": "inputs.node_group_defaults.gpu.platform",
+                        "preset_path": "inputs.node_group_defaults.gpu.preset",
                     },
                     "skip_prompt_if_no_choices": True,
                 }
@@ -4563,43 +6045,7 @@ def test_wizard_clears_stale_infiniband_when_gpu_preset_loses_cluster_support(
     )
     monkeypatch.setattr(
         "nebius_cxcli.cli.module_variables",
-        lambda _source: (
-            ModuleVariable(
-                name="cluster_name",
-                required=True,
-                type_hint="string",
-                has_default=True,
-                default="cluster1",
-            ),
-            ModuleVariable(
-                name="gpu_enabled",
-                required=False,
-                type_hint="bool",
-                has_default=True,
-                default=False,
-            ),
-            ModuleVariable(
-                name="gpu_nodes_platform",
-                required=False,
-                type_hint="string",
-                has_default=True,
-                default="",
-            ),
-            ModuleVariable(
-                name="gpu_nodes_preset",
-                required=False,
-                type_hint="string",
-                has_default=True,
-                default="",
-            ),
-            ModuleVariable(
-                name="infiniband_fabric",
-                required=False,
-                type_hint="string",
-                has_default=True,
-                default="",
-            ),
-        ),
+        lambda _source: (),
     )
     monkeypatch.setattr("nebius_cxcli.cli._wizard_continue_phase", lambda *_args, **_kwargs: True)
 
@@ -4610,16 +6056,17 @@ def test_wizard_clears_stale_infiniband_when_gpu_preset_loses_cluster_support(
         choices=None,
         type_hint=None,
         required=False,
+        unset_on_skip=False,
     ) -> tuple[object, bool]:
-        _ = choices, type_hint, required
-        if path_label.endswith(".gpu_nodes_preset"):
+        _ = choices, type_hint, required, unset_on_skip
+        if path_label.endswith(".preset"):
             return "1gpu-20vcpu-224gb", False
         return current, False
 
     class _Lookup:
         def resolve(self, *, provider, args, payload, field_path):
             _ = args, payload
-            if provider == "compute_platform_presets" and field_path.endswith(".gpu_nodes_preset"):
+            if provider == "compute_platform_presets" and field_path.endswith(".preset"):
                 return [
                     OptionChoice(value="1gpu-20vcpu-224gb", label="1gpu-20vcpu-224gb"),
                     OptionChoice(value="8gpu-160vcpu-1792gb", label="8gpu-160vcpu-1792gb"),
@@ -4645,5 +6092,6 @@ def test_wizard_clears_stale_infiniband_when_gpu_preset_loses_cluster_support(
     assert completed is True
     payload = yaml.safe_load(updated_yaml)
     inputs = payload["infra"]["components"][0]["inputs"]
-    assert inputs["gpu_nodes_preset"] == "1gpu-20vcpu-224gb"
-    assert "infiniband_fabric" not in inputs
+    gpu_defaults = inputs["node_group_defaults"]["gpu"]
+    assert gpu_defaults["preset"] == "1gpu-20vcpu-224gb"
+    assert "infiniband_fabric" not in gpu_defaults

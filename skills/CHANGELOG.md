@@ -23,6 +23,9 @@ All notable changes to the reusable Codex skills are tracked here.
   them in a container-specific virtual environment, preserves Git metadata for
   monorepo subprojects, and best-effort opens a new Dev Containers window for
   the running container.
+- Added the `commit-push` Codex skill for committing all current feature-branch
+  changes with `git add -A`, pushing the branch to `origin`, and reporting
+  final worktree cleanliness without opening a pull request.
 - Added the `create-pr` Codex skill for branch-safe GitHub PR creation.
 - Added the `config-codex` Codex skill for bootstrapping public-safe local
   Codex runtime setup, including global `AGENTS.md`, `config.toml` features
@@ -78,8 +81,19 @@ All notable changes to the reusable Codex skills are tracked here.
 - Documented the parent/subagent mental model in the `config-codex` and
   `global-context-management` READMEs.
 - Clarified that direct live hook probes with synthetic `session_id` values can
-  leave scaffold-only task-state directories, and extended local template
-  validation to cover the no-`session_id` manual fallback path.
+  leave scaffold-only task-state directories, and removed the no-`session_id`
+  manual fallback path from the task-state hook contract.
+- Extended `global-context-management` local template validation to prove an
+  existing nonempty `current.md` task-state file is preserved for the agent to
+  read instead of being overwritten or injected into hook context, and tightened
+  hook templates so reused task-state files are chmod-repaired to `0600`.
+- Changed task-state hook behavior to lazy automatic creation: `SessionStart`
+  now injects the session-scoped path without creating a missing `current.md`,
+  while `UserPromptSubmit` creates or reuses task state only for prompts that
+  look complex.
+- Tightened the `global-context-management` `SKILL.md` non-goals so a missing
+  global task-state path no longer permits repo-local or manual fallback state;
+  repo-local task-state files remain explicit-user-request only.
 - Aligned the `config-codex` AGENTS template and skills README with the global
   script-execution policy: read-only inspection or validation scripts may run
   when they do not modify files, services, external systems, credentials, or

@@ -60,9 +60,7 @@ def _install_fake_mk8s_module(
         def __init__(self, sdk: object) -> None:
             self.sdk = sdk
 
-        def get_compatibility_matrix(
-            self, request: object, **_kwargs: object
-        ) -> SimpleNamespace:
+        def get_compatibility_matrix(self, request: object, **_kwargs: object) -> SimpleNamespace:
             _ = request
             if compatibility_items is not None:
                 items = [
@@ -195,10 +193,53 @@ def _install_fake_compute_module(
     _install_module(monkeypatch, "nebius.api.nebius.compute.v1", compute_module)
 
 
+def _install_fake_vpc_module(
+    monkeypatch,
+    *,
+    subnets: list[dict[str, object]],
+) -> None:
+    vpc_module = ModuleType("nebius.api.nebius.vpc.v1")
+
+    class ListSubnetsRequest:
+        def __init__(self, *, parent_id: str, page_size: int, page_token: str) -> None:
+            self.parent_id = parent_id
+            self.page_size = page_size
+            self.page_token = page_token
+
+    class SubnetServiceClient:
+        def __init__(self, sdk: object) -> None:
+            self.sdk = sdk
+
+        def list(self, request: object, **_kwargs: object) -> SimpleNamespace:
+            assert 1 <= request.page_size <= 999
+            response = SimpleNamespace(
+                items=[
+                    SimpleNamespace(
+                        metadata=SimpleNamespace(
+                            id=item.get("id"),
+                            name=item.get("name"),
+                        ),
+                        spec=SimpleNamespace(network_id=item.get("network_id")),
+                        status=SimpleNamespace(
+                            ipv4_private_cidrs=list(item.get("ipv4_private_cidrs", []))
+                        ),
+                    )
+                    for item in subnets
+                ],
+                next_page_token="",
+            )
+            return SimpleNamespace(wait=lambda: response)
+
+    vpc_module.ListSubnetsRequest = ListSubnetsRequest
+    vpc_module.SubnetServiceClient = SubnetServiceClient
+    _install_module(monkeypatch, "nebius.api.nebius.vpc.v1", vpc_module)
+
+
 def _install_fake_capacity_module(
     monkeypatch,
     *,
     resource_advice_items: list[dict[str, object]],
+    capacity_block_group_items: list[dict[str, object]] | None = None,
 ) -> None:
     capacity_module = ModuleType("nebius.api.nebius.capacity.v1")
 
@@ -212,7 +253,7 @@ def _install_fake_capacity_module(
         def __init__(self, sdk: object) -> None:
             self.sdk = sdk
 
-        def list(self, request: object) -> SimpleNamespace:
+        def list(self, request: object, **_kwargs: object) -> SimpleNamespace:
             _ = request
             response = SimpleNamespace(
                 items=[
@@ -260,9 +301,86 @@ def _install_fake_capacity_module(
             )
             return SimpleNamespace(wait=lambda: response)
 
+    class ListCapacityBlockGroupsRequest:
+        def __init__(self, *, parent_id: str, page_size: int, page_token: str) -> None:
+            self.parent_id = parent_id
+            self.page_size = page_size
+            self.page_token = page_token
+
+    class CapacityBlockGroupStatus:
+        class State:
+            __members__ = {
+                "STATE_ACTIVE": 1,
+                "STATE_INACTIVE": 2,
+                "STATE_SHUTTING": 3,
+            }
+
+        class UsageState:
+            __members__ = {
+                "USAGE_STATE_AVAILABLE": 1,
+                "USAGE_STATE_IN_USE": 2,
+            }
+
+    class CapacityBlockGroupServiceClient:
+        def __init__(self, sdk: object) -> None:
+            self.sdk = sdk
+
+        def list(self, request: object, **_kwargs: object) -> SimpleNamespace:
+            assert request.parent_id == "tenant-123"
+            assert 1 <= request.page_size <= 200
+            response = SimpleNamespace(
+                items=[
+                    SimpleNamespace(
+                        metadata=SimpleNamespace(
+                            id=item.get("id"),
+                            name=item.get("name"),
+                        ),
+                        status=SimpleNamespace(
+                            region=item.get("region"),
+                            service=item.get("service", ""),
+                            resource_affinity=SimpleNamespace(
+                                compute_v1=SimpleNamespace(
+                                    platform=item.get("platform"),
+                                    fabric=item.get("fabric"),
+                                ),
+                            ),
+                            state=item.get("state", 1),
+                            usage_state=item.get("usage_state", 1),
+                            current_limit=item.get("current_limit", 0),
+                            usage=item.get("usage", 0),
+                        ),
+                    )
+                    for item in capacity_block_group_items or []
+                ],
+                next_page_token="",
+            )
+            return SimpleNamespace(wait=lambda: response)
+
     capacity_module.ListResourceAdviceRequest = ListResourceAdviceRequest
     capacity_module.ResourceAdviceServiceClient = ResourceAdviceServiceClient
+    capacity_module.ListCapacityBlockGroupsRequest = ListCapacityBlockGroupsRequest
+    capacity_module.CapacityBlockGroupServiceClient = CapacityBlockGroupServiceClient
+    capacity_module.CapacityBlockGroupStatus = CapacityBlockGroupStatus
     _install_module(monkeypatch, "nebius.api.nebius.capacity.v1", capacity_module)
+
+
+def _mk8s_gpu_defaults(
+    *,
+    platform: str | None = None,
+    preset: str | None = None,
+    stack_preset: str | None = None,
+    infiniband_fabric: str | None = None,
+) -> dict[str, object]:
+    gpu: dict[str, object] = {}
+    if platform is not None:
+        gpu["platform"] = platform
+    if preset is not None:
+        gpu["preset"] = preset
+    if stack_preset is not None:
+        gpu["gpu_stack_preset"] = stack_preset
+    if infiniband_fabric is not None:
+        gpu["infiniband_fabric"] = infiniband_fabric
+    return {"node_group_defaults": {"gpu": gpu}}
 
 
 def test_provider_option_lookup_uses_plugin_for_unknown_provider(
@@ -371,6 +489,28 @@ def test_provider_option_lookup_records_plugin_error(monkeypatch) -> None:
     assert lookup.last_error() == "vendor_networks: plugin resolver exploded"
 
 
+def test_provider_option_lookup_records_plugin_load_error(monkeypatch) -> None:
+    provider_options._load_option_plugins.cache_clear()
+    monkeypatch.setenv(
+        "NEBIUS_CXCLI_PROVIDER_OPTION_PLUGINS",
+        "missing_provider_plugin:choices",
+    )
+
+    lookup = ProviderOptionLookup()
+    resolved = lookup.resolve(
+        provider="vendor_networks",
+        args={},
+        payload={},
+        field_path="infra.components[0].inputs.network_id",
+    )
+
+    assert resolved == []
+    assert lookup.last_error()
+    assert "Provider option plugin 'missing_provider_plugin:choices' could not be loaded" in (
+        lookup.last_error() or ""
+    )
+
+
 def test_provider_option_lookup_sdk_uses_shared_sdk_auth(monkeypatch) -> None:
     lookup = ProviderOptionLookup()
     captured: dict[str, object] = {}
@@ -422,12 +562,59 @@ def test_compute_platforms_use_live_project_inventory(monkeypatch) -> None:
         provider="compute_platforms",
         args={"platform_prefix": "cpu-"},
         payload={"client_info": {"nebius": {"project_id": "project-123"}}},
-        field_path="infra.components[0].inputs.cpu_nodes_platform",
+        field_path="infra.components[0].inputs.node_group_defaults.cpu.platform",
     )
 
     assert [(choice.value, choice.label) for choice in resolved] == [
         ("cpu-d3", "cpu-d3  (CPU D3)"),
         ("cpu-e2", "cpu-e2"),
+    ]
+
+
+def test_project_subnets_filter_by_selected_network_path(monkeypatch) -> None:
+    _install_fake_vpc_module(
+        monkeypatch,
+        subnets=[
+            {
+                "id": "vpcsubnet-a",
+                "name": "subnet-a",
+                "network_id": "vpcnetwork-a",
+                "ipv4_private_cidrs": ["10.0.0.0/24"],
+            },
+            {
+                "id": "vpcsubnet-b",
+                "name": "subnet-b",
+                "network_id": "vpcnetwork-b",
+                "ipv4_private_cidrs": ["10.1.0.0/24"],
+            },
+        ],
+    )
+
+    lookup = ProviderOptionLookup()
+    monkeypatch.setattr(lookup, "_sdk_or_none", lambda: object())
+
+    resolved = lookup.resolve(
+        provider="project_subnets",
+        args={"network_id_path": "infra.components[0].inputs.cluster.network_id"},
+        payload={
+            "client_info": {"nebius": {"project_id": "project-123"}},
+            "infra": {
+                "components": [
+                    {
+                        "inputs": {
+                            "cluster": {
+                                "network_id": "vpcnetwork-b",
+                            }
+                        }
+                    }
+                ]
+            },
+        },
+        field_path="infra.components[0].inputs.cluster.subnet_id",
+    )
+
+    assert [(choice.value, choice.label) for choice in resolved] == [
+        ("vpcsubnet-b", "vpcsubnet-b  (subnet-b) (10.1.0.0/24)"),
     ]
 
 
@@ -509,7 +696,7 @@ def test_mk8s_compatible_platforms_intersect_project_inventory(monkeypatch) -> N
         provider="mk8s_compatible_platforms",
         args={"platform_prefix": "gpu-", "project_id": "project-123"},
         payload={},
-        field_path="infra.components[0].inputs.gpu_nodes_platform",
+        field_path="infra.components[0].inputs.node_group_defaults.gpu.platform",
     )
 
     assert [(choice.value, choice.label) for choice in resolved] == [
@@ -531,12 +718,91 @@ def test_mk8s_compatible_platforms_fall_back_to_matrix_without_project_scope(mon
         provider="mk8s_compatible_platforms",
         args={"platform_prefix": "cpu-"},
         payload={},
-        field_path="infra.components[0].inputs.cpu_nodes_platform",
+        field_path="infra.components[0].inputs.node_group_defaults.cpu.platform",
     )
 
     assert [(choice.value, choice.label) for choice in resolved] == [
         ("cpu-d3", "cpu-d3"),
     ]
+
+
+def test_capacity_block_groups_filter_by_region_platform_and_fabric(monkeypatch) -> None:
+    _install_fake_capacity_module(
+        monkeypatch,
+        resource_advice_items=[],
+        capacity_block_group_items=[
+            {
+                "id": "cbg-1",
+                "name": "reserved-h100-fabric-2",
+                "region": "eu-north1",
+                "platform": "gpu-h100-sxm",
+                "fabric": "fabric-2",
+                "current_limit": 8,
+                "usage": 2,
+            },
+            {
+                "id": "cbg-2",
+                "name": "reserved-h100-fabric-3",
+                "region": "eu-north1",
+                "platform": "gpu-h100-sxm",
+                "fabric": "fabric-3",
+                "current_limit": 8,
+                "usage": 0,
+            },
+            {
+                "id": "cbg-3",
+                "name": "inactive-h100-fabric-2",
+                "region": "eu-north1",
+                "platform": "gpu-h100-sxm",
+                "fabric": "fabric-2",
+                "state": 2,
+                "current_limit": 8,
+                "usage": 0,
+            },
+        ],
+    )
+
+    lookup = ProviderOptionLookup()
+    monkeypatch.setattr(lookup, "_sdk_or_none", lambda: object())
+
+    resolved = lookup.resolve(
+        provider="capacity_block_groups",
+        args={
+            "platform_path": "infra.components[0].inputs.node_groups.gpu.platform",
+            "fabric_path": "infra.components[0].inputs.gpu_clusters.gpu.infiniband_fabric",
+        },
+        payload={
+            "client_info": {
+                "nebius": {
+                    "tenant_id": "tenant-123",
+                    "region_id": "eu-north1",
+                }
+            },
+            "infra": {
+                "components": [
+                    {
+                        "inputs": {
+                            "node_groups": {
+                                "gpu": {
+                                    "platform": "gpu-h100-sxm",
+                                }
+                            },
+                            "gpu_clusters": {
+                                "gpu": {
+                                    "infiniband_fabric": "fabric-2",
+                                }
+                            },
+                        }
+                    }
+                ]
+            },
+        },
+        field_path="infra.components[0].inputs.node_groups.gpu.reservation.reservation_ids",
+    )
+
+    assert [(choice.value, choice.recommended) for choice in resolved] == [("cbg-1", True)]
+    assert "reserved-h100-fabric-2" in resolved[0].label
+    assert "available=6" in resolved[0].label
 
 
 def test_mk8s_gpu_stack_presets_follow_selected_platform(monkeypatch) -> None:
@@ -566,19 +832,17 @@ def test_mk8s_gpu_stack_presets_follow_selected_platform(monkeypatch) -> None:
 
     resolved = lookup.resolve(
         provider="mk8s_gpu_stack_presets",
-        args={"platform_path": "infra.components[0].inputs.gpu_nodes_platform"},
+        args={"platform_path": "infra.components[0].inputs.node_group_defaults.gpu.platform"},
         payload={
             "infra": {
                 "components": [
                     {
-                        "inputs": {
-                            "gpu_nodes_platform": "gpu-b200-sxm",
-                        }
+                        "inputs": _mk8s_gpu_defaults(platform="gpu-b200-sxm"),
                     }
                 ]
             }
         },
-        field_path="infra.components[0].inputs.gpu_stack_preset",
+        field_path="infra.components[0].inputs.node_group_defaults.gpu.gpu_stack_preset",
     )
 
     assert [(choice.value, choice.label) for choice in resolved] == [
@@ -610,22 +874,24 @@ def test_mk8s_node_group_os_values_follow_selected_driver_preset(monkeypatch) ->
     resolved = lookup.resolve(
         provider="mk8s_node_group_os_values",
         args={
-            "platform_path": "infra.components[0].inputs.gpu_nodes_platform",
-            "stack_preset_path": "infra.components[0].inputs.gpu_stack_preset",
+            "platform_path": "infra.components[0].inputs.node_group_defaults.gpu.platform",
+            "stack_preset_path": (
+                "infra.components[0].inputs.node_group_defaults.gpu.gpu_stack_preset"
+            ),
         },
         payload={
             "infra": {
                 "components": [
                     {
-                        "inputs": {
-                            "gpu_nodes_platform": "gpu-h100-sxm",
-                            "gpu_stack_preset": "cuda13.0",
-                        }
+                        "inputs": _mk8s_gpu_defaults(
+                            platform="gpu-h100-sxm",
+                            stack_preset="cuda13.0",
+                        ),
                     }
                 ]
             }
         },
-        field_path="infra.components[0].inputs.gpu_nodes_os",
+        field_path="infra.components[0].inputs.node_group_defaults.gpu.os",
     )
 
     assert [(choice.value, choice.label) for choice in resolved] == [
@@ -663,29 +929,95 @@ def test_compute_platform_presets_filter_gpu_clusterable_shapes(monkeypatch) -> 
     resolved = lookup.resolve(
         provider="compute_platform_presets",
         args={
-            "platform_path": "infra.components[0].inputs.gpu_nodes_platform",
-            "gpu_cluster_required_path": "infra.components[0].inputs.infiniband_fabric",
+            "platform_path": "infra.components[0].inputs.node_group_defaults.gpu.platform",
+            "gpu_cluster_required_path": (
+                "infra.components[0].inputs.node_group_defaults.gpu.infiniband_fabric"
+            ),
         },
         payload={
             "client_info": {"nebius": {"project_id": "project-123"}},
             "infra": {
                 "components": [
                     {
-                        "inputs": {
-                            "gpu_nodes_platform": "gpu-b200-sxm",
-                            "infiniband_fabric": "us-central1-b",
-                        }
+                        "inputs": _mk8s_gpu_defaults(
+                            platform="gpu-b200-sxm",
+                            infiniband_fabric="us-central1-b",
+                        ),
                     }
                 ]
             },
         },
-        field_path="infra.components[0].inputs.gpu_nodes_preset",
+        field_path="infra.components[0].inputs.node_group_defaults.gpu.preset",
     )
 
     assert [(choice.value, choice.label) for choice in resolved] == [
         (
             "8gpu-160vcpu-1792gb",
             "8gpu-160vcpu-1792gb  (vCPU=160, RAM=1792GiB, GPU=8, GPU cluster, InfiniBand)",
+        ),
+    ]
+
+
+def test_compute_platform_presets_follow_concrete_mk8s_node_group_platform_path(
+    monkeypatch,
+) -> None:
+    _install_fake_compute_module(
+        monkeypatch,
+        platforms=[
+            ("gpu-h100-sxm", "GPU H100 SXM"),
+            ("gpu-b200-sxm", "GPU B200 SXM"),
+        ],
+        presets_by_platform={
+            "gpu-h100-sxm": [
+                {
+                    "name": "8gpu-128vcpu-1600gb",
+                    "vcpu_count": 128,
+                    "memory_gibibytes": 1600,
+                    "gpu_count": 8,
+                    "allow_gpu_clustering": True,
+                },
+            ],
+            "gpu-b200-sxm": [
+                {
+                    "name": "8gpu-160vcpu-1792gb",
+                    "vcpu_count": 160,
+                    "memory_gibibytes": 1792,
+                    "gpu_count": 8,
+                    "allow_gpu_clustering": True,
+                },
+            ],
+        },
+    )
+
+    lookup = ProviderOptionLookup()
+    monkeypatch.setattr(lookup, "_sdk_or_none", lambda: object())
+
+    resolved = lookup.resolve(
+        provider="compute_platform_presets",
+        args={"platform_path": "infra.components[0].inputs.node_groups.gpu-nodeg2.platform"},
+        payload={
+            "client_info": {"nebius": {"project_id": "project-123"}},
+            "infra": {
+                "components": [
+                    {
+                        "inputs": {
+                            "node_groups": {
+                                "gpu-nodeg2": {
+                                    "platform": "gpu-h100-sxm",
+                                }
+                            }
+                        }
+                    }
+                ]
+            },
+        },
+        field_path="infra.components[0].inputs.node_groups.gpu-nodeg2.preset",
+    )
+
+    assert [(choice.value, choice.label) for choice in resolved] == [
+        (
+            "8gpu-128vcpu-1600gb",
+            "8gpu-128vcpu-1600gb  (vCPU=128, RAM=1600GiB, GPU=8, GPU cluster, InfiniBand)",
         ),
     ]
 
@@ -748,7 +1080,7 @@ def test_compute_platform_presets_rank_gpu_shapes_by_live_capacity_advice(monkey
 
     resolved = lookup.resolve(
         provider="compute_platform_presets",
-        args={"platform_path": "infra.components[0].inputs.gpu_nodes_platform"},
+        args={"platform_path": "infra.components[0].inputs.node_group_defaults.gpu.platform"},
         payload={
             "client_info": {
                 "nebius": {
@@ -760,14 +1092,12 @@ def test_compute_platform_presets_rank_gpu_shapes_by_live_capacity_advice(monkey
             "infra": {
                 "components": [
                     {
-                        "inputs": {
-                            "gpu_nodes_platform": "gpu-h100-sxm",
-                        }
+                        "inputs": _mk8s_gpu_defaults(platform="gpu-h100-sxm"),
                     }
                 ]
             },
         },
-        field_path="infra.components[0].inputs.gpu_nodes_preset",
+        field_path="infra.components[0].inputs.node_group_defaults.gpu.preset",
     )
 
     assert [(choice.value, choice.label, choice.recommended) for choice in resolved] == [
@@ -849,7 +1179,7 @@ def test_compute_platform_presets_summarize_reserved_capacity_for_selected_platf
 
     resolved = lookup.resolve(
         provider="compute_platform_presets",
-        args={"platform_path": "infra.components[0].inputs.gpu_nodes_platform"},
+        args={"platform_path": "infra.components[0].inputs.node_group_defaults.gpu.platform"},
         payload={
             "client_info": {
                 "nebius": {
@@ -861,14 +1191,12 @@ def test_compute_platform_presets_summarize_reserved_capacity_for_selected_platf
             "infra": {
                 "components": [
                     {
-                        "inputs": {
-                            "gpu_nodes_platform": "gpu-h100-sxm",
-                        }
+                        "inputs": _mk8s_gpu_defaults(platform="gpu-h100-sxm"),
                     }
                 ]
             },
         },
-        field_path="infra.components[0].inputs.gpu_nodes_preset",
+        field_path="infra.components[0].inputs.node_group_defaults.gpu.preset",
     )
 
     assert [(choice.value, choice.label, choice.recommended) for choice in resolved] == [
@@ -878,6 +1206,7 @@ def test_compute_platform_presets_summarize_reserved_capacity_for_selected_platf
             True,
         ),
     ]
+    assert [choice.metadata["reserved_vms"] for choice in resolved] == [3]
 
 
 def test_compute_boot_disk_types_labels_match_guided_contract() -> None:
@@ -887,7 +1216,7 @@ def test_compute_boot_disk_types_labels_match_guided_contract() -> None:
         provider="compute_boot_disk_types",
         args={},
         payload={},
-        field_path="infra.components[0].inputs.cpu_nodes_boot_disk_type",
+        field_path="infra.components[0].inputs.node_group_defaults.cpu.boot_disk.type",
     )
 
     assert [(choice.value, choice.label) for choice in resolved] == [
@@ -955,17 +1284,17 @@ def test_soperator_profile_choices_come_from_catalog_metadata() -> None:
     assert [(choice.value, choice.label, choice.recommended) for choice in resolved] == [
         (
             "nebius-cpu-v1",
-            "CPU-only workers: worker-cpu NodeSet, cpu Slurm partition, cpu feature",
+            "CPU-only workers: worker-cpu NodeSet, cpu Slurm partition, accounting DB enabled",
             False,
         ),
         (
             "nebius-mixed-v1",
-            "Mixed CPU+GPU workers: worker-cpu and worker-gpu NodeSets with cpu/gpu Slurm partitions",
+            "Mixed CPU+GPU workers: worker-cpu and worker-gpu NodeSets with cpu/gpu partitions, accounting DB enabled",
             False,
         ),
         (
             "nebius-gpu-v1",
-            "GPU-only workers: worker-gpu NodeSet, gpu Slurm partition, gpu/cuda features",
+            "Production GPU layout: system/controller/login/accounting CPU groups, GPU worker NodeSet, accounting DB enabled",
             True,
         ),
     ]
@@ -980,6 +1309,12 @@ def test_soperator_partition_choices_are_selected_profile_scoped() -> None:
         payload={"apps": {"charts": [{"id": "soperator", "profile": "nebius-cpu-v1"}]}},
         field_path="apps.charts[0].values.partitionProfile",
     )
+    gpu_choices = lookup.resolve(
+        provider="soperator_partition_profiles",
+        args={"default": "shape-default"},
+        payload={"apps": {"charts": [{"id": "soperator", "profile": "nebius-gpu-v1"}]}},
+        field_path="apps.charts[0].values.partitionProfile",
+    )
     mixed_choices = lookup.resolve(
         provider="soperator_partition_profiles",
         args={"default": "shape-default"},
@@ -987,17 +1322,167 @@ def test_soperator_partition_choices_are_selected_profile_scoped() -> None:
         field_path="apps.charts[0].values.partitionProfile",
     )
 
-    assert [choice.value for choice in cpu_choices] == ["shape-default", "with-debug-long"]
+    assert [choice.value for choice in cpu_choices] == [
+        "shape-default",
+        "with-debug-long",
+        "with-qos-preemption",
+    ]
+    assert (
+        cpu_choices[0].label
+        == "Baseline queues: default CPU worker queue; accounting enabled; no QoS/preemption"
+    )
+    assert (
+        gpu_choices[0].label
+        == "Baseline queues: default GPU worker queue; accounting enabled; no QoS/preemption"
+    )
+    assert (
+        gpu_choices[1].label
+        == "Add debug/long queues on the same GPU workers; accounting enabled; no QoS objects"
+    )
+    assert "requires SlurmDBD QOS/account objects" in gpu_choices[2].label
     assert [choice.value for choice in mixed_choices] == [
         "shape-default",
         "with-debug-long",
+        "with-qos-preemption",
         "with-h100-infiniband-debug-long",
     ]
     assert mixed_choices[0].label == (
-        "Shape partitions only: cpu and gpu partitions from worker-cpu/worker-gpu"
+        "Baseline queues: cpu/gpu shape partitions; accounting enabled; no QoS/preemption"
     )
     assert mixed_choices[0].recommended is True
-    assert "H100/InfiniBand feature partitions" in mixed_choices[2].label
+    assert "H100/InfiniBand feature partitions" in mixed_choices[3].label
+
+
+def test_soperator_topology_choices_are_selected_profile_scoped() -> None:
+    lookup = ProviderOptionLookup()
+
+    resolved = lookup.resolve(
+        provider="soperator_topology_profiles",
+        args={"default": "disabled"},
+        payload={"apps": {"charts": [{"id": "soperator", "profile": "nebius-gpu-v1"}]}},
+        field_path="apps.charts[0].values.topologyProfile",
+    )
+
+    assert [(choice.value, choice.recommended) for choice in resolved] == [
+        ("disabled", True),
+        ("nebius-tiered-tree-v1", False),
+        ("nebius-nvl-rack-v1", False),
+    ]
+    assert "tiered tree" in resolved[1].label
+    assert "NVL rack" in resolved[2].label
+
+
+def test_soperator_node_group_mapping_choices_follow_profile_role() -> None:
+    lookup = ProviderOptionLookup()
+    payload = {
+        "infra": {
+            "components": [
+                {
+                    "id": "mk8s",
+                    "instance_id": "cluster1",
+                    "enabled": True,
+                    "inputs": {
+                        "node_groups": {
+                            "cpu-a": {
+                                "gpu": False,
+                                "platform": "cpu-d3",
+                                "preset": "4vcpu-16gb",
+                            },
+                            "h100": {
+                                "gpu": True,
+                                "platform": "gpu-h100-sxm",
+                                "preset": "1gpu-16vcpu-200gb",
+                            },
+                        }
+                    },
+                }
+            ]
+        },
+        "apps": {
+            "charts": [
+                {
+                    "id": "soperator",
+                    "instance_id": "cluster1",
+                    "enabled": True,
+                    "profile": "nebius-gpu-v1",
+                }
+            ]
+        },
+    }
+
+    worker_choices = lookup.resolve(
+        provider="soperator_node_groups",
+        args={"role": "worker"},
+        payload=payload,
+        field_path="apps.charts[0].values.nodeGroupMapping.worker",
+    )
+    controller_choices = lookup.resolve(
+        provider="soperator_node_groups",
+        args={"role": "controller"},
+        payload=payload,
+        field_path="apps.charts[0].values.nodeGroupMapping.controller",
+    )
+
+    assert [choice.value for choice in worker_choices] == ["h100"]
+    assert [choice.value for choice in controller_choices] == ["cpu-a"]
+
+
+def test_soperator_node_group_mapping_choices_use_external_target_inventory() -> None:
+    lookup = ProviderOptionLookup()
+    payload = {
+        "deploy": {
+            "targets": [
+                {
+                    "instance_id": "cluster1",
+                    "kind": "external-mk8s",
+                    "ownership": "external",
+                    "kube_context": "nebius-cluster1-mk8scluster-123-external",
+                    "inventory": {
+                        "node_groups": {
+                            "cpu-a": {
+                                "gpu": False,
+                                "platform": "cpu-d3",
+                                "preset": "4vcpu-16gb",
+                            },
+                            "h100": {
+                                "gpu": True,
+                                "platform": "gpu-h100-sxm",
+                                "preset": "1gpu-16vcpu-200gb",
+                            },
+                        }
+                    },
+                }
+            ]
+        },
+        "infra": {"components": []},
+        "apps": {
+            "charts": [
+                {
+                    "id": "soperator",
+                    "instance_id": "cluster1",
+                    "enabled": True,
+                    "install_mode": "onboard-existing-cluster",
+                    "profile": "nebius-gpu-v1",
+                }
+            ]
+        },
+    }
+
+    worker_choices = lookup.resolve(
+        provider="soperator_node_groups",
+        args={"role": "worker"},
+        payload=payload,
+        field_path="apps.charts[0].values.nodeGroupMapping.worker",
+    )
+    controller_choices = lookup.resolve(
+        provider="soperator_node_groups",
+        args={"role": "controller"},
+        payload=payload,
+        field_path="apps.charts[0].values.nodeGroupMapping.controller",
+    )
+
+    assert [choice.value for choice in worker_choices] == ["h100"]
+    assert [choice.value for choice in controller_choices] == ["cpu-a"]
 
 
 def test_mk8s_infiniband_fabrics_skip_non_clusterable_gpu_presets(monkeypatch) -> None:
@@ -1030,8 +1515,8 @@ def test_mk8s_infiniband_fabrics_skip_non_clusterable_gpu_presets(monkeypatch) -
     resolved = lookup.resolve(
         provider="mk8s_infiniband_fabrics",
         args={
-            "platform_path": "infra.components[0].inputs.gpu_nodes_platform",
-            "preset_path": "infra.components[0].inputs.gpu_nodes_preset",
+            "platform_path": "infra.components[0].inputs.node_group_defaults.gpu.platform",
+            "preset_path": "infra.components[0].inputs.node_group_defaults.gpu.preset",
         },
         payload={
             "client_info": {
@@ -1043,15 +1528,15 @@ def test_mk8s_infiniband_fabrics_skip_non_clusterable_gpu_presets(monkeypatch) -
             "infra": {
                 "components": [
                     {
-                        "inputs": {
-                            "gpu_nodes_platform": "gpu-b200-sxm",
-                            "gpu_nodes_preset": "1gpu-20vcpu-224gb",
-                        }
+                        "inputs": _mk8s_gpu_defaults(
+                            platform="gpu-b200-sxm",
+                            preset="1gpu-20vcpu-224gb",
+                        ),
                     }
                 ]
             },
         },
-        field_path="infra.components[0].inputs.infiniband_fabric",
+        field_path="infra.components[0].inputs.node_group_defaults.gpu.infiniband_fabric",
     )
 
     assert resolved == []
@@ -1107,8 +1592,8 @@ def test_mk8s_infiniband_fabrics_use_live_capacity_rows_for_clusterable_shape(
     resolved = lookup.resolve(
         provider="mk8s_infiniband_fabrics",
         args={
-            "platform_path": "infra.components[0].inputs.gpu_nodes_platform",
-            "preset_path": "infra.components[0].inputs.gpu_nodes_preset",
+            "platform_path": "infra.components[0].inputs.node_group_defaults.gpu.platform",
+            "preset_path": "infra.components[0].inputs.node_group_defaults.gpu.preset",
         },
         payload={
             "client_info": {
@@ -1121,15 +1606,15 @@ def test_mk8s_infiniband_fabrics_use_live_capacity_rows_for_clusterable_shape(
             "infra": {
                 "components": [
                     {
-                        "inputs": {
-                            "gpu_nodes_platform": "gpu-h200-sxm",
-                            "gpu_nodes_preset": "8gpu-128vcpu-1600gb",
-                        }
+                        "inputs": _mk8s_gpu_defaults(
+                            platform="gpu-h200-sxm",
+                            preset="8gpu-128vcpu-1600gb",
+                        ),
                     }
                 ]
             },
         },
-        field_path="infra.components[0].inputs.infiniband_fabric",
+        field_path="infra.components[0].inputs.node_group_defaults.gpu.infiniband_fabric",
     )
 
     assert [(choice.value, choice.label, choice.recommended) for choice in resolved] == [
@@ -1217,8 +1702,8 @@ def test_mk8s_infiniband_fabrics_rank_live_capacity_and_mark_recommended(monkeyp
     resolved = lookup.resolve(
         provider="mk8s_infiniband_fabrics",
         args={
-            "platform_path": "infra.components[0].inputs.gpu_nodes_platform",
-            "preset_path": "infra.components[0].inputs.gpu_nodes_preset",
+            "platform_path": "infra.components[0].inputs.node_group_defaults.gpu.platform",
+            "preset_path": "infra.components[0].inputs.node_group_defaults.gpu.preset",
         },
         payload={
             "client_info": {
@@ -1231,15 +1716,15 @@ def test_mk8s_infiniband_fabrics_rank_live_capacity_and_mark_recommended(monkeyp
             "infra": {
                 "components": [
                     {
-                        "inputs": {
-                            "gpu_nodes_platform": "gpu-h100-sxm",
-                            "gpu_nodes_preset": "8gpu-128vcpu-1600gb",
-                        }
+                        "inputs": _mk8s_gpu_defaults(
+                            platform="gpu-h100-sxm",
+                            preset="8gpu-128vcpu-1600gb",
+                        ),
                     }
                 ]
             },
         },
-        field_path="infra.components[0].inputs.infiniband_fabric",
+        field_path="infra.components[0].inputs.node_group_defaults.gpu.infiniband_fabric",
     )
 
     assert [(choice.value, choice.label, choice.recommended) for choice in resolved] == [
@@ -1320,8 +1805,8 @@ def test_mk8s_infiniband_fabrics_prefer_reserved_capacity_fabric(
     resolved = lookup.resolve(
         provider="mk8s_infiniband_fabrics",
         args={
-            "platform_path": "infra.components[0].inputs.gpu_nodes_platform",
-            "preset_path": "infra.components[0].inputs.gpu_nodes_preset",
+            "platform_path": "infra.components[0].inputs.node_group_defaults.gpu.platform",
+            "preset_path": "infra.components[0].inputs.node_group_defaults.gpu.preset",
         },
         payload={
             "client_info": {
@@ -1334,15 +1819,15 @@ def test_mk8s_infiniband_fabrics_prefer_reserved_capacity_fabric(
             "infra": {
                 "components": [
                     {
-                        "inputs": {
-                            "gpu_nodes_platform": "gpu-h100-sxm",
-                            "gpu_nodes_preset": "8gpu-128vcpu-1600gb",
-                        }
+                        "inputs": _mk8s_gpu_defaults(
+                            platform="gpu-h100-sxm",
+                            preset="8gpu-128vcpu-1600gb",
+                        ),
                     }
                 ]
             },
         },
-        field_path="infra.components[0].inputs.infiniband_fabric",
+        field_path="infra.components[0].inputs.node_group_defaults.gpu.infiniband_fabric",
     )
 
     assert [(choice.value, choice.label, choice.recommended) for choice in resolved] == [
@@ -1357,6 +1842,7 @@ def test_mk8s_infiniband_fabrics_prefer_reserved_capacity_fabric(
             False,
         ),
     ]
+    assert [choice.metadata["reserved_vms"] for choice in resolved] == [3, 0]
 
 
 def test_resolve_k8s_version_prefers_dynamic_component_input_path() -> None:
@@ -1369,14 +1855,16 @@ def test_resolve_k8s_version_prefers_dynamic_component_input_path() -> None:
                 "components": [
                     {
                         "inputs": {
-                            "k8s_version": "1.31",
+                            "cluster": {
+                                "k8s_version": "1.31",
+                            },
                         }
                     }
                 ]
             }
         },
         args={},
-        field_path="infra.components[0].inputs.cpu_nodes_platform",
+        field_path="infra.components[0].inputs.node_group_defaults.cpu.platform",
     )
 
     assert resolved == "1.31"
@@ -1408,8 +1896,8 @@ def test_mk8s_infiniband_fabrics_report_manual_fallback_when_live_rows_are_missi
     resolved = lookup.resolve(
         provider="mk8s_infiniband_fabrics",
         args={
-            "platform_path": "infra.components[0].inputs.gpu_nodes_platform",
-            "preset_path": "infra.components[0].inputs.gpu_nodes_preset",
+            "platform_path": "infra.components[0].inputs.node_group_defaults.gpu.platform",
+            "preset_path": "infra.components[0].inputs.node_group_defaults.gpu.preset",
         },
         payload={
             "client_info": {
@@ -1422,15 +1910,15 @@ def test_mk8s_infiniband_fabrics_report_manual_fallback_when_live_rows_are_missi
             "infra": {
                 "components": [
                     {
-                        "inputs": {
-                            "gpu_nodes_platform": "gpu-h200-sxm",
-                            "gpu_nodes_preset": "8gpu-128vcpu-1600gb",
-                        }
+                        "inputs": _mk8s_gpu_defaults(
+                            platform="gpu-h200-sxm",
+                            preset="8gpu-128vcpu-1600gb",
+                        ),
                     }
                 ]
             },
         },
-        field_path="infra.components[0].inputs.infiniband_fabric",
+        field_path="infra.components[0].inputs.node_group_defaults.gpu.infiniband_fabric",
     )
 
     assert resolved == []

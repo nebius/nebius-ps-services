@@ -457,18 +457,122 @@ def test_runtime_validation_plugins_reject_incomplete_flat_mk8s_gpu_shape(
         "__shared_admin_ssh_user_name__": "ubuntu",
         "infra": {
             "mk8s": {
-                "gpu_enabled": True,
+                "node_groups": {
+                    "worker": {
+                        "gpu": True,
+                        "node_count": 1,
+                    }
+                },
             }
         },
     }
 
     with pytest.raises(
         ValueError,
-        match=(
-            "gpu_enabled=true requires either gpu_node_groups > 0 or at least one generic "
-            "node_groups entry with gpu=true"
-        ),
+        match="GPU node_groups entries require platform",
     ):
+        run_runtime_validation_plugins(
+            payload=payload,
+            get_path=_get_path,
+            as_text=_as_text,
+            id_pattern=re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"),
+            env_var_pattern=re.compile(r"^[A-Z_][A-Z0-9_]*$"),
+        )
+
+
+def test_runtime_validation_plugins_reject_mig_without_gpu_in_component_rows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(
+        "NEBIUS_CXCLI_RUNTIME_VALIDATION_PLUGINS",
+        "nebius_cxcli.runtime_component_validation:validate_component_runtime_rules",
+    )
+    payload = {
+        "__shared_admin_ssh_user_name__": "ubuntu",
+        "infra": {
+            "components": [
+                {
+                    "id": "mk8s",
+                    "enabled": True,
+                    "inputs": {
+                        "mig_strategy": "single",
+                        "node_groups": {
+                            "cpu": {
+                                "gpu": False,
+                                "node_count": 1,
+                                "platform": "cpu-d3",
+                                "preset": "4vcpu-16gb",
+                            }
+                        },
+                    },
+                }
+            ]
+        },
+    }
+
+    with pytest.raises(ValueError, match="mig_strategy/mig_parted_config require"):
+        run_runtime_validation_plugins(
+            payload=payload,
+            get_path=_get_path,
+            as_text=_as_text,
+            id_pattern=re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"),
+            env_var_pattern=re.compile(r"^[A-Z_][A-Z0-9_]*$"),
+        )
+
+
+@pytest.mark.parametrize(
+    "mig_inputs",
+    [
+        {
+            "node_group_defaults": {
+                "gpu": {
+                    "mig_strategy": "single",
+                }
+            },
+            "node_groups": {
+                "cpu": {
+                    "gpu": False,
+                    "node_count": 1,
+                    "platform": "cpu-d3",
+                    "preset": "4vcpu-16gb",
+                }
+            },
+        },
+        {
+            "node_groups": {
+                "cpu": {
+                    "gpu": False,
+                    "node_count": 1,
+                    "platform": "cpu-d3",
+                    "preset": "4vcpu-16gb",
+                    "mig_parted_config": "all-balanced",
+                }
+            },
+        },
+    ],
+)
+def test_runtime_validation_plugins_reject_nested_mig_without_gpu_node_groups(
+    monkeypatch: pytest.MonkeyPatch,
+    mig_inputs: dict[str, object],
+) -> None:
+    monkeypatch.setenv(
+        "NEBIUS_CXCLI_RUNTIME_VALIDATION_PLUGINS",
+        "nebius_cxcli.runtime_component_validation:validate_component_runtime_rules",
+    )
+    payload = {
+        "__shared_admin_ssh_user_name__": "ubuntu",
+        "infra": {
+            "components": [
+                {
+                    "id": "mk8s",
+                    "enabled": True,
+                    "inputs": mig_inputs,
+                }
+            ]
+        },
+    }
+
+    with pytest.raises(ValueError, match="mig_strategy/mig_parted_config require"):
         run_runtime_validation_plugins(
             payload=payload,
             get_path=_get_path,
@@ -489,14 +593,12 @@ def test_runtime_validation_plugins_allow_generic_mk8s_gpu_node_groups(
         "__shared_admin_ssh_user_name__": "ubuntu",
         "infra": {
             "mk8s": {
-                "gpu_enabled": True,
-                "gpu_node_groups": 0,
-                "gpu_nodes_platform": "gpu-h100-sxm",
-                "gpu_nodes_preset": "8gpu-128vcpu-1600gb",
                 "node_groups": {
-                    "worker-gpu-0": {
+                    "worker": {
                         "gpu": True,
-                        "fixed_node_count": 1,
+                        "node_count": 1,
+                        "platform": "gpu-h100-sxm",
+                        "preset": "8gpu-128vcpu-1600gb",
                     }
                 },
             }
@@ -532,17 +634,73 @@ def test_runtime_validation_plugins_reject_non_clusterable_mk8s_gpu_preset_with_
         },
         "infra": {
             "mk8s": {
-                "gpu_enabled": True,
-                "gpu_node_groups": 1,
-                "gpu_nodes_count_per_group": 1,
-                "gpu_nodes_platform": "gpu-b200-sxm",
-                "gpu_nodes_preset": "1gpu-20vcpu-224gb",
-                "infiniband_fabric": "us-central1-b",
+                "gpu_clusters": {
+                    "workers": {
+                        "infiniband_fabric": "us-central1-b",
+                    }
+                },
+                "node_groups": {
+                    "worker": {
+                        "gpu": True,
+                        "node_count": 1,
+                        "platform": "gpu-b200-sxm",
+                        "preset": "1gpu-20vcpu-224gb",
+                        "gpu_cluster_key": "workers",
+                    }
+                },
             }
         },
     }
 
-    with pytest.raises(ValueError, match="does not support GPU clustering"):
+    with pytest.raises(ValueError, match="does not have confirmed GPU clustering support"):
+        run_runtime_validation_plugins(
+            payload=payload,
+            get_path=_get_path,
+            as_text=_as_text,
+            id_pattern=re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"),
+            env_var_pattern=re.compile(r"^[A-Z_][A-Z0-9_]*$"),
+        )
+
+
+def test_runtime_validation_plugins_reject_mk8s_infiniband_when_clustering_unconfirmed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(
+        "NEBIUS_CXCLI_RUNTIME_VALIDATION_PLUGINS",
+        "nebius_cxcli.runtime_component_validation:validate_component_runtime_rules",
+    )
+    monkeypatch.setattr(
+        "nebius_cxcli.provider_options.ProviderOptionLookup.compute_platform_preset_allows_gpu_clustering",
+        lambda self, *, project_id, platform_name, preset_name: None,
+    )
+    payload = {
+        "__shared_admin_ssh_user_name__": "ubuntu",
+        "client_info": {
+            "nebius": {
+                "project_id": "project-1",
+            }
+        },
+        "infra": {
+            "mk8s": {
+                "gpu_clusters": {
+                    "workers": {
+                        "infiniband_fabric": "fabric-2",
+                    }
+                },
+                "node_groups": {
+                    "worker": {
+                        "gpu": True,
+                        "node_count": 1,
+                        "platform": "gpu-h100-sxm",
+                        "preset": "8gpu-128vcpu-1600gb",
+                        "gpu_cluster_key": "workers",
+                    }
+                },
+            }
+        },
+    }
+
+    with pytest.raises(ValueError, match="does not have confirmed GPU clustering support"):
         run_runtime_validation_plugins(
             payload=payload,
             get_path=_get_path,
@@ -581,12 +739,82 @@ def test_runtime_validation_plugins_reject_mk8s_infiniband_fabric_not_in_live_ca
         },
         "infra": {
             "mk8s": {
-                "gpu_enabled": True,
-                "gpu_node_groups": 1,
-                "gpu_nodes_count_per_group": 1,
-                "gpu_nodes_platform": "gpu-h100-sxm",
-                "gpu_nodes_preset": "8gpu-128vcpu-1600gb",
-                "infiniband_fabric": "fabric-6",
+                "gpu_clusters": {
+                    "workers": {
+                        "infiniband_fabric": "fabric-6",
+                    }
+                },
+                "node_groups": {
+                    "worker": {
+                        "gpu": True,
+                        "node_count": 1,
+                        "platform": "gpu-h100-sxm",
+                        "preset": "8gpu-128vcpu-1600gb",
+                        "gpu_cluster_key": "workers",
+                    }
+                },
+            }
+        },
+    }
+
+    with pytest.raises(ValueError, match="live Capacity Dashboard fabrics"):
+        run_runtime_validation_plugins(
+            payload=payload,
+            get_path=_get_path,
+            as_text=_as_text,
+            id_pattern=re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"),
+            env_var_pattern=re.compile(r"^[A-Z_][A-Z0-9_]*$"),
+        )
+
+
+def test_runtime_validation_plugins_reject_second_mk8s_gpu_group_invalid_fabric(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(
+        "NEBIUS_CXCLI_RUNTIME_VALIDATION_PLUGINS",
+        "nebius_cxcli.runtime_component_validation:validate_component_runtime_rules",
+    )
+    monkeypatch.setattr(
+        "nebius_cxcli.provider_options.ProviderOptionLookup.compute_platform_preset_allows_gpu_clustering",
+        lambda self, *, project_id, platform_name, preset_name: True,
+    )
+    monkeypatch.setattr(
+        "nebius_cxcli.provider_options.ProviderOptionLookup.compute_platform_preset_fabrics",
+        lambda self, *, tenant_id, project_id, region_id, platform_name, preset_name: (
+            SimpleNamespace(fabric="fabric-2"),
+        ),
+    )
+    payload = {
+        "__shared_admin_ssh_user_name__": "ubuntu",
+        "client_info": {
+            "nebius": {
+                "tenant_id": "tenant-1",
+                "project_id": "project-1",
+                "region_id": "eu-north1",
+            }
+        },
+        "infra": {
+            "mk8s": {
+                "gpu_clusters": {
+                    "secondary": {
+                        "infiniband_fabric": "fabric-6",
+                    }
+                },
+                "node_groups": {
+                    "worker-a": {
+                        "gpu": True,
+                        "node_count": 1,
+                        "platform": "gpu-h100-sxm",
+                        "preset": "8gpu-128vcpu-1600gb",
+                    },
+                    "worker-b": {
+                        "gpu": True,
+                        "node_count": 1,
+                        "platform": "gpu-h100-sxm",
+                        "preset": "8gpu-128vcpu-1600gb",
+                        "gpu_cluster_key": "secondary",
+                    },
+                },
             }
         },
     }
@@ -627,11 +855,14 @@ def test_runtime_validation_plugins_reject_invalid_mk8s_gpu_validation_override(
         },
         "infra": {
             "mk8s": {
-                "gpu_enabled": True,
-                "gpu_node_groups": 1,
-                "gpu_nodes_count_per_group": 1,
-                "gpu_nodes_platform": "gpu-h100-sxm",
-                "gpu_nodes_preset": "8gpu-128vcpu-1600gb",
+                "node_groups": {
+                    "worker": {
+                        "gpu": True,
+                        "node_count": 1,
+                        "platform": "gpu-h100-sxm",
+                        "preset": "8gpu-128vcpu-1600gb",
+                    }
+                },
             }
         },
     }

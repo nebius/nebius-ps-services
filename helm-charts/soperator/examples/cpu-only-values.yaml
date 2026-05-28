@@ -3,6 +3,35 @@
 clusterName: soperator-cpu
 clusterType: cpu
 
+soperator-activechecks:
+  # CPU-only examples render a cpu partition, not the upstream hidden partition.
+  srunReadyPartition: cpu
+  checks:
+    all-reduce-perf-nccl-in-docker:
+      enabled: false
+    all-reduce-perf-nccl-with-ib:
+      enabled: false
+    all-reduce-perf-nccl-without-ib:
+      enabled: false
+    cuda-samples:
+      enabled: false
+    dcgmi-diag-r2:
+      enabled: false
+    dcgmi-diag-r3:
+      enabled: false
+    ensure-healthy-nodes:
+      enabled: false
+    extensive-check:
+      enabled: false
+    gpu-fryer:
+      enabled: false
+    ib-gpu-perf:
+      enabled: false
+    mem-perf:
+      enabled: false
+    prepull-container-image:
+      enabled: false
+
 slurmNodes:
   login:
     # Keep public keys out of example files; pass them with Helm --set-file.
@@ -35,7 +64,7 @@ nodesets:
     slurmd:
       image:
         repository: cr.eu-north1.nebius.cloud/soperator/worker_slurmd
-        tag: 3.0.3-slurm25.11.3
+        tag: 3.0.4-slurm25.11.3
         pullPolicy: IfNotPresent
       resources:
         cpu: "4"
@@ -56,7 +85,7 @@ nodesets:
     munge:
       image:
         repository: cr.eu-north1.nebius.cloud/soperator/munge
-        tag: 3.0.3-slurm25.11.3
+        tag: 3.0.4-slurm25.11.3
         pullPolicy: IfNotPresent
       resources:
         cpu: 200m

@@ -23,6 +23,7 @@ from .deploy_targets import (
     target_scoped_app_instance_id,
 )
 from .runtime_config import to_plain_data
+from .slack_notifier_runtime import soperator_notifier_mysterybox_secret_refs
 
 EXTERNAL_SECRETS_APP_ID = "external-secrets"
 MYSTERYBOX_INFRA_COMPONENT_ID = "mysterybox"
@@ -260,58 +261,107 @@ def _mysterybox_secret_version_id(secret: Mapping[str, Any]) -> str:
 def _generated_external_secrets(
     payload: Mapping[str, Any],
     config: Mapping[str, Any],
+    *,
+    target_ref: str = "",
 ) -> list[dict[str, Any]]:
     refs = _enabled_mysterybox_secret_refs(payload)
-    if not refs:
-        return []
     sync_namespaces = _sync_namespaces(config)
     if not sync_namespaces:
         return []
     include_instance_prefix = len({item["mysterybox_instance_id"] for item in refs}) > 1
     external_secrets: list[dict[str, Any]] = []
-    for namespace in sync_namespaces:
-        seen_names: set[str] = set()
-        for ref in refs:
-            source_name = (
-                f"{ref['mysterybox_instance_id']}-{ref['secret_name']}"
-                if include_instance_prefix
-                else ref["secret_name"]
-            )
-            target_secret_name = _kubernetes_name(
-                _as_text(ref.get("kubernetes_secret_name")) or source_name
-            )
-            name = _unique_kubernetes_name(target_secret_name, seen=seen_names)
-            remote_ref_base = {
-                "mysterybox_instance_id": ref["mysterybox_instance_id"],
-                "secret_name": ref["secret_name"],
-            }
-            version = _as_text(ref.get("version"))
-            if (
-                _as_text(ref.get("eso_version_policy"))
-                == MYSTERYBOX_ESO_MANUAL_VERSION_POLICY
-                and version
-            ):
-                remote_ref_base["version"] = version
-            data = []
-            for payload_key in ref.get("payload_keys", []):
-                if not _as_text(payload_key):
+    if refs:
+        for namespace in sync_namespaces:
+            seen_names: set[str] = set()
+            for ref in refs:
+                source_name = (
+                    f"{ref['mysterybox_instance_id']}-{ref['secret_name']}"
+                    if include_instance_prefix
+                    else ref["secret_name"]
+                )
+                target_secret_name = _kubernetes_name(
+                    _as_text(ref.get("kubernetes_secret_name")) or source_name
+                )
+                name = _unique_kubernetes_name(target_secret_name, seen=seen_names)
+                remote_ref_base = {
+                    "mysterybox_instance_id": ref["mysterybox_instance_id"],
+                    "secret_name": ref["secret_name"],
+                }
+                version = _as_text(ref.get("version"))
+                if (
+                    _as_text(ref.get("eso_version_policy"))
+                    == MYSTERYBOX_ESO_MANUAL_VERSION_POLICY
+                    and version
+                ):
+                    remote_ref_base["version"] = version
+                data = []
+                for payload_key in ref.get("payload_keys", []):
+                    if not _as_text(payload_key):
+                        continue
+                    data_item = {
+                        **remote_ref_base,
+                        "secret_key": _as_text(payload_key),
+                        "property": _as_text(payload_key),
+                    }
+                    data.append(data_item)
+                if not data:
                     continue
-                data_item = {
-                    **remote_ref_base,
-                    "secret_key": _as_text(payload_key),
-                    "property": _as_text(payload_key),
-                }
-                data.append(data_item)
-            if not data:
+                external_secrets.append(
+                    {
+                        "name": name,
+                        "namespace": namespace,
+                        "target": {"name": name},
+                        "data": data,
+                    }
+                )
+    for ref in soperator_notifier_mysterybox_secret_refs(payload, target_ref=target_ref):
+        namespace = _as_text(ref.get("namespace"))
+        name = _kubernetes_name(_as_text(ref.get("name")))
+        secret_id = _as_text(ref.get("secret_id"))
+        secret_key = _as_text(ref.get("secret_key"))
+        if not namespace or not name or not secret_id or not secret_key:
+            continue
+        rendered_key = (namespace, _as_text(ref.get("target_name")) or name, secret_key)
+        direct_data = {
+            "secret_key": secret_key,
+            "secret_id": secret_id,
+            "property": _as_text(ref.get("property")) or secret_key,
+        }
+        merged = False
+        for item in external_secrets:
+            if _as_text(item.get("namespace")) != rendered_key[0]:
                 continue
-            external_secrets.append(
-                {
-                    "name": name,
-                    "namespace": namespace,
-                    "target": {"name": name},
-                    "data": data,
-                }
-            )
+            target = item.get("target")
+            target_name = (
+                _as_text(target.get("name")) if isinstance(target, Mapping) else ""
+            ) or _as_text(item.get("name"))
+            if target_name != rendered_key[1]:
+                continue
+            data = item.get("data")
+            if not isinstance(data, list):
+                data = []
+                item["data"] = data
+            for index, data_item in enumerate(data):
+                if not isinstance(data_item, Mapping):
+                    continue
+                if _as_text(data_item.get("secret_key")) == rendered_key[2]:
+                    data[index] = copy.deepcopy(direct_data)
+                    merged = True
+                    break
+            if not merged:
+                data.append(copy.deepcopy(direct_data))
+                merged = True
+            break
+        if merged:
+            continue
+        external_secrets.append(
+            {
+                "name": name,
+                "namespace": namespace,
+                "target": {"name": _as_text(ref.get("target_name")) or name},
+                "data": [copy.deepcopy(direct_data)],
+            }
+        )
     return external_secrets
 
 
@@ -406,6 +456,8 @@ def mysterybox_eso_app_target_refs(payload_or_config: Any) -> tuple[str, ...]:
     seen: set[str] = set()
     for target_ref in mysterybox_eso_enabled_target_refs(payload):
         _append_unique(target_refs, target_ref, seen)
+    for ref in soperator_notifier_mysterybox_secret_refs(payload):
+        _append_unique(target_refs, _as_text(ref.get("target_ref")), seen)
     if _mysterybox_backend_enabled(payload):
         for target_ref in enabled_cluster_target_refs(payload):
             _append_unique(target_refs, target_ref, seen)
@@ -561,6 +613,12 @@ def mysterybox_eso_dependency_issues(
 ) -> list[str]:
     payload = _payload(payload_or_config)
     enabled_targets = mysterybox_eso_app_target_refs(payload)
+    direct_secret_refs = soperator_notifier_mysterybox_secret_refs(payload)
+    direct_targets = {
+        normalize_component_token(ref.get("target_ref"))
+        for ref in direct_secret_refs
+        if normalize_component_token(ref.get("target_ref"))
+    }
     if not enabled_targets:
         return []
     native_targets = set(mysterybox_eso_enabled_target_refs(payload))
@@ -569,6 +627,11 @@ def mysterybox_eso_dependency_issues(
         if native_targets:
             issues.append(
                 "deploy.targets[].secrets.mysterybox.enabled=true requires bundled apps:external-secrets"
+            )
+        elif direct_targets:
+            issues.append(
+                "apps:soperator notifier webhookSource=mysterybox requires bundled "
+                "apps:external-secrets for the same target"
             )
         else:
             issues.append(
@@ -588,15 +651,21 @@ def mysterybox_eso_dependency_issues(
                     f"deploy.targets[instance_id={target_ref}].secrets.mysterybox.enabled=true "
                     "requires apps:external-secrets to be enabled for the same target"
                 )
+            elif target_ref in direct_targets:
+                issues.append(
+                    f"apps:soperator notifier webhookSource=mysterybox on target "
+                    f"'{target_ref}' requires apps:external-secrets to be enabled for the same target"
+                )
             else:
                 issues.append(
                     f"infra.components[id=mysterybox].enabled=true with MK8s target "
                     f"'{target_ref}' requires apps:external-secrets to be enabled for the same target"
                 )
-    if native_targets and not _enabled_mysterybox_secret_refs(payload):
+    if native_targets and not _enabled_mysterybox_secret_refs(payload) and not direct_secret_refs:
         issues.append(
             "deploy.targets[].secrets.mysterybox.enabled=true requires at least one "
-            "enabled mysterybox component with inputs.secrets"
+            "enabled mysterybox component with inputs.secrets or one bundled app "
+            "MysteryBox webhook source"
         )
     for ref in _enabled_mysterybox_secret_refs(payload):
         kubernetes_secret_name = _as_text(ref.get("kubernetes_secret_name"))
@@ -861,7 +930,7 @@ def mysterybox_eso_extra_objects_for_target(
     ]
     objects = [_namespace_doc(namespace) for namespace in namespaces]
     objects.append(_cluster_secret_store_doc(config))
-    for item in _generated_external_secrets(payload, config):
+    for item in _generated_external_secrets(payload, config, target_ref=normalized_target_ref):
         if _as_text(item.get("name")) and _as_text(item.get("namespace")):
             external_secret = _external_secret_doc(
                 payload,
@@ -980,14 +1049,65 @@ def _target_scoped_report_file(report_file: str, *, target_ref: str) -> str:
 def _external_secret_refs(
     payload: Mapping[str, Any],
     config: Mapping[str, Any],
+    *,
+    target_ref: str,
 ) -> list[dict[str, str]]:
     refs: list[dict[str, str]] = []
-    for item in _generated_external_secrets(payload, config):
+    for item in _generated_external_secrets(payload, config, target_ref=target_ref):
         name = _as_text(item.get("name"))
         namespace = _as_text(item.get("namespace"))
         if name and namespace:
             refs.append({"namespace": namespace, "name": name})
     return refs
+
+
+def mysterybox_eso_manages_kubernetes_secret(
+    payload_or_config: Any,
+    *,
+    target_ref: str | None,
+    namespace: str,
+    name: str,
+    key: str,
+    component_output_values: Mapping[str, Any] | None = None,
+) -> bool:
+    """Return true when rendered MysteryBox ESO sync owns a Secret data key."""
+    payload = _payload(payload_or_config)
+    resolved_component_outputs = component_output_values or {}
+    normalized_target_ref = normalize_component_token(target_ref) if target_ref else ""
+    expected_namespace = _as_text(namespace)
+    expected_name = _as_text(name)
+    expected_key = _as_text(key)
+    if not expected_namespace or not expected_name or not expected_key:
+        return False
+
+    for current_target_ref, config in _mysterybox_enabled_targets(payload):
+        if normalized_target_ref and current_target_ref != normalized_target_ref:
+            continue
+        for item in _generated_external_secrets(payload, config, target_ref=current_target_ref):
+            external_secret = _external_secret_doc(
+                payload,
+                config,
+                item,
+                component_output_values=resolved_component_outputs,
+            )
+            if external_secret is None:
+                continue
+            metadata = external_secret.get("metadata")
+            if not isinstance(metadata, Mapping):
+                continue
+            if _as_text(metadata.get("namespace")) != expected_namespace:
+                continue
+            spec = external_secret.get("spec")
+            if not isinstance(spec, Mapping):
+                continue
+            target = spec.get("target")
+            target_name = _as_text(target.get("name")) if isinstance(target, Mapping) else ""
+            if target_name != expected_name:
+                continue
+            for data_item in _list_of_mappings(spec.get("data")):
+                if _as_text(data_item.get("secretKey")) == expected_key:
+                    return True
+    return False
 
 
 def _secret_name_ref_instance_ids(
@@ -1041,7 +1161,7 @@ def mysterybox_eso_validation_specs(payload_or_config: Any) -> list[dict[str, An
     payload = _payload(payload_or_config)
     specs: list[dict[str, Any]] = []
     for target_ref, config in _mysterybox_enabled_targets(payload):
-        external_secret_refs = _external_secret_refs(payload, config)
+        external_secret_refs = _external_secret_refs(payload, config, target_ref=target_ref)
         if not external_secret_refs:
             continue
         secret = _credentials_secret(config)

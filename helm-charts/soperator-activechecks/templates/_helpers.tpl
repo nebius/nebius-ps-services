@@ -51,7 +51,6 @@ Create the name of the service account to use
 {{- end }}
 {{- end }}
 
-
 {{/*
 Pyxis format for active check image.
 */}}
@@ -69,6 +68,25 @@ Resolve active check image when not explicitly set.
 {{- $tag := required "activeCheck image tag for the selected CUDA version must be provided." (index .Values.images.activeCheckImageTags (printf "%v" $cudaVersion)) -}}
 {{- $repo := required "activeCheck image repository must be provided." .Values.images.activeCheckImageRepository -}}
 {{- $_ := set .Values "activeCheckImage" (printf "%s:%s" $repo $tag) -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Validate that enabled checks depend only on checks that are also enabled.
+Invoke with (dict "name" "<checkKey>" "check" $check "checks" .Values.checks)
+*/}}
+{{- define "soperator-activechecks.checkDependencies" -}}
+{{- $name := .name -}}
+{{- $check := default dict .check -}}
+{{- $checks := default dict .checks -}}
+{{- range $dependency := default (list) $check.dependsOn }}
+  {{- $dependencyCheck := index $checks $dependency -}}
+  {{- if not $dependencyCheck -}}
+    {{- fail (printf "checks.%s.dependsOn references unknown check %q" $name $dependency) -}}
+  {{- end -}}
+  {{- if not $dependencyCheck.enabled -}}
+    {{- fail (printf "checks.%s.dependsOn references disabled check %q" $name $dependency) -}}
+  {{- end -}}
 {{- end -}}
 {{- end -}}
 
@@ -95,14 +113,29 @@ Otherwise, look up from .Values.ncclTestsVersions map.
 {{- end -}}
 
 {{/*
+Validate that a script path references a packaged chart file.
+*/}}
+{{- define "soperator-activechecks.validateScriptPath" -}}
+{{- $field := default "script file" .field -}}
+{{- $path := required (printf "%s is required" $field) .path -}}
+{{- if eq (len (.ctx.Files.Glob $path)) 0 -}}
+{{- fail (printf "%s references missing chart file %q" $field $path) -}}
+{{- end -}}
+{{- $path -}}
+{{- end -}}
+
+{{/*
 Render script content from a file with optional tpl evaluation.
 */}}
 {{- define "soperator-activechecks.renderScript" -}}
-{{- $content := .ctx.Files.Get .path -}}
+{{- $path := include "soperator-activechecks.validateScriptPath" . | trim -}}
+{{- $content := .ctx.Files.Get $path -}}
 {{- $headlessSuffix := printf "%s-login-headless-svc.%s.svc.cluster.local" .ctx.Values.slurmClusterRefName .ctx.Release.Namespace -}}
 {{- $content = replace "soperator-login-headless-svc.soperator.svc.cluster.local" $headlessSuffix $content -}}
 {{- $loginTarget := printf "soperatorchecks@login-${i}.%s hostname" $headlessSuffix -}}
 {{- $content = replace "soperatorchecks@login-$i hostname" $loginTarget $content -}}
+{{- $srunReadyPartition := default "hidden" .ctx.Values.srunReadyPartition -}}
+{{- $content = replace "--partition=hidden" (printf "--partition=%s" $srunReadyPartition) $content -}}
 {{- tpl $content .ctx -}}
 {{- end -}}
 
@@ -124,6 +157,7 @@ Render slurmJobSpec for an ActiveCheck.
 */}}
 {{- define "soperator-activechecks.slurmJobSpec" -}}
 {{- $ctx := .ctx -}}
+{{- $name := .name -}}
 {{- $spec := default dict .check.slurmJobSpec -}}
 {{- $jobContainerRaw := default dict $spec.jobContainer -}}
 {{- $baseContainer := dict "appArmorProfile" "unconfined" "image" $ctx.Values.images.slurmJob "env" $ctx.Values.jobContainer.env "volumeMounts" $ctx.Values.jobContainer.volumeMounts "volumes" $ctx.Values.jobContainer.volumes -}}
@@ -135,8 +169,18 @@ Render slurmJobSpec for an ActiveCheck.
 {{- with $jobContainerRaw.extraVolumeMounts }}{{- $volumeMounts = concat $volumeMounts . -}}{{- end }}
 {{- $volumes := default (list) $jobContainer.volumes -}}
 {{- with $jobContainerRaw.extraVolumes }}{{- $volumes = concat $volumes . -}}{{- end }}
+{{- $script := "" -}}
+{{- $sbatchScriptFileField := printf "checks.%s.slurmJobSpec.sbatchScriptFile" $name -}}
+{{- if $spec.sbatchScript }}
+{{- $script = tpl $spec.sbatchScript $ctx -}}
+{{- if hasKey $spec "sbatchScriptFile" }}
+{{- $_ := include "soperator-activechecks.validateScriptPath" (dict "path" $spec.sbatchScriptFile "field" $sbatchScriptFileField "ctx" $ctx) -}}
+{{- end }}
+{{- else }}
+{{- $script = include "soperator-activechecks.renderScript" (dict "path" $spec.sbatchScriptFile "field" $sbatchScriptFileField "ctx" $ctx) -}}
+{{- end }}
 sbatchScript: |
-{{ include "soperator-activechecks.renderScript" (dict "path" $spec.sbatchScriptFile "ctx" $ctx) | indent 2 }}
+{{ $script | indent 2 }}
 {{- if hasKey $spec "eachWorkerJobs" }}
 eachWorkerJobs: {{ $spec.eachWorkerJobs }}
 {{- end }}
@@ -178,6 +222,7 @@ Render k8sJobSpec for an ActiveCheck.
 */}}
 {{- define "soperator-activechecks.k8sJobSpec" -}}
 {{- $ctx := .ctx -}}
+{{- $name := .name -}}
 {{- $spec := default dict .check.k8sJobSpec -}}
 {{- $jobContainerRaw := default dict $spec.jobContainer -}}
 {{- $useCommonVolumeMounts := default true $spec.useCommonVolumeMounts -}}
@@ -201,11 +246,21 @@ Render k8sJobSpec for an ActiveCheck.
 {{- if $spec.volumes }}{{- $volumes = $spec.volumes -}}{{- end }}
 {{- with $spec.extraVolumes }}{{- $volumes = concat $volumes . -}}{{- end }}
 {{- $command := $jobContainer.command -}}
-{{- if and (not $command) $spec.scriptFile }}
-{{- $command = list "bash" "-c" (include "soperator-activechecks.renderScript" (dict "path" $spec.scriptFile "ctx" $ctx)) -}}
+{{- if hasKey $spec "scriptFile" }}
+{{- $field := printf "checks.%s.k8sJobSpec.scriptFile" $name -}}
+{{- if not $command }}
+{{- $command = list "bash" "-c" (include "soperator-activechecks.renderScript" (dict "path" $spec.scriptFile "field" $field "ctx" $ctx)) -}}
+{{- else }}
+{{- $_ := include "soperator-activechecks.validateScriptPath" (dict "path" $spec.scriptFile "field" $field "ctx" $ctx) -}}
 {{- end }}
-{{- if and (not $command) $spec.pythonScriptFile }}
-{{- $command = list "bash" "-c" (printf "python3 - <<'PY'\n%s\nPY" (include "soperator-activechecks.renderScript" (dict "path" $spec.pythonScriptFile "ctx" $ctx))) -}}
+{{- end }}
+{{- if hasKey $spec "pythonScriptFile" }}
+{{- $field := printf "checks.%s.k8sJobSpec.pythonScriptFile" $name -}}
+{{- if not $command }}
+{{- $command = list "bash" "-c" (printf "python3 - <<'PY'\n%s\nPY" (include "soperator-activechecks.renderScript" (dict "path" $spec.pythonScriptFile "field" $field "ctx" $ctx))) -}}
+{{- else }}
+{{- $_ := include "soperator-activechecks.validateScriptPath" (dict "path" $spec.pythonScriptFile "field" $field "ctx" $ctx) -}}
+{{- end }}
 {{- end }}
 {{- $args := $jobContainer.args -}}
 {{- $image := tpl (default $ctx.Values.images.k8sJob $jobContainer.image) $ctx }}

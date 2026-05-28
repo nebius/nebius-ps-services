@@ -261,10 +261,13 @@ Expected evidence:
   configured read-only agents by name.
 
 Direct hook unit probes against a live `$CODEX_HOME` with synthetic
-`session_id` values create scaffold-only task-state directories named after
-those IDs. They validate hook path calculation, not active persistent model
-state. Prefer `global-context-management/scripts/validate-local-templates.py`
-for hook-unit validation because it uses disposable temporary homes.
+`session_id` values can create scaffold-only task-state directories named after
+those IDs when they exercise the complex-prompt hook. They validate hook path
+calculation, not active persistent model state. Prefer
+`global-context-management/scripts/validate-local-templates.py` for hook-unit
+validation because it uses disposable temporary homes. If a hook payload has no
+`session_id`, task state is unavailable and no manual or legacy fallback path is
+created.
 
 Then run an explicit subagent probe:
 

@@ -10,13 +10,19 @@ from nebius_cxcli.mysterybox_eso import (
     MYSTERYBOX_ESO_CONNECTIVITY_VALIDATION_KIND,
     materialize_mysterybox_eso_app_values,
     mysterybox_eso_api_domains,
+    mysterybox_eso_app_target_refs,
+    mysterybox_eso_dependency_issues,
     mysterybox_eso_extra_objects_for_target,
+    mysterybox_eso_manages_kubernetes_secret,
     mysterybox_eso_terraform_output_specs,
     mysterybox_eso_validation_specs,
 )
 
 
-def _starter_payload(selected_infra: set[str] | None = None) -> dict:
+def _starter_payload(
+    selected_infra: set[str] | None = None,
+    selected_apps: set[str] | None = None,
+) -> dict:
     payload = yaml.safe_load(
         starter_config_yaml(
             client_name="client-a",
@@ -25,7 +31,7 @@ def _starter_payload(selected_infra: set[str] | None = None) -> dict:
             region_id="eu-north1",
             email="ops@example.com",
             selected_infra=selected_infra or {"mk8s", "mysterybox"},
-            selected_apps=set(),
+            selected_apps=selected_apps or set(),
             infra_entries=component_entries("infra"),
             app_entries=component_entries("apps"),
         )
@@ -233,6 +239,241 @@ def test_native_mysterybox_eso_uses_declared_kubernetes_secret_name() -> None:
         }
     ]
     assert "dataFrom" not in external_secret["spec"]
+
+
+def test_native_mysterybox_eso_reports_managed_kubernetes_secret_key() -> None:
+    payload = _starter_payload()
+    _set_mysterybox_inputs(
+        payload,
+        secrets=[
+            {
+                "name": "soperator-slack-webhook",
+                "version_id": "n/a",
+                "kubernetes_secret_name": "soperator-notifier-slack-webhook",
+                "payload": {"url": {"type": "text"}},
+            }
+        ],
+    )
+    _enable_mysterybox_eso(payload, sync_namespaces=["soperator"])
+
+    config = validate_config(payload)
+
+    assert not mysterybox_eso_manages_kubernetes_secret(
+        config,
+        target_ref="mk8s",
+        namespace="soperator",
+        name="soperator-notifier-slack-webhook",
+        key="url",
+    )
+    assert mysterybox_eso_manages_kubernetes_secret(
+        config,
+        target_ref="mk8s",
+        namespace="soperator",
+        name="soperator-notifier-slack-webhook",
+        key="url",
+        component_output_values={
+            "mysterybox.secret_ids": {"soperator-slack-webhook": "mbsec-e00slack"}
+        },
+    )
+    assert not mysterybox_eso_manages_kubernetes_secret(
+        config,
+        target_ref="mk8s",
+        namespace="default",
+        name="soperator-notifier-slack-webhook",
+        key="url",
+    )
+    assert not mysterybox_eso_manages_kubernetes_secret(
+        config,
+        target_ref="mk8s",
+        namespace="soperator",
+        name="soperator-notifier-slack-webhook",
+        key="missing",
+    )
+
+
+def test_soperator_notifier_existing_mysterybox_secret_uses_primary_version() -> None:
+    payload = _starter_payload(selected_infra={"mk8s"}, selected_apps={"soperator"})
+    soperator = next(item for item in payload["apps"]["charts"] if item["id"] == "soperator")
+    soperator["values"] = {
+        "soperator-notifier": {
+            "enabled": True,
+            "slack": {
+                "mode": "existing-webhook",
+                "webhookSource": "mysterybox",
+                "existingSecret": "soperator-notifier-slack-webhook",
+                "existingSecretKey": "url",
+                "mysterybox": {
+                    "secretId": "mbsec-e00slack",
+                    "property": "url",
+                },
+            },
+        }
+    }
+
+    config = validate_config(payload)
+
+    mysterybox_sync = config["deploy"]["targets"][0]["secrets"]["mysterybox"]
+    assert mysterybox_sync["enabled"] is True
+    assert "soperator" in mysterybox_sync["sync_namespaces"]
+    assert _external_secrets_app(config)["enabled"] is True
+    assert mysterybox_eso_manages_kubernetes_secret(
+        config,
+        target_ref="mk8s",
+        namespace="soperator",
+        name="soperator-notifier-slack-webhook",
+        key="url",
+    )
+    external_secret = next(
+        item for item in _extra_objects(config, {}) if item["kind"] == "ExternalSecret"
+    )
+    assert external_secret["spec"]["data"] == [
+        {
+            "secretKey": "url",
+            "remoteRef": {"key": "mbsec-e00slack", "property": "url"},
+        }
+    ]
+
+
+def test_soperator_notifier_mysterybox_source_requires_external_secrets_target() -> None:
+    payload = _starter_payload(selected_infra={"mk8s"}, selected_apps={"soperator"})
+    soperator = next(item for item in payload["apps"]["charts"] if item["id"] == "soperator")
+    soperator["values"] = {
+        "soperator-notifier": {
+            "enabled": True,
+            "slack": {
+                "mode": "existing-webhook",
+                "webhookSource": "mysterybox",
+                "existingSecret": "soperator-notifier-slack-webhook",
+                "existingSecretKey": "url",
+                "mysterybox": {
+                    "secretId": "mbsec-e00slack",
+                    "property": "url",
+                },
+            },
+        }
+    }
+
+    assert mysterybox_eso_app_target_refs(payload) == ("mk8s",)
+    assert mysterybox_eso_dependency_issues(
+        payload,
+        app_entries=component_entries("apps"),
+    ) == [
+        "apps:soperator notifier webhookSource=mysterybox on target "
+        "'mk8s' requires apps:external-secrets to be enabled for the same target"
+    ]
+
+
+def test_soperator_notifier_direct_secret_renders_when_native_secret_name_collides() -> None:
+    payload = _starter_payload(selected_apps={"soperator"})
+    _set_mysterybox_inputs(
+        payload,
+        secrets=[
+            {
+                "name": "stale-slack-webhook",
+                "version_id": "n/a",
+                "kubernetes_secret_name": "soperator-notifier-slack-webhook",
+                "payload": {"url": {"type": "text"}},
+            }
+        ],
+    )
+    _enable_mysterybox_eso(payload, sync_namespaces=["soperator"])
+    soperator = next(item for item in payload["apps"]["charts"] if item["id"] == "soperator")
+    soperator["values"] = {
+        "soperator-notifier": {
+            "enabled": True,
+            "slack": {
+                "mode": "existing-webhook",
+                "webhookSource": "mysterybox",
+                "existingSecret": "soperator-notifier-slack-webhook",
+                "existingSecretKey": "url",
+                "mysterybox": {
+                    "secretId": "mbsec-e00direct",
+                    "property": "url",
+                },
+            },
+        }
+    }
+
+    config = validate_config(payload)
+
+    objects = [
+        item
+        for item in mysterybox_eso_extra_objects_for_target(
+            config,
+            target_ref="mk8s",
+            component_output_values={},
+        )
+        if item["kind"] == "ExternalSecret"
+    ]
+    assert len(objects) == 1
+    assert objects[0]["metadata"]["name"] == "soperator-notifier-slack-webhook"
+    assert objects[0]["spec"]["data"] == [
+        {
+            "secretKey": "url",
+            "remoteRef": {"key": "mbsec-e00direct", "property": "url"},
+        }
+    ]
+
+
+def test_soperator_notifier_direct_secret_replaces_native_secret_key_collision() -> None:
+    payload = _starter_payload(selected_apps={"soperator"})
+    _set_mysterybox_inputs(
+        payload,
+        secrets=[
+            {
+                "name": "stale-slack-webhook",
+                "version_id": "n/a",
+                "kubernetes_secret_name": "soperator-notifier-slack-webhook",
+                "payload": {
+                    "url": {"type": "text"},
+                    "token": {"type": "text"},
+                },
+            }
+        ],
+    )
+    _enable_mysterybox_eso(payload, sync_namespaces=["soperator"])
+    soperator = next(item for item in payload["apps"]["charts"] if item["id"] == "soperator")
+    soperator["values"] = {
+        "soperator-notifier": {
+            "enabled": True,
+            "slack": {
+                "mode": "existing-webhook",
+                "webhookSource": "mysterybox",
+                "existingSecret": "soperator-notifier-slack-webhook",
+                "existingSecretKey": "url",
+                "mysterybox": {
+                    "secretId": "mbsec-e00direct",
+                    "property": "url",
+                },
+            },
+        }
+    }
+
+    config = validate_config(payload)
+
+    objects = [
+        item
+        for item in mysterybox_eso_extra_objects_for_target(
+            config,
+            target_ref="mk8s",
+            component_output_values={
+                "mysterybox.secret_ids": {"stale-slack-webhook": "mbsec-e00native"}
+            },
+        )
+        if item["kind"] == "ExternalSecret"
+    ]
+    assert len(objects) == 1
+    assert objects[0]["metadata"]["name"] == "soperator-notifier-slack-webhook"
+    assert objects[0]["spec"]["data"] == [
+        {
+            "secretKey": "url",
+            "remoteRef": {"key": "mbsec-e00direct", "property": "url"},
+        },
+        {
+            "secretKey": "token",
+            "remoteRef": {"key": "mbsec-e00native", "property": "token"},
+        },
+    ]
 
 
 def test_native_mysterybox_eso_auto_primary_omits_declared_version() -> None:

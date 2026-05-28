@@ -3,6 +3,10 @@
 Reusable Terraform module that creates one Nebius Compute virtual machine with
 explicit platform/preset selection.
 
+This module requires Nebius Terraform provider `>= 0.5.217, < 0.6.0` so
+preemptible VM instances can omit the deprecated Compute preemptible priority
+field.
+
 Resources managed:
 
 - `nebius_compute_v1_instance` (VM)
@@ -114,7 +118,6 @@ module "vm" {
   - `filesystems`
 - GPU and lifecycle:
   - `preemptible_enabled`
-  - `preemptible_priority`
   - `recovery_policy`
   - `gpu_cluster_enabled`
   - `gpu_cluster_id`
@@ -176,7 +179,9 @@ object-level customization, and use
 - Regular VMs: supported for CPU and GPU platforms.
 - Preemptible VMs: the module exposes these with `preemptible_enabled=true`,
   but only for GPU platforms and only with `recovery_policy=FAIL`, matching the
-  Nebius documented contract.
+  Nebius documented contract. The module intentionally omits the deprecated
+  Compute preemptible priority field; Nebius derives actual preemption priority
+  outside the instance spec.
 - GPU clusters: `gpu_cluster_enabled=true` requires an `8gpu-*` preset and then
   either:
   - `gpu_cluster_id` to attach an existing cluster

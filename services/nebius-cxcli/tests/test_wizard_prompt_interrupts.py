@@ -1092,7 +1092,7 @@ def test_prompt_choice_override_keeps_optional_field_unset_when_empty(monkeypatc
     monkeypatch.setattr(cli.typer, "prompt", lambda *_args, **_kwargs: "")
 
     value, should_stop = cli._prompt_choice_override(
-        path_label="infra.components[0].inputs.k8s_version",
+        path_label="infra.components[0].inputs.cluster.k8s_version",
         current=None,
         choices=[
             OptionChoice(value="1.31", label="1.31"),
@@ -1135,6 +1135,76 @@ def test_prompt_choice_override_optional_empty_prompt_mentions_blank_keeps_unset
     assert should_stop is False
     assert value == ""
     assert captured["default"] == "us-central1-a"
+    assert "blank keeps unset" in str(captured["text"])
+
+
+def test_prompt_choice_override_non_tty_can_leave_auto_choice_unset(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(cli, "_is_tty_session", lambda: False)
+    captured: dict[str, object] = {}
+
+    def _fake_prompt(text: str, default=None):
+        captured["text"] = text
+        captured["default"] = default
+        return ""
+
+    monkeypatch.setattr(cli.typer, "prompt", _fake_prompt)
+
+    value, should_stop = cli._prompt_choice_override(
+        path_label="infra.components[0].inputs.node_groups.system.boot_disk.type",
+        current="NETWORK_SSD",
+        choices=[
+            OptionChoice(value="NETWORK_SSD", label="NETWORK_SSD"),
+            OptionChoice(value="NETWORK_SSD_NON_REPLICATED", label="NETWORK_SSD_NON_REPLICATED"),
+        ],
+        type_hint="string",
+        required=False,
+        unset_on_skip=True,
+    )
+
+    assert should_stop is False
+    assert value is None
+    assert captured["default"] == ""
+    assert "blank keeps unset" in str(captured["text"])
+
+
+@pytest.mark.parametrize(
+    ("current", "type_hint"),
+    [
+        ("auto-filled", "string"),
+        (True, "bool"),
+        (3, "number"),
+        (1.5, "number"),
+        ({"key": "value"}, "object"),
+    ],
+)
+def test_prompt_scalar_override_unset_on_skip_leaves_non_choice_scalars_unset(
+    monkeypatch,
+    current,
+    type_hint,
+) -> None:
+    monkeypatch.setattr(cli, "_is_tty_session", lambda: False)
+    captured: dict[str, object] = {}
+
+    def _fake_prompt(text: str, default=None):
+        captured["text"] = text
+        captured["default"] = default
+        return ""
+
+    monkeypatch.setattr(cli.typer, "prompt", _fake_prompt)
+
+    value, should_stop = cli._prompt_scalar_override(
+        "infra.components[0].inputs.optional_field",
+        current,
+        type_hint=type_hint,
+        required=False,
+        unset_on_skip=True,
+    )
+
+    assert should_stop is False
+    assert value is None
+    assert captured["default"] == ""
     assert "blank keeps unset" in str(captured["text"])
 
 
@@ -1189,6 +1259,81 @@ def test_prompt_choice_override_tty_keeps_skip_for_optional_recommended_default(
     assert "q=back; qq=quit" in str(captured["instruction"])
 
 
+def test_prompt_choice_override_tty_keeps_current_for_optional_existing_value(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(cli, "_is_tty_session", lambda: True)
+    captured: dict[str, object] = {}
+
+    class _FakePrompt:
+        def ask(self):
+            return "__skip__"
+
+    def _fake_select(*args, **kwargs):
+        captured["choices"] = kwargs.get("choices")
+        return _FakePrompt()
+
+    fake_questionary = SimpleNamespace(
+        Choice=lambda **kwargs: kwargs,
+        select=_fake_select,
+    )
+    monkeypatch.setitem(sys.modules, "questionary", fake_questionary)
+
+    value, should_stop = cli._prompt_choice_override(
+        path_label="infra.components[0].inputs.node_groups.system.boot_disk.type",
+        current="NETWORK_SSD",
+        choices=[
+            OptionChoice(value="NETWORK_SSD", label="NETWORK_SSD"),
+            OptionChoice(value="NETWORK_SSD_NON_REPLICATED", label="NETWORK_SSD_NON_REPLICATED"),
+        ],
+        type_hint="string",
+        required=False,
+    )
+
+    assert should_stop is False
+    assert value == "NETWORK_SSD"
+    titles = [choice["title"] for choice in captured["choices"]]
+    assert titles[0] == "<keep current / skip>"
+
+
+def test_prompt_choice_override_tty_can_leave_optional_auto_choice_unset(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(cli, "_is_tty_session", lambda: True)
+    captured: dict[str, object] = {}
+
+    class _FakePrompt:
+        def ask(self):
+            return "__skip__"
+
+    def _fake_select(*args, **kwargs):
+        captured["choices"] = kwargs.get("choices")
+        return _FakePrompt()
+
+    fake_questionary = SimpleNamespace(
+        Choice=lambda **kwargs: kwargs,
+        select=_fake_select,
+    )
+    monkeypatch.setitem(sys.modules, "questionary", fake_questionary)
+
+    value, should_stop = cli._prompt_choice_override(
+        path_label="infra.components[0].inputs.node_groups.system.boot_disk.type",
+        current="NETWORK_SSD",
+        choices=[
+            OptionChoice(value="NETWORK_SSD", label="NETWORK_SSD"),
+            OptionChoice(value="NETWORK_SSD_NON_REPLICATED", label="NETWORK_SSD_NON_REPLICATED"),
+        ],
+        type_hint="string",
+        required=False,
+        unset_on_skip=True,
+    )
+
+    assert should_stop is False
+    assert value is None
+    titles = [choice["title"] for choice in captured["choices"]]
+    assert titles[0] == "<skip / keep unset>"
+
+
 def test_maybe_print_gpu_preset_prompt_guidance_for_gpu_shape(monkeypatch) -> None:
     captured: list[str] = []
     monkeypatch.setattr(cli.console, "print", lambda message: captured.append(str(message)))
@@ -1199,7 +1344,11 @@ def test_maybe_print_gpu_preset_prompt_guidance_for_gpu_shape(monkeypatch) -> No
                 "components": [
                     {
                         "inputs": {
-                            "gpu_nodes_platform": "gpu-h100-sxm",
+                            "node_group_defaults": {
+                                "gpu": {
+                                    "platform": "gpu-h100-sxm",
+                                }
+                            },
                         }
                     }
                 ]
@@ -1211,7 +1360,7 @@ def test_maybe_print_gpu_preset_prompt_guidance_for_gpu_shape(monkeypatch) -> No
             config_path="infra.mk8s",
             description="mk8s",
         ),
-        full_path_label="infra.components[0].inputs.gpu_nodes_preset",
+        full_path_label="infra.components[0].inputs.node_group_defaults.gpu.preset",
         emitted_guidance=set(),
     )
 
@@ -1238,8 +1387,12 @@ def test_maybe_print_selected_gpu_preset_guidance_for_single_gpu_shape(monkeypat
                 "components": [
                     {
                         "inputs": {
-                            "gpu_nodes_platform": "gpu-h100-sxm",
-                            "gpu_nodes_preset": "1gpu-16vcpu-200gb",
+                            "node_group_defaults": {
+                                "gpu": {
+                                    "platform": "gpu-h100-sxm",
+                                    "preset": "1gpu-16vcpu-200gb",
+                                }
+                            },
                         }
                     }
                 ]
@@ -1251,7 +1404,7 @@ def test_maybe_print_selected_gpu_preset_guidance_for_single_gpu_shape(monkeypat
             config_path="infra.mk8s",
             description="mk8s",
         ),
-        full_path_label="infra.components[0].inputs.gpu_nodes_preset",
+        full_path_label="infra.components[0].inputs.node_group_defaults.gpu.preset",
         provider_lookup=provider_lookup,
         emitted_guidance=set(),
     )

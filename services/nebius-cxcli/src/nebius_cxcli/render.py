@@ -12,14 +12,15 @@ from uuid import uuid4
 from .component_sources import SourceProfile
 from .flux_render import render_flux
 from .infra_render import render_terraform_artifacts
-from .mk8s_gpu import materialize_mk8s_gpu_app_values
+from .mk8s_gpu import materialize_mk8s_gpu_app_values, prune_inactive_mk8s_gpu_app_rows
 from .mysterybox_eso import materialize_mysterybox_eso_app_values
 from .observability import (
     materialize_observability_app_values,
     materialize_observability_infra_values,
 )
 from .paths import ProjectPaths
-from .soperator_companions import materialize_soperator_companion_app_values
+from .soperator_child_charts import materialize_soperator_child_chart_values
+from .soperator_onboarding import write_soperator_onboarding_reports
 
 
 @dataclass(frozen=True)
@@ -84,8 +85,17 @@ def _render_project_to_paths(
     source_profile: SourceProfile = SourceProfile.PORTABLE,
 ) -> RenderResult:
     """Render Terraform and Flux artifacts into the provided target paths."""
+    if isinstance(config, dict):
+        from .cli import (
+            _materialize_soperator_component_defaults,
+            _materialize_soperator_render_only_values,
+        )
+
+        _materialize_soperator_component_defaults(config)
+        _materialize_soperator_render_only_values(config)
+    prune_inactive_mk8s_gpu_app_rows(config)
     materialize_mk8s_gpu_app_values(config)
-    materialize_soperator_companion_app_values(config)
+    materialize_soperator_child_chart_values(config)
     materialize_observability_infra_values(config)
     materialize_observability_app_values(config)
     materialize_mysterybox_eso_app_values(
@@ -99,6 +109,7 @@ def _render_project_to_paths(
     written: list[Path] = []
     written.extend(render_terraform_artifacts(config, paths, source_profile=source_profile))
     written.extend(render_flux(config, paths, component_output_values=component_output_values))
+    written.extend(write_soperator_onboarding_reports(config, paths.generated_dir))
     return RenderResult(files_written=sorted(written))
 
 
