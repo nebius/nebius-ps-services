@@ -75,3 +75,12 @@ spec:
         runAsNonRoot: true
       serviceAccountName: {{ include "soperatorchecks.fullname" . }}-checks
       terminationGracePeriodSeconds: 10
+      {{- with .Values.checks.tolerations }}
+      tolerations: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.checks.affinity }}
+      affinity: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.checks.nodeSelector }}
+      nodeSelector: {{- toYaml . | nindent 8 }}
+      {{- end }}

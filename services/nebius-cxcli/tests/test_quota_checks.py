@@ -234,12 +234,16 @@ def test_estimate_mk8s_requirements_add_gpu_capacity_shape_for_infiniband_nodes(
         component_id="mk8s",
         instance_id="mk8s",
         inputs={
-            "gpu_enabled": True,
-            "gpu_node_groups": 1,
-            "gpu_nodes_count_per_group": 1,
-            "gpu_nodes_platform": "gpu-b300-sxm",
-            "gpu_nodes_preset": "8gpu-192vcpu-2768gb",
-            "infiniband_fabric": "uk-south1-a",
+            "node_groups": {
+                "worker": {
+                    "node_count": 1,
+                    "gpu": True,
+                    "platform": "gpu-b300-sxm",
+                    "preset": "8gpu-192vcpu-2768gb",
+                    "gpu_cluster_key": "workers",
+                }
+            },
+            "gpu_clusters": {"workers": {"infiniband_fabric": "uk-south1-a"}},
         },
         requirements=requirements,
         gaps=gaps,
@@ -294,19 +298,30 @@ def test_estimate_mk8s_requirements_cover_boot_disk_quota_from_explicit_inputs()
         component_id="mk8s",
         instance_id="mk8s",
         inputs={
-            "cpu_nodes_count": 2,
-            "cpu_nodes_platform": "cpu-d3",
-            "cpu_nodes_preset": "32vcpu-128gb",
-            "cpu_nodes_boot_disk_size_gib": 186,
-            "cpu_nodes_boot_disk_type": "NETWORK_SSD",
-            "gpu_enabled": True,
-            "gpu_node_groups": 1,
-            "gpu_nodes_count_per_group": 1,
-            "gpu_nodes_platform": "gpu-b300-sxm",
-            "gpu_nodes_preset": "8gpu-192vcpu-2768gb",
-            "gpu_nodes_boot_disk_size_gib": 1023,
-            "gpu_nodes_boot_disk_type": "NETWORK_SSD",
-            "infiniband_fabric": "uk-south1-a",
+            "node_groups": {
+                "cpu": {
+                    "node_count": 2,
+                    "gpu": False,
+                    "platform": "cpu-d3",
+                    "preset": "32vcpu-128gb",
+                    "boot_disk": {
+                        "size_gibibytes": 186,
+                        "type": "NETWORK_SSD",
+                    },
+                },
+                "worker": {
+                    "node_count": 1,
+                    "gpu": True,
+                    "platform": "gpu-b300-sxm",
+                    "preset": "8gpu-192vcpu-2768gb",
+                    "boot_disk": {
+                        "size_gibibytes": 1023,
+                        "type": "NETWORK_SSD",
+                    },
+                    "gpu_cluster_key": "workers",
+                },
+            },
+            "gpu_clusters": {"workers": {"infiniband_fabric": "uk-south1-a"}},
         },
         requirements=requirements,
         gaps=gaps,
@@ -341,15 +356,16 @@ def test_estimate_mk8s_requirements_cover_boot_disk_quota_from_override_template
         component_id="mk8s",
         instance_id="mk8s",
         inputs={
-            "cpu_nodes_count": 1,
-            "cpu_nodes_platform": "cpu-d3",
-            "cpu_nodes_preset": "32vcpu-128gb",
-            "mk8s_cpu_node_group_overrides": {
-                "template": {
+            "node_groups": {
+                "cpu": {
+                    "node_count": 1,
+                    "gpu": False,
+                    "platform": "cpu-d3",
+                    "preset": "32vcpu-128gb",
                     "boot_disk": {
                         "size_gibibytes": 93,
                         "type": "NETWORK_SSD",
-                    }
+                    },
                 }
             },
         },
@@ -975,10 +991,8 @@ def test_format_quota_report_lines_include_errors_gaps_and_shortages() -> None:
                 component_label="mk8s",
                 message=(
                     "MK8s CPU node-group boot-disk quota could not be fully evaluated; "
-                    "set inputs.cpu_nodes_boot_disk_size_gib and "
-                    "inputs.cpu_nodes_boot_disk_type, or set "
-                    "inputs.mk8s_cpu_node_group_overrides.template.boot_disk.size_* and "
-                    "inputs.mk8s_cpu_node_group_overrides.template.boot_disk.type"
+                    "set inputs.node_groups.<cpu-group>.boot_disk.type and "
+                    "inputs.node_groups.<cpu-group>.boot_disk.size_gibibytes"
                 ),
             ),
             QuotaCoverageGap(
@@ -987,10 +1001,8 @@ def test_format_quota_report_lines_include_errors_gaps_and_shortages() -> None:
                 component_label="mk8s",
                 message=(
                     "MK8s GPU node-group boot-disk quota could not be fully evaluated; "
-                    "set inputs.gpu_nodes_boot_disk_size_gib and "
-                    "inputs.gpu_nodes_boot_disk_type, or set "
-                    "inputs.mk8s_gpu_node_group_overrides.template.boot_disk.size_* and "
-                    "inputs.mk8s_gpu_node_group_overrides.template.boot_disk.type"
+                    "set inputs.node_groups.<gpu-group>.boot_disk.type and "
+                    "inputs.node_groups.<gpu-group>.boot_disk.size_gibibytes"
                 ),
             ),
         ),
@@ -1011,15 +1023,13 @@ def test_format_quota_report_lines_include_errors_gaps_and_shortages() -> None:
     assert "    gaps:" in lines
     assert (
         "      - MK8s CPU node-group boot-disk quota could not be fully evaluated; "
-        "set inputs.cpu_nodes_boot_disk_size_gib and inputs.cpu_nodes_boot_disk_type, "
-        "or set inputs.mk8s_cpu_node_group_overrides.template.boot_disk.size_* and "
-        "inputs.mk8s_cpu_node_group_overrides.template.boot_disk.type"
+        "set inputs.node_groups.<cpu-group>.boot_disk.type and "
+        "inputs.node_groups.<cpu-group>.boot_disk.size_gibibytes"
     ) in lines
     assert (
         "      - MK8s GPU node-group boot-disk quota could not be fully evaluated; "
-        "set inputs.gpu_nodes_boot_disk_size_gib and inputs.gpu_nodes_boot_disk_type, "
-        "or set inputs.mk8s_gpu_node_group_overrides.template.boot_disk.size_* and "
-        "inputs.mk8s_gpu_node_group_overrides.template.boot_disk.type"
+        "set inputs.node_groups.<gpu-group>.boot_disk.type and "
+        "inputs.node_groups.<gpu-group>.boot_disk.size_gibibytes"
     ) in lines
 
 
@@ -1036,10 +1046,8 @@ def test_format_quota_report_lines_can_hide_coverage_gaps() -> None:
                 component_label="mk8s",
                 message=(
                     "MK8s CPU node-group boot-disk quota could not be fully evaluated; "
-                    "set inputs.cpu_nodes_boot_disk_size_gib and "
-                    "inputs.cpu_nodes_boot_disk_type, or set "
-                    "inputs.mk8s_cpu_node_group_overrides.template.boot_disk.size_* and "
-                    "inputs.mk8s_cpu_node_group_overrides.template.boot_disk.type"
+                    "set inputs.node_groups.<cpu-group>.boot_disk.type and "
+                    "inputs.node_groups.<cpu-group>.boot_disk.size_gibibytes"
                 ),
             ),
         ),
@@ -1182,10 +1190,8 @@ def test_format_quota_report_lines_include_confirmed_components_even_with_covera
                 component_label="mk8s",
                 message=(
                     "MK8s CPU node-group boot-disk quota could not be fully evaluated; "
-                    "set inputs.cpu_nodes_boot_disk_size_gib and "
-                    "inputs.cpu_nodes_boot_disk_type, or set "
-                    "inputs.mk8s_cpu_node_group_overrides.template.boot_disk.size_* and "
-                    "inputs.mk8s_cpu_node_group_overrides.template.boot_disk.type"
+                    "set inputs.node_groups.<cpu-group>.boot_disk.type and "
+                    "inputs.node_groups.<cpu-group>.boot_disk.size_gibibytes"
                 ),
             ),
         ),

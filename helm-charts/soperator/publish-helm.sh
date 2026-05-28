@@ -367,8 +367,15 @@ ensure_chart_version_matches_tag() {
 }
 
 validate_chart() {
-  log_note "Running helm lint --strict for ${CHART_DIR}..."
-  helm lint --strict "${CHART_DIR}"
+  if [[ -f "${CHART_DIR}/Chart.lock" ]]; then
+    log_note "Building locked Helm dependencies for ${CHART_DIR}..."
+    helm dependency build "${CHART_DIR}"
+  else
+    log_note "Updating Helm dependencies for ${CHART_DIR}..."
+    helm dependency update "${CHART_DIR}"
+  fi
+  log_note "Running helm lint --strict --with-subcharts for ${CHART_DIR}..."
+  helm lint --strict --with-subcharts "${CHART_DIR}"
   log_note "Rendering smoke template for ${CHART_DIR}..."
   helm template smoke "${CHART_DIR}" --namespace "${CHART_NAME}" >/dev/null
 }

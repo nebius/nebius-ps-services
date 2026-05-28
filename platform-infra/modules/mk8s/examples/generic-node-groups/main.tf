@@ -1,23 +1,17 @@
 module "mk8s" {
   source = "../.."
 
-  parent_id    = var.parent_id
-  cluster_name = var.cluster_name
-  subnet_id    = var.subnet_id
-
-  cpu_nodes_count    = 0
-  cpu_nodes_platform = var.cpu_nodes_platform
-  cpu_nodes_preset   = var.cpu_nodes_preset
-  cpu_nodes_os       = var.cpu_nodes_os
-
-  gpu_enabled               = true
-  gpu_node_groups           = 0
-  gpu_nodes_count_per_group = 0
-  gpu_nodes_platform        = var.gpu_nodes_platform
-  gpu_nodes_preset          = var.gpu_nodes_preset
-  gpu_nodes_os              = var.gpu_nodes_os
-  gpu_stack_source          = "nebius_image"
-  gpu_stack_preset          = var.gpu_stack_preset
+  cluster = {
+    parent_id       = var.parent_id
+    cluster_name    = var.cluster_name
+    network_id      = var.network_id
+    subnet_id       = var.subnet_id
+    k8s_version     = var.k8s_version
+    public_endpoint = var.public_endpoint
+    kube_network = {
+      service_cidrs = ["/20"]
+    }
+  }
 
   node_groups  = var.node_groups
   gpu_clusters = var.gpu_clusters
@@ -34,84 +28,117 @@ variable "cluster_name" {
   default     = "example-generic-node-groups"
 }
 
+variable "network_id" {
+  type        = string
+  description = "Nebius VPC network ID."
+}
+
 variable "subnet_id" {
   type        = string
   description = "Nebius subnet ID."
 }
 
-variable "cpu_nodes_platform" {
+variable "k8s_version" {
   type        = string
-  description = "Default CPU node platform inherited by non-GPU generic node groups."
-  default     = "cpu-d3"
+  description = "Kubernetes version."
+  default     = "1.33"
 }
 
-variable "cpu_nodes_preset" {
-  type        = string
-  description = "Default CPU node preset inherited by non-GPU generic node groups."
-  default     = "4vcpu-16gb"
-}
-
-variable "cpu_nodes_os" {
-  type        = string
-  description = "Default CPU node OS inherited by non-GPU generic node groups."
-  default     = "ubuntu24.04"
-}
-
-variable "gpu_nodes_platform" {
-  type        = string
-  description = "Default GPU node platform inherited by GPU generic node groups."
-  default     = "gpu-b200-sxm"
-}
-
-variable "gpu_nodes_preset" {
-  type        = string
-  description = "Default GPU node preset inherited by GPU generic node groups."
-  default     = "8gpu-180gb"
-}
-
-variable "gpu_nodes_os" {
-  type        = string
-  description = "Default GPU node OS inherited by GPU generic node groups."
-  default     = "ubuntu24.04"
-}
-
-variable "gpu_stack_preset" {
-  type        = string
-  description = "Nebius GPU image stack preset for GPU generic node groups."
-  default     = "cuda13.0"
+variable "public_endpoint" {
+  type        = bool
+  description = "Enable the public control-plane endpoint."
+  default     = true
 }
 
 variable "gpu_clusters" {
-  type        = any
-  description = "Optional named GPU clusters for generic node groups."
+  type = map(object({
+    enabled           = optional(bool, true)
+    parent_id         = optional(string)
+    name              = optional(string)
+    labels            = optional(map(string), {})
+    infiniband_fabric = optional(string)
+  }))
+  description = "Optional named GPU clusters for node groups."
   default     = {}
 }
 
 variable "node_groups" {
-  type        = any
-  description = "Caller-owned MK8s node groups keyed by any logical name."
+  description = "Caller-owned MK8s node groups keyed by logical name."
+  type = map(object({
+    enabled          = optional(bool, true)
+    name             = optional(string)
+    node_count       = optional(number)
+    autoscaling      = optional(any)
+    auto_repair      = optional(any)
+    gpu              = optional(bool, false)
+    platform         = optional(string)
+    preset           = optional(string)
+    os               = optional(string)
+    node_labels      = optional(map(string), {})
+    labels           = optional(map(string), {})
+    taints           = optional(list(object({ key = string, value = string, effect = string })), [])
+    boot_disk        = optional(any)
+    preemptible      = optional(bool, false)
+    public_ips       = optional(bool, false)
+    gpu_cluster_key  = optional(string)
+    gpu_cluster_id   = optional(string)
+    gpu_stack_source = optional(string, "nebius_image")
+    gpu_stack_preset = optional(string)
+    reservation = optional(object({
+      policy          = optional(string)
+      reservation_ids = optional(list(string), [])
+    }))
+    service_account = optional(object({
+      id          = optional(string)
+      name        = optional(string)
+      description = optional(string)
+      labels      = optional(map(string), {})
+    }))
+    ssh = optional(object({
+      username    = string
+      public_keys = list(string)
+    }))
+    filesystems         = optional(any, [])
+    sfs_filesystem_keys = optional(list(string), [])
+  }))
   default = {
-    core = {
-      fixed_node_count = 2
-      workload         = "platform"
-      jail             = true
+    system = {
+      node_count = 2
+      gpu        = false
+      platform   = "cpu-d3"
+      preset     = "4vcpu-16gb"
+      os         = "ubuntu24.04"
+      node_labels = {
+        "example.nebius.ai/role" = "system"
+      }
     }
     scheduler = {
-      fixed_node_count = 1
-      workload         = "scheduler"
-      jail             = true
+      node_count = 1
+      gpu        = false
+      platform   = "cpu-d3"
+      preset     = "4vcpu-16gb"
+      os         = "ubuntu24.04"
+      node_labels = {
+        "example.nebius.ai/role" = "scheduler"
+      }
       taints = [{
         key    = "example.nebius.ai/workload"
         value  = "scheduler"
         effect = "NO_SCHEDULE"
       }]
     }
-    "gpu-workers-a" = {
-      fixed_node_count = 1
-      workload         = "worker"
-      nodeset_name     = "gpu-workers"
+    worker = {
+      node_count       = 1
       gpu              = true
-      jail             = true
+      platform         = "gpu-b200-sxm"
+      preset           = "8gpu-180gb"
+      os               = "ubuntu24.04"
+      gpu_stack_source = "nebius_image"
+      gpu_stack_preset = "cuda13.0"
+      node_labels = {
+        "example.nebius.ai/role" = "worker"
+        "nebius.com/gpu"         = "true"
+      }
       taints = [{
         key    = "nvidia.com/gpu"
         value  = "true"

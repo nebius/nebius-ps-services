@@ -120,100 +120,6 @@ def _gpu_quota_name(platform: str) -> str:
     return f"gpu.capacity.{normalized or 'unknown'}"
 
 
-def _mk8s_effective_node_count(inputs: dict[str, Any], *, gpu: bool) -> int | None:
-    override_key = "mk8s_gpu_node_group_overrides" if gpu else "mk8s_cpu_node_group_overrides"
-    count_key = "gpu_nodes_count_per_group" if gpu else "cpu_nodes_count"
-    overrides = inputs.get(override_key)
-    autoscaling = _path_value(overrides, "autoscaling") if isinstance(overrides, dict) else None
-    override_fixed_count = (
-        _positive_int(_path_value(overrides, "fixed_node_count"))
-        if isinstance(overrides, dict)
-        else None
-    )
-    if autoscaling is None:
-        return (
-            override_fixed_count
-            if override_fixed_count is not None
-            else _positive_int(inputs.get(count_key))
-        )
-
-    if override_fixed_count is not None:
-        return override_fixed_count
-    if isinstance(autoscaling, dict):
-        for key in ("initial_count", "initial_node_count", "min_count", "min_node_count"):
-            resolved = _positive_int(autoscaling.get(key))
-            if resolved is not None:
-                return resolved
-    return None
-
-
-def _mk8s_effective_platform(inputs: dict[str, Any], *, gpu: bool) -> str:
-    override_key = "mk8s_gpu_node_group_overrides" if gpu else "mk8s_cpu_node_group_overrides"
-    field_key = "gpu_nodes_platform" if gpu else "cpu_nodes_platform"
-    overrides = inputs.get(override_key)
-    override_value = (
-        _as_text(_path_value(overrides, "template.resources.platform"))
-        if isinstance(overrides, dict)
-        else ""
-    )
-    return override_value or _mapping_text(inputs, field_key)
-
-
-def _mk8s_effective_preset(inputs: dict[str, Any], *, gpu: bool) -> str:
-    override_key = "mk8s_gpu_node_group_overrides" if gpu else "mk8s_cpu_node_group_overrides"
-    field_key = "gpu_nodes_preset" if gpu else "cpu_nodes_preset"
-    overrides = inputs.get(override_key)
-    override_value = (
-        _as_text(_path_value(overrides, "template.resources.preset"))
-        if isinstance(overrides, dict)
-        else ""
-    )
-    return override_value or _mapping_text(inputs, field_key)
-
-
-def _mk8s_effective_preemptible(inputs: dict[str, Any], *, gpu: bool) -> bool:
-    override_key = "mk8s_gpu_node_group_overrides" if gpu else "mk8s_cpu_node_group_overrides"
-    field_key = "gpu_nodes_preemptible" if gpu else "cpu_nodes_preemptible"
-    overrides = inputs.get(override_key)
-    override_value = (
-        _path_value(overrides, "template.preemptible") if isinstance(overrides, dict) else None
-    )
-    if override_value is not None:
-        return True
-    return _mapping_bool(inputs, field_key, default=False)
-
-
-def _mk8s_effective_public_ips(inputs: dict[str, Any], *, gpu: bool) -> bool:
-    override_key = "mk8s_gpu_node_group_overrides" if gpu else "mk8s_cpu_node_group_overrides"
-    field_key = "gpu_nodes_public_ips" if gpu else "cpu_nodes_public_ips"
-    overrides = inputs.get(override_key)
-    override_value = (
-        _path_value(overrides, "template.network_interfaces")
-        if isinstance(overrides, dict)
-        else None
-    )
-    if isinstance(override_value, list):
-        for item in override_value:
-            if isinstance(item, dict) and item.get("public_ip_address") is not None:
-                return True
-    return _mapping_bool(inputs, field_key, default=False)
-
-
-def _mk8s_boot_disk_override(inputs: dict[str, Any], *, gpu: bool) -> dict[str, Any]:
-    override_key = "mk8s_gpu_node_group_overrides" if gpu else "mk8s_cpu_node_group_overrides"
-    overrides = inputs.get(override_key)
-    override_value = (
-        _path_value(overrides, "template.boot_disk") if isinstance(overrides, dict) else None
-    )
-    return dict(override_value) if isinstance(override_value, dict) else {}
-
-
-def _mk8s_effective_boot_disk_type(inputs: dict[str, Any], *, gpu: bool) -> str:
-    field_key = "gpu_nodes_boot_disk_type" if gpu else "cpu_nodes_boot_disk_type"
-    override_value = _mapping_text(_mk8s_boot_disk_override(inputs, gpu=gpu), "type")
-    return override_value or _mapping_text(inputs, field_key)
-
-
 def _disk_size_bytes(mapping: dict[str, Any]) -> int | None:
     size_fields = (
         ("size_bytes", 1),
@@ -226,28 +132,6 @@ def _disk_size_bytes(mapping: dict[str, Any]) -> int | None:
         if resolved is not None and resolved > 0:
             return resolved * multiplier
     return None
-
-
-def _mk8s_effective_boot_disk_bytes(inputs: dict[str, Any], *, gpu: bool) -> int | None:
-    override_bytes = _disk_size_bytes(_mk8s_boot_disk_override(inputs, gpu=gpu))
-    if override_bytes is not None:
-        return override_bytes
-    field_key = "gpu_nodes_boot_disk_size_gib" if gpu else "cpu_nodes_boot_disk_size_gib"
-    resolved = _positive_int(inputs.get(field_key))
-    if resolved is None or resolved <= 0:
-        return None
-    return resolved * _GIB
-
-
-def _mk8s_boot_disk_gap_message(*, gpu: bool) -> str:
-    scope = "gpu" if gpu else "cpu"
-    label = "GPU" if gpu else "CPU"
-    override_root = f"inputs.mk8s_{scope}_node_group_overrides.template.boot_disk"
-    return (
-        f"MK8s {label} node-group boot-disk quota could not be fully evaluated; "
-        f"set inputs.{scope}_nodes_boot_disk_size_gib and inputs.{scope}_nodes_boot_disk_type, "
-        f"or set {override_root}.size_* and {override_root}.type"
-    )
 
 
 def _compute_boot_disk_gap_message() -> str:
@@ -1922,7 +1806,7 @@ def _estimate_managed_postgresql_requirements(
 
 
 def _node_group_count(group: Mapping[str, Any]) -> int | None:
-    fixed_count = _positive_int(group.get("fixed_node_count"))
+    fixed_count = _positive_int(group.get("node_count"))
     if fixed_count is not None:
         return fixed_count
     autoscaling = group.get("autoscaling")
@@ -1940,18 +1824,14 @@ def _node_group_template_value(group: Mapping[str, Any], path: str) -> Any:
 
 
 def _node_group_platform(inputs: dict[str, Any], group: Mapping[str, Any], *, gpu: bool) -> str:
-    return (
-        _mapping_text(group, "platform")
-        or _as_text(_node_group_template_value(group, "resources.platform"))
-        or _mk8s_effective_platform(inputs, gpu=gpu)
+    return _mapping_text(group, "platform") or _as_text(
+        _node_group_template_value(group, "resources.platform")
     )
 
 
 def _node_group_preset(inputs: dict[str, Any], group: Mapping[str, Any], *, gpu: bool) -> str:
-    return (
-        _mapping_text(group, "preset")
-        or _as_text(_node_group_template_value(group, "resources.preset"))
-        or _mk8s_effective_preset(inputs, gpu=gpu)
+    return _mapping_text(group, "preset") or _as_text(
+        _node_group_template_value(group, "resources.preset")
     )
 
 
@@ -1961,7 +1841,7 @@ def _node_group_preemptible(inputs: dict[str, Any], group: Mapping[str, Any], *,
     template_preemptible = _node_group_template_value(group, "preemptible")
     if template_preemptible is not None:
         return bool(template_preemptible)
-    return _mk8s_effective_preemptible(inputs, gpu=gpu)
+    return False
 
 
 def _node_group_public_ips(inputs: dict[str, Any], group: Mapping[str, Any], *, gpu: bool) -> bool:
@@ -1975,7 +1855,7 @@ def _node_group_public_ips(inputs: dict[str, Any], group: Mapping[str, Any], *, 
             isinstance(item, Mapping) and item.get("public_ip_address") is not None
             for item in network_interfaces
         )
-    return _mk8s_effective_public_ips(inputs, gpu=gpu)
+    return False
 
 
 def _node_group_boot_disk(
@@ -1990,7 +1870,7 @@ def _node_group_boot_disk(
     template_value = _node_group_template_value(group, "boot_disk")
     if isinstance(template_value, dict):
         return template_value
-    return _mk8s_boot_disk_override(inputs, gpu=gpu)
+    return {}
 
 
 def _estimate_mk8s_generic_node_group_requirements(
@@ -2059,7 +1939,9 @@ def _estimate_mk8s_generic_node_group_requirements(
             requirements,
             component_id=component_id,
             instance_id=instance_id,
-            quota_name="compute.instance.preemptible.count" if preemptible else "compute.instance.count",
+            quota_name="compute.instance.preemptible.count"
+            if preemptible
+            else "compute.instance.count",
             region=region,
             required=count,
             reason=(
@@ -2084,6 +1966,15 @@ def _estimate_mk8s_generic_node_group_requirements(
                 ),
             )
         elif gpu:
+            gpu_cluster_key = _mapping_text(raw_group, "gpu_cluster_key")
+            gpu_clusters = inputs.get("gpu_clusters")
+            gpu_fabric = (
+                _mapping_text(gpu_clusters.get(gpu_cluster_key), "infiniband_fabric")
+                if isinstance(gpu_clusters, Mapping)
+                and gpu_cluster_key
+                and isinstance(gpu_clusters.get(gpu_cluster_key), Mapping)
+                else ""
+            )
             _append_requirement(
                 requirements,
                 component_id=component_id,
@@ -2092,6 +1983,13 @@ def _estimate_mk8s_generic_node_group_requirements(
                 region=region,
                 required=resources.gpu_count * count,
                 reason=f"{count} GPU node(s) at {platform}/{preset} for '{group_label}'",
+                gpu_capacity_shape=_gpu_capacity_shape(
+                    platform=platform,
+                    preset=preset,
+                    fabric=gpu_fabric,
+                    mode="preemptible" if preemptible else "regular",
+                    resources=resources,
+                ),
             )
         else:
             _append_requirement(
@@ -2145,112 +2043,7 @@ def _estimate_mk8s_requirements(
         reason="one Managed Kubernetes cluster",
     )
 
-    cpu_count = _mk8s_effective_node_count(inputs, gpu=False)
-    cpu_platform = _mk8s_effective_platform(inputs, gpu=False)
-    cpu_preset = _mk8s_effective_preset(inputs, gpu=False)
-    cpu_autoscaling = _path_value(inputs.get("mk8s_cpu_node_group_overrides"), "autoscaling")
-    cpu_preemptible = _mk8s_effective_preemptible(inputs, gpu=False)
-    cpu_public_ips = _mk8s_effective_public_ips(inputs, gpu=False)
-    cpu_group_enabled = (cpu_count is not None and cpu_count > 0) or cpu_autoscaling is not None
-    if cpu_group_enabled:
-        if cpu_count is None:
-            _append_gap(
-                gaps,
-                component_id=component_id,
-                instance_id=instance_id,
-                message=(
-                    "CPU node group autoscaling is enabled but the current node count could not be "
-                    "derived from the config; CPU node quotas were not checked"
-                ),
-            )
-        else:
-            _append_requirement(
-                requirements,
-                component_id=component_id,
-                instance_id=instance_id,
-                quota_name="compute.disk.count",
-                region=region,
-                required=cpu_count,
-                reason=f"{cpu_count} CPU node boot disk(s)",
-            )
-            if cpu_public_ips:
-                _append_requirement(
-                    requirements,
-                    component_id=component_id,
-                    instance_id=instance_id,
-                    quota_name="vpc.ipv4-address.public.count",
-                    region=region,
-                    required=cpu_count,
-                    reason=f"{cpu_count} CPU node public IP(s)",
-                )
-            if cpu_preemptible:
-                _append_requirement(
-                    requirements,
-                    component_id=component_id,
-                    instance_id=instance_id,
-                    quota_name="compute.instance.preemptible.count",
-                    region=region,
-                    required=cpu_count,
-                    reason=f"{cpu_count} preemptible CPU node(s)",
-                )
-            else:
-                resources = (
-                    session.preset_resources(
-                        project_id=project_id, platform=cpu_platform, preset=cpu_preset
-                    )
-                    if cpu_platform and cpu_preset
-                    else None
-                )
-                if resources is None:
-                    _append_gap(
-                        gaps,
-                        component_id=component_id,
-                        instance_id=instance_id,
-                        message=(
-                            f"unable to resolve CPU node preset '{cpu_platform}/{cpu_preset}' live; "
-                            "CPU instance/vCPU quotas were not checked"
-                        ),
-                    )
-                else:
-                    _append_requirement(
-                        requirements,
-                        component_id=component_id,
-                        instance_id=instance_id,
-                        quota_name="compute.instance.count",
-                        region=region,
-                        required=cpu_count,
-                        reason=f"{cpu_count} regular CPU node(s)",
-                    )
-                    _append_requirement(
-                        requirements,
-                        component_id=component_id,
-                        instance_id=instance_id,
-                        quota_name="compute.instance.non-gpu.vcpu",
-                        region=region,
-                        required=resources.vcpu_count * cpu_count,
-                        reason=f"{cpu_count} CPU node(s) at {cpu_platform}/{cpu_preset}",
-                    )
-            cpu_disk_type = _disk_quota_suffix(_mk8s_effective_boot_disk_type(inputs, gpu=False))
-            cpu_disk_bytes = _mk8s_effective_boot_disk_bytes(inputs, gpu=False)
-            if cpu_disk_type and cpu_disk_bytes is not None:
-                _append_requirement(
-                    requirements,
-                    component_id=component_id,
-                    instance_id=instance_id,
-                    quota_name=f"compute.disk.size.{cpu_disk_type}",
-                    region=region,
-                    required=cpu_count * cpu_disk_bytes,
-                    reason=f"{cpu_count} CPU node boot disk(s) at {_format_disk_size_bytes(cpu_disk_bytes)}",
-                )
-            else:
-                _append_gap(
-                    gaps,
-                    component_id=component_id,
-                    instance_id=instance_id,
-                    message=_mk8s_boot_disk_gap_message(gpu=False),
-                )
-
-    generic_gpu_nodes = _estimate_mk8s_generic_node_group_requirements(
+    _estimate_mk8s_generic_node_group_requirements(
         session=session,
         project_id=project_id,
         region=region,
@@ -2260,147 +2053,6 @@ def _estimate_mk8s_requirements(
         requirements=requirements,
         gaps=gaps,
     )
-
-    gpu_enabled = _mapping_bool(inputs, "gpu_enabled", default=False)
-    if not gpu_enabled:
-        return
-
-    group_count = _positive_int(inputs.get("gpu_node_groups"))
-    nodes_per_group = _mk8s_effective_node_count(inputs, gpu=True)
-    gpu_platform = _mk8s_effective_platform(inputs, gpu=True)
-    gpu_preset = _mk8s_effective_preset(inputs, gpu=True)
-    gpu_autoscaling = _path_value(inputs.get("mk8s_gpu_node_group_overrides"), "autoscaling")
-    gpu_preemptible = _mk8s_effective_preemptible(inputs, gpu=True)
-    gpu_public_ips = _mk8s_effective_public_ips(inputs, gpu=True)
-    gpu_fabric = _mapping_text(inputs, "infiniband_fabric")
-
-    if group_count is None or group_count <= 0:
-        if generic_gpu_nodes > 0:
-            return
-        _append_gap(
-            gaps,
-            component_id=component_id,
-            instance_id=instance_id,
-            message="GPU is enabled but `gpu_node_groups` is missing or invalid",
-        )
-        return
-    if nodes_per_group is None:
-        if gpu_autoscaling is not None:
-            _append_gap(
-                gaps,
-                component_id=component_id,
-                instance_id=instance_id,
-                message=(
-                    "GPU node-group autoscaling is enabled but the current node count could not be "
-                    "derived from the config; GPU node quotas were not checked"
-                ),
-            )
-        else:
-            _append_gap(
-                gaps,
-                component_id=component_id,
-                instance_id=instance_id,
-                message="GPU is enabled but `gpu_nodes_count_per_group` is missing or invalid",
-            )
-        return
-
-    total_gpu_nodes = group_count * nodes_per_group
-    _append_requirement(
-        requirements,
-        component_id=component_id,
-        instance_id=instance_id,
-        quota_name="compute.disk.count",
-        region=region,
-        required=total_gpu_nodes,
-        reason=f"{total_gpu_nodes} GPU node boot disk(s)",
-    )
-    if gpu_public_ips:
-        _append_requirement(
-            requirements,
-            component_id=component_id,
-            instance_id=instance_id,
-            quota_name="vpc.ipv4-address.public.count",
-            region=region,
-            required=total_gpu_nodes,
-            reason=f"{total_gpu_nodes} GPU node public IP(s)",
-        )
-    if gpu_preemptible:
-        _append_requirement(
-            requirements,
-            component_id=component_id,
-            instance_id=instance_id,
-            quota_name="compute.instance.preemptible.count",
-            region=region,
-            required=total_gpu_nodes,
-            reason=f"{total_gpu_nodes} preemptible GPU node(s)",
-        )
-    else:
-        _append_requirement(
-            requirements,
-            component_id=component_id,
-            instance_id=instance_id,
-            quota_name="compute.instance.count",
-            region=region,
-            required=total_gpu_nodes,
-            reason=f"{total_gpu_nodes} regular GPU node(s)",
-        )
-
-    resources = (
-        session.preset_resources(project_id=project_id, platform=gpu_platform, preset=gpu_preset)
-        if gpu_platform and gpu_preset
-        else None
-    )
-    if resources is None:
-        _append_gap(
-            gaps,
-            component_id=component_id,
-            instance_id=instance_id,
-            message=(
-                f"unable to resolve GPU node preset '{gpu_platform}/{gpu_preset}' live; "
-                "GPU instance quotas were not checked"
-            ),
-        )
-    else:
-        gpu_reason = (
-            f"{total_gpu_nodes} preemptible GPU node(s) at {gpu_platform}/{gpu_preset}"
-            if gpu_preemptible
-            else f"{total_gpu_nodes} GPU node(s) at {gpu_platform}/{gpu_preset}"
-        )
-        _append_requirement(
-            requirements,
-            component_id=component_id,
-            instance_id=instance_id,
-            quota_name=_gpu_quota_name(gpu_platform),
-            region=region,
-            required=resources.gpu_count * total_gpu_nodes,
-            reason=gpu_reason,
-            gpu_capacity_shape=_gpu_capacity_shape(
-                platform=gpu_platform,
-                preset=gpu_preset,
-                fabric=gpu_fabric,
-                mode="preemptible" if gpu_preemptible else "regular",
-                resources=resources,
-            ),
-        )
-    gpu_disk_type = _disk_quota_suffix(_mk8s_effective_boot_disk_type(inputs, gpu=True))
-    gpu_disk_bytes = _mk8s_effective_boot_disk_bytes(inputs, gpu=True)
-    if gpu_disk_type and gpu_disk_bytes is not None:
-        _append_requirement(
-            requirements,
-            component_id=component_id,
-            instance_id=instance_id,
-            quota_name=f"compute.disk.size.{gpu_disk_type}",
-            region=region,
-            required=total_gpu_nodes * gpu_disk_bytes,
-            reason=f"{total_gpu_nodes} GPU node boot disk(s) at {_format_disk_size_bytes(gpu_disk_bytes)}",
-        )
-    else:
-        _append_gap(
-            gaps,
-            component_id=component_id,
-            instance_id=instance_id,
-            message=_mk8s_boot_disk_gap_message(gpu=True),
-        )
 
 
 def _requirements_for_component(

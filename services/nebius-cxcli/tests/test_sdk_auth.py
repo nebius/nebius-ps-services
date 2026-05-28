@@ -84,6 +84,47 @@ def test_retryable_refresh_log_filter_suppresses_deadline_exceeded_traceback() -
     assert not sdk_auth.retryable_refresh_log(unrelated_record)
 
 
+def test_retryable_request_log_filter_suppresses_sdk_retry_traceback() -> None:
+    expected_record = logging.LogRecord(
+        "nebius.aio.request",
+        logging.ERROR,
+        __file__,
+        1,
+        "request attempt 1 for Request(.nebius.mk8s.v1.ClusterService.List) "
+        "failed with Request error UNAVAILABLE: Received http2 header with status: 502 "
+        "but will be retried",
+        (),
+        None,
+    )
+    unrelated_record = logging.LogRecord(
+        "nebius.aio.request",
+        logging.ERROR,
+        __file__,
+        1,
+        "request failed permanently with Request error PERMISSION_DENIED",
+        (),
+        None,
+    )
+
+    assert sdk_auth.retryable_request_log(expected_record)
+    assert not sdk_auth.retryable_request_log(unrelated_record)
+
+
+def test_suppress_expected_sdk_retry_logs_filters_request_logger_only() -> None:
+    request_logger = logging.getLogger("nebius.aio.request")
+    refresh_logger = logging.getLogger("nebius.aio.token.renewable")
+    request_filters_before = tuple(request_logger.filters)
+    refresh_filters_before = tuple(refresh_logger.filters)
+
+    with sdk_auth.suppress_expected_sdk_retry_logs():
+        assert tuple(refresh_logger.filters) == refresh_filters_before
+        assert len(request_logger.filters) == len(request_filters_before) + 1
+        assert tuple(request_logger.filters[:-1]) == request_filters_before
+
+    assert tuple(request_logger.filters) == request_filters_before
+    assert tuple(refresh_logger.filters) == refresh_filters_before
+
+
 def test_init_nebius_sdk_prefers_credentials_file(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

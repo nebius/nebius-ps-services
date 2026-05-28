@@ -26,8 +26,7 @@ and a short final summary.
 
 ## Non-Goals
 
-- Do not create repo-local task-state files unless the user explicitly asks or
-  no global state path is available.
+- Do not create repo-local task-state files unless the user explicitly asks.
 - Do not store raw prompts, secrets, command output, stack traces, customer
   data, private URLs, or environment-specific values in task-state files.
 - Do not make subagents responsible for final decisions. The parent agent owns
@@ -66,10 +65,10 @@ injects that request and the current runtime accepts it.
 
 ## Task State
 
-Use the durable task-state path injected by global hooks. If no path is
-available, use a workspace-scoped manual fallback matching the hook layout:
-`$CODEX_HOME/task-state/<workspace>-<hash>/manual/current.md`, with
-`$CODEX_HOME` defaulting to `$HOME/.codex`.
+Use the durable task-state path injected by global hooks. No legacy task-state
+path is created when the hook payload has no session id. If no path is
+available, continue without durable task state rather than creating a manual or
+repo-local fallback.
 
 At the start of a complex task, resume, or context transition, read the
 existing task-state file before planning when it may contain prior decisions,
@@ -154,8 +153,8 @@ for a subagent would stall the next step.
 ## Workflow
 
 1. Understand the task and constraints.
-2. Read existing global task state when prior context may matter, then create
-   or update the task-state file.
+2. Read existing global task state when prior context may matter; create the
+   task-state file only when complex work needs continuity, then update it.
 3. Explore with targeted reads; use read-only subagents only when they are
    explicitly authorized, useful, available, and permitted. Wait for their
    final summaries and close completed subagent threads after consolidation

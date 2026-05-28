@@ -1,0 +1,4 @@
+interface:
+  display_name: "Commit and Push"
+  short_description: "Commit all branch changes and push"
+  default_prompt: "Use $commit-push to commit all changes and push to origin."

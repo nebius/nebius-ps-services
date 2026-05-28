@@ -64,9 +64,12 @@ spec:
 
   {{- with .nodeConfig }}
   nodeConfig:
-    {{- with .features }}
+    {{- $hwFeatures := .features | default list -}}
+    {{- $topoFeatures := $ns.topologyLabels | default list -}}
+    {{- $allFeatures := concat $hwFeatures $topoFeatures -}}
+    {{- if $allFeatures }}
     features:
-      {{- toYaml . | nindent 6 }}
+      {{- toYaml $allFeatures | nindent 6 }}
     {{- end }}
 
     {{- $static := (.static | default "") }}

@@ -36,6 +36,8 @@ from .deploy_targets import (
     is_auto_target_scoped_app_instance_id,
     target_scoped_app_instance_id,
 )
+from .mk8s_node_groups import first_gpu_node_group
+from .mk8s_node_groups import gpu_enabled as mk8s_gpu_enabled
 from .observability_validation import OBSERVABILITY_INGESTION_VALIDATION_KIND
 from .runtime_config import to_plain_data
 
@@ -919,6 +921,8 @@ def _service_bucket_condition_matches(condition: str, row: Mapping[str, Any]) ->
         return True
     if normalized == "enabled":
         return bool(row.get("enabled", False))
+    if normalized == "mk8s_gpu":
+        return _mk8s_gpu_nodes_enabled(row)
     if normalized.startswith("inputs."):
         value = _path_lookup(_mapping(row.get("inputs")), normalized.removeprefix("inputs."))
         return bool(value)
@@ -962,8 +966,7 @@ def _mk8s_gpu_nodes_enabled(row: Mapping[str, Any]) -> bool:
     inputs = row.get("inputs")
     if not isinstance(inputs, Mapping):
         return False
-    enabled = _coerce_optional_bool(inputs.get("gpu_enabled"))
-    return bool(enabled)
+    return mk8s_gpu_enabled(inputs)
 
 
 def _mk8s_default_gpu_stack_source() -> str:
@@ -975,7 +978,8 @@ def _mk8s_default_gpu_stack_source() -> str:
 
 def _mk8s_gpu_stack_source(row: Mapping[str, Any]) -> str:
     inputs = row.get("inputs")
-    explicit = _as_text(_mapping(inputs).get("gpu_stack_source")).lower()
+    gpu_group = first_gpu_node_group(_mapping(inputs))
+    explicit = _as_text(gpu_group.gpu_stack_source if gpu_group is not None else "").lower()
     return explicit or _mk8s_default_gpu_stack_source()
 
 
@@ -1060,19 +1064,29 @@ def _gpu_node_group_label_maps(
             return None, None, None
         inputs = {}
         row["inputs"] = inputs
-    overrides = inputs.get("mk8s_gpu_node_group_overrides")
-    if not isinstance(overrides, dict):
+    node_groups = inputs.get("node_groups")
+    if not isinstance(node_groups, dict):
         if not create:
             return inputs, None, None
-        overrides = {}
-        inputs["mk8s_gpu_node_group_overrides"] = overrides
-    labels = overrides.get("labels")
+        node_groups = {}
+        inputs["node_groups"] = node_groups
+    target_group: dict[str, Any] | None = None
+    for group in node_groups.values():
+        if isinstance(group, dict) and bool(group.get("gpu", False)):
+            target_group = group
+            break
+    if target_group is None:
+        if not create:
+            return inputs, node_groups, None
+        target_group = {}
+        node_groups["worker"] = target_group
+    labels = target_group.get("node_labels")
     if not isinstance(labels, dict):
         if not create:
-            return inputs, overrides, None
+            return inputs, target_group, None
         labels = {}
-        overrides["labels"] = labels
-    return inputs, overrides, labels
+        target_group["node_labels"] = labels
+    return inputs, target_group, labels
 
 
 def _prune_empty_gpu_node_label_maps(
@@ -1082,9 +1096,14 @@ def _prune_empty_gpu_node_label_maps(
     labels: dict[str, Any] | None,
 ) -> None:
     if overrides is not None and labels is not None and not labels:
-        overrides.pop("labels", None)
+        overrides.pop("node_labels", None)
     if inputs is not None and overrides is not None and not overrides:
-        inputs.pop("mk8s_gpu_node_group_overrides", None)
+        node_groups = inputs.get("node_groups")
+        if isinstance(node_groups, dict):
+            for key, value in list(node_groups.items()):
+                if value is overrides:
+                    node_groups.pop(key, None)
+                    break
 
 
 def observability_gpu_node_label_reconciliation(
@@ -2100,16 +2119,13 @@ def _strip_observability_collector_generated_values(
 
     values = chart_row.get("values")
     metrics = _nested_path_value(values, "config.metrics") if isinstance(values, dict) else None
-    additional_targets = (
-        metrics.get("additionalTargets") if isinstance(metrics, dict) else None
-    )
+    additional_targets = metrics.get("additionalTargets") if isinstance(metrics, dict) else None
     if isinstance(additional_targets, list):
         preserved = [
             item
             for item in additional_targets
             if not (
-                isinstance(item, Mapping)
-                and _as_text(item.get("job_name")) in managed_job_names
+                isinstance(item, Mapping) and _as_text(item.get("job_name")) in managed_job_names
             )
         ]
         if preserved:
@@ -2184,16 +2200,10 @@ def observability_endpoint_summary(
     service_metrics_enabled = bool(service_metric_buckets)
     service_logs_enabled = bool(service_log_buckets)
     metrics_enabled = bool(
-        kubernetes_metrics_enabled
-        or vm_service_metrics_enabled
-        or service_metrics_enabled
+        kubernetes_metrics_enabled or vm_service_metrics_enabled or service_metrics_enabled
     )
     signals = {
-        "logs": bool(
-            kubernetes_logs_enabled
-            or vm_logs_enabled
-            or service_logs_enabled
-        ),
+        "logs": bool(kubernetes_logs_enabled or vm_logs_enabled or service_logs_enabled),
         "metrics": metrics_enabled,
         "traces": kubernetes_traces_enabled,
         "service_metrics": service_metrics_enabled,
@@ -2373,8 +2383,10 @@ def observability_validation_specs(payload_or_config: Any) -> list[dict[str, Any
         namespace = _as_text(matching_row.get("namespace"))
         release_name = _as_text(matching_row.get("release-name"))
         namespace = namespace or _as_text(collector_source.namespace)
-        release_name = release_name or _as_text(collector_source.release_name) or _as_text(
-            collector_source.name
+        release_name = (
+            release_name
+            or _as_text(collector_source.release_name)
+            or _as_text(collector_source.name)
         )
         if not namespace:
             raise ValueError(

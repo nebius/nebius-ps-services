@@ -9,7 +9,7 @@ import re
 import urllib.error
 import urllib.request
 from collections.abc import Callable, Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, cast
@@ -23,6 +23,7 @@ from .capacity_dashboard import (
     filter_capacity_resource_advice,
     list_capacity_resource_advice,
 )
+from .deploy_targets import deploy_target_is_external_mk8s
 from .sdk_auth import init_nebius_sdk
 
 SUPPORTED_PROVIDER_OPTION_SOURCES = frozenset(
@@ -35,13 +36,16 @@ SUPPORTED_PROVIDER_OPTION_SOURCES = frozenset(
         "compute_platform_presets",
         "compute_public_image_families",
         "compute_boot_disk_types",
+        "capacity_block_groups",
         "operator_public_ip_cidr",
         "project_subnets",
         "project_networks",
         "tenant_projects",
         "mk8s_control_plane_versions",
+        "soperator_node_groups",
         "soperator_nodesets_profiles",
         "soperator_partition_profiles",
+        "soperator_topology_profiles",
     }
 )
 
@@ -50,6 +54,7 @@ _OPTION_PLUGIN_ENV = "NEBIUS_CXCLI_PROVIDER_OPTION_PLUGINS"
 _REQUEST_TIMEOUT_ENV = "NEBIUS_CXCLI_PROVIDER_REQUEST_TIMEOUT_SECONDS"
 _DEFAULT_REQUEST_TIMEOUT_SECONDS = 15.0
 _NEBIUS_LIST_PAGE_SIZE = 999
+_CAPACITY_BLOCK_GROUP_LIST_PAGE_SIZE = 200
 
 
 @dataclass(frozen=True)
@@ -57,6 +62,7 @@ class OptionChoice:
     value: str
     label: str
     recommended: bool = False
+    metadata: Mapping[str, Any] = field(default_factory=dict, compare=False, hash=False)
 
 
 @dataclass(frozen=True)
@@ -429,6 +435,22 @@ def _gpu_preset_interconnect_suffix(preset: _ComputePlatformPreset) -> tuple[str
     return ("Ethernet only",)
 
 
+def _enum_member_name(enum_cls: object, value: object) -> str:
+    members = getattr(enum_cls, "__members__", {})
+    try:
+        numeric_value = int(value)
+    except (TypeError, ValueError):
+        return _as_str(value) or ""
+    if isinstance(members, Mapping):
+        for name, member in members.items():
+            try:
+                if int(member) == numeric_value:
+                    return str(name)
+            except (TypeError, ValueError):
+                continue
+    return str(numeric_value)
+
+
 class ProviderOptionLookup:
     """Resolve dynamic field choices from Nebius APIs with in-process caching."""
 
@@ -462,6 +484,7 @@ class ProviderOptionLookup:
                 "mk8s_node_group_os_values": self._resolve_mk8s_node_group_os_values,
                 "mk8s_infiniband_fabrics": self._resolve_mk8s_infiniband_fabrics,
                 "compute_boot_disk_types": self._resolve_compute_boot_disk_types,
+                "capacity_block_groups": self._resolve_capacity_block_groups,
                 "compute_platforms": self._resolve_compute_platforms,
                 "compute_platform_presets": self._resolve_compute_platform_presets,
                 "compute_public_image_families": self._resolve_compute_public_image_families,
@@ -470,8 +493,10 @@ class ProviderOptionLookup:
                 "operator_public_ip_cidr": self._resolve_operator_public_ip_cidr,
                 "tenant_projects": self._resolve_tenant_projects,
                 "mk8s_control_plane_versions": self._resolve_mk8s_control_plane_versions,
+                "soperator_node_groups": self._resolve_soperator_node_groups,
                 "soperator_nodesets_profiles": self._resolve_soperator_nodesets_profiles,
                 "soperator_partition_profiles": self._resolve_soperator_partition_profiles,
+                "soperator_topology_profiles": self._resolve_soperator_topology_profiles,
             }.get(provider)
             if provider in SUPPORTED_PROVIDER_OPTION_SOURCES and resolver is not None:
                 try:
@@ -810,16 +835,9 @@ class ProviderOptionLookup:
         explicit_path = _as_str(args.get("kubernetes_version_path"))
         if explicit_path:
             candidate_paths.append(explicit_path)
-        sibling_version_path = _component_input_sibling_path(field_path, "k8s_version")
-        if sibling_version_path:
-            candidate_paths.append(sibling_version_path)
-        sibling_override_path = _component_input_sibling_path(
-            field_path,
-            "mk8s_cluster_overrides.control_plane.version",
-        )
-        if sibling_override_path:
-            candidate_paths.append(sibling_override_path)
-        candidate_paths.append("infra.mk8s.cluster_overrides.control_plane.version")
+        if ".inputs.node_group_defaults." in field_path:
+            component_prefix = field_path.split(".inputs.", maxsplit=1)[0]
+            candidate_paths.append(f"{component_prefix}.inputs.cluster.k8s_version")
 
         seen_paths: set[str] = set()
         for version_path in candidate_paths:
@@ -896,6 +914,129 @@ class ProviderOptionLookup:
             for item in compute_boot_disk_type_choices()
         )
 
+    def _resolve_capacity_block_groups(
+        self,
+        *,
+        args: dict[str, Any],
+        payload: dict[str, Any],
+        field_path: str,
+    ) -> tuple[OptionChoice, ...]:
+        tenant_id = self._resolve_tenant_id(payload, args)
+        if not tenant_id:
+            return ()
+
+        region_id = self._resolve_region_id(payload, args)
+        platform_path = _as_str(args.get("platform_path"))
+        platform_name = _as_str(args.get("platform"))
+        if not platform_name and platform_path:
+            platform_name = _as_str(_payload_value(payload, platform_path))
+
+        fabric_path = _as_str(args.get("fabric_path"))
+        fabric_name = _as_str(args.get("fabric"))
+        if not fabric_name and fabric_path:
+            fabric_name = _as_str(_payload_value(payload, fabric_path))
+
+        service_name = _as_str(args.get("service")) or ""
+        cache_key = (
+            "capacity_block_groups",
+            tenant_id,
+            region_id,
+            platform_name,
+            fabric_name,
+            service_name,
+        )
+        if cache_key in self._cache:
+            return self._cache[cache_key]
+
+        sdk = self._sdk_or_none()
+        if sdk is None:
+            return ()
+
+        from nebius.api.nebius.capacity.v1 import (
+            CapacityBlockGroupServiceClient,
+            CapacityBlockGroupStatus,
+            ListCapacityBlockGroupsRequest,
+        )
+
+        client = CapacityBlockGroupServiceClient(sdk)
+        items = self._paged_list(
+            request_factory=lambda page_token: ListCapacityBlockGroupsRequest(
+                parent_id=tenant_id,
+                page_size=_CAPACITY_BLOCK_GROUP_LIST_PAGE_SIZE,
+                page_token=page_token,
+            ),
+            request_call=client.list,
+        )
+
+        choices: list[OptionChoice] = []
+        for item in items:
+            metadata = getattr(item, "metadata", None)
+            status = getattr(item, "status", None)
+            block_id = _as_str(getattr(metadata, "id", None))
+            if not block_id:
+                continue
+            status_region = _as_str(getattr(status, "region", None))
+            if region_id and status_region and status_region != region_id:
+                continue
+            status_service = _as_str(getattr(status, "service", None))
+            if service_name and status_service and status_service != service_name:
+                continue
+            affinity = getattr(status, "resource_affinity", None)
+            compute_affinity = getattr(affinity, "compute_v1", None)
+            affinity_platform = _as_str(getattr(compute_affinity, "platform", None))
+            if platform_name and affinity_platform and affinity_platform != platform_name:
+                continue
+            affinity_fabric = _as_str(getattr(compute_affinity, "fabric", None))
+            if fabric_name and affinity_fabric and affinity_fabric != fabric_name:
+                continue
+
+            state_name = _enum_member_name(
+                CapacityBlockGroupStatus.State,
+                getattr(status, "state", None),
+            ).removeprefix("STATE_")
+            if state_name in {"INACTIVE", "SHUTTING"}:
+                continue
+            usage_state_name = _enum_member_name(
+                CapacityBlockGroupStatus.UsageState,
+                getattr(status, "usage_state", None),
+            ).removeprefix("USAGE_STATE_")
+            current_limit = getattr(status, "current_limit", None)
+            usage = getattr(status, "usage", None)
+            available = (
+                max(0, int(current_limit) - int(usage))
+                if isinstance(current_limit, int) and isinstance(usage, int)
+                else None
+            )
+            display_name = _as_str(getattr(metadata, "name", None)) or block_id
+            label_parts = [display_name]
+            details: list[str] = [block_id]
+            if status_region:
+                details.append(status_region)
+            if affinity_platform:
+                details.append(affinity_platform)
+            if affinity_fabric:
+                details.append(affinity_fabric)
+            if state_name:
+                details.append(state_name.lower())
+            if usage_state_name:
+                details.append(usage_state_name.lower().replace("_", "-"))
+            if available is not None:
+                details.append(f"available={available}")
+            if details:
+                label_parts.append(f"({', '.join(details)})")
+            choices.append(
+                OptionChoice(
+                    value=block_id,
+                    label="  ".join(label_parts),
+                    recommended=bool(available and available > 0),
+                )
+            )
+
+        choices.sort(key=lambda choice: (0 if choice.recommended else 1, choice.label))
+        resolved = tuple(choices)
+        self._cache[cache_key] = resolved
+        return resolved
+
     def _resolve_operator_public_ip_cidr(
         self,
         *,
@@ -969,6 +1110,174 @@ class ProviderOptionLookup:
             return field_path.rsplit(".", maxsplit=1)[0]
         return field_path.rsplit(".", maxsplit=1)[0]
 
+    @staticmethod
+    def _normalize_component_token(value: object) -> str:
+        return str(value or "").strip().lower().replace("_", "-")
+
+    def _soperator_target_ref_for_field(
+        self,
+        *,
+        payload: dict[str, Any],
+        field_path: str,
+    ) -> str:
+        row_path = self._soperator_chart_row_path(field_path)
+        target_ref = self._normalize_component_token(_payload_value(payload, f"{row_path}.target_ref"))
+        if target_ref:
+            return target_ref
+        target_ref = self._normalize_component_token(
+            _payload_value(payload, f"{row_path}.instance_id")
+        )
+        if target_ref and target_ref != "soperator":
+            return target_ref
+
+        infra = payload.get("infra")
+        components = infra.get("components") if isinstance(infra, Mapping) else None
+        if not isinstance(components, list):
+            return target_ref
+        mk8s_refs: list[str] = []
+        for row in components:
+            if not isinstance(row, Mapping) or not bool(row.get("enabled", False)):
+                continue
+            if self._normalize_component_token(row.get("id")) != "mk8s":
+                continue
+            instance_id = self._normalize_component_token(row.get("instance_id")) or "mk8s"
+            mk8s_refs.append(instance_id)
+        if len(mk8s_refs) == 1:
+            return mk8s_refs[0]
+        return target_ref
+
+    def _soperator_profile_for_field(
+        self,
+        *,
+        payload: dict[str, Any],
+        field_path: str,
+    ) -> Mapping[str, Any]:
+        from .component_sources import helm_chart_source_by_id
+
+        chart = helm_chart_source_by_id("soperator")
+        settings = getattr(chart, "soperator_nodesets", None)
+        default = _as_str(getattr(settings, "default", None))
+        profiles = getattr(settings, "profiles", {}) if settings is not None else {}
+        row_path = self._soperator_chart_row_path(field_path)
+        profile_name = _as_str(_payload_value(payload, f"{row_path}.profile")) or default
+        profile = profiles.get(profile_name or "") if isinstance(profiles, Mapping) else None
+        return profile if isinstance(profile, Mapping) else {}
+
+    def _soperator_node_group_kind_for_role(
+        self,
+        *,
+        args: dict[str, Any],
+        payload: dict[str, Any],
+        field_path: str,
+    ) -> str:
+        explicit_kind = (_as_str(args.get("node_group_kind")) or "").lower()
+        if explicit_kind:
+            return explicit_kind
+        role = _as_str(args.get("role"))
+        if not role:
+            return "all"
+        profile = self._soperator_profile_for_field(payload=payload, field_path=field_path)
+        role_mapping = profile.get("role_mapping")
+        roles = role_mapping.get("roles") if isinstance(role_mapping, Mapping) else None
+        raw_role = roles.get(role) if isinstance(roles, Mapping) else None
+        if isinstance(raw_role, Mapping):
+            return (_as_str(raw_role.get("default_node_group_kind")) or "all").lower()
+        return "all"
+
+    @staticmethod
+    def _soperator_node_group_kind(raw_group: Mapping[str, Any]) -> str:
+        gpu = raw_group.get("gpu")
+        if isinstance(gpu, bool):
+            return "gpu" if gpu else "cpu"
+        if str(gpu or "").strip().lower() in {"1", "true", "yes", "on"}:
+            return "gpu"
+        return "cpu"
+
+    def _resolve_soperator_node_groups(
+        self,
+        *,
+        args: dict[str, Any],
+        payload: dict[str, Any],
+        field_path: str,
+    ) -> tuple[OptionChoice, ...]:
+        target_ref = self._soperator_target_ref_for_field(payload=payload, field_path=field_path)
+        if not target_ref:
+            return ()
+        requested_kind = self._soperator_node_group_kind_for_role(
+            args=args,
+            payload=payload,
+            field_path=field_path,
+        )
+        deploy = payload.get("deploy")
+        targets = deploy.get("targets") if isinstance(deploy, Mapping) else None
+        if isinstance(targets, list):
+            for row in targets:
+                if not isinstance(row, Mapping) or not deploy_target_is_external_mk8s(row):
+                    continue
+                instance_id = self._normalize_component_token(row.get("instance_id"))
+                if instance_id != target_ref:
+                    continue
+                inventory = row.get("inventory")
+                node_groups = (
+                    inventory.get("node_groups") if isinstance(inventory, Mapping) else None
+                )
+                if isinstance(node_groups, Mapping):
+                    return self._soperator_node_group_choices_from_mapping(
+                        node_groups,
+                        requested_kind=requested_kind,
+                    )
+        infra = payload.get("infra")
+        components = infra.get("components") if isinstance(infra, Mapping) else None
+        if not isinstance(components, list):
+            return ()
+
+        for row in components:
+            if not isinstance(row, Mapping) or not bool(row.get("enabled", False)):
+                continue
+            if self._normalize_component_token(row.get("id")) != "mk8s":
+                continue
+            instance_id = self._normalize_component_token(row.get("instance_id")) or "mk8s"
+            if instance_id != target_ref:
+                continue
+            inputs = row.get("inputs")
+            node_groups = inputs.get("node_groups") if isinstance(inputs, Mapping) else None
+            if not isinstance(node_groups, Mapping):
+                return ()
+            return self._soperator_node_group_choices_from_mapping(
+                node_groups,
+                requested_kind=requested_kind,
+            )
+        return ()
+
+    def _soperator_node_group_choices_from_mapping(
+        self,
+        node_groups: Mapping[str, Any],
+        *,
+        requested_kind: str,
+    ) -> tuple[OptionChoice, ...]:
+        choices: list[OptionChoice] = []
+        for raw_key, raw_group in node_groups.items():
+            key = self._normalize_component_token(raw_key)
+            if not key or not isinstance(raw_group, Mapping):
+                continue
+            if raw_group.get("enabled") is False:
+                continue
+            kind = self._soperator_node_group_kind(raw_group)
+            if requested_kind in {"cpu", "gpu"} and kind != requested_kind:
+                continue
+            platform = _as_str(raw_group.get("platform")) or ""
+            preset = _as_str(raw_group.get("preset")) or ""
+            suffix = " / ".join(part for part in (kind.upper(), platform, preset) if part)
+            label = f"{key}  ({suffix})" if suffix else key
+            choices.append(
+                OptionChoice(
+                    value=key,
+                    label=label,
+                    recommended=requested_kind == kind,
+                )
+            )
+        return tuple(choices)
+
     def _resolve_soperator_nodesets_profiles(
         self,
         *,
@@ -1031,6 +1340,45 @@ class ProviderOptionLookup:
             )
         return tuple(choices)
 
+    def _resolve_soperator_topology_profiles(
+        self,
+        *,
+        args: dict[str, Any],
+        payload: dict[str, Any],
+        field_path: str,
+    ) -> tuple[OptionChoice, ...]:
+        default_profile, profiles = self._soperator_nodesets_profile_catalog()
+        default_topology_profile = _as_str(args.get("default"))
+        chart_row_path = self._soperator_chart_row_path(field_path)
+        profile_name = _as_str(_payload_value(payload, f"{chart_row_path}.profile"))
+        profile_name = profile_name or default_profile
+        profile = profiles.get(profile_name or "")
+        if not isinstance(profile, Mapping):
+            return ()
+        chart = profile.get("chart")
+        if not isinstance(chart, Mapping):
+            return ()
+        raw_topology_profiles = chart.get("topology_profiles")
+        if not isinstance(raw_topology_profiles, Mapping):
+            return ()
+        choices: list[OptionChoice] = []
+        for name, topology_profile in raw_topology_profiles.items():
+            profile_value = str(name).strip()
+            if not profile_value:
+                continue
+            choices.append(
+                OptionChoice(
+                    value=profile_value,
+                    label=self._soperator_catalog_label(
+                        topology_profile,
+                        fallback=profile_value,
+                    ),
+                    recommended=bool(default_topology_profile)
+                    and profile_value == default_topology_profile,
+                )
+            )
+        return tuple(choices)
+
     def _resolve_mk8s_compatible_platforms(
         self,
         *,
@@ -1079,7 +1427,9 @@ class ProviderOptionLookup:
 
         platform_path = _as_str(args.get("platform_path"))
         if not platform_path and field_path.endswith(".gpu_stack_preset"):
-            platform_path = f"{field_path.rsplit('.', maxsplit=1)[0]}.gpu_nodes_platform"
+            prefix = field_path.rsplit(".", maxsplit=1)[0]
+            if ".node_group_defaults.gpu." in field_path:
+                platform_path = f"{prefix}.platform"
 
         platform_name = _as_str(args.get("platform"))
         if not platform_name and platform_path:
@@ -1123,11 +1473,15 @@ class ProviderOptionLookup:
             return ()
 
         platform_path = _as_str(args.get("platform_path"))
-        if not platform_path:
-            if field_path.endswith(".gpu_nodes_os"):
-                platform_path = f"{field_path.rsplit('.', maxsplit=1)[0]}.gpu_nodes_platform"
-            elif field_path.endswith(".cpu_nodes_os"):
-                platform_path = f"{field_path.rsplit('.', maxsplit=1)[0]}.cpu_nodes_platform"
+        if (
+            not platform_path
+            and field_path.endswith(".os")
+            and (
+                ".node_group_defaults.gpu." in field_path
+                or ".node_group_defaults.cpu." in field_path
+            )
+        ):
+            platform_path = f"{field_path.rsplit('.', maxsplit=1)[0]}.platform"
         platform_name = _as_str(args.get("platform"))
         if not platform_name and platform_path:
             platform_name = _as_str(_payload_value(payload, platform_path))
@@ -1135,7 +1489,9 @@ class ProviderOptionLookup:
             return ()
 
         stack_preset_path = _as_str(args.get("stack_preset_path"))
-        if not stack_preset_path and field_path.endswith(".gpu_nodes_os"):
+        if not stack_preset_path and (
+            ".node_group_defaults.gpu." in field_path and field_path.endswith(".os")
+        ):
             stack_preset_path = f"{field_path.rsplit('.', maxsplit=1)[0]}.gpu_stack_preset"
         stack_preset = _as_str(args.get("stack_preset"))
         if not stack_preset and stack_preset_path:
@@ -1172,7 +1528,9 @@ class ProviderOptionLookup:
     ) -> tuple[OptionChoice, ...]:
         platform_path = _as_str(args.get("platform_path"))
         if not platform_path and field_path.endswith(".infiniband_fabric"):
-            platform_path = f"{field_path.rsplit('.', maxsplit=1)[0]}.gpu_nodes_platform"
+            prefix = field_path.rsplit(".", maxsplit=1)[0]
+            if ".node_group_defaults.gpu." in field_path:
+                platform_path = f"{prefix}.platform"
 
         platform_name = _as_str(args.get("platform"))
         if not platform_name and platform_path:
@@ -1255,6 +1613,10 @@ class ProviderOptionLookup:
                     )
                 ),
                 recommended=item.fabric == recommended_fabric,
+                metadata={
+                    "on_demand_vms": item.on_demand.available,
+                    "reserved_vms": item.reserved.available,
+                },
             )
             for item in advice_by_fabric.values()
         )
@@ -1394,6 +1756,19 @@ class ProviderOptionLookup:
                     if choice.value in advice_by_preset
                     else choice.label,
                     recommended=choice.value == recommended_preset,
+                    metadata=(
+                        {
+                            **choice.metadata,
+                            "on_demand_vms": advice_by_preset[
+                                choice.value
+                            ].on_demand.availability.available,
+                            "reserved_vms": advice_by_preset[
+                                choice.value
+                            ].reserved.availability.available,
+                        }
+                        if choice.value in advice_by_preset
+                        else choice.metadata
+                    ),
                 )
                 for choice in sorted(
                     options,
@@ -1636,7 +2011,11 @@ class ProviderOptionLookup:
         project_id = self._resolve_project_id(payload, args)
         if not project_id:
             return ()
-        cache_key = ("project_subnets", project_id)
+        network_id = _as_str(args.get("network_id"))
+        network_id_path = _as_str(args.get("network_id_path"))
+        if not network_id and network_id_path:
+            network_id = _as_str(_payload_value(payload, network_id_path))
+        cache_key = ("project_subnets", project_id, network_id)
         if cache_key in self._cache:
             return self._cache[cache_key]
 
@@ -1658,6 +2037,10 @@ class ProviderOptionLookup:
         options: list[OptionChoice] = []
         for item in items:
             metadata = getattr(item, "metadata", None)
+            spec = getattr(item, "spec", None)
+            item_network_id = _as_str(getattr(spec, "network_id", None))
+            if network_id and item_network_id != network_id:
+                continue
             status = getattr(item, "status", None)
             subnet_id = _as_str(getattr(metadata, "id", None))
             if not subnet_id:

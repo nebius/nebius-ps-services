@@ -140,7 +140,19 @@ def test_bundled_gpu_dashboard_contract_matches_nebius_service_metrics_labels() 
         "avg by (instance_id, uuid) (DCGM_FI_DEV_GPU_TEMP" in query
         for query in contract.queries
     )
-    assert any("DCGM_FI_DEV_XID_ERRORS" in query for query in contract.queries)
+    xid_panel = next(panel for panel in dashboard["panels"] if panel["id"] == 6)
+    xid_query = xid_panel["targets"][0]["expr"]
+    assert xid_panel["title"] == "Current XID Code"
+    assert xid_panel["description"].startswith(
+        "NVIDIA DCGM reports DCGM_FI_DEV_XID_ERRORS as the latest XID code value"
+    )
+    assert "No data means the XID read point is absent" in xid_panel["description"]
+    assert "count(" not in xid_query
+    assert "max by (instance_id, uuid) (DCGM_FI_DEV_XID_ERRORS" in xid_query
+    assert "DCGM_FI_DEV_GPU_UTIL" not in xid_query
+    assert xid_panel["fieldConfig"]["defaults"]["mappings"][0]["options"]["0"][
+        "text"
+    ] == "No XID"
     assert any("DCGM_FI_DEV_ECC_DBE_VOL_TOTAL" in query for query in contract.queries)
     timeseries_legends = [
         target.get("legendFormat", "")

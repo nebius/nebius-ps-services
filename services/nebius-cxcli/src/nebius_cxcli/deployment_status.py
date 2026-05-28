@@ -24,8 +24,10 @@ from nebius.api.nebius.mk8s.v1 import (
 from rich.markup import escape
 
 from .component_instances import component_instance_label
-from .runtime_config import to_plain_data
-from .sdk_auth import init_nebius_sdk
+from .components import component_lookup
+from .mk8s_node_groups import cluster_name as mk8s_cluster_name
+from .runtime_config import read_path, to_plain_data
+from .sdk_auth import init_nebius_sdk, suppress_expected_sdk_retry_logs
 
 
 def _as_text(value: Any) -> str:
@@ -180,8 +182,6 @@ class StatusWatcherTarget:
 
 
 def _mk8s_deployment_target(config: Any) -> Mk8sDeploymentTarget | None:
-    from .components import component_lookup
-
     payload = to_plain_data(config)
     if not isinstance(payload, dict):
         return None
@@ -208,9 +208,10 @@ def _mk8s_deployment_target(config: Any) -> Mk8sDeploymentTarget | None:
         if not isinstance(inputs, Mapping):
             continue
         # Use status.name_input to find the cluster name field dynamically.
-        name_input = "cluster_name"
-        name_input = getattr(status, "name_input", "name") or "name"
-        cluster_name = _as_text(inputs.get(name_input))
+        name_input = getattr(status, "name_input", "cluster.cluster_name") or "cluster.cluster_name"
+        cluster_name = _as_text(read_path(inputs, name_input)) or (
+            mk8s_cluster_name(inputs) if name_input == "cluster.cluster_name" else ""
+        )
         if not cluster_name:
             continue
         return Mk8sDeploymentTarget(project_id=project_id, cluster_name=cluster_name)
@@ -235,14 +236,8 @@ def _missing_resource_summary(
     operation: str,
 ) -> str:
     if _as_text(operation).lower() == "destroy":
-        return (
-            f"{resource_label} '{resource_name}' is already absent in "
-            f"project {project_id}."
-        )
-    return (
-        f"{resource_label} '{resource_name}' is not visible yet in "
-        f"project {project_id}."
-    )
+        return f"{resource_label} '{resource_name}' is already absent in project {project_id}."
+    return f"{resource_label} '{resource_name}' is not visible yet in project {project_id}."
 
 
 def _response_collection(response: Any, *field_names: str) -> list[Any]:
@@ -352,31 +347,65 @@ def _latest_operation_failure(operation_service: Any, resource_id: str) -> str |
     return f"{description}{detail_summary}"
 
 
-def _latest_operation_summary(operation_service: Any, resource_id: str) -> str | None:
-    latest = _latest_operation(operation_service, resource_id)
-    if latest is None:
+def _latest_operation_summary(
+    operation_service: Any,
+    resource_id: str,
+    *,
+    monitor_started_at: datetime | None = None,
+    observed_running_operation_ids: set[str] | None = None,
+) -> str | None:
+    response = operation_service.list(ListOperationsRequest(resource_id=resource_id)).wait()
+    operations = list(getattr(response, "operations", []) or [])
+    if not operations:
         return None
 
-    operation_id = _as_text(getattr(latest, "id", None))
-    description = _as_text(getattr(latest, "description", None)) or "operation"
-    age_summary = ""
-    latest_created = getattr(latest, "created_at", None)
-    if latest_created is not None:
+    started_at = _coerce_utc_datetime(monitor_started_at)
+    observed_operation_ids = (
+        observed_running_operation_ids if observed_running_operation_ids is not None else set()
+    )
+
+    def _created_at(operation: Any) -> datetime:
+        return _coerce_utc_datetime(getattr(operation, "created_at", None)) or datetime.min.replace(
+            tzinfo=UTC
+        )
+
+    for latest in sorted(operations, key=_created_at, reverse=True):
+        operation_id = _as_text(getattr(latest, "id", None))
+        description = _as_text(getattr(latest, "description", None)) or "operation"
+        age_summary = ""
+        latest_created = _coerce_utc_datetime(getattr(latest, "created_at", None))
+        if latest_created is not None:
+            with suppress(Exception):
+                age_summary = _format_elapsed(
+                    max(
+                        0.0,
+                        (datetime.now(latest_created.tzinfo) - latest_created).total_seconds(),
+                    )
+                )
+        done_summary = "state unknown"
+        full = _load_full_operation(operation_service, latest)
+        done = False
         with suppress(Exception):
-            age_summary = _format_elapsed(
-                max(0.0, (datetime.now(latest_created.tzinfo) - latest_created).total_seconds())
-            )
-    done_summary = "state unknown"
-    full = _load_full_operation(operation_service, latest)
-    with suppress(Exception):
-        done_summary = "done" if full.done() else "running"
-    parts = [description]
-    if operation_id:
-        parts.append(operation_id)
-    parts.append(done_summary)
-    if age_summary:
-        parts.append(age_summary)
-    return "op " + " ".join(parts)
+            done = bool(full.done())
+            done_summary = "done" if done else "running"
+        if not done and observed_running_operation_ids is not None and operation_id:
+            observed_running_operation_ids.add(operation_id)
+        if (
+            done
+            and operation_id not in observed_operation_ids
+            and started_at is not None
+            and latest_created is not None
+            and latest_created < (started_at - timedelta(seconds=1))
+        ):
+            continue
+        parts = [description]
+        if operation_id:
+            parts.append(operation_id)
+        parts.append(done_summary)
+        if age_summary:
+            parts.append(age_summary)
+        return "op " + " ".join(parts)
+    return None
 
 
 def _terminal_operation_failure_message(
@@ -405,6 +434,7 @@ class _Mk8sStatusPoller:
         self._cluster_id: str | None = None
         self._auth_warning: str | None = None
         self._monitor_started_at = datetime.now(UTC)
+        self._running_operation_ids: set[str] = set()
 
         self._sdk = init_nebius_sdk(
             parent_id=target.project_id,
@@ -529,7 +559,16 @@ class _Mk8sStatusPoller:
         return None
 
     def _latest_operation_summary(self, cluster_id: str) -> str | None:
-        return _latest_operation_summary(self._cluster_client.operation_service(), cluster_id)
+        observed = getattr(self, "_running_operation_ids", None)
+        if observed is None:
+            observed = set()
+            self._running_operation_ids = observed
+        return _latest_operation_summary(
+            self._cluster_client.operation_service(),
+            cluster_id,
+            monitor_started_at=getattr(self, "_monitor_started_at", None),
+            observed_running_operation_ids=observed,
+        )
 
     def summary(self) -> str:
         cluster = self._find_cluster()
@@ -1446,8 +1485,10 @@ class DeploymentStatusReporter:
             return
         self._terminal_failure_emitted = True
         self._emit(
-            "Nebius API reported terminal deployment error; aborting Terraform wait early: "
-            f"{failure}"
+            escape(
+                "Nebius API reported terminal deployment error; aborting Terraform wait early: "
+                f"{failure}"
+            )
         )
 
     def _run(self) -> None:
@@ -1457,8 +1498,10 @@ class DeploymentStatusReporter:
                 terminal_failure = self._poller_terminal_failure()
             except Exception as exc:
                 self._emit(
-                    "Nebius API status reporter failed; continuing with Terraform + elapsed heartbeat: "
-                    f"{exc}"
+                    escape(
+                        "Nebius API status reporter failed; continuing with Terraform + elapsed heartbeat: "
+                        f"{exc}"
+                    )
                 )
                 self._poller.close()
                 self._poller = _HeartbeatPoller()
@@ -1474,7 +1517,7 @@ class DeploymentStatusReporter:
 
     def start(self) -> DeploymentStatusReporter:
         for notice in self._startup_notices:
-            self._emit(notice)
+            self._emit(escape(notice))
         self._emit_status(force=True)
         if self._terminal_failure:
             self._emit_terminal_failure_notice(self._terminal_failure)
@@ -1507,15 +1550,16 @@ def deployment_status_reporting(
     poll_interval_seconds: float = 15.0,
     repeat_interval_seconds: float = 60.0,
 ):
-    reporter = DeploymentStatusReporter(
-        config,
-        emit=emit,
-        status_watchers=status_watchers,
-        operation=operation,
-        poll_interval_seconds=poll_interval_seconds,
-        repeat_interval_seconds=repeat_interval_seconds,
-    ).start()
-    try:
-        yield reporter
-    finally:
-        reporter.close()
+    with suppress_expected_sdk_retry_logs():
+        reporter = DeploymentStatusReporter(
+            config,
+            emit=emit,
+            status_watchers=status_watchers,
+            operation=operation,
+            poll_interval_seconds=poll_interval_seconds,
+            repeat_interval_seconds=repeat_interval_seconds,
+        ).start()
+        try:
+            yield reporter
+        finally:
+            reporter.close()

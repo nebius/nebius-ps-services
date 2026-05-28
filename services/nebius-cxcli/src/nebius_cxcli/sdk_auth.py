@@ -17,6 +17,10 @@ _RETRYABLE_REFRESH_LOG_MARKERS = (
     "deadline_exceeded",
     "deadline exceeded",
 )
+_RETRYABLE_REQUEST_LOG_MARKERS = (
+    "request attempt",
+    "but will be retried",
+)
 _LOGGER = logging.getLogger(__name__)
 
 
@@ -38,6 +42,11 @@ def retryable_refresh_log(record: logging.LogRecord) -> bool:
     )
 
 
+def retryable_request_log(record: logging.LogRecord) -> bool:
+    message = record.getMessage().lower()
+    return all(marker in message for marker in _RETRYABLE_REQUEST_LOG_MARKERS)
+
+
 class _SuppressDeletedKeyRefreshLog(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
         return not deleted_key_refresh_log(record)
@@ -46,6 +55,11 @@ class _SuppressDeletedKeyRefreshLog(logging.Filter):
 class _SuppressExpectedRefreshLog(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
         return not (deleted_key_refresh_log(record) or retryable_refresh_log(record))
+
+
+class _SuppressExpectedRequestRetryLog(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        return not retryable_request_log(record)
 
 
 @contextmanager
@@ -72,6 +86,19 @@ def suppress_expected_refresh_logs():
         yield
     finally:
         refresh_logger.removeFilter(expected_filter)
+
+
+@contextmanager
+def suppress_expected_sdk_retry_logs():
+    """Suppress SDK retry tracebacks for requests that are still being retried."""
+
+    request_logger = logging.getLogger("nebius.aio.request")
+    request_filter = _SuppressExpectedRequestRetryLog()
+    request_logger.addFilter(request_filter)
+    try:
+        yield
+    finally:
+        request_logger.removeFilter(request_filter)
 
 
 def _ensure_iam_token_from_cli(*, timeout_seconds: int = 10) -> str | None:

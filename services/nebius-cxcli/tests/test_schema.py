@@ -214,14 +214,22 @@ def test_schema_rejects_legacy_mk8s_gpu_validation_overrides_input(tmp_path: Pat
             "instance_id": "cluster-a",
             "enabled": True,
             "inputs": {
-                "cluster_name": "cluster-a",
-                "parent_id": "project-456",
-                "subnet_id": "subnet-123",
-                "gpu_enabled": True,
-                "gpu_node_groups": 1,
-                "gpu_nodes_count_per_group": 1,
-                "gpu_nodes_platform": "gpu-h100-sxm",
-                "gpu_nodes_preset": "8gpu-128vcpu-1600gb",
+                "cluster": {
+                    "parent_id": "project-456",
+                    "cluster_name": "cluster-a",
+                    "network_id": "vpcnetwork-123",
+                    "subnet_id": "subnet-123",
+                    "k8s_version": "1.33",
+                    "public_endpoint": True,
+                },
+                "node_groups": {
+                    "worker": {
+                        "node_count": 1,
+                        "gpu": True,
+                        "platform": "gpu-h100-sxm",
+                        "preset": "8gpu-128vcpu-1600gb",
+                    }
+                },
                 "gpu_validation_overrides": {
                     "operator_readiness": {"enabled": False},
                 },
@@ -263,6 +271,25 @@ def test_schema_rejects_root_mk8s_gpu_deploy_validations(tmp_path: Path) -> None
     with pytest.raises(ValueError) as exc_info:
         load_config(config_path)
     assert "deploy has unsupported field(s): validations" in str(exc_info.value)
+
+
+def test_schema_rejects_external_mk8s_target_fields_without_external_kind(tmp_path: Path) -> None:
+    payload = _dynamic_payload()
+    payload["deploy"] = {
+        "targets": [
+            {
+                "instance_id": "mk8s",
+                "kube_context": "nebius-cluster1-mk8scluster-123-external",
+            }
+        ],
+    }
+
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    with pytest.raises(ValueError) as exc_info:
+        load_config(config_path)
+    assert "deploy.targets[0] has unsupported field(s): kube_context" in str(exc_info.value)
 
 
 def test_schema_rejects_missing_infra_instance_id(tmp_path: Path) -> None:
@@ -382,6 +409,69 @@ def test_schema_rejects_target_bound_app_instance_id_mismatch(tmp_path: Path) ->
     assert "apps.charts[0].instance_id must reference one of the enabled cluster targets" in str(
         exc_info.value
     )
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+def test_schema_rejects_legacy_soperator_child_app_rows(
+    tmp_path: Path,
+    *,
+    enabled: bool,
+) -> None:
+    payload = _dynamic_payload()
+    payload["infra"]["components"] = [
+        {
+            "id": "mk8s",
+            "instance_id": "cluster-a",
+            "enabled": True,
+            "inputs": {},
+        }
+    ]
+    payload["deploy"] = {"targets": [{"instance_id": "cluster-a"}]}
+    payload["apps"]["charts"] = [
+        {
+            "id": "soperator-notifier",
+            "instance_id": "cluster-a",
+            "enabled": enabled,
+            "values": {},
+        }
+    ]
+
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    with pytest.raises(ValueError) as exc_info:
+        load_config(config_path)
+    assert "is no longer a standalone app" in str(exc_info.value)
+    assert "apps:soperator" in str(exc_info.value)
+
+
+def test_schema_rejects_legacy_k8up_app_row(tmp_path: Path) -> None:
+    payload = _dynamic_payload()
+    payload["infra"]["components"] = [
+        {
+            "id": "mk8s",
+            "instance_id": "cluster-a",
+            "enabled": True,
+            "inputs": {},
+        }
+    ]
+    payload["deploy"] = {"targets": [{"instance_id": "cluster-a"}]}
+    payload["apps"]["charts"] = [
+        {
+            "id": "k8up",
+            "instance_id": "cluster-a",
+            "enabled": True,
+            "values": {},
+        }
+    ]
+
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    with pytest.raises(ValueError) as exc_info:
+        load_config(config_path)
+    assert "k8up" in str(exc_info.value)
+    assert "values.soperator-backup-config.enabled" in str(exc_info.value)
 
 
 def test_schema_rejects_root_kubernetes_observability(tmp_path: Path) -> None:

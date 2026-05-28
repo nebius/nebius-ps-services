@@ -225,7 +225,7 @@ components:
               gpu:
                 label: GPU service metrics for GPU-backed MK8s nodes
                 include_when:
-                  - inputs.gpu_enabled
+                  - mk8s_gpu
           service_logs:
             buckets:
               sp_mk8s_control_plane:
@@ -497,19 +497,21 @@ components:
         mk8s_gpu_policy:
           # Shared NCCL image and benchmark defaults come from the chart's own
           # values.yaml. Keep only platform-specific MPI overlays here. Nebius
-          # docs add `-mca coll ^hcoll` only for the B200 MPIJob example while
-          # the H100/H200 example omits it, so this stays catalog-owned rather
-          # than becoming a shared chart default.
+          # docs add `-mca coll ^hcoll` for the B200 MPIJob example while the
+          # H100/H200 example omits it; NVIDIA HPC-X also marks HCOLL unsupported
+          # on GB200/GB300. Keep this Blackwell-family override catalog-owned
+          # rather than promoting it to a shared chart default.
           # Ref: https://docs.nebius.com/kubernetes/gpu/nccl-test
           rules:
             - match_platforms:
                 - gpu-b200-sxm
                 - gpu-b200-sxm-a
+                - gpu-b300-sxm
               defaults:
-                # B200 keeps the `-mca coll ^hcoll` overlay on top of the
-                # shared first-party NCCL image release because the official
-                # Nebius B200 NCCL example includes it while the H100/H200
-                # example does not.
+                # B200/B200A are covered by the official Nebius B200 NCCL
+                # example. B300/GB300 are covered by the NVIDIA HPC-X HCOLL
+                # support boundary. Keep the flag on the app policy so the
+                # shared nccl-test chart remains hardware-neutral.
                 values.benchmark.mpiExtraArgs:
                   - -mca
                   - coll
@@ -521,38 +523,167 @@ components:
           # cxcli already auto-enables GPU Operator and, for GPU fabric /
           # InfiniBand cases, Network Operator. This policy only orders the
           # Soperator HelmRelease after whichever GPU platform releases are
-          # present. The Soperator DCGM job-mapping exporter is a separate
-          # optional companion app.
+          # present. The Soperator DCGM job-mapping exporter is an optional
+          # child chart enabled under the parent Soperator values.
           install_after:
             - cert-manager
             - nvidia-network-operator
             - nvidia-gpu-operator
+          # Soperator worker pods intentionally consume the selected GPU nodes,
+          # so workload checks may skip once the Slurm workers reserve every
+          # GPU. Still expose the cxcli-owned MK8s GPU validation toggles during
+          # create/component add; Soperator ActiveChecks stay disabled unless an
+          # operator explicitly chooses Slurm-level benchmark/diagnostic jobs.
+        # ------------------------------------------------------------------
+        # Soperator wizard guidance for operators
+        # ------------------------------------------------------------------
+        # The Soperator wizard surfaces three layered choices, each rendered
+        # as Slurm.conf or SlurmDBD content by the chart at template time.
+        # Profile-owned settings use the chart's typed values where the chart
+        # models the Slurm key; raw customSlurmConfig remains only for
+        # unmodeled one-off Slurm keys. See the Scheduling And Preemption
+        # section of the soperator chart design doc for the field-to-Slurm.conf
+        # mapping.
+        #
+        # Slurm concepts that drive these choices (vendor terminology):
+        #
+        #   Partition         A queue plus its policy: which NodeSets the
+        #                     queue covers and how jobs behave on those
+        #                     nodes (MaxTime, AllowQos, PreemptMode, ...).
+        #
+        #   PriorityTier      Partition-level scheduling tier. The Slurm
+        #                     scheduler evaluates higher tiers first. With
+        #                     `PreemptType=preempt/partition_prio` it is
+        #                     also the preemption tier: a higher-tier job
+        #                     can preempt a lower-tier running job that
+        #                     shares the same nodes.
+        #
+        #   PriorityWeight*   slurm.conf knobs that weight each component
+        #                     of the multifactor job-priority formula:
+        #                     Age, Fairshare, QOS, TRES, Partition, JobSize.
+        #                     A weight of 0 makes that component inert.
+        #                     PriorityWeightPartition is the partition's
+        #                     numeric contribution (paired with the
+        #                     partition's PriorityJobFactor) and is only
+        #                     used when PriorityWeightPartition > 0.
+        #
+        #   PreemptType       Global plugin that decides which running jobs
+        #                     are eligible as preemption victims. Common
+        #                     values: preempt/partition_prio (use tiers),
+        #                     preempt/qos (use SlurmDB QOS relationships),
+        #                     preempt/none (disabled).
+        #
+        #   PreemptMode       Cluster default for how victim jobs are
+        #                     handled (OFF, CANCEL, REQUEUE, SUSPEND, GANG).
+        #                     Partitions and QOS objects can override the
+        #                     cluster default. REQUEUE only takes effect if
+        #                     victims were submitted with --requeue or
+        #                     `schedulingConfig.jobRequeue: 1`.
+        #
+        #   QOS               SlurmDBD accounting object that can affect
+        #                     three independent things: scheduling priority
+        #                     (via PriorityWeightQOS), preemption (under
+        #                     preempt/qos with explicit Preempt= lists),
+        #                     and resource limits (MaxJobs, MaxWall, TRES).
+        #                     QOS objects live in SlurmDBD; numeric priority
+        #                     alone is not enough to drive QOS preemption.
+        #
+        #   Niceness (--nice) Per-job user modifier applied directly to
+        #                     priority calculation. Re-orders jobs inside
+        #                     the same priority bucket; there is no
+        #                     PriorityWeightNice knob.
+        #
+        # Two operational patterns dominate Nebius Soperator deployments:
+        #
+        #   (a) Partition + tiering -- deterministic. Distinct PriorityTier
+        #       per partition orders queues without SlurmDBD QOS objects.
+        #       Operators can add PreemptType=preempt/partition_prio plus an
+        #       intentional PreemptMode when actual victim selection is wanted.
+        #       PriorityWeight* can stay at 0 so tiers drive the queue policy.
+        #
+        #   (b) QOS + fairshare -- multi-tenant fairness. Non-zero
+        #       PriorityWeightFairshare / PriorityWeightQOS, AllowQos lists
+        #       per partition, PreemptType=preempt/qos, and explicit QOS
+        #       Preempt= relationships in SlurmDBD. The chart's optional
+        #       `qosConfiguration` block reconciles those QOS objects.
+        #
+        # The catalog overlays expose these patterns through the
+        # `partition_profiles` choices; the conceptual mapping for each
+        # profile is documented inline below.
         soperator_nodesets_profile:
+          # NodeSet profile = capacity shape. It declares the Soperator
+          # worker NodeSets and their role mapping; partition selection
+          # (queue + policy) is a separate later choice. Per the Slurm
+          # guide: "NodeSet = capacity, Partition = policy".
           default: nebius-gpu-v1
           profiles:
             nebius-cpu-v1:
               wizard:
-                label: "CPU-only workers: worker-cpu NodeSet, cpu Slurm partition, cpu feature"
+                # Single homogeneous worker shape for CPU-only training,
+                # data ETL, or controller-side workloads. One worker
+                # NodeSet (worker-cpu) plus one Slurm partition (cpu).
+                label: "CPU-only workers: worker-cpu NodeSet, cpu Slurm partition, accounting DB enabled"
+              role_mapping:
+                roles:
+                  system:
+                    default_node_group_kind: cpu
+                    filesystem_keys: [jail]
+                    k8s_node_filter_name: system
+                    chart_filter_paths:
+                      - populateJail.k8sNodeFilterName
+                    chart_affinity_paths:
+                      - controllerManager.affinity
+                      - soperator-checks.checks.affinity
+                      - mariadb-operator.affinity
+                      - mariadb-operator.webhook.affinity
+                  controller:
+                    default_node_group_kind: cpu
+                    filesystem_keys: [jail, controller-spool]
+                    k8s_node_filter_name: controller
+                    chart_filter_paths:
+                      - slurmNodes.controller.k8sNodeFilterName
+                      - slurmNodes.rest.k8sNodeFilterName
+                      - sConfigController.node.k8sNodeFilterName
+                  login:
+                    default_node_group_kind: cpu
+                    filesystem_keys: [jail]
+                    k8s_node_filter_name: login
+                    chart_filter_paths:
+                      - slurmNodes.login.k8sNodeFilterName
+                  accounting:
+                    default_node_group_kind: cpu
+                    filesystem_keys: [jail, accounting]
+                    k8s_node_filter_name: accounting
+                    chart_filter_paths:
+                      - slurmNodes.accounting.k8sNodeFilterName
+                  worker:
+                    default_node_group_kind: cpu
+                    filesystem_keys: [jail]
+                    nodeset_templates:
+                      - worker-cpu
               mk8s:
-                use_generic_gpu_node_groups: true
                 inputs:
-                  cpu_nodes_count: 0
-                  gpu_enabled: false
-                  gpu_node_groups: 0
-                  gpu_nodes_count_per_group: 0
+                  node_group_defaults:
+                    cpu:
+                      platform: cpu-d3
+                      preset: 8vcpu-32gb
                 node_groups:
                   system:
                     nodeset_name: system
                     workload: system
-                    fixed_node_count: 2
+                    node_count: 1
+                    node_count_input: soperator.system_node_count
                     gpu: false
                     jail: true
                   controller:
                     nodeset_name: controller
                     workload: controller
-                    fixed_node_count: 1
+                    node_count: 1
+                    node_count_input: soperator.controller_node_count
                     gpu: false
                     jail: true
+                    sfs_filesystem_keys:
+                      - controller-spool
                     taints:
                       - key: slurm.nebius.ai/nodeset-name
                         value: controller
@@ -560,15 +691,23 @@ components:
                   login:
                     nodeset_name: login
                     workload: login
-                    fixed_node_count: 1
+                    node_count: 1
+                    node_count_input: soperator.login_node_count
                     gpu: false
                     jail: true
+                    taints:
+                      - key: slurm.nebius.ai/nodeset-name
+                        value: login
+                        effect: NO_SCHEDULE
                   accounting:
                     nodeset_name: accounting
                     workload: accounting
-                    fixed_node_count: 1
+                    node_count: 1
+                    node_count_input: soperator.accounting_node_count
                     gpu: false
                     jail: true
+                    sfs_filesystem_keys:
+                      - accounting
                     taints:
                       - key: slurm.nebius.ai/nodeset-name
                         value: accounting
@@ -580,33 +719,165 @@ components:
                     workload: worker
                     gpu: false
                     jail: true
-                    default_total_nodes: 2
-                    default_nodes_per_group: 2
+                    total_nodes_input: soperator.worker_total_nodes
+                    nodes_per_group_input: soperator.worker_nodes_per_group
+                    default_total_nodes: 1
+                    default_nodes_per_group: 100
                     max_nodes_per_group: 100
               sfs:
-                filesystems:
+                filesystems: &soperator_production_sfs_filesystems
                   jail:
                     name: "{target}-jail"
                     size_gib: 1024
+                    block_size_kib: 4
                     mount_tag: jail
+                    forbid_deletion: false
                   controller-spool:
                     name: "{target}-controller-spool"
                     size_gib: 128
+                    block_size_kib: 4
                     mount_tag: controller-spool
+                    forbid_deletion: false
                   accounting:
                     name: "{target}-accounting"
                     size_gib: 128
+                    block_size_kib: 4
                     mount_tag: accounting
+                    forbid_deletion: false
               chart:
+                topology_profiles:
+                  disabled: &soperator_topology_disabled_profile
+                    wizard:
+                      # Safe default for generic Kubernetes clusters or
+                      # onboarded existing clusters. Leaves
+                      # slurmConfig.topologyPlugin empty so workers do not
+                      # block waiting for tier-* labels.
+                      label: "Disabled: generic/existing cluster; do not require Soperator tier-* node labels"
+                  nebius-tiered-tree-v1: &soperator_topology_tiered_tree_profile
+                    wizard:
+                      # Production topology/tree plugin. Soperator reads
+                      # `topology.nebius.com/tier-*` labels on worker nodes
+                      # to model the fabric hierarchy and place distributed
+                      # jobs with better locality. Use only when worker
+                      # nodes already expose accurate tier labels (Nebius
+                      # provisioning sets these automatically on
+                      # production GPU clusters).
+                      label: "Nebius tiered tree: fresh production topology/tree with prepared topology.nebius.com tier labels"
+                    values:
+                      slurmConfig:
+                        topologyPlugin: topology/tree
+                        topologyParam: SwitchAsNodeRank
+                      soperator-activechecks:
+                        checks:
+                          wait-for-topology:
+                            runAfterCreation: true
+                      controllerManager:
+                        manager:
+                          env:
+                            topologyLabelPrefix: topology.nebius.com
+                onboarding_values: &soperator_onboarding_compact_resources
+                  kruise:
+                    manager:
+                      resources:
+                        requests:
+                          cpu: 100m
+                          memory: 128Mi
+                        limits:
+                          cpu: 500m
+                          memory: 512Mi
+                  sConfigController:
+                    container:
+                      resources:
+                        cpu: "100m"
+                        memory: 128Mi
+                        ephemeralStorage: 1Gi
+                  slurmNodes:
+                    accounting:
+                      slurmdbd:
+                        resources:
+                          cpu: "250m"
+                          memory: 512Mi
+                          ephemeralStorage: 2Gi
+                      mariadbOperator:
+                        resources:
+                          cpu: "250m"
+                          memory: 1Gi
+                          ephemeralStorage: 2Gi
+                      munge:
+                        resources:
+                          cpu: "100m"
+                          memory: 128Mi
+                          ephemeralStorage: 1Gi
+                    controller:
+                      slurmctld:
+                        resources:
+                          cpu: "250m"
+                          memory: 512Mi
+                          ephemeralStorage: 2Gi
+                      munge:
+                        resources:
+                          cpu: "100m"
+                          memory: 128Mi
+                          ephemeralStorage: 1Gi
+                    login:
+                      sshd:
+                        resources:
+                          cpu: "250m"
+                          memory: 512Mi
+                          ephemeralStorage: 2Gi
+                      munge:
+                        resources:
+                          cpu: "100m"
+                          memory: 128Mi
+                          ephemeralStorage: 1Gi
+                # Internal profile-owned ActiveChecks plumbing. cxcli derives
+                # this into render-time Helm values only when ActiveChecks are
+                # enabled; it is not a wizard field or source-config knob.
+                activechecks:
+                  srunReadyPartition: cpu
                 values:
+                  mariadb-operator:
+                    installOperator: true
                   clusterType: cpu
+                  soperator-activechecks:
+                    checks:
+                      all-reduce-perf-nccl-in-docker:
+                        enabled: false
+                      all-reduce-perf-nccl-with-ib:
+                        enabled: false
+                      all-reduce-perf-nccl-without-ib:
+                        enabled: false
+                      cuda-samples:
+                        enabled: false
+                      dcgmi-diag-r2:
+                        enabled: false
+                      dcgmi-diag-r3:
+                        enabled: false
+                      gpu-fryer:
+                        enabled: false
+                      ib-gpu-perf:
+                        enabled: false
+                      ensure-healthy-nodes:
+                        enabled: false
+                      extensive-check:
+                        enabled: false
+                      mem-perf:
+                        enabled: false
+                      prepull-container-image:
+                        enabled: false
+                      wait-for-topology:
+                        runAfterCreation: false
                   partitionConfiguration:
                     configType: structured
                     partitions:
                       - name: cpu
                         nodeSetRefs:
                           - worker-cpu
-                        config: Default=YES MaxTime=INFINITE State=UP PriorityTier=5
+                        policy:
+                          default: true
+                          state: UP
+                          maxTime: "INFINITE"
+                          priorityTier: 5
                   nodesets:
                     - name: worker-cpu
                       replicas: 2
@@ -622,7 +893,7 @@ components:
                       slurmd:
                         image:
                           repository: cr.eu-north1.nebius.cloud/soperator/worker_slurmd
-                          tag: 3.0.3-slurm25.11.3
+                          tag: 3.0.4-slurm25.11.3
                           pullPolicy: IfNotPresent
                         resources:
                           cpu: "4"
@@ -643,7 +914,7 @@ components:
                       munge:
                         image:
                           repository: cr.eu-north1.nebius.cloud/soperator/munge
-                          tag: 3.0.3-slurm25.11.3
+                          tag: 3.0.4-slurm25.11.3
                           pullPolicy: IfNotPresent
                         resources:
                           cpu: 200m
@@ -664,19 +935,47 @@ components:
                     k8sNodeFilterName: system
                   slurmNodes:
                     accounting:
+                      enabled: true
                       k8sNodeFilterName: accounting
+                      mariadbOperator:
+                        enabled: true
+                        storage:
+                          size: 128Gi
+                          storageClassName: slurm-local-pv
+                          volumeClaimTemplate:
+                            accessModes:
+                              - ReadWriteMany
                       slurmConfig:
                         accountingStorageTRES: CPU,Mem,Node,VMem
                   volume:
                     accounting:
                       enabled: true
+                # Partition profile = which Slurm queues the chart
+                # renders into SlurmCluster.spec.partitionConfiguration.
+                # Each profile populates typed `partitions[].policy`
+                # fields (PriorityTier, PreemptMode, MaxTime, AllowQos,
+                # ...) so the chart can hard-fail on raw/typed overlap.
+                # See the conceptual block at the top of the soperator
+                # section for the underlying Slurm concepts.
                 partition_profiles:
                   shape-default:
                     wizard:
-                      label: "Shape partitions only: cpu partition from worker-cpu"
+                      # Pattern (a) - Partition only (deterministic). One
+                      # visible partition (cpu). No preemption, no QOS
+                      # objects required, no PriorityWeight* knobs.
+                      # Recommended baseline for new clusters.
+                      label: "Baseline queues: default CPU worker queue; accounting enabled; no QoS/preemption"
                   with-debug-long:
                     wizard:
-                      label: "Add debug and long policy partitions on worker-cpu"
+                      # Pattern (a) - Partition + tiered scheduling.
+                      # Overlays two policy partitions on the same worker
+                      # NodeSet:
+                      #   debug  (PriorityTier=100, MaxTime=00:30:00)
+                      #   long   (PriorityTier=1,   MaxTime=7-00:00:00)
+                      # Higher PriorityTier evaluates first, so short
+                      # interactive `debug` jobs are ordered ahead of long
+                      # batch jobs. No SlurmDBD QOS objects required.
+                      label: "Add debug/long queues on the same CPU workers; accounting enabled; no QoS objects"
                     values:
                       partitionConfiguration:
                         configType: structured
@@ -684,39 +983,221 @@ components:
                           - name: cpu
                             nodeSetRefs:
                               - worker-cpu
-                            config: Default=YES MaxTime=INFINITE State=UP PriorityTier=5
+                            policy:
+                              default: true
+                              state: UP
+                              maxTime: "INFINITE"
+                              priorityTier: 5
                           - name: debug
                             nodeSetRefs:
                               - worker-cpu
-                            config: Default=NO MaxTime=00:30:00 State=UP PriorityTier=100
+                            policy:
+                              default: false
+                              state: UP
+                              maxTime: "00:30:00"
+                              priorityTier: 100
                           - name: long
                             nodeSetRefs:
                               - worker-cpu
-                            config: Default=NO MaxTime=7-00:00:00 State=UP PriorityTier=1
+                            policy:
+                              default: false
+                              state: UP
+                              maxTime: "7-00:00:00"
+                              priorityTier: 1
+                  with-qos-preemption:
+                      wizard:
+                        requires_qos_configuration: true
+                        # Pattern (b) - QOS + preemption (multi-tenant).
+                        # Sets schedulingConfig.preemptType=preempt/qos
+                        # plus per-partition AllowQos lists for debug,
+                        # eval, train, data QOS classes. Requires SlurmDBD
+                        # to have matching QOS objects, accounts, user
+                        # associations, and explicit QOS Preempt=
+                        # relationships before slurmctld can settle with this
+                        # partition policy. cxcli-managed
+                        # self-deployment uses the chart's `qosConfiguration`
+                        # block to provision those objects declaratively.
+                        # Managed Soperator targets cannot run the in-cluster
+                        # QOS reconcile Job, so this profile is not exposed as
+                        # a cxcli-managed path for those targets.
+                        label: "Advanced QoS/fairshare/preemption: cpu/debug/eval/train/data queues; requires SlurmDBD QOS/account objects"
+                      values:
+                        qosConfiguration: &soperator_qos_preemption_defaults
+                          enabled: true
+                          accounts:
+                            - name: root
+                              description: "Default local administrator account; replace or extend with real tenant accounts for production users"
+                          qos:
+                            - name: debug
+                              priority: 10000
+                              maxWallSeconds: 1800
+                              preempt: [eval, train, data]
+                              preemptMode: REQUEUE
+                            - name: eval
+                              priority: 8000
+                              maxWallSeconds: 14400
+                              preempt: [train, data]
+                              preemptMode: REQUEUE
+                            - name: train
+                              priority: 5000
+                              maxWallSeconds: 259200
+                              preempt: [data]
+                              preemptMode: REQUEUE
+                            - name: data
+                              priority: 1000
+                              maxWallSeconds: 86400
+                          associations:
+                            - user: root
+                              account: root
+                              defaultQos: data
+                              qos: [debug, eval, train, data]
+                        # The typed schedulingConfig owns QOS enforcement,
+                        # PreemptType / PreemptMode / PreemptParameters, and
+                        # priority weights, and would hard-fail if duplicated in
+                        # customSlurmConfig. Do not set PluginDir here: Slurm
+                        # fails if any listed directory is absent, which makes
+                        # static multi-arch paths unsafe.
+                        schedulingConfig:
+                          accountingStorageEnforce:
+                            - associations
+                            - limits
+                            - qos
+                          enforcePartLimits: ANY
+                          preemptType: preempt/qos
+                          preemptMode: REQUEUE
+                          preemptParameters:
+                            - send_user_signal
+                          priorityWeights:
+                            qos: 1000
+                            fairshare: 100
+                        partitionConfiguration:
+                          configType: structured
+                          partitions:
+                            - name: cpu
+                              nodeSetRefs:
+                                - worker-cpu
+                              policy:
+                                default: true
+                                state: UP
+                                maxTime: "INFINITE"
+                                priorityTier: 20
+                                allowQos: [debug, eval, train, data]
+                            - name: debug
+                              nodeSetRefs:
+                                - worker-cpu
+                              policy:
+                                default: false
+                                state: UP
+                                maxTime: "00:30:00"
+                                priorityTier: 100
+                                allowQos: [debug]
+                            - name: eval
+                              nodeSetRefs:
+                                - worker-cpu
+                              policy:
+                                default: false
+                                state: UP
+                                maxTime: "04:00:00"
+                                priorityTier: 80
+                                allowQos: [eval]
+                            - name: train
+                              nodeSetRefs:
+                                - worker-cpu
+                              policy:
+                                default: false
+                                state: UP
+                                maxTime: "3-00:00:00"
+                                priorityTier: 50
+                                allowQos: [train]
+                            - name: data
+                              nodeSetRefs:
+                                - worker-cpu
+                              policy:
+                                default: false
+                                state: UP
+                                maxTime: "1-00:00:00"
+                                priorityTier: 10
+                                allowQos: [data]
             nebius-mixed-v1:
               wizard:
-                label: "Mixed CPU+GPU workers: worker-cpu and worker-gpu NodeSets with cpu/gpu Slurm partitions"
+                # Two homogeneous worker shapes sharing one Slurm cluster.
+                # worker-cpu services data/preprocessing/login-relief
+                # workloads; worker-gpu services training/inference. Each
+                # shape gets its own NodeSet + matching Slurm partition so
+                # users can request capacity by shape (`-p cpu` / `-p gpu`)
+                # and operators can apply different policies (PriorityTier,
+                # PreemptMode, AllowAccounts) per partition.
+                label: "Mixed CPU+GPU workers: worker-cpu and worker-gpu NodeSets with cpu/gpu partitions, accounting DB enabled"
+              role_mapping:
+                roles:
+                  system:
+                    default_node_group_kind: cpu
+                    filesystem_keys: [jail]
+                    k8s_node_filter_name: system
+                    chart_filter_paths:
+                      - populateJail.k8sNodeFilterName
+                    chart_affinity_paths:
+                      - controllerManager.affinity
+                      - soperator-checks.checks.affinity
+                      - mariadb-operator.affinity
+                      - mariadb-operator.webhook.affinity
+                  controller:
+                    default_node_group_kind: cpu
+                    filesystem_keys: [jail, controller-spool]
+                    k8s_node_filter_name: controller
+                    chart_filter_paths:
+                      - slurmNodes.controller.k8sNodeFilterName
+                      - slurmNodes.rest.k8sNodeFilterName
+                      - sConfigController.node.k8sNodeFilterName
+                  login:
+                    default_node_group_kind: cpu
+                    filesystem_keys: [jail]
+                    k8s_node_filter_name: login
+                    chart_filter_paths:
+                      - slurmNodes.login.k8sNodeFilterName
+                  accounting:
+                    default_node_group_kind: cpu
+                    filesystem_keys: [jail, accounting]
+                    k8s_node_filter_name: accounting
+                    chart_filter_paths:
+                      - slurmNodes.accounting.k8sNodeFilterName
+                  worker:
+                    default_node_group_kind: gpu
+                    filesystem_keys: [jail]
+                    nodeset_templates:
+                      - worker-gpu
               mk8s:
-                use_generic_gpu_node_groups: true
-                gpu_cluster_key: workers
                 inputs:
-                  cpu_nodes_count: 0
-                  gpu_enabled: true
-                  gpu_node_groups: 1
-                  gpu_nodes_count_per_group: 2
+                  node_group_defaults:
+                    cpu:
+                      platform: cpu-d3
+                      preset: 8vcpu-32gb
+                    gpu:
+                      platform: gpu-h100-sxm
+                      preset: 8gpu-128vcpu-1600gb
+                      os: ubuntu24.04
+                      boot_disk:
+                        type: NETWORK_SSD
+                      gpu_stack_source: nebius_image
+                      gpu_stack_preset: cuda13.0
+                gpu_cluster_key: workers
                 node_groups:
                   system:
                     nodeset_name: system
                     workload: system
-                    fixed_node_count: 2
+                    node_count: 1
+                    node_count_input: soperator.system_node_count
                     gpu: false
                     jail: true
                   controller:
                     nodeset_name: controller
                     workload: controller
-                    fixed_node_count: 1
+                    node_count: 1
+                    node_count_input: soperator.controller_node_count
                     gpu: false
                     jail: true
+                    sfs_filesystem_keys:
+                      - controller-spool
                     taints:
                       - key: slurm.nebius.ai/nodeset-name
                         value: controller
@@ -724,15 +1205,23 @@ components:
                   login:
                     nodeset_name: login
                     workload: login
-                    fixed_node_count: 1
+                    node_count: 1
+                    node_count_input: soperator.login_node_count
                     gpu: false
                     jail: true
+                    taints:
+                      - key: slurm.nebius.ai/nodeset-name
+                        value: login
+                        effect: NO_SCHEDULE
                   accounting:
                     nodeset_name: accounting
                     workload: accounting
-                    fixed_node_count: 1
+                    node_count: 1
+                    node_count_input: soperator.accounting_node_count
                     gpu: false
                     jail: true
+                    sfs_filesystem_keys:
+                      - accounting
                     taints:
                       - key: slurm.nebius.ai/nodeset-name
                         value: accounting
@@ -744,8 +1233,10 @@ components:
                     workload: worker
                     gpu: false
                     jail: true
-                    default_total_nodes: 2
-                    default_nodes_per_group: 2
+                    total_nodes_input: soperator.worker_total_nodes
+                    nodes_per_group_input: soperator.worker_nodes_per_group
+                    default_total_nodes: 1
+                    default_nodes_per_group: 100
                     max_nodes_per_group: 100
                   - name: worker-gpu
                     nodeset_name: worker-gpu
@@ -753,48 +1244,86 @@ components:
                     workload: worker
                     gpu: true
                     jail: true
-                    default_total_nodes: 2
-                    default_nodes_per_group: 2
-                    node_groups_input: gpu_node_groups
-                    nodes_per_group_input: gpu_nodes_count_per_group
+                    total_nodes_input: soperator.worker_total_nodes
+                    nodes_per_group_input: soperator.worker_nodes_per_group
+                    default_total_nodes: 1
+                    default_nodes_per_group: 100
                     max_nodes_per_group: 100
                     node_group:
                       gpu_cluster_key: workers
+                      reservation:
+                        policy: AUTO
                       taints:
                         - key: nvidia.com/gpu
                           value: "true"
                           effect: NO_SCHEDULE
               sfs:
-                filesystems:
-                  jail:
-                    name: "{target}-jail"
-                    size_gib: 1024
-                    mount_tag: jail
-                  controller-spool:
-                    name: "{target}-controller-spool"
-                    size_gib: 128
-                    mount_tag: controller-spool
-                  accounting:
-                    name: "{target}-accounting"
-                    size_gib: 128
-                    mount_tag: accounting
+                filesystems: *soperator_production_sfs_filesystems
               chart:
+                topology_profiles:
+                  disabled: *soperator_topology_disabled_profile
+                  nebius-tiered-tree-v1: *soperator_topology_tiered_tree_profile
+                  nebius-nvl-rack-v1: &soperator_topology_nvl_rack_profile
+                    wizard:
+                      # GB300 / NVL rack-scoped topology. Uses Slurm
+                      # topology/block plugin so the scheduler treats each
+                      # NVIDIA NVL rack as one placement block, then reads
+                      # `topology.nvidia.com/rack` labels to learn rack
+                      # membership. Required for partial-rack PoC clusters
+                      # (1-2 hosts per node group) and for full GB300
+                      # racks where intra-rack NVLink bandwidth matters
+                      # more than inter-rack InfiniBand bandwidth.
+                      label: "Nebius NVL rack: rack-scoped topology/block for GB300/NVL clusters; reads topology.nvidia.com rack labels"
+                    values:
+                      slurmConfig:
+                        topologyPlugin: topology/block
+                        topologyParam: SwitchAsNodeRank
+                      soperator-activechecks:
+                        checks:
+                          wait-for-topology:
+                            runAfterCreation: true
+                      controllerManager:
+                        manager:
+                          env:
+                            topologyLabelPrefix: topology.nvidia.com
+                # Internal profile-owned ActiveChecks plumbing. cxcli derives
+                # this into render-time Helm values only when ActiveChecks are
+                # enabled; it is not a wizard field or source-config knob.
+                activechecks:
+                  srunReadyPartition: hidden
+                onboarding_values: *soperator_onboarding_compact_resources
                 values:
+                  mariadb-operator:
+                    installOperator: true
                   clusterType: gpu
+                  soperator-activechecks:
+                    checks:
+                      ensure-healthy-nodes:
+                        runAfterCreation: false
+                      wait-for-topology:
+                        runAfterCreation: false
                   partitionConfiguration:
                     configType: structured
                     partitions:
                       - name: cpu
                         nodeSetRefs:
                           - worker-cpu
-                        config: Default=YES MaxTime=INFINITE State=UP PriorityTier=5
+                        policy:
+                          default: true
+                          state: UP
+                          maxTime: "INFINITE"
+                          priorityTier: 5
                       - name: gpu
                         nodeSetRefs:
                           - worker-gpu
-                        config: Default=NO MaxTime=INFINITE State=UP PriorityTier=10
+                        policy:
+                          default: false
+                          state: UP
+                          maxTime: "INFINITE"
+                          priorityTier: 10
                   nodesets:
                     - name: worker-cpu
-                      replicas: 2
+                      replicas: 1
                       maxUnavailable: 1
                       enableHostUserNamespace: true
                       gpu:
@@ -807,7 +1336,7 @@ components:
                       slurmd:
                         image:
                           repository: cr.eu-north1.nebius.cloud/soperator/worker_slurmd
-                          tag: 3.0.3-slurm25.11.3
+                          tag: 3.0.4-slurm25.11.3
                           pullPolicy: IfNotPresent
                         resources:
                           cpu: "4"
@@ -828,7 +1357,7 @@ components:
                       munge:
                         image:
                           repository: cr.eu-north1.nebius.cloud/soperator/munge
-                          tag: 3.0.3-slurm25.11.3
+                          tag: 3.0.4-slurm25.11.3
                           pullPolicy: IfNotPresent
                         resources:
                           cpu: 200m
@@ -864,7 +1393,7 @@ components:
                       slurmd:
                         image:
                           repository: cr.eu-north1.nebius.cloud/soperator/worker_slurmd
-                          tag: 3.0.3-slurm25.11.3
+                          tag: 3.0.4-slurm25.11.3
                           pullPolicy: IfNotPresent
                         customEnv:
                           - name: NVIDIA_DRIVER_CAPABILITIES
@@ -889,7 +1418,7 @@ components:
                       munge:
                         image:
                           repository: cr.eu-north1.nebius.cloud/soperator/munge
-                          tag: 3.0.3-slurm25.11.3
+                          tag: 3.0.4-slurm25.11.3
                           pullPolicy: IfNotPresent
                         resources:
                           cpu: 200m
@@ -914,17 +1443,46 @@ components:
                     k8sNodeFilterName: system
                   slurmNodes:
                     accounting:
+                      enabled: true
                       k8sNodeFilterName: accounting
+                      mariadbOperator:
+                        enabled: true
+                        storage:
+                          size: 128Gi
+                          storageClassName: slurm-local-pv
+                          volumeClaimTemplate:
+                            accessModes:
+                              - ReadWriteMany
                   volume:
                     accounting:
                       enabled: true
+                # Partition profile = which Slurm queues the chart
+                # renders into SlurmCluster.spec.partitionConfiguration.
+                # Each profile populates typed `partitions[].policy`
+                # fields (PriorityTier, PreemptMode, MaxTime, AllowQos,
+                # ...) so the chart can hard-fail on raw/typed overlap.
+                # See the conceptual block at the top of the soperator
+                # section for the underlying Slurm concepts.
                 partition_profiles:
                   shape-default:
                     wizard:
-                      label: "Shape partitions only: cpu and gpu partitions from worker-cpu/worker-gpu"
+                      # Pattern (a) - Partition only. One partition per
+                      # shape: `cpu` covers worker-cpu, `gpu` covers
+                      # worker-gpu. Users target capacity by shape
+                      # (`-p cpu` or `-p gpu`). PriorityTier set so the
+                      # gpu partition evaluates ahead of cpu under
+                      # contention. No preemption, no QOS required.
+                      label: "Baseline queues: cpu/gpu shape partitions; accounting enabled; no QoS/preemption"
                   with-debug-long:
                     wizard:
-                      label: "Add debug and long policy partitions across worker-cpu and worker-gpu"
+                      # Pattern (a) - Partition + tiered scheduling,
+                      # mixed workers. Adds policy partitions that span
+                      # both worker-cpu and worker-gpu:
+                      #   debug  (PriorityTier=100, MaxTime=00:30:00)
+                      #   long   (PriorityTier=1,   MaxTime=7-00:00:00)
+                      # Shape partitions (cpu, gpu) remain available for
+                      # explicit capacity selection.
+                      label: "Add debug/long queues across CPU and GPU workers; accounting enabled; no QoS objects"
                     values:
                       partitionConfiguration:
                         configType: structured
@@ -932,23 +1490,135 @@ components:
                           - name: cpu
                             nodeSetRefs:
                               - worker-cpu
-                            config: Default=YES MaxTime=INFINITE State=UP PriorityTier=5
+                            policy:
+                              default: true
+                              state: UP
+                              maxTime: "INFINITE"
+                              priorityTier: 5
                           - name: gpu
                             nodeSetRefs:
                               - worker-gpu
-                            config: Default=NO MaxTime=INFINITE State=UP PriorityTier=10
+                            policy:
+                              default: false
+                              state: UP
+                              maxTime: "INFINITE"
+                              priorityTier: 10
                           - name: debug
                             nodeSetRefs:
                               - worker-cpu
                               - worker-gpu
-                            config: Default=NO MaxTime=00:30:00 State=UP PriorityTier=100
+                            policy:
+                              default: false
+                              state: UP
+                              maxTime: "00:30:00"
+                              priorityTier: 100
                           - name: long
                             nodeSetRefs:
                               - worker-cpu
                               - worker-gpu
-                            config: Default=NO MaxTime=7-00:00:00 State=UP PriorityTier=1
+                            policy:
+                              default: false
+                              state: UP
+                              maxTime: "7-00:00:00"
+                              priorityTier: 1
+                  with-qos-preemption:
+                      wizard:
+                        requires_qos_configuration: true
+                        # Pattern (b) - QOS + preemption, mixed workers.
+                        # Same QOS classes as the CPU profile (debug,
+                        # eval, train, data) but applied to both cpu and
+                        # gpu shape partitions plus the policy overlays.
+                        # See the CPU profile's `with-qos-preemption`
+                        # entry above for SlurmDBD prerequisites and the
+                        # Managed Soperator caveat; the same rules apply.
+                        label: "Advanced QoS/fairshare/preemption: cpu/gpu/debug/eval/train/data queues; requires SlurmDBD QOS/account objects"
+                      values:
+                        qosConfiguration: *soperator_qos_preemption_defaults
+                        schedulingConfig:
+                          accountingStorageEnforce:
+                            - associations
+                            - limits
+                            - qos
+                          enforcePartLimits: ANY
+                          preemptType: preempt/qos
+                          preemptMode: REQUEUE
+                          preemptParameters:
+                            - send_user_signal
+                          priorityWeights:
+                            qos: 1000
+                            fairshare: 100
+                        partitionConfiguration:
+                          configType: structured
+                          partitions:
+                            - name: cpu
+                              nodeSetRefs:
+                                - worker-cpu
+                              policy:
+                                default: true
+                                state: UP
+                                maxTime: "INFINITE"
+                                priorityTier: 20
+                                allowQos: [debug, eval, train, data]
+                            - name: gpu
+                              nodeSetRefs:
+                                - worker-gpu
+                              policy:
+                                default: false
+                                state: UP
+                                maxTime: "INFINITE"
+                                priorityTier: 30
+                                allowQos: [debug, eval, train, data]
+                            - name: debug
+                              nodeSetRefs:
+                                - worker-cpu
+                                - worker-gpu
+                              policy:
+                                default: false
+                                state: UP
+                                maxTime: "00:30:00"
+                                priorityTier: 100
+                                allowQos: [debug]
+                            - name: eval
+                              nodeSetRefs:
+                                - worker-cpu
+                                - worker-gpu
+                              policy:
+                                default: false
+                                state: UP
+                                maxTime: "04:00:00"
+                                priorityTier: 80
+                                allowQos: [eval]
+                            - name: train
+                              nodeSetRefs:
+                                - worker-cpu
+                                - worker-gpu
+                              policy:
+                                default: false
+                                state: UP
+                                maxTime: "3-00:00:00"
+                                priorityTier: 50
+                                allowQos: [train]
+                            - name: data
+                              nodeSetRefs:
+                                - worker-cpu
+                                - worker-gpu
+                              policy:
+                                default: false
+                                state: UP
+                                maxTime: "1-00:00:00"
+                                priorityTier: 10
+                                allowQos: [data]
                   with-h100-infiniband-debug-long:
                     wizard:
+                      # Mixed-only variant of pattern (a) for clusters
+                      # where the GPU shape exposes Slurm features `h100`
+                      # and `infiniband`. Adds two extra partitions
+                      # (`h100`, `infiniband`) that target worker-gpu via
+                      # those features so users can request RDMA-capable
+                      # nodes with `-p infiniband` instead of relying on
+                      # `--constraint=infiniband`. Use only when the
+                      # underlying NodeSet sets the corresponding
+                      # `nodeConfig.features`.
                       label: "H100/InfiniBand feature partitions plus debug and long across mixed workers"
                     values:
                       partitionConfiguration:
@@ -957,29 +1627,53 @@ components:
                           - name: cpu
                             nodeSetRefs:
                               - worker-cpu
-                            config: Default=YES MaxTime=INFINITE State=UP PriorityTier=5
+                            policy:
+                              default: true
+                              state: UP
+                              maxTime: "INFINITE"
+                              priorityTier: 5
                           - name: gpu
                             nodeSetRefs:
                               - worker-gpu
-                            config: Default=NO MaxTime=INFINITE State=UP PriorityTier=10
+                            policy:
+                              default: false
+                              state: UP
+                              maxTime: "INFINITE"
+                              priorityTier: 10
                           - name: h100
                             nodeSetRefs:
                               - worker-gpu
-                            config: Default=NO MaxTime=INFINITE State=UP PriorityTier=20
+                            policy:
+                              default: false
+                              state: UP
+                              maxTime: "INFINITE"
+                              priorityTier: 20
                           - name: infiniband
                             nodeSetRefs:
                               - worker-gpu
-                            config: Default=NO MaxTime=INFINITE State=UP PriorityTier=15
+                            policy:
+                              default: false
+                              state: UP
+                              maxTime: "INFINITE"
+                              priorityTier: 15
                           - name: debug
                             nodeSetRefs:
                               - worker-cpu
                               - worker-gpu
-                            config: Default=NO MaxTime=00:30:00 State=UP PriorityTier=100
+                            policy:
+                              default: false
+                              state: UP
+                              maxTime: "00:30:00"
+                              priorityTier: 100
                           - name: long
                             nodeSetRefs:
                               - worker-cpu
                               - worker-gpu
-                            config: Default=NO MaxTime=7-00:00:00 State=UP PriorityTier=1
+                            policy:
+                              default: false
+                              state: UP
+                              maxTime: "7-00:00:00"
+                              priorityTier: 1
                       nodesets:
                         - name: worker-cpu
                           replicas: 2
@@ -995,7 +1689,7 @@ components:
                           slurmd:
                             image:
                               repository: cr.eu-north1.nebius.cloud/soperator/worker_slurmd
-                              tag: 3.0.3-slurm25.11.3
+                              tag: 3.0.4-slurm25.11.3
                               pullPolicy: IfNotPresent
                             resources:
                               cpu: "4"
@@ -1016,7 +1710,7 @@ components:
                           munge:
                             image:
                               repository: cr.eu-north1.nebius.cloud/soperator/munge
-                              tag: 3.0.3-slurm25.11.3
+                              tag: 3.0.4-slurm25.11.3
                               pullPolicy: IfNotPresent
                             resources:
                               cpu: 200m
@@ -1054,7 +1748,7 @@ components:
                           slurmd:
                             image:
                               repository: cr.eu-north1.nebius.cloud/soperator/worker_slurmd
-                              tag: 3.0.3-slurm25.11.3
+                              tag: 3.0.4-slurm25.11.3
                               pullPolicy: IfNotPresent
                             customEnv:
                               - name: NVIDIA_DRIVER_CAPABILITIES
@@ -1079,7 +1773,7 @@ components:
                           munge:
                             image:
                               repository: cr.eu-north1.nebius.cloud/soperator/munge
-                              tag: 3.0.3-slurm25.11.3
+                              tag: 3.0.4-slurm25.11.3
                               pullPolicy: IfNotPresent
                             resources:
                               cpu: 200m
@@ -1102,32 +1796,84 @@ components:
                           customInitContainers: []
             nebius-gpu-v1:
               wizard:
-                label: "GPU-only workers: worker-gpu NodeSet, gpu Slurm partition, gpu/cuda features"
+                # Single homogeneous GPU worker shape. One worker NodeSet
+                # plus one `gpu` partition; Slurm features (gpu, cuda) are
+                # set on the NodeSet so jobs can use --constraint=cuda.
+                # Use this for clusters where every worker has GPUs (H100,
+                # H200, B200, B300/GB300). For rack-scoped GB300/NVL
+                # placement, pair with the `nebius-nvl-rack-v1` topology
+                # profile so Slurm reads NVL rack labels.
+                label: "Production GPU layout: system/controller/login/accounting CPU groups, GPU worker NodeSet, accounting DB enabled"
+              role_mapping:
+                roles:
+                  system:
+                    default_node_group_kind: cpu
+                    filesystem_keys: [jail]
+                    k8s_node_filter_name: system
+                    chart_filter_paths:
+                      - populateJail.k8sNodeFilterName
+                    chart_affinity_paths:
+                      - controllerManager.affinity
+                      - soperator-checks.checks.affinity
+                      - mariadb-operator.affinity
+                      - mariadb-operator.webhook.affinity
+                  controller:
+                    default_node_group_kind: cpu
+                    filesystem_keys: [jail, controller-spool]
+                    k8s_node_filter_name: controller
+                    chart_filter_paths:
+                      - slurmNodes.controller.k8sNodeFilterName
+                      - slurmNodes.rest.k8sNodeFilterName
+                      - sConfigController.node.k8sNodeFilterName
+                  login:
+                    default_node_group_kind: cpu
+                    filesystem_keys: [jail]
+                    k8s_node_filter_name: login
+                    chart_filter_paths:
+                      - slurmNodes.login.k8sNodeFilterName
+                  accounting:
+                    default_node_group_kind: cpu
+                    filesystem_keys: [jail, accounting]
+                    k8s_node_filter_name: accounting
+                    chart_filter_paths:
+                      - slurmNodes.accounting.k8sNodeFilterName
+                  worker:
+                    default_node_group_kind: gpu
+                    filesystem_keys: [jail]
+                    nodeset_templates:
+                      - worker
               mk8s:
-                # Soperator uses generic MK8s node_groups so Slurm NodeSets map
-                # to explicit host pools. Keep gpu_enabled=true so cxcli still
-                # auto-enables GPU Operator, DCGM exporter, and Network Operator
-                # when the target has GPU fabric.
-                use_generic_gpu_node_groups: true
-                gpu_cluster_key: workers
                 inputs:
-                  cpu_nodes_count: 0
-                  gpu_enabled: true
-                  gpu_node_groups: 1
-                  gpu_nodes_count_per_group: 1
+                  node_group_defaults:
+                    cpu:
+                      platform: cpu-d3
+                      preset: 8vcpu-32gb
+                    gpu:
+                      platform: gpu-h100-sxm
+                      preset: 8gpu-128vcpu-1600gb
+                      os: ubuntu24.04
+                      boot_disk:
+                        type: NETWORK_SSD
+                      gpu_stack_source: nebius_image
+                      gpu_stack_preset: cuda13.0
+                gpu_cluster_key: workers
                 node_groups:
                   system:
                     nodeset_name: system
                     workload: system
-                    fixed_node_count: 2
+                    node_count: 1
+                    node_count_input: soperator.system_node_count
                     gpu: false
                     jail: true
                   controller:
                     nodeset_name: controller
                     workload: controller
-                    fixed_node_count: 1
+                    node_count: 1
+                    node_count_input: soperator.controller_node_count
                     gpu: false
                     jail: true
+                    sfs_filesystem_keys:
+                      - controller-spool
                     taints:
                       - key: slurm.nebius.ai/nodeset-name
                         value: controller
@@ -1135,91 +1881,299 @@ components:
                   login:
                     nodeset_name: login
                     workload: login
-                    fixed_node_count: 1
+                    node_count: 1
+                    node_count_input: soperator.login_node_count
                     gpu: false
                     jail: true
+                    taints:
+                      - key: slurm.nebius.ai/nodeset-name
+                        value: login
+                        effect: NO_SCHEDULE
                   accounting:
                     nodeset_name: accounting
                     workload: accounting
-                    fixed_node_count: 1
+                    node_count: 1
+                    node_count_input: soperator.accounting_node_count
                     gpu: false
                     jail: true
+                    sfs_filesystem_keys:
+                      - accounting
                     taints:
                       - key: slurm.nebius.ai/nodeset-name
                         value: accounting
                         effect: NO_SCHEDULE
                 worker_nodesets:
-                  - name: worker-gpu
-                    nodeset_name: worker-gpu
-                    node_group_key_prefix: worker-gpu
+                  - name: worker
+                    nodeset_name: worker
+                    node_group_key_prefix: worker
                     workload: worker
                     gpu: true
                     jail: true
+                    total_nodes_input: soperator.worker_total_nodes
+                    nodes_per_group_input: soperator.worker_nodes_per_group
                     default_total_nodes: 1
-                    default_nodes_per_group: 1
-                    node_groups_input: gpu_node_groups
-                    nodes_per_group_input: gpu_nodes_count_per_group
+                    default_nodes_per_group: 100
                     max_nodes_per_group: 100
                     node_group:
                       gpu_cluster_key: workers
+                      reservation:
+                        policy: AUTO
                       taints:
                         - key: nvidia.com/gpu
                           value: "true"
                           effect: NO_SCHEDULE
               sfs:
-                filesystems:
-                  jail:
-                    name: "{target}-jail"
-                    size_gib: 1024
-                    mount_tag: jail
-                  controller-spool:
-                    name: "{target}-controller-spool"
-                    size_gib: 128
-                    mount_tag: controller-spool
-                  accounting:
-                    name: "{target}-accounting"
-                    size_gib: 128
-                    mount_tag: accounting
+                filesystems: *soperator_production_sfs_filesystems
               chart:
+                topology_profiles:
+                  disabled: *soperator_topology_disabled_profile
+                  nebius-tiered-tree-v1: *soperator_topology_tiered_tree_profile
+                  nebius-nvl-rack-v1: *soperator_topology_nvl_rack_profile
+                # Internal profile-owned ActiveChecks plumbing. cxcli derives
+                # this into render-time Helm values only when ActiveChecks are
+                # enabled; it is not a wizard field or source-config knob.
+                activechecks:
+                  srunReadyPartition: hidden
+                onboarding_values: *soperator_onboarding_compact_resources
                 values:
+                  mariadb-operator:
+                    installOperator: true
+                  soperator-activechecks:
+                    checks:
+                      ensure-healthy-nodes:
+                        runAfterCreation: false
+                      wait-for-topology:
+                        runAfterCreation: false
                   partitionConfiguration:
                     configType: structured
                     partitions:
                       - name: gpu
                         nodeSetRefs:
-                          - worker-gpu
-                        config: Default=YES MaxTime=INFINITE State=UP PriorityTier=10
+                          - worker
+                        policy:
+                          default: true
+                          state: UP
+                          maxTime: "INFINITE"
+                          priorityTier: 10
+                  nodesets:
+                    - name: worker
+                      replicas: 1
+                      maxUnavailable: 1
+                      enableHostUserNamespace: true
+                      gpu:
+                        enabled: true
+                        nvidia:
+                          gdrCopyEnabled: true
+                      nodeConfig:
+                        features:
+                          - gpu
+                          - cuda
+                        static: Boards=1 SocketsPerBoard=1 CoresPerSocket=8 ThreadsPerCore=1
+                        dynamic: "InstanceId={{ .PodName }}"
+                        gresConfig:
+                          - AutoDetect=nvidia
+                      slurmd:
+                        image:
+                          repository: cr.eu-north1.nebius.cloud/soperator/worker_slurmd
+                          tag: 3.0.4-slurm25.11.3
+                          pullPolicy: IfNotPresent
+                        customEnv:
+                          - name: NVIDIA_DRIVER_CAPABILITIES
+                            value: compute,graphics,utility,video
+                        resources:
+                          cpu: "4"
+                          memory: 16Gi
+                          ephemeralStorage: 10Gi
+                          gpu: 8
+                        volumes:
+                          spool:
+                            emptyDir: {}
+                          jail:
+                            persistentVolumeClaim:
+                              claimName: jail-pvc
+                          jailSubMounts: []
+                          sharedMemorySize: 8Gi
+                        security:
+                          appArmorProfile: unconfined
+                          limitsConfig: ""
+                          procMount: Default
+                      munge:
+                        image:
+                          repository: cr.eu-north1.nebius.cloud/soperator/munge
+                          tag: 3.0.4-slurm25.11.3
+                          pullPolicy: IfNotPresent
+                        resources:
+                          cpu: 200m
+                          memory: 512Mi
+                          ephemeralStorage: 1Gi
+                        security:
+                          appArmorProfile: unconfined
+                          limitsConfig: ""
+                          procMount: Default
+                      sssd:
+                        enabled: false
+                      priorityClass: soperator-worker-high-priority
+                      nodeSelector:
+                        slurm.nebius.ai/nodeset-name: worker
+                      tolerations:
+                        - key: nvidia.com/gpu
+                          operator: Exists
+                          effect: NoSchedule
+                      workerAnnotations: {}
+                      customInitContainers: []
                   populateJail:
                     k8sNodeFilterName: system
                   slurmNodes:
                     accounting:
+                      enabled: true
                       k8sNodeFilterName: accounting
+                      mariadbOperator:
+                        enabled: true
+                        storage:
+                          size: 128Gi
+                          storageClassName: slurm-local-pv
+                          volumeClaimTemplate:
+                            accessModes:
+                              - ReadWriteMany
                   volume:
                     accounting:
                       enabled: true
+                # Partition profile = which Slurm queues the chart
+                # renders into SlurmCluster.spec.partitionConfiguration.
+                # Each profile populates typed `partitions[].policy`
+                # fields (PriorityTier, PreemptMode, MaxTime, AllowQos,
+                # ...) so the chart can hard-fail on raw/typed overlap.
+                # See the conceptual block at the top of the soperator
+                # section for the underlying Slurm concepts.
                 partition_profiles:
                   shape-default:
                     wizard:
-                      label: "Shape partitions only: gpu partition from worker-gpu"
+                      # Pattern (a) - Partition only, GPU-only cluster.
+                      # One visible `gpu` partition. Slurm GRES is
+                      # automatically derived from the worker
+                      # NodeSet's GPU count (no manual Gres= needed).
+                      # Recommended baseline for new GPU clusters.
+                      label: "Baseline queues: default GPU worker queue; accounting enabled; no QoS/preemption"
                   with-debug-long:
                     wizard:
-                      label: "Add debug and long policy partitions on worker-gpu"
+                      # Pattern (a) - Partition + tiered scheduling,
+                      # GPU-only cluster. Overlays two policy partitions
+                      # on the single worker NodeSet:
+                      #   debug  (PriorityTier=100, MaxTime=00:30:00)
+                      #   long   (PriorityTier=1,   MaxTime=7-00:00:00)
+                      # Users still target the same GPU capacity; the
+                      # partition choice expresses scheduling intent.
+                      label: "Add debug/long queues on the same GPU workers; accounting enabled; no QoS objects"
                     values:
                       partitionConfiguration:
                         configType: structured
                         partitions:
                           - name: gpu
                             nodeSetRefs:
-                              - worker-gpu
-                            config: Default=YES MaxTime=INFINITE State=UP PriorityTier=10
+                              - worker
+                            policy:
+                              default: true
+                              state: UP
+                              maxTime: "INFINITE"
+                              priorityTier: 10
                           - name: debug
                             nodeSetRefs:
-                              - worker-gpu
-                            config: Default=NO MaxTime=00:30:00 State=UP PriorityTier=100
+                              - worker
+                            policy:
+                              default: false
+                              state: UP
+                              maxTime: "00:30:00"
+                              priorityTier: 100
                           - name: long
                             nodeSetRefs:
-                              - worker-gpu
-                            config: Default=NO MaxTime=7-00:00:00 State=UP PriorityTier=1
+                              - worker
+                            policy:
+                              default: false
+                              state: UP
+                              maxTime: "7-00:00:00"
+                              priorityTier: 1
+                  with-qos-preemption:
+                      wizard:
+                        requires_qos_configuration: true
+                        # Pattern (b) - QOS + preemption, GPU-only.
+                        # Same QOS class layout as the CPU/Mixed profiles
+                        # (debug/eval/train/data) but scoped to the
+                        # single GPU worker NodeSet. The gpu partition
+                        # is the default queue and accepts every QOS;
+                        # debug/eval/train/data are scoped partitions
+                        # with single-QOS AllowQos lists. Requires
+                        # SlurmDBD to have those QOS objects, accounts,
+                        # associations, and explicit QOS Preempt=
+                        # relationships before slurmctld can settle with this
+                        # partition policy. cxcli-managed
+                        # self-deployment uses the chart's `qosConfiguration`
+                        # block; this profile is not supported on Managed
+                        # Soperator because cxcli cannot run that reconcile Job
+                        # in the operator namespace.
+                        label: "Advanced QoS/fairshare/preemption: gpu/debug/eval/train/data queues; requires SlurmDBD QOS/account objects"
+                      values:
+                        qosConfiguration: *soperator_qos_preemption_defaults
+                        schedulingConfig:
+                          accountingStorageEnforce:
+                            - associations
+                            - limits
+                            - qos
+                          enforcePartLimits: ANY
+                          preemptType: preempt/qos
+                          preemptMode: REQUEUE
+                          preemptParameters:
+                            - send_user_signal
+                          priorityWeights:
+                            qos: 1000
+                            fairshare: 100
+                        partitionConfiguration:
+                          configType: structured
+                          partitions:
+                            - name: gpu
+                              nodeSetRefs:
+                                - worker
+                              policy:
+                                default: true
+                                state: UP
+                                maxTime: "INFINITE"
+                                priorityTier: 30
+                                allowQos: [debug, eval, train, data]
+                            - name: debug
+                              nodeSetRefs:
+                                - worker
+                              policy:
+                                default: false
+                                state: UP
+                                maxTime: "00:30:00"
+                                priorityTier: 100
+                                allowQos: [debug]
+                            - name: eval
+                              nodeSetRefs:
+                                - worker
+                              policy:
+                                default: false
+                                state: UP
+                                maxTime: "04:00:00"
+                                priorityTier: 80
+                                allowQos: [eval]
+                            - name: train
+                              nodeSetRefs:
+                                - worker
+                              policy:
+                                default: false
+                                state: UP
+                                maxTime: "3-00:00:00"
+                                priorityTier: 50
+                                allowQos: [train]
+                            - name: data
+                              nodeSetRefs:
+                                - worker
+                              policy:
+                                default: false
+                                state: UP
+                                maxTime: "1-00:00:00"
+                                priorityTier: 10
+                                allowQos: [data]
     grafana:
       cli:
         orgId: 1

@@ -34,8 +34,8 @@ from nebius_cxcli.mk8s_gpu import (
     mk8s_gpu_flux_release_dependencies,
     mk8s_gpu_project_validation_defaults,
     mk8s_gpu_validation_specs,
-    normalize_inactive_mk8s_gpu_inputs,
     normalize_mk8s_gpu_project_validation_settings,
+    prune_inactive_mk8s_gpu_app_rows,
     resolve_mk8s_gpu_app_selection,
 )
 from nebius_cxcli.runtime_introspection import reset_runtime_introspection_cache
@@ -107,7 +107,43 @@ def _render_nccl_chart(tmp_path: Path, chart_values: dict[str, Any]) -> str:
     return rendered.stdout
 
 
-def _mk8s_payload(*, infiniband_fabric: str = "") -> dict:
+def _mk8s_inputs(
+    *,
+    infiniband_fabric: str = "",
+    platform: str = "gpu-h100-sxm",
+    preset: str = "8gpu-128vcpu-1600gb",
+    gpu_stack_source: str = "nebius_image",
+) -> dict[str, Any]:
+    group: dict[str, Any] = {
+        "node_count": 1,
+        "gpu": True,
+        "platform": platform,
+        "preset": preset,
+        "gpu_stack_source": gpu_stack_source,
+    }
+    inputs: dict[str, Any] = {
+        "node_group_defaults": {
+            "gpu": {
+                "platform": platform,
+                "preset": preset,
+                "gpu_stack_source": gpu_stack_source,
+            }
+        },
+        "node_groups": {"worker": group},
+    }
+    if infiniband_fabric:
+        group["gpu_cluster_key"] = "workers"
+        inputs["gpu_clusters"] = {"workers": {"infiniband_fabric": infiniband_fabric}}
+    return inputs
+
+
+def _mk8s_payload(
+    *,
+    infiniband_fabric: str = "",
+    platform: str = "gpu-h100-sxm",
+    preset: str = "8gpu-128vcpu-1600gb",
+    gpu_stack_source: str = "nebius_image",
+) -> dict:
     return {
         "infra": {
             "components": [
@@ -115,12 +151,12 @@ def _mk8s_payload(*, infiniband_fabric: str = "") -> dict:
                     "id": "mk8s",
                     "instance_id": "mk8s",
                     "enabled": True,
-                    "inputs": {
-                        "gpu_enabled": True,
-                        "gpu_nodes_platform": "gpu-h100-sxm",
-                        "gpu_nodes_preset": "8gpu-128vcpu-1600gb",
-                        "infiniband_fabric": infiniband_fabric,
-                    },
+                    "inputs": _mk8s_inputs(
+                        infiniband_fabric=infiniband_fabric,
+                        platform=platform,
+                        preset=preset,
+                        gpu_stack_source=gpu_stack_source,
+                    ),
                 }
             ]
         },
@@ -128,60 +164,20 @@ def _mk8s_payload(*, infiniband_fabric: str = "") -> dict:
     }
 
 
-def test_normalize_inactive_mk8s_gpu_inputs_prunes_cpu_only_gpu_fields() -> None:
-    payload = {
-        "infra": {
-            "components": [
-                {
-                    "id": "mk8s",
-                    "instance_id": "cluster1",
-                    "enabled": True,
-                    "inputs": {
-                        "cpu_nodes_count": 2,
-                        "cpu_nodes_platform": "cpu-d3",
-                        "gpu_enabled": False,
-                        "gpu_stack_source": "nebius_image",
-                        "gpu_stack_preset": "cuda13",
-                        "gpu_nodes_boot_disk_type": "NETWORK_SSD",
-                        "gpu_nodes_boot_disk_size_gib": 1023,
-                        "gpu_nodes_platform": "gpu-h100-sxm",
-                        "gpu_nodes_preset": "8gpu-128vcpu-1600gb",
-                        "gpu_nodes_public_ips": True,
-                        "infiniband_fabric": "fabric-a",
-                        "mk8s_gpu_node_group_overrides": {"fixed_node_count": 1},
-                    },
-                }
-            ]
-        },
-        "apps": {"charts": []},
-    }
-
-    assert normalize_inactive_mk8s_gpu_inputs(payload) is True
-
-    inputs = payload["infra"]["components"][0]["inputs"]
-    assert inputs == {
-        "cpu_nodes_count": 2,
-        "cpu_nodes_platform": "cpu-d3",
-        "gpu_enabled": False,
+def _cluster2_gpu_row() -> dict[str, Any]:
+    return {
+        "id": "mk8s",
+        "instance_id": "cluster2",
+        "enabled": True,
+        "inputs": _mk8s_inputs(
+            platform="gpu-h100-sxm",
+            preset="1gpu-16vcpu-200gb",
+            gpu_stack_source="nebius_image",
+        ),
     }
 
 
-def test_normalize_inactive_mk8s_gpu_inputs_keeps_enabled_gpu_fields() -> None:
-    payload = _mk8s_payload(infiniband_fabric="fabric-a")
-    inputs = payload["infra"]["components"][0]["inputs"]
-    inputs.update(
-        {
-            "gpu_stack_source": "nebius_image",
-            "gpu_nodes_boot_disk_type": "NETWORK_SSD",
-        }
-    )
-
-    assert normalize_inactive_mk8s_gpu_inputs(payload) is False
-    assert inputs["gpu_stack_source"] == "nebius_image"
-    assert inputs["gpu_nodes_boot_disk_type"] == "NETWORK_SSD"
-
-
-def test_normalize_runtime_config_payload_prunes_inactive_gpu_inputs() -> None:
+def test_normalize_runtime_config_payload_keeps_cpu_only_gpu_settings_unmaterialized() -> None:
     from nebius_cxcli.config_loader import normalize_runtime_config_payload
 
     payload = {
@@ -192,9 +188,14 @@ def test_normalize_runtime_config_payload_prunes_inactive_gpu_inputs() -> None:
                     "instance_id": "cluster1",
                     "enabled": True,
                     "inputs": {
-                        "gpu_enabled": False,
-                        "gpu_stack_source": "nebius_image",
-                        "gpu_nodes_boot_disk_type": "NETWORK_SSD",
+                        "node_groups": {
+                            "cpu": {
+                                "node_count": 2,
+                                "gpu": False,
+                                "platform": "cpu-d3",
+                                "preset": "4vcpu-16gb",
+                            }
+                        },
                     },
                 }
             ]
@@ -205,8 +206,8 @@ def test_normalize_runtime_config_payload_prunes_inactive_gpu_inputs() -> None:
     assert normalize_runtime_config_payload(payload) is True
 
     inputs = payload["infra"]["components"][0]["inputs"]
-    assert "gpu_stack_source" not in inputs
-    assert "gpu_nodes_boot_disk_type" not in inputs
+    assert inputs["node_groups"]["cpu"]["gpu"] is False
+    assert "mk8s_gpu" not in payload["deploy"]["targets"][0].get("validations", {})
 
 
 def _set_mk8s_gpu_validation_config(
@@ -346,6 +347,48 @@ def test_mk8s_gpu_cluster_adds_network_operator_and_nccl_validation() -> None:
     assert dependencies == {
         "nvidia-gpu-operator": ("nvidia-network-operator",),
     }
+
+
+def test_mk8s_gpu_app_selection_uses_all_gpu_node_groups_in_target() -> None:
+    payload = _mk8s_payload(
+        platform="gpu-h100-sxm",
+        preset="1gpu-16vcpu-200gb",
+    )
+    inputs = payload["infra"]["components"][0]["inputs"]
+    inputs["node_groups"] = {
+        "ethernet": {
+            "node_count": 1,
+            "gpu": True,
+            "platform": "gpu-h100-sxm",
+            "preset": "1gpu-16vcpu-200gb",
+            "gpu_stack_source": "nebius_image",
+        },
+        "rdma": {
+            "node_count": 1,
+            "gpu": True,
+            "platform": "gpu-h100-sxm",
+            "preset": "8gpu-128vcpu-1600gb",
+            "gpu_stack_source": "nebius_image",
+            "gpu_cluster_key": "rdma",
+        },
+    }
+    inputs["gpu_clusters"] = {"rdma": {"infiniband_fabric": "fabric-1"}}
+
+    selection = resolve_mk8s_gpu_app_selection(
+        payload,
+        selected_app_ids=set(),
+        app_entries=component_entries("apps"),
+    )
+
+    assert len(selection.cluster_contexts) == 2
+    assert {context.gpu_cluster_enabled for context in selection.cluster_contexts} == {
+        False,
+        True,
+    }
+    assert selection.auto_enabled_app_ids == (
+        "nvidia-gpu-operator",
+        "nvidia-network-operator",
+    )
 
 
 def test_materialize_mk8s_gpu_app_values_heals_stale_network_operator_affinity_defaults() -> None:
@@ -526,8 +569,7 @@ def test_materialize_mk8s_gpu_app_values_keeps_optional_driverful_network_operat
 def test_materialize_mk8s_gpu_app_values_operator_managed_stack_disables_nebius_driver_crd() -> (
     None
 ):
-    payload = _mk8s_payload()
-    payload["infra"]["components"][0]["inputs"]["gpu_stack_source"] = "operator_managed"
+    payload = _mk8s_payload(gpu_stack_source="operator_managed")
     payload["apps"]["charts"] = [
         {
             "id": "nvidia-gpu-operator",
@@ -558,19 +600,7 @@ def test_materialize_mk8s_gpu_app_values_operator_managed_stack_disables_nebius_
 
 def test_materialize_mk8s_gpu_app_values_scopes_defaults_by_target_ref() -> None:
     payload = _mk8s_payload(infiniband_fabric="fabric-6")
-    payload["infra"]["components"].append(
-        {
-            "id": "mk8s",
-            "instance_id": "cluster2",
-            "enabled": True,
-            "inputs": {
-                "gpu_enabled": True,
-                "gpu_stack_source": "nebius_image",
-                "gpu_nodes_platform": "gpu-h100-sxm",
-                "gpu_nodes_preset": "1gpu-16vcpu-200gb",
-            },
-        }
-    )
+    payload["infra"]["components"].append(_cluster2_gpu_row())
     payload["apps"]["charts"] = [
         {
             "id": "nvidia-network-operator",
@@ -629,19 +659,7 @@ def test_materialize_mk8s_gpu_app_values_scopes_defaults_by_target_ref() -> None
 
 def test_mk8s_gpu_dependency_issues_require_app_rows_per_target() -> None:
     payload = _mk8s_payload(infiniband_fabric="fabric-6")
-    payload["infra"]["components"].append(
-        {
-            "id": "mk8s",
-            "instance_id": "cluster2",
-            "enabled": True,
-            "inputs": {
-                "gpu_enabled": True,
-                "gpu_stack_source": "nebius_image",
-                "gpu_nodes_platform": "gpu-h100-sxm",
-                "gpu_nodes_preset": "1gpu-16vcpu-200gb",
-            },
-        }
-    )
+    payload["infra"]["components"].append(_cluster2_gpu_row())
     payload["apps"]["charts"] = [
         {
             "id": "nvidia-gpu-operator",
@@ -669,19 +687,7 @@ def test_mk8s_gpu_dependency_issues_require_app_rows_per_target() -> None:
 
 def test_ensure_mk8s_gpu_app_rows_seeds_required_apps_per_target() -> None:
     payload = _mk8s_payload(infiniband_fabric="fabric-6")
-    payload["infra"]["components"].append(
-        {
-            "id": "mk8s",
-            "instance_id": "cluster2",
-            "enabled": True,
-            "inputs": {
-                "gpu_enabled": True,
-                "gpu_stack_source": "nebius_image",
-                "gpu_nodes_platform": "gpu-h100-sxm",
-                "gpu_nodes_preset": "1gpu-16vcpu-200gb",
-            },
-        }
-    )
+    payload["infra"]["components"].append(_cluster2_gpu_row())
     payload["apps"]["charts"] = [
         {
             "id": "nvidia-gpu-operator",
@@ -718,21 +724,145 @@ def test_ensure_mk8s_gpu_app_rows_seeds_required_apps_per_target() -> None:
     ] == ["mk8s"]
 
 
+def test_prune_inactive_mk8s_gpu_app_rows_removes_stale_operator_only_apps() -> None:
+    payload = {
+        "infra": {
+            "components": [
+                {
+                    "id": "mk8s",
+                    "instance_id": "mk8s",
+                    "enabled": True,
+                    "inputs": {
+                        "node_groups": {
+                            "system": {
+                                "node_count": 1,
+                                "gpu": False,
+                                "platform": "cpu-d3",
+                                "preset": "8vcpu-32gb",
+                            }
+                        }
+                    },
+                }
+            ]
+        },
+        "apps": {
+            "charts": [
+                {
+                    "id": "nvidia-gpu-operator",
+                    "instance_id": "mk8s",
+                    "enabled": True,
+                    "target_ref": "mk8s",
+                    "values": {},
+                },
+                {
+                    "id": "nvidia-network-operator",
+                    "instance_id": "mk8s",
+                    "enabled": True,
+                    "target_ref": "mk8s",
+                    "values": {},
+                },
+                {
+                    "id": "soperator",
+                    "instance_id": "mk8s",
+                    "enabled": True,
+                    "target_ref": "mk8s",
+                    "values": {},
+                },
+            ]
+        },
+    }
+
+    changed = prune_inactive_mk8s_gpu_app_rows(payload)
+
+    assert changed is True
+    assert [row["id"] for row in payload["apps"]["charts"]] == ["soperator"]
+
+
+def test_prune_inactive_mk8s_gpu_app_rows_removes_stripped_soperator_policy_apps() -> None:
+    payload = {
+        "deploy": {"targets": [{"instance_id": "mk8s"}]},
+        "infra": {
+            "components": [
+                {
+                    "id": "mk8s",
+                    "instance_id": "mk8s",
+                    "enabled": True,
+                    "inputs": {
+                        "node_groups": {
+                            "worker-cpu": {
+                                "node_count": 1,
+                                "gpu": False,
+                                "platform": "cpu-d3",
+                                "preset": "8vcpu-32gb",
+                            }
+                        }
+                    },
+                }
+            ]
+        },
+        "apps": {
+            "charts": [
+                {
+                    "id": "soperator",
+                    "instance_id": "mk8s",
+                    "enabled": True,
+                    "values": {},
+                },
+                {
+                    "id": "nvidia-network-operator",
+                    "instance_id": "mk8s",
+                    "enabled": True,
+                    "group": "platform",
+                    "repo": (
+                        "oci://cr.eu-north1.nebius.cloud/marketplace/nebius/"
+                        "nvidia-network-operator/chart/network-operator"
+                    ),
+                    "version": "25.7.0",
+                    "namespace": "nvidia-network-operator",
+                    "release-name": "network-operator",
+                    "values": {},
+                },
+            ]
+        },
+    }
+
+    changed = prune_inactive_mk8s_gpu_app_rows(payload)
+
+    assert changed is True
+    assert [row["id"] for row in payload["apps"]["charts"]] == ["soperator"]
+
+
+def test_prune_inactive_mk8s_gpu_app_rows_keeps_required_and_applicable_gpu_apps() -> None:
+    payload = _mk8s_payload()
+    payload["apps"]["charts"] = [
+        {
+            "id": "nvidia-gpu-operator",
+            "instance_id": "mk8s",
+            "enabled": True,
+            "target_ref": "mk8s",
+            "values": {},
+        },
+        {
+            "id": "nvidia-network-operator",
+            "instance_id": "mk8s",
+            "enabled": True,
+            "target_ref": "mk8s",
+            "values": {},
+        }
+    ]
+
+    changed = prune_inactive_mk8s_gpu_app_rows(payload)
+
+    assert changed is False
+    assert [row["id"] for row in payload["apps"]["charts"]] == [
+        "nvidia-gpu-operator",
+        "nvidia-network-operator",
+    ]
+
+
 def test_mk8s_gpu_post_render_patches_are_target_scoped() -> None:
     payload = _mk8s_payload(infiniband_fabric="fabric-6")
-    payload["infra"]["components"].append(
-        {
-            "id": "mk8s",
-            "instance_id": "cluster2",
-            "enabled": True,
-            "inputs": {
-                "gpu_enabled": True,
-                "gpu_stack_source": "nebius_image",
-                "gpu_nodes_platform": "gpu-h100-sxm",
-                "gpu_nodes_preset": "1gpu-16vcpu-200gb",
-            },
-        }
-    )
+    payload["infra"]["components"].append(_cluster2_gpu_row())
 
     patches = mk8s_gpu.mk8s_gpu_flux_release_post_render_patches(
         payload,
@@ -789,11 +919,10 @@ def test_mk8s_gpu_validation_warnings_flag_single_gpu_nccl_override(
                     "id": "mk8s",
                     "instance_id": "mk8s",
                     "enabled": True,
-                    "inputs": {
-                        "gpu_enabled": True,
-                        "gpu_nodes_platform": "gpu-h100-sxm",
-                        "gpu_nodes_preset": "1gpu-16vcpu-200gb",
-                    },
+                    "inputs": _mk8s_inputs(
+                        platform="gpu-h100-sxm",
+                        preset="1gpu-16vcpu-200gb",
+                    ),
                 }
             ]
         },
@@ -804,8 +933,11 @@ def test_mk8s_gpu_validation_warnings_flag_single_gpu_nccl_override(
     validations = mk8s_gpu_validation_specs(payload)
 
     assert len(warnings) == 1
-    assert "Ethernet/TCPIP" in warnings[0]
-    assert "not a representative production training test" in warnings[0]
+    assert warnings[0] == (
+        "NCCL validation is enabled for 1-GPU Ethernet-only MK8s shape "
+        "gpu-h100-sxm/1gpu-16vcpu-200gb; it will use Ethernet/TCPIP, not InfiniBand / "
+        "GPUDirect-RDMA, so the result is degraded and not production-training representative."
+    )
     assert {item["kind"] for item in validations} == {
         "mk8s_gpu_operator_readiness",
         "mk8s_gpu_visibility",
@@ -816,6 +948,113 @@ def test_mk8s_gpu_validation_warnings_flag_single_gpu_nccl_override(
     assert nccl_spec["threshold_enforced"] is False
     assert nccl_spec["chart_values"]["benchmark"]["transport"] == {"mode": "socket"}
     assert nccl_spec["chart_values"]["worker"]["gpus"] == 1
+
+
+def test_mk8s_gpu_validation_warnings_flag_soperator_activechecks_nccl_overlap() -> None:
+    payload = _mk8s_payload(infiniband_fabric="fabric-a")
+    payload["apps"]["charts"] = [
+        {
+            "id": "soperator",
+            "instance_id": "mk8s",
+            "target_ref": "mk8s",
+            "enabled": True,
+            "values": {"soperator-activechecks": {"enabled": True}},
+        }
+    ]
+    _set_mk8s_gpu_validation_config(payload, {"nccl": {"enabled": True}})
+
+    warnings = mk8s_gpu.mk8s_gpu_validation_warnings(payload)
+
+    assert warnings == (
+        "Soperator NCCL ActiveChecks and deploy-time NCCL validation are both enabled "
+        "for MK8s target mk8s; the Soperator Slurm NCCL checks and cxcli Kubernetes "
+        "MPIJob can compete for GPUs and RDMA bandwidth, skew benchmark results, "
+        "delay deploy, or skip/fail after Soperator workers consume the GPUs. Prefer "
+        "one validation path, or run cxcli NCCL before Soperator workers and "
+        "ActiveChecks occupy the GPU nodes.",
+    )
+
+
+def test_mk8s_gpu_validation_warnings_skip_default_disabled_soperator_activechecks() -> None:
+    payload = _mk8s_payload(infiniband_fabric="fabric-a")
+    payload["apps"]["charts"] = [
+        {
+            "id": "soperator",
+            "instance_id": "mk8s",
+            "target_ref": "mk8s",
+            "enabled": True,
+        }
+    ]
+    _set_mk8s_gpu_validation_config(payload, {"nccl": {"enabled": True}})
+
+    warnings = mk8s_gpu.mk8s_gpu_validation_warnings(payload)
+
+    assert warnings == ()
+
+
+def test_mk8s_gpu_validation_warnings_skip_disabled_soperator_activechecks() -> None:
+    payload = _mk8s_payload(infiniband_fabric="fabric-a")
+    payload["apps"]["charts"] = [
+        {
+            "id": "soperator",
+            "instance_id": "mk8s",
+            "target_ref": "mk8s",
+            "enabled": True,
+            "values": {"soperator-activechecks": {"enabled": False}},
+        }
+    ]
+    _set_mk8s_gpu_validation_config(payload, {"nccl": {"enabled": True}})
+
+    assert mk8s_gpu.mk8s_gpu_validation_warnings(payload) == ()
+
+
+def test_mk8s_gpu_validation_warnings_skip_disabled_soperator_nccl_activechecks() -> None:
+    payload = _mk8s_payload(infiniband_fabric="fabric-a")
+    payload["apps"]["charts"] = [
+        {
+            "id": "soperator",
+            "instance_id": "mk8s",
+            "target_ref": "mk8s",
+            "enabled": True,
+            "values": {
+                "soperator-activechecks": {
+                    "enabled": True,
+                    "checks": {
+                        "all-reduce-perf-nccl-in-docker": {"enabled": False},
+                        "all-reduce-perf-nccl-with-ib": {"enabled": False},
+                        "all-reduce-perf-nccl-without-ib": {"enabled": False},
+                    },
+                }
+            },
+        }
+    ]
+    _set_mk8s_gpu_validation_config(payload, {"nccl": {"enabled": True}})
+
+    assert mk8s_gpu.mk8s_gpu_validation_warnings(payload) == ()
+
+
+def test_mk8s_gpu_validation_warnings_are_target_scoped_for_soperator_activechecks() -> None:
+    payload = _mk8s_payload(infiniband_fabric="fabric-a")
+    payload["infra"]["components"].append(_cluster2_gpu_row())
+    payload["apps"]["charts"] = [
+        {
+            "id": "soperator",
+            "instance_id": "soperator-cluster2",
+            "target_ref": "cluster2",
+            "enabled": True,
+        }
+    ]
+    _set_mk8s_gpu_validation_config(payload, {"nccl": {"enabled": True}})
+    payload["deploy"]["targets"].append(
+        {
+            "instance_id": "cluster2",
+            "validations": {"mk8s_gpu": {"nccl": {"enabled": False}}},
+        }
+    )
+
+    warnings = mk8s_gpu.mk8s_gpu_validation_warnings(payload)
+
+    assert all("Soperator NCCL ActiveChecks" not in warning for warning in warnings)
 
 
 def test_nccl_live_runtime_overrides_prefer_non_gpu_launcher_nodes(
@@ -995,9 +1234,7 @@ def test_mk8s_gpu_project_validation_defaults_include_health_checker_for_custom_
 
 
 def test_operator_managed_b200_requires_network_operator_without_infiniband() -> None:
-    payload = _mk8s_payload()
-    payload["infra"]["components"][0]["inputs"]["gpu_stack_source"] = "operator_managed"
-    payload["infra"]["components"][0]["inputs"]["gpu_nodes_platform"] = "gpu-b200-sxm"
+    payload = _mk8s_payload(platform="gpu-b200-sxm", gpu_stack_source="operator_managed")
 
     selection = resolve_mk8s_gpu_app_selection(
         payload,
@@ -1012,9 +1249,7 @@ def test_operator_managed_b200_requires_network_operator_without_infiniband() ->
 
 
 def test_operator_managed_b200_materializes_single_network_operator_nfd_owner() -> None:
-    payload = _mk8s_payload()
-    payload["infra"]["components"][0]["inputs"]["gpu_stack_source"] = "operator_managed"
-    payload["infra"]["components"][0]["inputs"]["gpu_nodes_platform"] = "gpu-b200-sxm"
+    payload = _mk8s_payload(platform="gpu-b200-sxm", gpu_stack_source="operator_managed")
     payload["apps"]["charts"] = [
         {
             "id": "nvidia-network-operator",
@@ -1047,10 +1282,15 @@ def test_operator_managed_b200_materializes_single_network_operator_nfd_owner() 
     assert gpu_values["nfd"]["enabled"] is False
 
 
-def test_operator_managed_b200_nccl_validation_keeps_b200_mpi_overlay() -> None:
-    payload = _mk8s_payload(infiniband_fabric="fabric-1")
-    payload["infra"]["components"][0]["inputs"]["gpu_stack_source"] = "operator_managed"
-    payload["infra"]["components"][0]["inputs"]["gpu_nodes_platform"] = "gpu-b200-sxm"
+@pytest.mark.parametrize("platform", ["gpu-b200-sxm", "gpu-b200-sxm-a", "gpu-b300-sxm"])
+def test_operator_managed_blackwell_nccl_validation_keeps_hcoll_mpi_overlay(
+    platform: str,
+) -> None:
+    payload = _mk8s_payload(
+        infiniband_fabric="fabric-1",
+        platform=platform,
+        gpu_stack_source="operator_managed",
+    )
 
     validations = mk8s_gpu_validation_specs(payload)
 
@@ -1083,11 +1323,10 @@ def test_operator_managed_b200_nccl_validation_keeps_b200_mpi_overlay() -> None:
                             "id": "mk8s",
                             "instance_id": "mk8s",
                             "enabled": True,
-                            "inputs": {
-                                "gpu_enabled": True,
-                                "gpu_nodes_platform": "gpu-h100-sxm",
-                                "gpu_nodes_preset": "1gpu-16vcpu-200gb",
-                            },
+                            "inputs": _mk8s_inputs(
+                                platform="gpu-h100-sxm",
+                                preset="1gpu-16vcpu-200gb",
+                            ),
                         }
                     ]
                 },
@@ -1415,6 +1654,105 @@ def test_nccl_validation_skips_when_all_gpus_are_already_allocated(
     assert any("Skipping NCCL test" in item for item in emits)
 
 
+def test_nccl_wait_uses_mpijob_failure_when_launcher_pod_is_cleaned_up(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _kubectl_json(args, **_kwargs):  # type: ignore[no-untyped-def]
+        if args[:2] == ["get", "pod"]:
+            raise RuntimeError("pod not found")
+        if args[:2] == ["get", "mpijob"]:
+            return {"status": {"conditions": [{"type": "Failed", "status": "True"}]}}
+        raise AssertionError(args)
+
+    monkeypatch.setattr(mk8s_gpu, "_kubectl_json", _kubectl_json)
+    monkeypatch.setattr(mk8s_gpu.time, "sleep", lambda _seconds: pytest.fail())
+
+    phase = mk8s_gpu._wait_for_launcher_completion(
+        namespace="nccl-test",
+        job_name="nccl-test-nebius",
+        launcher_pod_name="nccl-test-nebius-launcher",
+        extra_env=None,
+        timeout_seconds=60,
+        emit=None,
+    )
+
+    assert phase == "Failed"
+
+
+def test_nccl_validation_skips_when_gpu_workload_preempts_launcher(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    spec = {
+        "namespace": "nccl-test",
+        "gpu_platform": "gpu-h100-sxm",
+        "transport_mode": "socket",
+        "threshold_enforced": False,
+        "average_bus_bandwidth_threshold_gbps": 300.0,
+        "timeout": "1m",
+        "max_nodes": 1,
+        "report_file": "nccl-test-report.json",
+    }
+    emits: list[str] = []
+    request_snapshots = [
+        {},
+        {"gpu-node-a": {"gpu_count": 1}},
+    ]
+
+    monkeypatch.setattr(
+        mk8s_gpu,
+        "_gpu_nodes",
+        lambda **_kwargs: [
+            {
+                "name": "gpu-node-a",
+                "gpu_count": 1,
+                "allocatable_resources": {"nvidia.com/gpu": "1"},
+            }
+        ],
+    )
+
+    def _pod_requests(**_kwargs):  # type: ignore[no-untyped-def]
+        if request_snapshots:
+            return request_snapshots.pop(0)
+        return {"gpu-node-a": {"gpu_count": 1}}
+
+    monkeypatch.setattr(mk8s_gpu, "_pod_request_totals_by_node", _pod_requests)
+    monkeypatch.setattr(mk8s_gpu, "_training_operator_present", lambda **_kwargs: True)
+    monkeypatch.setattr(mk8s_gpu, "_delete_resource", lambda _args, **_kwargs: None)
+    monkeypatch.setattr(
+        mk8s_gpu,
+        "_nccl_live_runtime_overrides",
+        lambda **_kwargs: ({}, {}),
+    )
+    monkeypatch.setattr(mk8s_gpu, "_nccl_chart_documents", lambda **_kwargs: [{}])
+    monkeypatch.setattr(mk8s_gpu, "_apply_docs", lambda _docs, **_kwargs: None)
+    monkeypatch.setattr(
+        mk8s_gpu,
+        "_wait_for_launcher_completion",
+        lambda **_kwargs: "Failed",
+    )
+    monkeypatch.setattr(
+        mk8s_gpu,
+        "_run_kubectl",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess(["kubectl"], 0, stdout="", stderr=""),
+    )
+
+    report_path = mk8s_gpu._run_nccl_validation(
+        spec=spec,
+        inventory_dir=tmp_path,
+        extra_env=None,
+        emit=emits.append,
+    )
+
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert report["passed"] is True
+    assert report["skipped"] is True
+    assert report["launcher_phase"] == "Failed"
+    assert report["saturated_node_count"] == 1
+    assert "before the NCCL test could complete" in report["skip_reason"]
+    assert any("Skipping NCCL test" in item for item in emits)
+
+
 def test_run_mk8s_gpu_validations_writes_error_report_on_nccl_exception(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -1713,6 +2051,9 @@ def test_operator_readiness_collects_daemonset_summaries_only_after_readiness_lo
 def test_operator_readiness_requires_rdma_resources_for_gpu_cluster_shapes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monotonic_values = iter([0.0, 0.0, 0.0, 31.0])
+    monkeypatch.setattr(mk8s_gpu.time, "monotonic", lambda: next(monotonic_values))
+    monkeypatch.setattr(mk8s_gpu.time, "sleep", lambda _seconds: None)
     monkeypatch.setattr(
         "nebius_cxcli.mk8s_gpu._resource_state_snapshot",
         lambda **kwargs: (
@@ -1850,3 +2191,78 @@ def test_normalize_mk8s_gpu_project_validation_settings_prunes_stale_block_witho
 
     assert changed is True
     assert "deploy" not in payload
+
+
+def test_normalize_mk8s_gpu_project_validation_settings_keeps_soperator_workload_defaults() -> None:
+    payload = _mk8s_payload()
+    payload["apps"]["charts"] = [
+        {
+            "id": "soperator",
+            "instance_id": "mk8s",
+            "target_ref": "mk8s",
+            "enabled": True,
+        }
+    ]
+
+    changed = normalize_mk8s_gpu_project_validation_settings(payload)
+
+    assert changed is True
+    mk8s_gpu_validations = payload["deploy"]["targets"][0]["validations"]["mk8s_gpu"]
+    assert mk8s_gpu_validations["operator_readiness"]["enabled"] is True
+    assert mk8s_gpu_validations["gpu_visibility"]["enabled"] is True
+    assert mk8s_gpu_validations["gpu_visibility"]["max_nodes"] == 3
+    assert mk8s_gpu_validations["nccl"]["enabled"] is True
+    assert mk8s_gpu_validations["nccl"]["max_nodes"] == 8
+
+
+def test_normalize_mk8s_gpu_project_validation_settings_preserves_explicit_soperator_workload_validations() -> (
+    None
+):
+    payload = _mk8s_payload()
+    payload["apps"]["charts"] = [
+        {
+            "id": "soperator",
+            "instance_id": "mk8s",
+            "target_ref": "mk8s",
+            "enabled": True,
+        }
+    ]
+    _set_mk8s_gpu_validation_config(
+        payload,
+        {
+            "gpu_visibility": {"enabled": True},
+            "nccl": {"enabled": True},
+        },
+    )
+
+    changed = normalize_mk8s_gpu_project_validation_settings(payload)
+
+    assert changed is True
+    mk8s_gpu_validations = payload["deploy"]["targets"][0]["validations"]["mk8s_gpu"]
+    assert mk8s_gpu_validations["gpu_visibility"]["enabled"] is True
+    assert mk8s_gpu_validations["nccl"]["enabled"] is True
+
+
+def test_normalize_mk8s_gpu_project_validation_settings_preserves_generated_soperator_workload_defaults() -> (
+    None
+):
+    payload = _mk8s_payload()
+    payload["apps"]["charts"] = [
+        {
+            "id": "soperator",
+            "instance_id": "mk8s",
+            "target_ref": "mk8s",
+            "enabled": True,
+        }
+    ]
+    _set_mk8s_gpu_validation_config(payload, mk8s_gpu_project_validation_defaults())
+
+    changed = normalize_mk8s_gpu_project_validation_settings(payload)
+
+    assert changed is False
+    mk8s_gpu_validations = payload["deploy"]["targets"][0]["validations"]["mk8s_gpu"]
+    assert mk8s_gpu_validations["operator_readiness"]["enabled"] is True
+    assert mk8s_gpu_validations["gpu_visibility"]["enabled"] is True
+    assert mk8s_gpu_validations["gpu_visibility"]["max_nodes"] == 3
+    assert mk8s_gpu_validations["nccl"]["enabled"] is True
+    assert mk8s_gpu_validations["nccl"]["max_nodes"] == 8

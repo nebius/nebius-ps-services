@@ -8,6 +8,12 @@ slack:
   # both modes; cxcli owns collecting or creating the webhook URL.
   mode: existing-webhook
 
+  # cxcli webhook source metadata. "deploy-time" means cxcli prompts for or
+  # reads the URL at deploy time, then creates the Kubernetes Secret. "mysterybox"
+  # means cxcli renders an ExternalSecret from mysterybox.secretId and lets ESO
+  # create the Kubernetes Secret.
+  webhookSource: deploy-time
+
   # Kubernetes Secret containing the Slack incoming webhook URL.
   existingSecret: soperator-notifier-slack-webhook
   existingSecretKey: url
@@ -15,6 +21,14 @@ slack:
   # Optional non-secret metadata for operators and cxcli reports.
   channelName: ""
   channelId: ""
+
+  # Optional cxcli metadata for an existing Nebius MysteryBox Secret containing
+  # the Slack incoming webhook URL. secretId is the non-secret mbsec-... ID, not
+  # a version ID; cxcli omits remoteRef.version so ESO follows the primary
+  # MysteryBox version. The webhook URL itself must be stored in the property.
+  mysterybox:
+    secretId: ""
+    property: url
 
   # Optional OAuth metadata for cxcli advanced setup. The client secret and
   # OAuth code are runtime inputs and must not be stored in values.

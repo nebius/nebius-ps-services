@@ -61,7 +61,7 @@ def test_render_backend_tf_is_non_secret_and_includes_locking() -> None:
     rendered = render_backend_tf(settings)
     assert 'backend "s3"' in rendered
     assert f'bucket = "{settings.bucket}"' in rendered
-    assert "use_lockfile = true" in rendered
+    assert "use_lockfile                = true" in rendered
     assert "access_key" not in rendered
     assert "secret_key" not in rendered
 

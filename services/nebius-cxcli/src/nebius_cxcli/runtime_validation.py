@@ -24,11 +24,18 @@ from .components import (
     component_lookup,
     parse_dependency_ref,
 )
+from .deploy_targets import (
+    EXTERNAL_MK8S_TARGET_KIND,
+    EXTERNAL_TARGET_OWNERSHIP,
+    deploy_target_is_external_mk8s,
+)
 from .mk8s_gpu import mk8s_gpu_dependency_issues
 from .mysterybox_eso import mysterybox_eso_dependency_issues
 from .observability import observability_dependency_issues
+from .runtime_component_validation import validate_soperator_qos_partition_profiles
 from .runtime_config import read_path_with_catalog
 from .runtime_plugin_validation import run_runtime_validation_plugins
+from .soperator_onboarding import validate_soperator_onboarding_acceptance
 
 _ROOT_KEYS = frozenset({"version", "client_info", "deploy", "infra", "apps"})
 _ID_PATTERN = re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$")
@@ -38,6 +45,16 @@ _CLIENT_NAME_PATTERN = re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$")
 _REFRESH_INTERVAL_PATTERN = re.compile(
     r"^(?:0|[1-9][0-9]*)(?:s|m|h)(?:(?:0|[1-9][0-9]*)(?:s|m|h))*$"
 )
+_FOLDED_SOPERATOR_CHILD_APP_IDS = frozenset(
+    {
+        "soperator-activechecks",
+        "soperator-backup-config",
+        "soperator-checks",
+        "soperator-dcgm-exporter",
+        "soperator-notifier",
+    }
+)
+_FOLDED_SOPERATOR_DEPENDENCY_APP_IDS = frozenset({"k8up"})
 
 
 def _get_path(payload: Mapping[str, Any], dotted_path: str, default: Any = None) -> Any:
@@ -174,10 +191,33 @@ def _validate_deploy(payload: Mapping[str, Any]) -> None:
         for index, raw_target in enumerate(targets):
             if not isinstance(raw_target, Mapping):
                 raise ValueError(f"deploy.targets[{index}] must be a mapping")
+            kind = _as_text(raw_target.get("kind")).lower()
+            base_target_keys = {
+                INSTANCE_ID_FIELD,
+                "observability",
+                "project_id",
+                "region_id",
+                "secrets",
+                "validations",
+            }
+            external_target_keys = {
+                "access",
+                "cluster_id",
+                "inventory",
+                "kind",
+                "kube_context",
+                "ownership",
+                "soperator_onboarding",
+            }
+            supported_target_keys = (
+                base_target_keys | external_target_keys
+                if kind == EXTERNAL_MK8S_TARGET_KIND
+                else base_target_keys | {"kind"}
+            )
             unknown_target_keys = sorted(
                 str(key)
                 for key in raw_target
-                if str(key) not in {INSTANCE_ID_FIELD, "observability", "secrets", "validations"}
+                if str(key) not in supported_target_keys
             )
             if unknown_target_keys:
                 raise ValueError(
@@ -196,6 +236,36 @@ def _validate_deploy(payload: Mapping[str, Any]) -> None:
                     f"deploy.targets[{index}].{INSTANCE_ID_FIELD} '{target_ref}' is duplicated"
                 )
             seen_target_refs.add(target_ref)
+            if kind and kind != EXTERNAL_MK8S_TARGET_KIND:
+                raise ValueError(
+                    f"deploy.targets[{index}].kind must be '{EXTERNAL_MK8S_TARGET_KIND}' when set"
+                )
+            ownership = _as_text(raw_target.get("ownership")).lower()
+            if ownership and ownership != EXTERNAL_TARGET_OWNERSHIP:
+                raise ValueError(
+                    f"deploy.targets[{index}].ownership must be '{EXTERNAL_TARGET_OWNERSHIP}' when set"
+                )
+            if deploy_target_is_external_mk8s(raw_target):
+                kube_context = _as_text(raw_target.get("kube_context"))
+                cluster_id = _as_text(raw_target.get("cluster_id"))
+                if not kube_context and not cluster_id:
+                    raise ValueError(
+                        f"deploy.targets[{index}] external MK8s target requires "
+                        "kube_context or cluster_id"
+                    )
+                access = _as_text(raw_target.get("access")).lower()
+                if access and access not in {"external", "internal", "public", "private"}:
+                    raise ValueError(
+                        f"deploy.targets[{index}].access must be external/internal/public/private"
+                    )
+                inventory = raw_target.get("inventory")
+                if inventory is not None and not isinstance(inventory, Mapping):
+                    raise ValueError(f"deploy.targets[{index}].inventory must be a mapping")
+                onboarding = raw_target.get("soperator_onboarding")
+                if onboarding is not None and not isinstance(onboarding, Mapping):
+                    raise ValueError(
+                        f"deploy.targets[{index}].soperator_onboarding must be a mapping"
+                    )
             _validate_observability(
                 raw_target.get("observability"),
                 field_label=f"deploy.targets[{index}].observability",
@@ -663,17 +733,21 @@ def validate_dynamic_payload_structure(payload: Mapping[str, Any]) -> None:
     deploy = payload.get("deploy")
     deploy_targets = deploy.get("targets") if isinstance(deploy, Mapping) else None
     if isinstance(deploy_targets, list):
-        if deploy_targets and not cluster_target_refs:
-            raise ValueError("deploy.targets requires at least one enabled cluster target")
         for index, raw_target in enumerate(deploy_targets):
             if not isinstance(raw_target, Mapping):
                 continue
             target_ref = _as_text(raw_target.get(INSTANCE_ID_FIELD)).lower()
+            if deploy_target_is_external_mk8s(raw_target) and target_ref:
+                cluster_target_refs.add(target_ref)
             if target_ref and cluster_target_refs and target_ref not in cluster_target_refs:
                 available = ", ".join(sorted(cluster_target_refs)) or "(none)"
                 raise ValueError(
                     f"deploy.targets[{index}].{INSTANCE_ID_FIELD} must reference one of the enabled cluster targets: {available}"
                 )
+        if deploy_targets and not cluster_target_refs:
+            raise ValueError(
+                "deploy.targets requires at least one enabled cluster target or external MK8s target"
+            )
     root_observability = deploy.get("observability") if isinstance(deploy, Mapping) else None
     if root_observability is not None and not enabled_vm_instance_ids:
         raise ValueError(
@@ -705,6 +779,7 @@ def validate_dynamic_payload_structure(payload: Mapping[str, Any]) -> None:
                 "instance_id",
                 "group",
                 "enabled",
+                "install_mode",
                 "repo",
                 "profile",
                 "version",
@@ -755,6 +830,25 @@ def validate_dynamic_payload_structure(payload: Mapping[str, Any]) -> None:
 
         if not isinstance(raw_chart.get("enabled"), bool):
             raise ValueError(f"apps.charts[{index}].enabled must be true or false")
+        if chart_id in _FOLDED_SOPERATOR_CHILD_APP_IDS:
+            raise ValueError(
+                f"apps.charts[{index}].id '{chart_id}' is no longer a standalone app. "
+                f"Enable values.{chart_id}.enabled under the "
+                "apps:soperator row instead."
+            )
+        if chart_id in _FOLDED_SOPERATOR_DEPENDENCY_APP_IDS:
+            raise ValueError(
+                f"apps.charts[{index}].id '{chart_id}' is no longer a standalone app. "
+                "Enable values.soperator-backup-config.enabled under the apps:soperator "
+                "row instead; k8up is installed as that child chart dependency."
+            )
+        install_mode = _as_text(raw_chart.get("install_mode"))
+        if install_mode and chart_id != "soperator":
+            raise ValueError(
+                f"apps.charts[{index}].install_mode is only supported for chart 'soperator'"
+            )
+        if chart_id == "soperator" and install_mode == "onboard-existing-cluster":
+            validate_soperator_onboarding_acceptance(payload, target_ref=instance_id)
         for key in ("repo", "profile", "version", "namespace"):
             value = raw_chart.get(key)
             if value is not None and not isinstance(value, str):
@@ -834,6 +928,7 @@ def validate_runtime_payload(payload: Mapping[str, Any]) -> None:
         raise ValueError(mysterybox_issues[0])
 
     _validate_materialized_shared_defaults(payload)
+    validate_soperator_qos_partition_profiles(payload, _as_text)
 
     run_runtime_validation_plugins(
         payload=payload,

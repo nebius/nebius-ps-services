@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -88,8 +89,22 @@ def _payload_with_mk8s() -> dict:
             row["instance_id"] = "cluster-a"
             inputs = row.setdefault("inputs", {})
             assert isinstance(inputs, dict)
-            inputs["subnet_id"] = "subnet-abc123"
-            inputs["cluster_name"] = "cluster-a"
+            inputs["cluster"] = {
+                "parent_id": "project-456",
+                "cluster_name": "cluster-a",
+                "subnet_id": "subnet-abc123",
+                "network_id": "vpcnetwork-123",
+                "k8s_version": "1.31",
+                "public_endpoint": True,
+            }
+            inputs["node_groups"] = {
+                "cpu": {
+                    "node_count": 1,
+                    "gpu": False,
+                    "platform": "cpu-d3",
+                    "preset": "4vcpu-16gb",
+                }
+            }
             for chart in payload.get("apps", {}).get("charts", []):
                 if not isinstance(chart, dict):
                     continue
@@ -187,17 +202,18 @@ def test_render_mysterybox_payload_values_as_runtime_only_root_variable(
 
     main_tf = (paths.infra_dir / "main.tf").read_text(encoding="utf-8")
     variables_tf = (paths.infra_dir / "variables.tf").read_text(encoding="utf-8")
+    normalized_variables_tf = re.sub(r"[ \t]+", " ", variables_tf)
     tfvars_payload = json.loads(
         (paths.infra_dir / "terraform.auto.tfvars.json").read_text(encoding="utf-8")
     )
 
     assert "payload_values = var.mysterybox_payload_values" in main_tf
     assert 'variable "mysterybox_secrets" {' in variables_tf
-    assert "type = list(object({" in variables_tf
+    assert "type = list(object({" in normalized_variables_tf
     assert 'variable "mysterybox_payload_values" {' in variables_tf
-    assert "type = map(map(string))" in variables_tf
-    assert "default = {}" in variables_tf
-    assert "sensitive = true" in variables_tf
+    assert "type = map(map(string))" in normalized_variables_tf
+    assert "default = {}" in normalized_variables_tf
+    assert "sensitive = true" in normalized_variables_tf
     assert "mysterybox_payload_values" not in tfvars_payload
     assert "kubernetes_secret_name" not in json.dumps(tfvars_payload)
     assert "eso_version_policy" not in json.dumps(tfvars_payload)
@@ -289,31 +305,8 @@ def test_render_prefers_active_catalog_source_over_stale_config_source(
     monkeypatch.setattr(
         "nebius_cxcli.infra_render.module_variables",
         lambda _source: (
-            ModuleVariable(name="parent_id", required=False, type_hint="string"),
-            ModuleVariable(name="cluster_name", required=False, type_hint="string"),
-            ModuleVariable(name="cpu_nodes_count", required=False, type_hint="number"),
-            ModuleVariable(name="cpu_nodes_platform", required=False, type_hint="string"),
-            ModuleVariable(name="cpu_nodes_preset", required=False, type_hint="string"),
-            ModuleVariable(name="subnet_id", required=False, type_hint="string"),
-            ModuleVariable(name="gpu_enabled", required=False, type_hint="bool"),
-            ModuleVariable(
-                name="gpu_stack_source",
-                required=False,
-                type_hint="string",
-                has_default=True,
-                default="nebius_image",
-            ),
-            ModuleVariable(name="gpu_stack_preset", required=False, type_hint="string"),
-            ModuleVariable(
-                name="mk8s_cluster_public_endpoint",
-                required=False,
-                type_hint="bool",
-            ),
-            ModuleVariable(
-                name="kube_network_service_cidrs",
-                required=False,
-                type_hint="list(string)",
-            ),
+            ModuleVariable(name="cluster", required=True, type_hint="object"),
+            ModuleVariable(name="node_groups", required=True, type_hint="map(object)"),
         ),
     )
 

@@ -4,6 +4,8 @@
 {{- include "validateK8sNodeFilters" . -}}
 {{- include "validateNodeSets" . -}}
 {{- include "validateSlurmMemoryConfig" . -}}
+{{- include "validateSchedulingOverlap" . -}}
+{{- include "validatePartitionPolicyOverlap" . -}}
 apiVersion: slurm.nebius.ai/v1
 kind: SlurmCluster
 metadata:
@@ -26,9 +28,22 @@ spec:
   slurmConfig:
     {{- toYaml .Values.slurmConfig | nindent 4 }}
   {{- end }}
-  {{- if .Values.customSlurmConfig }}
+  {{- $rawCustom := default "" .Values.customSlurmConfig -}}
+  {{- $schedLines := include "renderSchedulingConfig" . -}}
+  {{- $includeFile := default "" (get (.Values.partitionConfiguration | default dict) "includeFile") -}}
+  {{- $includeLine := "" -}}
+  {{- if $includeFile -}}
+    {{- $includeLine = printf "Include=%s" $includeFile -}}
+  {{- end -}}
+  {{- $mergedCustom := "" -}}
+  {{- $parts := list -}}
+  {{- if $rawCustom -}}{{- $parts = append $parts (trimSuffix "\n" $rawCustom) -}}{{- end -}}
+  {{- if $schedLines -}}{{- $parts = append $parts $schedLines -}}{{- end -}}
+  {{- if $includeLine -}}{{- $parts = append $parts $includeLine -}}{{- end -}}
+  {{- if $parts -}}{{- $mergedCustom = join "\n" $parts -}}{{- end }}
+  {{- if $mergedCustom }}
   customSlurmConfig: |
-{{- .Values.customSlurmConfig | nindent 4 }}
+{{- $mergedCustom | nindent 4 }}
   {{- end }}
   {{- if .Values.customCgroupConfig }}
   customCgroupConfig: |
@@ -62,19 +77,29 @@ spec:
     {{- end }}
     {{- if and .Values.partitionConfiguration.partitions (eq .Values.partitionConfiguration.configType "structured") }}
     partitions:
-      {{- range .Values.partitionConfiguration.partitions }}
-      - name: {{ required "Partition name is required" .name | quote }}
-        {{- if hasKey . "isAll" }}
-        isAll: {{ .isAll }}
+      {{- range $partition := .Values.partitionConfiguration.partitions }}
+      - name: {{ required "Partition name is required" $partition.name | quote }}
+        {{- if hasKey $partition "isAll" }}
+        isAll: {{ $partition.isAll }}
         {{- end }}
-        {{- if .nodeSetRefs }}
+        {{- if $partition.nodeSetRefs }}
         nodeSetRefs:
-          {{- range .nodeSetRefs }}
+          {{- range $partition.nodeSetRefs }}
           - {{ . | quote }}
           {{- end }}
         {{- end }}
-        {{- if .config }}
-        config: {{ .config | quote }}
+        {{- $policyTokens := include "renderPartitionPolicy" $partition -}}
+        {{- $rawConfig := default "" $partition.config -}}
+        {{- $mergedConfig := "" -}}
+        {{- if and $policyTokens $rawConfig -}}
+          {{- $mergedConfig = printf "%s %s" $policyTokens $rawConfig -}}
+        {{- else if $policyTokens -}}
+          {{- $mergedConfig = $policyTokens -}}
+        {{- else if $rawConfig -}}
+          {{- $mergedConfig = $rawConfig -}}
+        {{- end -}}
+        {{- if $mergedConfig }}
+        config: {{ $mergedConfig | quote }}
         {{- end }}
       {{- end }}
     {{- end }}

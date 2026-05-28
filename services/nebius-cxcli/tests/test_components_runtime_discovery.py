@@ -5,6 +5,7 @@ from pathlib import Path
 import yaml
 
 from nebius_cxcli.components import component_entries, reset_component_entry_cache
+from nebius_cxcli.wizard_profiles import BUILTIN_WIZARD_PROFILES
 
 
 def _reset_component_state() -> None:
@@ -94,173 +95,40 @@ def test_components_discovered_from_source_file(monkeypatch, tmp_path: Path) -> 
     assert infra["mk8s"].engine_type == "terraform_module"
     assert infra["mk8s"].group == "Compute"
     assert infra["mk8s"].default_enabled is True
-    assert infra["mk8s"].wizard_fields == {
-        "inputs.subnet_id": {
-            "options": {
-                "from": "project_subnets",
-            }
-        },
-        "inputs.k8s_version": {
-            "options": {
-                "from": "mk8s_control_plane_versions",
-                "auto_select_first": True,
-            }
-        },
-        "inputs.cpu_nodes_platform": {
-            "options": {
-                "from": "mk8s_compatible_platforms",
-                "args": {"platform_prefix": "cpu-"},
-            }
-        },
-        "inputs.gpu_nodes_platform": {
-            "options": {
-                "from": "mk8s_compatible_platforms",
-                "args": {"platform_prefix": "gpu-"},
-            }
-        },
-        "inputs.cpu_nodes_preset": {
-            "options": {
-                "from": "compute_platform_presets",
-                "args": {"platform_path": "inputs.cpu_nodes_platform"},
-            }
-        },
-        "inputs.cpu_nodes_os": {
-            "options": {
-                "from": "mk8s_node_group_os_values",
-                "args": {"platform_path": "inputs.cpu_nodes_platform"},
-                "auto_select_first": True,
-            },
-            "prompt": False,
-        },
-        "inputs.gpu_nodes_preset": {
-            "options": {
-                "from": "compute_platform_presets",
-                "args": {
-                    "platform_path": "inputs.gpu_nodes_platform",
-                    "gpu_cluster_required_path": "inputs.infiniband_fabric",
-                },
-                "auto_select_single": True,
-            }
-        },
-        "inputs.gpu_stack_source": {
-            "sources": [
-                {
-                    "source": "static",
-                    "values": [
-                        {
-                            "value": "nebius_image",
-                            "label": (
-                                "nebius_image  (Nebius GPU image includes the host "
-                                "NVIDIA driver/toolkit; GPU Operator does not "
-                                "install them)"
-                            ),
-                        },
-                        {
-                            "value": "operator_managed",
-                            "label": (
-                                "operator_managed  (base OS image; GPU Operator "
-                                "installs and manages the NVIDIA driver/toolkit)"
-                            ),
-                        },
-                    ],
-                }
-            ]
-        },
-        "inputs.infiniband_fabric": {
-            "options": {
-                "from": "mk8s_infiniband_fabrics",
-                "args": {
-                    "platform_path": "inputs.gpu_nodes_platform",
-                    "preset_path": "inputs.gpu_nodes_preset",
-                },
-                "skip_prompt_if_no_choices": True,
-            }
-        },
-        "inputs.gpu_stack_preset": {
-            "options": {
-                "from": "mk8s_gpu_stack_presets",
-                "args": {"platform_path": "inputs.gpu_nodes_platform"},
-            },
-            "prompt": False,
-        },
-        "inputs.gpu_nodes_os": {
-            "options": {
-                "from": "mk8s_node_group_os_values",
-                "args": {
-                    "platform_path": "inputs.gpu_nodes_platform",
-                    "stack_preset_path": "inputs.gpu_stack_preset",
-                },
-                "auto_select_first": True,
-            },
-            "prompt": False,
-        },
-        "inputs.cpu_nodes_boot_disk_type": {
-            "options": {
-                "from": "compute_boot_disk_types",
-                "auto_select_first": True,
-            },
-        },
-        "inputs.gpu_nodes_boot_disk_type": {
-            "options": {
-                "from": "compute_boot_disk_types",
-                "auto_select_first": True,
-            },
-        },
-        "deploy.targets[].secrets.mysterybox.enabled": {
-            "default": True,
-            "materialize_default": True,
-        },
-        "deploy.targets[].secrets.mysterybox.store_name": {
-            "default": "nebius-mysterybox-shared",
-            "prompt": False,
-        },
-        "deploy.targets[].secrets.mysterybox.api_domain": {
-            "default": "api.nebius.cloud:443",
-            "prompt": False,
-        },
-        "deploy.targets[].secrets.mysterybox.credentials_secret.name": {
-            "default": "nebius-mysterybox-shared-creds",
-            "prompt": False,
-        },
-        "deploy.targets[].secrets.mysterybox.credentials_secret.namespace": {
-            "default": "external-secrets",
-            "prompt": False,
-        },
-        "deploy.targets[].secrets.mysterybox.credentials_secret.key": {
-            "default": "credentials.json",
-            "prompt": False,
-        },
-        "deploy.targets[].secrets.mysterybox.allow_all_namespaces": {
-            "default": True,
-            "materialize_default": True,
-        },
-        "deploy.targets[].secrets.mysterybox.refresh_interval": {
-            "default": "15m",
-            "materialize_default": True,
-        },
-        "deploy.targets[].secrets.mysterybox.sync_namespaces": {
-            "default": ["default"],
-            "type_hint": "list(string)",
-            "prompt_complex": True,
-            "materialize_default": True,
-            "required": True,
-        },
-        "inputs.mk8s_cluster_overrides": {
-            "prompt": False,
-        },
-        "inputs.mk8s_cpu_node_group_overrides": {
-            "prompt": False,
-        },
-            "inputs.mk8s_gpu_node_group_overrides": {
-                "prompt": False,
-            },
-            "inputs.gpu_clusters": {
-                "prompt": False,
-            },
-            "inputs.node_groups": {
-                "prompt": False,
-            },
-        }
+    mk8s_fields = infra["mk8s"].wizard_fields
+    assert set(mk8s_fields) == set(BUILTIN_WIZARD_PROFILES["mk8s"])
+    assert mk8s_fields["inputs.cluster"]["prompt"] is False
+    assert mk8s_fields["inputs.cluster.cluster_name"]["required"] is True
+    assert mk8s_fields["inputs.cluster.subnet_id"]["options"] == {
+        "from": "project_subnets",
+        "args": {"network_id_path": "inputs.cluster.network_id"},
+        "auto_select_first": True,
+    }
+    assert mk8s_fields["inputs.cluster.k8s_version"]["options"] == {
+        "from": "mk8s_control_plane_versions",
+        "auto_select_first": True,
+    }
+    assert mk8s_fields["inputs.node_group_defaults.cpu.platform"]["options"] == {
+        "from": "mk8s_compatible_platforms",
+        "args": {"platform_prefix": "cpu-"},
+    }
+    assert mk8s_fields["inputs.node_group_defaults.gpu.platform"]["options"] == {
+        "from": "mk8s_compatible_platforms",
+        "args": {"platform_prefix": "gpu-"},
+    }
+    assert mk8s_fields["inputs.node_groups"]["prompt"] is False
+    assert mk8s_fields["inputs.node_groups.system.platform"]["options"] == {
+        "from": "mk8s_compatible_platforms",
+        "args": {"platform_prefix": "cpu-"},
+    }
+    assert mk8s_fields["inputs.node_groups.system.preset"]["options"] == {
+        "from": "compute_platform_presets",
+        "args": {"platform_path": "inputs.node_groups.system.platform"},
+    }
+    assert mk8s_fields["inputs.gpu_clusters"]["prompt"] is False
+    assert "inputs.cpu_nodes_platform" not in mk8s_fields
+    assert "inputs.gpu_nodes_platform" not in mk8s_fields
+    assert "inputs.infiniband_fabric" not in mk8s_fields
 
     apps = {entry.id: entry for entry in component_entries("apps")}
     assert "n8n" in apps

@@ -1,14 +1,20 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from nebius_cxcli.wizard_profiles import builtin_wizard_profile_names
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+MONOREPO_ROOT = REPO_ROOT.parents[1]
 
 
 def _section(text: str, start: str, end: str) -> str:
     return text.split(start, maxsplit=1)[1].split(end, maxsplit=1)[0]
+
+
+def _squash(text: str) -> str:
+    return " ".join(text.split())
 
 
 def test_readme_quick_start_uses_current_create_target_contract() -> None:
@@ -19,22 +25,127 @@ def test_readme_quick_start_uses_current_create_target_contract() -> None:
     assert "nebius-cxcli create <target-path>" not in quick_start
 
 
+def test_readme_documents_redacted_guided_create_prefill_example() -> None:
+    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+    flat = _squash(readme)
+
+    assert (
+        "nebius-cxcli create /path/to/deployments-root --client-name client-slug "
+        "--tenant-id TENANT_ID --project-id PROJECT_ID "
+        "--infra mk8s,vm,wireguard-gw,ssh-jumphost "
+        "--no-validate-sources --no-validate-config"
+    ) in flat
+    assert "still runs the wizard for remaining prompts such as region" in flat
+    assert (
+        "These flags skip source validation and post-write config validation; "
+        "they do not skip the warning-only live quota/capacity assessment."
+    ) in flat
+    assert "Add `--app none` when you also want to skip the app-selection prompt." in flat
+    assert "`--infra` and `--app` can each be repeated or passed as comma-separated lists" in flat
+    assert "`--infra mk8s,vm --infra wireguard-gw,ssh-jumphost`" in readme
+    assert "`--app n8n,gateway-helm --app cert-manager`" in readme
+    assert "# Guided create with multiple infra and app choices preselected" in readme
+    assert (
+        "--infra mk8s,vm" in readme
+        and "--infra wireguard-gw,ssh-jumphost" in readme
+        and "--app n8n,gateway-helm" in readme
+        and "--app cert-manager" in readme
+    )
+    assert "App chart dependencies can still add required chart rows automatically." in flat
+    assert re.search(r"\btenant-[a-z0-9]{16,}\b", readme) is None
+    assert re.search(r"\bproject-[a-z0-9]{16,}\b", readme) is None
+
+
+def test_readme_render_warning_lives_in_recommended_workflow() -> None:
+    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+    intro = readme.split("## Table of Contents", maxsplit=1)[0]
+    workflow = _section(readme, "## Recommended Workflow", "## Releases")
+
+    warning = "After any manual or wizard change to `config.yaml`, run"
+    assert warning not in intro
+    assert warning in workflow
+    assert "`nebius-cxcli render <config.yaml>` again before" in workflow
+    assert "`nebius-cxcli terraform plan`" in workflow
+    assert "`nebius-cxcli flux bootstrap`" in workflow
+    assert "Passing `config.yaml` to `deploy` only locates the" in workflow
+    assert "`deploy` runs generated-bundle preflight and Terraform validation before" in workflow
+    assert "it does not rerender `config.yaml`" in workflow
+    assert "terraform validate` after render" not in readme
+
+
+def test_readme_mk8s_gpu_workload_validation_defaults_include_soperator() -> None:
+    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+
+    assert (
+        "GPU Visibility test is enabled by default for GPU-backed MK8s deploys, including Soperator production targets"
+        in readme
+    )
+    assert (
+        "NCCL test is enabled by default for GPU-enabled MK8s clusters, including Soperator production targets"
+        in readme
+    )
+    assert "Soperator ActiveChecks stay as the opt-in Slurm-side benchmark/diagnostic path" in readme
+    assert "Soperator targets suppress this generic workload prompt" not in readme
+    assert "Soperator targets suppress the generic deploy-time NCCL workload" not in readme
+
+
+def test_readme_features_include_concise_grafana_command_summary() -> None:
+    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+    features = _section(readme, "## Features", "## Prerequisites and Installation")
+
+    assert (
+        "- `grafana` exports or normalizes dashboard JSON and can attach "
+        "deploy-ready imports to `component_sources.yaml`."
+    ) in features
+    assert "grafana.nebius.dev" not in features
+    assert "--catalog-folder" not in features
+
+
 def test_readme_supporting_commands_include_current_quota_and_target_flags() -> None:
     readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
     supporting = _section(readme, "### Supporting Commands", "## Auth Workflow")
 
     assert "nebius-cxcli quota-request /path/to/config.yaml" in supporting
     assert (
+        "nebius-cxcli grafana --export-dashboard https://grafana.example.invalid/ "
+        "--folder-uid folder-uid --dashboard-uid dashboard-uid "
+        '--dashboard-folder mk8s --datasource "Nebius User Metrics" --attach'
+    ) in supporting
+    assert (
+        "nebius-cxcli grafana --dashboard-json ./dashboards/mk8s/custom.json "
+        '--dashboard-folder mk8s --datasource "Nebius User Metrics" --attach'
+    ) in supporting
+    assert (
         "`component`, `validate`, `validate-dashboards`, `quota-check`, "
         "`quota-request`, `render`, `deploy`, `bootstrap-ci`, `wireguard`, "
         "`ssh-jumphost`, `destroy`, `email`"
+    ) in supporting
+    assert (
+        "- `grafana`: no positional path; use `--export-dashboard <grafana-base-or-folder-url>` "
+        "or `--dashboard-json <path>` and optional `--component-sources` with `--attach`."
+    ) in supporting
+    assert (
+        "- `grafana --export-dashboard <grafana-base-or-folder-url>` / "
+        "`grafana --dashboard-json <path>`"
     ) in supporting
     assert "- `quota-request <config.yaml>`" in supporting
 
     common_flags = supporting.split("Common command flags:", maxsplit=1)[1]
     assert (
+        "- `create`:\n  `--client-name`, `--tenant-id`, `--project-id`, `--region-id`, "
+        "`--email`, `--infra`, `--app`, `--app-namespace`, `--app-releasename`, "
+        "`--validate-sources/--no-validate-sources`, "
+        "`--validate-config/--no-validate-config`, `--no-interactive`, `--force`"
+    ) in common_flags
+    assert (
         "- `deploy`: `--auto-auth-bootstrap/--no-auto-auth-bootstrap`, "
         "`--skip-validations`, `--skip-validation`, `--target`, `--all-targets`"
+    ) in common_flags
+    assert (
+        "- `grafana`: `--export-dashboard`, `--dashboard-json`, `--output-dir`, `--folder-uid`, "
+        "`--dashboard-uid`, `--overwrite`, `--attach`, `--component-sources`, "
+        "`--dashboard-folder`, `--datasource`, `--token-env`, `--username`, "
+        "`--password-env`"
     ) in common_flags
     assert (
         "- `flux apply`: `--auto-auth-bootstrap/--no-auto-auth-bootstrap`, "
@@ -95,21 +206,34 @@ def test_docs_define_auth_target_modes() -> None:
 def test_docs_define_destroy_as_project_wide_destructive_teardown() -> None:
     readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
     design = (REPO_ROOT / "docs" / "design.md").read_text(encoding="utf-8")
+    readme_flat = _squash(readme)
+    design_flat = _squash(design)
 
     assert (
         "`destroy` is the project-wide destructive path: it tears down all rendered "
         "resources represented by that generated bundle/runtime snapshot"
-    ) in readme
+    ) in readme_flat
     assert (
         "`destroy` is the destructive inverse of `deploy` and is intentionally project-wide"
         in readme
     )
     assert (
+        "the external cluster and its node groups stay outside Terraform ownership "
+        "and are not destroyed"
+    ) in readme_flat
+    assert "`kubectl` is used for `validate-generated`, `deploy`, `destroy`" in readme
+    assert (
         "Destroys all rendered project resources represented by the existing generated bundle"
-        in design
+        in design_flat
     )
+    assert "locally applied post-Flux app resources first" in readme_flat
+    assert "locally applied post-Flux app resources first" in design_flat
+    assert "destroy` never destroys the external cluster or its node groups" in design_flat
+    assert "rendered app teardown failure is fatal" in design
     assert "### `destroy <config.yaml>`" in design
     assert "Project-wide destructive teardown from the generated bundle" in design
+    assert "external or current cluster" not in readme
+    assert "external or current cluster" not in design
 
 
 def test_design_uses_config_yaml_for_project_runtime_command_headings() -> None:
@@ -124,10 +248,10 @@ def test_design_uses_config_yaml_for_project_runtime_command_headings() -> None:
 def test_docs_define_app_instance_id_as_cluster_binding() -> None:
     readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
     design = (REPO_ROOT / "docs" / "design.md").read_text(encoding="utf-8")
+    design_flat = _squash(design)
 
     assert (
-        "For app rows, `id` names the chart type and `instance_id` names the MK8s target"
-        in readme
+        "For app rows, `id` names the chart type and `instance_id` names the MK8s target" in readme
     )
     assert "Enabled `apps.charts[]` rows require at least one enabled MK8s target" in readme
     assert "`nvidia-gpu-operator@cluster2`" in readme
@@ -135,17 +259,166 @@ def test_docs_define_app_instance_id_as_cluster_binding() -> None:
         "Authored `config.yaml` does not use `apps.charts[].target_ref`; any internal generated "
         "`target_ref` is derived from and must equal the same target `instance_id`."
     ) in readme
-    assert "target-bound app rows use the target id as `instance_id`" in design
+    assert "target-bound app rows use the target id as `instance_id`" in design_flat
     assert (
         "Internal generated rows may also carry `target_ref`, but that field is a derived "
         "runtime alias for the same target `instance_id`, not a second user-facing binding."
-    ) in design
+    ) in design_flat
     assert "`infra.components[]`: `id`, `instance_id`, `enabled`, `inputs`" in design
+
+
+def test_design_documents_typed_mk8s_catalog_paths() -> None:
+    design = (REPO_ROOT / "docs" / "design.md").read_text(encoding="utf-8")
+
+    assert "inputs.cluster.kube_network.service_cidrs" in design
+    assert "does not default `inputs.node_groups`" in design
+    assert "inputs.node_groups: 2" not in design
+    assert "defaults.inputs.kube_network_service_cidrs" not in design
+
+
+def test_soperator_chart_docs_align_default_gpu_worker_name() -> None:
+    chart_design = (MONOREPO_ROOT / "helm-charts" / "soperator" / "docs" / "design.md").read_text(
+        encoding="utf-8"
+    )
+    production_core = (
+        MONOREPO_ROOT / "helm-charts" / "soperator" / "examples" / "production-core-values.yaml"
+    ).read_text(encoding="utf-8")
+    gpu_only_section = _section(
+        chart_design,
+        "#### GPU-Only Workers",
+        "#### Mixed CPU+GPU Workers",
+    )
+
+    assert "worker          -> default GPU worker nodes" in chart_design
+    assert "name: worker" in production_core
+    assert "slurm.nebius.ai/nodeset-name: worker" in production_core
+    assert "worker-gpu" not in production_core
+    assert "worker-gpu" not in gpu_only_section
+
+
+def test_soperator_docs_lock_production_training_child_chart_defaults() -> None:
+    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+    design = (REPO_ROOT / "docs" / "design.md").read_text(encoding="utf-8")
+    changelog = (REPO_ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+    chart_readme = (MONOREPO_ROOT / "helm-charts" / "soperator" / "README.md").read_text(
+        encoding="utf-8"
+    )
+    chart_changelog = (MONOREPO_ROOT / "helm-charts" / "soperator" / "CHANGELOG.md").read_text(
+        encoding="utf-8"
+    )
+    chart_design = (MONOREPO_ROOT / "helm-charts" / "soperator" / "docs" / "design.md").read_text(
+        encoding="utf-8"
+    )
+    checks_readme = (
+        MONOREPO_ROOT / "helm-charts" / "soperator-checks" / "README.md"
+    ).read_text(encoding="utf-8")
+    activechecks_readme = (
+        MONOREPO_ROOT / "helm-charts" / "soperator-activechecks" / "README.md"
+    ).read_text(encoding="utf-8")
+
+    for text in (readme, design):
+        flat = _squash(text)
+        assert "values.soperator-activechecks.enabled=false" in flat
+        assert "values.soperator-activechecks.waitForChecks.enabled=false" in flat
+        assert "values.soperator-checks.enabled=false" in flat
+        assert "values.soperator-dcgm-exporter.enabled=false" in flat
+        assert "values.soperator-notifier.enabled=false" in flat
+        assert "values.soperator-backup-config.enabled=false" in flat
+        assert (
+            "no-GPU Soperator profiles force `values.soperator-dcgm-exporter.enabled=false`" in flat
+        )
+        assert "production-training best practice" in flat
+        assert "not production training clusters" in flat
+        assert "Slurm accounting, SlurmDBD, and chart-managed MariaDB enabled" in flat
+        assert (
+            "Slurm accounting, SlurmDBD, and the chart-managed accounting database stay enabled"
+            in flat
+        )
+        assert "the partition profile does not toggle the accounting database" in flat
+        assert (
+            "catalog-owned QOS overlays keep the chart's multi-arch Slurm `PluginDir`" not in text
+        )
+        assert "Advanced production-maintenance mode" in flat
+        assert "NebiusMaintenanceScheduled=True" in flat
+        assert "graceful maintenance drain" in flat
+        assert "node handoff" in flat
+        assert "does not call" in flat
+        assert "SlurmNodeReboot=True" in flat
+        assert "Soperator host reboot after drain" in flat
+        assert "already drained" in flat
+        assert "values.sssd.enabled=false" in flat
+    assert "catalog-owned QOS overlays leave `PluginDir` unset by default" in design
+    assert "pinned-image Slurm plugin directory override" not in chart_changelog
+
+    changelog_flat = _squash(changelog)
+    assert "enable production child-chart defaults for checks, active checks, and DCGM" not in (
+        changelog_flat
+    )
+    assert "keep production-impacting child-chart gates disabled by default" in changelog_flat
+    for text in (chart_readme, chart_design):
+        flat = _squash(text)
+        assert "soperator-activechecks.enabled=false" in flat
+        assert "soperator-activechecks.waitForChecks.enabled=false" in flat
+        assert "soperator-checks.enabled=false" in flat
+        assert "soperator-dcgm-exporter.enabled=false" in flat
+        assert "soperator-notifier.enabled=false" in flat
+        assert "soperator-backup-config.enabled=false" in flat
+        assert "rebooter.enabled=false" in flat
+        assert "does not create a reboot schedule" in flat
+        assert "not a per-NodeSet" in flat
+        assert "does not reboot nodes at install time" in flat or (
+            "does not reboot nodes during chart install" in flat
+        )
+        assert "NoExecute" in flat
+        assert "SlurmNodeReboot" in flat
+        assert "does not prompt" in flat
+        assert "NebiusMaintenanceScheduled=True" in flat
+        assert "SoperatorChecksNodeMaintenance=True" in flat
+        assert "SoperatorChecksNodeDegraded=True" in flat
+        assert "slurmNodes.sssd.enabled=false" in flat
+        assert "nodesets[].sssd.enabled=false" in flat
+        assert "Advanced production-maintenance mode" in flat
+        assert "graceful maintenance drain" in flat
+        assert "node handoff" in flat
+        assert "Soperator host reboot" in flat
+        assert "already drained" in flat
+    assert "override `waitForChecks.enabled=false`" in _squash(activechecks_readme)
+    checks_flat = _squash(checks_readme)
+    assert "NebiusMaintenanceScheduled=True" in checks_flat
+    assert "graceful maintenance drain and node handoff" in checks_flat
+    assert "SlurmNodeReboot=True" in checks_flat
+    assert "actual Soperator host reboot path after drain" in checks_flat
+    assert "SlurmNodeDrain=True" in checks_flat
+    assert "not `SlurmNodeReboot=True`" in checks_flat
+
+
+def test_soperator_chart_design_aligns_current_scheduling_qos_surfaces() -> None:
+    chart_design = (MONOREPO_ROOT / "helm-charts" / "soperator" / "docs" / "design.md").read_text(
+        encoding="utf-8"
+    )
+    flat = _squash(chart_design)
+
+    assert "The top-level `schedulingConfig` block defines cluster-wide scheduling" in flat
+    assert "`accountingStorageEnforce` | `AccountingStorageEnforce`" in flat
+    assert "`enforcePartLimits` | `EnforcePartLimits`" in flat
+    assert "set non-zero `schedulingConfig.priorityWeights.fairshare` / `qos` / `age`" in flat
+    assert "For self-managed clusters, enable `qosConfiguration` to reconcile" in flat
+    assert "For Managed Soperator, keep `qosConfiguration.enabled=false`" in flat
+    assert "accountingStorageEnforce: - associations - limits - qos" in flat
+    assert "enforcePartLimits: ANY" in flat
+    assert "customSlurmConfig: | AccountingStorageEnforce=associations,limits,qos" not in flat
+    assert "The chart does not create QOS objects" not in chart_design
+    assert "managed via `sacctmgr` outside the chart" not in chart_design
+    assert "slurmNodes.accounting.slurmConfig.priorityWeightFairshare" not in chart_design
+    assert "Archives under `helm-charts/soperator/charts/` are generated dependency artifacts" in flat
+    assert "Rebooter ServiceAccount, Role, and binding resources render only when" in flat
 
 
 def test_docs_define_component_selector_contract() -> None:
     readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
     design = (REPO_ROOT / "docs" / "design.md").read_text(encoding="utf-8")
+    readme_flat = _squash(readme)
+    design_flat = _squash(design)
 
     assert "`component add [component-selector...] --config <config.yaml>`" in design
     assert "`component remove [component-selector...] --config <config.yaml>`" in design
@@ -161,7 +434,131 @@ def test_docs_define_component_selector_contract() -> None:
     assert "bare infra selector creates the default named row when absent" in readme
     assert "For scalar named infra, the row id is the normalized resource name" in readme
     assert "non-interactive mode" in design
+    assert "does not repeat final `Added infra/apps components` lines" in readme
+    assert "summaries for categories that actually changed" in readme
+    assert "skips the final redundant `Added infra/apps components` lines" in design
+    assert "only for categories that actually changed" in design
     assert "removes app chart rows and `deploy.targets[]` settings" in design
+    assert "`apps:soperator`" in readme
+    assert "`install_mode`" in readme
+    assert "`production-cluster` creates the complete MK8s+SFS+Soperator" in readme
+    assert "`onboard-existing-cluster` registers an external Nebius MK8s target" in readme
+    assert "Onboarding is deliberately not a Terraform import or takeover" in readme_flat
+    assert "mainly for Soperator install and future upgrade workflows" in readme_flat
+    assert "Non-interactive `component add soperator@<target>`" in readme
+    assert "it does not create Terraform-managed MK8s/SFS rows" in readme_flat
+    assert "`values.nodeGroupMapping.*`" in readme
+    assert "worker` on GPU node groups" in readme_flat
+    assert "`onboard-existing-cluster` registers an external Nebius MK8s target" in design
+    assert "`deploy.targets[].inventory.node_groups`" in design
+    assert "This is primarily a day-2 Soperator management and upgrade path" in design_flat
+    assert "not a Terraform-managed MK8s row" in design_flat
+    assert "Non-interactive `component add soperator@<target>`" in design_flat
+    assert "skips Terraform MK8s/SFS row creation" in design_flat
+    assert "`production-cluster` materializes the complete MK8s+SFS+Soperator" in design
+    assert "`onboard-existing-cluster` resolves the selected" in design_flat
+    assert "`values.nodeGroupMapping.*` choices" in design
+    assert "In GPU profile-backed MK8s flows" in design
+    assert "CPU-only Soperator profiles skip and prune the inactive GPU helper scope" in design
+    assert "during runtime config normalization" in design_flat
+
+
+def test_design_defines_soperator_profile_policy_model() -> None:
+    design = (REPO_ROOT / "docs" / "design.md").read_text(encoding="utf-8")
+    design_flat = _squash(design)
+
+    assert "## Soperator" in design
+    assert "`component_sources.yaml` keeps the app source" in design
+    assert "`wizard_profile: soperator`" in design
+    assert "`soperator_nodesets_profile` table stays in `component_cli_settings.yaml`" in design
+    assert "NodeSet profile chooses the Slurm worker layout" in design
+    assert "Partition profile chooses Slurm queues and scheduling policy" in design
+    assert "Slurm accounting, SlurmDBD, and the chart-managed accounting database stay enabled" in (
+        design_flat
+    )
+    assert "QoS reconciliation is separate from selecting a partition profile" in design
+    assert "Topology profile controls Slurm locality scheduling" in design
+    assert "Node group mapping connects Slurm roles to MK8s node groups" in design
+    assert "curated CPU service-role count helpers" in design
+    assert "`inputs.soperator.system_node_count`" in design
+    assert "`worker_nodes_per_group` because workers can shard into multiple MK8s groups" in (
+        design_flat
+    )
+    assert "The Helm chart remains the Slurm resource owner" in design
+    assert "moving the prompt map out of YAML does not change `config.yaml`" in design_flat
+
+
+def test_readme_explains_soperator_slurm_concept_ownership() -> None:
+    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+    section = readme.split("Slurm concepts used by the bundled profiles:", 1)[1].split(
+        "The guided partition profiles are intentionally policy-sized:",
+        1,
+    )[0]
+    section_flat = _squash(section)
+
+    for term in (
+        "`SlurmCluster`",
+        "`NodeSet`",
+        "`NodeConfigurator`",
+        "`Partition`",
+        "`PriorityTier`",
+        "`PriorityJobFactor`",
+        "`PriorityWeightPartition`",
+        "Fairshare",
+        "QOS",
+        "`PreemptType`",
+        "`PreemptMode`",
+        "Niceness",
+        "`AccountingStorageEnforce`",
+        "`EnforcePartLimits`",
+    ):
+        assert term in section
+
+    assert "The Helm chart owns persistent Slurm resources" in section_flat
+    assert "cxcli selects bundled profiles and writes Helm values" in section_flat
+    assert (
+        "per-job choices such as `--qos`, `--nice`, `--time`, and `--requeue`"
+        in section_flat
+    )
+    assert "The chart types `schedulingConfig.priorityWeights.partition`" in section_flat
+    assert "does not currently type per-partition `PriorityJobFactor`" in section_flat
+    assert "Use per-partition `config: PriorityJobFactor=<n>` today" in section_flat
+    assert "`inputs.soperator.*_node_count` helpers" in section_flat
+    assert "CPU service-role counts are independent of worker sharding" in section_flat
+    assert "values.schedulingConfig.accountingStorageEnforce" in section_flat
+    assert "values.schedulingConfig.enforcePartLimits" in section_flat
+    assert "while partition `AllowQos` remains chart-rendered partition policy" in section_flat
+    assert "Real fairshare is tenant policy" in section_flat
+    assert "Managed Soperator cannot run this self-managed chart hook" in section_flat
+    assert "there is no `PriorityWeightNice` setting to model in Helm" in section_flat
+    assert "Actual preemption for these queues requires an explicit" not in section_flat
+
+
+def test_readme_guides_soperator_slurm_checks_through_login_service() -> None:
+    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+    section = readme.split("After the cluster is provisioned, connect to the Slurm", 1)[1].split(
+        "How to read the common outputs:",
+        1,
+    )[0]
+    section_flat = _squash(section)
+
+    assert "chart `clusterName` from the MK8s target id" in section_flat
+    assert "service `soperator-cluster1-login-svc`" in section_flat
+    assert "kubectl get svc soperator-cluster1-login-svc -n soperator" in section
+    assert "replace `soperator-cluster1` with that value" in section
+    assert "ssh root@<login-external-ip>" in section
+    assert "Once connected, run the Slurm inspection commands directly" in section
+    assert "scontrol show partition" in section
+    assert "squeue -l" in section
+    assert "Run these smoke checks from the same SSH session on the Slurm login node" in (
+        section_flat
+    )
+    assert "srun -p cpu -N1 -n1 /bin/hostname" in section
+    assert "Do not prefix normal SSH-session commands with chroot" not in section
+    assert "kubectl exec into the sshd container" not in section
+    assert "chroot /mnt/jail srun" not in section
+    assert "chroot /mnt/jail sbatch" not in section
+    assert "kubectl -n soperator exec login-0 -c sshd --" not in section
 
 
 def test_docs_define_validation_command_boundaries() -> None:
@@ -202,15 +599,39 @@ def test_docs_define_target_scoped_deploy_validation_report_filtering() -> None:
     design = (REPO_ROOT / "docs" / "design.md").read_text(encoding="utf-8")
 
     assert (
+        "A plain deploy and `--all-targets` report every selected target. "
         "When a run selects one target with `--target <target-id>`, the refreshed "
         "validation section is scoped to that selected target instead of marking "
-        "unselected target validations as not run; `--all-targets` reports every "
-        "selected target."
+        "unselected target validations as not run."
     ) in readme
     assert (
+        "Plain deploy and `--all-targets` report every selected target. "
         "When a run selects one target with `--target <target-id>`, the refreshed "
-        "validation section includes only that target's validations; `--all-targets` "
-        "reports every selected target."
+        "validation section includes only that target's validations."
+    ) in design
+
+
+def test_docs_define_deploy_default_all_targets_boundary() -> None:
+    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+    design = (REPO_ROOT / "docs" / "design.md").read_text(encoding="utf-8")
+
+    assert (
+        "A plain `deploy <config.yaml>` reconciles every generated target by default; "
+        "use `deploy --target <target-id>` to narrow one target or `deploy --all-targets` "
+        "to spell out the default."
+    ) in readme
+    assert (
+        "`flux apply`, `flux destroy`, and `flux bootstrap` still require "
+        "`--target <target-id>` or `--all-targets`"
+    ) in readme
+    assert (
+        "Plain `deploy <config.yaml>` reconciles every generated target by default; "
+        "`deploy --target <target-id>` narrows to one target, and `deploy --all-targets` "
+        "is an explicit spelling of the default."
+    ) in design
+    assert (
+        "Direct Flux commands that need Kubernetes access, such as `flux apply`, "
+        "`flux destroy`, or `flux bootstrap`, still select one target"
     ) in design
 
 
@@ -232,6 +653,21 @@ def test_docs_define_mysterybox_eso_name_resolution_contract() -> None:
         assert "externally managed MysteryBox Secrets" in text
 
 
+def test_docs_define_soperator_notifier_mysterybox_no_action_contract() -> None:
+    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+    design = (REPO_ROOT / "docs" / "design.md").read_text(encoding="utf-8")
+
+    for text in (readme, design):
+        assert "no-action deploy" in text
+        assert "MysteryBox" in text
+        assert "`values.soperator-notifier.slack.webhookSource`" in text
+        assert "`values.soperator-notifier.slack.mysterybox.secretId`" in text
+        assert "`values.soperator-notifier.slack.existingSecret`" in text
+        assert "`values.soperator-notifier.slack.existingSecretKey`" in text
+        assert "ExternalSecret" in text
+        assert "primary MysteryBox version" in text
+
+
 def test_docs_define_wizard_string_lists_as_comma_separated() -> None:
     readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
     design = (REPO_ROOT / "docs" / "design.md").read_text(encoding="utf-8")
@@ -247,7 +683,7 @@ def test_docs_list_all_builtin_wizard_profiles_and_static_sources() -> None:
     design = (REPO_ROOT / "docs" / "design.md").read_text(encoding="utf-8")
     design_profile_list = _section(
         design,
-        "Built-in infra `wizard_profile` names currently include:",
+        "Built-in component `wizard_profile` names currently include:",
         "Component output and handoff contract:",
     )
 
@@ -271,14 +707,20 @@ def test_design_documents_grafana_dashboard_binding_workflow() -> None:
     assert "The bundled Grafana contract is the binding chain" in design
     assert "`observability.endpoints.read.<key>` declares a Nebius read endpoint" in design
     assert "`components.apps.grafana.cli.datasources.<id>` binds" in design
+    assert "`components.apps.grafana.defaults.values.dashboards.<folder>.<dashboard>`" in design
     assert (
-        "`components.apps.grafana.defaults.values.dashboards.<folder>.<dashboard>`"
-        in design
-    )
+        "The `grafana` command is the operator workflow for bringing external "
+        "dashboards into that catalog"
+    ) in normalized_design
     assert "`components.apps.grafana.cli.dashboard_signals.<signal>` is not" in design
     assert "components.apps.grafana.cli.grafana" not in design
     assert "Dashboard source materialization workflow:" in design
-    assert "does not dynamically generate or rewrite dashboards" in design
+    assert "`render`, `deploy`, and `validate-dashboards` do not dynamically generate" in design
+    assert (
+        "`grafana --export-dashboard --attach` and `grafana --dashboard-json --attach` "
+        "workflows can rewrite"
+    ) in normalized_design
+    assert "refuses to attach JSON dashboards into a provider key" in normalized_design
     assert "It does not mutate, regenerate, or repair dashboard JSON." in normalized_design
     assert "Dashboard generation and materialization workflow:" not in design
     assert "`load_component_sources()` resolves the `json_file` relative" in design

@@ -24,6 +24,15 @@ from .deploy_validation_report import (
 )
 from .generated_manifest import manifest_path_for_generated_dir
 from .grafana_runtime import grafana_release_specs, read_grafana_status
+from .mk8s_node_groups import (
+    cluster_name as mk8s_cluster_name,
+)
+from .mk8s_node_groups import (
+    cluster_public_endpoint_enabled,
+    gpu_cluster_fabric,
+    gpu_node_groups,
+    iter_node_groups,
+)
 from .observability import observability_endpoint_summary, observability_status_summary
 from .paths import ProjectPaths
 from .runtime_config import to_plain_data
@@ -52,6 +61,17 @@ def _mapping(value: Any) -> dict[str, Any]:
 
 
 def _lookup(node: Mapping[str, Any], key: str) -> Any:
+    key = str(key)
+    if "." in key:
+        current: Any = node
+        for segment in key.split("."):
+            if not isinstance(current, Mapping):
+                return None
+            current = _lookup(current, segment)
+            if current is None:
+                return None
+        return current
+
     candidates = (key, key.replace("-", "_"), key.replace("_", "-"))
     for candidate in candidates:
         if candidate in node:
@@ -222,7 +242,9 @@ def _component_status_line(item: Mapping[str, Any]) -> str:
 
 
 def _enabled_status_report_lines(items: Sequence[tuple[str, Any]]) -> list[str]:
-    return [_status_line(label, value) for label, value in items if _enabled_label(value) == "enabled"]
+    return [
+        _status_line(label, value) for label, value in items if _enabled_label(value) == "enabled"
+    ]
 
 
 _REPORT_SENSITIVE_TOKENS = (
@@ -241,17 +263,14 @@ _REPORT_SENSITIVE_TOKENS = (
 )
 _REPORT_PREFERRED_INPUT_PATHS = (
     "name",
-    "cluster_name",
-    "subnet_id",
+    "cluster.cluster_name",
+    "cluster.network_id",
+    "cluster.subnet_id",
+    "cluster.k8s_version",
+    "cluster.public_endpoint",
     "platform",
     "preset",
-    "cpu_nodes_count",
-    "cpu_nodes_platform",
-    "cpu_nodes_preset",
-    "gpu_enabled",
-    "gpu_nodes_count",
-    "gpu_nodes_platform",
-    "gpu_nodes_preset",
+    "node_groups",
     "boot_disk_type",
     "boot_disk_size_gib",
     "source_image_family",
@@ -368,9 +387,7 @@ def _component_status_report_line(entry: ComponentEntry, row: Mapping[str, Any])
     name_value = _lookup(inputs, name_input)
     name_text = _report_value_text(name_value)
     if name_text:
-        return (
-            f"  - Resource: `{status.kind}` with `{name_input}` = `{name_text}`"
-        )
+        return f"  - Resource: `{status.kind}` with `{name_input}` = `{name_text}`"
     return f"  - Resource: `{status.kind}`"
 
 
@@ -387,7 +404,7 @@ def _infra_component_report_markdown_lines(config: Any) -> list[str]:
             label = _component_report_label(row)
             inputs = _component_inputs(row)
             input_pairs = _ordered_report_pairs(
-                _collect_report_pairs(inputs, max_depth=1),
+                _collect_report_pairs(inputs, max_depth=2),
                 preferred_paths=_REPORT_PREFERRED_INPUT_PATHS,
             )
             lines.append(f"- `{label}` ({entry.description})")
@@ -493,7 +510,9 @@ def _packaged_grafana_dashboards_by_uid() -> dict[str, dict[str, Any]]:
     return dashboards
 
 
-def _dashboard_defaults_from_chart(defaults: Sequence[Any]) -> list[tuple[str, str, Mapping[str, Any]]]:
+def _dashboard_defaults_from_chart(
+    defaults: Sequence[Any],
+) -> list[tuple[str, str, Mapping[str, Any]]]:
     dashboards: list[tuple[str, str, Mapping[str, Any]]] = []
     for default in defaults:
         if getattr(default, "kind", "") != "literal":
@@ -879,7 +898,9 @@ def _wireguard_component_markdown_lines(config: Any, paths: ProjectPaths) -> lis
 
     outputs = _terraform_outputs_if_available(paths)
     client_output_dir = default_wireguard_client_output_dir(paths)
-    client_configs = tuple(sorted(client_output_dir.glob("*.conf"))) if client_output_dir.exists() else ()
+    client_configs = (
+        tuple(sorted(client_output_dir.glob("*.conf"))) if client_output_dir.exists() else ()
+    )
     lines = ["### WireGuard VPN Gateway Access", ""]
 
     for index, row in enumerate(wireguard_rows):
@@ -1025,15 +1046,13 @@ def _target_metadata_by_ref(
         api_endpoint = _mapping(_lookup(inputs, "api_endpoint"))
         public_endpoint = _coalesce(
             _lookup(api_endpoint, "public"),
-            _lookup(inputs, "mk8s_cluster_public_endpoint"),
+            cluster_public_endpoint_enabled(inputs),
             _lookup(inputs, "api_endpoint_public"),
         )
         if "access" not in row_metadata:
             row_metadata["access"] = "external" if bool(public_endpoint) else "internal"
 
-        configured_cluster_name = str(
-            _coalesce(_lookup(inputs, "cluster_name"), instance_id)
-        ).strip()
+        configured_cluster_name = mk8s_cluster_name(inputs, fallback=instance_id)
         cluster_name_output = str(row_metadata.get("cluster_name_output_name") or "").strip()
         cluster_name = (
             _output_value_text(outputs, cluster_name_output) if cluster_name_output else ""
@@ -1092,35 +1111,30 @@ def _node_count_text(value: Any) -> str:
 def _mk8s_cluster_markdown_lines(cluster: Mapping[str, Any]) -> list[str]:
     instance_id = str(_coalesce(_lookup(cluster, "instance_id"), "mk8s"))
     cluster_name = str(_coalesce(_lookup(cluster, "cluster_name"), instance_id))
-    cpu_nodes = _mapping(_lookup(cluster, "cpu_nodes"))
-    gpu_nodes = _mapping(_lookup(cluster, "gpu_nodes"))
-    cpu_count = _coalesce(_lookup(cpu_nodes, "count"), "n/a")
-    cpu_shape = _shape_label(_lookup(cpu_nodes, "platform"), _lookup(cpu_nodes, "preset"))
-    if bool(_lookup(gpu_nodes, "enabled")):
-        groups = _coalesce(_lookup(gpu_nodes, "groups"), 1)
-        nodes_per_group = _coalesce(_lookup(gpu_nodes, "nodes_per_group"), "n/a")
-        gpu_shape = _shape_label(_lookup(gpu_nodes, "platform"), _lookup(gpu_nodes, "preset"))
-        group_count = _as_int(groups)
-        nodes_per_group_count = _as_int(nodes_per_group)
-        if group_count is not None and nodes_per_group_count is not None:
-            total_nodes = group_count * nodes_per_group_count
-            gpu_text = (
-                f"`{total_nodes}` node(s) "
-                f"(`{group_count}` group(s) x `{nodes_per_group_count}` node(s)/group) "
-                f"at `{gpu_shape}`"
-            )
-        else:
-            gpu_text = f"`{groups}x{nodes_per_group}` node(s) at `{gpu_shape}`"
-    else:
-        gpu_text = "`disabled`"
+    node_groups = _lookup(cluster, "node_groups")
+    groups = node_groups if isinstance(node_groups, list) else []
+    cpu_summaries = [
+        f"`{_lookup(group, 'key')}`: {_node_count_text(_lookup(group, 'node_count'))} at "
+        f"`{_shape_label(_lookup(group, 'platform'), _lookup(group, 'preset'))}`"
+        for group in groups
+        if isinstance(group, Mapping) and not bool(_lookup(group, "gpu"))
+    ]
+    gpu_summaries = [
+        f"`{_lookup(group, 'key')}`: {_node_count_text(_lookup(group, 'node_count'))} at "
+        f"`{_shape_label(_lookup(group, 'platform'), _lookup(group, 'preset'))}`"
+        for group in groups
+        if isinstance(group, Mapping) and bool(_lookup(group, "gpu"))
+    ]
+    cpu_text = "; ".join(cpu_summaries) if cpu_summaries else "`none`"
+    gpu_text = "; ".join(gpu_summaries) if gpu_summaries else "`disabled`"
     fabric = _coalesce(_lookup(cluster, "infiniband_fabric"), "none")
     public_endpoint = _coalesce(_lookup(cluster, "api_public"), "unknown")
     cluster_id = str(_lookup(cluster, "cluster_id") or "").strip()
     kube_context = str(_lookup(cluster, "kube_context") or "").strip()
     lines = [
         f"- `{instance_id}` (`{cluster_name}`)",
-        f"  - CPU nodes: {_node_count_text(cpu_count)} at `{cpu_shape}`",
-        f"  - GPU nodes: {gpu_text}",
+        f"  - CPU node groups: {cpu_text}",
+        f"  - GPU node groups: {gpu_text}",
         f"  - InfiniBand fabric: `{fabric}`",
         f"  - Public endpoint: `{_enabled_label(public_endpoint)}`",
     ]
@@ -1170,9 +1184,7 @@ def _mysterybox_sync_summaries(payload_data: Mapping[str, Any]) -> list[dict[str
                 "namespaces": [
                     str(namespace).strip() for namespace in namespaces if str(namespace).strip()
                 ],
-                "refresh_interval": str(
-                    _coalesce(_lookup(mysterybox, "refresh_interval"), "15m")
-                ),
+                "refresh_interval": str(_coalesce(_lookup(mysterybox, "refresh_interval"), "15m")),
                 "store_name": str(
                     _coalesce(_lookup(mysterybox, "store_name"), "nebius-mysterybox-shared")
                 ),
@@ -1254,70 +1266,40 @@ def _build_payload(config: Any, paths: ProjectPaths) -> dict[str, dict]:
 
     def _mk8s_summary(row: dict[str, Any] | None) -> dict[str, Any]:
         mk8s_inputs = _component_inputs(row)
-        cpu_nodes = _mapping(_lookup(mk8s_inputs, "cpu_nodes"))
-        gpu_nodes = _mapping(_lookup(mk8s_inputs, "gpu_nodes"))
         api_endpoint = _mapping(_lookup(mk8s_inputs, "api_endpoint"))
-        cluster_name = str(
-            _coalesce(
-                _lookup(mk8s_inputs, "cluster_name"),
-                project_id,
-                f"{tenant_id}/{project_id}",
-            )
+        cluster_name = mk8s_cluster_name(
+            mk8s_inputs,
+            fallback=str(_coalesce(project_id, f"{tenant_id}/{project_id}")),
         )
         instance_id = component_instance_id(row or {}) or component_type_id(row or {})
         metadata = _mapping(target_metadata.get(instance_id))
+        node_group_summaries = [
+            {
+                "key": group.key,
+                "gpu": group.gpu,
+                "node_count": group.node_count,
+                "platform": group.platform,
+                "preset": group.preset,
+            }
+            for group in iter_node_groups(mk8s_inputs)
+        ]
+        fabrics = [
+            gpu_cluster_fabric(mk8s_inputs, group)
+            for group in gpu_node_groups(mk8s_inputs)
+            if gpu_cluster_fabric(mk8s_inputs, group)
+        ]
         return {
             "instance_id": instance_id,
             "cluster_name": cluster_name,
             "cluster_id": _lookup(metadata, "cluster_id"),
             "kube_context": _lookup(metadata, "kube_context"),
-            "cpu_nodes": {
-                "count": _coalesce(
-                    _lookup(cpu_nodes, "count"), _lookup(mk8s_inputs, "cpu_nodes_count")
-                ),
-                "platform": _coalesce(
-                    _lookup(cpu_nodes, "platform"),
-                    _lookup(mk8s_inputs, "cpu_nodes_platform"),
-                ),
-                "preset": _coalesce(
-                    _lookup(cpu_nodes, "preset"),
-                    _lookup(mk8s_inputs, "cpu_nodes_preset"),
-                ),
-            },
-            "gpu_nodes": {
-                "enabled": bool(
-                    _coalesce(
-                        _lookup(gpu_nodes, "enabled"),
-                        _lookup(mk8s_inputs, "gpu_enabled"),
-                        _lookup(mk8s_inputs, "gpu_nodes_enabled"),
-                        False,
-                    )
-                ),
-                "groups": _coalesce(
-                    _lookup(gpu_nodes, "node_groups"),
-                    _lookup(mk8s_inputs, "gpu_node_groups"),
-                    _lookup(mk8s_inputs, "gpu_nodes_node_groups"),
-                ),
-                "nodes_per_group": _coalesce(
-                    _lookup(gpu_nodes, "nodes_per_group"),
-                    _lookup(mk8s_inputs, "gpu_nodes_count_per_group"),
-                    _lookup(mk8s_inputs, "gpu_nodes_nodes_per_group"),
-                ),
-                "platform": _coalesce(
-                    _lookup(gpu_nodes, "platform"),
-                    _lookup(mk8s_inputs, "gpu_nodes_platform"),
-                ),
-                "preset": _coalesce(
-                    _lookup(gpu_nodes, "preset"),
-                    _lookup(mk8s_inputs, "gpu_nodes_preset"),
-                ),
-            },
+            "node_groups": node_group_summaries,
             "api_public": _coalesce(
                 _lookup(api_endpoint, "public"),
-                _lookup(mk8s_inputs, "mk8s_cluster_public_endpoint"),
+                cluster_public_endpoint_enabled(mk8s_inputs),
                 _lookup(mk8s_inputs, "api_endpoint_public"),
             ),
-            "infiniband_fabric": _lookup(mk8s_inputs, "infiniband_fabric"),
+            "infiniband_fabric": ", ".join(sorted(set(fabrics))) if fabrics else "none",
         }
 
     mk8s_row = mk8s_rows[0] if mk8s_rows else None
@@ -1386,9 +1368,7 @@ def _build_payload(config: Any, paths: ProjectPaths) -> dict[str, dict]:
             "envoy_gateway": _chart_enabled(
                 app_rows, "gateway-helm", "envoy-gateway", "envoy_gateway"
             ),
-            "external_secrets": _chart_enabled(
-                app_rows, "external-secrets", "external_secrets"
-            ),
+            "external_secrets": _chart_enabled(app_rows, "external-secrets", "external_secrets"),
             "nvidia_gpu_operator": _chart_enabled(
                 app_rows, "nvidia-gpu-operator", "nvidia_gpu_operator"
             ),
@@ -1512,7 +1492,9 @@ def write_inventory(
         "### MK8s Clusters",
         "",
     ]
-    clusters = [cluster for cluster in payload.get("mk8s_clusters", []) if isinstance(cluster, Mapping)]
+    clusters = [
+        cluster for cluster in payload.get("mk8s_clusters", []) if isinstance(cluster, Mapping)
+    ]
     if clusters:
         for cluster in clusters:
             lines.extend(_mk8s_cluster_markdown_lines(cluster))
@@ -1712,9 +1694,7 @@ def write_inventory(
                 "- Datasources are provisioned in Grafana with server/proxy access and a deploy-time "
                 "Kubernetes Secret containing an Observability static token."
             )
-            grafana_lines.extend(
-                _grafana_prometheus_datasource_notes(observability_read_metadata)
-            )
+            grafana_lines.extend(_grafana_prometheus_datasource_notes(observability_read_metadata))
             if bundled_dashboards:
                 grafana_lines.append(
                     "- Bundled dashboard links list cxcli-owned JSON dashboards shipped "

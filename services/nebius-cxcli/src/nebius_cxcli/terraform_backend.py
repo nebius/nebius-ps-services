@@ -155,7 +155,7 @@ def render_backend_tf(settings: TerraformBackendSettings) -> str:
         f"      s3 = {json.dumps(settings.endpoint)}\n"
         "    }\n"
         "\n"
-        "    use_lockfile = true\n"
+        "    use_lockfile                = true\n"
         "    skip_credentials_validation = true\n"
         "    skip_region_validation      = true\n"
         "    skip_requesting_account_id  = true\n"

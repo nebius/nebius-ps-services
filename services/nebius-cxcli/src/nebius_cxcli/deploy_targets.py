@@ -18,6 +18,11 @@ from .runtime_config import to_plain_data
 
 TARGET_REF_FIELD = "target_ref"
 DEPLOY_TARGET_INSTANCE_ID_FIELD = "instance_id"
+DEPLOY_TARGET_KIND_FIELD = "kind"
+DEPLOY_TARGET_OWNERSHIP_FIELD = "ownership"
+EXTERNAL_MK8S_TARGET_KIND = "external-mk8s"
+EXTERNAL_TARGET_OWNERSHIP = "external"
+MANAGED_TARGET_OWNERSHIP = "managed"
 
 
 def app_chart_target_ref(row: Mapping[str, Any]) -> str:
@@ -26,6 +31,14 @@ def app_chart_target_ref(row: Mapping[str, Any]) -> str:
 
 def deploy_target_instance_id(row: Mapping[str, Any]) -> str:
     return normalize_component_token(row.get(DEPLOY_TARGET_INSTANCE_ID_FIELD))
+
+
+def deploy_target_kind(row: Mapping[str, Any]) -> str:
+    return str(row.get(DEPLOY_TARGET_KIND_FIELD, "") or "").strip().lower()
+
+
+def deploy_target_is_external_mk8s(row: Mapping[str, Any]) -> bool:
+    return deploy_target_kind(row) == EXTERNAL_MK8S_TARGET_KIND
 
 
 def _required_generated_target_field(
@@ -52,9 +65,6 @@ def normalize_generated_deploy_target(row: Any, *, index: int) -> dict[str, str]
     if not isinstance(row, Mapping):
         raise ValueError(f"Generated manifest deploy.targets[{index}] must be a mapping")
 
-    component_id = _required_generated_target_field(
-        row, index=index, field_name="component_id", normalize_token=True
-    )
     instance_id = _required_generated_target_field(
         row, index=index, field_name=DEPLOY_TARGET_INSTANCE_ID_FIELD, normalize_token=True
     )
@@ -73,6 +83,34 @@ def normalize_generated_deploy_target(row: Any, *, index: int) -> dict[str, str]
             f"Generated manifest deploy.targets[{index}].access must be external or internal"
         )
 
+    kind = deploy_target_kind(row)
+    ownership = str(row.get(DEPLOY_TARGET_OWNERSHIP_FIELD, "") or "").strip().lower()
+    if kind == EXTERNAL_MK8S_TARGET_KIND or ownership == EXTERNAL_TARGET_OWNERSHIP:
+        kube_context = str(row.get("kube_context", "") or "").strip()
+        cluster_id = str(row.get("cluster_id", "") or "").strip()
+        if not kube_context and not cluster_id:
+            raise ValueError(
+                f"Generated manifest deploy.targets[{index}] external MK8s target requires "
+                "kube_context or cluster_id"
+            )
+        normalized = {
+            DEPLOY_TARGET_KIND_FIELD: EXTERNAL_MK8S_TARGET_KIND,
+            DEPLOY_TARGET_OWNERSHIP_FIELD: EXTERNAL_TARGET_OWNERSHIP,
+            "component_id": EXTERNAL_MK8S_TARGET_KIND,
+            DEPLOY_TARGET_INSTANCE_ID_FIELD: instance_id,
+            TARGET_REF_FIELD: target_ref,
+            "access": access,
+            "flux_dir": _required_generated_target_field(row, index=index, field_name="flux_dir"),
+        }
+        if kube_context:
+            normalized["kube_context"] = kube_context
+        if cluster_id:
+            normalized["cluster_id"] = cluster_id
+        return normalized
+
+    component_id = _required_generated_target_field(
+        row, index=index, field_name="component_id", normalize_token=True
+    )
     return {
         "component_id": component_id,
         DEPLOY_TARGET_INSTANCE_ID_FIELD: instance_id,
@@ -115,28 +153,36 @@ def enabled_cluster_target_refs(payload_or_config: Any) -> tuple[str, ...]:
     payload = to_plain_data(payload_or_config)
     if not isinstance(payload, Mapping):
         return ()
-    infra = payload.get("infra")
-    if not isinstance(infra, Mapping):
-        return ()
-    components = infra.get("components")
-    if not isinstance(components, list):
-        return ()
-
-    handoff_component_ids = {
-        entry.id for entry in component_entries("infra") if entry.handoff is not None
-    }
     refs: list[str] = []
     seen: set[str] = set()
-    for row in components:
-        if not isinstance(row, Mapping) or not bool(row.get("enabled", False)):
-            continue
-        if component_type_id(row) not in handoff_component_ids:
-            continue
-        instance_id = component_instance_id(row)
+
+    def _append(raw: Any) -> None:
+        instance_id = normalize_component_token(raw)
         if not instance_id or instance_id in seen:
-            continue
+            return
         seen.add(instance_id)
         refs.append(instance_id)
+
+    infra = payload.get("infra")
+    components = infra.get("components") if isinstance(infra, Mapping) else None
+    if isinstance(components, list):
+        handoff_component_ids = {
+            entry.id for entry in component_entries("infra") if entry.handoff is not None
+        }
+        for row in components:
+            if not isinstance(row, Mapping) or not bool(row.get("enabled", False)):
+                continue
+            if component_type_id(row) not in handoff_component_ids:
+                continue
+            _append(component_instance_id(row))
+
+    deploy = payload.get("deploy")
+    targets = deploy.get("targets") if isinstance(deploy, Mapping) else None
+    if isinstance(targets, list):
+        for row in targets:
+            if not isinstance(row, Mapping) or not deploy_target_is_external_mk8s(row):
+                continue
+            _append(deploy_target_instance_id(row))
     return tuple(refs)
 
 
@@ -197,8 +243,15 @@ def flux_target_dir(paths: ProjectPaths, target_ref: str) -> Path:
 
 __all__ = [
     "DEPLOY_TARGET_INSTANCE_ID_FIELD",
+    "DEPLOY_TARGET_KIND_FIELD",
+    "DEPLOY_TARGET_OWNERSHIP_FIELD",
+    "EXTERNAL_MK8S_TARGET_KIND",
+    "EXTERNAL_TARGET_OWNERSHIP",
+    "MANAGED_TARGET_OWNERSHIP",
     "TARGET_REF_FIELD",
     "app_chart_target_ref",
+    "deploy_target_is_external_mk8s",
+    "deploy_target_kind",
     "deploy_target_instance_id",
     "enabled_cluster_target_refs",
     "flux_target_dir",

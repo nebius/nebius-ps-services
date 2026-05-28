@@ -1,0 +1,201 @@
+suite: qosConfiguration typed lifecycle
+templates:
+  - templates/slurm-cluster/qos-reconcile.yaml
+tests:
+  - it: renders nothing when qosConfiguration.enabled is false
+    set:
+      qosConfiguration:
+        enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: emits ServiceAccount, Role, RoleBinding, ConfigMap, and Job when enabled
+    set:
+      qosConfiguration:
+        enabled: true
+    asserts:
+      - hasDocuments:
+          count: 5
+
+  - it: renders helm hook annotations on all resources
+    set:
+      qosConfiguration:
+        enabled: true
+    asserts:
+      - equal:
+          path: metadata.annotations["helm.sh/hook"]
+          value: "post-install,post-upgrade"
+        documentSelector:
+          path: kind
+          value: ServiceAccount
+      - equal:
+          path: metadata.annotations["helm.sh/hook-weight"]
+          value: "10"
+        documentSelector:
+          path: kind
+          value: Job
+
+  - it: gives the default job enough time for pod and SlurmDBD readiness waits
+    set:
+      qosConfiguration:
+        enabled: true
+    asserts:
+      - equal:
+          path: spec.activeDeadlineSeconds
+          value: 1200
+        documentSelector:
+          path: kind
+          value: Job
+
+  - it: renders account commands with organization and description
+    set:
+      qosConfiguration:
+        enabled: true
+        accounts:
+          - name: research
+            organization: "AI Team"
+            description: "Research $(echo pwned)"
+    asserts:
+      - matchRegex:
+          path: data["reconcile.sh"]
+          pattern: 'sacctmgr -i modify account "\$name" set "\$\{args\[@\]\}"'
+        documentSelector:
+          path: kind
+          value: ConfigMap
+      - matchRegex:
+          path: data["reconcile.sh"]
+          pattern: "apply_account 'research' 'Organization=AI Team' 'Description=Research \\$\\(echo pwned\\)'"
+        documentSelector:
+          path: kind
+          value: ConfigMap
+
+  - it: converts maxWallSeconds to HH:MM:SS
+    set:
+      qosConfiguration:
+        enabled: true
+        qos:
+          - name: high
+            priority: 1000
+            maxJobs: 200
+            maxWallSeconds: 7200
+            flags: [DenyOnLimit]
+            preempt: [normal, low]
+    asserts:
+      - matchRegex:
+          path: data["reconcile.sh"]
+          pattern: "apply_qos 'high' 'Priority=1000' 'MaxJobs=200' 'MaxWall=02:00:00' 'Flags=DenyOnLimit' 'Preempt=normal,low'"
+        documentSelector:
+          path: kind
+          value: ConfigMap
+
+  - it: renders user association with DefaultQOS and Qos list
+    set:
+      qosConfiguration:
+        enabled: true
+        associations:
+          - user: alice
+            account: research
+            defaultQos: high
+            qos: [normal, high]
+    asserts:
+      - matchRegex:
+          path: data["reconcile.sh"]
+          pattern: "apply_association 'alice' 'research' 'DefaultQOS=high' 'Qos=normal,high'"
+        documentSelector:
+          path: kind
+          value: ConfigMap
+
+  - it: includes the preReconcileScript when set
+    set:
+      qosConfiguration:
+        enabled: true
+        preReconcileScript: |
+          echo custom-preflight
+    asserts:
+      - matchRegex:
+          path: data["reconcile.sh"]
+          pattern: "echo custom-preflight"
+        documentSelector:
+          path: kind
+          value: ConfigMap
+
+  - it: inherits controller filter placement when job placement is not explicit
+    set:
+      k8sNodeFilters:
+        - name: controller
+          nodeSelector:
+            slurm.nebius.ai/nodeset-name: controller
+          affinity:
+            nodeAffinity:
+              requiredDuringSchedulingIgnoredDuringExecution:
+                nodeSelectorTerms:
+                  - matchExpressions:
+                      - key: slurm.nebius.ai/nodeset-name
+                        operator: In
+                        values:
+                          - controller
+          tolerations:
+            - key: slurm.nebius.ai/nodeset-name
+              operator: Equal
+              value: controller
+              effect: NoSchedule
+      qosConfiguration:
+        enabled: true
+        job:
+          k8sNodeFilterName: controller
+    asserts:
+      - equal:
+          path: spec.template.spec.nodeSelector["slurm.nebius.ai/nodeset-name"]
+          value: controller
+        documentSelector:
+          path: kind
+          value: Job
+      - equal:
+          path: spec.template.spec.affinity.nodeAffinity.requiredDuringSchedulingIgnoredDuringExecution.nodeSelectorTerms[0].matchExpressions[0].values[0]
+          value: controller
+        documentSelector:
+          path: kind
+          value: Job
+      - contains:
+          path: spec.template.spec.tolerations
+          content:
+            key: slurm.nebius.ai/nodeset-name
+            operator: Equal
+            value: controller
+            effect: NoSchedule
+        documentSelector:
+          path: kind
+          value: Job
+
+  - it: lets explicit job tolerations override inherited filter tolerations
+    set:
+      qosConfiguration:
+        enabled: true
+        job:
+          k8sNodeFilterName: controller
+          tolerations:
+            - key: dedicated
+              operator: Equal
+              value: qos
+              effect: NoSchedule
+    asserts:
+      - equal:
+          path: spec.template.spec.tolerations
+          value:
+            - key: dedicated
+              operator: Equal
+              value: qos
+              effect: NoSchedule
+        documentSelector:
+          path: kind
+          value: Job
+
+  - it: requires qosConfiguration.image when enabled
+    set:
+      qosConfiguration:
+        enabled: true
+        image: ""
+    asserts:
+      - failedTemplate:
+          errorMessage: "qosConfiguration.image is required when qosConfiguration.enabled is true; the chart ships a default kubectl image in values.yaml."

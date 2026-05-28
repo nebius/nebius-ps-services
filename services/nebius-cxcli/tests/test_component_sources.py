@@ -52,6 +52,17 @@ def _reset_sources_state() -> None:
     reset_runtime_introspection_cache()
 
 
+def _deep_merge_mapping(base: dict, override: dict) -> dict:
+    merged = deepcopy(base)
+    for key, value in override.items():
+        existing = merged.get(key)
+        if isinstance(existing, dict) and isinstance(value, dict):
+            merged[key] = _deep_merge_mapping(existing, value)
+        else:
+            merged[key] = deepcopy(value)
+    return merged
+
+
 def setup_function() -> None:
     _reset_sources_state()
 
@@ -223,6 +234,11 @@ def _portable_chart_source(*, repo: str, chart: str, version: str = "") -> dict[
 
 def test_bundled_catalog_exposes_soperator_and_nfs_local_sources() -> None:
     sources = load_component_sources(source_profile=SourceProfile.LOCAL)
+    catalog_path = Path(__file__).parents[1] / "component_sources.yaml"
+    catalog = yaml.safe_load(catalog_path.read_text(encoding="utf-8"))
+    raw_soperator = catalog["components"]["apps"]["soperator"]
+    assert raw_soperator["wizard_profile"] == "soperator"
+    assert "wizard" not in raw_soperator
 
     nfs = next(module for module in sources.tf_modules if module.module == "nfs")
     assert nfs.local_source is not None
@@ -244,15 +260,89 @@ def test_bundled_catalog_exposes_soperator_and_nfs_local_sources() -> None:
             "auto_select_first": True,
         }
     }
-    assert nfs.wizard_fields["inputs.data_disk_enabled"]["materialize_default"] is True
+    assert nfs.wizard_fields["inputs.data_disk_enabled"]["write_default_to_config"] is True
     assert nfs.wizard_fields["inputs.data_disk_type"] == {
         "options": {
             "from": "compute_boot_disk_types",
             "auto_select_first": True,
         },
-        "materialize_default": True,
+        "write_default_to_config": True,
     }
-    assert nfs.wizard_fields["inputs.data_disk_size_gib"]["materialize_default"] is True
+    assert nfs.wizard_fields["inputs.data_disk_size_gib"]["write_default_to_config"] is True
+
+    sfs = next(module for module in sources.tf_modules if module.module == "sfs")
+    assert sfs.status is not None
+    assert sfs.status.kind == "nebius.compute.filesystem"
+    assert sfs.status.name_input == "name"
+    assert sfs.status.name_inputs == ("filesystems", "name")
+    assert sfs.wizard_fields["inputs.filesystems"] == {"prompt": False}
+    assert sfs.wizard_fields["inputs.parent_id"] == {
+        "prompt": False,
+        "type_hint": "string",
+    }
+    assert sfs.wizard_fields["inputs.type"]["sources"] == [
+        {
+            "source": "static",
+            "values": [
+                {
+                    "value": "NETWORK_SSD",
+                    "label": "NETWORK_SSD  (SSD-backed shared filesystem; recommended default)",
+                },
+                {
+                    "value": "NETWORK_HDD",
+                    "label": "NETWORK_HDD  (HDD-backed shared filesystem when available)",
+                },
+                {
+                    "value": "WEKA",
+                    "label": "WEKA  (advanced; requires nonzero compute.filesystem.size.weka quota)",
+                },
+                {
+                    "value": "VAST",
+                    "label": "VAST  (advanced; requires nonzero compute.filesystem.size.vast quota)",
+                },
+            ],
+        }
+    ]
+    assert sfs.wizard_fields["inputs.type"]["default"] == "NETWORK_SSD"
+    assert sfs.wizard_fields["inputs.type"]["write_default_to_config"] is True
+    assert sfs.wizard_fields["inputs.block_size_kib"] == {
+        "default": 4,
+        "write_default_to_config": True,
+        "type_hint": "number",
+    }
+    assert sfs.wizard_fields["inputs.mount_tag"] == {
+        "type_hint": "string",
+    }
+    assert sfs.wizard_fields["inputs.name"] == {
+        "default": "sfs",
+        "write_default_to_config": True,
+        "type_hint": "string",
+    }
+    assert sfs.wizard_fields["inputs.size_gib"] == {
+        "default": 1024,
+        "write_default_to_config": True,
+        "type_hint": "number",
+    }
+    assert sfs.wizard_fields["inputs.forbid_deletion"] == {
+        "default": False,
+        "write_default_to_config": True,
+        "type_hint": "bool",
+    }
+    assert sfs.wizard_fields["inputs.filesystems.jail.name"] == {
+        "type_hint": "string",
+    }
+    assert sfs.wizard_fields["inputs.filesystems.jail.size_gib"] == {
+        "type_hint": "number",
+    }
+    assert sfs.wizard_fields["inputs.filesystems.jail.block_size_kib"] == {
+        "type_hint": "number",
+    }
+    assert sfs.wizard_fields["inputs.filesystems.jail.mount_tag"] == {
+        "type_hint": "string",
+    }
+    assert sfs.wizard_fields["inputs.filesystems.jail.forbid_deletion"] == {
+        "type_hint": "bool",
+    }
 
     nfs_csi = next(chart for chart in sources.helm_charts if chart.name == "csi-driver-nfs")
     assert (
@@ -273,61 +363,378 @@ def test_bundled_catalog_exposes_soperator_and_nfs_local_sources() -> None:
     soperator = next(chart for chart in sources.helm_charts if chart.name == "soperator")
     assert soperator.source.path is not None
     assert soperator.source.path.endswith("helm-charts/soperator")
+    assert soperator.portable_source.version == "0.1.0"
     assert soperator.namespace == "soperator"
     assert soperator.release_name == "soperator"
     assert soperator.release_timeout == "90m"
     assert soperator.release_install_after == ()
     assert soperator.wizard_fields is not None
+    assert soperator.wizard_fields["namespace"] == {"prompt": False}
+    assert soperator.wizard_fields["release-name"] == {"prompt": False}
+    assert soperator.wizard_fields["values"] == {"prompt": False}
+    assert soperator.wizard_fields["install_mode"] == {
+        "default": "production-cluster",
+        "write_default_to_config": True,
+        "type_hint": "string",
+        "sources": [
+            {
+                "source": "static",
+                "values": [
+                    {
+                        "value": "production-cluster",
+                        "label": (
+                            "Create complete production Soperator cluster (MK8s + SFS + Soperator)"
+                        ),
+                    },
+                    {
+                        "value": "onboard-existing-cluster",
+                        "label": "Onboard existing Nebius MK8s cluster",
+                    },
+                ],
+            }
+        ],
+    }
     assert soperator.wizard_fields["profile"]["default"] == "nebius-gpu-v1"
-    assert soperator.wizard_fields["profile"]["materialize_default"] is True
+    assert soperator.wizard_fields["profile"]["write_default_to_config"] is True
     assert soperator.wizard_fields["profile"]["options"] == {"from": "soperator_nodesets_profiles"}
     assert soperator.wizard_fields["values.partitionProfile"]["default"] == "shape-default"
-    assert soperator.wizard_fields["values.partitionProfile"]["materialize_default"] is True
+    assert soperator.wizard_fields["values.partitionProfile"]["write_default_to_config"] is True
     assert soperator.wizard_fields["values.partitionProfile"]["options"] == {
         "from": "soperator_partition_profiles",
         "args": {"default": "shape-default"},
     }
+    assert soperator.wizard_fields["values.topologyProfile"]["default"] == "disabled"
+    assert soperator.wizard_fields["values.topologyProfile"]["write_default_to_config"] is True
+    assert soperator.wizard_fields["values.topologyProfile"]["options"] == {
+        "from": "soperator_topology_profiles",
+        "args": {"default": "disabled"},
+    }
+    assert soperator.wizard_fields["values.soperator-activechecks.enabled"] == {
+        "default": False,
+        "write_default_to_config": True,
+        "type_hint": "bool",
+    }
+    assert soperator.wizard_fields["values.soperator-activechecks.waitForChecks.enabled"] == {
+        "default": False,
+        "write_default_to_config": True,
+        "type_hint": "bool",
+    }
+    assert soperator.wizard_fields["values.soperator-checks.enabled"] == {
+        "default": False,
+        "write_default_to_config": True,
+        "type_hint": "bool",
+    }
+    assert soperator.wizard_fields["values.soperator-dcgm-exporter.enabled"] == {
+        "default": False,
+        "write_default_to_config": True,
+        "type_hint": "bool",
+    }
+    assert soperator.wizard_fields["values.qosConfiguration.enabled"] == {
+        "default": False,
+        "write_default_to_config": True,
+        "type_hint": "bool",
+    }
+    assert "values.rebooter.enabled" not in soperator.wizard_fields
+    assert soperator.wizard_fields["values.sssd.enabled"] == {
+        "default": False,
+        "write_default_to_config": True,
+        "type_hint": "bool",
+    }
+    assert "values.nodesets[0].sssd.enabled" not in soperator.wizard_fields
+    assert "values.slurmNodes.sssd.enabled" not in soperator.wizard_fields
+    assert soperator.wizard_fields["values.nodeGroupMapping.worker"]["type_hint"] == "list(string)"
+    assert soperator.wizard_fields["values.nodeGroupMapping.worker"]["default_from"] == {
+        "from": "soperator_node_groups",
+        "args": {"role": "worker"},
+    }
+    assert soperator.wizard_fields["values.nodeGroupMapping.controller"]["options"] == {
+        "from": "soperator_node_groups",
+        "args": {"role": "controller"},
+    }
+    assert (
+        soperator.wizard_fields["values.soperator-notifier.slack.webhookSource"]["default"]
+        == "deploy-time"
+    )
+    assert soperator.wizard_fields["values.soperator-notifier.slack.webhookSource"]["sources"] == [
+        {
+            "source": "static",
+            "values": [
+                {
+                    "value": "deploy-time",
+                    "label": "Provide webhook URL at deploy time",
+                },
+                {
+                    "value": "mysterybox",
+                    "label": "Use existing Nebius MysteryBox Secret ID",
+                },
+            ],
+        }
+    ]
+    assert (
+        soperator.wizard_fields["values.soperator-backup-config.secret.name"]["default"]
+        == "jail-backup"
+    )
     assert soperator.mk8s_gpu.install_after == (
         "cert-manager",
         "nvidia-network-operator",
         "nvidia-gpu-operator",
     )
+    assert soperator.mk8s_gpu.disable_target_validations == ()
     assert soperator.soperator_nodesets.default == "nebius-gpu-v1"
     assert set(soperator.soperator_nodesets.profiles) >= {
         "nebius-cpu-v1",
         "nebius-gpu-v1",
         "nebius-mixed-v1",
     }
+    for profile_name in ("nebius-cpu-v1", "nebius-gpu-v1", "nebius-mixed-v1"):
+        profile = soperator.soperator_nodesets.profiles[profile_name]
+        assert profile["mk8s"]["inputs"]["node_group_defaults"]["cpu"] == {
+            "platform": "cpu-d3",
+            "preset": "8vcpu-32gb",
+        }
+    cpu_profile = soperator.soperator_nodesets.profiles["nebius-cpu-v1"]
+    assert cpu_profile["mk8s"]["worker_nodesets"][0]["total_nodes_input"] == (
+        "soperator.worker_total_nodes"
+    )
+    assert cpu_profile["mk8s"]["worker_nodesets"][0]["nodes_per_group_input"] == (
+        "soperator.worker_nodes_per_group"
+    )
+    assert "srunReadyPartition" not in cpu_profile["chart"]["values"]["soperator-activechecks"]
+    assert cpu_profile["chart"]["activechecks"]["srunReadyPartition"] == "cpu"
+    assert (
+        cpu_profile["chart"]["values"]["soperator-activechecks"]["checks"]["wait-for-topology"][
+            "runAfterCreation"
+        ]
+        is False
+    )
+    activechecks_values_path = (
+        Path(__file__).resolve().parents[3]
+        / "helm-charts"
+        / "soperator-activechecks"
+        / "values.yaml"
+    )
+    activechecks_defaults = yaml.safe_load(activechecks_values_path.read_text(encoding="utf-8"))
+    cpu_activechecks_values = _deep_merge_mapping(
+        activechecks_defaults,
+        cpu_profile["chart"]["values"]["soperator-activechecks"],
+    )
+    disabled_checks = {
+        name
+        for name, check in cpu_activechecks_values["checks"].items()
+        if check.get("enabled") is False
+    }
+    missing_dependencies = {
+        name: [
+            dependency for dependency in check.get("dependsOn", []) if dependency in disabled_checks
+        ]
+        for name, check in cpu_activechecks_values["checks"].items()
+        if check.get("enabled") is not False
+    }
+    assert {name: deps for name, deps in missing_dependencies.items() if deps} == {}
     profile = soperator.soperator_nodesets.profiles["nebius-gpu-v1"]
-    assert profile["mk8s"]["use_generic_gpu_node_groups"] is True
+    assert profile["chart"]["activechecks"]["srunReadyPartition"] == "hidden"
+    assert profile["role_mapping"]["roles"]["worker"]["default_node_group_kind"] == "gpu"
+    assert (
+        profile["chart"]["values"]["soperator-activechecks"]["checks"]["wait-for-topology"][
+            "runAfterCreation"
+        ]
+        is False
+    )
+    assert (
+        profile["chart"]["values"]["soperator-activechecks"]["checks"]["ensure-healthy-nodes"][
+            "runAfterCreation"
+        ]
+        is False
+    )
+    assert profile["role_mapping"]["roles"]["controller"]["filesystem_keys"] == [
+        "jail",
+        "controller-spool",
+    ]
     assert profile["mk8s"]["worker_nodesets"][0]["max_nodes_per_group"] == 100
-    assert profile["mk8s"]["worker_nodesets"][0]["node_groups_input"] == "gpu_node_groups"
+    assert profile["mk8s"]["worker_nodesets"][0]["node_group_key_prefix"] == "worker"
+    assert profile["mk8s"]["worker_nodesets"][0]["nodeset_name"] == "worker"
     assert profile["chart"]["values"]["partitionConfiguration"]["partitions"][0]["name"] == "gpu"
+    assert profile["chart"]["values"]["partitionConfiguration"]["partitions"][0]["nodeSetRefs"] == [
+        "worker"
+    ]
+    assert profile["chart"]["topology_profiles"]["disabled"]["wizard"]["label"].startswith(
+        "Disabled"
+    )
+    topology_values = profile["chart"]["topology_profiles"]["nebius-tiered-tree-v1"]["values"]
+    assert topology_values["slurmConfig"] == {
+        "topologyPlugin": "topology/tree",
+        "topologyParam": "SwitchAsNodeRank",
+    }
+    assert (
+        topology_values["controllerManager"]["manager"]["env"]["topologyLabelPrefix"]
+        == "topology.nebius.com"
+    )
     assert "with-debug-long" in profile["chart"]["partition_profiles"]
+    qos_profile = profile["chart"]["partition_profiles"]["with-qos-preemption"]
+    qos_scheduling = qos_profile["values"]["schedulingConfig"]
+    assert qos_profile["values"].get("customSlurmConfig") is None
+    assert qos_scheduling["accountingStorageEnforce"] == ["associations", "limits", "qos"]
+    assert qos_scheduling["enforcePartLimits"] == "ANY"
+    assert qos_scheduling["preemptType"] == "preempt/qos"
+    assert qos_scheduling["preemptMode"] == "REQUEUE"
+    assert "send_user_signal" in qos_scheduling["preemptParameters"]
+    assert qos_profile["values"]["qosConfiguration"]["enabled"] is True
+    assert [
+        qos["name"] for qos in qos_profile["values"]["qosConfiguration"]["qos"]
+    ] == ["debug", "eval", "train", "data"]
+    assert [
+        partition["name"]
+        for partition in qos_profile["values"]["partitionConfiguration"]["partitions"]
+    ] == ["gpu", "debug", "eval", "train", "data"]
+    assert qos_profile["values"]["partitionConfiguration"]["partitions"][-1]["policy"][
+        "allowQos"
+    ] == ["data"]
     mixed_profile = soperator.soperator_nodesets.profiles["nebius-mixed-v1"]
     assert "Mixed CPU+GPU workers" in mixed_profile["wizard"]["label"]
     assert [worker["nodeset_name"] for worker in mixed_profile["mk8s"]["worker_nodesets"]] == [
         "worker-cpu",
         "worker-gpu",
     ]
+    assert {
+        worker["nodeset_name"]: (
+            worker["total_nodes_input"],
+            worker["nodes_per_group_input"],
+            worker["default_total_nodes"],
+            worker["default_nodes_per_group"],
+        )
+        for worker in mixed_profile["mk8s"]["worker_nodesets"]
+    } == {
+        "worker-cpu": (
+            "soperator.worker_total_nodes",
+            "soperator.worker_nodes_per_group",
+            1,
+            100,
+        ),
+        "worker-gpu": (
+            "soperator.worker_total_nodes",
+            "soperator.worker_nodes_per_group",
+            1,
+            100,
+        ),
+    }
     assert [node["name"] for node in mixed_profile["chart"]["values"]["nodesets"]] == [
         "worker-cpu",
         "worker-gpu",
     ]
     assert "with-debug-long" in mixed_profile["chart"]["partition_profiles"]
+    assert "with-qos-preemption" in mixed_profile["chart"]["partition_profiles"]
     assert "with-h100-infiniband-debug-long" in mixed_profile["chart"]["partition_profiles"]
+    assert "with-qos-preemption" in cpu_profile["chart"]["partition_profiles"]
     assert "nfs" not in profile["mk8s"]["node_groups"]
 
-    notifier = next(chart for chart in sources.helm_charts if chart.name == "soperator-notifier")
-    assert notifier.source.path is not None
-    assert notifier.source.path.endswith("helm-charts/soperator-notifier")
-    assert notifier.namespace == "soperator"
-    assert notifier.release_name == "soperator-notifier"
-    assert notifier.release_timeout == "10m"
-    assert notifier.release_install_after == ("soperator", "cert-manager")
-    assert notifier.wizard_fields["values.slack.mode"]["default"] == "existing-webhook"
-    assert notifier.defaults[0].target_path == "values.slack.mode"
-    assert notifier.defaults[0].value == "existing-webhook"
+    soperator_family = {
+        "soperator-activechecks",
+        "soperator-backup-config",
+        "soperator-checks",
+        "soperator-dcgm-exporter",
+        "soperator-notifier",
+        "k8up",
+    }
+    assert soperator_family.isdisjoint({chart.name for chart in sources.helm_charts})
+
+    soperator_defaults = {default.target_path: default.value for default in soperator.defaults}
+    assert soperator_defaults["values.soperator-activechecks.enabled"] is False
+    assert soperator_defaults["values.soperator-activechecks.waitForChecks.enabled"] is False
+    assert soperator_defaults["values.soperator-checks.enabled"] is False
+    assert soperator_defaults["values.soperator-notifier.enabled"] is False
+    assert (
+        soperator_defaults["values.soperator-notifier.slack.existingSecret"]
+        == "soperator-notifier-slack-webhook"
+    )
+    assert soperator_defaults["values.soperator-notifier.slack.webhookSource"] == "deploy-time"
+    assert soperator_defaults["values.soperator-notifier.slack.mysterybox.property"] == "url"
+    assert soperator_defaults["values.soperator-backup-config.enabled"] is False
+    assert soperator_defaults["values.soperator-backup-config.secret.name"] == "jail-backup"
+    assert soperator_defaults["values.soperator-dcgm-exporter.enabled"] is False
+
+
+def test_soperator_parent_dependencies_match_folded_child_chart_family() -> None:
+    repo_root = Path(__file__).resolve().parents[3]
+    chart_yaml = yaml.safe_load(
+        (repo_root / "helm-charts" / "soperator" / "Chart.yaml").read_text(encoding="utf-8")
+    )
+    parent_child_dependencies = {
+        dependency["name"]
+        for dependency in chart_yaml.get("dependencies", [])
+        if str(dependency.get("name", "")).startswith("soperator-")
+    }
+
+    assert parent_child_dependencies == {
+        "soperator-activechecks",
+        "soperator-backup-config",
+        "soperator-checks",
+        "soperator-dcgm-exporter",
+        "soperator-notifier",
+    }
+    dependencies_by_name = {
+        str(dependency.get("name")): dependency for dependency in chart_yaml.get("dependencies", [])
+    }
+    assert dependencies_by_name["k8up"] == {
+        "name": "k8up",
+        "version": "4.9.0",
+        "repository": "https://k8up-io.github.io/k8up",
+        "condition": "soperator-backup-config.enabled",
+    }
+    assert not (repo_root / "helm-charts" / "soperator-nfs-server").exists()
+
+
+def test_soperator_parent_chart_defaults_keep_optional_services_disabled() -> None:
+    repo_root = Path(__file__).resolve().parents[3]
+    values = yaml.safe_load(
+        (repo_root / "helm-charts" / "soperator" / "values.yaml").read_text(encoding="utf-8")
+    )
+
+    assert values["soperator-activechecks"]["enabled"] is False
+    assert values["soperator-activechecks"]["waitForChecks"]["enabled"] is False
+    assert values["soperator-checks"]["enabled"] is False
+    assert values["soperator-notifier"]["enabled"] is False
+    assert values["soperator-backup-config"]["enabled"] is False
+    assert values["soperator-dcgm-exporter"]["enabled"] is False
+    assert values["kruise"]["installOperator"] is True
+    assert values["mariadb-operator"]["installOperator"] is True
+    assert values["qosConfiguration"]["enabled"] is False
+    assert values["slurmNodes"]["sssd"]["enabled"] is False
+    assert values["rebooter"]["enabled"] is False
+    assert all(
+        (nodeset.get("sssd") or {}).get("enabled") is False
+        for nodeset in values["nodesets"]
+        if isinstance(nodeset, dict)
+    )
+
+
+def test_soperator_nodeconfigurator_rbac_covers_rebooter_runtime_access() -> None:
+    repo_root = Path(__file__).resolve().parents[3]
+    template = (
+        repo_root
+        / "helm-charts"
+        / "soperator"
+        / "templates"
+        / "nodeconfigurator"
+        / "nodeconfigurator-rbac.yaml"
+    ).read_text(encoding="utf-8")
+
+    assert "resources:\n  - pods\n  verbs:\n  - get\n  - list\n  - watch" in template
+    assert "resources:\n  - pods/eviction\n  verbs:\n  - create" in template
+
+
+def test_soperator_chart_defaults_fit_small_clusters_first() -> None:
+    repo_root = Path(__file__).resolve().parents[3]
+    values = yaml.safe_load(
+        (repo_root / "helm-charts" / "soperator" / "values.yaml").read_text(encoding="utf-8")
+    )
+
+    assert values["kruise"]["manager"]["replicas"] == 1
+    assert values["slurmConfig"]["topologyPlugin"] == ""
+    assert values["slurmConfig"]["topologyParam"] == ""
+    assert (
+        values["controllerManager"]["manager"]["env"]["topologyLabelPrefix"]
+        == "topology.kubernetes.io"
+    )
 
 
 def _kubernetes_agent_validation_enabled() -> bool:
@@ -664,7 +1071,7 @@ def test_load_component_sources_adds_builtin_mk8s_handoff(tmp_path: Path) -> Non
     assert loaded.tf_modules[0].handoff is not None
     assert loaded.tf_modules[0].handoff.cluster_id_output_name == "cluster_id"
     assert loaded.tf_modules[0].handoff.access_kind == "input"
-    assert loaded.tf_modules[0].handoff.access_source_path == "inputs.mk8s_cluster_public_endpoint"
+    assert loaded.tf_modules[0].handoff.access_source_path == "inputs.cluster.public_endpoint"
 
 
 def test_load_component_sources_rejects_public_validation_field(tmp_path: Path) -> None:
@@ -993,6 +1400,115 @@ def test_load_component_sources_merges_profile_and_explicit_wizard_override(tmp_
     }
 
 
+def test_load_component_sources_expands_app_wizard_profile(tmp_path: Path) -> None:
+    sources_file = tmp_path / "component_sources.yaml"
+    _write_catalog_file(
+        sources_file,
+        _catalog(
+            apps={
+                "soperator": {
+                    "source": _portable_chart_source(
+                        repo="https://example.invalid/charts",
+                        chart="soperator",
+                        version="0.1.0",
+                    ),
+                    "wizard_profile": "soperator",
+                }
+            }
+        ),
+    )
+
+    loaded = load_component_sources(explicit=sources_file)
+    chart = loaded.helm_charts[0]
+
+    assert chart.wizard_fields["install_mode"]["default"] == "production-cluster"
+    assert chart.wizard_fields["profile"]["options"] == {"from": "soperator_nodesets_profiles"}
+    assert chart.wizard_fields["values.partitionProfile"]["options"] == {
+        "from": "soperator_partition_profiles",
+        "args": {"default": "shape-default"},
+    }
+    assert chart.wizard_fields["values.topologyProfile"]["options"] == {
+        "from": "soperator_topology_profiles",
+        "args": {"default": "disabled"},
+    }
+    assert chart.wizard_fields["values.nodeGroupMapping.worker"]["default_from"] == {
+        "from": "soperator_node_groups",
+        "args": {"role": "worker"},
+    }
+    assert chart.wizard_fields["values.soperator-activechecks.enabled"] == {
+        "default": False,
+        "write_default_to_config": True,
+        "type_hint": "bool",
+    }
+
+
+def test_load_component_sources_rejects_legacy_materialize_default_key(
+    tmp_path: Path,
+) -> None:
+    sources_file = tmp_path / "component_sources.yaml"
+    _write_catalog_file(
+        sources_file,
+        _catalog(
+            infra={
+                "managed-postgresql": {
+                    "source": {
+                        "portable": "git::https://example.invalid/repo.git//managed-postgresql?ref=v1.0.0",
+                    },
+                    "wizard": {
+                        "inputs.network_id": {
+                            "default": "vpcnetwork-example",
+                            "materialize_default": True,
+                        }
+                    },
+                }
+            }
+        ),
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            r"components\.infra\.managed-postgresql wizard\['inputs\.network_id'\] "
+            r"uses unsupported field 'materialize_default'; use "
+            r"'write_default_to_config' instead"
+        ),
+    ):
+        load_component_sources(explicit=sources_file)
+
+
+def test_load_component_sources_rejects_non_bool_write_default_to_config(
+    tmp_path: Path,
+) -> None:
+    sources_file = tmp_path / "component_sources.yaml"
+    _write_catalog_file(
+        sources_file,
+        _catalog(
+            infra={
+                "managed-postgresql": {
+                    "source": {
+                        "portable": "git::https://example.invalid/repo.git//managed-postgresql?ref=v1.0.0",
+                    },
+                    "wizard": {
+                        "inputs.network_id": {
+                            "default": "vpcnetwork-example",
+                            "write_default_to_config": "true",
+                        }
+                    },
+                }
+            }
+        ),
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            r"components\.infra\.managed-postgresql wizard\['inputs\.network_id'\] "
+            r"write_default_to_config must be a boolean when set"
+        ),
+    ):
+        load_component_sources(explicit=sources_file)
+
+
 def test_load_component_sources_rejects_profile_name_that_does_not_match_component_id(
     tmp_path: Path,
 ) -> None:
@@ -1014,6 +1530,33 @@ def test_load_component_sources_rejects_profile_name_that_does_not_match_compone
     with pytest.raises(
         ValueError,
         match="wizard_profile must match component id 'managed-postgresql' when set",
+    ):
+        load_component_sources(explicit=sources_file)
+
+
+def test_load_component_sources_rejects_app_profile_name_that_does_not_match_component_id(
+    tmp_path: Path,
+) -> None:
+    sources_file = tmp_path / "component_sources.yaml"
+    _write_catalog_file(
+        sources_file,
+        _catalog(
+            apps={
+                "demo-app": {
+                    "source": _portable_chart_source(
+                        repo="https://example.invalid/charts",
+                        chart="demo-app",
+                        version="1.0.0",
+                    ),
+                    "wizard_profile": "soperator",
+                }
+            }
+        ),
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="wizard_profile must match component id 'demo-app' when set",
     ):
         load_component_sources(explicit=sources_file)
 
@@ -2200,224 +2743,118 @@ def test_bundled_mk8s_declares_optional_wizard_field_override() -> None:
         "-x",
         "NCCL_DMABUF_ENABLE=1",
     )
-    assert mk8s.wizard_fields == {
-        "inputs.subnet_id": {
-            "options": {
-                "from": "project_subnets",
-            }
-        },
-        "inputs.k8s_version": {
-            "options": {
-                "from": "mk8s_control_plane_versions",
-                "auto_select_first": True,
-            }
-        },
-        "inputs.cpu_nodes_platform": {
-            "options": {
-                "from": "mk8s_compatible_platforms",
-                "args": {"platform_prefix": "cpu-"},
-            }
-        },
-        "inputs.gpu_nodes_platform": {
-            "options": {
-                "from": "mk8s_compatible_platforms",
-                "args": {"platform_prefix": "gpu-"},
-            }
-        },
-        "inputs.cpu_nodes_preset": {
-            "options": {
-                "from": "compute_platform_presets",
-                "args": {"platform_path": "inputs.cpu_nodes_platform"},
-            }
-        },
-        "inputs.cpu_nodes_os": {
-            "options": {
-                "from": "mk8s_node_group_os_values",
-                "args": {"platform_path": "inputs.cpu_nodes_platform"},
-                "auto_select_first": True,
+    assert mk8s.wizard_fields["inputs.cluster"]["prompt"] is False
+    assert mk8s.wizard_fields["inputs.cluster.parent_id"] == {
+        "prompt": False,
+        "type_hint": "string",
+    }
+    assert mk8s.wizard_fields["inputs.cluster.cluster_name"] == {
+        "required": True,
+        "type_hint": "string",
+    }
+    assert mk8s.wizard_fields["inputs.cluster.network_id"]["options"] == {
+        "from": "project_networks",
+        "auto_select_first": True,
+    }
+    assert mk8s.wizard_fields["inputs.cluster.network_id"]["required"] is True
+    assert mk8s.wizard_fields["inputs.cluster.subnet_id"]["options"] == {
+        "from": "project_subnets",
+        "args": {"network_id_path": "inputs.cluster.network_id"},
+        "auto_select_first": True,
+    }
+    assert mk8s.wizard_fields["inputs.cluster.subnet_id"]["required"] is True
+    assert mk8s.wizard_fields["inputs.cluster.k8s_version"]["options"] == {
+        "from": "mk8s_control_plane_versions",
+        "auto_select_first": True,
+    }
+    assert mk8s.wizard_fields["inputs.cluster.k8s_version"]["required"] is True
+    assert mk8s.wizard_fields["inputs.cluster.public_endpoint"] == {
+        "default": True,
+        "write_default_to_config": True,
+        "type_hint": "bool",
+    }
+    assert mk8s.wizard_fields["inputs.node_group_defaults.gpu.platform"]["options"] == {
+        "from": "mk8s_compatible_platforms",
+        "args": {"platform_prefix": "gpu-"},
+    }
+    assert mk8s.wizard_fields["inputs.node_groups"]["prompt"] is False
+    assert mk8s.wizard_fields["inputs.node_groups.system.node_count"] == {
+        "default": 2,
+        "write_default_to_config": True,
+        "required": True,
+        "type_hint": "number",
+    }
+    assert mk8s.wizard_fields["inputs.node_groups.system.platform"]["options"] == {
+        "from": "mk8s_compatible_platforms",
+        "args": {"platform_prefix": "cpu-"},
+    }
+    assert mk8s.wizard_fields["inputs.node_groups.system.preset"]["options"] == {
+        "from": "compute_platform_presets",
+        "args": {"platform_path": "inputs.node_groups.system.platform"},
+    }
+    assert mk8s.wizard_fields["inputs.gpu_clusters"]["prompt"] is False
+    assert (
+        mk8s.wizard_fields["inputs.node_group_defaults.gpu.gpu_stack_source"]["default"]
+        == "nebius_image"
+    )
+    assert (
+        mk8s.wizard_fields["inputs.node_group_defaults.gpu.gpu_stack_source"]["write_default_to_config"]
+        is True
+    )
+    assert mk8s.wizard_fields["inputs.node_group_defaults.gpu.infiniband_fabric"] == {
+        "options": {
+            "from": "mk8s_infiniband_fabrics",
+            "args": {
+                "platform_path": "inputs.node_group_defaults.gpu.platform",
+                "preset_path": "inputs.node_group_defaults.gpu.preset",
             },
-            "prompt": False,
-        },
-        "inputs.gpu_nodes_preset": {
-            "options": {
-                "from": "compute_platform_presets",
-                "args": {
-                    "platform_path": "inputs.gpu_nodes_platform",
-                    "gpu_cluster_required_path": "inputs.infiniband_fabric",
-                },
-                "auto_select_single": True,
-            }
-        },
-        "inputs.gpu_stack_source": {
-            "sources": [
-                {
-                    "source": "static",
-                    "values": [
-                        {
-                            "value": "nebius_image",
-                            "label": (
-                                "nebius_image  (Nebius GPU image includes the host "
-                                "NVIDIA driver/toolkit; GPU Operator does not "
-                                "install them)"
-                            ),
-                        },
-                        {
-                            "value": "operator_managed",
-                            "label": (
-                                "operator_managed  (base OS image; GPU Operator "
-                                "installs and manages the NVIDIA driver/toolkit)"
-                            ),
-                        },
-                    ],
-                }
-            ]
-        },
-        "inputs.infiniband_fabric": {
-            "options": {
-                "from": "mk8s_infiniband_fabrics",
-                "args": {
-                    "platform_path": "inputs.gpu_nodes_platform",
-                    "preset_path": "inputs.gpu_nodes_preset",
-                },
-                "skip_prompt_if_no_choices": True,
-            }
-        },
-        "inputs.gpu_nodes_os": {
-            "options": {
-                "from": "mk8s_node_group_os_values",
-                "args": {
-                    "platform_path": "inputs.gpu_nodes_platform",
-                    "stack_preset_path": "inputs.gpu_stack_preset",
-                },
-                "auto_select_first": True,
-            },
-            "prompt": False,
-        },
-        "inputs.gpu_stack_preset": {
-            "options": {
-                "from": "mk8s_gpu_stack_presets",
-                "args": {"platform_path": "inputs.gpu_nodes_platform"},
-            },
-            "prompt": False,
-        },
-        "inputs.cpu_nodes_boot_disk_type": {
-            "options": {
-                "from": "compute_boot_disk_types",
-                "auto_select_first": True,
-            },
-        },
-        "inputs.gpu_nodes_boot_disk_type": {
-            "options": {
-                "from": "compute_boot_disk_types",
-                "auto_select_first": True,
-            },
-        },
-        "deploy.targets[].validations.mk8s_gpu.operator_readiness.enabled": {
-            "default": True,
-        },
-        "deploy.targets[].validations.mk8s_gpu.gpu_visibility.enabled": {
-            "default": True,
-        },
-        "deploy.targets[].validations.mk8s_gpu.gpu_visibility.max_nodes": {
-            "default": 3,
-        },
-        "deploy.targets[].validations.mk8s_gpu.nccl.enabled": {
-            "default": True,
-        },
-        "deploy.targets[].validations.mk8s_gpu.nccl.max_nodes": {
-            "default": 8,
-        },
-        "deploy.targets[].validations.mk8s_gpu.nccl.average_bus_bandwidth_threshold_gbps": {
-            "default": 300,
-        },
-        "deploy.targets[].validations.mk8s_gpu.health_checker.enabled": {
-            "default": False,
-        },
-        "deploy.targets[].observability.enabled": {
-            "default": False,
-        },
-        "deploy.targets[].observability.kubernetes.logs.enabled": {
-            "default": True,
-        },
-        "deploy.targets[].observability.kubernetes.logs.collect_agent_logs": {
-            "default": False,
-            "prompt": False,
-        },
-        "deploy.targets[].observability.kubernetes.logs.excluded_namespaces": {
-            "default": ["kube-system"],
-            "prompt": False,
-        },
-        "deploy.targets[].observability.kubernetes.metrics.enabled": {
-            "default": True,
-        },
-        "deploy.targets[].observability.kubernetes.metrics.collect_agent_metrics": {
-            "default": False,
-            "prompt": False,
-        },
-        "deploy.targets[].observability.kubernetes.metrics.collect_k8s_cluster_metrics": {
-            "default": True,
-        },
-        "deploy.targets[].observability.kubernetes.metrics.excluded_namespaces": {
-            "default": ["kube-system"],
-            "prompt": False,
-        },
-        "deploy.targets[].observability.kubernetes.traces.enabled": {
-            "default": True,
-        },
-        "deploy.targets[].secrets.mysterybox.enabled": {
-            "default": True,
-            "materialize_default": True,
-        },
-        "deploy.targets[].secrets.mysterybox.store_name": {
-            "default": "nebius-mysterybox-shared",
-            "prompt": False,
-        },
-        "deploy.targets[].secrets.mysterybox.api_domain": {
-            "default": "api.nebius.cloud:443",
-            "prompt": False,
-        },
-        "deploy.targets[].secrets.mysterybox.credentials_secret.name": {
-            "default": "nebius-mysterybox-shared-creds",
-            "prompt": False,
-        },
-        "deploy.targets[].secrets.mysterybox.credentials_secret.namespace": {
-            "default": "external-secrets",
-            "prompt": False,
-        },
-        "deploy.targets[].secrets.mysterybox.credentials_secret.key": {
-            "default": "credentials.json",
-            "prompt": False,
-        },
-        "deploy.targets[].secrets.mysterybox.allow_all_namespaces": {
-            "default": True,
-            "materialize_default": True,
-        },
-        "deploy.targets[].secrets.mysterybox.refresh_interval": {
-            "default": "15m",
-            "materialize_default": True,
-        },
-        "deploy.targets[].secrets.mysterybox.sync_namespaces": {
-            "default": ["default"],
-            "type_hint": "list(string)",
-            "prompt_complex": True,
-            "materialize_default": True,
-            "required": True,
-        },
-        "inputs.mk8s_cluster_overrides": {
-            "prompt": False,
-        },
-        "inputs.mk8s_cpu_node_group_overrides": {
-            "prompt": False,
-        },
-        "inputs.mk8s_gpu_node_group_overrides": {
-            "prompt": False,
-        },
-        "inputs.gpu_clusters": {
-            "prompt": False,
-        },
-        "inputs.node_groups": {
-            "prompt": False,
-        },
+            "auto_select_first": True,
+            "skip_prompt_if_no_choices": True,
+        }
+    }
+    assert mk8s.wizard_fields["inputs.soperator.worker_total_nodes"] == {
+        "default": 1,
+        "write_default_to_config": True,
+        "type_hint": "number",
+    }
+    for field in (
+        "system_node_count",
+        "controller_node_count",
+        "login_node_count",
+        "accounting_node_count",
+    ):
+        assert mk8s.wizard_fields[f"inputs.soperator.{field}"] == {
+            "default": 1,
+            "write_default_to_config": True,
+            "type_hint": "number",
+        }
+    assert "inputs.gpu_enabled" not in mk8s.wizard_fields
+    assert "inputs.gpu_node_groups" not in mk8s.wizard_fields
+    assert "inputs.mk8s_gpu_node_group_overrides" not in mk8s.wizard_fields
+    assert mk8s.wizard_fields[
+        "deploy.targets[].validations.mk8s_gpu.operator_readiness.enabled"
+    ] == {
+        "default": True,
+        "write_default_to_config": True,
+        "required": True,
+        "type_hint": "bool",
+    }
+    assert mk8s.wizard_fields["deploy.targets[].validations.mk8s_gpu.gpu_visibility.max_nodes"] == {
+        "default": 3,
+        "write_default_to_config": True,
+        "type_hint": "number",
+    }
+    assert mk8s.wizard_fields["deploy.targets[].validations.mk8s_gpu.nccl.max_nodes"] == {
+        "default": 8,
+        "write_default_to_config": True,
+        "type_hint": "number",
+    }
+    assert mk8s.wizard_fields["deploy.targets[].observability.kubernetes.logs.enabled"] == {
+        "default": True,
+    }
+    assert mk8s.wizard_fields["deploy.targets[].secrets.mysterybox.enabled"] == {
+        "default": True,
+        "write_default_to_config": True,
     }
     boot_disks = loaded.compute.boot_disk_defaults
     assert tuple(choice.value for choice in boot_disks.disk_types) == (
@@ -2629,6 +3066,8 @@ def test_bundled_cpu_only_charts_avoid_nebius_gpu_nodes_by_default() -> None:
         in grafana_dashboards["kubernetes-gpu"]["json"]
     )
     assert "DCGM_FI_DEV_XID_ERRORS" in grafana_dashboards["kubernetes-gpu"]["json"]
+    assert "Current XID Code" in grafana_dashboards["kubernetes-gpu"]["json"]
+    assert "0 * max by" not in grafana_dashboards["kubernetes-gpu"]["json"]
     assert grafana_dashboards["kubernetes-gpu"]["datasource"] == "Nebius Services"
     assert "kube_pod_info" not in grafana_dashboards["kubernetes-cluster-monitoring"]["json"]
     assert (
@@ -2741,17 +3180,17 @@ def test_bundled_vm_and_jump_hosts_use_component_scoped_wizard_profiles() -> Non
             }
         },
         "inputs.data_disk_enabled": {
-            "materialize_default": True,
+            "write_default_to_config": True,
         },
         "inputs.data_disk_type": {
             "options": {
                 "from": "compute_boot_disk_types",
                 "auto_select_first": True,
             },
-            "materialize_default": True,
+            "write_default_to_config": True,
         },
         "inputs.data_disk_size_gib": {
-            "materialize_default": True,
+            "write_default_to_config": True,
         },
         "inputs.public_ip_mode": {
             "sources": [
@@ -2893,7 +3332,7 @@ def test_bundled_vm_and_jump_hosts_use_component_scoped_wizard_profiles() -> Non
             }
         },
         "inputs.wireguard_tunnel_cidr": {
-            "materialize_default": True,
+            "write_default_to_config": True,
         },
         "inputs.boot_disk_block_size_bytes": {
             "prompt": False,
@@ -2943,7 +3382,7 @@ def test_bundled_vm_and_jump_hosts_use_component_scoped_wizard_profiles() -> Non
                 "from": "operator_public_ip_cidr",
             },
             "type_hint": "list(string)",
-            "materialize_default": True,
+            "write_default_to_config": True,
         },
         "inputs.boot_disk_block_size_bytes": {
             "prompt": False,
@@ -4268,6 +4707,140 @@ def test_validate_sources_reports_chart_contract_findings(
 
     assert any("missing Chart.yaml" in issue for issue in issues)
     assert not any("missing README.md" in warning for warning in warnings)
+
+
+def test_validate_sources_registry_filters_app_charts_to_selected_ids(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    sources_file = tmp_path / "component_sources.yaml"
+    _write_catalog_file(
+        sources_file,
+        _catalog(
+            apps={
+                "selected-app": {
+                    "source": _portable_chart_source(
+                        repo="oci://example.com/charts",
+                        chart="selected-app",
+                        version="1.2.3",
+                    ),
+                    "ui": {"enabled": True},
+                },
+                "slow-unselected-app": {
+                    "source": _portable_chart_source(
+                        repo="oci://example.com/charts",
+                        chart="slow-unselected-app",
+                        version="4.5.6",
+                    ),
+                    "ui": {"enabled": False},
+                },
+            }
+        ),
+    )
+    validated_charts: list[str] = []
+
+    def _fake_chart_validation(
+        *,
+        chart_name: str,
+        chart_repo: str,
+        chart_version: str,
+        chart_meta_cache: object | None = None,
+    ) -> tuple[str, ...]:
+        _ = chart_repo, chart_version, chart_meta_cache
+        validated_charts.append(chart_name)
+        return ()
+
+    monkeypatch.setattr(
+        "nebius_cxcli.cli._resolve_helm_chart_validation_issues",
+        _fake_chart_validation,
+    )
+    monkeypatch.setattr(
+        "nebius_cxcli.cli.chart_cli_contract_findings",
+        lambda **_kwargs: ((), ()),
+    )
+    monkeypatch.chdir(tmp_path)
+    set_component_sources_file_override(sources_file)
+    reset_component_sources_cache()
+
+    _resolved_path, issues, warnings = _validate_component_sources_registry(
+        selected_app_ids={"selected-app"},
+        include_infra=False,
+    )
+
+    assert issues == []
+    assert warnings == []
+    assert validated_charts == ["selected-app"]
+
+
+def test_validate_sources_registry_keeps_full_catalog_context_for_selected_apps(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    sources_file = tmp_path / "component_sources.yaml"
+    _write_catalog_file(
+        sources_file,
+        _catalog(
+            infra={
+                "mk8s": {
+                    "source": {
+                        "portable": "git::https://example.invalid/repo.git//mk8s?ref=v1.0.0",
+                    }
+                }
+            },
+            apps={
+                "selected-app": {
+                    "source": _portable_chart_source(
+                        repo="oci://example.com/charts",
+                        chart="selected-app",
+                        version="1.2.3",
+                    ),
+                    "input": {
+                        "values.global.clusterId": "mk8s.cluster_id",
+                    },
+                    "ui": {"enabled": True},
+                },
+                "slow-unselected-app": {
+                    "source": _portable_chart_source(
+                        repo="oci://example.com/charts",
+                        chart="slow-unselected-app",
+                        version="4.5.6",
+                    ),
+                    "ui": {"enabled": False},
+                },
+            },
+        ),
+    )
+    validated_charts: list[str] = []
+
+    def _fake_chart_validation(
+        *,
+        chart_name: str,
+        chart_repo: str,
+        chart_version: str,
+        chart_meta_cache: object | None = None,
+    ) -> tuple[str, ...]:
+        _ = chart_repo, chart_version, chart_meta_cache
+        validated_charts.append(chart_name)
+        return ()
+
+    monkeypatch.setattr(
+        "nebius_cxcli.cli._resolve_helm_chart_validation_issues",
+        _fake_chart_validation,
+    )
+    monkeypatch.setattr(
+        "nebius_cxcli.cli.chart_cli_contract_findings",
+        lambda **_kwargs: ((), ()),
+    )
+    monkeypatch.chdir(tmp_path)
+    set_component_sources_file_override(sources_file)
+    reset_component_sources_cache()
+
+    _resolved_path, issues, warnings = _validate_component_sources_registry(
+        selected_app_ids={"selected-app"},
+        include_infra=False,
+    )
+
+    assert issues == []
+    assert warnings == []
+    assert validated_charts == ["selected-app"]
 
 
 def test_validate_sources_rejects_https_git_repo_module_source_without_git_prefix(

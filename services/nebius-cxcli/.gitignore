@@ -80,3 +80,4 @@ terraform.rc
 plan.out
 crash.log
 .claude
+dashboards

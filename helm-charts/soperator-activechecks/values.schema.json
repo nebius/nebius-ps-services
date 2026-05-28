@@ -6,6 +6,13 @@
       "type": "string",
       "minLength": 1
     },
+    "hostUsers": {
+      "type": "boolean"
+    },
+    "srunReadyPartition": {
+      "type": "string",
+      "minLength": 1
+    },
     "waitForChecks": {
       "type": "object",
       "properties": {

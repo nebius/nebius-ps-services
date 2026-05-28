@@ -5,5 +5,23 @@ dependencies:
 - name: mariadb-operator
   repository: https://helm.mariadb.com/mariadb-operator
   version: 25.10.2
-digest: sha256:f0eea57830dfa5ea471eac6eef92944bea7d246b2248fe25951515d037c8c18f
-generated: "2026-05-07T04:50:46.738701-07:00"
+- name: soperator-checks
+  repository: file://../soperator-checks
+  version: 3.0.4-ps.1
+- name: soperator-activechecks
+  repository: file://../soperator-activechecks
+  version: 3.0.4-ps.1
+- name: soperator-notifier
+  repository: file://../soperator-notifier
+  version: 3.0.4-ps.1
+- name: soperator-backup-config
+  repository: file://../soperator-backup-config
+  version: 3.0.4-ps.1
+- name: k8up
+  repository: https://k8up-io.github.io/k8up
+  version: 4.9.0
+- name: soperator-dcgm-exporter
+  repository: file://../soperator-dcgm-exporter
+  version: 3.0.4-ps.1
+digest: sha256:3a95e02d86912e2f3716b0408274cde5e71dca7a550ca075b68bbb77ec2c5725
+generated: "2026-05-19T17:27:46.895949-07:00"

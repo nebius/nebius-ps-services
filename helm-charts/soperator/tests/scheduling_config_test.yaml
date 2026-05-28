@@ -1,0 +1,146 @@
+suite: schedulingConfig typed surface
+templates:
+  - templates/slurm-cluster/slurm-cluster-cr.yaml
+tests:
+  - it: renders nothing into customSlurmConfig when schedulingConfig is empty
+    set:
+      schedulingConfig: {}
+    asserts:
+      - notMatchRegex:
+          path: spec.customSlurmConfig
+          pattern: "PreemptType="
+      - notMatchRegex:
+          path: spec.customSlurmConfig
+          pattern: "JobRequeue="
+      - notMatchRegex:
+          path: spec.customSlurmConfig
+          pattern: "PriorityWeightPartition="
+      - notMatchRegex:
+          path: spec.customSlurmConfig
+          pattern: "PluginDir="
+
+  - it: emits typed preemption keys into customSlurmConfig
+    set:
+      schedulingConfig:
+        preemptType: preempt/partition_prio
+        accountingStorageEnforce:
+          - associations
+          - limits
+          - qos
+        enforcePartLimits: ANY
+        preemptMode: REQUEUE
+        preemptParameters:
+          - send_user_signal
+          - youngest_first
+        jobRequeue: 1
+    asserts:
+      - matchRegex:
+          path: spec.customSlurmConfig
+          pattern: "PreemptType=preempt/partition_prio"
+      - matchRegex:
+          path: spec.customSlurmConfig
+          pattern: "AccountingStorageEnforce=associations,limits,qos"
+      - matchRegex:
+          path: spec.customSlurmConfig
+          pattern: "EnforcePartLimits=ANY"
+      - matchRegex:
+          path: spec.customSlurmConfig
+          pattern: "PreemptMode=REQUEUE"
+      - matchRegex:
+          path: spec.customSlurmConfig
+          pattern: "PreemptParameters=send_user_signal,youngest_first"
+      - matchRegex:
+          path: spec.customSlurmConfig
+          pattern: "JobRequeue=1"
+
+  - it: emits scheduler tuning and priority weights
+    set:
+      schedulingConfig:
+        schedulerType: sched/backfill
+        schedulerParameters:
+          - sched_min_interval=2000000
+          - bf_max_job_test=2000
+        priorityType: priority/multifactor
+        priorityWeights:
+          age: 100
+          assoc: 300
+          fairshare: 200
+          partition: 1000
+          jobSize: 500
+          qos: 900
+          tres: gres/gpu=1000
+    asserts:
+      - matchRegex:
+          path: spec.customSlurmConfig
+          pattern: "SchedulerType=sched/backfill"
+      - matchRegex:
+          path: spec.customSlurmConfig
+          pattern: "SchedulerParameters=sched_min_interval=2000000,bf_max_job_test=2000"
+      - matchRegex:
+          path: spec.customSlurmConfig
+          pattern: "PriorityType=priority/multifactor"
+      - matchRegex:
+          path: spec.customSlurmConfig
+          pattern: "PriorityWeightAge=100"
+      - matchRegex:
+          path: spec.customSlurmConfig
+          pattern: "PriorityWeightAssoc=300"
+      - matchRegex:
+          path: spec.customSlurmConfig
+          pattern: "PriorityWeightPartition=1000"
+      - matchRegex:
+          path: spec.customSlurmConfig
+          pattern: "PriorityWeightJobSize=500"
+      - matchRegex:
+          path: spec.customSlurmConfig
+          pattern: "PriorityWeightFairshare=200"
+      - matchRegex:
+          path: spec.customSlurmConfig
+          pattern: "PriorityWeightQOS=900"
+      - matchRegex:
+          path: spec.customSlurmConfig
+          pattern: "PriorityWeightTRES=gres/gpu=1000"
+
+  - it: fails when a typed scheduling key collides with raw customSlurmConfig
+    set:
+      schedulingConfig:
+        accountingStorageEnforce:
+          - associations
+          - limits
+          - qos
+      customSlurmConfig: |
+        AccountingStorageEnforce=associations,limits,qos
+    asserts:
+      - failedTemplate:
+          errorMessage: "schedulingConfig.accountingStorageEnforce is set as a typed field, but customSlurmConfig also contains a raw AccountingStorageEnforce= line. Pick one source: either remove AccountingStorageEnforce= from customSlurmConfig, or unset schedulingConfig.accountingStorageEnforce."
+
+  - it: fails when typed EnforcePartLimits collides with raw customSlurmConfig
+    set:
+      schedulingConfig:
+        enforcePartLimits: ANY
+      customSlurmConfig: |
+        EnforcePartLimits=NO
+    asserts:
+      - failedTemplate:
+          errorMessage: "schedulingConfig.enforcePartLimits is set as a typed field, but customSlurmConfig also contains a raw EnforcePartLimits= line. Pick one source: either remove EnforcePartLimits= from customSlurmConfig, or unset schedulingConfig.enforcePartLimits."
+
+  - it: emits jobRequeue=0 when explicitly set to 0
+    set:
+      schedulingConfig:
+        jobRequeue: 0
+    asserts:
+      - matchRegex:
+          path: spec.customSlurmConfig
+          pattern: "JobRequeue=0"
+
+  - it: leaves customSlurmConfig untouched when schedulingConfig is absent
+    set:
+      customSlurmConfig: |
+        AccountingStorageEnforce=associations,limits,qos
+    asserts:
+      - matchRegex:
+          path: spec.customSlurmConfig
+          pattern: "AccountingStorageEnforce=associations,limits,qos"
+      - notMatchRegex:
+          path: spec.customSlurmConfig
+          pattern: "PreemptType="

@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Inject a global task-state path at Codex session start.
 
-This hook writes only a minimal task-state scaffold. It does not persist raw
-prompts, command output, stack traces, or secrets.
+This hook does not create a task-state scaffold for every session. It only
+advertises the session-scoped path and repairs permissions when a prior
+task-state file already exists.
 """
 
 from __future__ import annotations
@@ -14,32 +15,6 @@ from pathlib import Path
 import re
 import subprocess
 import sys
-
-
-STATE_TEMPLATE = """# Current Codex task state
-
-## Workspace
-
-- Root: `{root}`
-
-## Objective
-
-## Constraints
-
-## Current plan
-
-## Decisions made
-
-## Relevant files and symbols
-
-## Commands run
-
-## Test status
-
-## Risks
-
-## Next action
-"""
 
 
 def read_payload() -> dict:
@@ -64,9 +39,9 @@ def resolve_root(cwd: str) -> str:
     return os.path.abspath(root or cwd)
 
 
-def safe_segment(value: str, fallback: str) -> str:
+def safe_segment(value: str) -> str:
     safe = re.sub(r"[^A-Za-z0-9._-]+", "-", value).strip("-")
-    return safe[:80] or fallback
+    return safe[:80]
 
 
 def chmod_private(path: Path, mode: int) -> None:
@@ -76,14 +51,18 @@ def chmod_private(path: Path, mode: int) -> None:
         pass
 
 
-def state_file_for_payload(root: str, payload: dict) -> Path:
+def task_state_path_for_payload(root: str, payload: dict) -> Path | None:
     codex_home = Path(os.environ.get("CODEX_HOME", Path.home() / ".codex"))
     codex_home = codex_home.expanduser()
 
-    workspace_name = safe_segment(Path(root).name or "workspace", "workspace")
+    workspace_name = safe_segment(Path(root).name or "workspace") or "workspace"
     workspace_hash = hashlib.sha256(root.encode("utf-8")).hexdigest()[:12]
-    session_id = payload.get("session_id") or "manual"
-    session_segment = safe_segment(str(session_id), "manual")
+    session_id = payload.get("session_id")
+    if not session_id:
+        return None
+    session_segment = safe_segment(str(session_id))
+    if not session_segment:
+        return None
 
     state_dir = (
         codex_home
@@ -91,33 +70,42 @@ def state_file_for_payload(root: str, payload: dict) -> Path:
         / f"{workspace_name}-{workspace_hash}"
         / session_segment
     )
-    state_dir.mkdir(parents=True, exist_ok=True)
-    chmod_private(codex_home / "task-state", 0o700)
-    chmod_private(state_dir.parent, 0o700)
-    chmod_private(state_dir, 0o700)
 
-    state_file = state_dir / "current.md"
-    if not state_file.exists():
-        state_file.write_text(STATE_TEMPLATE.format(root=root), encoding="utf-8")
-        chmod_private(state_file, 0o600)
+    state_path = state_dir / "current.md"
+    if state_path.exists():
+        chmod_private(codex_home / "task-state", 0o700)
+        chmod_private(state_dir.parent, 0o700)
+        chmod_private(state_dir, 0o700)
+        chmod_private(state_path, 0o600)
 
-    return state_file
+    return state_path
 
 
 def main() -> int:
     payload = read_payload()
     cwd = payload.get("cwd") or os.getcwd()
     root = resolve_root(cwd)
-    state_file = state_file_for_payload(root, payload)
+    state_file = task_state_path_for_payload(root, payload)
+    if state_file is None:
+        task_state_context = """Durable task-state file: unavailable (hook payload missing session_id)
+
+No session-scoped task-state path is available for this session. Continue
+without creating a manual fallback path or repo-local state file.
+"""
+    else:
+        task_state_context = f"""Durable task-state file: `{state_file}`
+
+SessionStart only advertises this path; it does not create a scaffold file for
+every session. For complex prompts, the prompt hook creates or reuses this file
+automatically. If the file already exists, read it at the start of complex work
+when it may contain prior decisions, validation status, or next action. Use it
+instead of creating repo-local state files.
+"""
 
     context = f"""Global context management is enabled.
 
 Workspace root: `{root}`
-Durable task-state file: `{state_file}`
-
-Read this task-state file at the start of complex work when it may contain
-prior decisions, validation status, or next action. Use it instead of creating
-repo-local state files.
+{task_state_context}
 
 For non-trivial planning, implementation, debugging, refactoring, migration,
 architecture, review, testing, CI failure, or multi-file work, apply the

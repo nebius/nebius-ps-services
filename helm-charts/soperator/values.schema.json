@@ -29,6 +29,164 @@
         "pattern": "DefMemPerCPU\\s*="
       }
     },
+    "qosConfiguration": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "image": { "type": "string" },
+        "imagePullPolicy": {
+          "type": "string",
+          "enum": ["Always", "IfNotPresent", "Never"]
+        },
+        "hookWeight": { "type": "string" },
+        "job": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "backoffLimit": { "type": "integer", "minimum": 0 },
+            "activeDeadlineSeconds": { "type": "integer", "minimum": 1 },
+            "ttlSecondsAfterFinished": { "type": "integer", "minimum": 0 },
+            "resources": { "type": "object", "additionalProperties": true },
+            "nodeSelector": { "type": "object", "additionalProperties": true },
+            "tolerations": { "type": "array" },
+            "affinity": { "type": "object", "additionalProperties": true },
+            "k8sNodeFilterName": { "type": "string" }
+          }
+        },
+        "preReconcileScript": { "type": "string" },
+        "accounts": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name"],
+            "properties": {
+              "name": { "type": "string", "minLength": 1 },
+              "organization": { "type": "string" },
+              "description": { "type": "string" },
+              "parent": { "type": "string" }
+            }
+          }
+        },
+        "qos": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name"],
+            "properties": {
+              "name": { "type": "string", "minLength": 1 },
+              "priority": { "type": ["integer", "null"], "minimum": 0 },
+              "maxJobs": { "type": ["integer", "null"], "minimum": 0 },
+              "maxWallSeconds": { "type": ["integer", "null"], "minimum": 1 },
+              "maxTRES": { "type": "string" },
+              "maxTRESPerJob": { "type": "string" },
+              "flags": {
+                "type": "array",
+                "items": { "type": "string", "minLength": 1 }
+              },
+              "preempt": {
+                "type": "array",
+                "items": { "type": "string", "minLength": 1 }
+              },
+              "preemptMode": { "type": "string" }
+            }
+          }
+        },
+        "associations": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["user", "account"],
+            "properties": {
+              "user": { "type": "string", "minLength": 1 },
+              "account": { "type": "string", "minLength": 1 },
+              "defaultQos": { "type": "string" },
+              "qos": {
+                "type": "array",
+                "items": { "type": "string", "minLength": 1 }
+              },
+              "partition": { "type": "string" },
+              "fairshare": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
+    "schedulingConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "preemptType": {
+          "type": ["string", "null"],
+          "enum": [
+            null,
+            "preempt/partition_prio",
+            "preempt/qos",
+            "preempt/none"
+          ]
+        },
+        "accountingStorageEnforce": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "all",
+              "associations",
+              "limits",
+              "nojobs",
+              "nosteps",
+              "qos",
+              "safe",
+              "wckeys"
+            ]
+          }
+        },
+        "enforcePartLimits": {
+          "type": ["string", "null"],
+          "enum": [null, "ALL", "ANY", "NO"]
+        },
+        "preemptMode": {
+          "type": ["string", "null"],
+          "pattern": "^(OFF|CANCEL|REQUEUE|SUSPEND|GANG)(,(OFF|CANCEL|REQUEUE|SUSPEND|GANG))*$"
+        },
+        "preemptParameters": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "jobRequeue": {
+          "type": ["integer", "null"],
+          "enum": [null, 0, 1]
+        },
+        "schedulerType": {
+          "type": ["string", "null"],
+          "enum": [null, "sched/backfill", "sched/builtin", "sched/hold"]
+        },
+        "schedulerParameters": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "priorityType": {
+          "type": ["string", "null"],
+          "enum": [null, "priority/basic", "priority/multifactor"]
+        },
+        "priorityWeights": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "age": { "type": ["integer", "null"], "minimum": 0 },
+            "assoc": { "type": ["integer", "null"], "minimum": 0 },
+            "fairshare": { "type": ["integer", "null"], "minimum": 0 },
+            "partition": { "type": ["integer", "null"], "minimum": 0 },
+            "jobSize": { "type": ["integer", "null"], "minimum": 0 },
+            "qos": { "type": ["integer", "null"], "minimum": 0 },
+            "tres": { "type": ["string", "null"] }
+          }
+        }
+      }
+    },
     "partitionConfiguration": {
       "type": "object",
       "additionalProperties": true,
@@ -53,6 +211,9 @@
           "type": "string",
           "enum": ["default", "custom", "structured"]
         },
+        "includeFile": {
+          "type": "string"
+        },
         "rawConfig": {
           "type": "array",
           "items": { "type": "string" }
@@ -70,7 +231,50 @@
                 "type": "array",
                 "items": { "type": "string", "minLength": 1 }
               },
-              "config": { "type": "string" }
+              "config": { "type": "string" },
+              "policy": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "priorityTier": { "type": ["integer", "null"], "minimum": 0 },
+                  "preemptMode": {
+                    "type": ["string", "null"],
+                    "pattern": "^(OFF|CANCEL|REQUEUE|SUSPEND|GANG)(,(OFF|CANCEL|REQUEUE|SUSPEND|GANG))*$"
+                  },
+                  "default": { "type": ["boolean", "null"] },
+                  "hidden": { "type": ["boolean", "null"] },
+                  "state": {
+                    "type": ["string", "null"],
+                    "enum": [null, "UP", "DOWN", "DRAIN", "INACTIVE"]
+                  },
+                  "maxTime": { "type": ["string", "null"], "minLength": 1 },
+                  "defaultTime": { "type": ["string", "null"], "minLength": 1 },
+                  "defMemPerNode": { "type": ["integer", "null"], "minimum": 0 },
+                  "defMemPerCPU": { "type": ["integer", "null"], "minimum": 0 },
+                  "defMemPerGPU": { "type": ["integer", "null"], "minimum": 0 },
+                  "defCpuPerGPU": { "type": ["integer", "null"], "minimum": 0 },
+                  "overSubscribe": {
+                    "type": ["string", "null"],
+                    "pattern": "^(NO|YES|EXCLUSIVE|FORCE)(:[0-9]+)?$"
+                  },
+                  "allowAccounts": {
+                    "type": "array",
+                    "items": { "type": "string", "minLength": 1 }
+                  },
+                  "allowQos": {
+                    "type": "array",
+                    "items": { "type": "string", "minLength": 1 }
+                  },
+                  "denyAccounts": {
+                    "type": "array",
+                    "items": { "type": "string", "minLength": 1 }
+                  },
+                  "denyQos": {
+                    "type": "array",
+                    "items": { "type": "string", "minLength": 1 }
+                  }
+                }
+              }
             }
           }
         }
@@ -82,6 +286,23 @@
       "properties": {
         "installOperator": {
           "type": "boolean"
+        }
+      }
+    },
+    "certManager": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "privateKey": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "rotationPolicy": {
+              "type": "string",
+              "enum": ["Always", "Never"]
+            }
+          }
         }
       }
     },
@@ -101,6 +322,66 @@
         },
         "timeoutSeconds": { "type": "integer", "minimum": 1 },
         "pollIntervalSeconds": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "customContainer": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "env": { "type": "array" },
+        "image": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["repository", "tag", "pullPolicy"],
+          "properties": {
+            "repository": { "type": "string", "minLength": 1 },
+            "tag": { "type": "string", "minLength": 1 },
+            "pullPolicy": { "type": "string", "enum": ["Always", "IfNotPresent", "Never"] }
+          }
+        },
+        "command": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "nodeSelector": { "type": "object", "additionalProperties": true },
+        "resources": { "type": "object", "additionalProperties": true },
+        "livenessProbe": { "type": "object", "additionalProperties": true },
+        "readinessProbe": { "type": "object", "additionalProperties": true },
+        "tolerations": { "type": "array" },
+        "affinity": { "type": "object", "additionalProperties": true },
+        "priorityClassName": { "type": "string" },
+        "serviceAccountName": { "type": "string" }
+      }
+    },
+    "rebooter": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "generateRBAC": { "type": "boolean" },
+        "evictionMethod": { "type": "string", "minLength": 1 },
+        "logLevel": { "type": "string" },
+        "logFormat": { "type": "string" },
+        "env": { "type": "array" },
+        "image": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["repository", "tag", "pullPolicy"],
+          "properties": {
+            "repository": { "type": "string", "minLength": 1 },
+            "tag": { "type": "string", "minLength": 1 },
+            "pullPolicy": { "type": "string", "enum": ["Always", "IfNotPresent", "Never"] }
+          }
+        },
+        "nodeSelector": { "type": "object", "additionalProperties": true },
+        "resources": { "type": "object", "additionalProperties": true },
+        "livenessProbe": { "type": "object", "additionalProperties": true },
+        "readinessProbe": { "type": "object", "additionalProperties": true },
+        "tolerations": { "type": "array" },
+        "affinity": { "type": "object", "additionalProperties": true },
+        "priorityClassName": { "type": "string" },
+        "serviceAccountName": { "type": "string" }
       }
     },
     "slurmNodes": {

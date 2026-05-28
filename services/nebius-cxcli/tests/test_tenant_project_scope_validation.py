@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 import nebius_cxcli.cli as cli
+from nebius_cxcli.component_sources import StatusWatcher
 from nebius_cxcli.components import ComponentEntry
 from nebius_cxcli.provider_options import TenantProjectValidationResult
 
@@ -133,6 +134,51 @@ def test_seed_infra_project_scope_defaults_uses_client_project_id(
     inputs = payload["infra"]["components"][0]["inputs"]
     assert inputs["parent_id"] == "project-456"
     assert inputs["project_id"] == "project-456"
+
+
+def test_seed_infra_project_scope_defaults_uses_nested_status_parent_input(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        cli,
+        "module_variable_names",
+        lambda _source: ("cluster", "node_groups"),
+    )
+    payload = {
+        "client_info": {"nebius": {"project_id": "project-456"}},
+        "infra": {
+            "components": [
+                {
+                    "id": "mk8s",
+                    "enabled": True,
+                    "source": "../../platform-infra/modules/mk8s",
+                    "inputs": {"cluster": {"cluster_name": "cl1"}},
+                }
+            ]
+        },
+    }
+    entries = (
+        ComponentEntry(
+            id="mk8s",
+            scope="infra",
+            config_path="infra.components.mk8s",
+            description="mk8s",
+            source="../../platform-infra/modules/mk8s",
+            status=StatusWatcher(
+                kind="nebius.mk8s.cluster",
+                parent_input="cluster.parent_id",
+                name_input="cluster.cluster_name",
+            ),
+        ),
+    )
+
+    cli._seed_infra_project_scope_defaults(payload=payload, infra_entries=entries)
+
+    inputs = payload["infra"]["components"][0]["inputs"]
+    assert inputs["cluster"] == {
+        "cluster_name": "cl1",
+        "parent_id": "project-456",
+    }
 
 
 def test_seed_infra_shared_admin_ssh_public_key_copies_into_matching_inputs(

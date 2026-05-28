@@ -52,37 +52,36 @@ They should say, in effect:
 
 ```text
 Here is the workspace root.
-Here is the durable task-state file.
-Read current task state when prior context may matter.
+Here is the durable task-state path.
+Create task state automatically only for complex prompts.
+Read current task state when it already exists and prior context may matter.
 For complex work, use global-context-management.
 Keep the parent thread concise.
 ```
 
-The hooks create a session-scoped task-state path such as:
+The hooks use a session-scoped task-state path such as:
 
 ```text
 $CODEX_HOME/task-state/<workspace>-<hash>/<session-id>/current.md
 ```
 
-If no session ID is present, the hook uses the same workspace-scoped layout
-with `manual` as the session segment:
-
-```text
-$CODEX_HOME/task-state/<workspace>-<hash>/manual/current.md
-```
+If no session ID is present, task state is unavailable for that hook event. No
+manual or legacy fallback path is created.
 
 They must not persist raw prompts, broad command output, stack traces, secrets,
 customer data, private URLs, or broad environment dumps.
 
 ### Task-State Lifecycle
 
-Task-state files are useful only when Codex reads and updates them. Hooks
-create or reuse the file and inject its path into the session; they do not make
-hidden state automatically active in the model forever.
-Synthetic hook probes that pass a made-up `session_id` against a live
-`$CODEX_HOME` create scaffold-only directories named after that session ID.
-Those probe files are not active task context unless a real agent session later
-reads and updates that same path.
+Task-state files are useful only when Codex reads and updates them. The
+`SessionStart` hook injects the path without creating a missing `current.md`;
+the `UserPromptSubmit` hook creates or reuses the file automatically only when
+the prompt looks complex. Hooks do not make hidden state automatically active in
+the model forever.
+Synthetic complex-prompt hook probes that pass a made-up `session_id` against a
+live `$CODEX_HOME` can create scaffold-only directories named after that session
+ID. Those probe files are not active task context unless a real agent session
+later reads and updates that same path.
 
 Use the task-state file in three places:
 
@@ -212,7 +211,8 @@ installed.
 
 For a complex task, the intended flow is:
 
-1. Receive prompt and injected task-state path.
+1. Receive prompt and injected task-state path; for complex prompts, create or
+   reuse the task-state file automatically.
 2. Identify the objective, constraints, likely files, and validation path.
 3. Read existing task state when prior context may matter, then update it with
    the current plan.
@@ -237,8 +237,9 @@ The hook does this:
 
 Before Codex starts working:
   "Here is the repo.
-   Here is the task-state file.
-   Read it when prior context may matter.
+   Here is the task-state path.
+   Create it automatically only when the prompt looks complex.
+   Read it when it already exists and prior context may matter.
    Use the global workflow for complex work."
 
 The Skill does this:
@@ -293,6 +294,12 @@ git diff --check
 
 Runtime hook activation is surface-dependent. Treat it as unverified until a
 fresh Codex session has loaded and trusted the hooks.
+
+The local template validator uses disposable Codex homes. It verifies hook path
+calculation, lazy SessionStart behavior, private task-state permissions
+including reuse-time permission repair, prompt-leak prevention, and that an
+existing nonempty `current.md` is preserved for the agent to read rather than
+overwritten or copied into hook context.
 
 Runtime subagent activation is also surface-dependent. Treat it as unverified
 until a fresh session can actually spawn a read-only helper after an explicit

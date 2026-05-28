@@ -1,4 +1,7 @@
 checks:
+  affinity: {}
+  nodeSelector: {}
+  tolerations: []
   kubeRbacProxy:
     args:
       - --secure-listen-address=0.0.0.0:8443
@@ -51,7 +54,7 @@ checks:
       maintenanceIgnoreNodeLabels: "slurm.nebius.ai/nodeset=nfs"
     image:
       repository: cr.eu-north1.nebius.cloud/soperator/soperatorchecks
-      tag: 3.0.3
+      tag: 3.0.4
     imagePullPolicy: IfNotPresent
     resources:
       limits:

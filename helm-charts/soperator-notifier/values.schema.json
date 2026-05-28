@@ -3,6 +3,27 @@
   "type": "object",
   "additionalProperties": false,
   "properties": {
+    "enabled": {
+      "type": "boolean"
+    },
+    "global": {
+      "type": "object"
+    },
+    "soperator-activechecks": {
+      "type": "object"
+    },
+    "soperator-backup-config": {
+      "type": "object"
+    },
+    "soperator-checks": {
+      "type": "object"
+    },
+    "soperator-dcgm-exporter": {
+      "type": "object"
+    },
+    "soperator-notifier": {
+      "type": "object"
+    },
     "nameOverride": {
       "type": "string"
     },
@@ -17,6 +38,10 @@
         "mode": {
           "type": "string",
           "enum": ["existing-webhook", "oauth-webhook"]
+        },
+        "webhookSource": {
+          "type": "string",
+          "enum": ["deploy-time", "mysterybox"]
         },
         "existingSecret": {
           "type": "string",
@@ -33,6 +58,19 @@
         },
         "channelId": {
           "type": "string"
+        },
+        "mysterybox": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "secretId": {
+              "type": "string"
+            },
+            "property": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
         },
         "oauth": {
           "type": "object",

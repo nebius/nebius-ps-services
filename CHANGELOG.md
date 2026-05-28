@@ -8,6 +8,11 @@ project folder.
 
 ### Changed
 
+- Helm chart publication validation now lints charts with subcharts after
+  resolving chart dependencies and can run chart-specific strict lint and
+  smoke render combinations.
+- Removed the obsolete Soperator in-cluster NFS child chart from Soperator
+  upstream-sync and Helm publish validation surfaces.
 - Reorganized the root README and changelog around monorepo ownership: root
   docs now describe repository layout and cross-project policy, while
   project-specific release notes live in project-local changelogs. The root

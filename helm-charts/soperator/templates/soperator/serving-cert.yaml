@@ -14,5 +14,9 @@ spec:
   issuerRef:
     kind: Issuer
     name: '{{ include "soperator.fullname" . }}-selfsigned-issuer'
+  {{- with .Values.certManager.privateKey }}
+  privateKey:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
   secretName: webhook-server-cert
 {{- end }}

@@ -16,6 +16,7 @@ For skill-specific release notes, see [CHANGELOG.md](CHANGELOG.md).
 - End-to-end project alignment: `align`
 - Skill folder alignment and validation: `align-skill`
 - Disposable Ubuntu project container setup: `attach-ubuntu`
+- Commit and push the current feature branch: `commit-push`
 - Branch-safe GitHub pull request creation with safe check repair: `create-pr`
 - Public-safe local Codex runtime configuration: `config-codex`
 - GitHub Actions authoring and review: `github-workflows`
@@ -44,6 +45,8 @@ review Terraform code.
 ### Prompt Examples
 
 ```text
+$commit-push Commit all current changes on this feature branch, generate a commit message, push it to origin, and tell me whether the worktree is clean.
+
 $create-pr Create a PR for the current local work, using a new prep branch if I am still on the default branch.
 
 $create-pr Resolve conflicts for the current branch against main, open or reuse its PR, and return the PR URL.
@@ -66,12 +69,16 @@ $review-pr Review this Helm chart PR, apply the relevant sibling skills, resolve
 ```
 
 These prompts should work when the skill is installed and the local environment
-matches the task. For GitHub-backed flows such as `create-pr` and `review-pr`,
-that means:
+matches the task. For Git-backed flows such as `commit-push`, `create-pr`, and
+`review-pr`, that means:
 
 - the repository has an `origin` remote
-- `gh` is authenticated for the target repository
 - the branch state allows the requested operation
+
+For GitHub CLI backed flows such as `create-pr` and `review-pr`, that also
+means:
+
+- `gh` is authenticated for the target repository
 
 If those prerequisites are missing, the skill should stop and explain the
 blocker instead of guessing.
@@ -105,6 +112,14 @@ verification, canonical structure, and validation evidence need to be aligned.
 container, mounts the project at `/workdir`, prepares attached-container VS
 Code defaults, and helps create a disposable Ubuntu environment for local
 testing on macOS with Docker Desktop and the Dev Containers extension.
+
+### `commit-push`
+
+`commit-push` commits all current local changes on the active non-default
+feature branch and pushes that branch to `origin`. It stages the complete
+monorepo diff with `git add -A`, generates a commit message when needed, runs
+lightweight Git validation, preserves normal hooks, and stops instead of
+pulling, rebasing, merging, force-pushing, or opening a PR.
 
 ### `create-pr`
 
@@ -140,10 +155,11 @@ explicitly authorizes delegation or enables a local hook delegation policy and
 the runtime permits it, closing completed subagent threads after their results
 are consolidated when close controls are available, and reviewing risk before
 final answers. Its public skill files stay generic; local hooks, custom agent
-config, and task-state files belong under `$CODEX_HOME`. The task-state file
-is meant to be read at task start, resume, or after compaction when prior
-context may matter, then updated with concise decisions, validation status,
-and next action.
+config, and task-state files belong under `$CODEX_HOME`. The hook setup creates
+task state lazily for complex prompts instead of scaffolding every session; the
+file is meant to be read at task start, resume, or after compaction when prior
+context may matter, then updated with concise decisions, validation status, and
+next action.
 
 ### `gitignore`
 

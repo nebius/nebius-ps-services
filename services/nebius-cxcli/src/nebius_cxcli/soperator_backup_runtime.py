@@ -14,11 +14,13 @@ from typing import Any
 
 import yaml
 
-from .component_instances import component_type_id
+from .component_defaults import read_component_path
+from .component_instances import component_instance_id, component_type_id
 from .deploy_targets import app_chart_target_ref
 from .runtime_config import to_plain_data
 
-SOPERATOR_BACKUP_COMPONENT_ID = "soperator-backup-config"
+SOPERATOR_COMPONENT_ID = "soperator"
+SOPERATOR_BACKUP_VALUES_KEY = "soperator-backup-config"
 BACKUP_ACCESS_KEY_ID_ENV = "NEBIUS_CXCLI_SOPERATOR_BACKUP_AWS_ACCESS_KEY_ID"
 BACKUP_SECRET_ACCESS_KEY_ENV = "NEBIUS_CXCLI_SOPERATOR_BACKUP_AWS_SECRET_ACCESS_KEY"
 BACKUP_REPOSITORY_PASSWORD_ENV = "NEBIUS_CXCLI_SOPERATOR_BACKUP_REPOSITORY_PASSWORD"
@@ -55,8 +57,19 @@ def _active_backup_rows(payload_or_config: Any) -> tuple[dict[str, Any], ...]:
         for row in rows
         if isinstance(row, Mapping)
         and bool(row.get("enabled", False))
-        and component_type_id(row) == SOPERATOR_BACKUP_COMPONENT_ID
+        and component_type_id(row) == SOPERATOR_COMPONENT_ID
+        and read_component_path(row, f"values.{SOPERATOR_BACKUP_VALUES_KEY}.enabled") is True
     )
+
+
+def _soperator_row_target_ref(row: Mapping[str, Any]) -> str:
+    target_ref = app_chart_target_ref(row)
+    if target_ref:
+        return target_ref
+    instance_id = component_instance_id(row)
+    if instance_id and instance_id != SOPERATOR_COMPONENT_ID:
+        return instance_id
+    return ""
 
 
 def _reject_inline_secrets(values: Mapping[str, Any]) -> None:
@@ -72,9 +85,11 @@ def _reject_inline_secrets(values: Mapping[str, Any]) -> None:
     for path, value in forbidden_paths:
         if value not in (None, ""):
             raise RuntimeError(
-                "apps.charts[] soperator-backup-config values must not contain "
-                f"{path}. Store backup credentials in the runtime Kubernetes Secret "
-                "referenced by values.secret.name and values.secret.keys.*."
+                "apps.charts[] soperator values must not contain "
+                f"values.{SOPERATOR_BACKUP_VALUES_KEY}.{path.removeprefix('values.')}. "
+                "Store backup credentials in the runtime Kubernetes Secret referenced by "
+                f"values.{SOPERATOR_BACKUP_VALUES_KEY}.secret.name and "
+                f"values.{SOPERATOR_BACKUP_VALUES_KEY}.secret.keys.*."
             )
 
 
@@ -84,27 +99,29 @@ def soperator_backup_release_specs(
     target_ref: str = "",
 ) -> tuple[SoperatorBackupSpec, ...]:
     normalized_target_ref = str(target_ref or "").strip().lower()
-    specs: list[SoperatorBackupSpec] = []
+    active_rows: list[tuple[dict[str, Any], str]] = []
     for row in _active_backup_rows(payload_or_config):
-        row_target_ref = app_chart_target_ref(row)
+        row_target_ref = _soperator_row_target_ref(row)
         if normalized_target_ref and row_target_ref != normalized_target_ref:
             continue
         if not normalized_target_ref and row_target_ref:
             continue
-
+        active_rows.append((row, row_target_ref))
+    specs: list[SoperatorBackupSpec] = []
+    for row, row_target_ref in active_rows:
         values = _mapping(row.get("values"))
-        _reject_inline_secrets(values)
-        secret = _mapping(values.get("secret"))
+        backup_values = _mapping(values.get(SOPERATOR_BACKUP_VALUES_KEY))
+        _reject_inline_secrets(backup_values)
+        secret = _mapping(backup_values.get("secret"))
         secret_keys = _mapping(secret.get("keys"))
-        release_name = (
-            str(row.get("release-name") or SOPERATOR_BACKUP_COMPONENT_ID).strip()
-            or SOPERATOR_BACKUP_COMPONENT_ID
-        )
         specs.append(
             SoperatorBackupSpec(
                 target_ref=row_target_ref,
                 namespace=str(row.get("namespace") or "soperator").strip() or "soperator",
-                release_name=release_name,
+                release_name=str(
+                    backup_values.get("fullnameOverride") or "soperator-jail-backup"
+                ).strip()
+                or "soperator-jail-backup",
                 secret_name=str(secret.get("name") or "jail-backup").strip() or "jail-backup",
                 access_key_id_key=str(
                     secret_keys.get("accessKeyID") or "aws-access-key-id"
@@ -281,7 +298,7 @@ def _apply_secret(
 def _target_env_names(base_name: str, target_ref: str) -> tuple[str, ...]:
     suffix = re.sub(r"[^A-Z0-9]+", "_", str(target_ref or "").upper()).strip("_")
     if suffix:
-        return (f"{base_name}_{suffix}", base_name)
+        return (f"{base_name}_{suffix}",)
     return (base_name,)
 
 
@@ -337,19 +354,13 @@ def _secret_material(
             ).strip()
     missing = [key for key, value in values.items() if not value]
     if missing:
-        target_hint = (
-            " or target-specific variables "
-            f"{_target_env_names(BACKUP_ACCESS_KEY_ID_ENV, spec.target_ref)[0]}, "
-            f"{_target_env_names(BACKUP_SECRET_ACCESS_KEY_ENV, spec.target_ref)[0]}, and "
-            f"{_target_env_names(BACKUP_REPOSITORY_PASSWORD_ENV, spec.target_ref)[0]}"
-            if spec.target_ref
-            else ""
-        )
+        access_key_env = _target_env_names(BACKUP_ACCESS_KEY_ID_ENV, spec.target_ref)[0]
+        secret_key_env = _target_env_names(BACKUP_SECRET_ACCESS_KEY_ENV, spec.target_ref)[0]
+        password_env = _target_env_names(BACKUP_REPOSITORY_PASSWORD_ENV, spec.target_ref)[0]
         raise RuntimeError(
             f"Soperator backup Secret {spec.namespace}/{spec.secret_name} is missing. "
             "Set "
-            f"{BACKUP_ACCESS_KEY_ID_ENV}, {BACKUP_SECRET_ACCESS_KEY_ENV}, and "
-            f"{BACKUP_REPOSITORY_PASSWORD_ENV}{target_hint}; rerun interactively; or precreate "
+            f"{access_key_env}, {secret_key_env}, and {password_env}; rerun interactively; or precreate "
             f"the Kubernetes Secret with keys: {', '.join(sorted(missing))}."
         )
     return values
@@ -395,6 +406,7 @@ __all__ = [
     "BACKUP_ACCESS_KEY_ID_ENV",
     "BACKUP_REPOSITORY_PASSWORD_ENV",
     "BACKUP_SECRET_ACCESS_KEY_ENV",
+    "SOPERATOR_BACKUP_VALUES_KEY",
     "SoperatorBackupSpec",
     "ensure_soperator_backup_runtime_secrets",
     "soperator_backup_enabled_for_target",

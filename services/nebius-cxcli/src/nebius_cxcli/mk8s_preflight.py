@@ -16,6 +16,12 @@ from nebius.api.nebius.vpc.v1 import GetSubnetRequest, SubnetServiceClient
 from .component_defaults import resolve_component_defaults
 from .component_instances import component_instance_id, component_instance_label, component_type_id
 from .components import component_lookup
+from .mk8s_node_groups import (
+    cluster_name,
+    cluster_service_cidrs,
+    cluster_subnet_id,
+    gpu_node_groups,
+)
 from .runtime_config import to_plain_data
 from .sdk_auth import init_nebius_sdk
 
@@ -52,8 +58,10 @@ def _resolved_mk8s_components(payload: Mapping[str, Any]) -> tuple[_Mk8sResolved
         return ()
 
     entry_by_id = component_lookup("infra")
+    client_info = payload.get("client_info")
+    nebius_info = client_info.get("nebius") if isinstance(client_info, Mapping) else None
     default_project_id = _as_text(
-        payload.get("client_info", {}).get("nebius", {}).get("project_id")
+        nebius_info.get("project_id") if isinstance(nebius_info, Mapping) else ""
     )
     resolved_components: list[_Mk8sResolvedComponent] = []
     for item in components:
@@ -74,15 +82,45 @@ def _resolved_mk8s_components(payload: Mapping[str, Any]) -> tuple[_Mk8sResolved
         if not isinstance(inputs, Mapping):
             continue
         instance_id = component_instance_id(item)
+        cluster_inputs = inputs.get("cluster")
+        project_id = (
+            _as_text(cluster_inputs.get("parent_id"))
+            if isinstance(cluster_inputs, Mapping)
+            else ""
+        ) or default_project_id
         resolved_components.append(
             _Mk8sResolvedComponent(
                 component_label=component_instance_label(component_id, instance_id),
                 component_id=component_id,
-                project_id=_as_text(inputs.get("parent_id")) or default_project_id,
+                project_id=project_id,
                 inputs=inputs,
             )
         )
     return tuple(resolved_components)
+
+
+def _referenced_gpu_cluster_names(
+    inputs: Mapping[str, Any],
+    *,
+    configured_cluster_name: str,
+) -> tuple[str, ...]:
+    gpu_clusters = inputs.get("gpu_clusters")
+    if not isinstance(gpu_clusters, Mapping):
+        return ()
+    names: list[str] = []
+    seen: set[str] = set()
+    for group in gpu_node_groups(inputs):
+        key = group.gpu_cluster_key
+        if not key:
+            continue
+        gpu_cluster = gpu_clusters.get(key)
+        if not isinstance(gpu_cluster, Mapping):
+            continue
+        name = _as_text(gpu_cluster.get("name")) or f"{configured_cluster_name}-{key}-gpu-cluster"
+        if name and name not in seen:
+            names.append(name)
+            seen.add(name)
+    return tuple(names)
 
 
 def has_mk8s_resource_name_preflight_targets(config: Any) -> bool:
@@ -90,13 +128,9 @@ def has_mk8s_resource_name_preflight_targets(config: Any) -> bool:
     if not isinstance(payload, Mapping):
         return False
     for component in _resolved_mk8s_components(payload):
-        cluster_name = _as_text(component.inputs.get("cluster_name"))
-        if not cluster_name or not component.project_id:
+        configured_cluster_name = cluster_name(component.inputs)
+        if not configured_cluster_name or not component.project_id:
             continue
-        if bool(component.inputs.get("gpu_enabled", False)) and _as_text(
-            component.inputs.get("infiniband_fabric")
-        ):
-            return True
         return True
     return False
 
@@ -106,7 +140,7 @@ def _service_cidr_prefix_lengths(raw_value: Any) -> tuple[int, ...]:
         return ()
     if not isinstance(raw_value, (list, tuple)):
         raise RuntimeError(
-            "inputs.kube_network_service_cidrs must be a list of CIDR "
+            "inputs.cluster.kube_network.service_cidrs must be a list of CIDR "
             'strings or prefix-length strings such as ["/20"].'
         )
 
@@ -114,7 +148,9 @@ def _service_cidr_prefix_lengths(raw_value: Any) -> tuple[int, ...]:
     for item in raw_value:
         text = _as_text(item)
         if not text:
-            raise RuntimeError("inputs.kube_network_service_cidrs cannot contain empty values.")
+            raise RuntimeError(
+                "inputs.cluster.kube_network.service_cidrs cannot contain empty values."
+            )
         try:
             if text.startswith("/"):
                 prefix = int(text[1:])
@@ -122,13 +158,14 @@ def _service_cidr_prefix_lengths(raw_value: Any) -> tuple[int, ...]:
                 prefix = ipaddress.ip_network(text, strict=False).prefixlen
         except Exception as exc:
             raise RuntimeError(
-                f"inputs.kube_network_service_cidrs contains an invalid value: {text!r}"
+                f"inputs.cluster.kube_network.service_cidrs contains an invalid value: {text!r}"
             ) from exc
         prefixes.append(prefix)
 
     if len(prefixes) != 1:
         raise RuntimeError(
-            "inputs.kube_network_service_cidrs must contain exactly one CIDR or prefix value."
+            "inputs.cluster.kube_network.service_cidrs must contain exactly one CIDR or "
+            "prefix value."
         )
     return tuple(prefixes)
 
@@ -155,12 +192,12 @@ def validate_mk8s_network_preflight(config: Any) -> None:
     try:
         for component in _resolved_mk8s_components(payload):
             inputs = component.inputs
-            subnet_id = _as_text(inputs.get("subnet_id"))
+            subnet_id = cluster_subnet_id(inputs)
             if not subnet_id:
                 continue
 
-            raw_service_cidrs = inputs.get("kube_network_service_cidrs", ["/16"])
-            service_prefixes = _service_cidr_prefix_lengths(raw_service_cidrs)
+            service_cidrs = list(cluster_service_cidrs(inputs)) or ["/16"]
+            service_prefixes = _service_cidr_prefix_lengths(service_cidrs)
             if not service_prefixes:
                 continue
 
@@ -184,8 +221,9 @@ def validate_mk8s_network_preflight(config: Any) -> None:
             if service_prefix <= pool_prefix:
                 raise RuntimeError(
                     "MK8s network preflight failed: "
-                    f"component '{component.component_label}' inputs.kube_network_service_cidrs="
-                    f"{list(raw_service_cidrs)!r} "
+                    f"component '{component.component_label}' "
+                    "inputs.cluster.kube_network.service_cidrs="
+                    f"{service_cidrs!r} "
                     f"is too large for subnet {subnet_id} pool {pool_cidr}. "
                     "Nebius reserves Kubernetes service CIDRs from the same subnet pool, so this "
                     "single-pool subnet can stall cluster provisioning before any node groups are created. "
@@ -214,8 +252,8 @@ def validate_mk8s_resource_name_preflight(
     try:
         for component in _resolved_mk8s_components(payload):
             project_id = component.project_id
-            cluster_name = _as_text(component.inputs.get("cluster_name"))
-            if not project_id or not cluster_name:
+            configured_cluster_name = cluster_name(component.inputs)
+            if not project_id or not configured_cluster_name:
                 continue
 
             sdk = sdk_by_project.get(project_id)
@@ -228,10 +266,10 @@ def validate_mk8s_resource_name_preflight(
             mk8s_client = ClusterServiceClient(sdk)
             gpu_client = GpuClusterServiceClient(sdk)
 
-            if cluster_name not in managed_mk8s:
+            if configured_cluster_name not in managed_mk8s:
                 try:
                     mk8s_client.get_by_name(
-                        GetByNameRequest(parent_id=project_id, name=cluster_name)
+                        GetByNameRequest(parent_id=project_id, name=configured_cluster_name)
                     ).wait()
                 except Exception as exc:
                     if not _is_not_found_error(exc):
@@ -240,36 +278,34 @@ def validate_mk8s_resource_name_preflight(
                     raise RuntimeError(
                         "MK8s resource-name preflight failed: "
                         f"component '{component.component_label}' resolves cluster name "
-                        f"'{cluster_name}' in project {project_id}, but a live Nebius MK8s cluster "
+                        f"'{configured_cluster_name}' in project {project_id}, but a live Nebius MK8s cluster "
                         "with that name already exists and is not tracked in the current Terraform state. "
                         "If this is leftover from an earlier failed run, delete the live cluster and retry. "
-                        "Otherwise import it into Terraform state or change inputs.cluster_name and rerender."
+                        "Otherwise import it into Terraform state or change inputs.cluster.cluster_name and rerender."
                     )
 
-            gpu_cluster_name = (
-                f"{cluster_name}-gpu-cluster"
-                if bool(component.inputs.get("gpu_enabled", False))
-                and _as_text(component.inputs.get("infiniband_fabric"))
-                else ""
-            )
-            if not gpu_cluster_name or gpu_cluster_name in managed_gpu:
-                continue
-            try:
-                gpu_client.get_by_name(
-                    GetByNameRequest(parent_id=project_id, name=gpu_cluster_name)
-                ).wait()
-            except Exception as exc:
-                if not _is_not_found_error(exc):
-                    raise
-            else:
-                raise RuntimeError(
-                    "MK8s resource-name preflight failed: "
-                    f"component '{component.component_label}' resolves GPU cluster name "
-                    f"'{gpu_cluster_name}' in project {project_id}, but a live Nebius GPU cluster "
-                    "with that name already exists and is not tracked in the current Terraform state. "
-                    "If this is leftover from an earlier failed run, delete the live GPU cluster and retry. "
-                    "Otherwise import it into Terraform state or change inputs.cluster_name and rerender."
-                )
+            for gpu_cluster_name in _referenced_gpu_cluster_names(
+                component.inputs,
+                configured_cluster_name=configured_cluster_name,
+            ):
+                if not gpu_cluster_name or gpu_cluster_name in managed_gpu:
+                    continue
+                try:
+                    gpu_client.get_by_name(
+                        GetByNameRequest(parent_id=project_id, name=gpu_cluster_name)
+                    ).wait()
+                except Exception as exc:
+                    if not _is_not_found_error(exc):
+                        raise
+                else:
+                    raise RuntimeError(
+                        "MK8s resource-name preflight failed: "
+                        f"component '{component.component_label}' resolves GPU cluster name "
+                        f"'{gpu_cluster_name}' in project {project_id}, but a live Nebius GPU cluster "
+                        "with that name already exists and is not tracked in the current Terraform state. "
+                        "If this is leftover from an earlier failed run, delete the live GPU cluster and retry. "
+                        "Otherwise import it into Terraform state or change inputs.gpu_clusters and rerender."
+                    )
     finally:
         for sdk in sdk_by_project.values():
             with suppress(Exception):

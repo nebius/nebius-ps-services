@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import json
 import re
+import shutil
 import subprocess
 import tempfile
 from collections.abc import Mapping
@@ -67,6 +68,8 @@ _CLUSTER_SCOPED_RENDER_KINDS = {
     ("storage.k8s.io", "StorageClass"),
     ("storage.k8s.io", "VolumeAttachment"),
 }
+_CERT_MANAGER_CERTIFICATE_API_VERSION = "cert-manager.io/v1"
+_CERT_MANAGER_PRIVATE_KEY_ROTATION_POLICY = "Always"
 
 
 def _ensure_parent(path: Path) -> None:
@@ -116,11 +119,103 @@ def _local_chart_doc_needs_namespace(doc: dict[str, Any]) -> bool:
     return (_api_group(doc.get("apiVersion")), kind) not in _CLUSTER_SCOPED_RENDER_KINDS
 
 
+def _local_chart_doc_is_helm_hook(doc: dict[str, Any]) -> bool:
+    metadata = doc.get("metadata")
+    annotations = metadata.get("annotations") if isinstance(metadata, Mapping) else None
+    if not isinstance(annotations, Mapping):
+        return False
+    include_static = str(
+        annotations.get("nebius-cxcli.nebius.ai/include-local-render", "") or ""
+    ).strip()
+    if include_static.lower() in {"1", "true", "yes"}:
+        return False
+    return bool(str(annotations.get("helm.sh/hook", "") or "").strip())
+
+
+def _make_cert_manager_certificate_rotation_policy_explicit(doc: dict[str, Any]) -> None:
+    if (
+        doc.get("apiVersion") != _CERT_MANAGER_CERTIFICATE_API_VERSION
+        or doc.get("kind") != "Certificate"
+    ):
+        return
+    spec = doc.setdefault("spec", {})
+    if not isinstance(spec, dict):
+        return
+    private_key = spec.get("privateKey")
+    if private_key is None:
+        private_key = {}
+        spec["privateKey"] = private_key
+    if not isinstance(private_key, dict):
+        return
+    if not str(private_key.get("rotationPolicy") or "").strip():
+        private_key["rotationPolicy"] = _CERT_MANAGER_PRIVATE_KEY_ROTATION_POLICY
+
+
+def _cert_manager_certificate_rotation_policy_post_render_patch(
+    *,
+    name: str,
+    namespace: str,
+    rotation_policy: str = _CERT_MANAGER_PRIVATE_KEY_ROTATION_POLICY,
+) -> dict[str, Any]:
+    return {
+        "target": {
+            "group": "cert-manager.io",
+            "version": "v1",
+            "kind": "Certificate",
+            "name": name,
+            "namespace": namespace,
+        },
+        "patch": yaml.safe_dump(
+            {
+                "apiVersion": _CERT_MANAGER_CERTIFICATE_API_VERSION,
+                "kind": "Certificate",
+                "metadata": {"name": name, "namespace": namespace},
+                "spec": {
+                    "privateKey": {
+                        "rotationPolicy": rotation_policy,
+                    }
+                },
+            },
+            sort_keys=False,
+        ),
+    }
+
+
+def _soperator_certificate_rotation_policy_post_render_patches(
+    *,
+    release_name: str,
+    namespace: str,
+    values: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    cert_manager_values = values.get("certManager")
+    private_key_values = (
+        cert_manager_values.get("privateKey") if isinstance(cert_manager_values, Mapping) else None
+    )
+    rotation_policy = ""
+    if isinstance(private_key_values, Mapping):
+        rotation_policy = str(private_key_values.get("rotationPolicy") or "").strip()
+    if not rotation_policy:
+        rotation_policy = _CERT_MANAGER_PRIVATE_KEY_ROTATION_POLICY
+    return [
+        _cert_manager_certificate_rotation_policy_post_render_patch(
+            name=f"{release_name}-serving-cert",
+            namespace=namespace,
+            rotation_policy=rotation_policy,
+        ),
+        _cert_manager_certificate_rotation_policy_post_render_patch(
+            name=f"{release_name}-mariadb-operator-webhook-cert",
+            namespace=namespace,
+        ),
+    ]
+
+
 def _inject_local_chart_namespace(rendered: str, *, namespace: str) -> str:
-    docs = [doc for doc in yaml.safe_load_all(rendered) if isinstance(doc, dict)]
+    rendered_docs = [doc for doc in yaml.safe_load_all(rendered) if isinstance(doc, dict)]
+    docs = [doc for doc in rendered_docs if not _local_chart_doc_is_helm_hook(doc)]
     if not docs:
-        return rendered
+        return ""
     for doc in docs:
+        _make_cert_manager_certificate_rotation_policy_explicit(doc)
         if not _local_chart_doc_needs_namespace(doc):
             continue
         metadata = doc.setdefault("metadata", {})
@@ -299,6 +394,17 @@ def _soperator_nfs_instance_id(
     return nfs_instance_id_for_target(payload, target_ref=target_ref)
 
 
+def _object_storage_instance_id(payload: Mapping[str, Any], *, target_ref: str) -> str:
+    instance_ids = _enabled_infra_instance_ids(payload, "object-storage")
+    if not instance_ids:
+        return ""
+    if target_ref and target_ref in instance_ids:
+        return target_ref
+    if len(instance_ids) == 1:
+        return instance_ids[0]
+    return ""
+
+
 def _component_output_or_missing(
     resolved_component_outputs: Mapping[str, Any],
     *,
@@ -437,6 +543,57 @@ def _materialize_nfs_csi_storage_class_values(
             storage_class["mountOptions"] = normalized_mount_options
 
 
+def _materialize_soperator_backup_values(
+    *,
+    payload: Mapping[str, Any],
+    chart_node: dict[str, Any],
+    target_ref: str,
+    resolved_component_outputs: Mapping[str, Any],
+) -> None:
+    values = _nested_mapping(chart_node, "values")
+    backup_config = values.get("soperator-backup-config")
+    if not isinstance(backup_config, dict) or backup_config.get("enabled") is not True:
+        return
+
+    bucket = _nested_mapping(backup_config, "bucket")
+    existing_name = str(bucket.get("name", "") or "").strip()
+    existing_endpoint = str(bucket.get("endpoint", "") or "").strip()
+    if existing_name and existing_endpoint:
+        return
+
+    object_storage_instance_id = _object_storage_instance_id(payload, target_ref=target_ref)
+    if not object_storage_instance_id:
+        raise ValueError(
+            "apps chart 'soperator' values.soperator-backup-config.enabled requires one enabled "
+            "infra:object-storage component, or explicit values.soperator-backup-config.bucket.*"
+        )
+
+    bucket_name = existing_name or _component_output_or_missing(
+        resolved_component_outputs,
+        instance_id=object_storage_instance_id,
+        output_name="bucket_name",
+    )
+    bucket_endpoint = existing_endpoint or _component_output_or_missing(
+        resolved_component_outputs,
+        instance_id=object_storage_instance_id,
+        output_name="bucket_endpoint",
+    )
+    missing: list[str] = []
+    if bucket_name is _UNRESOLVED:
+        missing.append(component_output_ref(object_storage_instance_id, "bucket_name"))
+    if bucket_endpoint is _UNRESOLVED:
+        missing.append(component_output_ref(object_storage_instance_id, "bucket_endpoint"))
+    if missing:
+        raise ValueError(
+            "apps chart 'soperator' values.soperator-backup-config.enabled requires "
+            f"Terraform-derived output(s) {', '.join(missing)}. Run `deploy`, or rerun `render` "
+            "after Terraform state exists."
+        )
+
+    bucket.setdefault("name", bucket_name)
+    bucket.setdefault("endpoint", bucket_endpoint)
+
+
 def _configured_app_release_specs(
     config: Any,
     *,
@@ -549,6 +706,12 @@ def _configured_app_release_specs(
 
                 if entry_id == "soperator":
                     _materialize_soperator_nfs_values(
+                        payload=payload,
+                        chart_node=chart_node,
+                        target_ref=target_ref,
+                        resolved_component_outputs=resolved_component_outputs,
+                    )
+                    _materialize_soperator_backup_values(
                         payload=payload,
                         chart_node=chart_node,
                         target_ref=target_ref,
@@ -673,7 +836,8 @@ def _configured_app_release_specs(
         target_ref = str(release.get("target_ref", "")).strip()
         dependency_ids = tuple(
             dict.fromkeys(
-                tuple(release.get("install_after") or ()) + tuple(dependency_map.get(entry_id, ()))
+                tuple(release.get("install_after") or ())
+                + tuple(dependency_map.get(entry_id, ()))
             )
         )
         depends_on: list[dict[str, str]] = []
@@ -687,7 +851,16 @@ def _configured_app_release_specs(
                 )
         if depends_on:
             release["depends_on"] = depends_on
-        patches = post_render_patch_map.get((target_ref, entry_id))
+        patches = list(release.get("post_render_patches") or [])
+        if entry_id == "soperator":
+            patches.extend(
+                _soperator_certificate_rotation_policy_post_render_patches(
+                    release_name=str(release["release_name"]),
+                    namespace=str(release["namespace"]),
+                    values=release["values"] if isinstance(release.get("values"), Mapping) else {},
+                )
+            )
+        patches.extend(post_render_patch_map.get((target_ref, entry_id)) or ())
         if patches:
             release["post_render_patches"] = [dict(item) for item in patches]
     return specs
@@ -1015,27 +1188,30 @@ def _render_local_helm_chart(
     chart_path: str,
     values: dict[str, Any],
 ) -> str:
-    with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".yaml") as values_file:
-        yaml.safe_dump(values, values_file, sort_keys=False)
-        values_file.flush()
-        command = [
-            "helm",
-            "template",
-            release_name,
-            chart_path,
-            "--namespace",
-            namespace,
-            "--include-crds",
-            "--values",
-            values_file.name,
-        ]
-        result = subprocess.run(
-            command,
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=180,
-        )
+    with tempfile.TemporaryDirectory(prefix="nebius-cxcli-helm-chart-") as chart_staging_dir:
+        render_chart_path = _stage_local_helm_chart(chart_path, Path(chart_staging_dir))
+        _build_local_helm_chart_dependencies(render_chart_path)
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".yaml") as values_file:
+            yaml.safe_dump(values, values_file, sort_keys=False)
+            values_file.flush()
+            command = [
+                "helm",
+                "template",
+                release_name,
+                render_chart_path,
+                "--namespace",
+                namespace,
+                "--include-crds",
+                "--values",
+                values_file.name,
+            ]
+            result = subprocess.run(
+                command,
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=180,
+            )
     if result.returncode != 0:
         stderr = result.stderr.strip() or result.stdout.strip()
         raise ValueError(
@@ -1046,6 +1222,124 @@ def _render_local_helm_chart(
     if not rendered:
         raise ValueError(f"local Helm chart render produced no manifests for {chart_path}")
     return _inject_local_chart_namespace(rendered, namespace=namespace)
+
+
+def _local_chart_metadata(chart_path: str | Path) -> dict[str, Any]:
+    chart_dir = Path(chart_path)
+    chart_file = chart_dir / "Chart.yaml"
+    if not chart_file.exists():
+        return {}
+    try:
+        chart = yaml.safe_load(chart_file.read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError) as exc:
+        raise ValueError(f"unable to read local Helm chart metadata for {chart_path}") from exc
+    return dict(chart) if isinstance(chart, Mapping) else {}
+
+
+def _local_chart_dependency_metadata(chart_dir: Path) -> list[Mapping[str, Any]]:
+    lock_file = chart_dir / "Chart.lock"
+    if lock_file.exists():
+        try:
+            lock = yaml.safe_load(lock_file.read_text(encoding="utf-8"))
+        except (OSError, yaml.YAMLError) as exc:
+            raise ValueError(f"unable to read local Helm chart lock for {chart_dir}") from exc
+        dependencies = lock.get("dependencies") if isinstance(lock, Mapping) else None
+    else:
+        dependencies = _local_chart_metadata(chart_dir).get("dependencies")
+    if not isinstance(dependencies, list):
+        return []
+    return [item for item in dependencies if isinstance(item, Mapping)]
+
+
+def _local_chart_dependency_is_present(
+    charts_dir: Path,
+    *,
+    name: str,
+    version: str,
+) -> bool:
+    if not name or not version:
+        return False
+    if (charts_dir / f"{name}-{version}.tgz").is_file():
+        return True
+    unpacked_dir = charts_dir / name
+    if not unpacked_dir.is_dir():
+        return False
+    metadata = _local_chart_metadata(unpacked_dir)
+    return metadata.get("name") == name and str(metadata.get("version") or "") == version
+
+
+def _local_chart_dependencies_are_packaged(chart_dir: Path) -> bool:
+    dependencies = _local_chart_dependency_metadata(chart_dir)
+    if not dependencies:
+        return True
+    if any(
+        str(dependency.get("repository") or "").strip().startswith("file://")
+        for dependency in dependencies
+    ):
+        return False
+    charts_dir = chart_dir / "charts"
+    return all(
+        _local_chart_dependency_is_present(
+            charts_dir,
+            name=str(dependency.get("name") or "").strip(),
+            version=str(dependency.get("version") or "").strip(),
+        )
+        for dependency in dependencies
+    )
+
+
+def _stage_local_helm_chart(chart_path: str, staging_root: Path) -> str:
+    source_chart_dir = Path(chart_path).expanduser().resolve()
+    staged_chart_dir = staging_root / source_chart_dir.name
+    shutil.copytree(source_chart_dir, staged_chart_dir, symlinks=False)
+
+    staging_root = staging_root.resolve()
+    for dependency in _local_chart_metadata(source_chart_dir).get("dependencies") or ():
+        if not isinstance(dependency, Mapping):
+            continue
+        repository = str(dependency.get("repository") or "").strip()
+        if not repository.startswith("file://"):
+            continue
+        relative_dependency_path = repository.removeprefix("file://")
+        dependency_source = (source_chart_dir / relative_dependency_path).resolve()
+        dependency_target = (staged_chart_dir / relative_dependency_path).resolve()
+        try:
+            dependency_target.relative_to(staging_root)
+        except ValueError as exc:
+            raise ValueError(
+                f"local Helm chart dependency path escapes staging directory: {repository}"
+            ) from exc
+        if not dependency_source.is_dir():
+            raise ValueError(f"local Helm chart dependency not found: {dependency_source}")
+        if dependency_target.exists():
+            continue
+        dependency_target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(dependency_source, dependency_target, symlinks=False)
+    return str(staged_chart_dir)
+
+
+def _build_local_helm_chart_dependencies(chart_path: str) -> None:
+    chart_dir = Path(chart_path)
+    chart = _local_chart_metadata(chart_dir)
+    if not chart.get("dependencies"):
+        return
+    if _local_chart_dependencies_are_packaged(chart_dir):
+        return
+
+    command = ["helm", "dependency", "build", "--skip-refresh", str(chart_dir)]
+    result = subprocess.run(
+        command,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=180,
+    )
+    if result.returncode != 0:
+        stderr = result.stderr.strip() or result.stdout.strip()
+        raise ValueError(
+            "local Helm chart dependency build failed for "
+            f"{chart_path}: {stderr or 'helm exited without diagnostic output'}"
+        )
 
 
 def _render_post_flux_mysterybox_eso_resources(

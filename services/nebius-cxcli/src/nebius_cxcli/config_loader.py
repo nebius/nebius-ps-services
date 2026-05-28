@@ -8,13 +8,18 @@ from typing import Any
 import yaml
 
 from .config_model import is_dynamic_payload, to_runtime_payload
-from .deploy_targets import materialize_app_chart_target_refs, strip_app_chart_target_refs
+from .deploy_targets import (
+    TARGET_REF_FIELD,
+    materialize_app_chart_target_refs,
+    strip_app_chart_target_refs,
+)
 from .mk8s_gpu import (
     ensure_mk8s_gpu_app_rows,
     materialize_mk8s_gpu_app_values,
-    normalize_inactive_mk8s_gpu_inputs,
     normalize_mk8s_gpu_project_validation_settings,
+    prune_inactive_mk8s_gpu_app_rows,
 )
+from .mk8s_node_group_defaults import prune_inactive_mk8s_node_group_defaults
 from .mysterybox_eso import (
     ensure_mysterybox_eso_app_rows,
     normalize_mysterybox_eso_project_settings,
@@ -29,7 +34,7 @@ from .observability import (
 )
 from .runtime_config import AttrDict, to_plain_data, wrap_runtime_config
 from .runtime_validation import validate_dynamic_payload_structure, validate_runtime_payload
-from .soperator_companions import materialize_soperator_companion_app_values
+from .soperator_child_charts import materialize_soperator_child_chart_values
 from .ssh_public_keys import normalize_runtime_ssh_public_key_inputs
 
 
@@ -39,17 +44,33 @@ def normalize_runtime_config_payload(
     base_dir: Path | None = None,
 ) -> bool:
     changed = normalize_runtime_ssh_public_key_inputs(payload, base_dir=base_dir)
+    apps_node = payload.get("apps")
+    chart_rows = apps_node.get("charts", []) if isinstance(apps_node, dict) else []
+    preexisting_target_ref_row_ids = {
+        id(row) for row in chart_rows if isinstance(row, dict) and TARGET_REF_FIELD in row
+    }
     if materialize_app_chart_target_refs(payload):
         changed = True
-    if normalize_inactive_mk8s_gpu_inputs(payload):
-        changed = True
+    if any(
+        isinstance(row, dict) and row.get("id") == "soperator" and row.get("enabled") is True
+        for row in chart_rows
+    ):
+        from .cli import _materialize_soperator_component_defaults
+
+        if _materialize_soperator_component_defaults(payload):
+            changed = True
     if normalize_mk8s_gpu_project_validation_settings(payload):
+        changed = True
+    if prune_inactive_mk8s_gpu_app_rows(
+        payload,
+        preexisting_target_ref_row_ids=preexisting_target_ref_row_ids,
+    ):
         changed = True
     if ensure_mk8s_gpu_app_rows(payload):
         changed = True
     if materialize_mk8s_gpu_app_values(payload):
         changed = True
-    if materialize_soperator_companion_app_values(payload):
+    if materialize_soperator_child_chart_values(payload):
         changed = True
     if ensure_nfs_csi_app_rows(payload):
         changed = True
@@ -58,6 +79,8 @@ def normalize_runtime_config_payload(
     if ensure_observability_app_rows(payload):
         changed = True
     if materialize_observability_infra_values(payload):
+        changed = True
+    if prune_inactive_mk8s_node_group_defaults(payload):
         changed = True
     if strip_observability_generated_app_values(payload):
         changed = True

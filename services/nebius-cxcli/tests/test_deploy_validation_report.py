@@ -204,6 +204,11 @@ def test_build_deploy_validation_report_formats_socket_mode_nccl_summary(tmp_pat
         f"  Combined report: {tmp_path / DEPLOY_REPORT_FILENAME}",
         f"  JSON detail: {tmp_path / 'nccl-test-report.json'}",
     ]
+    assert (
+        "- Summary: Launcher phase Succeeded; Socket/TCPIP average bus bandwidth "
+        "**41.7** Gbps across 2 worker node(s); RDMA threshold not enforced for this run."
+        in validation_section_lines(report)
+    )
 
 
 def test_build_deploy_validation_report_formats_skipped_gpu_workload_summary(
@@ -289,6 +294,12 @@ def test_build_deploy_validation_report_formats_rdma_dmabuf_summary(tmp_path: Pa
         f"  Combined report: {tmp_path / DEPLOY_REPORT_FILENAME}",
         f"  JSON detail: {tmp_path / 'nccl-test-report.json'}",
     ]
+    assert (
+        "- Summary: Launcher phase Succeeded; RDMA verbs (IB/RoCE) average bus bandwidth "
+        "**781.2** Gbps vs threshold 300.0 Gbps across 1 worker node(s); "
+        "NCCL_DMABUF_ENABLE=1 (explicit MPI environment; GPUDirect mode dma-buf)."
+        in validation_section_lines(report)
+    )
 
 
 def test_build_deploy_validation_report_prefers_target_scoped_spec_name(

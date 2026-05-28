@@ -33,7 +33,9 @@ These requirements apply to direct consumers of the modules in this repo:
   provider write-only payload fields
 - Nebius provider source:
   `terraform-provider.storage.eu-north1.nebius.cloud/nebius/nebius`
-- Nebius provider version: `>= 0.5.55, < 0.6.0`
+- Nebius provider version: `>= 0.5.55, < 0.6.0` for most modules; `vm`
+  requires `>= 0.5.217, < 0.6.0` so preemptible instances can omit the
+  deprecated priority field
 - `managed-postgresql` also requires `hashicorp/random >= 3.6.0, < 4.0.0`
 - The calling Terraform root owns backend configuration, provider configuration,
   credentials, and lock files
@@ -108,7 +110,8 @@ That pattern is why the modules in this repo consistently use inputs such as
 
 You can consume any module from your own Terraform root.
 
-Example with pinned Git source:
+Example with pinned Git source. The example uses the `modules/vm` provider
+floor, which is also valid for the other modules.
 
 ```hcl
 terraform {
@@ -117,7 +120,7 @@ terraform {
   required_providers {
     nebius = {
       source  = "terraform-provider.storage.eu-north1.nebius.cloud/nebius/nebius"
-      version = ">= 0.5.55, < 0.6.0"
+      version = ">= 0.5.217, < 0.6.0"
     }
   }
 }

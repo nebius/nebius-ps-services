@@ -140,7 +140,15 @@ def _base_payload(
                     "instance_id": "mk8s",
                     "enabled": mk8s_enabled,
                     "inputs": {
-                        "gpu_enabled": True,
+                        "node_groups": {
+                            "worker": {
+                                "node_count": 1,
+                                "gpu": True,
+                                "platform": "gpu-h100-sxm",
+                                "preset": "8gpu-128vcpu-1600gb",
+                                "gpu_stack_source": "nebius_image",
+                            }
+                        },
                     },
                 },
                 {
@@ -912,15 +920,12 @@ def test_materialize_observability_infra_values_sets_dcgm_gpu_node_labels() -> N
         enabled_apps=("nebius-observability-agent", "nvidia-gpu-operator"),
     )
     mk8s_row = payload["infra"]["components"][0]
-    mk8s_row["inputs"]["mk8s_gpu_node_group_overrides"] = {
-        "labels": {
-            "example.com/custom": "kept",
-        }
-    }
+    labels = mk8s_row["inputs"]["node_groups"]["worker"].setdefault("node_labels", {})
+    labels["example.com/custom"] = "kept"
 
     changed = materialize_observability_infra_values(payload)
 
-    labels = mk8s_row["inputs"]["mk8s_gpu_node_group_overrides"]["labels"]
+    labels = mk8s_row["inputs"]["node_groups"]["worker"]["node_labels"]
     assert changed is True
     assert labels["example.com/custom"] == "kept"
     assert labels["nvidia.com/gpu.deploy.operands"] == "true"
@@ -948,7 +953,9 @@ def test_observability_gpu_node_label_reconciliation_skips_operator_managed_stac
         observability_enabled=True,
         enabled_apps=("nebius-observability-agent", "nvidia-gpu-operator"),
     )
-    payload["infra"]["components"][0]["inputs"]["gpu_stack_source"] = "operator_managed"
+    payload["infra"]["components"][0]["inputs"]["node_groups"]["worker"][
+        "gpu_stack_source"
+    ] = "operator_managed"
 
     policy = observability_gpu_node_label_reconciliation(payload)
     changed = materialize_observability_infra_values(payload)
@@ -963,20 +970,18 @@ def test_materialize_observability_infra_values_cleans_stale_dcgm_gpu_node_label
         enabled_apps=("nebius-observability-agent", "nvidia-gpu-operator"),
     )
     mk8s_row = payload["infra"]["components"][0]
-    mk8s_row["inputs"]["mk8s_gpu_node_group_overrides"] = {
-        "labels": {
-            "example.com/custom": "kept",
-            "nvidia.com/gpu.deploy.operands": "true",
-            "nvidia.com/gpu.deploy.dcgm-exporter": "true",
-            "nvidia.com/gpu.deploy.operator-validator": "true",
-            "nvidia.com/gpu.deploy.device-plugin": "false",
-            "nvidia.com/gpu.deploy.gpu-feature-discovery": "false",
-        }
+    mk8s_row["inputs"]["node_groups"]["worker"]["node_labels"] = {
+        "example.com/custom": "kept",
+        "nvidia.com/gpu.deploy.operands": "true",
+        "nvidia.com/gpu.deploy.dcgm-exporter": "true",
+        "nvidia.com/gpu.deploy.operator-validator": "true",
+        "nvidia.com/gpu.deploy.device-plugin": "false",
+        "nvidia.com/gpu.deploy.gpu-feature-discovery": "false",
     }
 
     changed = materialize_observability_infra_values(payload)
 
-    labels = mk8s_row["inputs"]["mk8s_gpu_node_group_overrides"]["labels"]
+    labels = mk8s_row["inputs"]["node_groups"]["worker"]["node_labels"]
     assert changed is True
     assert labels == {"example.com/custom": "kept"}
 
@@ -987,15 +992,13 @@ def test_materialize_observability_infra_values_preserves_non_catalog_label_valu
         enabled_apps=("nebius-observability-agent", "nvidia-gpu-operator"),
     )
     mk8s_row = payload["infra"]["components"][0]
-    mk8s_row["inputs"]["mk8s_gpu_node_group_overrides"] = {
-        "labels": {
-            "nvidia.com/gpu.deploy.operands": "false",
-        }
+    mk8s_row["inputs"]["node_groups"]["worker"]["node_labels"] = {
+        "nvidia.com/gpu.deploy.operands": "false",
     }
 
     changed = materialize_observability_infra_values(payload)
 
-    labels = mk8s_row["inputs"]["mk8s_gpu_node_group_overrides"]["labels"]
+    labels = mk8s_row["inputs"]["node_groups"]["worker"]["node_labels"]
     assert changed is False
     assert labels == {"nvidia.com/gpu.deploy.operands": "false"}
 
@@ -1011,7 +1014,7 @@ def test_materialize_observability_infra_values_skips_dcgm_labels_when_metrics_d
 
     mk8s_row = payload["infra"]["components"][0]
     assert changed is False
-    assert "mk8s_gpu_node_group_overrides" not in mk8s_row["inputs"]
+    assert "node_labels" not in mk8s_row["inputs"]["node_groups"]["worker"]
 
 
 def test_materialize_observability_infra_values_sets_vm_journald_labels() -> None:

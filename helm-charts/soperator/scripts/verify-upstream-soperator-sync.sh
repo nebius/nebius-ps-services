@@ -118,12 +118,39 @@ resolve_tag_commit() {
   fi
 }
 
+github_api_token() {
+  if [[ -n "${GITHUB_TOKEN:-}" ]]; then
+    printf '%s\n' "${GITHUB_TOKEN}"
+  elif [[ -n "${GH_TOKEN:-}" ]]; then
+    printf '%s\n' "${GH_TOKEN}"
+  fi
+  return 0
+}
+
+curl_github_api() {
+  local url="$1"
+  shift
+
+  local -a curl_args=(
+    -fsSL
+    -H "Accept: application/vnd.github+json"
+    -H "X-GitHub-Api-Version: 2022-11-28"
+  )
+  local token
+  token="$(github_api_token)"
+  if [[ -n "${token}" ]]; then
+    curl_args+=(-H "Authorization: Bearer ${token}")
+  fi
+
+  curl "${curl_args[@]}" "$@" "${url}"
+}
+
 latest_release_tag() {
   local repo="$1"
   local api_repo
   api_repo="${repo#https://github.com/}"
   api_repo="${api_repo%.git}"
-  curl -fsSL "https://api.github.com/repos/${api_repo}/releases/latest" \
+  curl_github_api "https://api.github.com/repos/${api_repo}/releases/latest" \
     | sed -n 's/^[[:space:]]*"tag_name":[[:space:]]*"\([^"]*\)".*/\1/p' \
     | head -n 1
 }
@@ -261,6 +288,16 @@ def verify_chart_versions!(repo_root, lock)
   end
 end
 
+def verify_tracked_chart_app_version!(repo_root, upstream_root, entry)
+  upstream_chart = chart_yaml(File.join(upstream_root, entry.fetch("upstream_file")))
+  local_chart = chart_yaml(safe_join(repo_root, entry.fetch("local_file")))
+  upstream_app_version = upstream_chart.fetch("appVersion")
+  local_app_version = local_chart.fetch("appVersion")
+  return if upstream_app_version == local_app_version
+
+  raise "local appVersion #{local_app_version.inspect} does not match upstream #{upstream_app_version.inspect}"
+end
+
 def report_line(status, kind, name, detail = nil)
   suffix = detail && !detail.empty? ? " - #{detail}" : ""
   puts format("%-7s %-7s %s%s", status, kind, name, suffix)
@@ -285,6 +322,18 @@ begin
 rescue StandardError => e
   failures << e.message
   report_line("fail", "lock", "chart SemVer and upstream appVersion", e.message)
+end
+
+Array(lock.dig("imports", "chart_versions")).each do |entry|
+  next unless scope == "all"
+  name = entry.fetch("name")
+  begin
+    verify_tracked_chart_app_version!(repo_root, upstream_root, entry)
+    report_line("ok", "chart", name) if report
+  rescue StandardError => e
+    failures << "#{name}: #{e.message}"
+    report_line("fail", "chart", name, e.message)
+  end
 end
 
 Array(lock.dig("imports", "exact")).each do |entry|

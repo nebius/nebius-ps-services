@@ -22,6 +22,7 @@ import tomllib
 
 ROOT_MARKERS = ("SKILL.md", "assets", "references")
 SENTINEL_MARKER = "PROMPT_CONTENT_SENTINEL_DO_NOT_PERSIST"
+STATE_REUSE_MARKER = "TASK_STATE_REUSE_SENTINEL_KEEP_FOR_AGENT_READ"
 
 
 def skill_dir() -> Path:
@@ -73,6 +74,11 @@ def extract_state_path(output: str) -> Path:
     return Path(match.group(1))
 
 
+def extract_context(output: str) -> str:
+    payload = json.loads(output)
+    return payload["hookSpecificOutput"]["additionalContext"]
+
+
 def assert_private_file(path: Path) -> None:
     mode = stat.S_IMODE(path.stat().st_mode)
     if mode != 0o600:
@@ -83,6 +89,36 @@ def assert_no_prompt_leak(state_file: Path) -> None:
     text = state_file.read_text(encoding="utf-8")
     if SENTINEL_MARKER in text:
         raise AssertionError("hook persisted prompt content into task state")
+
+
+def assert_missing_state_path(state_file: Path, codex_home: Path) -> None:
+    if state_file.exists():
+        raise AssertionError(f"hook unexpectedly created task-state file: {state_file}")
+    try:
+        state_file.relative_to(codex_home)
+    except ValueError as exc:
+        raise AssertionError(f"state path is outside CODEX_HOME: {state_file}") from exc
+
+
+def assert_existing_state_preserved(
+    *,
+    result: subprocess.CompletedProcess[str],
+    state_file: Path,
+    expected_text: str,
+) -> str:
+    context = json.loads(result.stdout)["hookSpecificOutput"]["additionalContext"]
+    actual_state = extract_state_path(result.stdout)
+    if actual_state != state_file:
+        raise AssertionError(
+            "hook did not reuse existing task-state path: "
+            f"{actual_state} != {state_file}"
+        )
+    if state_file.read_text(encoding="utf-8") != expected_text:
+        raise AssertionError("hook overwrote existing task-state contents")
+    if STATE_REUSE_MARKER in context:
+        raise AssertionError("hook injected task-state contents into model context")
+    assert_private_file(state_file)
+    return context
 
 
 def write_agent_fixture(codex_home: Path, *, enable_policy: bool) -> None:
@@ -174,6 +210,21 @@ def expected_workspace_segment(root: Path) -> str:
     return f"{workspace_name}-{workspace_hash}"
 
 
+def expected_session_segment(session_id: str) -> str:
+    safe = re.sub(r"[^A-Za-z0-9._-]+", "-", session_id).strip("-")
+    return safe[:80]
+
+
+def expected_state_file(codex_home: Path, root: Path, session_id: str) -> Path:
+    return (
+        codex_home
+        / "task-state"
+        / expected_workspace_segment(root)
+        / expected_session_segment(session_id)
+        / "current.md"
+    )
+
+
 def resolve_root_for_cwd(cwd: str) -> Path:
     cwd = os.path.abspath(cwd)
     try:
@@ -245,22 +296,6 @@ def validate_path_contract_helpers(temp_dir: Path) -> None:
         raise AssertionError("resolve_root_for_cwd should match hook abspath semantics")
 
 
-def assert_manual_state_path(state_file: Path, codex_home: Path, root: Path) -> None:
-    if state_file.parent.name != "manual":
-        raise AssertionError(f"manual fallback used unexpected directory: {state_file}")
-    if state_file.name != "current.md":
-        raise AssertionError(f"manual fallback used unexpected file name: {state_file}")
-    if not str(state_file).startswith(str(codex_home / "task-state") + os.sep):
-        raise AssertionError(f"manual state file is outside CODEX_HOME: {state_file}")
-    expected_relative = Path(expected_workspace_segment(root)) / "manual" / "current.md"
-    actual_relative = state_file.relative_to(codex_home / "task-state")
-    if actual_relative != expected_relative:
-        raise AssertionError(
-            "manual fallback is not workspace-scoped: "
-            f"{actual_relative} != {expected_relative}"
-        )
-
-
 def assert_doc_contracts(root: Path) -> None:
     gcm_readme = (root / "README.md").read_text(encoding="utf-8")
     gcm_skill = (root / "SKILL.md").read_text(encoding="utf-8")
@@ -268,23 +303,31 @@ def assert_doc_contracts(root: Path) -> None:
         encoding="utf-8"
     )
 
-    required_skill = (
+    forbidden_needles = (
         "$CODEX_HOME/task-state/<workspace>-<hash>/manual/current.md",
+        "$CODEX_HOME/task-state/manual/current.md",
+        "manual fallback",
+    )
+    for needle in forbidden_needles:
+        if needle in gcm_skill:
+            raise AssertionError(
+                f"global-context-management SKILL still documents legacy path: {needle}"
+            )
+
+    required_skill = (
+        "No legacy task-state",
     )
     for needle in required_skill:
         if needle not in gcm_skill:
             raise AssertionError(f"global-context-management SKILL missing: {needle}")
-    if "$CODEX_HOME/task-state/manual/current.md" in gcm_skill:
-        raise AssertionError(
-            "global-context-management SKILL still documents flat manual fallback"
-        )
 
     required_gcm = (
-        "$CODEX_HOME/task-state/<workspace>-<hash>/manual/current.md",
         "Task-state files are useful only when Codex reads and updates them.",
-        "hidden state automatically active in the model forever.",
+        "`SessionStart` hook injects the path without creating a missing `current.md`",
+        "manual or legacy fallback path",
+        "hidden state automatically active",
         "continuity note",
-        "Synthetic hook probes that pass a made-up `session_id`",
+        "Synthetic complex-prompt hook probes that pass a made-up `session_id`",
     )
     for needle in required_gcm:
         if needle not in gcm_readme:
@@ -294,6 +337,8 @@ def assert_doc_contracts(root: Path) -> None:
         "Treat runtime activation as unverified",
         "task-state path under",
         "Direct hook unit probes against a live `$CODEX_HOME`",
+        "checks that `SessionStart` does not create missing scaffold files",
+        "manual or legacy task-state path",
     )
     for needle in required_config:
         if needle not in config_readme:
@@ -316,6 +361,28 @@ def validate_direct_hooks(root: Path, codex_home: Path, home: Path) -> None:
     }
     cwd = str(root)
     resolved_root = resolve_root_for_cwd(cwd)
+    missing_session_result = run_hook(
+        session_script,
+        {
+            "cwd": cwd,
+            "hook_event_name": "SessionStart",
+            "source": "startup",
+            "model": "test-model",
+        },
+        env,
+    )
+    missing_session_context = extract_context(missing_session_result.stdout)
+    if "unavailable (hook payload missing session_id)" not in missing_session_context:
+        raise AssertionError("missing-session SessionStart did not report unavailable state")
+    legacy_state = (
+        codex_home
+        / "task-state"
+        / expected_workspace_segment(resolved_root)
+        / "manual"
+        / "current.md"
+    )
+    assert_missing_state_path(legacy_state, codex_home)
+
     session_payload = {
         "session_id": "session one/with spaces",
         "cwd": cwd,
@@ -329,22 +396,25 @@ def validate_direct_hooks(root: Path, codex_home: Path, home: Path) -> None:
     ]
     assert_no_default_agent_names(session_context)
     state_file = extract_state_path(session_result.stdout)
-    if not state_file.exists():
-        raise AssertionError(f"state file was not created: {state_file}")
     if not str(state_file).startswith(str(codex_home / "task-state") + os.sep):
         raise AssertionError(f"state file is outside CODEX_HOME: {state_file}")
-    assert_private_file(state_file)
-
-    manual_session_payload = {
-        "cwd": cwd,
-        "hook_event_name": "SessionStart",
-        "source": "startup",
-        "model": "test-model",
-    }
-    manual_session_result = run_hook(session_script, manual_session_payload, env)
-    manual_session_state = extract_state_path(manual_session_result.stdout)
-    assert_manual_state_path(manual_session_state, codex_home, resolved_root)
-    assert_private_file(manual_session_state)
+    assert_missing_state_path(state_file, codex_home)
+    preserved_state = (
+        "# Current Codex task state\n\n"
+        "## Workspace\n\n"
+        f"- Root: `{resolved_root}`\n\n"
+        "## Objective\n\n"
+        f"- Preserve existing state for the agent to read: {STATE_REUSE_MARKER}\n"
+    )
+    state_file.parent.mkdir(parents=True, exist_ok=True)
+    state_file.write_text(preserved_state, encoding="utf-8")
+    state_file.chmod(0o644)
+    preserved_session_result = run_hook(session_script, session_payload, env)
+    assert_existing_state_preserved(
+        result=preserved_session_result,
+        state_file=state_file,
+        expected_text=preserved_state,
+    )
 
     simple_payload = {
         "session_id": "session one/with spaces",
@@ -356,6 +426,34 @@ def validate_direct_hooks(root: Path, codex_home: Path, home: Path) -> None:
     simple_result = run_hook(user_script, simple_payload, env)
     if simple_result.stdout:
         raise AssertionError("simple prompt unexpectedly produced hook context")
+    fresh_simple_session = "fresh simple session"
+    fresh_simple_payload = {
+        "session_id": fresh_simple_session,
+        "cwd": cwd,
+        "hook_event_name": "UserPromptSubmit",
+        "turn_id": "turn-simple-fresh",
+        "prompt": "hello",
+    }
+    fresh_simple_result = run_hook(user_script, fresh_simple_payload, env)
+    if fresh_simple_result.stdout:
+        raise AssertionError("fresh simple prompt unexpectedly produced hook context")
+    fresh_simple_state = expected_state_file(
+        codex_home, resolved_root, fresh_simple_session
+    )
+    assert_missing_state_path(fresh_simple_state, codex_home)
+    missing_session_simple_result = run_hook(
+        user_script,
+        {
+            "cwd": cwd,
+            "hook_event_name": "UserPromptSubmit",
+            "turn_id": "turn-simple-no-session",
+            "prompt": "hello",
+        },
+        env,
+    )
+    if missing_session_simple_result.stdout:
+        raise AssertionError("missing-session simple prompt unexpectedly produced context")
+    assert_missing_state_path(legacy_state, codex_home)
 
     complex_payload = {
         "session_id": "session one/with spaces",
@@ -367,8 +465,13 @@ def validate_direct_hooks(root: Path, codex_home: Path, home: Path) -> None:
             f"Do not persist {SENTINEL_MARKER} in task state."
         ),
     }
+    state_file.chmod(0o644)
     complex_result = run_hook(user_script, complex_payload, env)
-    context = json.loads(complex_result.stdout)["hookSpecificOutput"]["additionalContext"]
+    context = assert_existing_state_preserved(
+        result=complex_result,
+        state_file=state_file,
+        expected_text=preserved_state,
+    )
     if "Apply the `global-context-management` skill" not in context:
         raise AssertionError("complex prompt did not request the skill")
     if "Hook-assisted read-only subagent delegation is enabled" in context:
@@ -377,19 +480,55 @@ def validate_direct_hooks(root: Path, codex_home: Path, home: Path) -> None:
         raise AssertionError("hook echoed prompt content into model context")
     assert_no_prompt_leak(state_file)
 
-    manual_prompt_payload = {
+    fresh_complex_payload = {
+        "session_id": "fresh complex session",
         "cwd": cwd,
         "hook_event_name": "UserPromptSubmit",
-        "turn_id": "turn-manual",
+        "turn_id": "turn-complex-fresh",
+        "prompt": (
+            "Please review and test hooks end to end for a fresh complex "
+            f"session. Do not persist {SENTINEL_MARKER} in task state."
+        ),
+    }
+    fresh_complex_result = run_hook(user_script, fresh_complex_payload, env)
+    fresh_complex_state = extract_state_path(fresh_complex_result.stdout)
+    expected_fresh_complex_state = expected_state_file(
+        codex_home, resolved_root, "fresh complex session"
+    )
+    if fresh_complex_state != expected_fresh_complex_state:
+        raise AssertionError(
+            "fresh complex prompt used unexpected state path: "
+            f"{fresh_complex_state} != {expected_fresh_complex_state}"
+        )
+    if not fresh_complex_state.exists():
+        raise AssertionError(
+            f"fresh complex prompt did not create: {fresh_complex_state}"
+        )
+    assert_private_file(fresh_complex_state)
+    assert_no_prompt_leak(fresh_complex_state)
+
+    missing_session_complex_payload = {
+        "cwd": cwd,
+        "hook_event_name": "UserPromptSubmit",
+        "turn_id": "turn-complex-no-session",
         "prompt": "Please review and test hooks end to end.",
     }
-    manual_prompt_result = run_hook(user_script, manual_prompt_payload, env)
-    manual_prompt_state = extract_state_path(manual_prompt_result.stdout)
-    assert_manual_state_path(manual_prompt_state, codex_home, resolved_root)
-    if manual_prompt_state != manual_session_state:
+    missing_session_complex_result = run_hook(
+        user_script, missing_session_complex_payload, env
+    )
+    missing_session_complex_context = extract_context(
+        missing_session_complex_result.stdout
+    )
+    if (
+        "unavailable (hook payload missing session_id)"
+        not in missing_session_complex_context
+    ):
         raise AssertionError(
-            "SessionStart and UserPromptSubmit manual fallback paths differ"
+            "missing-session complex prompt did not report unavailable state"
         )
+    if SENTINEL_MARKER in missing_session_complex_context:
+        raise AssertionError("missing-session complex hook echoed prompt content")
+    assert_missing_state_path(legacy_state, codex_home)
 
     write_agent_fixture(codex_home, enable_policy=False)
     env_override = {**env, "CODEX_GCM_AUTO_SUBAGENTS": "1"}
