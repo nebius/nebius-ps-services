@@ -1782,6 +1782,36 @@ def test_stage_local_helm_chart_copies_symlink_targets(tmp_path: Path) -> None:
     assert "name: copied" in staged_link.read_text(encoding="utf-8")
 
 
+def test_stage_local_helm_chart_replaces_stale_staged_copy(tmp_path: Path) -> None:
+    chart_dir = tmp_path / "example-chart"
+    templates_dir = chart_dir / "templates"
+    templates_dir.mkdir(parents=True)
+    (chart_dir / "Chart.yaml").write_text(
+        "apiVersion: v2\nname: example-chart\nversion: 0.1.0\n",
+        encoding="utf-8",
+    )
+    (templates_dir / "config.yaml").write_text(
+        "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: first\n",
+        encoding="utf-8",
+    )
+    staging_root = tmp_path / "staging"
+
+    staged_chart = Path(_stage_local_helm_chart(str(chart_dir), staging_root))
+    (staged_chart / "stale.yaml").write_text("stale\n", encoding="utf-8")
+    (templates_dir / "config.yaml").write_text(
+        "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: second\n",
+        encoding="utf-8",
+    )
+
+    restaged_chart = Path(_stage_local_helm_chart(str(chart_dir), staging_root))
+
+    assert restaged_chart == staged_chart
+    assert not (restaged_chart / "stale.yaml").exists()
+    assert "name: second" in (
+        restaged_chart / "templates" / "config.yaml"
+    ).read_text(encoding="utf-8")
+
+
 def test_build_local_helm_chart_dependencies_reuses_packaged_archives(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1893,6 +1923,166 @@ def test_build_local_helm_chart_dependencies_rebuilds_file_dependencies(
     _build_local_helm_chart_dependencies(str(parent_dir))
 
     assert calls == [["helm", "dependency", "build", "--skip-refresh", str(parent_dir)]]
+
+
+def test_build_local_helm_chart_dependencies_adds_remote_repositories(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    chart_dir = tmp_path / "chart"
+    chart_dir.mkdir()
+    dependency = {
+        "name": "child",
+        "version": "1.2.3",
+        "repository": "https://example.invalid/charts",
+    }
+    (chart_dir / "Chart.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "apiVersion": "v2",
+                "name": "parent",
+                "version": "0.1.0",
+                "dependencies": [dependency],
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    (chart_dir / "Chart.lock").write_text(
+        yaml.safe_dump(
+            {
+                "dependencies": [dependency],
+                "digest": "sha256:test",
+                "generated": "2026-01-01T00:00:00Z",
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    calls: list[list[str]] = []
+    monkeypatch.setenv(
+        "HELM_REPOSITORY_CONFIG",
+        str(tmp_path / "missing-repositories.yaml"),
+    )
+
+    class Result:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    def fake_run(command: list[str], **_kwargs: object) -> Result:
+        calls.append(command)
+        return Result()
+
+    monkeypatch.setattr("nebius_cxcli.flux_render.subprocess.run", fake_run)
+
+    _build_local_helm_chart_dependencies(str(chart_dir))
+
+    assert len(calls) == 2
+    assert calls[0][:5] == [
+        "helm",
+        "repo",
+        "add",
+        "cxcli-local-1",
+        "https://example.invalid/charts",
+    ]
+    assert calls[0][5] == "--force-update"
+    assert calls[1][0:4] == ["helm", "dependency", "build", "--skip-refresh"]
+    assert calls[1][-1] == str(chart_dir)
+    repo_config = calls[0][calls[0].index("--repository-config") + 1]
+    repo_cache = calls[0][calls[0].index("--repository-cache") + 1]
+    assert calls[1][calls[1].index("--repository-config") + 1] == repo_config
+    assert calls[1][calls[1].index("--repository-cache") + 1] == repo_cache
+
+
+def test_build_local_helm_chart_dependencies_filters_unrelated_repository_config(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    chart_dir = tmp_path / "chart"
+    chart_dir.mkdir()
+    dependency = {
+        "name": "child",
+        "version": "1.2.3",
+        "repository": "https://example.invalid/charts",
+    }
+    (chart_dir / "Chart.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "apiVersion": "v2",
+                "name": "parent",
+                "version": "0.1.0",
+                "dependencies": [dependency],
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    (chart_dir / "Chart.lock").write_text(
+        yaml.safe_dump(
+            {
+                "dependencies": [dependency],
+                "digest": "sha256:test",
+                "generated": "2026-01-01T00:00:00Z",
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    source_config = tmp_path / "repositories.yaml"
+    source_config.write_text(
+        yaml.safe_dump(
+            {
+                "repositories": [
+                    {
+                        "name": "kuberay",
+                        "url": "https://ray-project.github.io/kuberay-helm/",
+                    },
+                    {
+                        "name": "example",
+                        "url": "https://example.invalid/charts",
+                        "username": "user",
+                        "password": "redacted",
+                    },
+                ]
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    calls: list[list[str]] = []
+    seeded_configs: list[object] = []
+    monkeypatch.setenv("HELM_REPOSITORY_CONFIG", str(source_config))
+
+    class Result:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    def fake_run(command: list[str], **_kwargs: object) -> Result:
+        calls.append(command)
+        if command[:3] == ["helm", "repo", "update"]:
+            repo_config = Path(command[command.index("--repository-config") + 1])
+            seeded_configs.append(yaml.safe_load(repo_config.read_text(encoding="utf-8")))
+        return Result()
+
+    monkeypatch.setattr("nebius_cxcli.flux_render.subprocess.run", fake_run)
+
+    _build_local_helm_chart_dependencies(str(chart_dir))
+
+    assert calls[0][:4] == ["helm", "repo", "update", "example"]
+    assert seeded_configs == [
+        {
+            "repositories": [
+                {
+                    "name": "example",
+                    "url": "https://example.invalid/charts",
+                    "username": "user",
+                    "password": "redacted",
+                }
+            ]
+        }
+    ]
 
 
 def test_render_local_soperator_cpu_profile_writes_single_cpu_nodeset(tmp_path: Path) -> None:

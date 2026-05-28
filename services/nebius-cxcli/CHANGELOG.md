@@ -10,6 +10,9 @@ All notable changes to this project are tracked here. This changelog follows
   status, deployment status pollers, MK8s preflight, quota preset lookup
   retries, emitted kubectl helper commands, and malformed JSON responses so
   transient or malformed inputs no longer degrade into silent empty results.
+- Fixed local Helm chart dependency staging so clean runners can render charts
+  with locked remote dependencies without preconfigured global Helm repo
+  entries, and stale staged copies no longer cascade into follow-on failures.
 - Made NCCL launcher placement resource-aware: cxcli now pins the launcher to
   non-GPU nodes only when they have enough scheduler-visible CPU/memory
   headroom, otherwise it falls back to GPU-node headroom accounting.

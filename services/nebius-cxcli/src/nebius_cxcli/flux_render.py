@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -1288,9 +1289,19 @@ def _local_chart_dependencies_are_packaged(chart_dir: Path) -> bool:
     )
 
 
+def _remove_staged_chart_dir(staged_chart_dir: Path) -> None:
+    if not staged_chart_dir.exists() and not staged_chart_dir.is_symlink():
+        return
+    if staged_chart_dir.is_dir() and not staged_chart_dir.is_symlink():
+        shutil.rmtree(staged_chart_dir)
+        return
+    staged_chart_dir.unlink()
+
+
 def _stage_local_helm_chart(chart_path: str, staging_root: Path) -> str:
     source_chart_dir = Path(chart_path).expanduser().resolve()
     staged_chart_dir = staging_root / source_chart_dir.name
+    _remove_staged_chart_dir(staged_chart_dir)
     shutil.copytree(source_chart_dir, staged_chart_dir, symlinks=False)
 
     staging_root = staging_root.resolve()
@@ -1318,15 +1329,185 @@ def _stage_local_helm_chart(chart_path: str, staging_root: Path) -> str:
     return str(staged_chart_dir)
 
 
-def _build_local_helm_chart_dependencies(chart_path: str) -> None:
-    chart_dir = Path(chart_path)
-    chart = _local_chart_metadata(chart_dir)
-    if not chart.get("dependencies"):
-        return
-    if _local_chart_dependencies_are_packaged(chart_dir):
-        return
+def _local_chart_remote_dependency_repositories(chart_dir: Path) -> list[str]:
+    repositories: list[str] = []
+    seen: set[str] = set()
+    for dependency in _local_chart_dependency_metadata(chart_dir):
+        repository = str(dependency.get("repository") or "").strip()
+        if not (
+            repository.startswith("http://") or repository.startswith("https://")
+        ):
+            continue
+        if repository in seen:
+            continue
+        repositories.append(repository)
+        seen.add(repository)
+    return repositories
 
-    command = ["helm", "dependency", "build", "--skip-refresh", str(chart_dir)]
+
+def _helm_repository_config_source() -> Path | None:
+    configured = os.environ.get("HELM_REPOSITORY_CONFIG")
+    if configured:
+        return Path(configured).expanduser()
+
+    result = subprocess.run(
+        ["helm", "env", "HELM_REPOSITORY_CONFIG"],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    if result.returncode != 0:
+        return None
+    value = result.stdout.strip()
+    return Path(value).expanduser() if value else None
+
+
+def _helm_repository_config_entries_for_urls(
+    source: Path,
+    required_urls: set[str],
+) -> list[Mapping[str, Any]]:
+    try:
+        config = yaml.safe_load(source.read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError):
+        return []
+    if not isinstance(config, Mapping):
+        return []
+    repositories = config.get("repositories")
+    if not isinstance(repositories, list):
+        return []
+
+    entries: list[Mapping[str, Any]] = []
+    seen: set[str] = set()
+    for repository in repositories:
+        if not isinstance(repository, Mapping):
+            continue
+        url = str(repository.get("url") or "").strip()
+        if not url or url not in required_urls or url in seen:
+            continue
+        entries.append(dict(repository))
+        seen.add(url)
+    return entries
+
+
+def _seed_helm_repository_config(target: Path, repositories: list[str]) -> None:
+    target.parent.mkdir(parents=True, exist_ok=True)
+    source = _helm_repository_config_source()
+    entries: list[Mapping[str, Any]] = []
+    if source and source.is_file():
+        entries = _helm_repository_config_entries_for_urls(source, set(repositories))
+    target.write_text(
+        yaml.safe_dump({"repositories": entries}, sort_keys=False),
+        encoding="utf-8",
+    )
+
+
+def _helm_repository_entries(config_path: Path) -> dict[str, str]:
+    try:
+        config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError):
+        return {}
+    if not isinstance(config, Mapping):
+        return {}
+    repositories = config.get("repositories")
+    if not isinstance(repositories, list):
+        return {}
+
+    entries: dict[str, str] = {}
+    for repository in repositories:
+        if not isinstance(repository, Mapping):
+            continue
+        url = str(repository.get("url") or "").strip()
+        name = str(repository.get("name") or "").strip()
+        if url and name and url not in entries:
+            entries[url] = name
+    return entries
+
+
+def _helm_output(result: subprocess.CompletedProcess[str]) -> str:
+    return (
+        result.stderr.strip()
+        or result.stdout.strip()
+        or "helm exited without diagnostic output"
+    )
+
+
+def _next_helm_repository_name(index: int, used_names: set[str]) -> str:
+    while True:
+        name = f"cxcli-local-{index}"
+        if name not in used_names:
+            used_names.add(name)
+            return name
+        index += 1
+
+
+def _prepare_local_chart_helm_repositories(
+    *,
+    chart_path: str,
+    repositories: list[str],
+    repository_config: Path,
+    repository_cache: Path,
+) -> None:
+    repository_cache.mkdir(parents=True, exist_ok=True)
+    _seed_helm_repository_config(repository_config, repositories)
+    configured = _helm_repository_entries(repository_config)
+    used_names = set(configured.values())
+
+    for index, repository in enumerate(repositories, start=1):
+        repo_name = configured.get(repository)
+        if repo_name:
+            command = [
+                "helm",
+                "repo",
+                "update",
+                repo_name,
+                "--repository-config",
+                str(repository_config),
+                "--repository-cache",
+                str(repository_cache),
+            ]
+        else:
+            repo_name = _next_helm_repository_name(index, used_names)
+            command = [
+                "helm",
+                "repo",
+                "add",
+                repo_name,
+                repository,
+                "--force-update",
+                "--repository-config",
+                str(repository_config),
+                "--repository-cache",
+                str(repository_cache),
+            ]
+        result = subprocess.run(
+            command,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=180,
+        )
+        if result.returncode != 0:
+            raise ValueError(
+                "local Helm chart dependency repository setup failed for "
+                f"{chart_path}: {_helm_output(result)}"
+            )
+
+
+def _run_local_helm_dependency_build(
+    *,
+    chart_path: str,
+    chart_dir: Path,
+    repository_flags: list[str] | None = None,
+) -> None:
+    command = [
+        "helm",
+        "dependency",
+        "build",
+        "--skip-refresh",
+        *(repository_flags or ()),
+        str(chart_dir),
+    ]
     result = subprocess.run(
         command,
         check=False,
@@ -1335,11 +1516,47 @@ def _build_local_helm_chart_dependencies(chart_path: str) -> None:
         timeout=180,
     )
     if result.returncode != 0:
-        stderr = result.stderr.strip() or result.stdout.strip()
         raise ValueError(
             "local Helm chart dependency build failed for "
-            f"{chart_path}: {stderr or 'helm exited without diagnostic output'}"
+            f"{chart_path}: {_helm_output(result)}"
         )
+
+
+def _build_local_helm_chart_dependencies(chart_path: str) -> None:
+    chart_dir = Path(chart_path)
+    chart = _local_chart_metadata(chart_dir)
+    if not chart.get("dependencies"):
+        return
+    if _local_chart_dependencies_are_packaged(chart_dir):
+        return
+
+    remote_repositories = _local_chart_remote_dependency_repositories(chart_dir)
+    if remote_repositories:
+        with tempfile.TemporaryDirectory(
+            prefix="nebius-cxcli-helm-repositories-"
+        ) as repository_temp_dir:
+            repository_root = Path(repository_temp_dir)
+            repository_config = repository_root / "repositories.yaml"
+            repository_cache = repository_root / "repository-cache"
+            _prepare_local_chart_helm_repositories(
+                chart_path=chart_path,
+                repositories=remote_repositories,
+                repository_config=repository_config,
+                repository_cache=repository_cache,
+            )
+            _run_local_helm_dependency_build(
+                chart_path=chart_path,
+                chart_dir=chart_dir,
+                repository_flags=[
+                    "--repository-config",
+                    str(repository_config),
+                    "--repository-cache",
+                    str(repository_cache),
+                ],
+            )
+        return
+
+    _run_local_helm_dependency_build(chart_path=chart_path, chart_dir=chart_dir)
 
 
 def _render_post_flux_mysterybox_eso_resources(

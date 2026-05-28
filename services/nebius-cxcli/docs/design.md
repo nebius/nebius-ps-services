@@ -190,7 +190,10 @@ Sections:
     - optional `source.portable`, optional `source.local`, optional `ui`, optional `release`, optional `defaults`, optional `wizard_profile`, optional `wizard`, optional `input`
   - `source.portable.repo` can be an HTTP/S Helm repo base (must expose `index.yaml`), OCI (`oci://...`), or GitHub tree URL for a git-hosted chart
   - `source.portable.chart` remains the canonical chart basename when it differs from the app id; runtime Helm resolution must use that configured name instead of assuming `id == chart`
-  - `source.local.path` is for developer-local Helm chart work and is removed from portable build artifacts
+  - `source.local.path` is for developer-local Helm chart work and is removed
+    from portable build artifacts; local renders stage charts into a temporary
+    tree, rebuild local `file://` children there, and prepare temporary Helm
+    repo entries for locked remote dependencies
 - `component_cli_settings.yaml`
   - `cli.flux.version`
   - `cli.flux.release_timeout`

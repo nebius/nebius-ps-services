@@ -833,8 +833,10 @@ Source requirements enforced by `validate-sources`:
   - Local chart format: `source.local.path` must resolve to an existing chart directory when the active source profile is `local`.
   - Local chart staging copies symlink targets into the staging tree, rebuilds
     `file://` chart dependencies in that temporary staging tree so local child
-    chart edits are not hidden by stale packaged archives. Generic Helm hooks
-    are stripped from the static local render, but hooks annotated with
+    chart edits are not hidden by stale packaged archives, and prepares
+    temporary Helm repo entries for locked remote dependencies instead of
+    requiring global `helm repo add` state. Generic Helm hooks are stripped from
+    the static local render, but hooks annotated with
     `nebius-cxcli.nebius.ai/include-local-render=true` are kept for cxcli's
     post-Flux apply path.
   - Portable build/release verification strips `source.local` and fails if an app chart still has no usable `source.portable`.
