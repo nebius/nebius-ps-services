@@ -43,7 +43,7 @@ def find_git_root(start: Path) -> Path:
             timeout=10,
         )
         return Path(result.stdout.strip()).resolve()
-    except Exception:
+    except (FileNotFoundError, OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
         for candidate in [start, *start.parents]:
             if (candidate / ".git").exists():
                 return candidate.resolve()

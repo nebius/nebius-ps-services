@@ -110,6 +110,56 @@ def test_validate_mk8s_network_preflight_rejects_single_pool_conflict(
         validate_mk8s_network_preflight(config)
 
 
+def test_validate_mk8s_network_preflight_rejects_malformed_pool_cidr(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _FakeRequest:
+        def wait(self) -> SimpleNamespace:
+            return _fake_subnet("not-a-cidr")
+
+    class _FakeSubnetServiceClient:
+        def __init__(self, sdk: object) -> None:
+            self.sdk = sdk
+
+        def get(self, request: object) -> _FakeRequest:
+            return _FakeRequest()
+
+    class _FakeSDK:
+        def sync_close(self) -> None:
+            return
+
+    monkeypatch.setattr("nebius_cxcli.mk8s_preflight.init_nebius_sdk", lambda **_: _FakeSDK())
+    monkeypatch.setattr(
+        "nebius_cxcli.mk8s_preflight.SubnetServiceClient",
+        _FakeSubnetServiceClient,
+    )
+    config = {
+        "version": "v1",
+        "client_info": {
+            "client_name": "client-a",
+            "nebius": {
+                "tenant_id": "tenant-123",
+                "project_id": "project-123",
+                "region_id": "us-central1",
+            },
+        },
+        "infra": {
+            "components": [
+                {
+                    "id": "mk8s",
+                    "enabled": True,
+                    "source": "../../platform-infra/modules/mk8s",
+                    "inputs": _cpu_mk8s_inputs(service_cidrs=["/20"]),
+                }
+            ]
+        },
+        "apps": {"charts": []},
+    }
+
+    with pytest.raises(RuntimeError, match="malformed pool CIDR 'not-a-cidr'"):
+        validate_mk8s_network_preflight(config)
+
+
 def test_validate_mk8s_resource_name_preflight_rejects_existing_gpu_cluster(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

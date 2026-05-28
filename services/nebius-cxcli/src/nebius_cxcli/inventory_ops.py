@@ -1633,11 +1633,16 @@ def write_inventory(
             cluster_id = str(_lookup(status, "cluster_id") or "").strip()
             kube_context = str(_lookup(status, "kube_context") or "").strip()
             kube_context_arg = f" --context={shlex.quote(kube_context)}" if kube_context else ""
+            namespace_arg = shlex.quote(namespace)
+            admin_secret_arg = shlex.quote(admin_secret)
+            password_jsonpath_arg = shlex.quote(f"{{.data.{password_key}}}")
             if not str(_lookup(status, "base_url") or "").strip():
                 pending_grafana_links = True
+            root_url_warning = str(_lookup(status, "root_url_warning") or "").strip()
             password_command = (
-                f"printf '%s\\n' \"$(kubectl{kube_context_arg} -n {namespace} get secret {admin_secret} "
-                f"-o jsonpath='{{.data.{password_key}}}' | base64 -d)\""
+                f"printf '%s\\n' \"$(kubectl{kube_context_arg} -n {namespace_arg} "
+                f"get secret {admin_secret_arg} -o jsonpath={password_jsonpath_arg} "
+                "| base64 -d)\""
             )
             target_info: list[str] = []
             if cluster_id:
@@ -1674,6 +1679,7 @@ def write_inventory(
                     "```bash",
                     password_command,
                     "```",
+                    *([f"- Root URL note: `{root_url_warning}`"] if root_url_warning else []),
                     "",
                 ]
             )

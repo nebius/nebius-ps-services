@@ -2372,6 +2372,41 @@ def test_questionary_prefix_jump_keys_move_to_first_matching_choice() -> None:
     assert control.pointed_at == 1
     bindings.handlers["z"](SimpleNamespace(key_sequence=[SimpleNamespace(key="z")]))
     assert control.pointed_at == 1
+    bindings.handlers["g"](SimpleNamespace(key_sequence=[]))
+    assert control.pointed_at == 1
+
+
+def test_collect_leaf_paths_skip_recursive_config_structures() -> None:
+    payload: dict[str, object] = {"name": "demo"}
+    payload["self"] = payload
+    values: list[object] = ["first"]
+    values.append(values)
+
+    assert cli._collect_scalar_leaf_paths(payload) == [("name",)]
+    assert cli._collect_promptable_leaf_paths(values) == [(0,)]
+
+
+def test_grafana_export_auth_candidates_suppress_bearer_warning_for_basic_auth(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    def fake_bearer_auth_candidates(**kwargs: object) -> list[object]:
+        captured.update(kwargs)
+        return []
+
+    monkeypatch.setenv("GRAFANA_PASSWORD", "secret")
+    monkeypatch.setattr(cli, "bearer_auth_candidates", fake_bearer_auth_candidates)
+
+    candidates = cli._grafana_export_auth_candidates(
+        token_env="",
+        username="admin",
+        password_env="GRAFANA_PASSWORD",
+    )
+
+    assert captured["on_warning"] is None
+    assert len(candidates) == 1
+    assert candidates[0].source == "Basic auth user admin"
 
 
 def test_grafana_command_attaches_local_dashboard_json_without_api_calls(

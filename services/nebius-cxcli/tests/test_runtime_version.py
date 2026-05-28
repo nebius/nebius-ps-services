@@ -71,6 +71,17 @@ def test_version_from_setuptools_scm_uses_nested_scm_describe_command(monkeypatc
     assert "git_describe_command" not in captured
 
 
+def test_version_from_setuptools_scm_falls_back_on_unexpected_failure(monkeypatch) -> None:
+    def fake_get_version(**_kwargs):
+        raise RuntimeError("setuptools-scm failed")
+
+    monkeypatch.setitem(
+        sys.modules, "setuptools_scm", SimpleNamespace(get_version=fake_get_version)
+    )
+
+    assert runtime_version._version_from_setuptools_scm(Path("/tmp/repo")) is None
+
+
 def test_version_from_source_tree_falls_back_to_git_describe(monkeypatch) -> None:
     source_root = Path("/tmp/repo/services/nebius-cxcli")
 

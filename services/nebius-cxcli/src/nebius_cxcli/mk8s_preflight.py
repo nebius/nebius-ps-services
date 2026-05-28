@@ -214,8 +214,12 @@ def validate_mk8s_network_preflight(config: Any) -> None:
             pool_cidr = pool_cidrs[0]
             try:
                 pool_prefix = ipaddress.ip_network(pool_cidr, strict=False).prefixlen
-            except Exception:
-                continue
+            except ValueError as exc:
+                raise RuntimeError(
+                    "MK8s network preflight failed: "
+                    f"component '{component.component_label}' subnet {subnet_id} "
+                    f"returned malformed pool CIDR {pool_cidr!r}."
+                ) from exc
 
             service_prefix = service_prefixes[0]
             if service_prefix <= pool_prefix:

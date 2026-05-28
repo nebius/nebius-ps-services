@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Mapping, Sequence
 from typing import Any
 
@@ -11,6 +12,7 @@ from .deploy_targets import app_chart_target_ref
 from .runtime_introspection import module_variables
 
 _SOPERATOR_INSTALL_MODE_PRODUCTION = "production-cluster"
+_LOGGER = logging.getLogger(__name__)
 
 
 def _normalize_leaf_name(value: str) -> str:
@@ -45,7 +47,12 @@ def _entry_declares_module_input(entry: ComponentEntry | None, input_name: str) 
         module_input_names = {
             _normalize_leaf_name(variable.name) for variable in module_variables(source)
         }
-    except Exception:
+    except (OSError, RuntimeError, ValueError) as exc:
+        _LOGGER.warning(
+            "Unable to inspect module inputs for %s while pruning MK8s node-group defaults: %s",
+            source,
+            exc,
+        )
         return True
     return _normalize_leaf_name(input_name) in module_input_names
 
@@ -166,7 +173,11 @@ def _infra_entry_by_id(
         return {entry.id: entry for entry in infra_entries}
     try:
         return {entry.id: entry for entry in component_entries("infra")}
-    except Exception:
+    except (OSError, RuntimeError, ValueError) as exc:
+        _LOGGER.warning(
+            "Unable to load infra component sources while pruning MK8s node-group defaults: %s",
+            exc,
+        )
         return {}
 
 

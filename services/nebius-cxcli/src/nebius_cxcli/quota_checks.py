@@ -1018,7 +1018,6 @@ class _QuotaSession:
                 GetByNameRequest(parent_id=project_id, name=platform)
             ).wait()
         except Exception:
-            self._preset_cache[cache_key] = None
             return None
 
         spec = getattr(resource, "spec", None)

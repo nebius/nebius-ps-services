@@ -489,6 +489,28 @@ def test_provider_option_lookup_records_plugin_error(monkeypatch) -> None:
     assert lookup.last_error() == "vendor_networks: plugin resolver exploded"
 
 
+def test_provider_option_lookup_records_plugin_load_error(monkeypatch) -> None:
+    provider_options._load_option_plugins.cache_clear()
+    monkeypatch.setenv(
+        "NEBIUS_CXCLI_PROVIDER_OPTION_PLUGINS",
+        "missing_provider_plugin:choices",
+    )
+
+    lookup = ProviderOptionLookup()
+    resolved = lookup.resolve(
+        provider="vendor_networks",
+        args={},
+        payload={},
+        field_path="infra.components[0].inputs.network_id",
+    )
+
+    assert resolved == []
+    assert lookup.last_error()
+    assert "Provider option plugin 'missing_provider_plugin:choices' could not be loaded" in (
+        lookup.last_error() or ""
+    )
+
+
 def test_provider_option_lookup_sdk_uses_shared_sdk_auth(monkeypatch) -> None:
     lookup = ProviderOptionLookup()
     captured: dict[str, object] = {}

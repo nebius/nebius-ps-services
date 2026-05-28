@@ -530,6 +530,7 @@ def test_write_inventory_includes_live_grafana_urls_when_status_exists(tmp_path:
                         "traces_url_kind": "dashboard",
                         "traces_url": "http://203.0.113.10/goto/traces123?orgId=1",
                         "dashboards_url": "http://203.0.113.10/dashboards",
+                        "root_url_warning": "Timed out waiting for Grafana root_url",
                     }
                 ]
             }
@@ -566,6 +567,7 @@ def test_write_inventory_includes_live_grafana_urls_when_status_exists(tmp_path:
         "  - [Nebius VM Logs](http://203.0.113.10/d/cxcli-vm-logs?orgId=1) (`nebius-vm/vm-logs`)"
     ) in markdown
     assert "- Credentials: user `admin`; password command:" in markdown
+    assert "- Root URL note: `Timed out waiting for Grafana root_url`" in markdown
     assert (
         "- Credentials: user `admin`; password command:\n\n"
         "```bash\n"

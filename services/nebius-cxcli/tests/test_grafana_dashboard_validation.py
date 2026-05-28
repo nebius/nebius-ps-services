@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from importlib import resources
 
+import pytest
+
 import nebius_cxcli.grafana_dashboard_validation as dashboard_validation
 from nebius_cxcli.component_sources import GrafanaDatasourceSpec
 from nebius_cxcli.grafana_runtime import GrafanaReleaseSpec
@@ -11,6 +13,11 @@ from nebius_cxcli.grafana_runtime import GrafanaReleaseSpec
 def _dashboard(name: str) -> dict:
     payload = resources.files("nebius_cxcli").joinpath("grafana_dashboards", name).read_text()
     return json.loads(payload)
+
+
+def test_dashboard_payload_invalid_json_includes_response_snippet() -> None:
+    with pytest.raises(RuntimeError, match="not-json-response"):
+        dashboard_validation._dashboard_payload("not-json-response")
 
 
 def test_bundled_metrics_dashboard_contract_matches_nebius_user_metrics_labels() -> None:

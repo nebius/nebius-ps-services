@@ -927,6 +927,49 @@ def test_keep_mk8s_node_group_defaults_when_custom_module_declares_input(monkeyp
     assert "node_group_defaults" in payload["infra"]["components"][0]["inputs"]
 
 
+def test_keep_mk8s_node_group_defaults_when_module_introspection_fails(
+    monkeypatch,
+    caplog,
+) -> None:
+    payload = {
+        "infra": {
+            "components": [
+                {
+                    "id": "mk8s",
+                    "instance_id": "cluster1",
+                    "enabled": True,
+                    "inputs": {
+                        "node_group_defaults": {
+                            "gpu": {
+                                "platform": "gpu-h100-sxm",
+                                "preset": "1gpu-16vcpu-200gb",
+                            }
+                        }
+                    },
+                }
+            ]
+        },
+        "apps": {"charts": []},
+    }
+    entry = ComponentEntry(
+        id="mk8s",
+        scope="infra",
+        config_path="infra.mk8s",
+        description="custom mk8s",
+        source="../custom-mk8s",
+    )
+    monkeypatch.setattr(
+        "nebius_cxcli.mk8s_node_group_defaults.module_variables",
+        lambda _source: (_ for _ in ()).throw(RuntimeError("metadata failed")),
+    )
+    caplog.set_level("WARNING", logger="nebius_cxcli.mk8s_node_group_defaults")
+
+    _prune_mk8s_node_group_defaults_without_soperator(payload, infra_entries=(entry,))
+
+    assert "node_group_defaults" in payload["infra"]["components"][0]["inputs"]
+    assert "Unable to inspect module inputs" in caplog.text
+
+
 def test_keep_mk8s_node_group_defaults_when_catalog_seeds_helper() -> None:
     payload = {
         "infra": {

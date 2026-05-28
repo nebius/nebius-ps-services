@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import math
 import re
 from dataclasses import dataclass
@@ -28,6 +29,7 @@ _VM_STYLE_BOOT_DISK_INPUTS = frozenset(
         "boot_disk_type",
     }
 )
+_LOGGER = logging.getLogger(__name__)
 
 
 class ComputeBootDiskRecommendationError(ValueError):
@@ -98,7 +100,8 @@ def _vm_style_component_ids() -> frozenset[str]:
     ids: set[str] = set()
     try:
         modules = load_component_sources().tf_modules
-    except Exception:
+    except (OSError, RuntimeError, ValueError) as exc:
+        _LOGGER.warning("Unable to load component sources for VM-style boot-disk defaults: %s", exc)
         return frozenset()
     for module in modules:
         source = str(module.metadata_source or module.source or "").strip()

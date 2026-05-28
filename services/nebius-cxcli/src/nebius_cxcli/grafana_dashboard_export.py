@@ -140,8 +140,9 @@ def bearer_auth_candidates(
     token_env: str = "",
     env: Mapping[str, str] | None = None,
     run: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
+    on_warning: Callable[[str], None] | None = None,
 ) -> list[GrafanaAuth]:
-    resolved_env = env or os.environ
+    resolved_env = env if env is not None else os.environ
     candidates: list[GrafanaAuth] = []
     seen_tokens: set[str] = set()
 
@@ -154,6 +155,8 @@ def bearer_auth_candidates(
 
     add_token(str(resolved_env.get("GRAFANA_TOKEN") or ""), "GRAFANA_TOKEN")
     add_token(str(resolved_env.get("NEBIUS_IAM_TOKEN") or ""), "NEBIUS_IAM_TOKEN")
+    deferred_token = str(resolved_env.get(token_env) or "").strip() if token_env else ""
+    should_warn_cli_token_failure = not candidates and not deferred_token
     try:
         cp = run(
             ["nebius", "iam", "get-access-token", "--format", "text"],
@@ -163,8 +166,18 @@ def bearer_auth_candidates(
             timeout=10,
         )
         add_token(str(cp.stdout or ""), "nebius iam get-access-token")
-    except Exception:
-        pass
+    except (FileNotFoundError, OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+        if on_warning is not None and should_warn_cli_token_failure:
+            if isinstance(exc, subprocess.CalledProcessError):
+                detail = str(exc.stderr or exc.output or exc).strip()
+            elif isinstance(exc, subprocess.TimeoutExpired):
+                detail = f"timed out after {exc.timeout}s"
+            else:
+                detail = str(exc).strip()
+            on_warning(
+                "Unable to read a Nebius IAM token with "
+                f"`nebius iam get-access-token`: {detail or exc.__class__.__name__}."
+            )
     if token_env:
         add_token(str(resolved_env.get(token_env) or ""), token_env)
     return candidates
@@ -419,6 +432,7 @@ def write_dashboard_file(path: Path, dashboard: Mapping[str, object], *, overwri
         temp_path = Path(handle.name)
         handle.write(rendered)
     try:
+        temp_path.chmod(0o600)
         temp_path.replace(path)
     except Exception:
         if temp_path.exists():

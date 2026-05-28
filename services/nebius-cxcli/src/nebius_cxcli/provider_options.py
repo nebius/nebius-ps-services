@@ -186,10 +186,10 @@ def _load_option_plugins(specs: str) -> tuple[ProviderOptionPlugin, ...]:
         try:
             module = importlib.import_module(module_name.strip())
             resolver = getattr(module, function_name.strip(), None)
-        except Exception:
-            continue
+        except Exception as exc:
+            raise RuntimeError(f"Provider option plugin {spec!r} could not be loaded: {exc}") from exc
         if not callable(resolver):
-            continue
+            raise RuntimeError(f"Provider option plugin {spec!r} did not resolve to a callable")
         plugins.append(cast(ProviderOptionPlugin, resolver))
     return tuple(plugins)
 
@@ -307,7 +307,7 @@ def _apply_choice_filter(
 def _mk8s_gpu_preference_lists() -> tuple[tuple[str, ...], tuple[str, ...]]:
     try:
         from .component_sources import load_component_sources, tf_module_source_by_id
-    except Exception:
+    except (ImportError, OSError, RuntimeError, ValueError):
         return (), ()
     settings = tf_module_source_by_id("mk8s", sources=load_component_sources())
     if settings is None:
@@ -1815,7 +1815,8 @@ class ProviderOptionLookup:
             return ()
         try:
             cached = list_capacity_resource_advice(sdk, parent_id=tenant_id)
-        except Exception:
+        except Exception as exc:
+            self._last_error = f"capacity resource advice lookup failed: {exc}"
             return ()
         self._capacity_resource_advice_cache[tenant_id] = cached
         return cached
@@ -1842,7 +1843,8 @@ class ProviderOptionLookup:
                 GetByNameRequest(parent_id=project_id, name=platform_name),
                 **_provider_request_kwargs(),
             ).wait()
-        except Exception:
+        except Exception as exc:
+            self._last_error = f"compute platform lookup failed for {platform_name}: {exc}"
             return ()
 
         resolved = tuple(

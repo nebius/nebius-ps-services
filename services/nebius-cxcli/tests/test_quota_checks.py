@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import sys
+from types import ModuleType
+
 import pytest
 
 import nebius_cxcli.quota_checks as quota_checks
@@ -1083,6 +1086,65 @@ def test_quota_session_prefers_operator_auth(monkeypatch: pytest.MonkeyPatch) ->
     assert captured["parent_id"] == "project-456"
     assert captured["context"] == "deploy quota assessment"
     assert captured["prefer_operator_auth"] is True
+
+
+def test_quota_session_does_not_cache_transient_preset_lookup_failures(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = 0
+
+    class _FakePlatformServiceClient:
+        def __init__(self, sdk: object) -> None:
+            self.sdk = sdk
+
+        def get_by_name(self, request: object) -> object:
+            nonlocal calls
+            calls += 1
+            raise RuntimeError("transient SDK failure")
+
+    for module_name in (
+        "nebius",
+        "nebius.api",
+        "nebius.api.nebius",
+        "nebius.api.nebius.common",
+        "nebius.api.nebius.compute",
+    ):
+        module = ModuleType(module_name)
+        module.__path__ = []
+        monkeypatch.setitem(sys.modules, module_name, module)
+    common_v1 = ModuleType("nebius.api.nebius.common.v1")
+    common_v1.GetByNameRequest = lambda **kwargs: kwargs
+    compute_v1 = ModuleType("nebius.api.nebius.compute.v1")
+    compute_v1.PlatformServiceClient = _FakePlatformServiceClient
+    monkeypatch.setitem(sys.modules, "nebius.api.nebius.common.v1", common_v1)
+    monkeypatch.setitem(sys.modules, "nebius.api.nebius.compute.v1", compute_v1)
+
+    session = object.__new__(quota_checks._QuotaSession)
+    session._sdk = object()
+    session._context = "test"
+    session._npc_path = ""
+    session._preset_cache = {}
+    session._capacity_resource_advice_cache = {}
+    session._quota_cache = {}
+
+    assert (
+        session.preset_resources(
+            project_id="project-123",
+            platform="cpu-d3",
+            preset="4vcpu-16gb",
+        )
+        is None
+    )
+    assert (
+        session.preset_resources(
+            project_id="project-123",
+            platform="cpu-d3",
+            preset="4vcpu-16gb",
+        )
+        is None
+    )
+    assert calls == 2
+    assert session._preset_cache == {}
 
 
 def test_format_quota_report_lines_include_unresolved_limits() -> None:

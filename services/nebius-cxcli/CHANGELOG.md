@@ -6,6 +6,10 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Hardened cxcli diagnostics around dynamic provider lookups, Grafana runtime
+  status, deployment status pollers, MK8s preflight, quota preset lookup
+  retries, emitted kubectl helper commands, and malformed JSON responses so
+  transient or malformed inputs no longer degrade into silent empty results.
 - Made NCCL launcher placement resource-aware: cxcli now pins the launcher to
   non-GPU nodes only when they have enough scheduler-visible CPU/memory
   headroom, otherwise it falls back to GPU-node headroom accounting.

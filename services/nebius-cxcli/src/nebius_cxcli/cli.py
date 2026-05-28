@@ -1008,6 +1008,7 @@ WIZARD_ABORT_TOKEN = "qq"
 _WIZARD_BACK_CHOICE = "__wizard_back__"
 _WIZARD_QUIT_CHOICE = "__wizard_quit__"
 PayloadPath = tuple[str | int, ...]
+_MAX_COLLECT_LEAF_DEPTH = 128
 _TEMP_PRIVATE_KEY_FILES: list[Path] = []
 _RUNTIME_TF_SERVICE_ACCOUNT_NAME = "nebius-cxcli-tf-sa"
 _MYSTERYBOX_ESO_SERVICE_ACCOUNT_NAME = "mysterybox-sa"
@@ -1961,7 +1962,10 @@ def _register_questionary_prefix_jump_keys(question: Any) -> None:
         return
 
     def _jump_to_prefix(event: Any) -> None:
-        key = str(getattr(event.key_sequence[0], "key", "") or "").casefold()
+        key_event = event.key_sequence[0] if getattr(event, "key_sequence", None) else None
+        key = str(getattr(key_event, "key", "") or "").casefold()
+        if not key:
+            return
         choices = list(
             getattr(control, "filtered_choices", None) or getattr(control, "choices", ())
         )
@@ -7637,34 +7641,106 @@ def _delete_payload_value(payload: object, path: PayloadPath) -> None:
     _delete(payload, path)
 
 
-def _collect_scalar_leaf_paths(node: object, *, prefix: PayloadPath = ()) -> list[PayloadPath]:
+def _collect_scalar_leaf_paths(
+    node: object,
+    *,
+    prefix: PayloadPath = (),
+    _seen: set[int] | None = None,
+    _depth: int = 0,
+) -> list[PayloadPath]:
     if isinstance(node, dict):
+        if _depth >= _MAX_COLLECT_LEAF_DEPTH:
+            return []
+        seen = set() if _seen is None else _seen
+        node_id = id(node)
+        if node_id in seen:
+            return []
+        seen.add(node_id)
         leaf_paths: list[PayloadPath] = []
         for key, value in node.items():
-            leaf_paths.extend(_collect_scalar_leaf_paths(value, prefix=prefix + (key,)))
+            leaf_paths.extend(
+                _collect_scalar_leaf_paths(
+                    value,
+                    prefix=prefix + (key,),
+                    _seen=seen,
+                    _depth=_depth + 1,
+                )
+            )
+        seen.discard(node_id)
         return leaf_paths
     if isinstance(node, list):
+        if _depth >= _MAX_COLLECT_LEAF_DEPTH:
+            return []
+        seen = set() if _seen is None else _seen
+        node_id = id(node)
+        if node_id in seen:
+            return []
+        seen.add(node_id)
         leaf_paths: list[PayloadPath] = []
         for index, value in enumerate(node):
-            leaf_paths.extend(_collect_scalar_leaf_paths(value, prefix=prefix + (index,)))
+            leaf_paths.extend(
+                _collect_scalar_leaf_paths(
+                    value,
+                    prefix=prefix + (index,),
+                    _seen=seen,
+                    _depth=_depth + 1,
+                )
+            )
+        seen.discard(node_id)
         return leaf_paths
     return [prefix]
 
 
-def _collect_promptable_leaf_paths(node: object, *, prefix: PayloadPath = ()) -> list[PayloadPath]:
+def _collect_promptable_leaf_paths(
+    node: object,
+    *,
+    prefix: PayloadPath = (),
+    _seen: set[int] | None = None,
+    _depth: int = 0,
+) -> list[PayloadPath]:
     if isinstance(node, dict):
         if not node:
             return [prefix]
+        if _depth >= _MAX_COLLECT_LEAF_DEPTH:
+            return []
+        seen = set() if _seen is None else _seen
+        node_id = id(node)
+        if node_id in seen:
+            return []
+        seen.add(node_id)
         leaf_paths: list[PayloadPath] = []
         for key, value in node.items():
-            leaf_paths.extend(_collect_promptable_leaf_paths(value, prefix=prefix + (key,)))
+            leaf_paths.extend(
+                _collect_promptable_leaf_paths(
+                    value,
+                    prefix=prefix + (key,),
+                    _seen=seen,
+                    _depth=_depth + 1,
+                )
+            )
+        seen.discard(node_id)
         return leaf_paths
     if isinstance(node, list):
         if not node:
             return [prefix]
+        if _depth >= _MAX_COLLECT_LEAF_DEPTH:
+            return []
+        seen = set() if _seen is None else _seen
+        node_id = id(node)
+        if node_id in seen:
+            return []
+        seen.add(node_id)
         leaf_paths: list[PayloadPath] = []
         for index, value in enumerate(node):
-            leaf_paths.extend(_collect_promptable_leaf_paths(value, prefix=prefix + (index,)))
+            leaf_paths.extend(
+                _collect_promptable_leaf_paths(
+                    value,
+                    prefix=prefix + (index,),
+                    _seen=seen,
+                    _depth=_depth + 1,
+                )
+            )
+        seen.discard(node_id)
         return leaf_paths
     return [prefix]
 
@@ -26909,8 +26985,17 @@ def _grafana_export_auth_candidates(
     username: str,
     password_env: str,
 ) -> tuple[GrafanaAuth, ...]:
-    candidates = bearer_auth_candidates(token_env=str(token_env or "").strip())
     username = str(username or "").strip()
+    candidates = bearer_auth_candidates(
+        token_env=str(token_env or "").strip(),
+        on_warning=(
+            None
+            if username
+            else lambda message: console.print(
+                f"{warning_markup('WARNING:', bold=True)} {escape(message)}"
+            )
+        ),
+    )
     if username:
         password_env = str(password_env or "GRAFANA_PASSWORD").strip()
         password = str(os.environ.get(password_env) or "") if password_env else ""

@@ -104,7 +104,7 @@ nebius-cxcli bootstrap-ci <config.yaml>
   Soperator DCGM exporter disabled unless the operator explicitly opts in.
   Slack webhook URLs and backup credentials stay in runtime Kubernetes Secrets
   instead of `config.yaml` or generated Flux manifests.
-- Target-scoped observability with Nebius Observability Agent, Grafana datasource provisioning, cxcli-owned dashboards, dashboard validation, and deploy-report links.
+- Target-scoped observability with Nebius Observability Agent, Grafana datasource provisioning, cxcli-owned dashboards, dashboard validation, deploy-report links, and visible Grafana runtime diagnostics when public URL reconciliation cannot finish.
 - `grafana` exports or normalizes dashboard JSON and can attach deploy-ready imports to `component_sources.yaml`.
 - Native External Secrets Operator for MysteryBox sync with generated `ClusterSecretStore`/`ExternalSecret` resources, and runtime connectivity validation.
 - Customer CI workflow generation plus runtime auth/profile helpers for local and generated workflow use.
@@ -660,6 +660,7 @@ What `status` is doing:
 - The bundled `sfs` component is the ordered-source example: `status.name_inputs: [filesystems, name]` watches each configured `inputs.filesystems` entry when present and otherwise falls back to scalar `inputs.name`.
 - Supported bundled watcher kinds currently include `nebius.mk8s.cluster`, `nebius.msp.postgresql.cluster`, `nebius.compute.filesystem`, `nebius.compute.instance`, `nebius.mysterybox.secret`, and `nebius.storage.bucket`.
 - Fail-fast behavior is service-native: MK8s watchers inspect live node-group events, while the PostgreSQL/filesystem/compute-instance/MysteryBox/object-storage watchers combine live resource state with the latest terminal Nebius operation status for that resource.
+- If one watcher cannot evaluate terminal operation status, the merged status output reports that watcher as terminal-check unavailable instead of hiding the failed sub-poller; this diagnostic does not abort Terraform by itself.
 
 Example:
 
@@ -2107,6 +2108,7 @@ nebius-cxcli flux bootstrap /path/to/generated
   - Nebius API status polling for infra is catalog-driven per Terraform module. The generated manifest snapshots enabled module watcher specs, and `deploy`/`terraform apply` fall back to the active catalog when older generated bundles do not have that metadata yet.
   - Each watcher resolves its `parent_id` and `resource_name` from the enabled component row in `config.yaml`, using the catalog's `status.parent_input` and `status.name_input` paths. For example, `mk8s` reads `inputs.cluster.parent_id` plus `inputs.cluster.cluster_name`, `managed-postgresql` reads `inputs.parent_id` plus `inputs.name`, `object-storage` reads `inputs.parent_id` plus `inputs.name`, SSH/WireGuard public VM wrappers read `inputs.parent_id` plus `inputs.name`, and `mysterybox` expands the canonical `inputs.secrets` list into one watcher per configured secret `name`.
   - Status output reads Nebius service-native response fields directly. MK8s watchers fail fast from node-group error events, and the PostgreSQL, SFS, object-storage, compute-instance, and MysteryBox watchers fail fast from terminal Nebius operation status once the resource is visible, so long-running applies do not sit on generic Terraform timeouts after the API already knows the operation has failed.
+  - A watcher terminal-check failure is shown as an API status diagnostic but does not abort Terraform unless a watcher reports an actual terminal Nebius resource failure.
   - `deploy` does not run `flux bootstrap`; use `flux bootstrap` itself or the generated CI apply workflow when you want GitOps bootstrap/reconcile.
   - `deploy` does not run `bootstrap-ci` automatically, even when the bundle lives inside a git repository. GitHub workflow/environment bootstrap stays an explicit generator-side step.
   - Example: `nebius-cxcli deploy ~/deployments/tenant-name-example/project-name-example/config.yaml`

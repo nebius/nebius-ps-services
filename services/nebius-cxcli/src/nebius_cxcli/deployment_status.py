@@ -1140,6 +1140,13 @@ class _MysteryBoxSecretStatusPoller:
 class _CompositeStatusPoller:
     def __init__(self, pollers: tuple[tuple[str, Any], ...]) -> None:
         self._pollers = pollers
+        self._terminal_check_warnings: dict[str, str] = {}
+
+    def _terminal_check_warning_summary(self) -> str:
+        return " | ".join(
+            f"{label}: terminal check unavailable ({detail})"
+            for label, detail in self._terminal_check_warnings.items()
+        )
 
     def summary(self) -> str:
         summaries: list[str] = []
@@ -1148,6 +1155,9 @@ class _CompositeStatusPoller:
                 summaries.append(poller.summary())
             except Exception as exc:
                 summaries.append(f"{label}: unavailable ({_shorten(str(exc), limit=96)})")
+        diagnostic = self._terminal_check_warning_summary()
+        if diagnostic:
+            summaries.append(diagnostic)
         return (
             " | ".join(summary for summary in summaries if summary)
             or "API unavailable; heartbeat only"
@@ -1157,8 +1167,13 @@ class _CompositeStatusPoller:
         for label, poller in self._pollers:
             try:
                 failure = poller.terminal_failure()
-            except Exception:
+            except Exception as exc:
+                self._terminal_check_warnings[label] = _shorten(
+                    str(exc) or exc.__class__.__name__,
+                    limit=96,
+                )
                 continue
+            self._terminal_check_warnings.pop(label, None)
             if failure:
                 return f"{label}: {failure}"
         return None

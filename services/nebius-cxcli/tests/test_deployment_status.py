@@ -850,6 +850,44 @@ def test_deployment_status_reporter_supports_multiple_manifest_watchers(monkeypa
     )
 
 
+def test_composite_status_poller_reports_terminal_check_errors_without_abort() -> None:
+    class _BrokenTerminalCheckPoller:
+        def summary(self) -> str:
+            return "managed-postgresql pgsql1 (pg-123): RUNNING."
+
+        def terminal_failure(self) -> str | None:
+            raise RuntimeError("operation API unavailable")
+
+        def close(self) -> None:
+            return
+
+    class _HealthyPoller:
+        def summary(self) -> str:
+            return "sfs sharedfs (fs-123): READY."
+
+        def terminal_failure(self) -> str | None:
+            return None
+
+        def close(self) -> None:
+            return
+
+    poller = deployment_status_module._CompositeStatusPoller(
+        (
+            ("managed-postgresql 'pgsql1'", _BrokenTerminalCheckPoller()),
+            ("sfs 'sharedfs'", _HealthyPoller()),
+        )
+    )
+
+    assert poller.terminal_failure() is None
+    summary = poller.summary()
+    assert "managed-postgresql pgsql1 (pg-123): RUNNING" in summary
+    assert "sfs sharedfs (fs-123): READY" in summary
+    assert (
+        "managed-postgresql 'pgsql1': terminal check unavailable "
+        "(operation API unavailable)"
+    ) in summary
+
+
 def test_object_storage_status_poller_reads_bucket_state(monkeypatch) -> None:
     sdk = SimpleNamespace(sync_close=lambda: None)
     captured: dict[str, object] = {}

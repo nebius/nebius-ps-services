@@ -205,6 +205,30 @@ def test_bearer_auth_candidates_follow_documented_order() -> None:
     ]
 
 
+def test_bearer_auth_candidates_warn_when_cli_token_lookup_fails() -> None:
+    warnings: list[str] = []
+
+    def fake_run(args: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        raise subprocess.CalledProcessError(
+            1,
+            args,
+            output="",
+            stderr="not logged in",
+        )
+
+    candidates = grafana_export.bearer_auth_candidates(
+        env={},
+        run=fake_run,
+        on_warning=warnings.append,
+    )
+
+    assert candidates == []
+    assert warnings == [
+        "Unable to read a Nebius IAM token with "
+        "`nebius iam get-access-token`: not logged in."
+    ]
+
+
 def test_list_folders_sorts_by_title_then_uid(monkeypatch: pytest.MonkeyPatch) -> None:
     def fake_get_json(
         _base_url: str,
@@ -338,6 +362,7 @@ def test_write_dashboard_file_requires_overwrite_for_existing_file(tmp_path: Pat
         "uid": "cluster",
         "title": "Cluster",
     }
+    assert target.stat().st_mode & 0o777 == 0o600
 
 
 def test_attach_dashboards_to_catalog_creates_provider_and_dashboard_entry(tmp_path: Path) -> None:
