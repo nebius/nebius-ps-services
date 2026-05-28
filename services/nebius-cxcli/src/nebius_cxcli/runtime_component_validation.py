@@ -72,7 +72,7 @@ def validate_component_runtime_rules(
         elif profile == "wireguard_gw":
             _validate_wireguard(payload, get_path, as_text, base, id_pattern)
         elif profile == "ssh_jumphost":
-            _validate_ssh_jumphost(payload, get_path, as_text, base)
+            _validate_ssh_jumphost(payload, get_path, as_text, base, id_pattern)
 
     for entry in component_entries("infra"):
         if getattr(entry, "validation_profile", "") == "mysterybox":
@@ -681,6 +681,13 @@ def _validate_wireguard(
                 f"{base}.create_public_ip_allocation must be false "
                 "when public_ip_allocation_id is set"
             )
+        public_ip_allocation_name = as_text(
+            get_path(payload, f"{base}.public_ip_allocation_name")
+        )
+        if public_ip_allocation_name and not id_pattern.fullmatch(public_ip_allocation_name):
+            raise ValueError(
+                f"{base}.public_ip_allocation_name must use lowercase letters, digits, and hyphens"
+            )
 
         tunnel_cidr = as_text(get_path(payload, f"{base}.wireguard_tunnel_cidr", "10.8.0.1/22"))
         try:
@@ -815,11 +822,19 @@ def _validate_ssh_jumphost(
     get_path: Callable,
     as_text: Callable,
     base: str,
+    id_pattern: Pattern[str],
 ) -> None:
     ssh_jump_enabled = bool(get_path(payload, f"{base}.enabled", False))
     if ssh_jump_enabled:
         ssh_user_name = as_text(get_path(payload, f"{base}.ssh_user_name"))
         _validate_linux_user_name(ssh_user_name, field_label=f"{base}.ssh_user_name")
+        public_ip_allocation_name = as_text(
+            get_path(payload, f"{base}.public_ip_allocation_name")
+        )
+        if public_ip_allocation_name and not id_pattern.fullmatch(public_ip_allocation_name):
+            raise ValueError(
+                f"{base}.public_ip_allocation_name must use lowercase letters, digits, and hyphens"
+            )
         allowed_cidrs = get_path(payload, f"{base}.allowed_cidrs", [])
         if not isinstance(allowed_cidrs, list) or not allowed_cidrs:
             raise ValueError(

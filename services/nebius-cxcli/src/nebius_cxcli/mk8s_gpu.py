@@ -2707,6 +2707,39 @@ def _gpu_nodes_with_free_capacity(
     return free_nodes, saturated_nodes
 
 
+def _node_free_cpu_memory(
+    node: Mapping[str, Any],
+    requested_by_node: Mapping[str, Mapping[str, int]],
+) -> tuple[int, int]:
+    name = _as_text(node.get("name"))
+    used = requested_by_node.get(name, {})
+    free_cpu_millicores = max(
+        0,
+        int(node.get("allocatable_cpu_millicores", 0) or 0)
+        - int(used.get("cpu_millicores", 0) or 0),
+    )
+    free_memory_bytes = max(
+        0,
+        int(node.get("allocatable_memory_bytes", 0) or 0)
+        - int(used.get("memory_bytes", 0) or 0),
+    )
+    return free_cpu_millicores, free_memory_bytes
+
+
+def _node_has_cpu_memory_headroom(
+    node: Mapping[str, Any],
+    requested_by_node: Mapping[str, Mapping[str, int]],
+    *,
+    required_cpu_millicores: int,
+    required_memory_bytes: int,
+) -> bool:
+    free_cpu_millicores, free_memory_bytes = _node_free_cpu_memory(node, requested_by_node)
+    return (
+        free_cpu_millicores >= required_cpu_millicores
+        and free_memory_bytes >= required_memory_bytes
+    )
+
+
 def _write_nccl_skip_report(
     *,
     spec: Mapping[str, Any],
@@ -2784,14 +2817,6 @@ def _nccl_live_runtime_overrides(
     worker_names = {
         _as_text(node.get("name")) for node in worker_nodes if _as_text(node.get("name"))
     }
-    launcher_candidates = tuple(
-        sorted(
-            _as_text(node.get("name"))
-            for node in ready_nodes
-            if _as_text(node.get("name")) not in worker_names
-            and int(node.get("gpu_count", 0) or 0) <= 0
-        )
-    )
 
     chart_values = spec.get("chart_values")
     values_map = dict(chart_values) if isinstance(chart_values, dict) else {}
@@ -2808,6 +2833,20 @@ def _nccl_live_runtime_overrides(
     )
     launcher_cpu_millicores = _parse_cpu_millicores(launcher_requests.get("cpu"))
     launcher_memory_bytes = _parse_memory_bytes(launcher_requests.get("memory"))
+    launcher_candidates = tuple(
+        sorted(
+            _as_text(node.get("name"))
+            for node in ready_nodes
+            if _as_text(node.get("name")) not in worker_names
+            and int(node.get("gpu_count", 0) or 0) <= 0
+            and _node_has_cpu_memory_headroom(
+                node,
+                requested_by_node,
+                required_cpu_millicores=launcher_cpu_millicores,
+                required_memory_bytes=launcher_memory_bytes,
+            )
+        )
+    )
 
     available_cpu_millicores: list[int] = []
     available_memory_bytes: list[int] = []
@@ -2818,16 +2857,9 @@ def _nccl_live_runtime_overrides(
             raise RuntimeError(
                 f"NCCL test could not resolve live node allocatable resources for worker node '{node_name}'."
             )
-        used = requested_by_node.get(node_name, {})
-        free_cpu_millicores = max(
-            0,
-            int(inventory.get("allocatable_cpu_millicores", 0) or 0)
-            - int(used.get("cpu_millicores", 0) or 0),
-        )
-        free_memory_bytes = max(
-            0,
-            int(inventory.get("allocatable_memory_bytes", 0) or 0)
-            - int(used.get("memory_bytes", 0) or 0),
+        free_cpu_millicores, free_memory_bytes = _node_free_cpu_memory(
+            inventory,
+            requested_by_node,
         )
         if not launcher_candidates:
             free_cpu_millicores = max(0, free_cpu_millicores - launcher_cpu_millicores)

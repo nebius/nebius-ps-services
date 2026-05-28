@@ -1136,6 +1136,162 @@ def test_nccl_live_runtime_overrides_prefer_non_gpu_launcher_nodes(
     }
 
 
+def test_nccl_live_runtime_overrides_filters_non_gpu_launcher_nodes_by_headroom(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    worker_nodes = [
+        {"name": "gpu-node-a", "gpu_count": 1, "allocatable_resources": {"nvidia.com/gpu": "1"}},
+        {"name": "gpu-node-b", "gpu_count": 1, "allocatable_resources": {"nvidia.com/gpu": "1"}},
+    ]
+
+    spec = {
+        "chart_values": {
+            "launcher": {
+                "resources": {
+                    "requests": {
+                        "cpu": "2",
+                        "memory": "1Gi",
+                    }
+                }
+            }
+        }
+    }
+
+    monkeypatch.setattr(
+        mk8s_gpu,
+        "_ready_node_inventory",
+        lambda **_kwargs: [
+            {
+                "name": "cpu-low",
+                "gpu_count": 0,
+                "allocatable_cpu_millicores": 4000,
+                "allocatable_memory_bytes": 8 * (1 << 30),
+                "allocatable_resources": {},
+            },
+            {
+                "name": "cpu-ok",
+                "gpu_count": 0,
+                "allocatable_cpu_millicores": 4000,
+                "allocatable_memory_bytes": 8 * (1 << 30),
+                "allocatable_resources": {},
+            },
+            {
+                "name": "gpu-node-a",
+                "gpu_count": 1,
+                "allocatable_cpu_millicores": 16000,
+                "allocatable_memory_bytes": 128 * (1 << 30),
+                "allocatable_resources": {"nvidia.com/gpu": "1"},
+            },
+            {
+                "name": "gpu-node-b",
+                "gpu_count": 1,
+                "allocatable_cpu_millicores": 16000,
+                "allocatable_memory_bytes": 128 * (1 << 30),
+                "allocatable_resources": {"nvidia.com/gpu": "1"},
+            },
+        ],
+    )
+    monkeypatch.setattr(
+        mk8s_gpu,
+        "_pod_request_totals_by_node",
+        lambda **_kwargs: {
+            "cpu-low": {"cpu_millicores": 3000, "memory_bytes": 0},
+            "cpu-ok": {"cpu_millicores": 1000, "memory_bytes": 1 << 30},
+            "gpu-node-a": {"cpu_millicores": 0, "memory_bytes": 0},
+            "gpu-node-b": {"cpu_millicores": 0, "memory_bytes": 0},
+        },
+    )
+
+    overrides, metadata = mk8s_gpu._nccl_live_runtime_overrides(
+        spec=spec,
+        worker_nodes=worker_nodes,
+        extra_env=None,
+    )
+
+    assert overrides["worker"]["resources"]["requests"] == {"cpu": "16000m", "memory": "128Gi"}
+    assert overrides["launcher"]["affinity"]["nodeAffinity"][
+        "requiredDuringSchedulingIgnoredDuringExecution"
+    ]["nodeSelectorTerms"][0]["matchExpressions"][0] == {
+        "key": "kubernetes.io/hostname",
+        "operator": "In",
+        "values": ["cpu-ok"],
+    }
+    assert metadata["launcher_non_gpu_node_names"] == ["cpu-ok"]
+
+
+def test_nccl_live_runtime_overrides_falls_back_when_non_gpu_launcher_nodes_lack_headroom(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    worker_nodes = [
+        {"name": "gpu-node-a", "gpu_count": 1, "allocatable_resources": {"nvidia.com/gpu": "1"}},
+        {"name": "gpu-node-b", "gpu_count": 1, "allocatable_resources": {"nvidia.com/gpu": "1"}},
+    ]
+
+    spec = {
+        "chart_values": {
+            "launcher": {
+                "resources": {
+                    "requests": {
+                        "cpu": "2",
+                        "memory": "1Gi",
+                    }
+                }
+            }
+        }
+    }
+
+    monkeypatch.setattr(
+        mk8s_gpu,
+        "_ready_node_inventory",
+        lambda **_kwargs: [
+            {
+                "name": "cpu-low",
+                "gpu_count": 0,
+                "allocatable_cpu_millicores": 4000,
+                "allocatable_memory_bytes": 8 * (1 << 30),
+                "allocatable_resources": {},
+            },
+            {
+                "name": "gpu-node-a",
+                "gpu_count": 1,
+                "allocatable_cpu_millicores": 16000,
+                "allocatable_memory_bytes": 128 * (1 << 30),
+                "allocatable_resources": {"nvidia.com/gpu": "1"},
+            },
+            {
+                "name": "gpu-node-b",
+                "gpu_count": 1,
+                "allocatable_cpu_millicores": 16000,
+                "allocatable_memory_bytes": 128 * (1 << 30),
+                "allocatable_resources": {"nvidia.com/gpu": "1"},
+            },
+        ],
+    )
+    monkeypatch.setattr(
+        mk8s_gpu,
+        "_pod_request_totals_by_node",
+        lambda **_kwargs: {
+            "cpu-low": {"cpu_millicores": 3000, "memory_bytes": 0},
+            "gpu-node-a": {"cpu_millicores": 0, "memory_bytes": 0},
+            "gpu-node-b": {"cpu_millicores": 0, "memory_bytes": 0},
+        },
+    )
+
+    overrides, metadata = mk8s_gpu._nccl_live_runtime_overrides(
+        spec=spec,
+        worker_nodes=worker_nodes,
+        extra_env=None,
+    )
+
+    assert overrides["worker"]["resources"]["requests"] == {"cpu": "14000m", "memory": "127Gi"}
+    assert "launcher" not in overrides
+    assert metadata == {
+        "worker_request_cpu": "14000m",
+        "worker_request_memory": "127Gi",
+        "launcher_non_gpu_node_names": [],
+    }
+
+
 def test_nccl_live_runtime_overrides_subtract_launcher_headroom_without_cpu_nodes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

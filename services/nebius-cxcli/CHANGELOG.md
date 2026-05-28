@@ -6,6 +6,12 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Made NCCL launcher placement resource-aware: cxcli now pins the launcher to
+  non-GPU nodes only when they have enough scheduler-visible CPU/memory
+  headroom, otherwise it falls back to GPU-node headroom accounting.
+- Added strict cxcli validation for `wireguard-gw` and `ssh-jumphost`
+  `inputs.public_ip_allocation_name` values so Terraform resource-name regex
+  failures surface before deploy.
 - Highlighted the NCCL average bus bandwidth value in the generated
   `deploy-report.md` Markdown summary while keeping terminal diagnostics and
   deploy footers plain.

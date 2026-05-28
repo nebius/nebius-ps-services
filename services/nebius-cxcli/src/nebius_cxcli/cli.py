@@ -15326,6 +15326,13 @@ def _jump_host_public_ip_allocation_inputs(component_node: Mapping[str, Any]) ->
     return create_allocation, allocation_id
 
 
+def _jump_host_public_ip_allocation_name(component_node: Mapping[str, Any]) -> str:
+    inputs = component_node.get("inputs", {})
+    if not isinstance(inputs, Mapping):
+        return ""
+    return _non_empty_text(_resolve_mapping_segment(inputs, "public_ip_allocation_name"))
+
+
 def _jump_host_conditionally_required_input_leaf_names(
     component_node: Mapping[str, Any],
 ) -> set[str]:
@@ -16165,6 +16172,12 @@ def _jump_host_public_ip_allocation_issues(payload: dict[str, Any]) -> list[str]
             issues.append(
                 f"{component_label}.inputs.create_public_ip_allocation must be false "
                 "when inputs.public_ip_allocation_id is set"
+            )
+        allocation_name = _jump_host_public_ip_allocation_name(row)
+        if allocation_name and not INSTANCE_ID_PATTERN.fullmatch(allocation_name):
+            issues.append(
+                f"{component_label}.inputs.public_ip_allocation_name must use lowercase "
+                "letters, digits, and hyphens"
             )
     return issues
 

@@ -644,6 +644,49 @@ def test_strict_validation_rejects_public_ip_allocation_id_when_jump_host_create
 @pytest.mark.parametrize(
     ("component_id", "instance_name", "extra_inputs"),
     [
+        ("wireguard-gw", "wg-gw", {"local_subnets": ["10.0.0.0/8"]}),
+        ("ssh-jumphost", "ssh-jh", {"allowed_cidrs": ["203.0.113.10/32"]}),
+    ],
+)
+def test_strict_validation_rejects_invalid_public_ip_allocation_name_for_jump_host(
+    tmp_path: Path,
+    component_id: str,
+    instance_name: str,
+    extra_inputs: dict[str, object],
+) -> None:
+    payload = _starter_payload(selected_infra={component_id}, selected_apps=set())
+    jumphost = _infra_component_row(payload, component_id)
+    _align_infra_resource_name(payload, jumphost, instance_name)
+    jumphost["inputs"] = {
+        "parent_id": "project-456",
+        "subnet_id": "subnet-123",
+        "name": instance_name,
+        "platform": "cpu-d3",
+        "preset": "4vcpu-16gb",
+        "source_image_family": "ubuntu24.04-driverless",
+        "ssh_user_name": "ubuntu",
+        "ssh_public_key": _VALID_ED25519_PUBLIC_KEY,
+        "create_public_ip_allocation": True,
+        "public_ip_allocation_name": "jumpHost_Ip",
+        **extra_inputs,
+    }
+
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+    config = load_config(config_path)
+
+    with pytest.raises(RuntimeError) as exc_info:
+        _validate_strict_config(config)
+
+    assert (
+        f"{_infra_component_path(component_id, instance_name)}.inputs.public_ip_allocation_name "
+        "must use lowercase letters, digits, and hyphens"
+    ) in str(exc_info.value)
+
+
+@pytest.mark.parametrize(
+    ("component_id", "instance_name", "extra_inputs"),
+    [
         ("vm", "vm", {}),
         ("wireguard-gw", "wg-gw", {"local_subnets": ["10.0.0.0/8"]}),
         ("ssh-jumphost", "ssh-jh", {"allowed_cidrs": ["203.0.113.10/32"]}),
