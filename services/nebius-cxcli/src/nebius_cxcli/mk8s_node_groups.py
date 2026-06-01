@@ -50,6 +50,8 @@ class Mk8sNodeGroup:
     platform: str
     preset: str
     node_count: int | None
+    autoscaling_min_node_count: int | None
+    autoscaling_max_node_count: int | None
     gpu_stack_source: str
     gpu_stack_preset: str
     gpu_cluster_key: str
@@ -80,10 +82,18 @@ def _positive_int_or_none(value: Any) -> int | None:
     if isinstance(value, bool) or value is None:
         return None
     try:
-        parsed = int(str(value).strip())
+        if isinstance(value, float):
+            parsed = int(value) if value.is_integer() else -1
+        else:
+            parsed = int(str(value).strip())
     except (TypeError, ValueError):
         return None
     return parsed if parsed >= 0 else None
+
+
+def _autoscaling_enabled(raw_group: Mapping[str, Any]) -> bool:
+    autoscaling = _mapping(raw_group.get("autoscaling"))
+    return bool(autoscaling) and _bool(autoscaling.get("enabled"), default=True)
 
 
 def _infer_gpu_stack_source(raw_group: Mapping[str, Any], *, gpu: bool) -> str:
@@ -147,6 +157,8 @@ def iter_node_groups(inputs: Mapping[str, Any] | None) -> tuple[Mk8sNodeGroup, .
         if not key:
             continue
         gpu = _bool(raw_group.get("gpu"), default=False)
+        autoscaling = _mapping(raw_group.get("autoscaling"))
+        autoscaling_enabled = _autoscaling_enabled(raw_group)
         reservation = _mapping(raw_group.get("reservation"))
         raw_reservation_ids = reservation.get("reservation_ids", [])
         reservation_ids = (
@@ -162,6 +174,16 @@ def iter_node_groups(inputs: Mapping[str, Any] | None) -> tuple[Mk8sNodeGroup, .
                 platform=_text(raw_group.get("platform")),
                 preset=_text(raw_group.get("preset")),
                 node_count=_positive_int_or_none(raw_group.get("node_count")),
+                autoscaling_min_node_count=(
+                    _positive_int_or_none(autoscaling.get("min_node_count"))
+                    if autoscaling_enabled
+                    else None
+                ),
+                autoscaling_max_node_count=(
+                    _positive_int_or_none(autoscaling.get("max_node_count"))
+                    if autoscaling_enabled
+                    else None
+                ),
                 gpu_stack_source=_infer_gpu_stack_source(raw_group, gpu=gpu),
                 gpu_stack_preset=_text(raw_group.get("gpu_stack_preset")),
                 gpu_cluster_key=_text(raw_group.get("gpu_cluster_key")),

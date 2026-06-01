@@ -18,6 +18,7 @@ module "vm" {
   depends_on = [terraform_data.nfs_export_contract]
 
   parent_id             = var.parent_id
+  network_id            = var.network_id
   subnet_id             = var.subnet_id
   name                  = var.name
   platform              = var.platform

@@ -2,6 +2,7 @@ module "ssh_jump_host" {
   source = "../.."
 
   parent_id           = "project-xxxxxxxx"
+  network_id          = "vpcnetwork-xxxxxxxx"
   subnet_id           = "vpcsubnet-xxxxxxxx"
   name                = "example-ssh-jh"
   platform            = "cpu-d3"

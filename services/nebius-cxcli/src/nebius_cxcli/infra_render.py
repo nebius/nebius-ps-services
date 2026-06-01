@@ -11,6 +11,8 @@ from typing import Any
 
 from .cluster_handoffs import Handoff
 from .component_defaults import (
+    component_path_has_material_value,
+    read_component_path,
     resolve_component_defaults,
     set_component_path,
 )
@@ -28,6 +30,7 @@ from .component_wiring import (
     output_lookup,
     resolve_component_output_value,
     resolve_input_binding_source,
+    row_input_bindings,
 )
 from .components import ComponentEntry, component_entries
 from .deploy_targets import app_chart_target_ref
@@ -374,6 +377,13 @@ def _module_inputs_for_terraform(
     return result
 
 
+def _binding_module_input_path(target_path: str) -> str:
+    path = str(target_path or "").strip()
+    if path.startswith("inputs."):
+        return path[len("inputs.") :]
+    return path
+
+
 def _reserved_variable_name(
     base: str,
     *,
@@ -441,6 +451,10 @@ def _enabled_infra_instance_ids(payload: dict[str, Any], component_id: str) -> t
     return tuple(instance_ids)
 
 
+def _enabled_mk8s_target_refs(payload: dict[str, Any]) -> tuple[str, ...]:
+    return _enabled_infra_instance_ids(payload, "mk8s")
+
+
 def _sfs_module_name_for_target(
     payload: dict[str, Any],
     *,
@@ -450,20 +464,23 @@ def _sfs_module_name_for_target(
     sfs_instance_ids = _enabled_infra_instance_ids(payload, "sfs")
     if target_ref in sfs_instance_ids:
         return sfs_module_name_by_instance_id.get(target_ref, "")
-    if len(sfs_instance_ids) == 1:
+    if len(sfs_instance_ids) == 1 and len(_enabled_mk8s_target_refs(payload)) <= 1:
         return sfs_module_name_by_instance_id.get(sfs_instance_ids[0], "")
     return ""
 
 
 def _sfs_filesystem_attachments_expr(
-    module_name: str, filesystem_keys: list[str]
+    module_name: str,
+    filesystem_keys: list[str],
+    *,
+    attach_mode: str = "READ_WRITE",
 ) -> _HclExpression:
     keys_expr = json.dumps(filesystem_keys)
     return _HclExpression(
         "\n".join(
             [
                 f"[for key in {keys_expr} : {{",
-                '  attach_mode = "READ_WRITE"',
+                f"  attach_mode = {json.dumps(attach_mode)}",
                 f"  mount_tag = module.{module_name}.filesystems[key].mount_tag",
                 "  existing_filesystem = {",
                 f"    id = module.{module_name}.filesystems[key].id",
@@ -472,6 +489,53 @@ def _sfs_filesystem_attachments_expr(
             ]
         )
     )
+
+
+def _binding_selected_static_value(
+    *,
+    component_label: str,
+    binding_ref: str,
+    binding: Any,
+    value: Any,
+) -> Any:
+    if not binding.key and not binding.attribute:
+        return value
+    if binding.key is None or binding.attribute is None:
+        raise ValueError(
+            f"infra component '{component_label}' input binding '{binding.target_path}' "
+            f"uses incomplete selector for output '{binding_ref}'"
+        )
+    if not isinstance(value, dict):
+        raise ValueError(
+            f"infra component '{component_label}' input binding '{binding.target_path}' "
+            f"requires map/object output '{binding_ref}'"
+        )
+    if binding.key not in value:
+        raise ValueError(
+            f"infra component '{component_label}' input binding '{binding.target_path}' "
+            f"references missing key '{binding.key}' on output '{binding_ref}'"
+        )
+    selected = value[binding.key]
+    if not isinstance(selected, dict):
+        raise ValueError(
+            f"infra component '{component_label}' input binding '{binding.target_path}' "
+            f"requires object value at '{binding_ref}.{binding.key}'"
+        )
+    if binding.attribute not in selected:
+        raise ValueError(
+            f"infra component '{component_label}' input binding '{binding.target_path}' "
+            f"references missing attribute '{binding.attribute}' on output '{binding_ref}.{binding.key}'"
+        )
+    return selected[binding.attribute]
+
+
+def _binding_output_expression(*, module_name: str, source_path: str, binding: Any) -> _HclExpression:
+    expression = f"module.{module_name}.{source_path}"
+    if binding.key:
+        expression = f"{expression}[{json.dumps(binding.key)}]"
+    if binding.attribute:
+        expression = f"{expression}.{binding.attribute}"
+    return _HclExpression(expression)
 
 
 def _node_group_sfs_filesystem_keys(group_key: str, group: dict[str, Any]) -> list[str]:
@@ -489,6 +553,77 @@ def _node_group_sfs_filesystem_keys(group_key: str, group: dict[str, Any]) -> li
     elif isinstance(explicit_keys, list):
         filesystem_keys.extend(str(key).strip() for key in explicit_keys if str(key).strip())
     return filesystem_keys
+
+
+def _string_list(value: Any) -> list[str]:
+    if isinstance(value, str):
+        return [item.strip() for item in value.split(",") if item.strip()]
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    return []
+
+
+def _vm_sfs_attachments_value(
+    *,
+    attachments: Any,
+    sfs_module_name_by_instance_id: dict[str, str],
+) -> Any:
+    if not isinstance(attachments, list):
+        return None
+
+    literal_items: list[dict[str, Any]] = []
+    expression_lists: list[str] = []
+    for attachment in attachments:
+        if not isinstance(attachment, dict):
+            continue
+        attach_mode = str(attachment.get("attach_mode") or "READ_WRITE").strip() or "READ_WRITE"
+        source_instance = str(attachment.get("source_instance") or "").strip().lower()
+        keys = _string_list(attachment.get("keys") or attachment.get("filesystem_keys"))
+        if source_instance:
+            module_name = sfs_module_name_by_instance_id.get(source_instance)
+            if not module_name:
+                raise ValueError(
+                    f"VM sfs_attachments references missing infra:sfs@{source_instance}"
+                )
+            if not keys:
+                raise ValueError(
+                    f"VM sfs_attachments for infra:sfs@{source_instance} must set keys"
+                )
+            expression_lists.append(
+                _sfs_filesystem_attachments_expr(
+                    module_name,
+                    list(dict.fromkeys(keys)),
+                    attach_mode=attach_mode,
+                ).expression
+            )
+            continue
+
+        filesystem_id = (
+            str(attachment.get("id") or attachment.get("existing_id") or "").strip()
+        )
+        existing_filesystem = attachment.get("existing_filesystem")
+        if not filesystem_id and isinstance(existing_filesystem, dict):
+            filesystem_id = str(existing_filesystem.get("id") or "").strip()
+        mount_tag = str(attachment.get("mount_tag") or "").strip()
+        if not filesystem_id or not mount_tag:
+            raise ValueError(
+                "VM sfs_attachments entries must set source_instance+keys or literal id+mount_tag"
+            )
+        literal_items.append(
+            {
+                "attach_mode": attach_mode,
+                "mount_tag": mount_tag,
+                "existing_filesystem": {"id": filesystem_id},
+            }
+        )
+
+    if not expression_lists:
+        return literal_items or None
+    if literal_items:
+        expression_lists.insert(0, _hcl_value(literal_items, indent=2))
+    if len(expression_lists) == 1:
+        return _HclExpression(expression_lists[0])
+    return _HclExpression(f"concat({', '.join(expression_lists)})")
 
 
 def _truthy(value: Any) -> bool:
@@ -628,6 +763,7 @@ def _build_module_plans(
         wizard_input_roots = _declared_wizard_input_root_keys(entry) if entry is not None else set()
         helper_keys = {
             "module_name",
+            *({"sfs_attachments"} if component_id == "vm" else set()),
             *runtime_only_argument_names,
             *(root for root in wizard_input_roots if root not in declared_argument_names),
         }
@@ -680,6 +816,7 @@ def _build_module_plans(
                 "module_source": module_source,
                 "module_version": module_version,
                 "module_inputs": module_inputs,
+                "cxcli_sfs_attachments": inputs.get("sfs_attachments") if component_id == "vm" else None,
                 "type_hints": _module_type_hints(metadata_module_source),
                 "runtime_only_argument_names": runtime_only_argument_names,
             }
@@ -698,10 +835,12 @@ def _build_module_plans(
         module_source = str(prepared["module_source"])
         module_version = prepared["module_version"]
         module_inputs = dict(prepared["module_inputs"])
+        cxcli_sfs_attachments = prepared["cxcli_sfs_attachments"]
         type_hints = dict(prepared["type_hints"])
         runtime_only_argument_names = set(prepared["runtime_only_argument_names"])
 
-        if entry is not None and entry.input_bindings:
+        catalog_bindings = tuple(entry.input_bindings) if entry is not None else ()
+        if catalog_bindings:
             conflicts = input_binding_conflicts(resolved_item, entry)
             if conflicts:
                 target_path, source_ref = conflicts[0]
@@ -709,64 +848,102 @@ def _build_module_plans(
                     f"infra component '{component_label}' field '{target_path}' is managed by component input "
                     f"binding '{source_ref}' and must not be set explicitly"
                 )
-            for binding in entry.input_bindings:
-                declared_source_ref = component_input_binding_ref(binding)
-                source_entry = all_entry_by_id.get(binding.source_component_id)
-                if source_entry is None:
-                    raise ValueError(
-                        f"infra component '{component_label}' input binding '{binding.target_path}' references "
-                        f"unknown component '{binding.source_component_id}'"
-                    )
-                source_output = output_lookup(source_entry).get(binding.source_output_name)
-                if source_output is None:
-                    raise ValueError(
-                        f"infra component '{component_label}' input binding '{binding.target_path}' references "
-                        f"undeclared output '{declared_source_ref}'"
-                    )
-                _resolved_source_entry, resolved_source_row, source_instance_id = (
-                    resolve_input_binding_source(payload, binding=binding)
-                )
-                source_ref = (
-                    component_output_ref(source_instance_id, binding.source_output_name)
-                    if source_instance_id
-                    else declared_source_ref
+        row_bindings = row_input_bindings(
+            resolved_item,
+            field_label=f"infra component '{component_label}'",
+        )
+        for binding in row_bindings:
+            existing_value = read_component_path(resolved_item, binding.target_path)
+            if component_path_has_material_value(existing_value):
+                raise ValueError(
+                    f"infra component '{component_label}' field '{binding.target_path}' conflicts with "
+                    "row-level binding and must not be set explicitly"
                 )
 
-                static_value = resolve_component_output_value(
-                    payload,
-                    component_id=binding.source_component_id,
-                    output_name=binding.source_output_name,
-                    instance_id=source_instance_id or binding.source_instance_id,
+        for binding in (*catalog_bindings, *row_bindings):
+            declared_source_ref = component_input_binding_ref(binding)
+            source_entry = all_entry_by_id.get(binding.source_component_id)
+            if source_entry is None:
+                raise ValueError(
+                    f"infra component '{component_label}' input binding '{binding.target_path}' references "
+                    f"unknown component '{binding.source_component_id}'"
                 )
-                if static_value is not _UNRESOLVED:
-                    set_component_path(module_inputs, binding.target_path, static_value)
-                    continue
+            source_output = output_lookup(source_entry).get(binding.source_output_name)
+            if source_output is None:
+                raise ValueError(
+                    f"infra component '{component_label}' input binding '{binding.target_path}' references "
+                    f"undeclared output '{declared_source_ref}'"
+                )
+            _resolved_source_entry, _resolved_source_row, source_instance_id = (
+                resolve_input_binding_source(payload, binding=binding)
+            )
+            source_ref = (
+                component_output_ref(source_instance_id, binding.source_output_name)
+                if source_instance_id
+                else declared_source_ref
+            )
 
-                if source_output.kind != "terraform_output":
-                    raise ValueError(
-                        f"infra component '{component_label}' input binding '{binding.target_path}' could not "
-                        f"resolve output '{source_ref}' "
-                        "from the current config payload"
-                    )
-                if source_entry.scope != "infra":
-                    raise ValueError(
-                        f"infra component '{component_label}' input binding '{binding.target_path}' references "
-                        f"Terraform output '{source_ref}' "
-                        f"from non-infra component '{binding.source_component_id}'"
-                    )
-                source_module_name = module_name_by_component_instance.get(
-                    (binding.source_component_id, source_instance_id)
-                )
-                if not source_module_name:
-                    raise ValueError(
-                        f"infra component '{component_label}' input binding '{binding.target_path}' requires "
-                        f"enabled infra component matching '{declared_source_ref}'"
-                    )
+            static_value = resolve_component_output_value(
+                payload,
+                component_id=binding.source_component_id,
+                output_name=binding.source_output_name,
+                instance_id=source_instance_id or binding.source_instance_id,
+            )
+            module_target_path = _binding_module_input_path(binding.target_path)
+            if static_value is not _UNRESOLVED:
                 set_component_path(
                     module_inputs,
-                    binding.target_path,
-                    _HclExpression(f"module.{source_module_name}.{source_output.source_path}"),
+                    module_target_path,
+                    _binding_selected_static_value(
+                        component_label=component_label,
+                        binding_ref=source_ref,
+                        binding=binding,
+                        value=static_value,
+                    ),
                 )
+                continue
+
+            if source_output.kind != "terraform_output":
+                raise ValueError(
+                    f"infra component '{component_label}' input binding '{binding.target_path}' could not "
+                    f"resolve output '{source_ref}' "
+                    "from the current config payload"
+                )
+            if source_entry.scope != "infra":
+                raise ValueError(
+                    f"infra component '{component_label}' input binding '{binding.target_path}' references "
+                    f"Terraform output '{source_ref}' "
+                    f"from non-infra component '{binding.source_component_id}'"
+                )
+            source_module_name = module_name_by_component_instance.get(
+                (binding.source_component_id, source_instance_id)
+            )
+            if not source_module_name:
+                raise ValueError(
+                    f"infra component '{component_label}' input binding '{binding.target_path}' requires "
+                    f"enabled infra component matching '{declared_source_ref}'"
+                )
+            set_component_path(
+                module_inputs,
+                module_target_path,
+                _binding_output_expression(
+                    module_name=source_module_name,
+                    source_path=source_output.source_path,
+                    binding=binding,
+                ),
+            )
+
+        if component_id == "vm" and cxcli_sfs_attachments is not None:
+            if "filesystems" in module_inputs:
+                raise ValueError(
+                    f"infra component '{component_label}' cannot set both filesystems and sfs_attachments"
+                )
+            filesystems_value = _vm_sfs_attachments_value(
+                attachments=cxcli_sfs_attachments,
+                sfs_module_name_by_instance_id=sfs_module_name_by_instance_id,
+            )
+            if filesystems_value is not None:
+                module_inputs["filesystems"] = filesystems_value
 
         _materialize_mk8s_sfs_attachments(
             payload=payload,

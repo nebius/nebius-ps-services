@@ -102,7 +102,7 @@ def test_build_generated_manifest_uses_repo_relative_paths(tmp_path: Path) -> No
         source_profile="portable",
         terraform_tfvars={"mk8s_cluster_name": "clust1"},
         flux_version="v2.8.0",
-        terraform_version="1.14.1",
+        terraform_version="1.15.5",
     )
 
     assert manifest["schema"] == GENERATED_MANIFEST_SCHEMA
@@ -122,7 +122,7 @@ def test_build_generated_manifest_uses_repo_relative_paths(tmp_path: Path) -> No
     }
     assert manifest["tools"] == {
         "flux_version": "v2.8.0",
-        "terraform_version": "1.14.1",
+        "terraform_version": "1.15.5",
     }
     assert manifest["deploy"]["targets"] == [
         {
@@ -204,7 +204,7 @@ def test_write_load_and_runtime_config_round_trip(tmp_path: Path) -> None:
         required_component_outputs=[{"component_id": "mk8s", "output_name": "cluster_id"}],
         terraform_tfvars={"mk8s_cluster_name": "clust1"},
         flux_version="v2.8.0",
-        terraform_version="1.14.1",
+        terraform_version="1.15.5",
     )
 
     assert written_path == manifest_path_for_generated_dir(paths.generated_dir)
@@ -220,7 +220,7 @@ def test_write_load_and_runtime_config_round_trip(tmp_path: Path) -> None:
     assert tfvars == {"mk8s_cluster_name": "clust1"}
     assert loaded["tools"] == {
         "flux_version": "v2.8.0",
-        "terraform_version": "1.14.1",
+        "terraform_version": "1.15.5",
     }
 
 
@@ -236,7 +236,7 @@ def test_write_generated_manifest_to_path_uses_explicit_output_path(tmp_path: Pa
         required_component_outputs=[{"component_id": "mk8s", "output_name": "cluster_id"}],
         terraform_tfvars={"mk8s_cluster_name": "clust1"},
         flux_version="v2.8.0",
-        terraform_version="1.14.1",
+        terraform_version="1.15.5",
     )
 
     assert written_path == explicit_path
@@ -283,7 +283,7 @@ def test_build_generated_manifest_includes_quota_report(tmp_path: Path) -> None:
         },
         terraform_tfvars={"mk8s_cluster_name": "clust1"},
         flux_version="v2.8.0",
-        terraform_version="1.14.1",
+        terraform_version="1.15.5",
     )
 
     assert manifest["quota"]["confirmed_insufficient"] is True

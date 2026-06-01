@@ -2,6 +2,7 @@ module "wireguard_gw" {
   source = "../.."
 
   parent_id           = "project-xxxxxxxx"
+  network_id          = "vpcnetwork-xxxxxxxx"
   subnet_id           = "vpcsubnet-xxxxxxxx"
   name                = "example-wg"
   platform            = "cpu-d3"

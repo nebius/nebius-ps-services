@@ -38,6 +38,9 @@ SUPPORTED_PROVIDER_OPTION_SOURCES = frozenset(
         "compute_boot_disk_types",
         "capacity_block_groups",
         "operator_public_ip_cidr",
+        "project_filesystems",
+        "project_private_allocations",
+        "project_private_pools",
         "project_subnets",
         "project_networks",
         "tenant_projects",
@@ -55,6 +58,7 @@ _REQUEST_TIMEOUT_ENV = "NEBIUS_CXCLI_PROVIDER_REQUEST_TIMEOUT_SECONDS"
 _DEFAULT_REQUEST_TIMEOUT_SECONDS = 15.0
 _NEBIUS_LIST_PAGE_SIZE = 999
 _CAPACITY_BLOCK_GROUP_LIST_PAGE_SIZE = 200
+_DEFAULT_PROJECT_NETWORK_NAME = "default-network"
 
 
 @dataclass(frozen=True)
@@ -144,6 +148,10 @@ def _normalize_plugin_choices(items: Iterable[object] | None) -> list[OptionChoi
     return out
 
 
+def _is_default_project_network_name(value: str) -> bool:
+    return value.strip().casefold() == _DEFAULT_PROJECT_NETWORK_NAME
+
+
 def _is_live_fabric_name(value: object) -> bool:
     normalized = _as_str(value)
     return bool(normalized) and normalized.upper() not in {"N/A", "NA", "NONE"}
@@ -187,7 +195,9 @@ def _load_option_plugins(specs: str) -> tuple[ProviderOptionPlugin, ...]:
             module = importlib.import_module(module_name.strip())
             resolver = getattr(module, function_name.strip(), None)
         except Exception as exc:
-            raise RuntimeError(f"Provider option plugin {spec!r} could not be loaded: {exc}") from exc
+            raise RuntimeError(
+                f"Provider option plugin {spec!r} could not be loaded: {exc}"
+            ) from exc
         if not callable(resolver):
             raise RuntimeError(f"Provider option plugin {spec!r} did not resolve to a callable")
         plugins.append(cast(ProviderOptionPlugin, resolver))
@@ -260,6 +270,87 @@ def _as_str(value: object | None) -> str | None:
         return None
     text = str(value).strip()
     return text or None
+
+
+def _enum_token(value: object | None) -> str:
+    name = getattr(value, "name", None)
+    if name:
+        return str(name).strip().rsplit(".", maxsplit=1)[-1].upper()
+    text = _as_str(value) or ""
+    return text.rsplit(".", maxsplit=1)[-1].upper()
+
+
+def _cidr_text(value: object | None) -> str | None:
+    return _as_str(getattr(value, "cidr", None)) or _as_str(value)
+
+
+def _cidr_texts(values: object) -> tuple[str, ...]:
+    return tuple(
+        cidr for cidr in (_cidr_text(item) for item in list(values or [])) if cidr
+    )
+
+
+def _arg_texts(value: object) -> tuple[str, ...]:
+    if value is None:
+        return ()
+    if isinstance(value, str):
+        return tuple(item.strip() for item in value.split(",") if item.strip())
+    if isinstance(value, Mapping):
+        return ()
+    if isinstance(value, Iterable):
+        return tuple(str(item).strip() for item in value if str(item).strip())
+    text = str(value).strip()
+    return (text,) if text else ()
+
+
+def _ipv4_cidr_text(value: object | None) -> str | None:
+    text = _as_str(value)
+    if not text:
+        return None
+    try:
+        network = ipaddress.ip_network(text, strict=False)
+    except ValueError:
+        return None
+    if network.version != 4:
+        return None
+    return str(network)
+
+
+def _pool_cidrs(*, spec: object | None, status: object | None) -> tuple[str, ...]:
+    return tuple(
+        dict.fromkeys(
+            [
+                *_cidr_texts(getattr(status, "cidrs", [])),
+                *_cidr_texts(getattr(spec, "cidrs", [])),
+            ]
+        )
+    )
+
+
+def _pool_assignment_ids(status: object | None) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    assignment = getattr(status, "assignment", None)
+    if assignment is None:
+        return (), ()
+
+    def _assignment_texts(*field_names: str) -> tuple[str, ...]:
+        values: list[str] = []
+        for field_name in field_names:
+            for item in list(getattr(assignment, field_name, []) or []):
+                metadata = getattr(item, "metadata", None)
+                text = (
+                    _as_str(getattr(metadata, "id", None))
+                    or _as_str(getattr(item, "id", None))
+                    or _as_str(getattr(item, "network_id", None))
+                    or _as_str(getattr(item, "subnet_id", None))
+                    or _as_str(item)
+                )
+                if text:
+                    values.append(text)
+        return tuple(dict.fromkeys(values))
+
+    networks = _assignment_texts("networks", "network_ids")
+    subnets = _assignment_texts("subnets", "subnet_ids")
+    return networks, subnets
 
 
 def _component_input_sibling_path(field_path: str, input_name: str) -> str | None:
@@ -488,6 +579,9 @@ class ProviderOptionLookup:
                 "compute_platforms": self._resolve_compute_platforms,
                 "compute_platform_presets": self._resolve_compute_platform_presets,
                 "compute_public_image_families": self._resolve_compute_public_image_families,
+                "project_filesystems": self._resolve_project_filesystems,
+                "project_private_allocations": self._resolve_project_private_allocations,
+                "project_private_pools": self._resolve_project_private_pools,
                 "project_subnets": self._resolve_project_subnets,
                 "project_networks": self._resolve_project_networks,
                 "operator_public_ip_cidr": self._resolve_operator_public_ip_cidr,
@@ -1121,7 +1215,9 @@ class ProviderOptionLookup:
         field_path: str,
     ) -> str:
         row_path = self._soperator_chart_row_path(field_path)
-        target_ref = self._normalize_component_token(_payload_value(payload, f"{row_path}.target_ref"))
+        target_ref = self._normalize_component_token(
+            _payload_value(payload, f"{row_path}.target_ref")
+        )
         if target_ref:
             return target_ref
         target_ref = self._normalize_component_token(
@@ -2051,7 +2147,250 @@ class ProviderOptionLookup:
             cidrs = list(getattr(status, "ipv4_private_cidrs", [])) if status is not None else []
             cidr_suffix = f" ({', '.join(str(cidr) for cidr in cidrs)})" if cidrs else ""
             label = f"{subnet_id}  ({name}){cidr_suffix}" if name else f"{subnet_id}{cidr_suffix}"
-            options.append(OptionChoice(value=subnet_id, label=label))
+            private_pools = getattr(spec, "ipv4_private_pools", None)
+            use_network_private_pools = (
+                True
+                if private_pools is None
+                else bool(getattr(private_pools, "use_network_pools", False))
+            )
+            explicit_private_cidrs: tuple[str, ...] = ()
+            if private_pools is not None and not use_network_private_pools:
+                spec_private_cidrs = tuple(
+                    cidr
+                    for pool in list(getattr(private_pools, "pools", []) or [])
+                    for cidr in (
+                        _cidr_text(cidr_obj)
+                        for cidr_obj in list(getattr(pool, "cidrs", []) or [])
+                    )
+                    if cidr
+                )
+                explicit_private_cidrs = spec_private_cidrs or tuple(
+                    str(cidr).strip() for cidr in cidrs if str(cidr).strip()
+                )
+            options.append(
+                OptionChoice(
+                    value=subnet_id,
+                    label=label,
+                    metadata={
+                        "private_cidrs": explicit_private_cidrs,
+                        "use_network_private_pools": use_network_private_pools,
+                    },
+                )
+            )
+
+        options.sort(key=lambda item: item.value)
+        resolved = tuple(options)
+        self._cache[cache_key] = resolved
+        return resolved
+
+    def _resolve_project_filesystems(
+        self,
+        *,
+        args: dict[str, Any],
+        payload: dict[str, Any],
+        field_path: str,
+    ) -> tuple[OptionChoice, ...]:
+        project_id = self._resolve_project_id(payload, args)
+        if not project_id:
+            return ()
+        cache_key = ("project_filesystems", project_id)
+        if cache_key in self._cache:
+            return self._cache[cache_key]
+
+        sdk = self._sdk_or_none()
+        if sdk is None:
+            return ()
+        from nebius.api.nebius.compute.v1 import FilesystemServiceClient, ListFilesystemsRequest
+
+        client = FilesystemServiceClient(sdk)
+        items = self._paged_list(
+            request_factory=lambda page_token: ListFilesystemsRequest(
+                parent_id=project_id,
+                page_size=_NEBIUS_LIST_PAGE_SIZE,
+                page_token=page_token,
+            ),
+            request_call=client.list,
+        )
+
+        options: list[OptionChoice] = []
+        for item in items:
+            metadata = getattr(item, "metadata", None)
+            spec = getattr(item, "spec", None)
+            status = getattr(item, "status", None)
+            filesystem_id = _as_str(getattr(metadata, "id", None))
+            if not filesystem_id:
+                continue
+            name = _as_str(getattr(metadata, "name", None))
+            mount_tag = (
+                _as_str(getattr(spec, "mount_tag", None))
+                or _as_str(getattr(status, "mount_tag", None))
+                or name
+                or filesystem_id
+            )
+            label_parts = [filesystem_id]
+            if name:
+                label_parts.append(f"({name})")
+            if mount_tag:
+                label_parts.append(f"mount_tag={mount_tag}")
+            options.append(
+                OptionChoice(
+                    value=filesystem_id,
+                    label="  ".join(label_parts),
+                    metadata={
+                        "name": name or "",
+                        "mount_tag": mount_tag,
+                    },
+                )
+            )
+
+        options.sort(key=lambda item: item.value)
+        resolved = tuple(options)
+        self._cache[cache_key] = resolved
+        return resolved
+
+    def _resolve_project_private_allocations(
+        self,
+        *,
+        args: dict[str, Any],
+        payload: dict[str, Any],
+        field_path: str,
+    ) -> tuple[OptionChoice, ...]:
+        project_id = self._resolve_project_id(payload, args)
+        if not project_id:
+            return ()
+        subnet_ids = _arg_texts(args.get("subnet_ids"))
+        pool_ids = _arg_texts(args.get("pool_ids"))
+        cache_key = ("project_private_allocations", project_id, subnet_ids, pool_ids)
+        if cache_key in self._cache:
+            return self._cache[cache_key]
+
+        sdk = self._sdk_or_none()
+        if sdk is None:
+            return ()
+        from nebius.api.nebius.vpc.v1 import AllocationServiceClient, ListAllocationsRequest
+
+        client = AllocationServiceClient(sdk)
+        items = self._paged_list(
+            request_factory=lambda page_token: ListAllocationsRequest(
+                parent_id=project_id,
+                page_size=_NEBIUS_LIST_PAGE_SIZE,
+                page_token=page_token,
+            ),
+            request_call=client.list,
+        )
+
+        filter_by_resource = bool(subnet_ids or pool_ids)
+        options: list[OptionChoice] = []
+        for item in items:
+            metadata = getattr(item, "metadata", None)
+            spec = getattr(item, "spec", None)
+            status = getattr(item, "status", None)
+            spec_private = getattr(spec, "ipv4_private", None)
+            details = getattr(status, "details", None)
+            if spec_private is None and details is None:
+                continue
+            version = _enum_token(getattr(details, "version", None))
+            if version == "IPV6":
+                continue
+            allocated_cidr = _ipv4_cidr_text(
+                getattr(details, "allocated_cidr", None)
+                or getattr(spec_private, "cidr", None)
+            )
+            if not allocated_cidr:
+                continue
+            subnet_id = (
+                _as_str(getattr(details, "subnet_id", None))
+                or _as_str(getattr(spec_private, "subnet_id", None))
+                or ""
+            )
+            pool_id = (
+                _as_str(getattr(details, "pool_id", None))
+                or _as_str(getattr(spec_private, "pool_id", None))
+                or ""
+            )
+            if filter_by_resource and subnet_id not in subnet_ids and pool_id not in pool_ids:
+                continue
+            allocation_id = _as_str(getattr(metadata, "id", None)) or allocated_cidr
+            name = _as_str(getattr(metadata, "name", None))
+            label_name = f"  ({name})" if name else ""
+            options.append(
+                OptionChoice(
+                    value=allocation_id,
+                    label=f"{allocation_id}{label_name} ({allocated_cidr})",
+                    metadata={
+                        "private_cidrs": (allocated_cidr,),
+                        "subnet_id": subnet_id,
+                        "pool_id": pool_id,
+                    },
+                )
+            )
+
+        options.sort(key=lambda item: item.value)
+        resolved = tuple(options)
+        self._cache[cache_key] = resolved
+        return resolved
+
+    def _resolve_project_private_pools(
+        self,
+        *,
+        args: dict[str, Any],
+        payload: dict[str, Any],
+        field_path: str,
+    ) -> tuple[OptionChoice, ...]:
+        project_id = self._resolve_project_id(payload, args)
+        if not project_id:
+            return ()
+        cache_key = ("project_private_pools", project_id)
+        if cache_key in self._cache:
+            return self._cache[cache_key]
+
+        sdk = self._sdk_or_none()
+        if sdk is None:
+            return ()
+        from nebius.api.nebius.vpc.v1 import ListPoolsRequest, PoolServiceClient
+
+        client = PoolServiceClient(sdk)
+        items = self._paged_list(
+            request_factory=lambda page_token: ListPoolsRequest(
+                parent_id=project_id,
+                page_size=_NEBIUS_LIST_PAGE_SIZE,
+                page_token=page_token,
+            ),
+            request_call=client.list,
+        )
+
+        options: list[OptionChoice] = []
+        for item in items:
+            metadata = getattr(item, "metadata", None)
+            spec = getattr(item, "spec", None)
+            status = getattr(item, "status", None)
+            pool_id = _as_str(getattr(metadata, "id", None))
+            if not pool_id:
+                continue
+            if _enum_token(getattr(spec, "visibility", None)) != "PRIVATE":
+                continue
+            if _enum_token(getattr(spec, "version", None)) != "IPV4":
+                continue
+            assigned_networks, assigned_subnets = _pool_assignment_ids(status)
+            if assigned_networks or assigned_subnets:
+                continue
+            name = _as_str(getattr(metadata, "name", None))
+            cidrs = _pool_cidrs(spec=spec, status=status)
+            if not cidrs:
+                continue
+            cidr_suffix = f" ({', '.join(cidrs)})" if cidrs else ""
+            label = f"{pool_id}  ({name}){cidr_suffix}" if name else f"{pool_id}{cidr_suffix}"
+            options.append(
+                OptionChoice(
+                    value=pool_id,
+                    label=label,
+                    metadata={
+                        "name": name or "",
+                        "cidrs": cidrs,
+                        "source_pool_id": _as_str(getattr(spec, "source_pool_id", None)) or "",
+                    },
+                )
+            )
 
         options.sort(key=lambda item: item.value)
         resolved = tuple(options)
@@ -2075,9 +2414,15 @@ class ProviderOptionLookup:
         sdk = self._sdk_or_none()
         if sdk is None:
             return ()
-        from nebius.api.nebius.vpc.v1 import ListNetworksRequest, NetworkServiceClient
+        from nebius.api.nebius.vpc.v1 import (
+            GetPoolRequest,
+            ListNetworksRequest,
+            NetworkServiceClient,
+            PoolServiceClient,
+        )
 
         client = NetworkServiceClient(sdk)
+        pool_client = PoolServiceClient(sdk)
         items = self._paged_list(
             request_factory=lambda page_token: ListNetworksRequest(
                 parent_id=project_id,
@@ -2087,17 +2432,63 @@ class ProviderOptionLookup:
             request_call=client.list,
         )
 
+        pool_cidr_cache: dict[str, tuple[str, ...]] = {}
+
+        def _private_pool_cidrs(pool_id: str) -> tuple[str, ...]:
+            if pool_id in pool_cidr_cache:
+                return pool_cidr_cache[pool_id]
+            try:
+                pool = pool_client.get(
+                    GetPoolRequest(id=pool_id),
+                    **_provider_request_kwargs(),
+                ).wait()
+            except Exception:
+                pool_cidr_cache[pool_id] = ()
+                return ()
+            spec = getattr(pool, "spec", None)
+            status = getattr(pool, "status", None)
+            cidrs = _pool_cidrs(spec=spec, status=status)
+            pool_cidr_cache[pool_id] = cidrs
+            return cidrs
+
         options: list[OptionChoice] = []
         for item in items:
             metadata = getattr(item, "metadata", None)
+            spec = getattr(item, "spec", None)
             network_id = _as_str(getattr(metadata, "id", None))
             if not network_id:
                 continue
             name = _as_str(getattr(metadata, "name", None))
+            pool_refs = getattr(getattr(spec, "ipv4_private_pools", None), "pools", []) or []
+            private_pool_ids = tuple(
+                pool_id
+                for pool_ref in pool_refs
+                if (
+                    pool_id := _as_str(
+                        getattr(pool_ref, "pool_id", None) or getattr(pool_ref, "id", None)
+                    )
+                )
+            )
+            private_cidrs = tuple(
+                dict.fromkeys(
+                    cidr for pool_id in private_pool_ids for cidr in _private_pool_cidrs(pool_id)
+                )
+            )
             label = f"{network_id}  ({name})" if name else network_id
-            options.append(OptionChoice(value=network_id, label=label))
+            options.append(
+                OptionChoice(
+                    value=network_id,
+                    label=label,
+                    recommended=_is_default_project_network_name(name),
+                    metadata={
+                        "name": name or "",
+                        "private_pool_ids": private_pool_ids,
+                        "private_cidrs": private_cidrs,
+                    },
+                )
+            )
 
-        options.sort(key=lambda item: item.value)
+        options.sort(key=lambda item: (0 if item.recommended else 1, item.value))
         resolved = tuple(options)
         self._cache[cache_key] = resolved
         return resolved

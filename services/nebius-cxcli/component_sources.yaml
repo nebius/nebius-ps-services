@@ -24,6 +24,15 @@ components:
         inputs.cluster.kube_network.service_cidrs:
           - /20
       wizard_profile: mk8s
+    vpc:
+      source:
+        portable: git::https://github.com/nebius/nebius-ps-services.git//platform-infra/modules/vpc?ref=main
+        local: ../../platform-infra/modules/vpc
+      ui:
+        title: VPC network and optional subnets
+        group: Network
+        enabled: false
+      wizard_profile: vpc
     managed-postgresql:
       source:
         portable: git::https://github.com/nebius/nebius-ps-services.git//platform-infra/modules/managed-postgresql?ref=main

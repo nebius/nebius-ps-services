@@ -41,6 +41,20 @@ def _coerce_int(value: Any, *, default: int = 0) -> int:
         return default
 
 
+def _integer_or_none(value: Any) -> int | None:
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value) if value.is_integer() else None
+    text = str(value).strip()
+    try:
+        return int(text)
+    except (TypeError, ValueError):
+        return None
+
+
 def validate_component_runtime_rules(
     payload: Mapping[str, Any],
     *,
@@ -346,6 +360,55 @@ def _mk8s_mig_configured(inputs: Mapping[str, Any], as_text: Callable) -> bool:
     return False
 
 
+def _bool_value(value: Any, *, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _mk8s_node_group_autoscaling_enabled(group: Mapping[str, Any]) -> bool:
+    autoscaling = group.get("autoscaling")
+    return isinstance(autoscaling, Mapping) and _bool_value(
+        autoscaling.get("enabled"),
+        default=True,
+    )
+
+
+def _validate_mk8s_node_group_scale(base: str, key: str, group: Mapping[str, Any]) -> None:
+    label = f"{base}.node_groups.{key}"
+    autoscaling_enabled = _mk8s_node_group_autoscaling_enabled(group)
+    node_count = group.get("node_count")
+    if node_count is not None and autoscaling_enabled:
+        raise ValueError(f"{label} cannot set both node_count and enabled autoscaling")
+    if node_count is None and not autoscaling_enabled:
+        raise ValueError(f"{label} requires node_count or enabled autoscaling")
+    if node_count is not None:
+        parsed = _integer_or_none(node_count)
+        if parsed is None or parsed < 0:
+            raise ValueError(f"{label}.node_count must be an integer >= 0")
+    if not autoscaling_enabled:
+        return
+    autoscaling = group.get("autoscaling")
+    if not isinstance(autoscaling, Mapping):
+        raise ValueError(f"{label}.autoscaling must be a mapping when enabled")
+    min_raw = autoscaling.get("min_node_count")
+    max_raw = autoscaling.get("max_node_count")
+    min_count = _integer_or_none(min_raw)
+    max_count = _integer_or_none(max_raw)
+    if (
+        min_count is None
+        or max_count is None
+        or min_count < 0
+        or max_count < min_count
+    ):
+        raise ValueError(
+            f"{label}.autoscaling requires integer min_node_count >= 0 "
+            "and max_node_count >= min_node_count"
+        )
+
+
 def _validate_mk8s_inputs(
     payload: Mapping[str, Any],
     get_path: Callable,
@@ -383,6 +446,13 @@ def _validate_mk8s_inputs(
 
     if not node_groups:
         raise ValueError(f"{base}.node_groups must declare at least one enabled node group")
+
+    raw_node_groups = inputs.get("node_groups")
+    if isinstance(raw_node_groups, Mapping):
+        for raw_key, raw_group in raw_node_groups.items():
+            if not isinstance(raw_group, Mapping) or raw_group.get("enabled") is False:
+                continue
+            _validate_mk8s_node_group_scale(base, str(raw_key), raw_group)
 
     if selected_gpu_enabled:
         for group in node_groups:

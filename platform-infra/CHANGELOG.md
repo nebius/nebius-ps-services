@@ -6,6 +6,9 @@ All notable changes to this project are documented in this file.
 
 ### Added
 
+- Added `modules/vpc`, a reusable Nebius VPC module that can create a new
+  VPC network with optional subnets or create declared subnets under an
+  existing VPC network for planned-resource wiring through `nebius-cxcli`.
 - Added `modules/vm`, a reusable Nebius Compute VM module with explicit
   platform/preset selection, support for regular and preemptible GPU VMs,
   optional GPU cluster creation/attachment, optional data disks/filesystems,
@@ -20,14 +23,49 @@ All notable changes to this project are documented in this file.
 
 ### Changed
 
+- Switched every Terraform module and example root to the official public
+  Nebius Terraform provider source `nebius/nebius` with the shared constraint
+  `>= 0.6.8, < 0.7.0`, and refreshed checked-in example lockfiles to provider
+  `0.6.8`.
+- Added required `network_id` inputs to the subnet-attached VM-style modules
+  (`modules/vm`, `modules/nfs`, `modules/wireguard-gw`, and
+  `modules/ssh-jumphost`) and added Terraform data-source preconditions so
+  direct Terraform plans fail when the selected VPC subnet does not belong to
+  the selected VPC network/project. The affected subnet-attached
+  compute/MK8s modules and examples now share the Nebius provider floor
+  `>= 0.6.8, < 0.7.0`.
+- Tightened `modules/mk8s` VPC validation: the module now validates the
+  selected cluster network/subnet relationship, checks node-group subnet
+  overrides against that network, and requires explicit
+  `network_interfaces[*].subnet_id` values when callers provide explicit
+  network-interface mappings.
+- Aligned `modules/vpc` with Nebius VPC addressing semantics: new networks now
+  require `network.ipv4_private_cidrs` or `network.ipv4_private_pool_ids`, the
+  module creates and attaches private pools for declared network CIDRs, accepts
+  `network.ipv4_private_source_pool_id` for source-pool-backed managed pools,
+  and validates supplied private and public pool IDs. Every declared subnet now
+  uses explicit private child CIDRs with `use_network_private_pools=false`;
+  public pool IDs remain optional because Nebius attaches the default public
+  pool to new networks when none is specified. Explicit child subnet CIDRs are
+  checked during planning so they fit declared network CIDRs or attached
+  existing private-pool CIDRs, including private pools on
+  `network.existing_id`, and do not overlap each other. Plans with declared
+  subnets now fail when parent private CIDR ranges cannot be resolved from the
+  selected network or pools. The VPC module now also exposes Nebius-reported
+  default route-table and effective network pool metadata in outputs.
 - Removed the deprecated Compute preemptible priority field from `modules/vm`:
   preemptible VM instances now render `on_preemption = "STOP"` without exposing
   or setting `preemptible_priority`, and the VM module now requires Nebius
-  Terraform provider `>= 0.5.217`.
+  Terraform provider `>= 0.6.8`.
 - Aligned `modules/mk8s` disabled object semantics and GPU stack defaults:
   disabled `node_groups` / `gpu_clusters` entries may now omit enabled-only
   fields, and GPU node groups default to the Nebius image stack while requiring
   `gpu_stack_preset` only for enabled GPU groups on that path.
+- Tightened `modules/mk8s` node-group autoscaling typing and normalization:
+  enabled node groups now require either `node_count` or enabled autoscaling,
+  autoscaling validates integer min/max bounds, and an explicit
+  `autoscaling.enabled = false` helper block is normalized away before provider
+  rendering.
 - Redesigned `modules/mk8s` around required typed `cluster` and `node_groups`
   inputs. The module now separates cluster provisioning from node-group shape,
   reservation, SSH, service account, GPU cluster, and filesystem attachment
@@ -131,6 +169,14 @@ All notable changes to this project are documented in this file.
 
 ### Fixed
 
+- Tightened `modules/vpc`, `modules/ssh-jumphost`, and
+  `modules/wireguard-gw` VPC validation so an existing VPC network and
+  wrapper-owned public IP allocations validate the selected
+  `network_id`/`subnet_id` relationship before dependent resources are
+  created.
+- Fixed `modules/mk8s` VPC validation so planned VPC subnet IDs produced by
+  `modules/vpc` can be used during Terraform planning; subnet data sources
+  are now keyed by stable logical references instead of apply-time subnet IDs.
 - Fixed `modules/vm` lifecycle handling so rendered cloud-init changes are
   driven by a replacement trigger for the module-created boot disk and instance
   instead of an in-place `user_data` update that Nebius rejects on running

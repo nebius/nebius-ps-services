@@ -10,9 +10,19 @@ import yaml
 import nebius_cxcli.cli as cli
 from nebius_cxcli.components import ComponentEntry
 from nebius_cxcli.provider_options import OptionChoice
+from nebius_cxcli.wizard_profiles import BUILTIN_WIZARD_PROFILES
 
 _VALID_ED25519_PUBLIC_KEY = (
     "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4f demo@example"
+)
+_EXPECTED_VPC_CUSTOM_PRIVATE_CIDR_SUGGESTIONS = (
+    "10.8.0.0/13",
+    "10.16.0.0/13",
+    "10.32.0.0/13",
+    "10.40.0.0/13",
+    "10.56.0.0/13",
+    "172.16.0.0/12",
+    "192.168.0.0/16",
 )
 
 
@@ -76,6 +86,80 @@ def test_prompt_choice_override_tty_renders_only_selectable_values(monkeypatch) 
     assert titles == ["cpu-d3", "cpu-e2"]
     assert "<manual input>" not in titles
     assert captured["instruction"] == "Use arrows; q=back; qq=quit; Enter=select."
+
+
+def test_vpc_existing_network_tty_skip_choice_creates_new_network(monkeypatch) -> None:
+    monkeypatch.setattr(cli, "_is_tty_session", lambda: True)
+    captured: dict[str, object] = {}
+
+    class _FakePrompt:
+        def ask(self):
+            return "__skip__"
+
+    def _fake_select(*args, **kwargs):
+        captured["choices"] = kwargs.get("choices")
+        captured["default"] = kwargs.get("default")
+        return _FakePrompt()
+
+    fake_questionary = SimpleNamespace(
+        Choice=lambda **kwargs: kwargs,
+        select=_fake_select,
+    )
+    monkeypatch.setitem(sys.modules, "questionary", fake_questionary)
+
+    value, should_stop = cli._prompt_choice_override(
+        path_label="infra.components[0].inputs.network.existing_id",
+        current=None,
+        choices=[
+            OptionChoice(
+                value="vpcnetwork-live",
+                label="default-network",
+                recommended=True,
+            )
+        ],
+        required=False,
+        unset_on_skip=True,
+    )
+
+    assert should_stop is False
+    assert value is None
+    titles = [choice["title"] for choice in captured["choices"]]
+    assert titles[0] == "Create a new VPC network"
+    assert titles[1] == "default-network"
+    assert captured["default"] == "vpcnetwork-live"
+
+
+def test_vpc_private_pool_tty_skip_choice_creates_pool_from_cidr(monkeypatch) -> None:
+    monkeypatch.setattr(cli, "_is_tty_session", lambda: True)
+    captured: dict[str, object] = {}
+
+    class _FakePrompt:
+        def ask(self):
+            return "__skip__"
+
+    def _fake_select(*args, **kwargs):
+        captured["choices"] = kwargs.get("choices")
+        return _FakePrompt()
+
+    fake_questionary = SimpleNamespace(
+        Choice=lambda **kwargs: kwargs,
+        select=_fake_select,
+    )
+    monkeypatch.setitem(sys.modules, "questionary", fake_questionary)
+
+    value, should_stop = cli._prompt_choice_override(
+        path_label="infra.components[0].inputs.network.ipv4_private_pool_ids",
+        current=None,
+        choices=[OptionChoice(value="vpcpool-private", label="default private pool")],
+        required=False,
+        unset_on_skip=True,
+    )
+
+    assert should_stop is False
+    assert value is None
+    titles = [choice["title"] for choice in captured["choices"]]
+    assert titles[0] == "Create a new private pool from CIDR"
+    assert titles[1] == "default private pool"
 
 
 def test_ssh_public_key_prompt_lists_local_pub_files(tmp_path, monkeypatch) -> None:
@@ -232,7 +316,9 @@ def test_prompt_choice_override_text_prompt_rejects_unlisted_value(monkeypatch) 
     printed: list[str] = []
 
     monkeypatch.setattr(cli.typer, "prompt", lambda *_args, **_kwargs: next(responses))
-    monkeypatch.setattr(cli.console, "print", lambda message, **_kwargs: printed.append(str(message)))
+    monkeypatch.setattr(
+        cli.console, "print", lambda message, **_kwargs: printed.append(str(message))
+    )
 
     value, should_stop = cli._prompt_choice_override(
         path_label="infra.components[0].inputs.cpu_nodes_platform",
@@ -427,9 +513,7 @@ def test_prompt_scalar_override_guides_mysterybox_secret_payload_pairs(monkeypat
         }
     ]
     assert prompts[0] == "MysteryBox Secret name (required, q=back, qq=quit wizard)"
-    assert prompts[1] == (
-        "Kubernetes Secret name for db-uname-pass (q=back, qq=quit wizard)"
-    )
+    assert prompts[1] == ("Kubernetes Secret name for db-uname-pass (q=back, qq=quit wizard)")
     assert prompts[2] == (
         "ESO version policy for db-uname-pass [required] "
         "(enter q to go back; qq quits wizard) (index or value)"
@@ -440,8 +524,7 @@ def test_prompt_scalar_override_guides_mysterybox_secret_payload_pairs(monkeypat
         "(enter q to go back; qq quits wizard) (index or value)"
     )
     assert (
-        prompts[5]
-        == "Payload key for db-uname-pass (blank=finish Secret, q=back, qq=quit wizard)"
+        prompts[5] == "Payload key for db-uname-pass (blank=finish Secret, q=back, qq=quit wizard)"
     )
     assert prompts[-1] == "MysteryBox Secret name (blank=done, q=back, qq=quit wizard)"
     assert any("Entered USERNAME as the key." in item for item in captured)
@@ -676,9 +759,7 @@ def test_mysterybox_guided_prompt_q_at_first_payload_key_returns_to_secret_name(
             },
         },
     ]
-    apikey_prompt_index = prompts.index(
-        "Payload key for apikey (required, q=back, qq=quit wizard)"
-    )
+    apikey_prompt_index = prompts.index("Payload key for apikey (required, q=back, qq=quit wizard)")
     assert prompts[apikey_prompt_index + 1] == (
         "MysteryBox Secret name (blank=done, q=back, qq=quit wizard)"
     )
@@ -1030,6 +1111,2499 @@ def test_component_field_wizard_q_revisits_previous_field(monkeypatch) -> None:
     assert updated_payload["infra"]["components"][0]["inputs"]["second"] == "two-final"
 
 
+def test_component_field_wizard_guides_vpc_subnets_without_raw_yaml_prompt(
+    monkeypatch,
+) -> None:
+    payload = {
+        "version": "v1",
+        "client_info": {
+            "client_name": "demo",
+            "nebius": {
+                "tenant_id": "tenant-1",
+                "project_id": "project-1",
+                "region_id": "eu-north1",
+            },
+            "notifications": {"email_enabled": False, "email": None},
+        },
+        "infra": {
+            "components": [
+                {
+                    "id": "vpc",
+                    "instance_id": "workloads-vpc",
+                    "enabled": True,
+                    "inputs": {"network": {}},
+                }
+            ]
+        },
+        "apps": {"charts": []},
+    }
+    entry = ComponentEntry(
+        id="vpc",
+        scope="infra",
+        config_path="infra.components[].inputs",
+        description="VPC",
+        wizard_fields=BUILTIN_WIZARD_PROFILES["vpc"],
+    )
+    prompt_texts: list[str] = []
+    answers = {
+        "infra.components[0].inputs.network.name": "workloads-network",
+        "infra.components[0].inputs.network.ipv4_private_cidrs": "10.10.0.0/16",
+        "infra.components[0].inputs.subnets.<new>.name": "workloads",
+        "infra.components[0].inputs.subnets.workloads.ipv4_private_cidrs": "10.10.0.0/24",
+        "infra.components[0].inputs.subnets.add_another": "false",
+    }
+
+    class _EmptyProviderLookup:
+        def resolve(self, **_kwargs):
+            return []
+
+        def last_error(self):
+            return None
+
+    def _answer_prompt(text: str, default=None, **_kwargs):
+        prompt_texts.append(text)
+        for path_label, answer in answers.items():
+            if path_label in text:
+                return answer
+        return "" if default is None else str(default)
+
+    def _phase_decision(prompt_label: str, **_kwargs):
+        assert not prompt_label.startswith("Extend the selected live VPC network")
+        return cli._WizardPhaseDecision(proceed=True)
+
+    monkeypatch.setattr(cli, "_wizard_continue_phase", _phase_decision)
+    monkeypatch.setattr(cli.typer, "prompt", _answer_prompt)
+
+    updated_yaml, completed = cli._run_component_field_wizard(
+        config_yaml=yaml.safe_dump(payload, sort_keys=False),
+        selected_infra={"workloads-vpc"},
+        selected_apps=set(),
+        infra_entries=(entry,),
+        app_entries=(),
+        provider_lookup=_EmptyProviderLookup(),
+    )
+
+    updated_payload = yaml.safe_load(updated_yaml)
+    inputs = updated_payload["infra"]["components"][0]["inputs"]
+    assert completed is True
+    assert inputs["network"] == {
+        "name": "workloads-network",
+        "ipv4_private_cidrs": ["10.10.0.0/16"],
+    }
+    assert inputs["subnets"] == {
+        "workloads": {
+            "name": "workloads",
+            "use_network_private_pools": False,
+            "ipv4_private_cidrs": ["10.10.0.0/24"],
+        }
+    }
+    assert any("inputs.subnets.<new>.name" in text for text in prompt_texts)
+    assert any("select a suggested custom CIDR" in text for text in prompt_texts)
+    assert all("enter a single-line YAML/JSON value" not in text for text in prompt_texts)
+
+
+def test_component_field_wizard_allows_vpc_network_without_subnets_when_live_networks_exist(
+    monkeypatch,
+) -> None:
+    payload = {
+        "version": "v1",
+        "client_info": {
+            "client_name": "demo",
+            "nebius": {
+                "tenant_id": "tenant-1",
+                "project_id": "project-1",
+                "region_id": "eu-north1",
+            },
+            "notifications": {"email_enabled": False, "email": None},
+        },
+        "infra": {
+            "components": [
+                {
+                    "id": "vpc",
+                    "instance_id": "workloads-vpc",
+                    "enabled": True,
+                    "inputs": {"network": {}},
+                }
+            ]
+        },
+        "apps": {"charts": []},
+    }
+    entry = ComponentEntry(
+        id="vpc",
+        scope="infra",
+        config_path="infra.components[].inputs",
+        description="VPC",
+        wizard_fields=BUILTIN_WIZARD_PROFILES["vpc"],
+    )
+    prompt_texts: list[str] = []
+    answers = {
+        "infra.components[0].inputs.network.existing_id": "",
+        "infra.components[0].inputs.network.name": "mynetwork",
+        "infra.components[0].inputs.network.ipv4_private_cidrs": "1",
+        "infra.components[0].inputs.subnets.add": "false",
+    }
+    provider_calls: list[str] = []
+
+    class _ProviderLookup:
+        def resolve(self, **kwargs):
+            field_path = str(kwargs.get("field_path", ""))
+            provider_calls.append(field_path)
+            if field_path.endswith(".inputs.network.existing_id"):
+                return [OptionChoice(value="vpcnetwork-live", label="default network")]
+            return []
+
+        def last_error(self):
+            return None
+
+    def _answer_prompt(text: str, default=None, **_kwargs):
+        prompt_texts.append(text)
+        for path_label, answer in answers.items():
+            if path_label in text:
+                return answer
+        if "infra.components[0].inputs.subnets.<new>.name" in text:
+            raise AssertionError("subnet name should not be prompted when subnets are skipped")
+        return "" if default is None else str(default)
+
+    monkeypatch.setattr(
+        cli,
+        "_wizard_continue_phase",
+        lambda *_args, **_kwargs: cli._WizardPhaseDecision(proceed=True),
+    )
+    monkeypatch.setattr(cli.typer, "prompt", _answer_prompt)
+
+    updated_yaml, completed = cli._run_component_field_wizard(
+        config_yaml=yaml.safe_dump(payload, sort_keys=False),
+        selected_infra={"workloads-vpc"},
+        selected_apps=set(),
+        infra_entries=(entry,),
+        app_entries=(),
+        provider_lookup=_ProviderLookup(),
+    )
+
+    updated_payload = yaml.safe_load(updated_yaml)
+    inputs = updated_payload["infra"]["components"][0]["inputs"]
+    assert completed is True
+    assert inputs["network"] == {
+        "name": "mynetwork",
+        "ipv4_private_cidrs": ["10.8.0.0/13"],
+    }
+    assert "existing_id" not in inputs["network"]
+    assert "subnets" not in inputs
+    assert any("inputs.network.existing_id" in path for path in provider_calls)
+    assert any("inputs.subnets.add" in text for text in prompt_texts)
+    assert all("inputs.subnets.<new>.name" not in text for text in prompt_texts)
+    assert all("enter a single-line YAML/JSON value" not in text for text in prompt_texts)
+
+
+def test_component_field_wizard_existing_vpc_network_skips_network_name_and_retries_cidr(
+    monkeypatch,
+) -> None:
+    payload = {
+        "version": "v1",
+        "client_info": {
+            "client_name": "demo",
+            "nebius": {
+                "tenant_id": "tenant-1",
+                "project_id": "project-1",
+                "region_id": "eu-north1",
+            },
+            "notifications": {"email_enabled": False, "email": None},
+        },
+        "infra": {
+            "components": [
+                {
+                    "id": "vpc",
+                    "instance_id": "workloads-vpc",
+                    "enabled": True,
+                    "inputs": {"network": {}},
+                }
+            ]
+        },
+        "apps": {"charts": []},
+    }
+    entry = ComponentEntry(
+        id="vpc",
+        scope="infra",
+        config_path="infra.components[].inputs",
+        description="VPC",
+        wizard_fields=BUILTIN_WIZARD_PROFILES["vpc"],
+    )
+    prompt_texts: list[str] = []
+    captured: list[str] = []
+    cidr_answers = ["not-a-cidr", "10.1.0.0/16"]
+
+    class _ProviderLookup:
+        def resolve(self, **kwargs):
+            if str(kwargs.get("field_path", "")).endswith(".inputs.network.existing_id"):
+                return [
+                    OptionChoice(
+                        value="vpcnetwork-live",
+                        label="default network",
+                        metadata={"private_cidrs": ("10.0.0.0/13",)},
+                    )
+                ]
+            return []
+
+        def last_error(self):
+            return None
+
+    def _answer_prompt(text: str, default=None, **_kwargs):
+        prompt_texts.append(text)
+        if "infra.components[0].inputs.network.existing_id" in text:
+            return "1"
+        if "infra.components[0].inputs.network.name" in text:
+            raise AssertionError("network.name should not be prompted for an existing network")
+        if "infra.components[0].inputs.network.ipv4_private_cidrs" in text:
+            raise AssertionError(
+                "network private CIDRs should not be prompted for an existing network"
+            )
+        if "infra.components[0].inputs.subnets.<new>.name" in text:
+            return "workloads"
+        if "infra.components[0].inputs.subnets.workloads.ipv4_private_cidrs" in text:
+            return cidr_answers.pop(0)
+        if "infra.components[0].inputs.subnets.add_another" in text:
+            return "false"
+        return "" if default is None else str(default)
+
+    monkeypatch.setattr(
+        cli,
+        "_wizard_continue_phase",
+        lambda *_args, **_kwargs: cli._WizardPhaseDecision(proceed=True),
+    )
+    monkeypatch.setattr(cli.typer, "prompt", _answer_prompt)
+    monkeypatch.setattr(
+        cli.console, "print", lambda message="", **_kwargs: captured.append(str(message))
+    )
+
+    updated_yaml, completed = cli._run_component_field_wizard(
+        config_yaml=yaml.safe_dump(payload, sort_keys=False),
+        selected_infra={"workloads-vpc"},
+        selected_apps=set(),
+        infra_entries=(entry,),
+        app_entries=(),
+        provider_lookup=_ProviderLookup(),
+    )
+
+    updated_payload = yaml.safe_load(updated_yaml)
+    inputs = updated_payload["infra"]["components"][0]["inputs"]
+    assert completed is True
+    assert inputs["network"] == {"existing_id": "vpcnetwork-live"}
+    assert inputs["subnets"] == {
+        "workloads": {
+            "name": "workloads",
+            "use_network_private_pools": False,
+            "ipv4_private_cidrs": ["10.1.0.0/16"],
+        }
+    }
+    assert cidr_answers == []
+    assert sum("inputs.subnets.workloads.ipv4_private_cidrs" in text for text in prompt_texts) == 2
+    assert "'not-a-cidr' is not a valid IPv4 CIDR" in "\n".join(captured)
+    assert all("enter a single-line YAML/JSON value" not in text for text in prompt_texts)
+
+
+def test_component_field_wizard_accepts_region_vpc_cidr_suggestion(
+    monkeypatch,
+) -> None:
+    payload = {
+        "version": "v1",
+        "client_info": {
+            "client_name": "demo",
+            "nebius": {
+                "tenant_id": "tenant-1",
+                "project_id": "project-1",
+                "region_id": "eu-west1",
+            },
+            "notifications": {"email_enabled": False, "email": None},
+        },
+        "infra": {
+            "components": [
+                {
+                    "id": "vpc",
+                    "instance_id": "workloads-vpc",
+                    "enabled": True,
+                    "inputs": {"network": {}},
+                }
+            ]
+        },
+        "apps": {"charts": []},
+    }
+    entry = ComponentEntry(
+        id="vpc",
+        scope="infra",
+        config_path="infra.components[].inputs",
+        description="VPC",
+        wizard_fields=BUILTIN_WIZARD_PROFILES["vpc"],
+    )
+    prompt_texts: list[str] = []
+    answers = {
+        "infra.components[0].inputs.network.name": "workloads-network",
+        "infra.components[0].inputs.network.ipv4_private_cidrs": "",
+        "infra.components[0].inputs.subnets.<new>.name": "workloads",
+        "infra.components[0].inputs.subnets.workloads.ipv4_private_cidrs": "1",
+        "infra.components[0].inputs.subnets.add_another": "false",
+    }
+
+    class _EmptyProviderLookup:
+        def resolve(self, **_kwargs):
+            return []
+
+        def last_error(self):
+            return None
+
+    def _answer_prompt(text: str, default=None, **_kwargs):
+        prompt_texts.append(text)
+        for path_label, answer in answers.items():
+            if path_label in text:
+                return answer
+        return "" if default is None else str(default)
+
+    monkeypatch.setattr(
+        cli,
+        "_wizard_continue_phase",
+        lambda *_args, **_kwargs: cli._WizardPhaseDecision(proceed=True),
+    )
+    monkeypatch.setattr(cli.typer, "prompt", _answer_prompt)
+
+    updated_yaml, completed = cli._run_component_field_wizard(
+        config_yaml=yaml.safe_dump(payload, sort_keys=False),
+        selected_infra={"workloads-vpc"},
+        selected_apps=set(),
+        infra_entries=(entry,),
+        app_entries=(),
+        provider_lookup=_EmptyProviderLookup(),
+    )
+
+    updated_payload = yaml.safe_load(updated_yaml)
+    inputs = updated_payload["infra"]["components"][0]["inputs"]
+    subnet = inputs["subnets"]["workloads"]
+    assert completed is True
+    assert inputs["network"]["ipv4_private_cidrs"] == ["10.8.0.0/13"]
+    assert subnet == {
+        "name": "workloads",
+        "use_network_private_pools": False,
+        "ipv4_private_cidrs": ["10.8.0.0/16"],
+    }
+    suggestions = cli._vpc_custom_private_cidr_suggestions(region_id="eu-west1")
+    assert suggestions == _EXPECTED_VPC_CUSTOM_PRIVATE_CIDR_SUGGESTIONS
+    assert all(cli._vpc_default_private_pool_overlap(cidr) is None for cidr in suggestions)
+    assert any("select a suggested custom CIDR" in text for text in prompt_texts)
+
+
+def test_vpc_subnet_cidr_prompt_choices_suggest_child_ranges_inside_parent_pool() -> None:
+    choices = cli._vpc_subnet_cidr_prompt_choices(
+        region_id="eu-north1",
+        existing_cidrs=("10.0.0.0/16",),
+        parent_cidrs=("10.0.0.0/13",),
+    )
+
+    assert [(choice.value, choice.recommended) for choice in choices] == [
+        ("10.1.0.0/16", True),
+        ("10.2.0.0/16", False),
+        ("10.3.0.0/16", False),
+        ("10.4.0.0/16", False),
+    ]
+    assert all(
+        choice.metadata == {
+            "suggestion_kind": "subnet_child",
+            "parent_cidr": "10.0.0.0/13",
+        }
+        for choice in choices
+    )
+
+
+def test_vpc_subnet_cidr_prompt_choices_skip_ranges_with_private_allocations() -> None:
+    choices = cli._vpc_subnet_cidr_prompt_choices(
+        region_id="eu-north1",
+        existing_cidrs=("10.0.0.42/32",),
+        parent_cidrs=("10.0.0.0/13",),
+    )
+
+    assert [choice.value for choice in choices] == [
+        "10.1.0.0/16",
+        "10.2.0.0/16",
+        "10.3.0.0/16",
+        "10.4.0.0/16",
+    ]
+
+
+def test_vpc_subnet_cidr_prompt_choices_include_parent_extension_for_new_network() -> None:
+    choices = cli._vpc_subnet_cidr_prompt_choices(
+        region_id="eu-north1",
+        existing_cidrs=(),
+        parent_cidrs=("172.16.0.0/12",),
+        allow_parent_extension=True,
+    )
+
+    assert [choice.value for choice in choices] == [
+        "172.16.0.0/16",
+        "172.17.0.0/16",
+        "172.18.0.0/16",
+        "172.19.0.0/16",
+        "192.168.0.0/16",
+    ]
+    assert choices[-1].metadata == {"suggestion_kind": "parent_extension"}
+    assert "extends Terraform-owned network before subnet" in choices[-1].label
+
+
+def test_vpc_subnet_cidr_prompt_choices_combine_existing_children_and_extensions() -> None:
+    choices = cli._vpc_subnet_cidr_prompt_choices(
+        region_id="eu-north1",
+        existing_cidrs=("10.0.0.0/16",),
+        parent_cidrs=("10.0.0.0/13",),
+        allow_parent_extension=True,
+        parent_extension_description="extends selected live network attached private pool",
+        allow_custom_fallback=False,
+    )
+
+    assert [choice.value for choice in choices] == [
+        "10.1.0.0/16",
+        "10.2.0.0/16",
+        "10.3.0.0/16",
+        "10.4.0.0/16",
+        "172.16.0.0/12",
+        "192.168.0.0/16",
+    ]
+    assert [choice.metadata["suggestion_kind"] for choice in choices] == [
+        "subnet_child",
+        "subnet_child",
+        "subnet_child",
+        "subnet_child",
+        "parent_extension",
+        "parent_extension",
+    ]
+    assert choices[-2].label == (
+        "172.16.0.0/12  (new parent private block; extends selected live network "
+        "attached private pool)"
+    )
+    assert choices[-1].label == (
+        "192.168.0.0/16  (192.168 parent private block; extends selected live network "
+        "attached private pool)"
+    )
+
+
+def test_vpc_subnet_cidr_prompt_choices_keep_attached_rfc1918_parent_blocks_visible() -> None:
+    choices = cli._vpc_subnet_cidr_prompt_choices(
+        region_id="eu-north1",
+        existing_cidrs=("10.0.0.0/16", "10.2.0.0/16"),
+        parent_cidrs=("10.0.0.0/13", "172.16.0.0/12", "192.168.0.0/16"),
+        allow_parent_extension=True,
+        parent_extension_description="extends selected live network attached private pool",
+        suggest_whole_parent_cidrs=True,
+        allow_custom_fallback=False,
+    )
+
+    assert [choice.value for choice in choices] == [
+        "10.1.0.0/16",
+        "10.3.0.0/16",
+        "10.4.0.0/16",
+        "10.5.0.0/16",
+        "172.16.0.0/12",
+        "192.168.0.0/16",
+    ]
+    assert [choice.metadata["suggestion_kind"] for choice in choices] == [
+        "subnet_child",
+        "subnet_child",
+        "subnet_child",
+        "subnet_child",
+        "subnet_child",
+        "subnet_child",
+    ]
+    assert choices[-2].metadata["parent_cidr"] == "172.16.0.0/12"
+    assert choices[-2].label == (
+        "172.16.0.0/12  (subnet child range inside 172.16.0.0/12)"
+    )
+    assert choices[-1].metadata["parent_cidr"] == "192.168.0.0/16"
+    assert choices[-1].label == (
+        "192.168.0.0/16  (subnet child range inside 192.168.0.0/16)"
+    )
+
+
+def test_vpc_subnet_cidr_prompt_choices_skip_whole_parent_block_with_allocations() -> None:
+    choices = cli._vpc_subnet_cidr_prompt_choices(
+        region_id="eu-north1",
+        existing_cidrs=("172.16.30.0/24",),
+        parent_cidrs=("172.16.0.0/12",),
+        allow_parent_extension=True,
+        parent_extension_description="extends selected live network attached private pool",
+        suggest_whole_parent_cidrs=True,
+        allow_custom_fallback=False,
+    )
+
+    assert "172.16.0.0/12" not in [choice.value for choice in choices]
+    assert "172.17.0.0/16" in [choice.value for choice in choices]
+
+
+def test_vpc_private_cidr_tty_custom_rejects_comma_separated_values(monkeypatch) -> None:
+    monkeypatch.setattr(cli, "_is_tty_session", lambda: True)
+    captured: dict[str, object] = {}
+    messages: list[str] = []
+    answers = ["172.16.30.0/24, 172.16.20.0/24", "172.16.30.0/24"]
+
+    class _FakePrompt:
+        def ask(self):
+            return "__custom__"
+
+    def _fake_select(*_args, **kwargs):
+        captured["choices"] = kwargs["choices"]
+        captured["instruction"] = kwargs["instruction"]
+        return _FakePrompt()
+
+    def _fake_prompt(text: str, default=None, **_kwargs):
+        captured["text"] = text
+        captured["default"] = default
+        return answers.pop(0)
+
+    fake_questionary = SimpleNamespace(
+        Choice=lambda **kwargs: kwargs,
+        select=_fake_select,
+    )
+    monkeypatch.setitem(sys.modules, "questionary", fake_questionary)
+    monkeypatch.setattr(cli.typer, "prompt", _fake_prompt)
+    monkeypatch.setattr(
+        cli.console, "print", lambda message="", **_kwargs: messages.append(str(message))
+    )
+
+    value, should_stop = cli._prompt_vpc_private_cidr_override(
+        path_label="infra.components[0].inputs.subnets.workloads.ipv4_private_cidrs",
+        current=[],
+        choices=[
+            OptionChoice(
+                value="10.1.0.0/16",
+                label="10.1.0.0/16  (subnet child range inside 10.0.0.0/13)",
+            )
+        ],
+        region_id="eu-north1",
+        type_hint="list(string)",
+        allow_multiple=False,
+    )
+
+    assert should_stop is False
+    assert value == ["172.16.30.0/24"]
+    assert answers == []
+    titles = [choice["title"] for choice in captured["choices"]]
+    assert titles[-1] == "Enter custom CIDR"
+    assert "q=back; qq=quit" in str(captured["instruction"])
+    assert "enter one CIDR" in str(captured["text"])
+    assert captured["default"] == ""
+    assert "multi-CIDR mode" in "\n".join(messages)
+
+
+def _patch_vpc_extension_sdk_bindings(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    network_client: type,
+    pool_client: type,
+) -> None:
+    class _Message:
+        def __init__(self, **kwargs):
+            self.__dict__.update(kwargs)
+
+    class _MaskedRequest(_Message):
+        def set_mask(self, mask):
+            self._mask = mask
+
+        def get_mask(self):
+            return self._mask
+
+    class _Mask:
+        def __init__(self, paths: list[str]):
+            self._paths = paths
+
+        @classmethod
+        def unmarshal(cls, value: str):
+            return cls([value])
+
+        def marshal(self):
+            return list(self._paths)
+
+    monkeypatch.setattr(
+        cli,
+        "_load_vpc_extension_sdk_bindings",
+        lambda: {
+            "AddressBlockState": SimpleNamespace(AVAILABLE="AVAILABLE"),
+            "ResourceMetadata": _Message,
+            "GetNetworkRequest": _Message,
+            "GetPoolRequest": _Message,
+            "IpVersion": SimpleNamespace(IPV4="IPV4"),
+            "IpVisibility": SimpleNamespace(PRIVATE="PRIVATE"),
+            "NetworkServiceClient": network_client,
+            "PoolCidr": _Message,
+            "PoolServiceClient": pool_client,
+            "PoolSpec": _Message,
+            "UpdatePoolRequest": _MaskedRequest,
+            "Mask": _Mask,
+        },
+    )
+
+
+def test_extend_existing_vpc_parent_private_cidrs_updates_attached_pool_cidrs(
+    monkeypatch,
+) -> None:
+    captured: dict[str, object] = {}
+    sync_waits: list[int | None] = []
+
+    class _RequestResult:
+        def __init__(self, value):
+            self._value = value
+
+        def wait(self):
+            return self._value
+
+    class _Operation:
+        def __init__(self, resource_id: str = ""):
+            self.resource_id = resource_id
+
+        def sync_wait(self, timeout=None):
+            sync_waits.append(timeout)
+
+    class _Sdk:
+        def sync_close(self):
+            captured["sdk_closed"] = True
+
+    network = SimpleNamespace(
+        metadata=SimpleNamespace(
+            id="vpcnetwork-live",
+            parent_id="project-1",
+            name="default-network",
+        ),
+        spec=SimpleNamespace(
+            ipv4_private_pools=SimpleNamespace(pools=[SimpleNamespace(id="vpcpool-default")]),
+        ),
+    )
+    default_pool = SimpleNamespace(
+        metadata=SimpleNamespace(
+            id="vpcpool-default",
+            parent_id="project-1",
+            name="default-network-pool",
+            resource_version=17,
+        ),
+        spec=SimpleNamespace(
+            version="IPV4",
+            visibility="PRIVATE",
+            cidrs=[
+                SimpleNamespace(cidr="10.0.0.0/13", state="AVAILABLE", max_mask_length=32)
+            ],
+        ),
+        status=SimpleNamespace(cidrs=["10.0.0.0/13"]),
+    )
+
+    class _NetworkClient:
+        def __init__(self, sdk):
+            captured["network_sdk"] = sdk
+
+        def get(self, request):
+            captured["get_network_id"] = request.id
+            return _RequestResult(network)
+
+    class _PoolClient:
+        def __init__(self, sdk):
+            captured["pool_sdk"] = sdk
+
+        def get(self, request):
+            captured.setdefault("get_pool_ids", []).append(request.id)
+            return _RequestResult(default_pool)
+
+        def update(self, request):
+            captured["update_pool_request"] = request
+            return _RequestResult(_Operation())
+
+    sdk = _Sdk()
+    monkeypatch.setattr(cli, "init_nebius_sdk", lambda **_kwargs: sdk)
+    _patch_vpc_extension_sdk_bindings(
+        monkeypatch,
+        network_client=_NetworkClient,
+        pool_client=_PoolClient,
+    )
+
+    result = cli._extend_existing_vpc_parent_private_cidrs(
+        project_id="project-1",
+        network_id="vpcnetwork-live",
+        cidrs=("172.16.10.0/24",),
+    )
+
+    assert result == ("10.0.0.0/13", "172.16.10.0/24")
+    assert captured["get_network_id"] == "vpcnetwork-live"
+    assert captured["get_pool_ids"] == ["vpcpool-default"]
+    update_request = captured["update_pool_request"]
+    update_mask = update_request.get_mask().marshal()
+    assert update_mask == ["spec.cidrs"]
+    assert update_request.metadata.id == "vpcpool-default"
+    assert update_request.metadata.parent_id == "project-1"
+    assert update_request.metadata.name == "default-network-pool"
+    assert update_request.metadata.resource_version == 17
+    assert update_request.spec.version == "IPV4"
+    assert update_request.spec.visibility == "PRIVATE"
+    assert [entry.cidr for entry in update_request.spec.cidrs] == [
+        "10.0.0.0/13",
+        "172.16.10.0/24",
+    ]
+    assert update_request.spec.cidrs[-1].state == "AVAILABLE"
+    assert sync_waits == [120]
+    assert captured["sdk_closed"] is True
+
+
+def test_extend_existing_vpc_parent_private_cidrs_updates_once_for_multiple_missing_cidrs(
+    monkeypatch,
+) -> None:
+    captured: dict[str, object] = {}
+    sync_waits: list[int | None] = []
+
+    class _RequestResult:
+        def __init__(self, value):
+            self._value = value
+
+        def wait(self):
+            return self._value
+
+    class _Operation:
+        def sync_wait(self, timeout=None):
+            sync_waits.append(timeout)
+
+    class _Sdk:
+        def sync_close(self):
+            captured["sdk_closed"] = True
+
+    network = SimpleNamespace(
+        metadata=SimpleNamespace(id="vpcnetwork-live", parent_id="project-1"),
+        spec=SimpleNamespace(
+            ipv4_private_pools=SimpleNamespace(pools=[SimpleNamespace(id="vpcpool-default")]),
+        ),
+    )
+    default_pool = SimpleNamespace(
+        metadata=SimpleNamespace(id="vpcpool-default", name="default-network-pool"),
+        spec=SimpleNamespace(version="IPV4", visibility="PRIVATE", cidrs=["10.0.0.0/13"]),
+        status=SimpleNamespace(cidrs=["10.0.0.0/13"]),
+    )
+
+    class _NetworkClient:
+        def __init__(self, _sdk):
+            pass
+
+        def get(self, request):
+            captured["get_network_id"] = request.id
+            return _RequestResult(network)
+
+    class _PoolClient:
+        def __init__(self, _sdk):
+            pass
+
+        def get(self, request):
+            captured.setdefault("get_pool_ids", []).append(request.id)
+            return _RequestResult(default_pool)
+
+        def update(self, request):
+            captured["update_pool_request"] = request
+            return _RequestResult(_Operation())
+
+    monkeypatch.setattr(cli, "init_nebius_sdk", lambda **_kwargs: _Sdk())
+    _patch_vpc_extension_sdk_bindings(
+        monkeypatch,
+        network_client=_NetworkClient,
+        pool_client=_PoolClient,
+    )
+
+    result = cli._extend_existing_vpc_parent_private_cidrs(
+        project_id="project-1",
+        network_id="vpcnetwork-live",
+        cidrs=("172.16.10.0/24", "192.168.0.0/16"),
+    )
+
+    assert result == ("10.0.0.0/13", "172.16.10.0/24", "192.168.0.0/16")
+    assert captured["get_network_id"] == "vpcnetwork-live"
+    update_request = captured["update_pool_request"]
+    assert update_request.metadata.id == "vpcpool-default"
+    assert [entry.cidr for entry in update_request.spec.cidrs] == [
+        "10.0.0.0/13",
+        "172.16.10.0/24",
+        "192.168.0.0/16",
+    ]
+    assert sync_waits == [120]
+    assert captured["sdk_closed"] is True
+
+
+def test_extend_existing_vpc_parent_private_cidrs_rejects_overlapping_parent(
+    monkeypatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    class _RequestResult:
+        def __init__(self, value):
+            self._value = value
+
+        def wait(self):
+            return self._value
+
+    class _Sdk:
+        def sync_close(self):
+            captured["sdk_closed"] = True
+
+    network = SimpleNamespace(
+        metadata=SimpleNamespace(id="vpcnetwork-live", parent_id="project-1"),
+        spec=SimpleNamespace(
+            ipv4_private_pools=SimpleNamespace(pools=[SimpleNamespace(id="vpcpool-default")]),
+        ),
+    )
+    default_pool = SimpleNamespace(
+        metadata=SimpleNamespace(id="vpcpool-default"),
+        spec=SimpleNamespace(version="IPV4", visibility="PRIVATE", cidrs=["10.0.0.0/13"]),
+        status=SimpleNamespace(cidrs=["10.0.0.0/13"]),
+    )
+
+    class _NetworkClient:
+        def __init__(self, _sdk):
+            pass
+
+        def get(self, request):
+            captured["get_network_id"] = request.id
+            return _RequestResult(network)
+
+    class _PoolClient:
+        def __init__(self, _sdk):
+            pass
+
+        def get(self, request):
+            captured.setdefault("get_pool_ids", []).append(request.id)
+            return _RequestResult(default_pool)
+
+        def update(self, _request):
+            raise AssertionError("overlapping parent extension should not update the pool")
+
+    monkeypatch.setattr(cli, "init_nebius_sdk", lambda **_kwargs: _Sdk())
+    _patch_vpc_extension_sdk_bindings(
+        monkeypatch,
+        network_client=_NetworkClient,
+        pool_client=_PoolClient,
+    )
+
+    with pytest.raises(RuntimeError, match="overlaps existing VPC network private CIDR"):
+        cli._extend_existing_vpc_parent_private_cidrs(
+            project_id="project-1",
+            network_id="vpcnetwork-live",
+            cidrs=("10.0.0.0/12",),
+        )
+
+    assert captured["get_pool_ids"] == ["vpcpool-default"]
+    assert captured["sdk_closed"] is True
+
+
+def test_extend_existing_vpc_parent_private_cidrs_fails_without_attached_private_pool(
+    monkeypatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    class _RequestResult:
+        def __init__(self, value):
+            self._value = value
+
+        def wait(self):
+            return self._value
+
+    class _Sdk:
+        def sync_close(self):
+            captured["sdk_closed"] = True
+
+    network = SimpleNamespace(
+        metadata=SimpleNamespace(id="vpcnetwork-live", parent_id="project-1"),
+        spec=SimpleNamespace(ipv4_private_pools=SimpleNamespace(pools=[])),
+    )
+
+    class _NetworkClient:
+        def __init__(self, _sdk):
+            pass
+
+        def get(self, request):
+            captured["get_network_id"] = request.id
+            return _RequestResult(network)
+
+    class _PoolClient:
+        def __init__(self, _sdk):
+            pass
+
+        def get(self, request):
+            captured.setdefault("get_pool_ids", []).append(request.id)
+            raise AssertionError("network has no private pools to inspect")
+
+    monkeypatch.setattr(cli, "init_nebius_sdk", lambda **_kwargs: _Sdk())
+    _patch_vpc_extension_sdk_bindings(
+        monkeypatch,
+        network_client=_NetworkClient,
+        pool_client=_PoolClient,
+    )
+
+    with pytest.raises(RuntimeError, match="has no attached private pools"):
+        cli._extend_existing_vpc_parent_private_cidrs(
+            project_id="project-1",
+            network_id="vpcnetwork-live",
+            cidrs=("172.16.10.0/24",),
+        )
+
+    assert captured["get_network_id"] == "vpcnetwork-live"
+    assert "get_pool_ids" not in captured
+    assert captured["sdk_closed"] is True
+
+
+def test_extend_existing_vpc_parent_private_cidrs_fails_when_attached_pool_unreadable(
+    monkeypatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    class _RequestResult:
+        def __init__(self, value):
+            self._value = value
+
+        def wait(self):
+            return self._value
+
+    class _Sdk:
+        def sync_close(self):
+            captured["sdk_closed"] = True
+
+    network = SimpleNamespace(
+        metadata=SimpleNamespace(
+            id="vpcnetwork-live",
+            parent_id="project-1",
+            name="default-network",
+            resource_version=12,
+        ),
+        spec=SimpleNamespace(
+            ipv4_private_pools=SimpleNamespace(pools=[SimpleNamespace(id="vpcpool-default")]),
+        ),
+    )
+
+    class _NetworkClient:
+        def __init__(self, _sdk):
+            pass
+
+        def get(self, request):
+            captured["get_network_id"] = request.id
+            return _RequestResult(network)
+
+    class _PoolClient:
+        def __init__(self, _sdk):
+            pass
+
+        def get(self, request):
+            captured.setdefault("get_pool_ids", []).append(request.id)
+            raise RuntimeError("pool API unavailable")
+
+    monkeypatch.setattr(cli, "init_nebius_sdk", lambda **_kwargs: _Sdk())
+    _patch_vpc_extension_sdk_bindings(
+        monkeypatch,
+        network_client=_NetworkClient,
+        pool_client=_PoolClient,
+    )
+
+    with pytest.raises(RuntimeError, match="Could not inspect attached VPC private pool"):
+        cli._extend_existing_vpc_parent_private_cidrs(
+            project_id="project-1",
+            network_id="vpcnetwork-live",
+            cidrs=("10.0.1.0/24",),
+        )
+
+    assert captured["get_pool_ids"] == ["vpcpool-default"]
+    assert captured["sdk_closed"] is True
+
+
+def test_extend_existing_vpc_parent_private_cidrs_noops_when_pool_already_attached(
+    monkeypatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    class _RequestResult:
+        def __init__(self, value):
+            self._value = value
+
+        def wait(self):
+            return self._value
+
+    class _Sdk:
+        def sync_close(self):
+            captured["sdk_closed"] = True
+
+    network = SimpleNamespace(
+        metadata=SimpleNamespace(
+            id="vpcnetwork-live",
+            parent_id="project-1",
+            name="default-network",
+            resource_version=9,
+        ),
+        spec=SimpleNamespace(
+            ipv4_private_pools=SimpleNamespace(
+                pools=[
+                    SimpleNamespace(id="vpcpool-default"),
+                    SimpleNamespace(id="vpcpool-existing"),
+                ]
+            ),
+        ),
+    )
+    pools = {
+        "vpcpool-default": SimpleNamespace(
+            metadata=SimpleNamespace(id="vpcpool-default"),
+            spec=SimpleNamespace(version="IPV4", visibility="PRIVATE", cidrs=["10.0.0.0/13"]),
+            status=SimpleNamespace(cidrs=["10.0.0.0/13"]),
+        ),
+        "vpcpool-existing": SimpleNamespace(
+            metadata=SimpleNamespace(id="vpcpool-existing"),
+            spec=SimpleNamespace(
+                version="IPV4",
+                visibility="PRIVATE",
+                cidrs=["172.16.10.0/24"],
+            ),
+            status=SimpleNamespace(cidrs=["172.16.10.0/24"]),
+        ),
+    }
+
+    class _NetworkClient:
+        def __init__(self, _sdk):
+            pass
+
+        def get(self, request):
+            captured["get_network_id"] = request.id
+            return _RequestResult(network)
+
+    class _PoolClient:
+        def __init__(self, _sdk):
+            pass
+
+        def get(self, request):
+            captured.setdefault("get_pool_ids", []).append(request.id)
+            return _RequestResult(pools[request.id])
+
+        def update(self, _request):
+            raise AssertionError("already attached CIDR should not update the parent pool")
+
+    monkeypatch.setattr(cli, "init_nebius_sdk", lambda **_kwargs: _Sdk())
+    _patch_vpc_extension_sdk_bindings(
+        monkeypatch,
+        network_client=_NetworkClient,
+        pool_client=_PoolClient,
+    )
+
+    result = cli._extend_existing_vpc_parent_private_cidrs(
+        project_id="project-1",
+        network_id="vpcnetwork-live",
+        cidrs=("172.16.10.0/24",),
+    )
+
+    assert result == ("10.0.0.0/13", "172.16.10.0/24")
+    assert captured["get_network_id"] == "vpcnetwork-live"
+    assert captured["get_pool_ids"] == ["vpcpool-default", "vpcpool-existing"]
+    assert captured["sdk_closed"] is True
+
+
+def test_component_field_wizard_can_select_existing_private_pool_for_new_vpc(
+    monkeypatch,
+) -> None:
+    payload = {
+        "version": "v1",
+        "client_info": {
+            "client_name": "demo",
+            "nebius": {
+                "tenant_id": "tenant-1",
+                "project_id": "project-1",
+                "region_id": "eu-north1",
+            },
+            "notifications": {"email_enabled": False, "email": None},
+        },
+        "infra": {
+            "components": [
+                {
+                    "id": "vpc",
+                    "instance_id": "workloads-vpc",
+                    "enabled": True,
+                    "inputs": {"network": {}},
+                }
+            ]
+        },
+        "apps": {"charts": []},
+    }
+    entry = ComponentEntry(
+        id="vpc",
+        scope="infra",
+        config_path="infra.components[].inputs",
+        description="VPC",
+        wizard_fields=BUILTIN_WIZARD_PROFILES["vpc"],
+    )
+    answers = {
+        "infra.components[0].inputs.network.name": "workloads-network",
+        "infra.components[0].inputs.network.ipv4_private_pool_ids": "1",
+        "infra.components[0].inputs.subnets.add": "false",
+    }
+
+    class _PoolProviderLookup:
+        def resolve(self, *, provider, **_kwargs):
+            if provider == "project_private_pools":
+                return [
+                    OptionChoice(
+                        value="vpcpool-private",
+                        label="vpcpool-private  (default-network-pool) (172.16.0.0/12)",
+                    )
+                ]
+            return []
+
+        def last_error(self):
+            return None
+
+    def _answer_prompt(text: str, default=None, **_kwargs):
+        for path_label, answer in answers.items():
+            if path_label in text:
+                return answer
+        return "" if default is None else str(default)
+
+    monkeypatch.setattr(
+        cli,
+        "_wizard_continue_phase",
+        lambda *_args, **_kwargs: cli._WizardPhaseDecision(proceed=True),
+    )
+    monkeypatch.setattr(cli.typer, "prompt", _answer_prompt)
+
+    updated_yaml, completed = cli._run_component_field_wizard(
+        config_yaml=yaml.safe_dump(payload, sort_keys=False),
+        selected_infra={"workloads-vpc"},
+        selected_apps=set(),
+        infra_entries=(entry,),
+        app_entries=(),
+        provider_lookup=_PoolProviderLookup(),
+    )
+
+    updated_payload = yaml.safe_load(updated_yaml)
+    inputs = updated_payload["infra"]["components"][0]["inputs"]
+    assert completed is True
+    assert inputs["network"] == {
+        "name": "workloads-network",
+        "ipv4_private_pool_ids": ["vpcpool-private"],
+    }
+    assert "subnets" not in inputs
+
+
+def test_component_field_wizard_extends_new_vpc_parent_cidrs_for_out_of_pool_subnet(
+    monkeypatch,
+) -> None:
+    payload = {
+        "version": "v1",
+        "client_info": {
+            "client_name": "demo",
+            "nebius": {
+                "tenant_id": "tenant-1",
+                "project_id": "project-1",
+                "region_id": "eu-north1",
+            },
+            "notifications": {"email_enabled": False, "email": None},
+        },
+        "infra": {
+            "components": [
+                {
+                    "id": "vpc",
+                    "instance_id": "workloads-vpc",
+                    "enabled": True,
+                    "inputs": {"network": {}},
+                }
+            ]
+        },
+        "apps": {"charts": []},
+    }
+    entry = ComponentEntry(
+        id="vpc",
+        scope="infra",
+        config_path="infra.components[].inputs",
+        description="VPC",
+        wizard_fields=BUILTIN_WIZARD_PROFILES["vpc"],
+    )
+    captured: list[str] = []
+    answers = {
+        "infra.components[0].inputs.network.name": "workloads-network",
+        "infra.components[0].inputs.network.ipv4_private_cidrs": "1",
+        "infra.components[0].inputs.subnets.<new>.name": "workloads",
+        "infra.components[0].inputs.subnets.workloads.ipv4_private_cidrs": "5",
+        "infra.components[0].inputs.subnets.add_another": "false",
+    }
+
+    class _EmptyProviderLookup:
+        def resolve(self, **_kwargs):
+            return []
+
+        def last_error(self):
+            return None
+
+    def _answer_prompt(text: str, default=None, **_kwargs):
+        for path_label, answer in answers.items():
+            if path_label in text:
+                return answer
+        return "" if default is None else str(default)
+
+    monkeypatch.setattr(
+        cli,
+        "_wizard_continue_phase",
+        lambda *_args, **_kwargs: cli._WizardPhaseDecision(proceed=True),
+    )
+    monkeypatch.setattr(cli.typer, "prompt", _answer_prompt)
+    monkeypatch.setattr(
+        cli.console, "print", lambda message="", **_kwargs: captured.append(str(message))
+    )
+
+    updated_yaml, completed = cli._run_component_field_wizard(
+        config_yaml=yaml.safe_dump(payload, sort_keys=False),
+        selected_infra={"workloads-vpc"},
+        selected_apps=set(),
+        infra_entries=(entry,),
+        app_entries=(),
+        provider_lookup=_EmptyProviderLookup(),
+    )
+
+    updated_payload = yaml.safe_load(updated_yaml)
+    inputs = updated_payload["infra"]["components"][0]["inputs"]
+    assert completed is True
+    assert inputs["network"] == {
+        "name": "workloads-network",
+        "ipv4_private_cidrs": ["10.8.0.0/13", "172.16.0.0/12"],
+    }
+    assert inputs["subnets"]["workloads"] == {
+        "name": "workloads",
+        "use_network_private_pools": False,
+        "ipv4_private_cidrs": ["172.16.0.0/12"],
+    }
+    joined = "\n".join(captured)
+    assert "suggested subnet CIDRs" in joined
+    assert "192.168.0.0/16  (192.168 parent private block" in joined
+    assert "suggested new parent block" in joined
+    assert "cxcli adds out-of-parent custom subnet CIDRs to network.ipv4_private_cidrs" in joined
+    assert "Extending planned VPC network private CIDRs with 172.16.0.0/12" in joined
+
+
+def test_component_field_wizard_existing_private_pool_subnet_extends_new_vpc_parent_cidrs(
+    monkeypatch,
+) -> None:
+    payload = {
+        "version": "v1",
+        "client_info": {
+            "client_name": "demo",
+            "nebius": {
+                "tenant_id": "tenant-1",
+                "project_id": "project-1",
+                "region_id": "eu-north1",
+            },
+            "notifications": {"email_enabled": False, "email": None},
+        },
+        "infra": {
+            "components": [
+                {
+                    "id": "vpc",
+                    "instance_id": "workloads-vpc",
+                    "enabled": True,
+                    "inputs": {"network": {}},
+                }
+            ]
+        },
+        "apps": {"charts": []},
+    }
+    entry = ComponentEntry(
+        id="vpc",
+        scope="infra",
+        config_path="infra.components[].inputs",
+        description="VPC",
+        wizard_fields=BUILTIN_WIZARD_PROFILES["vpc"],
+    )
+    answers = {
+        "infra.components[0].inputs.network.name": "workloads-network",
+        "infra.components[0].inputs.network.ipv4_private_pool_ids": "1",
+        "infra.components[0].inputs.subnets.<new>.name": "workloads",
+        "infra.components[0].inputs.subnets.workloads.ipv4_private_cidrs": "192.168.0.0/16",
+        "infra.components[0].inputs.subnets.add_another": "false",
+    }
+
+    class _PoolProviderLookup:
+        def resolve(self, *, provider, **_kwargs):
+            if provider == "project_private_pools":
+                return [
+                    OptionChoice(
+                        value="vpcpool-private",
+                        label="vpcpool-private  (default-network-pool) (10.0.0.0/13)",
+                        metadata={"cidrs": ("10.0.0.0/13",)},
+                    )
+                ]
+            return []
+
+        def last_error(self):
+            return None
+
+    def _answer_prompt(text: str, default=None, **_kwargs):
+        for path_label, answer in answers.items():
+            if path_label in text:
+                return answer
+        return "" if default is None else str(default)
+
+    monkeypatch.setattr(
+        cli,
+        "_wizard_continue_phase",
+        lambda *_args, **_kwargs: cli._WizardPhaseDecision(proceed=True),
+    )
+    monkeypatch.setattr(cli.typer, "prompt", _answer_prompt)
+
+    updated_yaml, completed = cli._run_component_field_wizard(
+        config_yaml=yaml.safe_dump(payload, sort_keys=False),
+        selected_infra={"workloads-vpc"},
+        selected_apps=set(),
+        infra_entries=(entry,),
+        app_entries=(),
+        provider_lookup=_PoolProviderLookup(),
+    )
+
+    updated_payload = yaml.safe_load(updated_yaml)
+    inputs = updated_payload["infra"]["components"][0]["inputs"]
+    assert completed is True
+    assert inputs["network"] == {
+        "name": "workloads-network",
+        "ipv4_private_pool_ids": ["vpcpool-private"],
+        "ipv4_private_cidrs": ["192.168.0.0/16"],
+    }
+    assert inputs["subnets"]["workloads"] == {
+        "name": "workloads",
+        "use_network_private_pools": False,
+        "ipv4_private_cidrs": ["192.168.0.0/16"],
+    }
+
+
+def test_component_field_wizard_existing_vpc_extends_parent_for_out_of_parent_subnet(
+    monkeypatch,
+) -> None:
+    payload = {
+        "version": "v1",
+        "client_info": {
+            "client_name": "demo",
+            "nebius": {
+                "tenant_id": "tenant-1",
+                "project_id": "project-1",
+                "region_id": "eu-north1",
+            },
+            "notifications": {"email_enabled": False, "email": None},
+        },
+        "infra": {
+            "components": [
+                {
+                    "id": "vpc",
+                    "instance_id": "workloads-vpc",
+                    "enabled": True,
+                    "inputs": {"network": {}},
+                }
+            ]
+        },
+        "apps": {"charts": []},
+    }
+    entry = ComponentEntry(
+        id="vpc",
+        scope="infra",
+        config_path="infra.components[].inputs",
+        description="VPC",
+        wizard_fields=BUILTIN_WIZARD_PROFILES["vpc"],
+    )
+    captured: list[str] = []
+    extension_calls: list[dict[str, object]] = []
+
+    class _ProviderLookup:
+        def resolve(self, *, provider, **_kwargs):
+            if provider == "project_networks":
+                return [
+                    OptionChoice(
+                        value="vpcnetwork-live",
+                        label="vpcnetwork-live  (default-network)",
+                        metadata={"private_cidrs": ("10.0.0.0/13",)},
+                    )
+                ]
+            if provider == "project_subnets":
+                return [
+                    OptionChoice(
+                        value="vpcsubnet-live",
+                        label="vpcsubnet-live  (existing) (10.0.0.0/16)",
+                        metadata={"private_cidrs": ("10.0.0.0/16",)},
+                    )
+                ]
+            return []
+
+        def last_error(self):
+            return None
+
+    def _answer_prompt(text: str, default=None, **_kwargs):
+        if "infra.components[0].inputs.network.existing_id" in text:
+            return "1"
+        if "infra.components[0].inputs.subnets.<new>.name" in text:
+            return "workloads"
+        if "infra.components[0].inputs.subnets.workloads.ipv4_private_cidrs" in text:
+            return "5"
+        if "infra.components[0].inputs.subnets.add_another" in text:
+            return "false"
+        return "" if default is None else str(default)
+
+    def _extend_parent(**kwargs):
+        extension_calls.append(kwargs)
+        return ("10.0.0.0/13", "172.16.0.0/12")
+
+    def _phase_decision(prompt_label: str, **_kwargs):
+        assert not prompt_label.startswith("Extend the selected live VPC network")
+        return cli._WizardPhaseDecision(proceed=True)
+
+    monkeypatch.setattr(cli, "_wizard_continue_phase", _phase_decision)
+    monkeypatch.setattr(cli, "_extend_existing_vpc_parent_private_cidrs", _extend_parent)
+    monkeypatch.setattr(cli.typer, "prompt", _answer_prompt)
+    monkeypatch.setattr(
+        cli.console, "print", lambda message="", **_kwargs: captured.append(str(message))
+    )
+
+    updated_yaml, completed = cli._run_component_field_wizard(
+        config_yaml=yaml.safe_dump(payload, sort_keys=False),
+        selected_infra={"workloads-vpc"},
+        selected_apps=set(),
+        infra_entries=(entry,),
+        app_entries=(),
+        provider_lookup=_ProviderLookup(),
+    )
+
+    updated_payload = yaml.safe_load(updated_yaml)
+    inputs = updated_payload["infra"]["components"][0]["inputs"]
+    assert completed is True
+    assert inputs["network"] == {"existing_id": "vpcnetwork-live"}
+    assert inputs["subnets"] == {
+        "workloads": {
+            "name": "workloads",
+            "use_network_private_pools": False,
+            "ipv4_private_cidrs": ["172.16.0.0/12"],
+        }
+    }
+    assert extension_calls == [
+        {
+            "project_id": "project-1",
+            "network_id": "vpcnetwork-live",
+            "cidrs": ("172.16.0.0/12",),
+        }
+    ]
+    joined = "\n".join(captured)
+    assert "attached private pool on the selected live" in joined
+    assert "10.1.0.0/16  (subnet child range inside 10.0.0.0/13)" in joined
+    assert (
+        "172.16.0.0/12  (new parent private block; extends selected live network "
+        "attached private pool)"
+    ) in joined
+    assert (
+        "192.168.0.0/16  (192.168 parent private block; extends selected live network "
+        "attached private pool)"
+    ) in joined
+    assert "Live VPC network update required" in joined
+    assert "cxcli will add this CIDR to an attached private pool" in joined
+    assert "use_network_private_pools=false" in joined
+    assert (
+        "Extended selected live VPC network attached private pool with 172.16.0.0/12"
+        in joined
+    )
+    assert "Extend the selected live VPC network private pool now?" not in joined
+
+
+def test_component_field_wizard_existing_vpc_failed_parent_extension_reprompts_for_subnet_cidr(
+    monkeypatch,
+) -> None:
+    payload = {
+        "version": "v1",
+        "client_info": {
+            "client_name": "demo",
+            "nebius": {
+                "tenant_id": "tenant-1",
+                "project_id": "project-1",
+                "region_id": "eu-north1",
+            },
+            "notifications": {"email_enabled": False, "email": None},
+        },
+        "infra": {
+            "components": [
+                {
+                    "id": "vpc",
+                    "instance_id": "workloads-vpc",
+                    "enabled": True,
+                    "inputs": {"network": {}},
+                }
+            ]
+        },
+        "apps": {"charts": []},
+    }
+    entry = ComponentEntry(
+        id="vpc",
+        scope="infra",
+        config_path="infra.components[].inputs",
+        description="VPC",
+        wizard_fields=BUILTIN_WIZARD_PROFILES["vpc"],
+    )
+    captured: list[str] = []
+    cidr_answers = ["192.168.0.0/16", "10.1.0.0/16"]
+
+    class _ProviderLookup:
+        def resolve(self, *, provider, **_kwargs):
+            if provider == "project_networks":
+                return [
+                    OptionChoice(
+                        value="vpcnetwork-live",
+                        label="vpcnetwork-live  (default-network)",
+                        metadata={"private_cidrs": ("10.0.0.0/13",)},
+                    )
+                ]
+            return []
+
+        def last_error(self):
+            return None
+
+    def _answer_prompt(text: str, default=None, **_kwargs):
+        if "infra.components[0].inputs.network.existing_id" in text:
+            return "1"
+        if "infra.components[0].inputs.subnets.<new>.name" in text:
+            return "workloads"
+        if "infra.components[0].inputs.subnets.workloads.ipv4_private_cidrs" in text:
+            return cidr_answers.pop(0)
+        if "infra.components[0].inputs.subnets.add_another" in text:
+            return "false"
+        return "" if default is None else str(default)
+
+    def _extend_parent(**_kwargs):
+        raise RuntimeError("simulated live extension failure")
+
+    monkeypatch.setattr(
+        cli,
+        "_wizard_continue_phase",
+        lambda *_args, **_kwargs: cli._WizardPhaseDecision(proceed=True),
+    )
+    monkeypatch.setattr(cli, "_extend_existing_vpc_parent_private_cidrs", _extend_parent)
+    monkeypatch.setattr(cli.typer, "prompt", _answer_prompt)
+    monkeypatch.setattr(
+        cli.console, "print", lambda message="", **_kwargs: captured.append(str(message))
+    )
+
+    updated_yaml, completed = cli._run_component_field_wizard(
+        config_yaml=yaml.safe_dump(payload, sort_keys=False),
+        selected_infra={"workloads-vpc"},
+        selected_apps=set(),
+        infra_entries=(entry,),
+        app_entries=(),
+        provider_lookup=_ProviderLookup(),
+    )
+
+    updated_payload = yaml.safe_load(updated_yaml)
+    inputs = updated_payload["infra"]["components"][0]["inputs"]
+    assert completed is True
+    assert inputs["network"] == {"existing_id": "vpcnetwork-live"}
+    assert inputs["subnets"] == {
+        "workloads": {
+            "name": "workloads",
+            "use_network_private_pools": False,
+            "ipv4_private_cidrs": ["10.1.0.0/16"],
+        }
+    }
+    assert cidr_answers == []
+    joined = "\n".join(captured)
+    assert "Live VPC network update required" in joined
+    assert "simulated live extension failure" in joined
+
+
+def test_component_field_wizard_existing_vpc_accepts_subnet_cidr_inside_default_parent_pool(
+    monkeypatch,
+) -> None:
+    payload = {
+        "version": "v1",
+        "client_info": {
+            "client_name": "demo",
+            "nebius": {
+                "tenant_id": "tenant-1",
+                "project_id": "project-1",
+                "region_id": "eu-north1",
+            },
+            "notifications": {"email_enabled": False, "email": None},
+        },
+        "infra": {
+            "components": [
+                {
+                    "id": "vpc",
+                    "instance_id": "workloads-vpc",
+                    "enabled": True,
+                    "inputs": {"network": {}},
+                }
+            ]
+        },
+        "apps": {"charts": []},
+    }
+    entry = ComponentEntry(
+        id="vpc",
+        scope="infra",
+        config_path="infra.components[].inputs",
+        description="VPC",
+        wizard_fields=BUILTIN_WIZARD_PROFILES["vpc"],
+    )
+    captured: list[str] = []
+
+    class _ProviderLookup:
+        def resolve(self, *, provider, **_kwargs):
+            if provider == "project_networks":
+                return [
+                    OptionChoice(
+                        value="vpcnetwork-live",
+                        label="vpcnetwork-live  (default-network)",
+                        metadata={
+                            "private_cidrs": (
+                                "10.0.0.0/13",
+                                "172.16.0.0/12",
+                                "192.168.0.0/16",
+                            ),
+                        },
+                    )
+                ]
+            if provider == "project_subnets":
+                return [
+                    OptionChoice(
+                        value="vpcsubnet-live-1",
+                        label="vpcsubnet-live-1  (existing) (10.0.0.0/16)",
+                        metadata={"private_cidrs": ("10.0.0.0/16",)},
+                    ),
+                    OptionChoice(
+                        value="vpcsubnet-live-2",
+                        label="vpcsubnet-live-2  (existing) (10.2.0.0/16)",
+                        metadata={"private_cidrs": ("10.2.0.0/16",)},
+                    )
+                ]
+            return []
+
+        def last_error(self):
+            return None
+
+    def _answer_prompt(text: str, default=None, **_kwargs):
+        if "infra.components[0].inputs.network.existing_id" in text:
+            return "1"
+        if "infra.components[0].inputs.subnets.<new>.name" in text:
+            return "workloads"
+        if "infra.components[0].inputs.subnets.workloads.ipv4_private_cidrs" in text:
+            return "1"
+        if "infra.components[0].inputs.subnets.add_another" in text:
+            return "false"
+        return "" if default is None else str(default)
+
+    monkeypatch.setattr(
+        cli,
+        "_wizard_continue_phase",
+        lambda *_args, **_kwargs: cli._WizardPhaseDecision(proceed=True),
+    )
+    monkeypatch.setattr(cli.typer, "prompt", _answer_prompt)
+    monkeypatch.setattr(
+        cli.console, "print", lambda message="", **_kwargs: captured.append(str(message))
+    )
+
+    updated_yaml, completed = cli._run_component_field_wizard(
+        config_yaml=yaml.safe_dump(payload, sort_keys=False),
+        selected_infra={"workloads-vpc"},
+        selected_apps=set(),
+        infra_entries=(entry,),
+        app_entries=(),
+        provider_lookup=_ProviderLookup(),
+    )
+
+    updated_payload = yaml.safe_load(updated_yaml)
+    inputs = updated_payload["infra"]["components"][0]["inputs"]
+    assert completed is True
+    assert inputs["network"] == {"existing_id": "vpcnetwork-live"}
+    assert inputs["subnets"] == {
+        "workloads": {
+            "name": "workloads",
+            "use_network_private_pools": False,
+            "ipv4_private_cidrs": ["10.1.0.0/16"],
+        }
+    }
+    joined = "\n".join(captured)
+    assert "10.1.0.0/16  (subnet child range inside 10.0.0.0/13)" in joined
+    assert "10.3.0.0/16  (subnet child range inside 10.0.0.0/13)" in joined
+    assert "10.4.0.0/16  (subnet child range inside 10.0.0.0/13)" in joined
+    assert "10.5.0.0/16  (subnet child range inside 10.0.0.0/13)" in joined
+    assert "172.16.0.0/12  (subnet child range inside 172.16.0.0/12)" in joined
+    assert "192.168.0.0/16  (subnet child range inside 192.168.0.0/16)" in joined
+    assert "172.16.0.0/12  (new parent private block" not in joined
+    assert "192.168.0.0/16  (192.168 parent private block" not in joined
+
+
+def test_component_field_wizard_existing_vpc_avoids_live_private_allocations(
+    monkeypatch,
+) -> None:
+    payload = {
+        "version": "v1",
+        "client_info": {
+            "client_name": "demo",
+            "nebius": {
+                "tenant_id": "tenant-1",
+                "project_id": "project-1",
+                "region_id": "eu-north1",
+            },
+            "notifications": {"email_enabled": False, "email": None},
+        },
+        "infra": {
+            "components": [
+                {
+                    "id": "vpc",
+                    "instance_id": "workloads-vpc",
+                    "enabled": True,
+                    "inputs": {"network": {}},
+                }
+            ]
+        },
+        "apps": {"charts": []},
+    }
+    entry = ComponentEntry(
+        id="vpc",
+        scope="infra",
+        config_path="infra.components[].inputs",
+        description="VPC",
+        wizard_fields=BUILTIN_WIZARD_PROFILES["vpc"],
+    )
+    captured: list[str] = []
+
+    class _ProviderLookup:
+        def resolve(self, *, provider, **kwargs):
+            if provider == "project_networks":
+                return [
+                    OptionChoice(
+                        value="vpcnetwork-live",
+                        label="vpcnetwork-live  (default-network)",
+                        metadata={
+                            "private_cidrs": ("10.0.0.0/13",),
+                            "private_pool_ids": ("vpcpool-live",),
+                        },
+                    )
+                ]
+            if provider == "project_subnets":
+                return [
+                    OptionChoice(
+                        value="vpcsubnet-inherited",
+                        label="vpcsubnet-inherited  (default) (10.0.0.0/13)",
+                        metadata={
+                            "private_cidrs": (),
+                            "use_network_private_pools": True,
+                        },
+                    )
+                ]
+            if provider == "project_private_allocations":
+                assert kwargs["args"] == {
+                    "subnet_ids": ("vpcsubnet-inherited",),
+                    "pool_ids": ("vpcpool-live",),
+                }
+                return [
+                    OptionChoice(
+                        value="allocation-existing",
+                        label="allocation-existing  (10.0.0.42/32)",
+                        metadata={
+                            "private_cidrs": ("10.0.0.42/32",),
+                            "subnet_id": "vpcsubnet-inherited",
+                            "pool_id": "vpcpool-live",
+                        },
+                    )
+                ]
+            return []
+
+        def last_error(self):
+            return None
+
+    def _answer_prompt(text: str, default=None, **_kwargs):
+        if "infra.components[0].inputs.network.existing_id" in text:
+            return "1"
+        if "infra.components[0].inputs.subnets.<new>.name" in text:
+            return "workloads"
+        if "infra.components[0].inputs.subnets.workloads.ipv4_private_cidrs" in text:
+            return "1"
+        if "infra.components[0].inputs.subnets.add_another" in text:
+            return "false"
+        return "" if default is None else str(default)
+
+    monkeypatch.setattr(
+        cli,
+        "_wizard_continue_phase",
+        lambda *_args, **_kwargs: cli._WizardPhaseDecision(proceed=True),
+    )
+    monkeypatch.setattr(cli.typer, "prompt", _answer_prompt)
+    monkeypatch.setattr(
+        cli.console, "print", lambda message="", **_kwargs: captured.append(str(message))
+    )
+
+    updated_yaml, completed = cli._run_component_field_wizard(
+        config_yaml=yaml.safe_dump(payload, sort_keys=False),
+        selected_infra={"workloads-vpc"},
+        selected_apps=set(),
+        infra_entries=(entry,),
+        app_entries=(),
+        provider_lookup=_ProviderLookup(),
+    )
+
+    updated_payload = yaml.safe_load(updated_yaml)
+    inputs = updated_payload["infra"]["components"][0]["inputs"]
+    assert completed is True
+    assert inputs["network"] == {"existing_id": "vpcnetwork-live"}
+    assert inputs["subnets"] == {
+        "workloads": {
+            "name": "workloads",
+            "use_network_private_pools": False,
+            "ipv4_private_cidrs": ["10.1.0.0/16"],
+        }
+    }
+    joined = "\n".join(captured)
+    assert "10.0.0.0/16  (subnet child range inside 10.0.0.0/13)" not in joined
+    assert "10.1.0.0/16  (subnet child range inside 10.0.0.0/13)" in joined
+    assert "without live private allocations" in joined
+
+
+def test_component_field_wizard_existing_vpc_rejects_manual_cidr_over_live_private_allocation(
+    monkeypatch,
+) -> None:
+    payload = {
+        "version": "v1",
+        "client_info": {
+            "client_name": "demo",
+            "nebius": {
+                "tenant_id": "tenant-1",
+                "project_id": "project-1",
+                "region_id": "eu-north1",
+            },
+            "notifications": {"email_enabled": False, "email": None},
+        },
+        "infra": {
+            "components": [
+                {
+                    "id": "vpc",
+                    "instance_id": "workloads-vpc",
+                    "enabled": True,
+                    "inputs": {"network": {}},
+                }
+            ]
+        },
+        "apps": {"charts": []},
+    }
+    entry = ComponentEntry(
+        id="vpc",
+        scope="infra",
+        config_path="infra.components[].inputs",
+        description="VPC",
+        wizard_fields=BUILTIN_WIZARD_PROFILES["vpc"],
+    )
+    captured: list[str] = []
+    cidr_answers = ["10.1.0.0/16", "10.2.0.0/16"]
+
+    class _ProviderLookup:
+        def resolve(self, *, provider, **kwargs):
+            if provider == "project_networks":
+                return [
+                    OptionChoice(
+                        value="vpcnetwork-live",
+                        label="vpcnetwork-live  (default-network)",
+                        metadata={
+                            "private_cidrs": ("10.0.0.0/13",),
+                            "private_pool_ids": ("vpcpool-live",),
+                        },
+                    )
+                ]
+            if provider == "project_subnets":
+                return [
+                    OptionChoice(
+                        value="vpcsubnet-inherited",
+                        label="vpcsubnet-inherited  (default) (10.0.0.0/13)",
+                        metadata={
+                            "private_cidrs": (),
+                            "use_network_private_pools": True,
+                        },
+                    )
+                ]
+            if provider == "project_private_allocations":
+                assert kwargs["args"] == {
+                    "subnet_ids": ("vpcsubnet-inherited",),
+                    "pool_ids": ("vpcpool-live",),
+                }
+                return [
+                    OptionChoice(
+                        value="allocation-existing",
+                        label="allocation-existing  (10.1.2.3/32)",
+                        metadata={
+                            "private_cidrs": ("10.1.2.3/32",),
+                            "subnet_id": "vpcsubnet-inherited",
+                            "pool_id": "vpcpool-live",
+                        },
+                    )
+                ]
+            return []
+
+        def last_error(self):
+            return None
+
+    def _answer_prompt(text: str, default=None, **_kwargs):
+        if "infra.components[0].inputs.network.existing_id" in text:
+            return "1"
+        if "infra.components[0].inputs.subnets.<new>.name" in text:
+            return "workloads"
+        if "infra.components[0].inputs.subnets.workloads.ipv4_private_cidrs" in text:
+            return cidr_answers.pop(0)
+        if "infra.components[0].inputs.subnets.add_another" in text:
+            return "false"
+        return "" if default is None else str(default)
+
+    monkeypatch.setattr(
+        cli,
+        "_wizard_continue_phase",
+        lambda *_args, **_kwargs: cli._WizardPhaseDecision(proceed=True),
+    )
+    monkeypatch.setattr(cli.typer, "prompt", _answer_prompt)
+    monkeypatch.setattr(
+        cli.console, "print", lambda message="", **_kwargs: captured.append(str(message))
+    )
+
+    updated_yaml, completed = cli._run_component_field_wizard(
+        config_yaml=yaml.safe_dump(payload, sort_keys=False),
+        selected_infra={"workloads-vpc"},
+        selected_apps=set(),
+        infra_entries=(entry,),
+        app_entries=(),
+        provider_lookup=_ProviderLookup(),
+    )
+
+    updated_payload = yaml.safe_load(updated_yaml)
+    inputs = updated_payload["infra"]["components"][0]["inputs"]
+    assert completed is True
+    assert inputs["network"] == {"existing_id": "vpcnetwork-live"}
+    assert inputs["subnets"] == {
+        "workloads": {
+            "name": "workloads",
+            "use_network_private_pools": False,
+            "ipv4_private_cidrs": ["10.2.0.0/16"],
+        }
+    }
+    assert cidr_answers == []
+    joined = "\n".join(captured)
+    assert "10.1.0.0/16 overlaps 10.1.2.3/32" in joined
+    assert "private allocations in the selected VPC network" in joined
+
+
+def test_component_field_wizard_existing_vpc_rejects_explicit_cidr_when_allocation_lookup_fails(
+    monkeypatch,
+) -> None:
+    payload = {
+        "version": "v1",
+        "client_info": {
+            "client_name": "demo",
+            "nebius": {
+                "tenant_id": "tenant-1",
+                "project_id": "project-1",
+                "region_id": "eu-north1",
+            },
+            "notifications": {"email_enabled": False, "email": None},
+        },
+        "infra": {
+            "components": [
+                {
+                    "id": "vpc",
+                    "instance_id": "workloads-vpc",
+                    "enabled": True,
+                    "inputs": {"network": {}},
+                }
+            ]
+        },
+        "apps": {"charts": []},
+    }
+    entry = ComponentEntry(
+        id="vpc",
+        scope="infra",
+        config_path="infra.components[].inputs",
+        description="VPC",
+        wizard_fields=BUILTIN_WIZARD_PROFILES["vpc"],
+    )
+    captured: list[str] = []
+    cidr_answers = ["1", "qq"]
+
+    class _ProviderLookup:
+        def __init__(self):
+            self._last_error = None
+
+        def resolve(self, *, provider, **kwargs):
+            self._last_error = None
+            if provider == "project_networks":
+                return [
+                    OptionChoice(
+                        value="vpcnetwork-live",
+                        label="vpcnetwork-live  (default-network)",
+                        metadata={
+                            "private_cidrs": ("10.0.0.0/13",),
+                            "private_pool_ids": ("vpcpool-live",),
+                        },
+                    )
+                ]
+            if provider == "project_subnets":
+                return [
+                    OptionChoice(
+                        value="vpcsubnet-inherited",
+                        label="vpcsubnet-inherited  (default) (10.0.0.0/13)",
+                        metadata={
+                            "private_cidrs": (),
+                            "use_network_private_pools": True,
+                        },
+                    )
+                ]
+            if provider == "project_private_allocations":
+                assert kwargs["args"] == {
+                    "subnet_ids": ("vpcsubnet-inherited",),
+                    "pool_ids": ("vpcpool-live",),
+                }
+                self._last_error = "allocation API unavailable"
+                return []
+            return []
+
+        def last_error(self):
+            return self._last_error
+
+    def _answer_prompt(text: str, default=None, **_kwargs):
+        if "infra.components[0].inputs.network.existing_id" in text:
+            return "1"
+        if "infra.components[0].inputs.subnets.<new>.name" in text:
+            return "workloads"
+        if "infra.components[0].inputs.subnets.workloads.ipv4_private_cidrs" in text:
+            return cidr_answers.pop(0)
+        if "infra.components[0].inputs.subnets.add_another" in text:
+            return "false"
+        return "" if default is None else str(default)
+
+    monkeypatch.setattr(
+        cli,
+        "_wizard_continue_phase",
+        lambda *_args, **_kwargs: cli._WizardPhaseDecision(proceed=True),
+    )
+    monkeypatch.setattr(cli.typer, "prompt", _answer_prompt)
+    monkeypatch.setattr(
+        cli.console, "print", lambda message="", **_kwargs: captured.append(str(message))
+    )
+
+    updated_yaml, completed = cli._run_component_field_wizard(
+        config_yaml=yaml.safe_dump(payload, sort_keys=False),
+        selected_infra={"workloads-vpc"},
+        selected_apps=set(),
+        infra_entries=(entry,),
+        app_entries=(),
+        provider_lookup=_ProviderLookup(),
+    )
+
+    updated_payload = yaml.safe_load(updated_yaml)
+    inputs = updated_payload["infra"]["components"][0]["inputs"]
+    assert completed is False
+    assert inputs["network"] == {"existing_id": "vpcnetwork-live"}
+    assert inputs["subnets"] == {"workloads": {"name": "workloads"}}
+    assert cidr_answers == []
+    joined = "\n".join(captured)
+    assert "Live private allocation lookup failed" in joined
+    assert "could not inspect live private allocations" in joined
+    assert "allocation API unavailable" in joined
+
+
+def test_component_field_wizard_existing_vpc_rejects_explicit_cidr_when_subnet_lookup_fails(
+    monkeypatch,
+) -> None:
+    payload = {
+        "version": "v1",
+        "client_info": {
+            "client_name": "demo",
+            "nebius": {
+                "tenant_id": "tenant-1",
+                "project_id": "project-1",
+                "region_id": "eu-north1",
+            },
+            "notifications": {"email_enabled": False, "email": None},
+        },
+        "infra": {
+            "components": [
+                {
+                    "id": "vpc",
+                    "instance_id": "workloads-vpc",
+                    "enabled": True,
+                    "inputs": {"network": {}},
+                }
+            ]
+        },
+        "apps": {"charts": []},
+    }
+    entry = ComponentEntry(
+        id="vpc",
+        scope="infra",
+        config_path="infra.components[].inputs",
+        description="VPC",
+        wizard_fields=BUILTIN_WIZARD_PROFILES["vpc"],
+    )
+    captured: list[str] = []
+    cidr_answers = ["10.0.0.0/16", "qq"]
+
+    class _ProviderLookup:
+        def __init__(self):
+            self._last_error = None
+
+        def resolve(self, *, provider, **_kwargs):
+            self._last_error = None
+            if provider == "project_networks":
+                return [
+                    OptionChoice(
+                        value="vpcnetwork-live",
+                        label="vpcnetwork-live  (default-network)",
+                        metadata={
+                            "private_cidrs": ("10.0.0.0/13",),
+                            "private_pool_ids": ("vpcpool-live",),
+                        },
+                    )
+                ]
+            if provider == "project_subnets":
+                self._last_error = "subnet API unavailable"
+                return []
+            if provider == "project_private_allocations":
+                return []
+            return []
+
+        def last_error(self):
+            return self._last_error
+
+    def _answer_prompt(text: str, default=None, **_kwargs):
+        if "infra.components[0].inputs.network.existing_id" in text:
+            return "1"
+        if "infra.components[0].inputs.subnets.<new>.name" in text:
+            return "workloads"
+        if "infra.components[0].inputs.subnets.workloads.ipv4_private_cidrs" in text:
+            return cidr_answers.pop(0)
+        if "infra.components[0].inputs.subnets.add_another" in text:
+            return "false"
+        return "" if default is None else str(default)
+
+    monkeypatch.setattr(
+        cli,
+        "_wizard_continue_phase",
+        lambda *_args, **_kwargs: cli._WizardPhaseDecision(proceed=True),
+    )
+    monkeypatch.setattr(cli.typer, "prompt", _answer_prompt)
+    monkeypatch.setattr(
+        cli.console, "print", lambda message="", **_kwargs: captured.append(str(message))
+    )
+
+    updated_yaml, completed = cli._run_component_field_wizard(
+        config_yaml=yaml.safe_dump(payload, sort_keys=False),
+        selected_infra={"workloads-vpc"},
+        selected_apps=set(),
+        infra_entries=(entry,),
+        app_entries=(),
+        provider_lookup=_ProviderLookup(),
+    )
+
+    updated_payload = yaml.safe_load(updated_yaml)
+    inputs = updated_payload["infra"]["components"][0]["inputs"]
+    assert completed is False
+    assert inputs["network"] == {"existing_id": "vpcnetwork-live"}
+    assert inputs["subnets"] == {"workloads": {"name": "workloads"}}
+    assert cidr_answers == []
+    joined = "\n".join(captured)
+    assert "Live subnet lookup failed" in joined
+    assert "could not inspect live subnets" in joined
+    assert "subnet API unavailable" in joined
+
+
+def test_component_field_wizard_subnet_custom_cidr_accepts_multiple_ranges(
+    monkeypatch,
+) -> None:
+    payload = {
+        "version": "v1",
+        "client_info": {
+            "client_name": "demo",
+            "nebius": {
+                "tenant_id": "tenant-1",
+                "project_id": "project-1",
+                "region_id": "eu-north1",
+            },
+            "notifications": {"email_enabled": False, "email": None},
+        },
+        "infra": {
+            "components": [
+                {
+                    "id": "vpc",
+                    "instance_id": "workloads-vpc",
+                    "enabled": True,
+                    "inputs": {"network": {}},
+                }
+            ]
+        },
+        "apps": {"charts": []},
+    }
+    entry = ComponentEntry(
+        id="vpc",
+        scope="infra",
+        config_path="infra.components[].inputs",
+        description="VPC",
+        wizard_fields=BUILTIN_WIZARD_PROFILES["vpc"],
+    )
+    captured: list[str] = []
+    prompt_texts: list[str] = []
+    cidr_answers = ["172.16.30.0/24, 172.16.20.0/24"]
+
+    class _ProviderLookup:
+        def resolve(self, *, provider, **_kwargs):
+            if provider == "project_networks":
+                return [
+                    OptionChoice(
+                        value="vpcnetwork-live",
+                        label="vpcnetwork-live  (default-network)",
+                        metadata={"private_cidrs": ("172.16.0.0/12",)},
+                    )
+                ]
+            if provider in {"project_subnets", "project_private_allocations"}:
+                return []
+            return []
+
+        def last_error(self):
+            return None
+
+    def _answer_prompt(text: str, default=None, **_kwargs):
+        prompt_texts.append(text)
+        if "infra.components[0].inputs.network.existing_id" in text:
+            return "1"
+        if "infra.components[0].inputs.subnets.<new>.name" in text:
+            return "workloads"
+        if "infra.components[0].inputs.subnets.workloads.ipv4_private_cidrs" in text:
+            return cidr_answers.pop(0)
+        if "infra.components[0].inputs.subnets.add_another" in text:
+            return "false"
+        return "" if default is None else str(default)
+
+    monkeypatch.setattr(
+        cli,
+        "_wizard_continue_phase",
+        lambda *_args, **_kwargs: cli._WizardPhaseDecision(proceed=True),
+    )
+    monkeypatch.setattr(cli.typer, "prompt", _answer_prompt)
+    monkeypatch.setattr(
+        cli.console, "print", lambda message="", **_kwargs: captured.append(str(message))
+    )
+
+    updated_yaml, completed = cli._run_component_field_wizard(
+        config_yaml=yaml.safe_dump(payload, sort_keys=False),
+        selected_infra={"workloads-vpc"},
+        selected_apps=set(),
+        infra_entries=(entry,),
+        app_entries=(),
+        provider_lookup=_ProviderLookup(),
+    )
+
+    updated_payload = yaml.safe_load(updated_yaml)
+    inputs = updated_payload["infra"]["components"][0]["inputs"]
+    assert completed is True
+    assert inputs["network"] == {"existing_id": "vpcnetwork-live"}
+    assert inputs["subnets"] == {
+        "workloads": {
+            "name": "workloads",
+            "use_network_private_pools": False,
+            "ipv4_private_cidrs": ["172.16.30.0/24", "172.16.20.0/24"],
+        }
+    }
+    assert cidr_answers == []
+    assert any("index or comma-separated CIDRs" in text for text in prompt_texts)
+    assert "comma-separated CIDRs are not supported" not in "\n".join(captured)
+
+
+def test_component_field_wizard_retries_vpc_cidr_overlapping_default_pool(
+    monkeypatch,
+) -> None:
+    payload = {
+        "version": "v1",
+        "client_info": {
+            "client_name": "demo",
+            "nebius": {
+                "tenant_id": "tenant-1",
+                "project_id": "project-1",
+                "region_id": "eu-north1",
+            },
+            "notifications": {"email_enabled": False, "email": None},
+        },
+        "infra": {
+            "components": [
+                {
+                    "id": "vpc",
+                    "instance_id": "workloads-vpc",
+                    "enabled": True,
+                    "inputs": {"network": {}},
+                }
+            ]
+        },
+        "apps": {"charts": []},
+    }
+    entry = ComponentEntry(
+        id="vpc",
+        scope="infra",
+        config_path="infra.components[].inputs",
+        description="VPC",
+        wizard_fields=BUILTIN_WIZARD_PROFILES["vpc"],
+    )
+    prompt_texts: list[str] = []
+    cidr_answers = ["10.0.0.0/24", "1"]
+
+    class _EmptyProviderLookup:
+        def resolve(self, **_kwargs):
+            return []
+
+        def last_error(self):
+            return None
+
+    def _answer_prompt(text: str, default=None, **_kwargs):
+        prompt_texts.append(text)
+        if "infra.components[0].inputs.network.name" in text:
+            return "workloads-network"
+        if "infra.components[0].inputs.network.ipv4_private_cidrs" in text:
+            return cidr_answers.pop(0)
+        if "infra.components[0].inputs.subnets.<new>.name" in text:
+            return "workloads"
+        if "infra.components[0].inputs.subnets.workloads.ipv4_private_cidrs" in text:
+            return "1"
+        if "infra.components[0].inputs.subnets.add_another" in text:
+            return "false"
+        return "" if default is None else str(default)
+
+    monkeypatch.setattr(
+        cli,
+        "_wizard_continue_phase",
+        lambda *_args, **_kwargs: cli._WizardPhaseDecision(proceed=True),
+    )
+    monkeypatch.setattr(cli.typer, "prompt", _answer_prompt)
+
+    updated_yaml, completed = cli._run_component_field_wizard(
+        config_yaml=yaml.safe_dump(payload, sort_keys=False),
+        selected_infra={"workloads-vpc"},
+        selected_apps=set(),
+        infra_entries=(entry,),
+        app_entries=(),
+        provider_lookup=_EmptyProviderLookup(),
+    )
+
+    updated_payload = yaml.safe_load(updated_yaml)
+    network = updated_payload["infra"]["components"][0]["inputs"]["network"]
+    subnet = updated_payload["infra"]["components"][0]["inputs"]["subnets"]["workloads"]
+    assert completed is True
+    assert network["ipv4_private_cidrs"] == ["10.8.0.0/13"]
+    assert subnet["ipv4_private_cidrs"] == ["10.8.0.0/16"]
+    assert subnet["use_network_private_pools"] is False
+    assert cidr_answers == []
+    assert sum("inputs.network.ipv4_private_cidrs" in text for text in prompt_texts) == 2
+
+
+def test_component_field_wizard_retries_overlapping_vpc_cidr_values(
+    monkeypatch,
+) -> None:
+    payload = {
+        "version": "v1",
+        "client_info": {
+            "client_name": "demo",
+            "nebius": {
+                "tenant_id": "tenant-1",
+                "project_id": "project-1",
+                "region_id": "eu-north1",
+            },
+            "notifications": {"email_enabled": False, "email": None},
+        },
+        "infra": {
+            "components": [
+                {
+                    "id": "vpc",
+                    "instance_id": "workloads-vpc",
+                    "enabled": True,
+                    "inputs": {"network": {}},
+                }
+            ]
+        },
+        "apps": {"charts": []},
+    }
+    entry = ComponentEntry(
+        id="vpc",
+        scope="infra",
+        config_path="infra.components[].inputs",
+        description="VPC",
+        wizard_fields=BUILTIN_WIZARD_PROFILES["vpc"],
+    )
+    prompt_texts: list[str] = []
+    cidr_answers = ["172.16.0.0/13,172.16.0.0/12", "2"]
+
+    class _EmptyProviderLookup:
+        def resolve(self, **_kwargs):
+            return []
+
+        def last_error(self):
+            return None
+
+    def _answer_prompt(text: str, default=None, **_kwargs):
+        prompt_texts.append(text)
+        if "infra.components[0].inputs.network.name" in text:
+            return "workloads-network"
+        if "infra.components[0].inputs.network.ipv4_private_cidrs" in text:
+            return cidr_answers.pop(0)
+        if "infra.components[0].inputs.subnets.<new>.name" in text:
+            return "workloads"
+        if "infra.components[0].inputs.subnets.workloads.ipv4_private_cidrs" in text:
+            return "1"
+        if "infra.components[0].inputs.subnets.add_another" in text:
+            return "false"
+        return "" if default is None else str(default)
+
+    monkeypatch.setattr(
+        cli,
+        "_wizard_continue_phase",
+        lambda *_args, **_kwargs: cli._WizardPhaseDecision(proceed=True),
+    )
+    monkeypatch.setattr(cli.typer, "prompt", _answer_prompt)
+
+    updated_yaml, completed = cli._run_component_field_wizard(
+        config_yaml=yaml.safe_dump(payload, sort_keys=False),
+        selected_infra={"workloads-vpc"},
+        selected_apps=set(),
+        infra_entries=(entry,),
+        app_entries=(),
+        provider_lookup=_EmptyProviderLookup(),
+    )
+
+    updated_payload = yaml.safe_load(updated_yaml)
+    network = updated_payload["infra"]["components"][0]["inputs"]["network"]
+    subnet = updated_payload["infra"]["components"][0]["inputs"]["subnets"]["workloads"]
+    assert completed is True
+    assert network["ipv4_private_cidrs"] == ["10.16.0.0/13"]
+    assert subnet["ipv4_private_cidrs"] == ["10.16.0.0/16"]
+    assert subnet["use_network_private_pools"] is False
+    assert cidr_answers == []
+    assert sum("inputs.network.ipv4_private_cidrs" in text for text in prompt_texts) == 2
+
+
+def test_vpc_existing_network_choices_do_not_include_planned_vpc_self_reference() -> None:
+    payload = {
+        "infra": {
+            "components": [
+                {
+                    "id": "vpc",
+                    "instance_id": "workloads-vpc",
+                    "enabled": True,
+                    "inputs": {"network": {"name": "mynetwork"}},
+                }
+            ]
+        }
+    }
+    entry = ComponentEntry(
+        id="vpc",
+        scope="infra",
+        config_path="infra.components[].inputs",
+        description="VPC",
+        wizard_fields=BUILTIN_WIZARD_PROFILES["vpc"],
+    )
+
+    class _ProviderLookup:
+        def resolve(self, **kwargs):
+            if str(kwargs.get("field_path", "")).endswith(".inputs.network.existing_id"):
+                return [OptionChoice(value="vpcnetwork-live", label="default network")]
+            return []
+
+    choices = cli._resolve_dynamic_field_choices(
+        payload=payload,
+        entry=entry,
+        full_path_label="infra.components[0].inputs.network.existing_id",
+        provider_lookup=_ProviderLookup(),
+    )
+
+    assert [choice.value for choice in choices] == ["vpcnetwork-live"]
+    assert all("planned:" not in choice.label for choice in choices)
+
+
 def test_wizard_backtrack_target_skips_current_prompt_left_in_history() -> None:
     first = ("infra", "components", 0, "inputs", "first")
     second = ("infra", "components", 0, "inputs", "second")
@@ -1051,7 +3625,9 @@ def test_vm_observability_prompt_guidance_includes_concise_field_comments(
     monkeypatch,
 ) -> None:
     captured: list[str] = []
-    monkeypatch.setattr(cli.console, "print", lambda message, **_kwargs: captured.append(str(message)))
+    monkeypatch.setattr(
+        cli.console, "print", lambda message, **_kwargs: captured.append(str(message))
+    )
     emitted_guidance: set[str] = set()
 
     for field_path in (
@@ -1061,7 +3637,7 @@ def test_vm_observability_prompt_guidance_includes_concise_field_comments(
         cli._maybe_print_observability_prompt_guidance(
             full_path_label=field_path,
             emitted_guidance=emitted_guidance,
-    )
+        )
 
     joined = "\n".join(captured)
     assert "Compute VMs use the built-in Monitoring agent" in joined

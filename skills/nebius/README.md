@@ -9,6 +9,9 @@ infrastructure workflows.
   automation.
 - Helps design service accounts, access keys, Terraform state buckets, and
   auth bootstrap flows.
+- Captures the current Nebius VPC pool/subnet model for explicit subnet CIDRs,
+  inherited network-pool mode, live allocation overlap checks, pool-tree
+  compatibility, and safe parent private-pool extension.
 - Supports MK8s GPU compatibility, quota readiness, and operator decisions.
 - Documents observability endpoints and onboarding patterns.
 
@@ -44,6 +47,9 @@ Implement, inspect, or validate with least exposure
 - Treat live cloud changes as high impact.
 - Use placeholders in public docs.
 - Prefer environment-driven or catalog-driven behavior over hardcoding.
+- For VPC automation, distinguish parent network private pools, explicit
+  subnet child pools, inherited subnet mode, and existing live allocations
+  before proposing CIDRs or changing pools.
 - Cleanup evidence matters when live resources are created.
 
 ## Files

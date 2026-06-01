@@ -8,6 +8,16 @@ variable "parent_id" {
   }
 }
 
+variable "network_id" {
+  description = "VPC network ID that owns subnet_id."
+  type        = string
+  nullable    = false
+  validation {
+    condition     = length(trimspace(var.network_id)) > 0
+    error_message = "network_id cannot be empty."
+  }
+}
+
 variable "name" {
   description = "NFS VM name."
   type        = string

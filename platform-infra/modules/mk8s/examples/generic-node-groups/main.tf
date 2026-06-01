@@ -65,10 +65,14 @@ variable "gpu_clusters" {
 variable "node_groups" {
   description = "Caller-owned MK8s node groups keyed by logical name."
   type = map(object({
-    enabled          = optional(bool, true)
-    name             = optional(string)
-    node_count       = optional(number)
-    autoscaling      = optional(any)
+    enabled    = optional(bool, true)
+    name       = optional(string)
+    node_count = optional(number)
+    autoscaling = optional(object({
+      enabled        = optional(bool, true)
+      min_node_count = optional(number)
+      max_node_count = optional(number)
+    }))
     auto_repair      = optional(any)
     gpu              = optional(bool, false)
     platform         = optional(string)
@@ -113,11 +117,14 @@ variable "node_groups" {
       }
     }
     scheduler = {
-      node_count = 1
-      gpu        = false
-      platform   = "cpu-d3"
-      preset     = "4vcpu-16gb"
-      os         = "ubuntu24.04"
+      autoscaling = {
+        min_node_count = 1
+        max_node_count = 3
+      }
+      gpu      = false
+      platform = "cpu-d3"
+      preset   = "4vcpu-16gb"
+      os       = "ubuntu24.04"
       node_labels = {
         "example.nebius.ai/role" = "scheduler"
       }

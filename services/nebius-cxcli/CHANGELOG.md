@@ -6,8 +6,123 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Changed `create <deployments-root>` to create the deployments root directory
+  when it is missing, while keeping `discover` strict about existing
+  deployment-scope directories and preserving the nested managed-root guard.
+- Changed interactive `create --force` for an existing resolved project folder
+  to treat `--force` as the overwrite confirmation. The CLI still prints the
+  existing-project warning, but it no longer asks the follow-up overwrite
+  question when the operator already passed `--force`.
+- Changed live project VPC network choices to recommend the Nebius
+  `default-network` when present, so any wizard profile backed by
+  `project_networks` opens with that existing network selected instead of the
+  create-new or first-ID fallback. The explicit `Create a new VPC network` row
+  remains available for `infra:vpc` when a new network is needed.
+- Switched rendered Terraform roots and bundled module validation to the
+  official public Nebius Terraform provider source `nebius/nebius` with the
+  shared constraint `>= 0.6.8, < 0.7.0`, and updated the cxcli-managed
+  Terraform client version to `1.15.5`.
+- Added live VPC network/subnet selection for subnet-attached infra in `create`
+  and `component add`. `mk8s`, `vm`, `nfs`, `wireguard-gw`, and
+  `ssh-jumphost` now list project VPC networks first, list only subnets in the
+  selected network, auto-select only singleton choices, and support explicit
+  `--network-id` / `--subnet-id` values with scoped selectors when several
+  applicable infra rows are selected.
+- Added the Terraform-owned `infra:vpc` component and row-level
+  `infra.components[].bindings` so configs can bind MK8s/VM-style workloads to
+  a planned VPC network or subnet created by the same config. Planned selectors
+  use `--network-ref` / `--subnet-ref`; literal `--network-id` /
+  `--subnet-id` remain live-ID-only.
+- Fixed interactive same-run planned VPC wiring so selected `infra:vpc` rows
+  are configured before MK8s and VM-style consumers, making newly declared VPC
+  subnets available as planned subnet choices in the same `create` or
+  `component add` field wizard pass.
+- Fixed row-level planned VPC bindings during render so config targets such as
+  `inputs.network_id` and `inputs.subnet_id` materialize as direct Terraform
+  module arguments instead of an unsupported nested `inputs` argument.
+- Changed the interactive `create` wizard to show app chart selection only
+  after an MK8s target is selected, and changed the `infra:vpc` wizard to
+  collect planned subnets through guided name/private-CIDR prompts instead of a
+  raw YAML/JSON map prompt. Existing-network VPC rows now skip the new-network
+  name prompt and collect only planned subnets for that network; new VPC rows
+  can also create a network with no subnets. New-network VPC rows now label
+  the skip row as `Create a new VPC network` and prompt for
+  `inputs.network.ipv4_private_cidrs` before subnet creation. Network CIDR
+  prompts now suggest custom private non-default `10.x` `/13` ranges such as
+  `10.8.0.0/13`, `10.16.0.0/13`, `10.32.0.0/13`, `10.40.0.0/13`, and
+  `10.56.0.0/13`, plus `172.16.0.0/12` and `192.168.0.0/16`, outside
+  Nebius' documented regional default private-pool ranges;
+  direct config can instead set
+  `inputs.network.ipv4_private_pool_ids`, and the wizard now lists live
+  unassigned `project_private_pools` so new VPC networks can attach an
+  available existing private pool before falling back to creating a managed
+  pool from CIDR. Direct config can set
+  `inputs.network.ipv4_private_source_pool_id` when the managed pool must be
+  carved from an existing Nebius source pool. Declared subnets now always use
+  explicit private CIDRs: cxcli records `use_network_private_pools=false`, and
+  subnet CIDRs must fit inside the selected network range, including
+  default-network private ranges already attached to the selected parent, and
+  must not overlap another subnet or live private allocation in that network.
+  For Terraform-owned new networks, the wizard adds any out-of-parent custom
+  subnet CIDR to
+  `inputs.network.ipv4_private_cidrs` first so Terraform extends the parent
+  network IP space before creating the explicit subnet child range; for live
+  `inputs.network.existing_id` networks, it now adds a selected or manually
+  entered out-of-parent subnet CIDR to an attached private pool on the selected
+  live network before recording the subnet with explicit private pools
+  (`use_network_private_pools=false`). Terraform ownership of that existing
+  network remains external to the generated config. The
+  VPC module now validates explicit public pool
+  IDs, documents that Nebius attaches the default public pool and default route
+  table when public pools or route tables are omitted, and exposes the
+  Nebius-reported default route-table and effective network-pool metadata in
+  outputs.
+- Changed `infra:vpc` subnet CIDR prompts to suggest deterministic child CIDRs
+  from the selected parent VPC private-pool ranges while avoiding known
+  explicit subnet CIDRs and live private allocations, so an existing live
+  `default-network` with attached private CIDR metadata offers explicit subnet
+  CIDR choices instead of falling back directly to free-form input. For
+  Terraform-owned new networks, the same prompt also includes suggested new
+  parent blocks that cxcli can add to `inputs.network.ipv4_private_cidrs`
+  before subnet creation. Existing live networks now combine those child CIDR
+  suggestions with already attached RFC1918 extension blocks such as
+  `172.16.0.0/12` and `192.168.0.0/16` when no explicit subnet CIDR or live
+  private allocation overlaps them; selected or manually entered out-of-parent
+  CIDRs extend an attached private pool on the selected live network before
+  the subnet is recorded with `use_network_private_pools=false`.
+- Changed the guided `infra:vpc` subnet custom-CIDR prompt to accept one or
+  more comma-separated explicit private CIDRs, matching the Terraform module's
+  `list(string)` shape while keeping the same parent-fit, overlap, and live
+  allocation checks across the full list.
+- Changed interactive `component add` so answering `n` at a newly added infra
+  component's field phase cancels that pending infra row instead of writing an
+  unconfigured component. App chart phases keep the existing behavior where
+  `n` preserves the selected chart with catalog/default values.
+- Added live `project_filesystems` lookup and VM `inputs.sfs_attachments`
+  rendering so VM components can attach either existing SFS filesystems or
+  planned `infra:sfs` filesystem outputs without passing cxcli helper fields to
+  Terraform modules.
+- Broadened the former MK8s-only preflight into a shared VPC networking
+  preflight. Validation, render/deploy preflight, post-create validation, and
+  post-component-add validation now verify that selected networks and subnets
+  belong to the project and that each selected subnet belongs to the selected
+  network, including MK8s node-group subnet overrides.
+- Fixed VPC pool CIDR parsing so `project_private_pools` and VPC networking
+  preflight handle Nebius SDK responses that expose CIDRs as either strings or
+  objects.
+- Fixed the `project_private_pools` wizard source so new VPC network prompts
+  list only unassigned private IPv4 pools that already have at least one CIDR,
+  and recognize assignment IDs exposed through either `networks`/`subnets` or
+  `network_ids`/`subnet_ids` SDK fields.
+- Fixed existing-network VPC parent-pool extension to update the selected
+  network's attached private pool CIDR list directly, which matches the Nebius
+  custom-private-address workflow and avoids creating or attaching detached
+  root pools.
+- Fixed VPC runtime validation to reject malformed subnet entries that are not
+  mappings, so direct config cannot bypass the explicit subnet private-CIDR
+  contract.
 - Hardened cxcli diagnostics around dynamic provider lookups, Grafana runtime
-  status, deployment status pollers, MK8s preflight, quota preset lookup
+  status, deployment status pollers, VPC/MK8s preflight, quota preset lookup
   retries, emitted kubectl helper commands, and malformed JSON responses so
   transient or malformed inputs no longer degrade into silent empty results.
 - Fixed local Helm chart dependency staging so clean runners can render charts
@@ -25,7 +140,7 @@ All notable changes to this project are tracked here. This changelog follows
 - Removed deprecated VM preemptible priority handling from cxcli's VM
   wizard/render contract; preemptible VM flows now only materialize
   `recovery_policy=FAIL` and pass `preemptible_enabled` to the VM module,
-  which requires Nebius Terraform provider `>= 0.5.217`; generated Terraform
+  which requires Nebius Terraform provider `>= 0.6.8`; generated Terraform
   roots now use that same provider floor.
 - Made local Helm chart renders explicit about cert-manager
   `Certificate.spec.privateKey.rotationPolicy=Always`, covering Soperator
@@ -58,6 +173,14 @@ All notable changes to this project are tracked here. This changelog follows
   profile-owned `inputs.node_groups.*` fields, but those curated helpers now
   materialize the `system`, `controller`, `login`, and `accounting` MK8s
   `node_count` values alongside the existing worker sizing helpers.
+- Added disabled-by-default Soperator production autoscaling helpers for each
+  generated MK8s role. `inputs.soperator.<role>_autoscaling.*` now materializes
+  concrete `inputs.node_groups.*.autoscaling` blocks and removes the conflicting
+  fixed `node_count` for `system`, `controller`, `login`, `accounting`, and
+  worker shards. Repeated materialization also clears stale concrete
+  autoscaling blocks when a helper is disabled and preserves explicit worker
+  `0..0` autoscaling instead of falling back to the profile's default worker
+  count; service-role autoscaling rejects `max_node_count=0`.
 - Hid the raw Soperator `rebooter.enabled` gate from the normal guided wizard
   while keeping explicit `config.yaml` overrides supported. The docs and
   warnings now describe it as a cluster-level NodeConfigurator maintenance
@@ -1777,8 +1900,8 @@ All notable changes to this project are tracked here. This changelog follows
   `cli.mk8s_gpu_policy.role: health_checker`, so bundled catalogs no longer
   present an impossible health-checker prompt during `create` / `component add`.
 - Fixed component-level wizard phase control flow so answering `n` to
-  `Configure '<component>' component fields now?` skips only that component and
-  continues with the remaining selected components, while `q` still stops the
+  `Configure '<component>' component fields now?` skips that component phase
+  and continues with the remaining selected components, while `q` still stops the
   wizard. This fixes the MK8s GPU app case where skipping
   `nvidia-network-operator` previously prevented the later
   `nvidia-gpu-operator` prompt from appearing at all.
@@ -1881,13 +2004,13 @@ All notable changes to this project are tracked here. This changelog follows
   on `templates/nvidiadriver_nebius_patch.yaml`.
 
 - Clarified the source-config validation contract: `validate` help now
-  explicitly calls out strict readiness, MK8s preflight, and fail-fast live
+  explicitly calls out strict readiness, VPC networking preflight, and fail-fast live
   quota/capacity checks, and `component add` / `component remove` now point
   operators at the same `validate`, then `render` day-2 loop already used
   after `create`.
 - Hardened `deploy <generated-dir>` with an explicit generated-bundle
   preflight before Terraform apply: strict readiness checks against the
-  manifest runtime config, MK8s network preflight, live Nebius
+  manifest runtime config, VPC networking preflight, live Nebius
   quota/capacity validation, Terraform validation for `generated/infra`, and
   rendered Flux manifest validation when apps are enabled now all fail fast
   inside `deploy` itself instead of relying on operators to run separate
@@ -1978,7 +2101,7 @@ All notable changes to this project are tracked here. This changelog follows
 - Refactored the bundled MK8s GPU contract around the actual Nebius node-group model: `inputs.gpu_stack_source` and `inputs.gpu_stack_preset` now replace the earlier driver-centric terminology in the customer- and catalog-facing contracts, the MK8s module/docs now describe Nebius-managed `gpu_settings.drivers_preset` vs operator-managed GPU stacks explicitly, and the NCCL path now renders a first-party `helm-charts/nccl-test` chart selected through the same Helm `source.portable` / `source.local` contract used by other bundled charts instead of assembling the raw `MPIJob` manifest in Python.
 - Replaced the old MK8s GPU hardcoded profile split with component-local settings policy: `component_cli_settings.yaml` now keeps MK8s GPU image preferences and validations under `components.infra.mk8s.cli.gpu`, keeps GPU operator/network operator auto-enable rules and Helm value overrides on the operator app entries under `components.apps.<id>.cli.mk8s_gpu_policy`, while `component_sources.yaml` keeps the reusable Terraform/Helm source and release metadata. The catalog pair removes the unused standalone `nvidia-device-plugin` entry, still materializes Nebius-image vs operator-managed MK8s defaults from the live Nebius compatibility matrix, keeps the GPU Operator B300 driver pin out of Python, and still persists deploy-time GPU readiness/visibility/NCCL reports under `generated/inventory/`.
 - Changed interactive `create` overwrite UX so it now resolves `tenant_id` / `project_id` before showing any overwrite warning: existing deployments roots no longer emit a root-wide pre-warning, and confirmation appears only when the chosen resolved project folder already exists.
-- Changed the canonical project layout to match the two-level project hierarchy under the deployments root: project configs now live at `<deployments-root>/<tenant-folder>/<project-folder>/config.yaml`, and `create <deployments-root>` is a bootstrap/overwrite command instead of an existing-config reconcile path. Once that resolved project folder already exists, interactive reruns now require explicit overwrite confirmation, non-interactive reruns require `--force`, overwrite recreates only that one resolved project folder from scratch, client-info prompts restart from the normal create defaults, and infra/apps selections plus component values are rebuilt from the current create inputs instead of being merged from the old config; docs/help/tests were realigned to make `component list/add/remove` the default day-2 editing surface.
+- Changed the canonical project layout to match the two-level project hierarchy under the deployments root: project configs now live at `<deployments-root>/<tenant-folder>/<project-folder>/config.yaml`, and `create <deployments-root>` is a bootstrap/overwrite command instead of an existing-config reconcile path. Once that resolved project folder already exists, interactive reruns now require explicit overwrite confirmation unless `--force` is provided, non-interactive reruns require `--force`, overwrite recreates only that one resolved project folder from scratch, client-info prompts restart from the normal create defaults, and infra/apps selections plus component values are rebuilt from the current create inputs instead of being merged from the old config; docs/help/tests were realigned to make `component list/add/remove` the default day-2 editing surface.
 - Tightened the remaining help/docs wording around the project-folder layout so `create --help`, README, and the design doc consistently describe the canonical overwrite target and the generated customer workflow's canonical `<tenant-folder>/<project-folder>/generated/**` watch scope.
 - Tightened the generated customer GitHub workflow trigger to the canonical two-level deployment layout under the deployments root: it now watches only `.../<tenant-folder>/<project-folder>/generated/**` paths instead of a broader recursive `generated/**` glob that could still match stale pre-refactor layouts.
 - Extended catalog-driven Nebius fail-fast status monitoring beyond MK8s: bundled SSH jump-host and WireGuard gateway modules now declare live `nebius.compute.instance` watchers, bundled `mysterybox` now declares `nebius.mysterybox.secret` watchers that expand one component row into one watcher per configured secret name, supported watcher kinds now include compute instances and MysteryBox secrets, and the MSP PostgreSQL/SFS/object-storage/compute-instance/MysteryBox pollers now abort long-running apply/destroy waits from terminal Nebius SDK operation failures instead of only printing progress summaries.
@@ -2004,7 +2127,7 @@ All notable changes to this project are tracked here. This changelog follows
 - Improved config-path error handling for config-driven commands such as `render`: passing a directory like `generated/` now fails with a targeted “expected project config.yaml file path” message instead of leaking a raw `Is a directory` exception.
 - Improved complex wizard prompt wording to ask for single-line YAML/JSON values for maps, objects, and object lists, and stopped app components with an empty top-level `values: {}` block from showing a confusing whole-map prompt when no concrete Helm value leaves are known yet.
 - Added `wizard.<field>.prompt: false` support so bundled profiles can suppress optional advanced fields from the interactive wizard; the MK8s profile now hides the raw `mk8s_*_overrides` passthrough maps while keeping them available for manual `config.yaml` edits.
-- Hardened `create --force` guard rails for existing projects: the CLI now emits a force-specific overwrite warning, requires an extra interactive confirmation before overwriting an existing resolved project folder, and documents that `create --force` does not delete the deployments root or unrelated projects.
+- Hardened `create --force` guard rails for existing projects: the CLI emits a force-specific overwrite warning before overwriting an existing resolved project folder and documents that `create --force` does not delete the deployments root or unrelated projects.
 - Wired MK8s `inputs.infiniband_fabric` into the built-in wizard profile with a guided, optional fabric selector keyed by the chosen GPU platform and `client_info.nebius.region_id`, using the Nebius GPU-cluster fabric matrix instead of a raw free-text prompt.
 - Fixed `create` wizard prompt helper late-binding closures in `cli.py` so Ruff no longer flags `B023` on the deferred module-prompt builders, and tightened the runtime-shape unit coverage to skip post-write validation in the test that only asserts generated config structure.
 - Added a central Codex skill at `../../skills/onboard-nebius-cxcli/` for onboarding Nebius Terraform modules into `nebius-cxcli`; it documents the catalog-first onboarding flow, the code-owned layers (`wizard_profiles.py`, `provider_options.py`, `validation_profiles.py`, `runtime_component_validation.py`, `cluster_handoffs.py`, `deployment_status.py`), and the focused test/doc updates expected for each change shape.

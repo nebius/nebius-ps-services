@@ -133,6 +133,12 @@ current Codex surface permits delegation:
 - `risk_reviewer`: review near-final work for correctness, regressions,
   security, compatibility, edge cases, and missing tests.
 
+Do not spawn every configured role by default. With a conservative
+`max_threads = 4` budget, use `repo_mapper` and `test_strategist` early only
+when their work is useful and independent, close completed helpers after
+consolidating their summaries, and reserve `risk_reviewer` for near-final
+review of non-trivial or risky changes.
+
 Ask subagents for concise final summaries only, and tell them to stop after
 returning the result instead of waiting for follow-up prompts. The parent
 agent owns the lifecycle: spawn bounded read-only helpers, wait for their final

@@ -299,7 +299,7 @@ def test_validate_command_runs_strict_checks_by_default(
         assert include_common_checks is False
 
     monkeypatch.setattr(cli, "_validate_strict_config", _fake_strict)
-    monkeypatch.setattr(cli, "validate_mk8s_network_preflight", lambda _cfg: None)
+    monkeypatch.setattr(cli, "validate_vpc_networking_preflight", lambda _cfg: None)
     monkeypatch.setattr(
         cli,
         "_raise_on_config_live_quota_issues",
@@ -330,7 +330,7 @@ def test_validate_command_runs_strict_checks_by_default(
     assert "Validate component dependencies" in output
     assert "Validate Terraform module inputs" in output
     assert "Validate strict deployment readiness" in output
-    assert "Validate MK8s network preflight" in output
+    assert "Validate VPC networking preflight" in output
     assert "Validate live Nebius quota/capacity" in output
     assert "Validated scope:" in output
     assert "infra:" in output
@@ -437,7 +437,7 @@ def test_validate_command_fails_on_confirmed_live_quota_insufficiency(
         "_validate_component_dependencies",
         lambda _cfg, *, chart_meta_cache=None: [],
     )
-    monkeypatch.setattr(cli, "validate_mk8s_network_preflight", lambda _cfg: None)
+    monkeypatch.setattr(cli, "validate_vpc_networking_preflight", lambda _cfg: None)
     monkeypatch.setattr(cli, "_validate_strict_config", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(cli, "rendered_module_sources", lambda *_args, **_kwargs: ())
     monkeypatch.setattr(
@@ -529,7 +529,7 @@ def test_validate_command_prints_mk8s_gpu_validation_warning(
     )
     monkeypatch.setattr(cli, "rendered_module_sources", lambda *_args, **_kwargs: ())
     monkeypatch.setattr(cli, "_validate_strict_config", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(cli, "validate_mk8s_network_preflight", lambda _cfg: None)
+    monkeypatch.setattr(cli, "validate_vpc_networking_preflight", lambda _cfg: None)
     monkeypatch.setattr(
         cli,
         "_raise_on_config_live_quota_issues",
@@ -576,7 +576,7 @@ def test_validate_command_accepts_local_source_profile(
         ),
     )
     monkeypatch.setattr(cli, "_validate_strict_config", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(cli, "validate_mk8s_network_preflight", lambda _cfg: None)
+    monkeypatch.setattr(cli, "validate_vpc_networking_preflight", lambda _cfg: None)
     monkeypatch.setattr(
         cli,
         "_raise_on_config_live_quota_issues",
@@ -1390,7 +1390,7 @@ def test_load_generated_context_exports_manifest_tool_versions(
     fake_manifest = {
         "tools": {
             "flux_version": "v2.8.0",
-            "terraform_version": "1.14.1",
+            "terraform_version": "1.15.5",
         },
         "render": {
             "terraform_tfvars": {
@@ -1415,7 +1415,7 @@ def test_load_generated_context_exports_manifest_tool_versions(
     assert paths is fake_paths
     assert manifest is fake_manifest
     assert os.environ[FLUX_VERSION_ENV] == "v2.8.0"
-    assert os.environ[TERRAFORM_VERSION_ENV] == "1.14.1"
+    assert os.environ[TERRAFORM_VERSION_ENV] == "1.15.5"
     assert json.loads(
         (fake_paths.infra_dir / "terraform.auto.tfvars.json").read_text(encoding="utf-8")
     ) == {"mk8s_cluster_name": "clust1"}
@@ -1761,7 +1761,7 @@ def test_validate_generated_command_portable_checks_module_sources(
         ),
     )
     monkeypatch.setattr(cli, "_validate_strict_config", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(cli, "validate_mk8s_network_preflight", lambda _cfg: None)
+    monkeypatch.setattr(cli, "validate_vpc_networking_preflight", lambda _cfg: None)
     monkeypatch.setattr(
         cli,
         "_raise_on_generated_bundle_live_quota_issues",
@@ -1802,7 +1802,7 @@ def test_validate_generated_command_portable_checks_module_sources(
     assert result.exit_code == 0, result.output
     output = _plain_output(result.output)
     assert "Validate strict deployment readiness" in output
-    assert "Validate MK8s network preflight" in output
+    assert "Validate VPC networking preflight" in output
     assert "Validate live Nebius quota/capacity" in output
     assert captured["paths"] == fake_paths
     assert captured["quota_phase"] == "validate-generated"
@@ -1822,7 +1822,7 @@ def test_validate_generated_command_requires_manifest_module_sources_metadata(
         lambda _path: ("cfg", fake_paths, {"render": {}}),
     )
     monkeypatch.setattr(cli, "_validate_strict_config", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(cli, "validate_mk8s_network_preflight", lambda _cfg: None)
+    monkeypatch.setattr(cli, "validate_vpc_networking_preflight", lambda _cfg: None)
     monkeypatch.setattr(
         cli,
         "_raise_on_generated_bundle_live_quota_issues",
@@ -3784,7 +3784,7 @@ def test_run_deploy_preflight_runs_strict_quota_backend_terraform_and_flux_valid
     )
     monkeypatch.setattr(
         cli,
-        "validate_mk8s_network_preflight",
+        "validate_vpc_networking_preflight",
         lambda config: calls.append(("mk8s", config)),
     )
     monkeypatch.setattr(
@@ -3868,7 +3868,7 @@ def test_run_deploy_preflight_skips_flux_validation_when_no_apps_enabled(
     )
     monkeypatch.setattr(
         cli,
-        "validate_mk8s_network_preflight",
+        "validate_vpc_networking_preflight",
         lambda config: calls.append(("mk8s", config)),
     )
     monkeypatch.setattr(
@@ -4089,7 +4089,7 @@ def test_run_deploy_preflight_validates_mysterybox_payloads_before_live_checks(
     )
     monkeypatch.setattr(
         cli,
-        "validate_mk8s_network_preflight",
+        "validate_vpc_networking_preflight",
         lambda _config: calls.append(("mk8s",)),
     )
     monkeypatch.delenv("TF_VAR_mysterybox_payload_values", raising=False)
@@ -4151,7 +4151,7 @@ def test_run_deploy_preflight_prompts_for_mysterybox_values_before_progress(
     )
     monkeypatch.setattr(
         cli,
-        "validate_mk8s_network_preflight",
+        "validate_vpc_networking_preflight",
         lambda config: events.append(("mk8s", config)),
     )
     monkeypatch.setattr(
@@ -6898,12 +6898,7 @@ def test_apply_rendered_flux_retries_transient_kubectl_apply_failure(
 
     def _fake_run(cmd: list[str], **_kwargs: object) -> SimpleNamespace:
         calls.append(tuple(cmd))
-        if (
-            len(cmd) >= 4
-            and cmd[0] == "kubectl"
-            and cmd[1] == "--cache-dir"
-            and cmd[3] == "apply"
-        ):
+        if len(cmd) >= 4 and cmd[0] == "kubectl" and cmd[1] == "--cache-dir" and cmd[3] == "apply":
             apply_calls.append(tuple(cmd))
             if len(apply_calls) == 1:
                 return SimpleNamespace(
@@ -6964,12 +6959,7 @@ def test_apply_rendered_flux_does_not_retry_non_transient_kubectl_apply_failure(
     )
 
     def _fake_run(cmd: list[str], **_kwargs: object) -> SimpleNamespace:
-        if (
-            len(cmd) >= 4
-            and cmd[0] == "kubectl"
-            and cmd[1] == "--cache-dir"
-            and cmd[3] == "apply"
-        ):
+        if len(cmd) >= 4 and cmd[0] == "kubectl" and cmd[1] == "--cache-dir" and cmd[3] == "apply":
             apply_calls.append(tuple(cmd))
             return SimpleNamespace(
                 returncode=1,
@@ -8350,7 +8340,7 @@ def test_run_terraform_apply_with_status_can_skip_mk8s_preflight(
     monkeypatch.setattr(cli, "_terraform_runtime_env", lambda _cfg: {"TF_VAR_DEMO": "1"})
     monkeypatch.setattr(
         cli,
-        "validate_mk8s_network_preflight",
+        "validate_vpc_networking_preflight",
         lambda config: calls.append(("mk8s_preflight", config)),
     )
 
@@ -11300,10 +11290,13 @@ def test_help_text_maps_commands_to_target_types() -> None:
 
     assert "Target guide:" in plain_output
     assert (
-        "create bootstraps one name-based tenant/project folder from a deployments root directory"
+        "create bootstraps one name-based tenant/project folder from a deployments root directory, creating that root when missing"
         in output
     )
-    assert "overwrites existing resolved project folders only with confirmation" in output
+    assert (
+        "overwrites existing resolved project folders only with confirmation unless --force is provided"
+        in output
+    )
     assert (
         "component list/add/remove use --config CONFIG_YAML as the day-2 config.yaml editing surface"
         in output
@@ -11447,6 +11440,8 @@ def test_command_help_usage_labels_positional_target_types() -> None:
         in normalized_create_help
     )
     assert "overwrite an existing resolved project folder from scratch" in normalized_create_help
+    assert "unless --force is provided" in normalized_create_help
+    assert "Overwrite the resolved existing project folder from scratch" in normalized_create_help
     assert "skips that validation" in normalized_create_help
     assert "only; create still runs" in normalized_create_help
     assert "warning-only live" in normalized_create_help
@@ -13753,6 +13748,175 @@ def test_soperator_production_service_role_counts_materialize_mk8s_groups() -> N
     assert all("node_count_input" not in group for group in node_groups.values())
 
 
+def test_soperator_production_service_role_autoscaling_materializes_mk8s_groups() -> None:
+    payload = {
+        "infra": {
+            "components": [
+                {
+                    "id": "mk8s",
+                    "instance_id": "cluster1",
+                    "enabled": True,
+                    "inputs": {
+                        "soperator": {
+                            "system_node_count": 2,
+                            "system_autoscaling": {
+                                "enabled": True,
+                                "min_node_count": 1,
+                                "max_node_count": 4,
+                            },
+                            "controller_node_count": 3,
+                            "login_node_count": 1,
+                            "accounting_node_count": 1,
+                        }
+                    },
+                },
+                {
+                    "id": "sfs",
+                    "instance_id": "sfs",
+                    "enabled": True,
+                    "inputs": {},
+                },
+            ]
+        },
+        "apps": {
+            "charts": [
+                {
+                    "id": "soperator",
+                    "instance_id": "cluster1",
+                    "enabled": True,
+                    "install_mode": "production-cluster",
+                    "values": {},
+                }
+            ]
+        },
+    }
+
+    assert cli._materialize_soperator_component_defaults(payload) is True
+
+    node_groups = payload["infra"]["components"][0]["inputs"]["node_groups"]
+    assert node_groups["system"]["autoscaling"] == {
+        "min_node_count": 1,
+        "max_node_count": 4,
+    }
+    assert "node_count" not in node_groups["system"]
+    assert node_groups["controller"]["node_count"] == 3
+    assert node_groups["login"]["node_count"] == 1
+    assert node_groups["accounting"]["node_count"] == 1
+    assert all("node_count_input" not in group for group in node_groups.values())
+    assert all("autoscaling_input" not in group for group in node_groups.values())
+
+
+def test_soperator_production_disabled_service_autoscaling_clears_stale_group_scale() -> None:
+    payload = {
+        "infra": {
+            "components": [
+                {
+                    "id": "mk8s",
+                    "instance_id": "cluster1",
+                    "enabled": True,
+                    "inputs": {
+                        "soperator": {
+                            "system_autoscaling": {
+                                "enabled": True,
+                                "min_node_count": 1,
+                                "max_node_count": 4,
+                            },
+                        },
+                    },
+                },
+                {
+                    "id": "sfs",
+                    "instance_id": "sfs",
+                    "enabled": True,
+                    "inputs": {},
+                },
+            ]
+        },
+        "apps": {
+            "charts": [
+                {
+                    "id": "soperator",
+                    "instance_id": "cluster1",
+                    "enabled": True,
+                    "install_mode": "production-cluster",
+                    "values": {},
+                }
+            ]
+        },
+    }
+
+    assert cli._materialize_soperator_component_defaults(payload) is True
+    mk8s_inputs = payload["infra"]["components"][0]["inputs"]
+    assert mk8s_inputs["node_groups"]["system"]["autoscaling"] == {
+        "min_node_count": 1,
+        "max_node_count": 4,
+    }
+
+    mk8s_inputs["soperator"]["system_autoscaling"] = {"enabled": False}
+    assert cli._materialize_soperator_component_defaults(payload) is True
+
+    system_group = mk8s_inputs["node_groups"]["system"]
+    assert system_group["node_count"] == 1
+    assert "autoscaling" not in system_group
+
+
+def test_soperator_production_disabled_service_autoscaling_clears_first_render_stale_group() -> (
+    None
+):
+    payload = {
+        "infra": {
+            "components": [
+                {
+                    "id": "mk8s",
+                    "instance_id": "cluster1",
+                    "enabled": True,
+                    "inputs": {
+                        "soperator": {
+                            "system_autoscaling": {
+                                "enabled": False,
+                            },
+                        },
+                        "node_groups": {
+                            "system": {
+                                "autoscaling": {
+                                    "min_node_count": 1,
+                                    "max_node_count": 4,
+                                },
+                                "gpu": False,
+                                "platform": "cpu-d3",
+                                "preset": "8vcpu-32gb",
+                            },
+                        },
+                    },
+                },
+                {
+                    "id": "sfs",
+                    "instance_id": "sfs",
+                    "enabled": True,
+                    "inputs": {},
+                },
+            ]
+        },
+        "apps": {
+            "charts": [
+                {
+                    "id": "soperator",
+                    "instance_id": "cluster1",
+                    "enabled": True,
+                    "install_mode": "production-cluster",
+                    "values": {},
+                }
+            ]
+        },
+    }
+
+    assert cli._materialize_soperator_component_defaults(payload) is True
+
+    system_group = payload["infra"]["components"][0]["inputs"]["node_groups"]["system"]
+    assert system_group["node_count"] == 1
+    assert "autoscaling" not in system_group
+
+
 def test_soperator_production_worker_count_shards_mk8s_groups_and_nodesets() -> None:
     payload = {
         "infra": {
@@ -13813,9 +13977,288 @@ def test_soperator_production_worker_count_shards_mk8s_groups_and_nodesets() -> 
         for partition in values["partitionConfiguration"]["partitions"]
         if partition["name"] == "gpu"
     )
-    assert worker_partition["nodeSetRefs"] == [
-        f"worker-worker-{index}" for index in range(10)
+    assert worker_partition["nodeSetRefs"] == [f"worker-worker-{index}" for index in range(10)]
+
+
+def test_soperator_production_worker_autoscaling_shards_mk8s_groups_and_nodesets() -> None:
+    payload = {
+        "infra": {
+            "components": [
+                {
+                    "id": "mk8s",
+                    "instance_id": "cluster1",
+                    "enabled": True,
+                    "inputs": {
+                        "soperator": {
+                            "worker_total_nodes": 10,
+                            "worker_nodes_per_group": 100,
+                            "worker_autoscaling": {
+                                "enabled": True,
+                                "min_node_count": 1,
+                                "max_node_count": 250,
+                            },
+                        }
+                    },
+                },
+                {
+                    "id": "sfs",
+                    "instance_id": "sfs",
+                    "enabled": True,
+                    "inputs": {},
+                },
+            ]
+        },
+        "apps": {
+            "charts": [
+                {
+                    "id": "soperator",
+                    "instance_id": "cluster1",
+                    "enabled": True,
+                    "install_mode": "production-cluster",
+                    "values": {},
+                }
+            ]
+        },
+    }
+
+    assert cli._materialize_soperator_component_defaults(payload) is True
+
+    mk8s_inputs = payload["infra"]["components"][0]["inputs"]
+    node_groups = mk8s_inputs["node_groups"]
+    worker_group_keys = [key for key in node_groups if str(key).startswith("worker")]
+    assert worker_group_keys == ["worker-0", "worker-1", "worker-2"]
+    assert node_groups["worker-0"]["autoscaling"] == {
+        "min_node_count": 1,
+        "max_node_count": 100,
+    }
+    assert node_groups["worker-1"]["autoscaling"] == {
+        "min_node_count": 0,
+        "max_node_count": 100,
+    }
+    assert node_groups["worker-2"]["autoscaling"] == {
+        "min_node_count": 0,
+        "max_node_count": 50,
+    }
+    assert all("node_count" not in node_groups[group_key] for group_key in worker_group_keys)
+
+    values = payload["apps"]["charts"][0]["values"]
+    assert values["nodeGroupMapping"]["worker"] == worker_group_keys
+    worker_nodesets = [
+        item for item in values["nodesets"] if str(item.get("name", "")).startswith("worker-")
     ]
+    assert [(item["name"], item["replicas"]) for item in worker_nodesets] == [
+        ("worker-worker-0", 100),
+        ("worker-worker-1", 100),
+        ("worker-worker-2", 50),
+    ]
+
+
+def test_soperator_production_worker_autoscaling_allows_scale_to_zero() -> None:
+    payload = {
+        "infra": {
+            "components": [
+                {
+                    "id": "mk8s",
+                    "instance_id": "cluster1",
+                    "enabled": True,
+                    "inputs": {
+                        "soperator": {
+                            "worker_autoscaling": {
+                                "enabled": True,
+                                "min_node_count": 0,
+                                "max_node_count": 0,
+                            },
+                        }
+                    },
+                },
+                {
+                    "id": "sfs",
+                    "instance_id": "sfs",
+                    "enabled": True,
+                    "inputs": {},
+                },
+            ]
+        },
+        "apps": {
+            "charts": [
+                {
+                    "id": "soperator",
+                    "instance_id": "cluster1",
+                    "enabled": True,
+                    "install_mode": "production-cluster",
+                    "values": {},
+                }
+            ]
+        },
+    }
+
+    assert cli._materialize_soperator_component_defaults(payload) is True
+
+    mk8s_inputs = payload["infra"]["components"][0]["inputs"]
+    node_groups = mk8s_inputs["node_groups"]
+    assert node_groups["worker"]["autoscaling"] == {
+        "min_node_count": 0,
+        "max_node_count": 0,
+    }
+    assert "node_count" not in node_groups["worker"]
+
+    values = payload["apps"]["charts"][0]["values"]
+    assert values["nodeGroupMapping"]["worker"] == ["worker"]
+    worker_nodeset = next(item for item in values["nodesets"] if item["name"] == "worker")
+    assert worker_nodeset["replicas"] == 0
+
+
+def test_soperator_production_disabled_worker_autoscaling_clears_stale_shards() -> None:
+    payload = {
+        "infra": {
+            "components": [
+                {
+                    "id": "mk8s",
+                    "instance_id": "cluster1",
+                    "enabled": True,
+                    "inputs": {
+                        "soperator": {
+                            "worker_nodes_per_group": 100,
+                            "worker_autoscaling": {
+                                "enabled": True,
+                                "min_node_count": 1,
+                                "max_node_count": 250,
+                            },
+                        }
+                    },
+                },
+                {
+                    "id": "sfs",
+                    "instance_id": "sfs",
+                    "enabled": True,
+                    "inputs": {},
+                },
+            ]
+        },
+        "apps": {
+            "charts": [
+                {
+                    "id": "soperator",
+                    "instance_id": "cluster1",
+                    "enabled": True,
+                    "install_mode": "production-cluster",
+                    "values": {},
+                }
+            ]
+        },
+    }
+
+    assert cli._materialize_soperator_component_defaults(payload) is True
+    mk8s_inputs = payload["infra"]["components"][0]["inputs"]
+    assert [key for key in mk8s_inputs["node_groups"] if str(key).startswith("worker")] == [
+        "worker-0",
+        "worker-1",
+        "worker-2",
+    ]
+
+    mk8s_inputs["soperator"]["worker_autoscaling"] = {"enabled": False}
+    assert cli._materialize_soperator_component_defaults(payload) is True
+
+    node_groups = mk8s_inputs["node_groups"]
+    assert [key for key in node_groups if str(key).startswith("worker")] == ["worker"]
+    assert node_groups["worker"]["node_count"] == 1
+    assert "autoscaling" not in node_groups["worker"]
+    values = payload["apps"]["charts"][0]["values"]
+    assert values["nodeGroupMapping"]["worker"] == ["worker"]
+    worker_nodeset = next(item for item in values["nodesets"] if item["name"] == "worker")
+    assert worker_nodeset["replicas"] == 1
+
+
+def test_soperator_production_autoscaling_rejects_invalid_bounds() -> None:
+    payload = {
+        "infra": {
+            "components": [
+                {
+                    "id": "mk8s",
+                    "instance_id": "cluster1",
+                    "enabled": True,
+                    "inputs": {
+                        "soperator": {
+                            "system_autoscaling": {
+                                "enabled": True,
+                                "min_node_count": 4,
+                                "max_node_count": 2,
+                            },
+                        }
+                    },
+                },
+                {
+                    "id": "sfs",
+                    "instance_id": "sfs",
+                    "enabled": True,
+                    "inputs": {},
+                },
+            ]
+        },
+        "apps": {
+            "charts": [
+                {
+                    "id": "soperator",
+                    "instance_id": "cluster1",
+                    "enabled": True,
+                    "install_mode": "production-cluster",
+                    "values": {},
+                }
+            ]
+        },
+    }
+
+    with pytest.raises(
+        ValueError,
+        match="soperator.system_autoscaling.max_node_count",
+    ):
+        cli._materialize_soperator_component_defaults(payload)
+
+
+def test_soperator_production_service_role_autoscaling_rejects_scale_to_zero() -> None:
+    payload = {
+        "infra": {
+            "components": [
+                {
+                    "id": "mk8s",
+                    "instance_id": "cluster1",
+                    "enabled": True,
+                    "inputs": {
+                        "soperator": {
+                            "system_autoscaling": {
+                                "enabled": True,
+                                "min_node_count": 0,
+                                "max_node_count": 0,
+                            },
+                        }
+                    },
+                },
+                {
+                    "id": "sfs",
+                    "instance_id": "sfs",
+                    "enabled": True,
+                    "inputs": {},
+                },
+            ]
+        },
+        "apps": {
+            "charts": [
+                {
+                    "id": "soperator",
+                    "instance_id": "cluster1",
+                    "enabled": True,
+                    "install_mode": "production-cluster",
+                    "values": {},
+                }
+            ]
+        },
+    }
+
+    with pytest.raises(
+        ValueError,
+        match="soperator.system_autoscaling.max_node_count must be at least 1",
+    ):
+        cli._materialize_soperator_component_defaults(payload)
 
 
 def test_soperator_profile_managed_groups_track_selected_shape_defaults() -> None:
@@ -14300,7 +14743,9 @@ def test_soperator_onboarding_maps_external_mk8s_node_groups_without_creating_ro
     ]
 
 
-def test_soperator_onboarding_existing_storage_mode_uses_local_storage_and_allocatable_fit() -> None:
+def test_soperator_onboarding_existing_storage_mode_uses_local_storage_and_allocatable_fit() -> (
+    None
+):
     payload = {
         "deploy": {
             "targets": [
@@ -14387,10 +14832,7 @@ def test_soperator_onboarding_existing_storage_mode_uses_local_storage_and_alloc
     assert values["slurmNodes"]["accounting"]["mariadbOperator"]["enabled"] is False
     assert values["slurmNodes"]["rest"]["enabled"] is False
     assert values["mariadb-operator"]["installOperator"] is False
-    assert (
-        values["controllerManager"]["manager"]["env"]["isMariadbCrdInstalled"]
-        == "false"
-    )
+    assert values["controllerManager"]["manager"]["env"]["isMariadbCrdInstalled"] == "false"
     worker = next(node for node in values["nodesets"] if node["name"] == "worker-cpu")
     assert worker["replicas"] == 1
     assert worker["nodeSelector"] == {"kubernetes.io/hostname": "computeinstance-a"}
@@ -14716,9 +15158,10 @@ def test_soperator_activechecks_ready_partition_is_render_only_profile_value() -
 
     assert cli._materialize_soperator_render_only_values(payload) is True
     assert values["soperator-activechecks"]["srunReadyPartition"] == "hidden"
-    assert [
-        partition["name"] for partition in values["partitionConfiguration"]["partitions"]
-    ] == ["hidden", "gpu"]
+    assert [partition["name"] for partition in values["partitionConfiguration"]["partitions"]] == [
+        "hidden",
+        "gpu",
+    ]
 
 
 def test_soperator_guided_sssd_helper_is_render_only_profile_value() -> None:

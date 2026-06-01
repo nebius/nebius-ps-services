@@ -23,6 +23,7 @@ module "nfs" {
   source = "./platform-infra/modules/nfs"
 
   parent_id           = "project-xxxxxxxx"
+  network_id          = "vpcnetwork-xxxxxxxx"
   name                = "client-a-nfs"
   subnet_id           = "vpcsubnet-xxxxxxxx"
   platform            = "cpu-d3"
@@ -94,6 +95,7 @@ or provide explicit `export_options`.
 
 - Required:
   - `parent_id`
+  - `network_id`
   - `name`
   - `subnet_id`
   - `platform`

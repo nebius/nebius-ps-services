@@ -28,6 +28,26 @@ from nebius_cxcli.runtime_introspection import (
 from nebius_cxcli.wizard_profiles import BUILTIN_WIZARD_PROFILES
 
 
+def _static_vpc_choices(provider: str) -> list[OptionChoice]:
+    if provider == "project_networks":
+        return [OptionChoice(value="vpcnetwork-1", label="default network")]
+    if provider == "project_subnets":
+        return [OptionChoice(value="vpcsubnet-1", label="default subnet")]
+    return []
+
+
+class _StaticVpcLookup:
+    def resolve(self, *, provider, args, payload, field_path):
+        _ = args, payload, field_path
+        return _static_vpc_choices(provider)
+
+    def last_error(self):
+        return ""
+
+    def compute_platform_preset_allows_gpu_clustering(self, **_kwargs):
+        return False
+
+
 def test_module_variable_discovery_includes_optional_and_required(tmp_path: Path) -> None:
     module_dir = tmp_path / "demo-module"
     module_dir.mkdir(parents=True)
@@ -173,6 +193,29 @@ def test_vm_module_requires_explicit_boot_image_source() -> None:
 
     assert specs["source_image_family"].has_default is True
     assert specs["source_image_family"].default is None
+
+
+def test_vpc_module_subnet_contract_includes_attached_private_pool_cidrs() -> None:
+    repo_root = Path(__file__).resolve().parents[3]
+    vpc_dir = repo_root / "platform-infra" / "modules" / "vpc"
+    locals_tf = (vpc_dir / "locals.tf").read_text(encoding="utf-8")
+    main_tf = (vpc_dir / "main.tf").read_text(encoding="utf-8")
+
+    assert "input_network_private_pool_cidrs" in locals_tf
+    assert "existing_network_private_pool_cidrs" in locals_tf
+    assert "data.nebius_vpc_v1_pool.private_pool" in locals_tf
+    assert 'data "nebius_vpc_v1_pool" "existing_private_pool"' in main_tf
+    assert "network_private_cidrs = distinct(concat(" in locals_tf
+    assert "local.existing_network_private_pool_cidrs," in locals_tf
+    assert "local.input_network_private_pool_cidrs," in locals_tf
+    assert "for network_range in local.network_private_ranges" in main_tf
+    assert (
+        "!local.create_network"
+        not in main_tf.split(
+            'resource "terraform_data" "subnet_contract"',
+            maxsplit=1,
+        )[1]
+    )
 
 
 def test_dynamic_provider_checks_cover_custom_tf_module_fields() -> None:
@@ -407,6 +450,8 @@ def test_wizard_uses_guided_mk8s_cluster_and_node_group_fields(
     )
 
     prompted_paths: list[str] = []
+    new_group_names = ["system", "burst"]
+    add_another_answers = [True, False]
 
     def _fake_prompt(
         path_label: str,
@@ -430,39 +475,89 @@ def test_wizard_uses_guided_mk8s_cluster_and_node_group_fields(
         if path_label.endswith(".inputs.cluster.public_endpoint"):
             return current if current is not None else True, False
         if path_label.endswith(".inputs.node_groups.<new>.name"):
-            return "system", False
+            if not new_group_names:
+                pytest.fail("unexpected extra MK8s node group prompt")
+            return new_group_names.pop(0), False
         if path_label.endswith(".inputs.node_groups.system.autoscaling.enabled"):
             return False, False
+        if path_label.endswith(".inputs.node_groups.burst.autoscaling.enabled"):
+            return True, False
+        if path_label.endswith(".inputs.node_groups.burst.autoscaling.min_node_count"):
+            return 1, False
+        if path_label.endswith(".inputs.node_groups.burst.autoscaling.max_node_count"):
+            return 4, False
         if path_label.endswith(".inputs.node_groups.system.node_count"):
             return current if current is not None else 2, False
+        if path_label.endswith(".inputs.node_groups.burst.node_count"):
+            pytest.fail("autoscaled MK8s node group should not prompt for node_count")
         if path_label.endswith(".inputs.node_groups.system.resource"):
+            return "cpu", False
+        if path_label.endswith(".inputs.node_groups.burst.resource"):
             return "cpu", False
         if path_label.endswith(".inputs.node_groups.system.preemptible"):
             return False, False
+        if path_label.endswith(".inputs.node_groups.burst.preemptible"):
+            return False, False
         if path_label.endswith(".inputs.node_groups.system.platform"):
+            return "cpu-d3", False
+        if path_label.endswith(".inputs.node_groups.burst.platform"):
             return "cpu-d3", False
         if path_label.endswith(".inputs.node_groups.system.preset"):
             return "4vcpu-16gb", False
+        if path_label.endswith(".inputs.node_groups.burst.preset"):
+            return "16vcpu-64gb", False
         if path_label.endswith(".inputs.node_groups.system.boot_disk.type"):
+            return "NETWORK_SSD", False
+        if path_label.endswith(".inputs.node_groups.burst.boot_disk.type"):
             return "NETWORK_SSD", False
         if path_label.endswith(".inputs.node_groups.system.boot_disk.size_gibibytes"):
             assert current == 64
             return current, False
+        if path_label.endswith(".inputs.node_groups.burst.boot_disk.size_gibibytes"):
+            return current, False
         if path_label.endswith(".inputs.node_groups.system.ssh.enabled"):
             assert current is True
             return True, False
+        if path_label.endswith(".inputs.node_groups.burst.ssh.enabled"):
+            assert current is True
+            return False, False
         if path_label.endswith(".inputs.node_groups.system.ssh.username"):
             return "ubuntu", False
+        if path_label.endswith(".inputs.node_groups.burst.ssh.username"):
+            pytest.fail("disabled SSH should not prompt for username")
         if path_label.endswith(".inputs.node_groups.system.service_account.mode"):
             return "none", False
+        if path_label.endswith(".inputs.node_groups.burst.service_account.mode"):
+            return "none", False
         if path_label.endswith(".inputs.node_groups.add_another"):
-            return False, False
+            if not add_another_answers:
+                pytest.fail("unexpected extra MK8s node group add-another prompt")
+            return add_another_answers.pop(0), False
         return current, False
 
     monkeypatch.setattr("nebius_cxcli.cli._prompt_scalar_override", _fake_prompt)
     monkeypatch.setattr(
         "nebius_cxcli.cli._prompt_ssh_public_key_override",
         lambda *_args, **_kwargs: ("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFakeKey test", False),
+    )
+    monkeypatch.setattr(
+        "nebius_cxcli.cli._provider_allowed_values_for_field",
+        lambda **_kwargs: (set(), ()),
+    )
+
+    def _fake_provider_choices(**kwargs):  # type: ignore[no-untyped-def]
+        full_path_label = kwargs["full_path_label"]
+        if full_path_label.endswith(".inputs.cluster.network_id"):
+            return [OptionChoice(value="vpcnetwork-1", label="default network")]
+        if full_path_label.endswith(".inputs.cluster.subnet_id"):
+            return [OptionChoice(value="vpcsubnet-1", label="default subnet")]
+        if full_path_label.endswith(".inputs.cluster.k8s_version"):
+            return [OptionChoice(value="1.33", label="1.33")]
+        return []
+
+    monkeypatch.setattr(
+        "nebius_cxcli.cli._resolve_dynamic_field_choices",
+        _fake_provider_choices,
     )
 
     updated_yaml, completed = _run_component_field_wizard(
@@ -471,7 +566,7 @@ def test_wizard_uses_guided_mk8s_cluster_and_node_group_fields(
         selected_apps=set(),
         infra_entries=(entry,),
         app_entries=(),
-        provider_lookup=None,
+        provider_lookup=cli.ProviderOptionLookup(),
     )
 
     assert completed is True
@@ -486,7 +581,18 @@ def test_wizard_uses_guided_mk8s_cluster_and_node_group_fields(
     assert "infra.components[0].inputs.node_groups.system.autoscaling.enabled" in prompted_paths
     assert "infra.components[0].inputs.node_groups.system.platform" in prompted_paths
     assert "infra.components[0].inputs.node_groups.system.preset" in prompted_paths
+    assert "infra.components[0].inputs.node_groups.burst.resource" in prompted_paths
+    assert "infra.components[0].inputs.node_groups.burst.autoscaling.enabled" in prompted_paths
+    assert (
+        "infra.components[0].inputs.node_groups.burst.autoscaling.min_node_count" in prompted_paths
+    )
+    assert (
+        "infra.components[0].inputs.node_groups.burst.autoscaling.max_node_count" in prompted_paths
+    )
+    assert "infra.components[0].inputs.node_groups.burst.node_count" not in prompted_paths
     assert "infra.components[0].inputs.node_groups.add_another" in prompted_paths
+    assert not new_group_names
+    assert not add_another_answers
 
     payload = yaml.safe_load(updated_yaml)
     inputs = payload["infra"]["components"][0]["inputs"]
@@ -501,6 +607,14 @@ def test_wizard_uses_guided_mk8s_cluster_and_node_group_fields(
     assert inputs["node_groups"]["system"]["gpu"] is False
     assert inputs["node_groups"]["system"]["platform"] == "cpu-d3"
     assert inputs["node_groups"]["system"]["preset"] == "4vcpu-16gb"
+    assert inputs["node_groups"]["burst"]["autoscaling"] == {
+        "min_node_count": 1,
+        "max_node_count": 4,
+    }
+    assert "node_count" not in inputs["node_groups"]["burst"]
+    assert inputs["node_groups"]["burst"]["gpu"] is False
+    assert inputs["node_groups"]["burst"]["platform"] == "cpu-d3"
+    assert inputs["node_groups"]["burst"]["preset"] == "16vcpu-64gb"
     assert inputs["node_groups"]["system"]["boot_disk"] == {
         "type": "NETWORK_SSD",
         "size_gibibytes": 64,
@@ -690,6 +804,9 @@ def test_wizard_auto_enables_gpu_apps_after_plain_mk8s_gpu_node_group_loop(
     class _Lookup:
         def resolve(self, *, provider, args, payload, field_path):
             _ = args, payload, field_path
+            vpc_choices = _static_vpc_choices(provider)
+            if vpc_choices:
+                return vpc_choices
             if provider == "mk8s_gpu_stack_presets":
                 return [OptionChoice(value="cuda13.0", label="cuda13.0  (ubuntu24.04)")]
             if provider == "mk8s_node_group_os_values":
@@ -879,7 +996,7 @@ def test_wizard_back_inside_plain_mk8s_node_group_stays_in_group_loop(
         selected_apps=set(),
         infra_entries=(entry,),
         app_entries=(),
-        provider_lookup=None,
+        provider_lookup=_StaticVpcLookup(),
     )
 
     assert completed is True
@@ -1029,6 +1146,9 @@ def test_wizard_back_after_plain_mk8s_gpu_cluster_removes_orphan_fabric(
     class _Lookup:
         def resolve(self, *, provider, args, payload, field_path):
             _ = args, payload, field_path
+            vpc_choices = _static_vpc_choices(provider)
+            if vpc_choices:
+                return vpc_choices
             if provider == "mk8s_gpu_stack_presets":
                 return [OptionChoice(value="cuda13.0", label="cuda13.0  (ubuntu24.04)")]
             if provider == "mk8s_node_group_os_values":
@@ -1180,7 +1300,10 @@ def test_wizard_plain_mk8s_boot_disk_policy_errors_are_not_hidden(
 
     class _Lookup:
         def resolve(self, *, provider, args, payload, field_path):
-            _ = provider, args, payload, field_path
+            _ = args, payload, field_path
+            vpc_choices = _static_vpc_choices(provider)
+            if vpc_choices:
+                return vpc_choices
             return []
 
         def last_error(self):
@@ -2658,6 +2781,7 @@ def test_vm_wizard_prefills_boot_disk_size_after_preset_selection(monkeypatch) -
         "nebius_cxcli.cli.module_required_variables",
         lambda _source: (
             "parent_id",
+            "network_id",
             "subnet_id",
             "name",
             "platform",
@@ -2669,6 +2793,7 @@ def test_vm_wizard_prefills_boot_disk_size_after_preset_selection(monkeypatch) -
         "nebius_cxcli.cli.module_variables",
         lambda _source: (
             ModuleVariable(name="parent_id", required=True, type_hint="string"),
+            ModuleVariable(name="network_id", required=True, type_hint="string"),
             ModuleVariable(name="subnet_id", required=True, type_hint="string"),
             ModuleVariable(name="name", required=True, type_hint="string"),
             ModuleVariable(name="platform", required=True, type_hint="string"),
@@ -2848,6 +2973,7 @@ def test_vm_wizard_prompts_secondary_data_disk_shape_when_enabled(monkeypatch) -
         "nebius_cxcli.cli.module_required_variables",
         lambda _source: (
             "parent_id",
+            "network_id",
             "subnet_id",
             "name",
             "platform",
@@ -3062,6 +3188,7 @@ def test_jump_host_wizard_prefills_boot_disk_size_and_skips_created_public_ip_id
     def _module_variables(_source: str) -> tuple[ModuleVariable, ...]:
         variables = (
             ModuleVariable(name="parent_id", required=True, type_hint="string"),
+            ModuleVariable(name="network_id", required=True, type_hint="string"),
             ModuleVariable(name="subnet_id", required=True, type_hint="string"),
             ModuleVariable(name="name", required=True, type_hint="string"),
             ModuleVariable(name="platform", required=True, type_hint="string"),
@@ -3398,12 +3525,13 @@ def test_jump_host_wizard_requires_existing_public_ip_id_when_create_is_false(
     )
     monkeypatch.setattr(
         "nebius_cxcli.cli.module_required_variables",
-        lambda _source: ("parent_id", "subnet_id", "name", "platform", "preset"),
+        lambda _source: ("parent_id", "network_id", "subnet_id", "name", "platform", "preset"),
     )
     monkeypatch.setattr(
         "nebius_cxcli.cli.module_variables",
         lambda _source: (
             ModuleVariable(name="parent_id", required=True, type_hint="string"),
+            ModuleVariable(name="network_id", required=True, type_hint="string"),
             ModuleVariable(name="subnet_id", required=True, type_hint="string"),
             ModuleVariable(name="name", required=True, type_hint="string"),
             ModuleVariable(name="platform", required=True, type_hint="string"),

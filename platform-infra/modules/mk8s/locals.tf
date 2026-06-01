@@ -41,6 +41,17 @@ locals {
     if try(group.enabled, true)
   }
 
+  node_group_autoscaling = {
+    for key, group in local.node_groups : key => (
+      try(group.autoscaling, null) == null || try(group.autoscaling.enabled, true) == false
+      ? null
+      : {
+        min_node_count = group.autoscaling.min_node_count
+        max_node_count = group.autoscaling.max_node_count
+      }
+    )
+  }
+
   node_group_service_accounts_to_create = {
     for key, group in local.node_groups : key => group.service_account
     if length(trimspace(try(group.service_account.name != null ? group.service_account.name : "", ""))) > 0
@@ -100,7 +111,10 @@ locals {
       [
         merge(
           {
-            subnet_id = coalesce(try(group.subnet_id, null), var.cluster.subnet_id)
+            subnet_id = coalesce(
+              try(length(trimspace(group.subnet_id)) > 0 ? group.subnet_id : null, null),
+              var.cluster.subnet_id,
+            )
           },
           try(group.public_ips, false) ? {
             public_ip_address = {}
@@ -109,6 +123,32 @@ locals {
       ]
     )
   }
+
+  node_group_network_interface_subnet_refs = flatten([
+    for key, interfaces in local.node_group_network_interfaces : [
+      for index, interface in interfaces : {
+        key       = "node_group_interface:${key}:${index}"
+        subnet_id = try(interface.subnet_id, null)
+      }
+    ]
+  ])
+
+  subnet_refs_to_validate = merge(
+    {
+      cluster = var.cluster.subnet_id
+    },
+    {
+      for key, group in local.node_groups :
+      "node_group:${key}" => coalesce(
+        try(length(trimspace(group.subnet_id)) > 0 ? group.subnet_id : null, null),
+        var.cluster.subnet_id,
+      )
+    },
+    {
+      for ref in local.node_group_network_interface_subnet_refs :
+      ref.key => ref.subnet_id
+    }
+  )
 
   node_group_metadata = {
     for key, group in local.node_groups : key => (

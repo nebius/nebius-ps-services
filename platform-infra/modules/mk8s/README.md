@@ -115,12 +115,19 @@ overrides, and `kube_network.service_cidrs`. The default service CIDR is `["/20"
 so callers do not accidentally consume an entire small subnet with the provider
 default.
 
+The module looks up the selected VPC network and every selected VPC subnet at
+plan time. `cluster.subnet_id`, node-group `subnet_id`, and explicit
+`network_interfaces[*].subnet_id` values must all belong to `cluster.network_id`
+and the same `cluster.parent_id` project. When a caller provides explicit
+`network_interfaces`, each entry must include a non-empty `subnet_id`; otherwise
+Terraform cannot validate the network relationship and the module fails fast.
+
 ## Node Groups
 
 Each `node_groups` entry is keyed by the canonical logical group name. The key is
 used for Terraform addressing and outputs. A node group accepts:
 
-- `node_count` or `autoscaling`, but not both.
+- `node_count` or enabled `autoscaling`, but not both.
 - `gpu`, `platform`, `preset`, `os`, `boot_disk`, `preemptible`, and optional
   public IP/network-interface settings.
 - Kubernetes `node_labels` and `taints`.
@@ -134,7 +141,13 @@ used for Terraform addressing and outputs. A node group accepts:
 
 Disabled `gpu_clusters` entries may omit `infiniband_fabric`, and disabled
 `node_groups` entries may omit shape fields; enabled entries require
-`platform` and `preset`. GPU node groups default to
+`platform`, `preset`, and either `node_count` or enabled `autoscaling`.
+`autoscaling.enabled = false` is treated the same as omitting the autoscaling
+block, so callers that render helper objects can keep autoscaling disabled
+without passing a provider autoscaling object. Enabled autoscaling requires
+integer `min_node_count >= 0` and `max_node_count >= min_node_count`, and the
+module strips the helper `enabled` flag before calling the provider. GPU node
+groups default to
 `gpu_stack_source = "nebius_image"` and must set `gpu_stack_preset` for that
 host-driver image path. Set `gpu_stack_source = "operator_managed"` when the
 GPU Operator should install and manage the host GPU stack instead.

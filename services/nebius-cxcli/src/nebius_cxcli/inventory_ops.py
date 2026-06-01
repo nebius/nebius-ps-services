@@ -1104,8 +1104,15 @@ def _as_int(value: Any) -> int | None:
         return None
 
 
-def _node_count_text(value: Any) -> str:
-    return f"`{_coalesce(value, 'n/a')}` node(s)"
+def _node_scale_text(group: Mapping[str, Any]) -> str:
+    node_count = _lookup(group, "node_count")
+    if node_count is not None:
+        return f"`{_coalesce(node_count, 'n/a')}` node(s)"
+    min_count = _lookup(group, "autoscaling_min_node_count")
+    max_count = _lookup(group, "autoscaling_max_node_count")
+    if min_count is not None and max_count is not None:
+        return f"autoscaling `{min_count}`..`{max_count}` node(s)"
+    return "`n/a` node(s)"
 
 
 def _mk8s_cluster_markdown_lines(cluster: Mapping[str, Any]) -> list[str]:
@@ -1114,13 +1121,13 @@ def _mk8s_cluster_markdown_lines(cluster: Mapping[str, Any]) -> list[str]:
     node_groups = _lookup(cluster, "node_groups")
     groups = node_groups if isinstance(node_groups, list) else []
     cpu_summaries = [
-        f"`{_lookup(group, 'key')}`: {_node_count_text(_lookup(group, 'node_count'))} at "
+        f"`{_lookup(group, 'key')}`: {_node_scale_text(group)} at "
         f"`{_shape_label(_lookup(group, 'platform'), _lookup(group, 'preset'))}`"
         for group in groups
         if isinstance(group, Mapping) and not bool(_lookup(group, "gpu"))
     ]
     gpu_summaries = [
-        f"`{_lookup(group, 'key')}`: {_node_count_text(_lookup(group, 'node_count'))} at "
+        f"`{_lookup(group, 'key')}`: {_node_scale_text(group)} at "
         f"`{_shape_label(_lookup(group, 'platform'), _lookup(group, 'preset'))}`"
         for group in groups
         if isinstance(group, Mapping) and bool(_lookup(group, "gpu"))
@@ -1278,6 +1285,8 @@ def _build_payload(config: Any, paths: ProjectPaths) -> dict[str, dict]:
                 "key": group.key,
                 "gpu": group.gpu,
                 "node_count": group.node_count,
+                "autoscaling_min_node_count": group.autoscaling_min_node_count,
+                "autoscaling_max_node_count": group.autoscaling_max_node_count,
                 "platform": group.platform,
                 "preset": group.preset,
             }

@@ -119,7 +119,7 @@ def _write_sources_file(
                     "version": "v2.8.0",
                 },
                 "terraform": {
-                    "version": "1.14.1",
+                    "version": "1.15.5",
                 },
             },
             "components": {
@@ -240,13 +240,44 @@ def test_bundled_catalog_exposes_soperator_and_nfs_local_sources() -> None:
     assert raw_soperator["wizard_profile"] == "soperator"
     assert "wizard" not in raw_soperator
 
+    vpc = next(module for module in sources.tf_modules if module.module == "vpc")
+    assert vpc.local_source is not None
+    assert vpc.local_source.endswith("platform-infra/modules/vpc")
+    assert vpc.description == "VPC network and optional subnets"
+    assert vpc.wizard_fields["inputs.network.existing_id"]["options"] == {
+        "from": "project_networks",
+        "auto_select_single": False,
+        "skip_prompt_if_no_choices": True,
+    }
+    network_type_hint = vpc.wizard_fields["inputs.network"]["type_hint"]
+    assert "ipv4_private_cidrs" in network_type_hint
+    assert "ipv4_private_pool_ids" in network_type_hint
+    assert "ipv4_private_source_pool_id" in network_type_hint
+    assert "ipv4_public_pool_ids" in network_type_hint
+    assert vpc.wizard_fields["inputs.network.ipv4_private_cidrs"]["prompt"] is False
+    assert vpc.wizard_fields["inputs.network.ipv4_private_pool_ids"]["options"]["from"] == (
+        "project_private_pools"
+    )
+    assert vpc.wizard_fields["inputs.network.ipv4_private_source_pool_id"]["options"]["from"] == (
+        "project_private_pools"
+    )
+    assert vpc.wizard_fields["inputs.subnets"]["prompt"] is False
+    assert "prompt_complex" not in vpc.wizard_fields["inputs.subnets"]
+
     nfs = next(module for module in sources.tf_modules if module.module == "nfs")
     assert nfs.local_source is not None
     assert nfs.local_source.endswith("platform-infra/modules/nfs")
     assert nfs.description == "VM-based NFS bridge (non-HA)"
     assert nfs.wizard_fields["inputs.subnet_id"]["options"] == {
         "from": "project_subnets",
+        "args": {"network_id_path": "inputs.network_id"},
+        "auto_select_single": True,
     }
+    assert nfs.wizard_fields["inputs.network_id"]["options"] == {
+        "from": "project_networks",
+        "auto_select_single": True,
+    }
+    assert nfs.wizard_fields["inputs.network_id"]["required"] is True
     assert nfs.wizard_fields["inputs.platform"]["options"] == {
         "from": "compute_platforms",
     }
@@ -492,12 +523,20 @@ def test_bundled_catalog_exposes_soperator_and_nfs_local_sources() -> None:
             "platform": "cpu-d3",
             "preset": "8vcpu-32gb",
         }
+        for role in ("system", "controller", "login", "accounting"):
+            assert profile["mk8s"]["node_groups"][role]["autoscaling_input"] == (
+                f"soperator.{role}_autoscaling"
+            )
     cpu_profile = soperator.soperator_nodesets.profiles["nebius-cpu-v1"]
     assert cpu_profile["mk8s"]["worker_nodesets"][0]["total_nodes_input"] == (
         "soperator.worker_total_nodes"
     )
     assert cpu_profile["mk8s"]["worker_nodesets"][0]["nodes_per_group_input"] == (
         "soperator.worker_nodes_per_group"
+    )
+    assert (
+        cpu_profile["mk8s"]["worker_nodesets"][0]["autoscaling_input"]
+        == "soperator.worker_autoscaling"
     )
     assert "srunReadyPartition" not in cpu_profile["chart"]["values"]["soperator-activechecks"]
     assert cpu_profile["chart"]["activechecks"]["srunReadyPartition"] == "cpu"
@@ -551,6 +590,9 @@ def test_bundled_catalog_exposes_soperator_and_nfs_local_sources() -> None:
         "controller-spool",
     ]
     assert profile["mk8s"]["worker_nodesets"][0]["max_nodes_per_group"] == 100
+    assert profile["mk8s"]["worker_nodesets"][0]["autoscaling_input"] == (
+        "soperator.worker_autoscaling"
+    )
     assert profile["mk8s"]["worker_nodesets"][0]["node_group_key_prefix"] == "worker"
     assert profile["mk8s"]["worker_nodesets"][0]["nodeset_name"] == "worker"
     assert profile["chart"]["values"]["partitionConfiguration"]["partitions"][0]["name"] == "gpu"
@@ -579,9 +621,12 @@ def test_bundled_catalog_exposes_soperator_and_nfs_local_sources() -> None:
     assert qos_scheduling["preemptMode"] == "REQUEUE"
     assert "send_user_signal" in qos_scheduling["preemptParameters"]
     assert qos_profile["values"]["qosConfiguration"]["enabled"] is True
-    assert [
-        qos["name"] for qos in qos_profile["values"]["qosConfiguration"]["qos"]
-    ] == ["debug", "eval", "train", "data"]
+    assert [qos["name"] for qos in qos_profile["values"]["qosConfiguration"]["qos"]] == [
+        "debug",
+        "eval",
+        "train",
+        "data",
+    ]
     assert [
         partition["name"]
         for partition in qos_profile["values"]["partitionConfiguration"]["partitions"]
@@ -599,6 +644,7 @@ def test_bundled_catalog_exposes_soperator_and_nfs_local_sources() -> None:
         worker["nodeset_name"]: (
             worker["total_nodes_input"],
             worker["nodes_per_group_input"],
+            worker["autoscaling_input"],
             worker["default_total_nodes"],
             worker["default_nodes_per_group"],
         )
@@ -607,12 +653,14 @@ def test_bundled_catalog_exposes_soperator_and_nfs_local_sources() -> None:
         "worker-cpu": (
             "soperator.worker_total_nodes",
             "soperator.worker_nodes_per_group",
+            "soperator.worker_autoscaling",
             1,
             100,
         ),
         "worker-gpu": (
             "soperator.worker_total_nodes",
             "soperator.worker_nodes_per_group",
+            "soperator.worker_autoscaling",
             1,
             100,
         ),
@@ -883,7 +931,7 @@ def test_load_component_sources_reads_tf_modules_and_helm_entries(
                     "version": "v2.8.0",
                 },
                 "terraform": {
-                    "version": "1.14.1",
+                    "version": "1.15.5",
                 },
             },
             shared={
@@ -956,7 +1004,7 @@ def test_load_component_sources_reads_tf_modules_and_helm_entries(
     loaded = load_component_sources()
     assert loaded.cli.flux.version == "v2.8.0"
     assert loaded.cli.flux.release_timeout == "5m"
-    assert loaded.cli.terraform.version == "1.14.1"
+    assert loaded.cli.terraform.version == "1.15.5"
     assert loaded.tf_modules[0].module == "wireguard-gw"
     assert (
         loaded.tf_modules[0].source
@@ -1019,7 +1067,7 @@ def test_app_release_timeout_inherits_global_flux_default(tmp_path: Path) -> Non
                     "version": "v2.8.0",
                     "release_timeout": "15m",
                 },
-                "terraform": {"version": "1.14.1"},
+                "terraform": {"version": "1.15.5"},
             },
             apps={
                 "demo-app": {
@@ -1342,7 +1390,10 @@ def test_load_component_sources_expands_builtin_wizard_profile(tmp_path: Path) -
         "inputs.network_id": {
             "options": {
                 "from": "project_networks",
-            }
+                "auto_select_single": True,
+            },
+            "required": True,
+            "type_hint": "string",
         },
         "inputs.tier": {
             "sources": [
@@ -2754,13 +2805,13 @@ def test_bundled_mk8s_declares_optional_wizard_field_override() -> None:
     }
     assert mk8s.wizard_fields["inputs.cluster.network_id"]["options"] == {
         "from": "project_networks",
-        "auto_select_first": True,
+        "auto_select_single": True,
     }
     assert mk8s.wizard_fields["inputs.cluster.network_id"]["required"] is True
     assert mk8s.wizard_fields["inputs.cluster.subnet_id"]["options"] == {
         "from": "project_subnets",
         "args": {"network_id_path": "inputs.cluster.network_id"},
-        "auto_select_first": True,
+        "auto_select_single": True,
     }
     assert mk8s.wizard_fields["inputs.cluster.subnet_id"]["required"] is True
     assert mk8s.wizard_fields["inputs.cluster.k8s_version"]["options"] == {
@@ -2798,7 +2849,9 @@ def test_bundled_mk8s_declares_optional_wizard_field_override() -> None:
         == "nebius_image"
     )
     assert (
-        mk8s.wizard_fields["inputs.node_group_defaults.gpu.gpu_stack_source"]["write_default_to_config"]
+        mk8s.wizard_fields["inputs.node_group_defaults.gpu.gpu_stack_source"][
+            "write_default_to_config"
+        ]
         is True
     )
     assert mk8s.wizard_fields["inputs.node_group_defaults.gpu.infiniband_fabric"] == {
@@ -2824,6 +2877,22 @@ def test_bundled_mk8s_declares_optional_wizard_field_override() -> None:
         "accounting_node_count",
     ):
         assert mk8s.wizard_fields[f"inputs.soperator.{field}"] == {
+            "default": 1,
+            "write_default_to_config": True,
+            "type_hint": "number",
+        }
+    for role in ("system", "controller", "login", "accounting", "worker"):
+        assert mk8s.wizard_fields[f"inputs.soperator.{role}_autoscaling.enabled"] == {
+            "default": False,
+            "write_default_to_config": True,
+            "type_hint": "bool",
+        }
+        assert mk8s.wizard_fields[f"inputs.soperator.{role}_autoscaling.min_node_count"] == {
+            "default": 1,
+            "write_default_to_config": True,
+            "type_hint": "number",
+        }
+        assert mk8s.wizard_fields[f"inputs.soperator.{role}_autoscaling.max_node_count"] == {
             "default": 1,
             "write_default_to_config": True,
             "type_hint": "number",
@@ -3127,7 +3196,10 @@ def test_bundled_managed_postgresql_uses_wizard_profile() -> None:
         "inputs.network_id": {
             "options": {
                 "from": "project_networks",
-            }
+                "auto_select_single": True,
+            },
+            "required": True,
+            "type_hint": "string",
         },
         "inputs.tier": {
             "sources": [
@@ -3150,10 +3222,22 @@ def test_bundled_vm_and_jump_hosts_use_component_scoped_wizard_profiles() -> Non
     ssh = next(item for item in loaded.tf_modules if item.module == "ssh-jumphost")
 
     assert vm.wizard_fields == {
+        "inputs.network_id": {
+            "options": {
+                "from": "project_networks",
+                "auto_select_single": True,
+            },
+            "required": True,
+            "type_hint": "string",
+        },
         "inputs.subnet_id": {
             "options": {
                 "from": "project_subnets",
-            }
+                "args": {"network_id_path": "inputs.network_id"},
+                "auto_select_single": True,
+            },
+            "required": True,
+            "type_hint": "string",
         },
         "inputs.platform": {
             "options": {
@@ -3209,6 +3293,11 @@ def test_bundled_vm_and_jump_hosts_use_component_scoped_wizard_profiles() -> Non
                 },
                 "skip_prompt_if_no_choices": True,
             }
+        },
+        "inputs.sfs_attachments": {
+            "type_hint": "list(object({ source_instance = optional(string), keys = optional(list(string)), id = optional(string), mount_tag = optional(string), attach_mode = optional(string) }))",
+            "prompt_complex": True,
+            "required": False,
         },
         "deploy.observability.enabled": {
             "default": False,
@@ -3302,10 +3391,22 @@ def test_bundled_vm_and_jump_hosts_use_component_scoped_wizard_profiles() -> Non
         },
     }
     assert wireguard.wizard_fields == {
+        "inputs.network_id": {
+            "options": {
+                "from": "project_networks",
+                "auto_select_single": True,
+            },
+            "required": True,
+            "type_hint": "string",
+        },
         "inputs.subnet_id": {
             "options": {
                 "from": "project_subnets",
-            }
+                "args": {"network_id_path": "inputs.network_id"},
+                "auto_select_single": True,
+            },
+            "required": True,
+            "type_hint": "string",
         },
         "inputs.platform": {
             "options": {
@@ -3348,10 +3449,22 @@ def test_bundled_vm_and_jump_hosts_use_component_scoped_wizard_profiles() -> Non
         },
     }
     assert ssh.wizard_fields == {
+        "inputs.network_id": {
+            "options": {
+                "from": "project_networks",
+                "auto_select_single": True,
+            },
+            "required": True,
+            "type_hint": "string",
+        },
         "inputs.subnet_id": {
             "options": {
                 "from": "project_subnets",
-            }
+                "args": {"network_id_path": "inputs.network_id"},
+                "auto_select_single": True,
+            },
+            "required": True,
+            "type_hint": "string",
         },
         "inputs.platform": {
             "options": {
@@ -4497,8 +4610,8 @@ def test_validate_sources_resolves_relative_local_module_path_from_component_sou
                 '  required_version = ">= 1.10.0, < 2.0.0"',
                 "  required_providers {",
                 "    nebius = {",
-                '      source = "terraform-provider.storage.eu-north1.nebius.cloud/nebius/nebius"',
-                '      version = ">= 0.5.55, < 0.6.0"',
+                '      source = "nebius/nebius"',
+                '      version = ">= 0.6.8, < 0.7.0"',
                 "    }",
                 "  }",
                 "}",
@@ -4569,8 +4682,8 @@ def test_validate_sources_accepts_absolute_local_module_path(monkeypatch, tmp_pa
                 '  required_version = ">= 1.10.0, < 2.0.0"',
                 "  required_providers {",
                 "    nebius = {",
-                '      source = "terraform-provider.storage.eu-north1.nebius.cloud/nebius/nebius"',
-                '      version = ">= 0.5.55, < 0.6.0"',
+                '      source = "nebius/nebius"',
+                '      version = ">= 0.6.8, < 0.7.0"',
                 "    }",
                 "  }",
                 "}",

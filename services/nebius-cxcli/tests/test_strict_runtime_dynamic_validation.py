@@ -410,6 +410,7 @@ def test_strict_validation_ssh_jumphost_requires_allowed_cidrs(
     _align_infra_resource_name(payload, jumphost, "ssh-jh")
     jumphost["inputs"] = {
         "parent_id": "project-456",
+        "network_id": "network-123",
         "subnet_id": "subnet-123",
         "name": "ssh-jh",
         "platform": "cpu-d3",
@@ -499,6 +500,7 @@ def test_strict_validation_allows_explicit_ssh_public_key_for_jumphost(
     _align_infra_resource_name(payload, jumphost, instance_name)
     jumphost["inputs"] = {
         "parent_id": "project-456",
+        "network_id": "network-123",
         "subnet_id": "subnet-123",
         "name": instance_name,
         "platform": "cpu-d3",
@@ -534,6 +536,7 @@ def test_strict_validation_rejects_missing_ssh_public_key_for_jumphost(
     _align_infra_resource_name(payload, jumphost, instance_name)
     jumphost["inputs"] = {
         "parent_id": "project-456",
+        "network_id": "network-123",
         "subnet_id": "subnet-123",
         "name": instance_name,
         "platform": "cpu-d3",
@@ -574,6 +577,7 @@ def test_strict_validation_requires_existing_public_ip_allocation_id_for_jump_ho
     _align_infra_resource_name(payload, jumphost, instance_name)
     jumphost["inputs"] = {
         "parent_id": "project-456",
+        "network_id": "network-123",
         "subnet_id": "subnet-123",
         "name": instance_name,
         "platform": "cpu-d3",
@@ -616,6 +620,7 @@ def test_strict_validation_rejects_public_ip_allocation_id_when_jump_host_create
     _align_infra_resource_name(payload, jumphost, instance_name)
     jumphost["inputs"] = {
         "parent_id": "project-456",
+        "network_id": "network-123",
         "subnet_id": "subnet-123",
         "name": instance_name,
         "platform": "cpu-d3",
@@ -659,6 +664,7 @@ def test_strict_validation_rejects_invalid_public_ip_allocation_name_for_jump_ho
     _align_infra_resource_name(payload, jumphost, instance_name)
     jumphost["inputs"] = {
         "parent_id": "project-456",
+        "network_id": "network-123",
         "subnet_id": "subnet-123",
         "name": instance_name,
         "platform": "cpu-d3",
@@ -714,6 +720,7 @@ def test_strict_validation_rejects_boot_disk_encryption_on_unsupported_disk_type
     _align_infra_resource_name(payload, component, instance_name)
     component["inputs"] = {
         "parent_id": "project-456",
+        "network_id": "network-123",
         "subnet_id": "subnet-123",
         "name": instance_name,
         "platform": "cpu-d3",
@@ -768,6 +775,7 @@ def test_strict_validation_rejects_created_disk_security_flags_with_existing_boo
     _align_infra_resource_name(payload, component, instance_name)
     component["inputs"] = {
         "parent_id": "project-456",
+        "network_id": "network-123",
         "subnet_id": "subnet-123",
         "name": instance_name,
         "platform": "cpu-d3",
@@ -800,6 +808,7 @@ def test_strict_validation_rejects_data_disk_encryption_on_unsupported_disk_type
     component = _infra_component_row(payload, "vm")
     component["inputs"] = {
         "parent_id": "project-456",
+        "network_id": "network-123",
         "subnet_id": "subnet-123",
         "name": "vm",
         "platform": "cpu-d3",
@@ -835,6 +844,7 @@ def test_strict_validation_rejects_unaligned_high_performance_data_disk_size(
     component = _infra_component_row(payload, "vm")
     component["inputs"] = {
         "parent_id": "project-456",
+        "network_id": "network-123",
         "subnet_id": "subnet-123",
         "name": "vm",
         "platform": "cpu-d3",

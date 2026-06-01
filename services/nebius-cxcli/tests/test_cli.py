@@ -24,11 +24,12 @@ from nebius_cxcli.component_sources import (
     set_component_sources_file_override,
     set_component_sources_profile_override,
 )
-from nebius_cxcli.components import component_entries, reset_component_entry_cache
+from nebius_cxcli.components import ComponentEntry, component_entries, reset_component_entry_cache
 from nebius_cxcli.email_settings import EmailSettings
 from nebius_cxcli.quota_checks import QuotaCheck, QuotaReport
 from nebius_cxcli.runtime_config import to_plain_data
 from nebius_cxcli.runtime_validation import validate_dynamic_payload_structure
+from nebius_cxcli.wizard_profiles import BUILTIN_WIZARD_PROFILES
 
 runner = CliRunner()
 
@@ -73,6 +74,66 @@ def _project_folder_name(project_id: str = "project-456") -> str:
     return folder_by_project_id[project_id]
 
 
+def test_apply_vpc_ref_overrides_materializes_row_bindings() -> None:
+    payload = {
+        "infra": {
+            "components": [
+                {
+                    "id": "vpc",
+                    "instance_id": "worker-vpc",
+                    "enabled": True,
+                    "inputs": {
+                        "network": {"name": "worker-network"},
+                        "subnets": {
+                            "worker": {
+                                "name": "worker-subnet",
+                                "use_network_private_pools": False,
+                                "ipv4_private_cidrs": ["172.16.0.0/16"],
+                            }
+                        },
+                    },
+                },
+                {
+                    "id": "vm",
+                    "instance_id": "worker",
+                    "enabled": True,
+                    "inputs": {},
+                },
+            ]
+        }
+    }
+
+    cli_module._apply_vpc_ref_overrides(
+        payload=payload,
+        selected_infra={"worker"},
+        network_refs=["infra:vm@worker=vpc@worker-vpc.network_id"],
+        subnet_refs=["infra:vm@worker=vpc@worker-vpc.subnets.worker.id"],
+    )
+
+    vm = payload["infra"]["components"][1]
+    assert vm["bindings"] == {
+        "inputs.network_id": {
+            "source_component": "vpc",
+            "source_instance": "worker-vpc",
+            "source_output": "network_id",
+        },
+        "inputs.subnet_id": {
+            "source_component": "vpc",
+            "source_instance": "worker-vpc",
+            "source_output": "subnets",
+            "key": "worker",
+            "attribute": "id",
+        },
+    }
+
+
+def test_network_command_is_not_available() -> None:
+    result = runner.invoke(app, ["network", "create"])
+
+    assert result.exit_code != 0
+    assert "No such command" in result.output
+
+
 @pytest.fixture(autouse=True)
 def _reset_runtime_state(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("NEBIUS_CXCLI_COMPONENT_SOURCES_FILE", raising=False)
@@ -113,6 +174,7 @@ def _reset_runtime_state(monkeypatch: pytest.MonkeyPatch) -> None:
         "nebius_cxcli.cli.rendered_module_sources",
         lambda _config, *, source_profile: (),
     )
+    monkeypatch.setattr("nebius_cxcli.cli.validate_vpc_networking_preflight", lambda _cfg: None)
     monkeypatch.setattr("nebius_cxcli.infra_render.module_variables", lambda _source: ())
     monkeypatch.setattr(
         "nebius_cxcli.cli._try_generate_terraform_lock_file", lambda *_args, **_kwargs: False
@@ -122,6 +184,20 @@ def _reset_runtime_state(monkeypatch: pytest.MonkeyPatch) -> None:
         lambda _cfg, *, chart_meta_cache=None: None,
     )
     monkeypatch.setattr("nebius_cxcli.cli.helm_chart_default_values", lambda **_kwargs: {})
+    original_dynamic_choices = cli_module._resolve_dynamic_field_choices
+
+    def _fake_dynamic_provider_choices(**kwargs):  # type: ignore[no-untyped-def]
+        full_path_label = kwargs["full_path_label"]
+        if full_path_label.endswith(".network_id"):
+            return [cli_module.OptionChoice(value="vpcnetwork-123", label="default network")]
+        if full_path_label.endswith(".subnet_id"):
+            return [cli_module.OptionChoice(value="vpcsubnet-123", label="default subnet")]
+        return original_dynamic_choices(**kwargs)
+
+    monkeypatch.setattr(
+        "nebius_cxcli.cli._resolve_dynamic_field_choices",
+        _fake_dynamic_provider_choices,
+    )
     monkeypatch.setattr(
         "nebius_cxcli.cli._helm_chart_metadata",
         lambda *, chart_name_or_ref, chart_repo, chart_version, cache=None: (
@@ -462,6 +538,24 @@ def test_create_does_not_preflight_unselected_app_source_tools_before_identity_p
     assert "Tenant ID" in result.output
 
 
+def test_create_creates_missing_deployments_root(tmp_path: Path) -> None:
+    deployments_root = tmp_path / "deployment-example"
+
+    result = _create_non_interactive(
+        deployments_root,
+        "--infra",
+        "none",
+        "--app",
+        "none",
+        "--no-validate-config",
+    )
+
+    assert result.exit_code == 0, result.output
+    assert deployments_root.is_dir()
+    assert _project_config_path(deployments_root).exists()
+    assert "Target directory does not exist" not in result.output
+
+
 def test_create_reprompts_invalid_interactive_client_name(tmp_path: Path) -> None:
     deployments_root = tmp_path / "deployments"
     deployments_root.mkdir(parents=True, exist_ok=True)
@@ -563,6 +657,121 @@ def test_create_guided_prefilled_infra_example_skips_source_and_post_write_valid
     }
 
 
+def test_create_interactive_skips_app_selection_without_selected_mk8s(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    deployments_root = tmp_path / "deployments"
+    deployments_root.mkdir(parents=True, exist_ok=True)
+    resolved_scopes: list[str] = []
+    captured: dict[str, object] = {}
+
+    def capture_component_selection(**kwargs: object) -> set[str]:
+        scope = str(kwargs["scope"])
+        resolved_scopes.append(scope)
+        if scope == "infra":
+            return {"vpc"}
+        raise AssertionError("app selection should be skipped without a selected MK8s target")
+
+    def capture_field_wizard(**kwargs: object) -> tuple[str, bool]:
+        captured["selected_infra"] = set(kwargs["selected_infra"])  # type: ignore[arg-type]
+        captured["selected_apps"] = set(kwargs["selected_apps"])  # type: ignore[arg-type]
+        payload = yaml.safe_load(str(kwargs["config_yaml"]))
+        vpc = next(row for row in payload["infra"]["components"] if row.get("id") == "vpc")
+        vpc.setdefault("inputs", {}).setdefault("network", {})["ipv4_private_cidrs"] = [
+            "172.16.0.0/12"
+        ]
+        return yaml.safe_dump(payload, sort_keys=False), True
+
+    monkeypatch.setattr(cli_module, "_resolve_component_ids", capture_component_selection)
+    monkeypatch.setattr(cli_module, "_run_component_field_wizard", capture_field_wizard)
+    monkeypatch.setattr(
+        cli_module,
+        "_wizard_continue_phase",
+        lambda *_args, **_kwargs: cli_module._WizardPhaseDecision(proceed=True),
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "_warn_on_live_quota_issues",
+        lambda *_args, **_kwargs: _empty_quota_report(),
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "create",
+            str(deployments_root),
+            "--client-name",
+            "client-a",
+            "--tenant-id",
+            "tenant-123",
+            "--project-id",
+            "project-456",
+            "--region-id",
+            "eu-north1",
+            "--email",
+            "ops@example.com",
+            "--no-validate-sources",
+            "--no-validate-config",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert resolved_scopes == ["infra"]
+    assert captured["selected_infra"] == {"vpc"}
+    assert captured["selected_apps"] == set()
+    assert "Skipping app chart selection because no MK8s target was selected" in result.output
+
+
+def test_create_interactive_explicit_app_without_mk8s_target_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    deployments_root = tmp_path / "deployments"
+    deployments_root.mkdir(parents=True, exist_ok=True)
+
+    monkeypatch.setattr(
+        cli_module,
+        "_wizard_continue_phase",
+        lambda *_args, **_kwargs: cli_module._WizardPhaseDecision(proceed=True),
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "_run_component_field_wizard",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("field wizard should not run for invalid app selection")
+        ),
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "create",
+            str(deployments_root),
+            "--client-name",
+            "client-a",
+            "--tenant-id",
+            "tenant-123",
+            "--project-id",
+            "project-456",
+            "--region-id",
+            "eu-north1",
+            "--email",
+            "ops@example.com",
+            "--no-validate-sources",
+            "--no-validate-config",
+            "--infra",
+            "none",
+            "--app",
+            "n8n",
+        ],
+    )
+
+    assert result.exit_code == 1, result.output
+    assert "Apps are Helm charts and require an enabled MK8s target" in result.output
+    assert "Skipping app chart selection because no MK8s target was selected" not in result.output
+
+
 def test_create_guided_prefilled_infra_and_apps_example_is_accepted(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -625,11 +834,528 @@ def test_create_guided_prefilled_infra_and_apps_example_is_accepted(
         assert apps_enabled[app_id] is True
 
 
+def test_create_noninteractive_auto_selects_single_live_vpc_choice(tmp_path: Path) -> None:
+    deployments_root = tmp_path / "deployments"
+    deployments_root.mkdir(parents=True, exist_ok=True)
+
+    result = _create_non_interactive(
+        deployments_root,
+        "--infra",
+        "vm",
+        "--app",
+        "none",
+        "--no-validate-config",
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = yaml.safe_load(_project_config_path(deployments_root).read_text(encoding="utf-8"))
+    vm = next(row for row in payload["infra"]["components"] if row.get("id") == "vm")
+    assert vm["inputs"]["network_id"] == "vpcnetwork-123"
+    assert vm["inputs"]["subnet_id"] == "vpcsubnet-123"
+
+
+def test_create_interactive_vpc_can_skip_live_network_and_create_network_without_subnets(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    deployments_root = tmp_path / "deployments"
+    deployments_root.mkdir(parents=True, exist_ok=True)
+
+    original_dynamic_choices = cli_module._resolve_dynamic_field_choices
+
+    def _vpc_existing_network_choices(**kwargs):  # type: ignore[no-untyped-def]
+        full_path_label = kwargs["full_path_label"]
+        if full_path_label.endswith(".inputs.network.existing_id"):
+            return [cli_module.OptionChoice(value="vpcnetwork-live", label="default network")]
+        return original_dynamic_choices(**kwargs)
+
+    monkeypatch.setattr(
+        cli_module,
+        "_resolve_dynamic_field_choices",
+        _vpc_existing_network_choices,
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "create",
+            str(deployments_root),
+            "--client-name",
+            "client-a",
+            "--tenant-id",
+            "tenant-123",
+            "--project-id",
+            "project-456",
+            "--region-id",
+            "eu-north1",
+            "--email",
+            "ops@example.com",
+            "--infra",
+            "vpc",
+            "--app",
+            "none",
+            "--no-validate-sources",
+            "--no-validate-config",
+        ],
+        input="y\ny\n\nmynetwork\n1\nfalse\n",
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "planned:" not in result.output
+    assert "inputs.subnets.<new>.name" not in result.output
+    payload = yaml.safe_load(_project_config_path(deployments_root).read_text(encoding="utf-8"))
+    vpc = next(row for row in payload["infra"]["components"] if row.get("id") == "vpc")
+    assert vpc["inputs"]["network"] == {
+        "name": "mynetwork",
+        "ipv4_private_cidrs": ["10.8.0.0/13"],
+    }
+    assert "subnets" not in vpc["inputs"]
+
+
+def test_create_interactive_vpc_selects_suggested_custom_network_cidr_and_subnet_cidr(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    deployments_root = tmp_path / "deployments"
+    deployments_root.mkdir(parents=True, exist_ok=True)
+
+    original_dynamic_choices = cli_module._resolve_dynamic_field_choices
+
+    def _vpc_existing_network_choices(**kwargs):  # type: ignore[no-untyped-def]
+        full_path_label = kwargs["full_path_label"]
+        if full_path_label.endswith(".inputs.network.existing_id"):
+            return [cli_module.OptionChoice(value="vpcnetwork-live", label="default network")]
+        return original_dynamic_choices(**kwargs)
+
+    monkeypatch.setattr(
+        cli_module,
+        "_resolve_dynamic_field_choices",
+        _vpc_existing_network_choices,
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "create",
+            str(deployments_root),
+            "--client-name",
+            "client-a",
+            "--tenant-id",
+            "tenant-123",
+            "--project-id",
+            "project-456",
+            "--region-id",
+            "eu-north1",
+            "--email",
+            "ops@example.com",
+            "--infra",
+            "vpc",
+            "--app",
+            "none",
+            "--no-validate-sources",
+            "--no-validate-config",
+        ],
+        input="y\ny\n\nmynetwork\n1\ntrue\nworkloads\n1\nfalse\n",
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = yaml.safe_load(_project_config_path(deployments_root).read_text(encoding="utf-8"))
+    vpc = next(row for row in payload["infra"]["components"] if row.get("id") == "vpc")
+    assert vpc["inputs"]["network"] == {
+        "name": "mynetwork",
+        "ipv4_private_cidrs": ["10.8.0.0/13"],
+    }
+    assert vpc["inputs"]["subnets"] == {
+        "workloads": {
+            "name": "workloads",
+            "use_network_private_pools": False,
+            "ipv4_private_cidrs": ["10.8.0.0/16"],
+        }
+    }
+
+
+def test_noninteractive_auto_selects_single_planned_vpc_choice(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = {
+        "infra": {
+            "components": [
+                {
+                    "id": "vpc",
+                    "instance_id": "worker-vpc",
+                    "enabled": True,
+                    "inputs": {
+                        "parent_id": "project-456",
+                        "network": {
+                            "name": "worker-network",
+                            "ipv4_private_cidrs": ["172.16.0.0/12"],
+                        },
+                        "subnets": {
+                            "worker": {
+                                "name": "worker-subnet",
+                                "use_network_private_pools": False,
+                                "ipv4_private_cidrs": ["172.16.0.0/16"],
+                            }
+                        },
+                    },
+                },
+                {
+                    "id": "vm",
+                    "instance_id": "worker",
+                    "enabled": True,
+                    "inputs": {"parent_id": "project-456"},
+                },
+            ]
+        }
+    }
+
+    def _single_planned_vpc_choice(**kwargs):  # type: ignore[no-untyped-def]
+        full_path_label = kwargs["full_path_label"]
+        if full_path_label.endswith(".network_id"):
+            return [
+                cli_module.OptionChoice(
+                    value="planned:vpc@worker-vpc.network_id",
+                    label="planned network",
+                )
+            ]
+        if full_path_label.endswith(".subnet_id"):
+            return [
+                cli_module.OptionChoice(
+                    value="planned:vpc@worker-vpc.subnets.worker.id",
+                    label="planned subnet",
+                )
+            ]
+        return []
+
+    monkeypatch.setattr(
+        cli_module,
+        "_resolve_dynamic_field_choices",
+        _single_planned_vpc_choice,
+    )
+
+    cli_module._materialize_singleton_provider_defaults(
+        payload=payload,
+        selected_infra={"worker"},
+        infra_entries=component_entries("infra"),
+        provider_lookup=SimpleNamespace(),
+    )
+    cli_module._materialize_planned_vpc_binding_tokens(payload)
+
+    vm = payload["infra"]["components"][1]
+    assert vm["inputs"] == {"parent_id": "project-456"}
+    assert vm["bindings"] == {
+        "inputs.network_id": {
+            "source_component": "vpc",
+            "source_instance": "worker-vpc",
+            "source_output": "network_id",
+        },
+        "inputs.subnet_id": {
+            "source_component": "vpc",
+            "source_instance": "worker-vpc",
+            "source_output": "subnets",
+            "key": "worker",
+            "attribute": "id",
+        },
+    }
+
+
+def test_component_field_wizard_configures_planned_vpc_before_mk8s_consumer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = {
+        "version": "v1",
+        "client_info": {
+            "client_name": "demo",
+            "nebius": {
+                "tenant_id": "tenant-123",
+                "project_id": "project-456",
+                "region_id": "eu-north1",
+            },
+            "notifications": {"email_enabled": False, "email": None},
+        },
+        "infra": {
+            "components": [
+                {
+                    "id": "mk8s",
+                    "instance_id": "mk8s",
+                    "enabled": True,
+                    "inputs": {"cluster": {}},
+                },
+                {
+                    "id": "vpc",
+                    "instance_id": "vpc",
+                    "enabled": True,
+                    "inputs": {"network": {}},
+                },
+            ]
+        },
+        "apps": {"charts": []},
+    }
+    mk8s_entry = ComponentEntry(
+        id="mk8s",
+        scope="infra",
+        config_path="infra.components[].inputs",
+        description="Managed Kubernetes",
+        wizard_fields={
+            "inputs.cluster.network_id": {
+                "options": {"from": "project_networks", "auto_select_single": True},
+                "required": True,
+                "type_hint": "string",
+            },
+            "inputs.cluster.subnet_id": {
+                "options": {
+                    "from": "project_subnets",
+                    "args": {"network_id_path": "inputs.cluster.network_id"},
+                    "auto_select_single": True,
+                },
+                "required": True,
+                "type_hint": "string",
+            },
+        },
+    )
+    vpc_entry = ComponentEntry(
+        id="vpc",
+        scope="infra",
+        config_path="infra.components[].inputs",
+        description="VPC",
+        wizard_fields=BUILTIN_WIZARD_PROFILES["vpc"],
+    )
+    phase_prompts: list[str] = []
+
+    class _ProviderLookup:
+        def resolve(self, **_kwargs):  # type: ignore[no-untyped-def]
+            return []
+
+        def last_error(self) -> None:
+            return None
+
+    def _dynamic_choices(**kwargs):  # type: ignore[no-untyped-def]
+        current_payload = kwargs["payload"]
+        entry = kwargs["entry"]
+        full_path_label = kwargs["full_path_label"]
+        if full_path_label.endswith(".inputs.cluster.network_id"):
+            return cli_module._combined_vpc_choices(
+                payload=current_payload,
+                entry=entry,
+                full_path_label=full_path_label,
+                provider="project_networks",
+                args={},
+                live_choices=[],
+            )
+        if full_path_label.endswith(".inputs.cluster.subnet_id"):
+            return cli_module._combined_vpc_choices(
+                payload=current_payload,
+                entry=entry,
+                full_path_label=full_path_label,
+                provider="project_subnets",
+                args={
+                    "network_id_path": full_path_label.removesuffix("subnet_id")
+                    + "network_id"
+                },
+                live_choices=[],
+            )
+        return []
+
+    def _phase_decision(prompt_label: str, **_kwargs) -> cli_module._WizardPhaseDecision:
+        phase_prompts.append(prompt_label)
+        return cli_module._WizardPhaseDecision(proceed=True)
+
+    def _answer_prompt(text: str, default=None, **_kwargs):  # type: ignore[no-untyped-def]
+        if "inputs.network.name" in text:
+            return "mynetwork"
+        if "inputs.network.ipv4_private_cidrs" in text:
+            return "1"
+        if "inputs.subnets.add_another" in text:
+            return "false"
+        if "inputs.subnets.add" in text:
+            return "true"
+        if "inputs.subnets.<new>.name" in text:
+            return "workloads"
+        if "inputs.subnets.workloads.ipv4_private_cidrs" in text:
+            return "1"
+        return "" if default is None else str(default)
+
+    monkeypatch.setattr(cli_module, "_is_tty_session", lambda: False)
+    monkeypatch.setattr(cli_module, "_resolve_dynamic_field_choices", _dynamic_choices)
+    monkeypatch.setattr(cli_module, "_wizard_continue_phase", _phase_decision)
+    monkeypatch.setattr(cli_module.typer, "prompt", _answer_prompt)
+
+    updated_yaml, completed = cli_module._run_component_field_wizard(
+        config_yaml=yaml.safe_dump(payload, sort_keys=False),
+        selected_infra={"mk8s", "vpc"},
+        selected_apps=set(),
+        infra_entries=(mk8s_entry, vpc_entry),
+        app_entries=(),
+        provider_lookup=_ProviderLookup(),
+    )
+
+    assert completed is True
+    assert phase_prompts[:2] == [
+        "Configure 'vpc' component fields now?",
+        "Configure 'mk8s' component fields now?",
+    ]
+    updated_payload = yaml.safe_load(updated_yaml)
+    cli_module._materialize_planned_vpc_binding_tokens(updated_payload)
+    mk8s = updated_payload["infra"]["components"][0]
+    vpc = updated_payload["infra"]["components"][1]
+    assert vpc["inputs"]["network"] == {
+        "name": "mynetwork",
+        "ipv4_private_cidrs": ["10.8.0.0/13"],
+    }
+    assert vpc["inputs"]["subnets"] == {
+        "workloads": {
+            "name": "workloads",
+            "use_network_private_pools": False,
+            "ipv4_private_cidrs": ["10.8.0.0/16"],
+        }
+    }
+    assert mk8s.get("inputs", {}).get("cluster", {}) == {}
+    assert mk8s["bindings"] == {
+        "inputs.cluster.network_id": {
+            "source_component": "vpc",
+            "source_instance": "vpc",
+            "source_output": "network_id",
+        },
+        "inputs.cluster.subnet_id": {
+            "source_component": "vpc",
+            "source_instance": "vpc",
+            "source_output": "subnets",
+            "key": "workloads",
+            "attribute": "id",
+        },
+    }
+
+
+def test_create_noninteractive_requires_scoped_vpc_flags_for_multiple_choices(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    deployments_root = tmp_path / "deployments"
+    deployments_root.mkdir(parents=True, exist_ok=True)
+
+    def _multiple_vpc_choices(**kwargs):  # type: ignore[no-untyped-def]
+        full_path_label = kwargs["full_path_label"]
+        if full_path_label.endswith(".network_id"):
+            return [
+                cli_module.OptionChoice(value="vpcnetwork-a", label="network a"),
+                cli_module.OptionChoice(value="vpcnetwork-b", label="network b"),
+            ]
+        return []
+
+    monkeypatch.setattr(
+        "nebius_cxcli.cli._resolve_dynamic_field_choices",
+        _multiple_vpc_choices,
+    )
+
+    result = _create_non_interactive(
+        deployments_root,
+        "--infra",
+        "vm",
+        "--app",
+        "none",
+        "--no-validate-config",
+    )
+
+    assert result.exit_code == 1
+    assert "multiple live choices exist" in result.output
+    assert "--network-id" in result.output
+
+
+def test_create_accepts_bare_vpc_flags_for_single_subnet_attached_component(
+    tmp_path: Path,
+) -> None:
+    deployments_root = tmp_path / "deployments"
+    deployments_root.mkdir(parents=True, exist_ok=True)
+
+    result = _create_non_interactive(
+        deployments_root,
+        "--infra",
+        "vm",
+        "--app",
+        "none",
+        "--network-id",
+        "vpcnetwork-explicit",
+        "--subnet-id",
+        "vpcsubnet-explicit",
+        "--no-validate-config",
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = yaml.safe_load(_project_config_path(deployments_root).read_text(encoding="utf-8"))
+    vm = next(row for row in payload["infra"]["components"] if row.get("id") == "vm")
+    assert vm["inputs"]["network_id"] == "vpcnetwork-explicit"
+    assert vm["inputs"]["subnet_id"] == "vpcsubnet-explicit"
+
+
+def test_create_accepts_scoped_vpc_flags_for_multiple_components(tmp_path: Path) -> None:
+    deployments_root = tmp_path / "deployments"
+    deployments_root.mkdir(parents=True, exist_ok=True)
+
+    result = _create_non_interactive(
+        deployments_root,
+        "--infra",
+        "vm,ssh-jumphost",
+        "--app",
+        "none",
+        "--network-id",
+        "infra:vm=vpcnetwork-vm",
+        "--subnet-id",
+        "infra:vm=vpcsubnet-vm",
+        "--network-id",
+        "infra:ssh-jumphost=vpcnetwork-ssh",
+        "--subnet-id",
+        "infra:ssh-jumphost=vpcsubnet-ssh",
+        "--no-validate-config",
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = yaml.safe_load(_project_config_path(deployments_root).read_text(encoding="utf-8"))
+    by_id = {row["id"]: row for row in payload["infra"]["components"] if row.get("enabled")}
+    assert by_id["vm"]["inputs"]["network_id"] == "vpcnetwork-vm"
+    assert by_id["vm"]["inputs"]["subnet_id"] == "vpcsubnet-vm"
+    assert by_id["ssh-jumphost"]["inputs"]["network_id"] == "vpcnetwork-ssh"
+    assert by_id["ssh-jumphost"]["inputs"]["subnet_id"] == "vpcsubnet-ssh"
+
+
 def test_wizard_field_prompt_describes_q_as_previous_field() -> None:
     rendered = cli_module._wizard_field_prompt_suffix("infra.components[0].inputs.name")
 
     assert "enter q to go back" in rendered
     assert "qq quits wizard" in rendered
+
+
+def test_component_field_wizard_reports_skipped_component_phase(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    vm_entry = next(entry for entry in cli_module.component_entries("infra") if entry.id == "vm")
+    payload = {
+        "infra": {
+            "components": [
+                {
+                    "id": "vm",
+                    "instance_id": "vm",
+                    "enabled": True,
+                    "inputs": {},
+                }
+            ]
+        },
+        "apps": {"charts": []},
+    }
+    skipped_components: set[tuple[str, str, str]] = set()
+
+    monkeypatch.setattr(cli_module, "_wizard_continue_phase", lambda *_args, **_kwargs: False)
+
+    _updated_yaml, completed = cli_module._run_component_field_wizard(
+        config_yaml=yaml.safe_dump(payload, sort_keys=False),
+        selected_infra={"vm"},
+        selected_apps=set(),
+        infra_entries=(vm_entry,),
+        app_entries=(),
+        skipped_components=skipped_components,
+    )
+
+    assert completed is True
+    assert skipped_components == {("infra", "vm", "vm")}
 
 
 def _apps_enabled_map(payload: dict) -> dict[str, bool]:
@@ -1184,6 +1910,34 @@ def test_create_rejects_nested_deployments_root_with_managed_parent_gitignore(
     assert not _project_config_path(nested_root).exists()
 
 
+def test_create_rejects_missing_nested_deployments_root_with_managed_parent_gitignore(
+    tmp_path: Path,
+) -> None:
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir(parents=True, exist_ok=True)
+    _git_init(repo_root)
+
+    deployments_root = repo_root / "deployment-examples"
+    create_root = _create_non_interactive(
+        deployments_root,
+        "--infra",
+        "none",
+        "--app",
+        "none",
+        "--no-validate-config",
+    )
+    assert create_root.exit_code == 0, create_root.output
+
+    nested_root = deployments_root / "post-sales"
+    result = _create_non_interactive(nested_root)
+
+    assert result.exit_code == 1, result.output
+    normalized = _normalized_cli_output(result.output)
+    assert "nested under existing cxcli-managed deployments root" in normalized
+    assert not nested_root.exists()
+    assert not _project_config_path(nested_root).exists()
+
+
 def test_render_recreates_deployments_gitignore_in_git_repo(tmp_path: Path) -> None:
     repo_root = tmp_path / "repo"
     repo_root.mkdir(parents=True, exist_ok=True)
@@ -1594,7 +2348,7 @@ def test_create_force_overwrite_does_not_touch_other_projects(tmp_path: Path) ->
     assert (other_project_dir / "config.yaml").exists()
 
 
-def test_create_interactive_force_existing_project_still_requires_confirmation(
+def test_create_interactive_force_existing_project_skips_confirmation(
     tmp_path: Path,
 ) -> None:
     deployments_root = tmp_path / "deployments"
@@ -1604,26 +2358,31 @@ def test_create_interactive_force_existing_project_still_requires_confirmation(
     assert first.exit_code == 0, first.output
 
     config_path = _project_config_path(deployments_root)
-    original = config_path.read_text(encoding="utf-8")
-
     result = runner.invoke(
         app,
         [
             "create",
             str(deployments_root),
             "--force",
+            "--infra",
+            "none",
+            "--app",
+            "none",
             "--no-validate-sources",
         ],
-        input="tenant-123\nproject-456\nn\n",
+        input="tenant-123\nproject-456\nclient-forced\neu-north1\n\nn\n",
     )
 
     assert result.exit_code == 0, result.output
     assert "Existing project detected." in result.output
-    assert "Continue and overwrite the existing project folder from scratch?" in result.output
-    assert "(y/n, q/qq=stop wizard) [n]" in result.output
+    assert "Continue and overwrite the existing project folder from scratch?" not in result.output
+    assert "`--force` confirms the overwrite." in result.output
+    assert "(y/n, q/qq=stop wizard) [n]" not in result.output
     assert "Existing deployments root detected." not in result.output
-    assert "No changes applied." in result.output
-    assert config_path.read_text(encoding="utf-8") == original
+    assert "No changes applied." not in result.output
+    assert "Overwritten project:" in result.output
+    refreshed = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    assert refreshed["client_info"]["client_name"] == "client-forced"
 
 
 def test_create_interactive_overwrite_restarts_client_info_prompts_from_fresh_defaults(
@@ -2608,9 +3367,7 @@ def test_component_add_soperator_repairs_multi_target_onboarding_with_explicit_d
         ("cert-manager", "external-a"),
         ("cert-manager", "external-b"),
     ]
-    assert all(
-        component_instance_id(row) != "cert-manager" for row in payload["apps"]["charts"]
-    )
+    assert all(component_instance_id(row) != "cert-manager" for row in payload["apps"]["charts"])
 
 
 def test_component_add_soperator_onboarding_adds_dependency_for_external_target(
@@ -3571,7 +4328,6 @@ def test_create_does_not_write_when_early_exit_leaves_required_fields_missing(
     assert "Wizard stopped before all required fields were filled." in normalized
     assert "No project config or generated output was written." in normalized
     assert "infra.components[managed-postgresql].inputs.name is required" in result.output
-    assert "infra.components[managed-postgresql].inputs.network_id is required" in result.output
     assert "Ensured generated skeleton:" not in result.output
     assert not _project_config_path(deployments_root).exists()
     assert not (_project_dir(deployments_root) / "generated").exists()
@@ -4717,6 +5473,40 @@ def test_component_add_uses_selector_first_config_option(tmp_path: Path) -> None
     assert "Added infra components: vm" in result.output
 
 
+def test_component_add_accepts_scoped_vpc_flags_for_multiple_components(tmp_path: Path) -> None:
+    deployments_root = tmp_path / "deployments"
+    deployments_root.mkdir(parents=True, exist_ok=True)
+
+    created = _create_non_interactive(deployments_root, "--infra", "none", "--app", "none")
+    assert created.exit_code == 0, created.output
+
+    config_path = _project_config_path(deployments_root)
+    result = _component_add(
+        config_path,
+        "infra:vm@worker-vm",
+        "infra:ssh-jumphost@jump",
+        "--no-interactive",
+        "--network-id",
+        "infra:vm@worker-vm=vpcnetwork-vm",
+        "--subnet-id",
+        "infra:vm@worker-vm=vpcsubnet-vm",
+        "--network-id",
+        "infra:ssh-jumphost@jump=vpcnetwork-ssh",
+        "--subnet-id",
+        "infra:ssh-jumphost@jump=vpcsubnet-ssh",
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    by_instance = {
+        row["instance_id"]: row for row in payload["infra"]["components"] if row.get("enabled")
+    }
+    assert by_instance["worker-vm"]["inputs"]["network_id"] == "vpcnetwork-vm"
+    assert by_instance["worker-vm"]["inputs"]["subnet_id"] == "vpcsubnet-vm"
+    assert by_instance["jump"]["inputs"]["network_id"] == "vpcnetwork-ssh"
+    assert by_instance["jump"]["inputs"]["subnet_id"] == "vpcsubnet-ssh"
+
+
 def test_component_add_requires_config_option_instead_of_treating_selector_as_path(
     tmp_path: Path,
 ) -> None:
@@ -4891,6 +5681,38 @@ def test_component_add_interactive_repeated_infra_selector_prompts_with_next_ins
     ]
     assert [row.get("instance_id") for row in vm_rows] == ["vm", "vm-2"]
     assert [row.get("inputs", {}).get("name") for row in vm_rows] == ["vm", "vm-2"]
+
+
+def test_component_add_interactive_skipped_new_infra_fields_do_not_persist_row(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    deployments_root = tmp_path / "deployments"
+    deployments_root.mkdir(parents=True, exist_ok=True)
+
+    created = _create_non_interactive(deployments_root, "--infra", "vm")
+    assert created.exit_code == 0, created.output
+
+    def _fake_run_component_field_wizard(**kwargs):  # type: ignore[no-untyped-def]
+        skipped_components = kwargs["skipped_components"]
+        skipped_components.add(("infra", "vm", "vm-2"))
+        return kwargs["config_yaml"], True
+
+    monkeypatch.setattr(
+        cli_module,
+        "_run_component_field_wizard",
+        _fake_run_component_field_wizard,
+    )
+
+    config_path = _project_config_path(deployments_root)
+    original_config = config_path.read_text(encoding="utf-8")
+    result = _component_add(config_path, "infra:vm", input_text="\ny\n")
+
+    assert result.exit_code == 0, result.output
+    assert "Skipped newly added infra components: vm@vm-2" in result.output
+    assert "No component changes applied." in result.output
+    assert "Updated:" not in result.output
+    assert config_path.read_text(encoding="utf-8") == original_config
 
 
 def test_component_add_interactive_repeated_infra_selector_uses_prompted_instance_id(
@@ -5208,6 +6030,545 @@ def test_runtime_validation_does_not_force_collection_identity_to_scalar_name() 
         "apps": {"charts": []},
     }
     validate_dynamic_payload_structure(scalar_collection_payload)
+
+
+def test_runtime_validation_rejects_overlapping_planned_vpc_private_cidrs() -> None:
+    payload = {
+        "infra": {
+            "components": [
+                {
+                    "id": "vpc",
+                    "instance_id": "worker-vpc",
+                    "enabled": True,
+                    "inputs": {
+                        "parent_id": "project-123",
+                        "network": {
+                            "name": "worker-network",
+                            "ipv4_private_cidrs": ["172.16.0.0/12"],
+                        },
+                        "subnets": {
+                            "worker-a": {
+                                "name": "worker-a",
+                                "use_network_private_pools": False,
+                                "ipv4_private_cidrs": ["172.16.0.0/12"],
+                            },
+                            "worker-b": {
+                                "name": "worker-b",
+                                "use_network_private_pools": False,
+                                "ipv4_private_cidrs": ["172.16.0.0/13"],
+                            },
+                        },
+                    },
+                }
+            ]
+        },
+        "apps": {"charts": []},
+    }
+
+    with pytest.raises(ValueError, match="Nebius requires subnet CIDR blocks"):
+        validate_dynamic_payload_structure(payload)
+
+
+def test_runtime_validation_rejects_new_planned_vpc_without_network_private_cidr() -> None:
+    payload = {
+        "infra": {
+            "components": [
+                {
+                    "id": "vpc",
+                    "instance_id": "worker-vpc",
+                    "enabled": True,
+                    "inputs": {
+                        "parent_id": "project-123",
+                        "network": {"name": "worker-network"},
+                        "subnets": {"worker": {"name": "worker"}},
+                    },
+                }
+            ]
+        },
+        "apps": {"charts": []},
+    }
+
+    with pytest.raises(ValueError, match="network\\.ipv4_private_cidrs"):
+        validate_dynamic_payload_structure(payload)
+
+
+def test_runtime_validation_rejects_vpc_subnet_network_private_pool_inheritance() -> None:
+    payload = {
+        "infra": {
+            "components": [
+                {
+                    "id": "vpc",
+                    "instance_id": "worker-vpc",
+                    "enabled": True,
+                    "inputs": {
+                        "parent_id": "project-123",
+                        "network": {
+                            "name": "worker-network",
+                            "ipv4_private_cidrs": ["172.16.0.0/12"],
+                        },
+                        "subnets": {
+                            "worker": {
+                                "name": "worker",
+                                "use_network_private_pools": True,
+                            }
+                        },
+                    },
+                }
+            ]
+        },
+        "apps": {"charts": []},
+    }
+
+    with pytest.raises(ValueError, match="use_network_private_pools must be false"):
+        validate_dynamic_payload_structure(payload)
+
+
+def test_runtime_validation_rejects_non_mapping_vpc_subnet() -> None:
+    payload = {
+        "infra": {
+            "components": [
+                {
+                    "id": "vpc",
+                    "instance_id": "worker-vpc",
+                    "enabled": True,
+                    "inputs": {
+                        "parent_id": "project-123",
+                        "network": {
+                            "name": "worker-network",
+                            "ipv4_private_cidrs": ["172.16.0.0/12"],
+                        },
+                        "subnets": {"worker": "worker-subnet"},
+                    },
+                }
+            ]
+        },
+        "apps": {"charts": []},
+    }
+
+    with pytest.raises(ValueError, match="subnets\\.worker must be a mapping"):
+        validate_dynamic_payload_structure(payload)
+
+
+def test_runtime_validation_accepts_new_planned_vpc_with_network_private_pool_id() -> None:
+    payload = {
+        "infra": {
+            "components": [
+                {
+                    "id": "vpc",
+                    "instance_id": "worker-vpc",
+                    "enabled": True,
+                    "inputs": {
+                        "parent_id": "project-123",
+                        "network": {
+                            "name": "worker-network",
+                            "ipv4_private_pool_ids": ["vpcpool-private"],
+                        },
+                        "subnets": {
+                            "worker": {
+                                "name": "worker",
+                                "use_network_private_pools": False,
+                                "ipv4_private_cidrs": ["10.1.0.0/16"],
+                            }
+                        },
+                    },
+                }
+            ]
+        },
+        "apps": {"charts": []},
+    }
+
+    validate_dynamic_payload_structure(payload)
+
+
+def test_runtime_validation_accepts_new_planned_vpc_with_pool_id_and_extended_cidr() -> None:
+    payload = {
+        "infra": {
+            "components": [
+                {
+                    "id": "vpc",
+                    "instance_id": "worker-vpc",
+                    "enabled": True,
+                    "inputs": {
+                        "parent_id": "project-123",
+                        "network": {
+                            "name": "worker-network",
+                            "ipv4_private_pool_ids": ["vpcpool-private"],
+                            "ipv4_private_cidrs": ["192.168.0.0/16"],
+                        },
+                        "subnets": {
+                            "existing-pool-child": {
+                                "name": "existing-pool-child",
+                                "use_network_private_pools": False,
+                                "ipv4_private_cidrs": ["10.1.0.0/16"],
+                            },
+                            "extended-pool-child": {
+                                "name": "extended-pool-child",
+                                "use_network_private_pools": False,
+                                "ipv4_private_cidrs": ["192.168.1.0/24"],
+                            },
+                        },
+                    },
+                }
+            ]
+        },
+        "apps": {"charts": []},
+    }
+
+    validate_dynamic_payload_structure(payload)
+
+
+def test_runtime_validation_accepts_new_planned_vpc_with_public_pool_id() -> None:
+    payload = {
+        "infra": {
+            "components": [
+                {
+                    "id": "vpc",
+                    "instance_id": "worker-vpc",
+                    "enabled": True,
+                    "inputs": {
+                        "parent_id": "project-123",
+                        "network": {
+                            "name": "worker-network",
+                            "ipv4_private_cidrs": ["172.16.0.0/12"],
+                            "ipv4_public_pool_ids": ["vpcpool-public"],
+                        },
+                        "subnets": {
+                            "worker": {
+                                "name": "worker",
+                                "use_network_private_pools": False,
+                                "ipv4_private_cidrs": ["172.16.0.0/16"],
+                                "use_network_public_pools": True,
+                            }
+                        },
+                    },
+                }
+            ]
+        },
+        "apps": {"charts": []},
+    }
+
+    validate_dynamic_payload_structure(payload)
+
+
+def test_runtime_validation_accepts_new_planned_vpc_with_private_source_pool_id() -> None:
+    payload = {
+        "infra": {
+            "components": [
+                {
+                    "id": "vpc",
+                    "instance_id": "worker-vpc",
+                    "enabled": True,
+                    "inputs": {
+                        "parent_id": "project-123",
+                        "network": {
+                            "name": "worker-network",
+                            "ipv4_private_source_pool_id": "vpcpool-source",
+                            "ipv4_private_cidrs": ["172.16.0.0/12"],
+                        },
+                        "subnets": {
+                            "worker": {
+                                "name": "worker",
+                                "use_network_private_pools": False,
+                                "ipv4_private_cidrs": ["172.16.0.0/16"],
+                            }
+                        },
+                    },
+                }
+            ]
+        },
+        "apps": {"charts": []},
+    }
+
+    validate_dynamic_payload_structure(payload)
+
+
+def test_runtime_validation_rejects_private_source_pool_without_network_cidr() -> None:
+    payload = {
+        "infra": {
+            "components": [
+                {
+                    "id": "vpc",
+                    "instance_id": "worker-vpc",
+                    "enabled": True,
+                    "inputs": {
+                        "parent_id": "project-123",
+                        "network": {
+                            "name": "worker-network",
+                            "ipv4_private_source_pool_id": "vpcpool-source",
+                            "ipv4_private_pool_ids": ["vpcpool-private"],
+                        },
+                    },
+                }
+            ]
+        },
+        "apps": {"charts": []},
+    }
+
+    with pytest.raises(ValueError, match="ipv4_private_source_pool_id"):
+        validate_dynamic_payload_structure(payload)
+
+
+def test_runtime_validation_rejects_planned_subnet_outside_new_vpc_network_range() -> None:
+    payload = {
+        "infra": {
+            "components": [
+                {
+                    "id": "vpc",
+                    "instance_id": "worker-vpc",
+                    "enabled": True,
+                    "inputs": {
+                        "parent_id": "project-123",
+                        "network": {
+                            "name": "worker-network",
+                            "ipv4_private_cidrs": ["172.16.0.0/12"],
+                        },
+                        "subnets": {
+                            "worker": {
+                                "name": "worker",
+                                "use_network_private_pools": False,
+                                "ipv4_private_cidrs": ["192.168.0.0/16"],
+                            }
+                        },
+                    },
+                }
+            ]
+        },
+        "apps": {"charts": []},
+    }
+
+    with pytest.raises(ValueError, match="must fit inside the VPC network private CIDR range"):
+        validate_dynamic_payload_structure(payload)
+
+
+def test_runtime_validation_rejects_network_private_cidrs_for_existing_vpc_network() -> None:
+    payload = {
+        "infra": {
+            "components": [
+                {
+                    "id": "vpc",
+                    "instance_id": "worker-vpc",
+                    "enabled": True,
+                    "inputs": {
+                        "parent_id": "project-123",
+                        "network": {
+                            "existing_id": "vpcnetwork-live",
+                            "ipv4_private_cidrs": ["172.16.0.0/12"],
+                        },
+                    },
+                }
+            ]
+        },
+        "apps": {"charts": []},
+    }
+
+    with pytest.raises(ValueError, match="cannot be set when network\\.existing_id is set"):
+        validate_dynamic_payload_structure(payload)
+
+
+def test_runtime_validation_rejects_overlapping_planned_vpc_cidrs_for_same_live_network() -> None:
+    payload = {
+        "client_info": {
+            "client_name": "demo",
+            "nebius": {
+                "tenant_id": "tenant-123",
+                "project_id": "project-123",
+                "region_id": "eu-north1",
+            },
+            "notifications": {"email_enabled": False, "email": None},
+        },
+        "infra": {
+            "components": [
+                {
+                    "id": "vpc",
+                    "instance_id": "vpc-a",
+                    "enabled": True,
+                    "inputs": {
+                        "network": {"existing_id": "vpcnetwork-live"},
+                        "subnets": {
+                            "worker-a": {
+                                "name": "worker-a",
+                                "use_network_private_pools": False,
+                                "ipv4_private_cidrs": ["172.16.0.0/12"],
+                            }
+                        },
+                    },
+                },
+                {
+                    "id": "vpc",
+                    "instance_id": "vpc-b",
+                    "enabled": True,
+                    "inputs": {
+                        "network": {"existing_id": "vpcnetwork-live"},
+                        "subnets": {
+                            "worker-b": {
+                                "name": "worker-b",
+                                "use_network_private_pools": False,
+                                "ipv4_private_cidrs": ["172.16.0.0/13"],
+                            }
+                        },
+                    },
+                },
+            ]
+        },
+        "apps": {"charts": []},
+    }
+
+    with pytest.raises(ValueError, match="same VPC network"):
+        validate_dynamic_payload_structure(payload)
+
+
+def test_runtime_validation_allows_overlapping_planned_vpc_cidrs_for_different_live_networks() -> (
+    None
+):
+    payload = {
+        "client_info": {
+            "client_name": "demo",
+            "nebius": {
+                "tenant_id": "tenant-123",
+                "project_id": "project-123",
+                "region_id": "eu-north1",
+            },
+            "notifications": {"email_enabled": False, "email": None},
+        },
+        "infra": {
+            "components": [
+                {
+                    "id": "vpc",
+                    "instance_id": "vpc-a",
+                    "enabled": True,
+                    "inputs": {
+                        "network": {"existing_id": "vpcnetwork-a"},
+                        "subnets": {
+                            "worker-a": {
+                                "name": "worker-a",
+                                "use_network_private_pools": False,
+                                "ipv4_private_cidrs": ["172.16.0.0/12"],
+                            }
+                        },
+                    },
+                },
+                {
+                    "id": "vpc",
+                    "instance_id": "vpc-b",
+                    "enabled": True,
+                    "inputs": {
+                        "network": {"existing_id": "vpcnetwork-b"},
+                        "subnets": {
+                            "worker-b": {
+                                "name": "worker-b",
+                                "use_network_private_pools": False,
+                                "ipv4_private_cidrs": ["172.16.0.0/13"],
+                            }
+                        },
+                    },
+                },
+            ]
+        },
+        "apps": {"charts": []},
+    }
+
+    validate_dynamic_payload_structure(payload)
+
+
+def _vpc_binding_payload() -> dict:
+    return {
+        "infra": {
+            "components": [
+                {
+                    "id": "vpc",
+                    "instance_id": "worker-vpc",
+                    "enabled": True,
+                    "source": "../../platform-infra/modules/vpc",
+                    "inputs": {
+                        "parent_id": "project-123",
+                        "network": {
+                            "name": "worker-network",
+                            "ipv4_private_cidrs": ["172.16.0.0/12"],
+                        },
+                        "subnets": {
+                            "worker": {
+                                "name": "worker",
+                                "use_network_private_pools": False,
+                                "ipv4_private_cidrs": ["172.16.0.0/16"],
+                            }
+                        },
+                    },
+                },
+                {
+                    "id": "vm",
+                    "instance_id": "worker",
+                    "enabled": True,
+                    "source": "../../platform-infra/modules/vm",
+                    "inputs": {
+                        "parent_id": "project-123",
+                        "name": "worker",
+                    },
+                    "bindings": {
+                        "inputs.network_id": {
+                            "source_component": "vpc",
+                            "source_instance": "worker-vpc",
+                            "source_output": "network_id",
+                        },
+                        "inputs.subnet_id": {
+                            "source_component": "vpc",
+                            "source_instance": "worker-vpc",
+                            "source_output": "subnets",
+                            "key": "worker",
+                            "attribute": "id",
+                        },
+                    },
+                },
+            ]
+        },
+        "apps": {"charts": []},
+    }
+
+
+def _install_vpc_binding_output_discovery(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        component_sources,
+        "_discover_terraform_outputs",
+        lambda _source: (
+            ComponentOutput(
+                name="network_id",
+                kind="terraform_output",
+                source_path="network_id",
+                sensitive=False,
+            ),
+            ComponentOutput(
+                name="subnets",
+                kind="terraform_output",
+                source_path="subnets",
+                sensitive=False,
+            ),
+        ),
+    )
+    reset_component_sources_cache()
+    reset_component_entry_cache()
+
+
+def test_runtime_validation_accepts_row_level_vpc_bindings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_vpc_binding_output_discovery(monkeypatch)
+
+    validate_dynamic_payload_structure(_vpc_binding_payload())
+
+
+def test_runtime_validation_rejects_row_binding_literal_conflict() -> None:
+    payload = _vpc_binding_payload()
+    payload["infra"]["components"][1]["inputs"]["subnet_id"] = "vpcsubnet-live"
+
+    with pytest.raises(ValueError, match=r"bindings\.inputs\.subnet_id conflicts"):
+        validate_dynamic_payload_structure(payload)
+
+
+def test_runtime_validation_rejects_invalid_row_binding_attribute() -> None:
+    payload = _vpc_binding_payload()
+    payload["infra"]["components"][1]["bindings"]["inputs.subnet_id"]["attribute"] = "0id"
+
+    with pytest.raises(ValueError, match="attribute must be a simple attribute name"):
+        validate_dynamic_payload_structure(payload)
 
 
 def test_component_add_allows_multiple_mk8s_instances(tmp_path: Path) -> None:
@@ -6042,6 +7403,20 @@ def test_component_add_requeues_provider_dependent_module_fields(
             default=None,
         ),
         SimpleNamespace(
+            name="network_id",
+            required=True,
+            type_hint="string",
+            has_default=False,
+            default=None,
+        ),
+        SimpleNamespace(
+            name="subnet_id",
+            required=True,
+            type_hint="string",
+            has_default=False,
+            default=None,
+        ),
+        SimpleNamespace(
             name="platform",
             required=True,
             type_hint="string",
@@ -6070,6 +7445,11 @@ def test_component_add_requeues_provider_dependent_module_fields(
         provider_lookup,
     ):
         _ = entry, provider_lookup
+        if full_path_label.endswith(".inputs.network_id"):
+            return [cli_module.OptionChoice(value="vpcnetwork-1", label="default network")]
+        if full_path_label.endswith(".inputs.subnet_id"):
+            assert cli_module._read_payload_field(payload, "infra.components[0].inputs.network_id")
+            return [cli_module.OptionChoice(value="vpcsubnet-1", label="default subnet")]
         if full_path_label.endswith(".inputs.platform"):
             return [cli_module.OptionChoice(value="cpu-d3", label="cpu-d3")]
         if full_path_label.endswith(".inputs.preset"):
@@ -6085,6 +7465,10 @@ def test_component_add_requeues_provider_dependent_module_fields(
         provider_lookup,
     ):
         _ = payload, entry, provider_lookup
+        if full_path_label.endswith(".inputs.network_id"):
+            return {"vpcnetwork-1"}, ("project_networks",)
+        if full_path_label.endswith(".inputs.subnet_id"):
+            return {"vpcsubnet-1"}, ("project_subnets",)
         if full_path_label.endswith(".inputs.platform"):
             return {"cpu-d3"}, ("compute_platforms",)
         if full_path_label.endswith(".inputs.preset"):
@@ -6097,7 +7481,7 @@ def test_component_add_requeues_provider_dependent_module_fields(
     result = _component_add(
         config_path,
         "wireguard-gw",
-        input_text="wg-gw\ny\ny\n\n\n",
+        input_text="wg-gw\ny\ny\n\n\n\n\n",
     )
 
     assert result.exit_code == 0, result.output
@@ -6110,6 +7494,8 @@ def test_component_add_requeues_provider_dependent_module_fields(
     )
     assert wireguard["instance_id"] == "wg-gw"
     assert wireguard["inputs"]["name"] == "wg-gw"
+    assert wireguard["inputs"]["network_id"] == "vpcnetwork-1"
+    assert wireguard["inputs"]["subnet_id"] == "vpcsubnet-1"
     assert wireguard["inputs"]["platform"] == "cpu-d3"
     assert wireguard["inputs"]["preset"] == "4vcpu-16gb"
 

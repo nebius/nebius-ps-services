@@ -61,6 +61,10 @@ def test_node_group_helpers_skip_disabled_groups_and_coerce_values() -> None:
                     "platform": "gpu-h100-sxm",
                     "preset": "8gpu-128vcpu-1600gb",
                     "node_count": "-1",
+                    "autoscaling": {
+                        "min_node_count": "1",
+                        "max_node_count": "4",
+                    },
                     "gpu_cluster_key": "fabric-a",
                     "reservation": {"reservation_ids": ["cbg-1", ""]},
                     "node_labels": {"role": "worker"},
@@ -75,6 +79,8 @@ def test_node_group_helpers_skip_disabled_groups_and_coerce_values() -> None:
     assert groups[0].gpu is False
     assert groups[1].gpu is True
     assert groups[1].node_count is None
+    assert groups[1].autoscaling_min_node_count == 1
+    assert groups[1].autoscaling_max_node_count == 4
     assert groups[1].reservation_policy == "FORBID"
     assert groups[1].reservation_ids == ("cbg-1",)
     assert groups[1].node_labels == {"role": "worker"}

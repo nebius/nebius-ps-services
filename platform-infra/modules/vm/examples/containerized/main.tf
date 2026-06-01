@@ -2,6 +2,7 @@ module "vm" {
   source = "../.."
 
   parent_id      = "project-xxxxxxxx"
+  network_id     = "vpcnetwork-xxxxxxxx"
   subnet_id      = "vpcsubnet-xxxxxxxx"
   name           = "example-container-vm"
   platform       = "gpu-h200-sxm"

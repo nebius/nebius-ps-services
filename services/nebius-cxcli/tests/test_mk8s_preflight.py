@@ -6,18 +6,31 @@ import pytest
 
 from nebius_cxcli.mk8s_preflight import (
     has_mk8s_resource_name_preflight_targets,
-    validate_mk8s_network_preflight,
     validate_mk8s_resource_name_preflight,
+    validate_vpc_networking_preflight,
 )
 
 
-def _fake_subnet(pool_cidr: str) -> SimpleNamespace:
+def _fake_network(*, parent_id: str = "project-123") -> SimpleNamespace:
+    return SimpleNamespace(metadata=SimpleNamespace(parent_id=parent_id))
+
+
+def _fake_subnet(
+    pool_cidr: str,
+    *,
+    parent_id: str = "project-123",
+    network_id: str = "vpcnetwork-123",
+    cidrs_as_strings: bool = False,
+) -> SimpleNamespace:
+    pool_cidrs = [pool_cidr] if cidrs_as_strings else [SimpleNamespace(cidr=pool_cidr)]
     return SimpleNamespace(
+        metadata=SimpleNamespace(parent_id=parent_id),
         spec=SimpleNamespace(
+            network_id=network_id,
             ipv4_private_pools=SimpleNamespace(
                 pools=[
                     SimpleNamespace(
-                        cidrs=[SimpleNamespace(cidr=pool_cidr)],
+                        cidrs=pool_cidrs,
                     )
                 ]
             )
@@ -29,6 +42,7 @@ def _cpu_mk8s_inputs(*, service_cidrs: list[str] | None = None) -> dict:
     cluster = {
         "parent_id": "project-123",
         "cluster_name": "cluster-a",
+        "network_id": "vpcnetwork-123",
         "subnet_id": "vpcsubnet-123",
     }
     if service_cidrs is not None:
@@ -59,25 +73,89 @@ def _gpu_mk8s_inputs() -> dict:
     return inputs
 
 
-def test_validate_mk8s_network_preflight_rejects_single_pool_conflict(
+def _patch_vpc_clients(
     monkeypatch: pytest.MonkeyPatch,
+    *,
+    subnet_network_ids: dict[str, str] | None = None,
+    project_id: str = "project-123",
 ) -> None:
     class _FakeRequest:
+        def __init__(self, value: SimpleNamespace) -> None:
+            self._value = value
+
         def wait(self) -> SimpleNamespace:
-            return _fake_subnet("10.96.0.0/16")
+            return self._value
+
+    class _FakeNetworkServiceClient:
+        def __init__(self, sdk: object) -> None:
+            self.sdk = sdk
+
+        def get(self, request: object) -> _FakeRequest:
+            _ = request
+            return _FakeRequest(_fake_network(parent_id=project_id))
 
     class _FakeSubnetServiceClient:
         def __init__(self, sdk: object) -> None:
             self.sdk = sdk
 
         def get(self, request: object) -> _FakeRequest:
-            return _FakeRequest()
+            subnet_id = str(getattr(request, "id", "")).strip()
+            return _FakeRequest(
+                _fake_subnet(
+                    "10.96.0.0/12",
+                    parent_id=project_id,
+                    network_id=(subnet_network_ids or {}).get(subnet_id, "vpcnetwork-123"),
+                )
+            )
 
     class _FakeSDK:
         def sync_close(self) -> None:
             return
 
     monkeypatch.setattr("nebius_cxcli.mk8s_preflight.init_nebius_sdk", lambda **_: _FakeSDK())
+    monkeypatch.setattr(
+        "nebius_cxcli.mk8s_preflight.NetworkServiceClient",
+        _FakeNetworkServiceClient,
+    )
+    monkeypatch.setattr(
+        "nebius_cxcli.mk8s_preflight.SubnetServiceClient",
+        _FakeSubnetServiceClient,
+    )
+
+
+def test_validate_vpc_networking_preflight_rejects_single_pool_conflict(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _FakeRequest:
+        def __init__(self, value: SimpleNamespace) -> None:
+            self._value = value
+
+        def wait(self) -> SimpleNamespace:
+            return self._value
+
+    class _FakeNetworkServiceClient:
+        def __init__(self, sdk: object) -> None:
+            self.sdk = sdk
+
+        def get(self, request: object) -> _FakeRequest:
+            return _FakeRequest(_fake_network())
+
+    class _FakeSubnetServiceClient:
+        def __init__(self, sdk: object) -> None:
+            self.sdk = sdk
+
+        def get(self, request: object) -> _FakeRequest:
+            return _FakeRequest(_fake_subnet("10.96.0.0/16"))
+
+    class _FakeSDK:
+        def sync_close(self) -> None:
+            return
+
+    monkeypatch.setattr("nebius_cxcli.mk8s_preflight.init_nebius_sdk", lambda **_: _FakeSDK())
+    monkeypatch.setattr(
+        "nebius_cxcli.mk8s_preflight.NetworkServiceClient",
+        _FakeNetworkServiceClient,
+    )
     monkeypatch.setattr(
         "nebius_cxcli.mk8s_preflight.SubnetServiceClient",
         _FakeSubnetServiceClient,
@@ -106,29 +184,106 @@ def test_validate_mk8s_network_preflight_rejects_single_pool_conflict(
         "apps": {"charts": []},
     }
 
-    with pytest.raises(RuntimeError, match="MK8s network preflight failed"):
-        validate_mk8s_network_preflight(config)
+    with pytest.raises(RuntimeError, match="VPC networking preflight failed"):
+        validate_vpc_networking_preflight(config)
 
 
-def test_validate_mk8s_network_preflight_rejects_malformed_pool_cidr(
+def test_validate_vpc_networking_preflight_accepts_string_pool_cidrs(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     class _FakeRequest:
+        def __init__(self, value: SimpleNamespace) -> None:
+            self._value = value
+
         def wait(self) -> SimpleNamespace:
-            return _fake_subnet("not-a-cidr")
+            return self._value
+
+    class _FakeNetworkServiceClient:
+        def __init__(self, sdk: object) -> None:
+            self.sdk = sdk
+
+        def get(self, request: object) -> _FakeRequest:
+            return _FakeRequest(_fake_network())
 
     class _FakeSubnetServiceClient:
         def __init__(self, sdk: object) -> None:
             self.sdk = sdk
 
         def get(self, request: object) -> _FakeRequest:
-            return _FakeRequest()
+            return _FakeRequest(_fake_subnet("10.96.0.0/12", cidrs_as_strings=True))
 
     class _FakeSDK:
         def sync_close(self) -> None:
             return
 
     monkeypatch.setattr("nebius_cxcli.mk8s_preflight.init_nebius_sdk", lambda **_: _FakeSDK())
+    monkeypatch.setattr(
+        "nebius_cxcli.mk8s_preflight.NetworkServiceClient",
+        _FakeNetworkServiceClient,
+    )
+    monkeypatch.setattr(
+        "nebius_cxcli.mk8s_preflight.SubnetServiceClient",
+        _FakeSubnetServiceClient,
+    )
+    config = {
+        "version": "v1",
+        "client_info": {
+            "client_name": "client-a",
+            "nebius": {
+                "tenant_id": "tenant-123",
+                "project_id": "project-123",
+                "region_id": "us-central1",
+            },
+        },
+        "infra": {
+            "components": [
+                {
+                    "id": "mk8s",
+                    "enabled": True,
+                    "source": "../../platform-infra/modules/mk8s",
+                    "inputs": _cpu_mk8s_inputs(service_cidrs=["/20"]),
+                }
+            ]
+        },
+        "apps": {"charts": []},
+    }
+
+    validate_vpc_networking_preflight(config)
+
+
+def test_validate_vpc_networking_preflight_rejects_malformed_pool_cidr(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _FakeRequest:
+        def __init__(self, value: SimpleNamespace) -> None:
+            self._value = value
+
+        def wait(self) -> SimpleNamespace:
+            return self._value
+
+    class _FakeNetworkServiceClient:
+        def __init__(self, sdk: object) -> None:
+            self.sdk = sdk
+
+        def get(self, request: object) -> _FakeRequest:
+            return _FakeRequest(_fake_network())
+
+    class _FakeSubnetServiceClient:
+        def __init__(self, sdk: object) -> None:
+            self.sdk = sdk
+
+        def get(self, request: object) -> _FakeRequest:
+            return _FakeRequest(_fake_subnet("not-a-cidr"))
+
+    class _FakeSDK:
+        def sync_close(self) -> None:
+            return
+
+    monkeypatch.setattr("nebius_cxcli.mk8s_preflight.init_nebius_sdk", lambda **_: _FakeSDK())
+    monkeypatch.setattr(
+        "nebius_cxcli.mk8s_preflight.NetworkServiceClient",
+        _FakeNetworkServiceClient,
+    )
     monkeypatch.setattr(
         "nebius_cxcli.mk8s_preflight.SubnetServiceClient",
         _FakeSubnetServiceClient,
@@ -157,7 +312,7 @@ def test_validate_mk8s_network_preflight_rejects_malformed_pool_cidr(
     }
 
     with pytest.raises(RuntimeError, match="malformed pool CIDR 'not-a-cidr'"):
-        validate_mk8s_network_preflight(config)
+        validate_vpc_networking_preflight(config)
 
 
 def test_validate_mk8s_resource_name_preflight_rejects_existing_gpu_cluster(
@@ -381,14 +536,24 @@ def test_validate_mk8s_resource_name_preflight_accepts_nebius_not_found_request_
     validate_mk8s_resource_name_preflight(config)
 
 
-def test_validate_mk8s_network_preflight_falls_back_to_client_project_id(
+def test_validate_vpc_networking_preflight_falls_back_to_client_project_id(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     seen_parent_ids: list[str | None] = []
 
     class _FakeRequest:
+        def __init__(self, value: SimpleNamespace) -> None:
+            self._value = value
+
         def wait(self) -> SimpleNamespace:
-            return _fake_subnet("10.96.0.0/12")
+            return self._value
+
+    class _FakeNetworkServiceClient:
+        def __init__(self, sdk: object) -> None:
+            self.sdk = sdk
+
+        def get(self, request: object) -> _FakeRequest:
+            return _FakeRequest(_fake_network(parent_id="project-from-client-info"))
 
     class _FakeSubnetServiceClient:
         def __init__(self, sdk: object) -> None:
@@ -396,7 +561,12 @@ def test_validate_mk8s_network_preflight_falls_back_to_client_project_id(
 
         def get(self, request: object) -> _FakeRequest:
             _ = request
-            return _FakeRequest()
+            return _FakeRequest(
+                _fake_subnet(
+                    "10.96.0.0/12",
+                    parent_id="project-from-client-info",
+                )
+            )
 
     class _FakeSDK:
         def sync_close(self) -> None:
@@ -407,6 +577,10 @@ def test_validate_mk8s_network_preflight_falls_back_to_client_project_id(
         return _FakeSDK()
 
     monkeypatch.setattr("nebius_cxcli.mk8s_preflight.init_nebius_sdk", _fake_sdk)
+    monkeypatch.setattr(
+        "nebius_cxcli.mk8s_preflight.NetworkServiceClient",
+        _FakeNetworkServiceClient,
+    )
     monkeypatch.setattr(
         "nebius_cxcli.mk8s_preflight.SubnetServiceClient",
         _FakeSubnetServiceClient,
@@ -437,9 +611,239 @@ def test_validate_mk8s_network_preflight_falls_back_to_client_project_id(
         "apps": {"charts": []},
     }
 
-    validate_mk8s_network_preflight(config)
+    validate_vpc_networking_preflight(config)
 
-    assert seen_parent_ids == ["project-from-client-info"]
+    assert seen_parent_ids == ["project-from-client-info", "project-from-client-info"]
+
+
+def test_validate_vpc_networking_preflight_rejects_vm_subnet_network_mismatch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_vpc_clients(
+        monkeypatch,
+        subnet_network_ids={"vpcsubnet-123": "vpcnetwork-other"},
+    )
+    config = {
+        "version": "v1",
+        "client_info": {
+            "client_name": "client-a",
+            "nebius": {
+                "tenant_id": "tenant-123",
+                "project_id": "project-123",
+                "region_id": "us-central1",
+            },
+        },
+        "infra": {
+            "components": [
+                {
+                    "id": "vm",
+                    "enabled": True,
+                    "source": "../../platform-infra/modules/vm",
+                    "inputs": {
+                        "parent_id": "project-123",
+                        "network_id": "vpcnetwork-123",
+                        "subnet_id": "vpcsubnet-123",
+                    },
+                }
+            ]
+        },
+        "apps": {"charts": []},
+    }
+
+    with pytest.raises(RuntimeError, match="belongs to network vpcnetwork-other"):
+        validate_vpc_networking_preflight(config)
+
+
+def test_validate_vpc_networking_preflight_rejects_mk8s_node_group_subnet_mismatch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_vpc_clients(
+        monkeypatch,
+        subnet_network_ids={
+            "vpcsubnet-123": "vpcnetwork-123",
+            "vpcsubnet-node": "vpcnetwork-other",
+        },
+    )
+    inputs = _cpu_mk8s_inputs(service_cidrs=["/20"])
+    inputs["node_groups"]["cpu"]["subnet_id"] = "vpcsubnet-node"
+    config = {
+        "version": "v1",
+        "client_info": {
+            "client_name": "client-a",
+            "nebius": {
+                "tenant_id": "tenant-123",
+                "project_id": "project-123",
+                "region_id": "us-central1",
+            },
+        },
+        "infra": {
+            "components": [
+                {
+                    "id": "mk8s",
+                    "enabled": True,
+                    "source": "../../platform-infra/modules/mk8s",
+                    "inputs": inputs,
+                }
+            ]
+        },
+        "apps": {"charts": []},
+    }
+
+    with pytest.raises(RuntimeError, match="inputs.node_groups.cpu.subnet_id"):
+        validate_vpc_networking_preflight(config)
+
+
+def test_validate_vpc_networking_preflight_requires_explicit_network_interface_subnet(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_vpc_clients(monkeypatch)
+    inputs = _cpu_mk8s_inputs(service_cidrs=["/20"])
+    inputs["node_groups"]["cpu"]["network_interfaces"] = [{}]
+    config = {
+        "version": "v1",
+        "client_info": {
+            "client_name": "client-a",
+            "nebius": {
+                "tenant_id": "tenant-123",
+                "project_id": "project-123",
+                "region_id": "us-central1",
+            },
+        },
+        "infra": {
+            "components": [
+                {
+                    "id": "mk8s",
+                    "enabled": True,
+                    "source": "../../platform-infra/modules/mk8s",
+                    "inputs": inputs,
+                }
+            ]
+        },
+        "apps": {"charts": []},
+    }
+
+    with pytest.raises(RuntimeError, match=r"network_interfaces\[0\]\.subnet_id is required"):
+        validate_vpc_networking_preflight(config)
+
+
+def test_validate_vpc_networking_preflight_rejects_live_network_planned_subnet_mismatch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_vpc_clients(monkeypatch)
+    inputs = _cpu_mk8s_inputs(service_cidrs=["/20"])
+    inputs["cluster"].pop("subnet_id")
+    config = {
+        "version": "v1",
+        "client_info": {
+            "client_name": "client-a",
+            "nebius": {
+                "tenant_id": "tenant-123",
+                "project_id": "project-123",
+                "region_id": "us-central1",
+            },
+        },
+        "infra": {
+            "components": [
+                {
+                    "id": "mk8s",
+                    "instance_id": "cluster1",
+                    "enabled": True,
+                    "source": "../../platform-infra/modules/mk8s",
+                    "inputs": inputs,
+                    "bindings": {
+                        "inputs.cluster.subnet_id": {
+                            "source_component": "vpc",
+                            "source_instance": "cluster1-vpc",
+                            "source_output": "subnets",
+                            "key": "worker",
+                            "attribute": "id",
+                        }
+                    },
+                },
+                {
+                    "id": "vpc",
+                    "instance_id": "cluster1-vpc",
+                    "enabled": True,
+                    "source": "../../platform-infra/modules/vpc",
+                    "inputs": {
+                        "parent_id": "project-123",
+                        "network": {"existing_id": "vpcnetwork-other"},
+                        "subnets": {"worker": {"name": "worker"}},
+                    },
+                },
+            ]
+        },
+        "apps": {"charts": []},
+    }
+
+    with pytest.raises(RuntimeError, match="not selected network vpcnetwork-123"):
+        validate_vpc_networking_preflight(config)
+
+
+def test_validate_vpc_networking_preflight_uses_planned_subnet_cidr() -> None:
+    inputs = _cpu_mk8s_inputs(service_cidrs=["/16"])
+    inputs["cluster"].pop("network_id")
+    inputs["cluster"].pop("subnet_id")
+    config = {
+        "version": "v1",
+        "client_info": {
+            "client_name": "client-a",
+            "nebius": {
+                "tenant_id": "tenant-123",
+                "project_id": "project-123",
+                "region_id": "us-central1",
+            },
+        },
+        "infra": {
+            "components": [
+                {
+                    "id": "mk8s",
+                    "instance_id": "cluster1",
+                    "enabled": True,
+                    "source": "../../platform-infra/modules/mk8s",
+                    "inputs": inputs,
+                    "bindings": {
+                        "inputs.cluster.network_id": {
+                            "source_component": "vpc",
+                            "source_instance": "cluster1-vpc",
+                            "source_output": "network_id",
+                        },
+                        "inputs.cluster.subnet_id": {
+                            "source_component": "vpc",
+                            "source_instance": "cluster1-vpc",
+                            "source_output": "subnets",
+                            "key": "worker",
+                            "attribute": "id",
+                        },
+                    },
+                },
+                {
+                    "id": "vpc",
+                    "instance_id": "cluster1-vpc",
+                    "enabled": True,
+                    "source": "../../platform-infra/modules/vpc",
+                    "inputs": {
+                        "parent_id": "project-123",
+                        "network": {
+                            "name": "cluster1-network",
+                            "ipv4_private_cidrs": ["10.10.0.0/16"],
+                        },
+                        "subnets": {
+                            "worker": {
+                                "name": "worker",
+                                "use_network_private_pools": False,
+                                "ipv4_private_cidrs": ["10.10.0.0/24"],
+                            }
+                        },
+                    },
+                },
+            ]
+        },
+        "apps": {"charts": []},
+    }
+
+    with pytest.raises(RuntimeError, match="planned VPC subnet pool 10.10.0.0/24"):
+        validate_vpc_networking_preflight(config)
 
 
 def test_validate_mk8s_resource_name_preflight_checks_only_referenced_gpu_clusters(

@@ -6,6 +6,7 @@ import atexit
 import base64
 import copy
 import getpass
+import ipaddress
 import json
 import math
 import os
@@ -22,7 +23,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from collections import deque
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from contextlib import ExitStack, contextmanager, suppress
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
@@ -85,6 +86,7 @@ from .component_wiring import (
     resolve_component_output_value,
     resolve_input_binding_source,
     resolved_component_row,
+    row_input_bindings,
 )
 from .components import (
     COMPONENT_ID_PATTERN,
@@ -248,8 +250,8 @@ from .mk8s_node_groups import (
 )
 from .mk8s_preflight import (
     has_mk8s_resource_name_preflight_targets,
-    validate_mk8s_network_preflight,
     validate_mk8s_resource_name_preflight,
+    validate_vpc_networking_preflight,
 )
 from .mysterybox_eso import (
     EXTERNAL_SECRETS_APP_ID,
@@ -995,6 +997,50 @@ SUPPORTED_REGION_IDS: tuple[str, ...] = (
     "eu-north2",
     "uk-south1",
 )
+NEBIUS_DEFAULT_PRIVATE_POOL_CIDRS_BY_REGION: dict[str, str] = {
+    # Source: https://docs.nebius.com/vpc/addressing/available-addresses
+    "eu-north1": "10.0.0.0/13",
+    "eu-west1": "10.48.0.0/13",
+    "me-west1": "10.144.0.0/13",
+    "us-central1": "10.96.0.0/13",
+    "eu-north2": "10.24.0.0/13",
+    "uk-south1": "10.64.0.0/13",
+}
+_VPC_CUSTOM_PRIVATE_TEN_DOT_CIDR_PREFIXLEN = 13
+_VPC_CUSTOM_PRIVATE_TEN_DOT_CIDR_LIMIT = 5
+
+
+def _vpc_non_default_ten_dot_private_cidr_fallbacks() -> tuple[str, ...]:
+    documented_defaults = tuple(
+        ipaddress.ip_network(cidr, strict=True)
+        for cidr in NEBIUS_DEFAULT_PRIVATE_POOL_CIDRS_BY_REGION.values()
+    )
+    suggestions: list[str] = []
+    for network in ipaddress.ip_network("10.0.0.0/8", strict=True).subnets(
+        new_prefix=_VPC_CUSTOM_PRIVATE_TEN_DOT_CIDR_PREFIXLEN
+    ):
+        if any(network.overlaps(default_network) for default_network in documented_defaults):
+            continue
+        suggestions.append(str(network))
+        if len(suggestions) >= _VPC_CUSTOM_PRIVATE_TEN_DOT_CIDR_LIMIT:
+            break
+    return tuple(suggestions)
+
+
+_VPC_PARENT_EXTENSION_PRIVATE_CIDR_FALLBACKS: tuple[str, ...] = (
+    "172.16.0.0/12",
+    "192.168.0.0/16",
+)
+_VPC_CUSTOM_PRIVATE_CIDR_FALLBACKS: tuple[str, ...] = (
+    *_vpc_non_default_ten_dot_private_cidr_fallbacks(),
+    *_VPC_PARENT_EXTENSION_PRIVATE_CIDR_FALLBACKS,
+)
+_VPC_CUSTOM_PRIVATE_CIDR_SUGGESTIONS_BY_REGION: dict[str, tuple[str, ...]] = {
+    region_id: _VPC_CUSTOM_PRIVATE_CIDR_FALLBACKS for region_id in SUPPORTED_REGION_IDS
+}
+_VPC_SUBNET_CHILD_CIDR_SUGGESTION_LIMIT = 4
+_VPC_SUBNET_CHILD_LARGE_PARENT_PREFIXLEN = 16
+_VPC_SUBNET_CHILD_SMALL_PARENT_PREFIXLEN = 24
 NEBIUS_CI_SECRET_KEYS = [
     "NEBIUS_SA_ID",
     "NEBIUS_AUTH_PUBLIC_KEY_ID",
@@ -1033,6 +1079,13 @@ _SOPERATOR_SERVICE_ROLE_NODE_COUNT_FIELDS = (
     "controller_node_count",
     "login_node_count",
     "accounting_node_count",
+)
+_SOPERATOR_NODE_GROUP_AUTOSCALING_ROLES = (
+    "system",
+    "controller",
+    "login",
+    "accounting",
+    "worker",
 )
 _SOPERATOR_ONBOARDING_STORAGE_MODES = (
     "adopt-existing-storage",
@@ -1076,8 +1129,9 @@ class _WizardComponentOutcome:
 
 _DEPLOYMENTS_ROOT_ARGUMENT_HELP = (
     "Deployments root directory. Pass the folder that contains or will contain "
-    "<tenant-folder>/<project-folder>/config.yaml; any existing directory works. "
-    "Do not pass a nested directory under another cxcli-managed deployments root."
+    "<tenant-folder>/<project-folder>/config.yaml; create will make the root "
+    "directory when it does not exist. Do not pass a nested directory under "
+    "another cxcli-managed deployments root."
 )
 _CONFIG_YAML_ARGUMENT_HELP = (
     "Path to project config.yaml under the deployments root "
@@ -1126,8 +1180,9 @@ app = typer.Typer(
     add_completion=False,
     help=(
         "Nebius artifact generator and deployer. Target guide: create bootstraps one "
-        "name-based tenant/project folder from a deployments root directory and overwrites existing "
-        "resolved project folders only with confirmation; component list/add/remove use "
+        "name-based tenant/project folder from a deployments root directory, creating that "
+        "root when missing, and overwrites existing resolved project folders only with "
+        "confirmation unless --force is provided; component list/add/remove use "
         "--config CONFIG_YAML as the day-2 config.yaml editing surface; "
         "discover uses a deployment-scope directory; grafana exports dashboard JSON from a "
         "Grafana API or local JSON file and only edits component_sources.yaml with --attach; "
@@ -1535,12 +1590,17 @@ def _run_runtime_validation(
         phase_defs.extend(
             [
                 _ValidationPhase("strict-readiness", "Validate strict deployment readiness"),
-                _ValidationPhase("mk8s-preflight", "Validate MK8s network preflight"),
+                _ValidationPhase("vpc-preflight", "Validate VPC networking preflight"),
                 _ValidationPhase("quota-readiness", "Validate live Nebius quota/capacity"),
             ]
         )
     else:
-        phase_defs.append(_ValidationPhase("quota-readiness", "Check live Nebius quota/capacity"))
+        phase_defs.extend(
+            [
+                _ValidationPhase("vpc-preflight", "Validate VPC networking preflight"),
+                _ValidationPhase("quota-readiness", "Check live Nebius quota/capacity"),
+            ]
+        )
 
     validation_cache = _ValidationWorkCache()
     resolved_source_profile = resolve_component_sources_profile()
@@ -1571,6 +1631,7 @@ def _run_runtime_validation(
             lambda: rendered_module_sources(config, source_profile=resolved_source_profile),
         )
         if not strict:
+            progress.run("vpc-preflight", lambda: validate_vpc_networking_preflight(config))
             quota_report = progress.run(
                 "quota-readiness",
                 lambda: _warn_on_live_quota_issues(config, phase="validate"),
@@ -1584,7 +1645,7 @@ def _run_runtime_validation(
                     include_common_checks=False,
                 ),
             )
-            progress.run("mk8s-preflight", lambda: validate_mk8s_network_preflight(config))
+            progress.run("vpc-preflight", lambda: validate_vpc_networking_preflight(config))
             quota_report = progress.run(
                 "quota-readiness",
                 lambda: _raise_on_config_live_quota_issues(
@@ -1690,10 +1751,20 @@ def _relative_discover_target_for_ci(repo_root: Path, deployments_root: Path) ->
         ) from exc
 
 
+def _git_lookup_path(start: Path) -> Path:
+    lookup = start
+    if lookup.exists() and not lookup.is_dir():
+        lookup = lookup.parent
+    while not lookup.exists() and lookup != lookup.parent:
+        lookup = lookup.parent
+    return lookup
+
+
 def _try_git_root(start: Path) -> Path | None:
+    lookup = _git_lookup_path(start)
     try:
         result = subprocess.run(
-            ["git", "-C", str(start), "rev-parse", "--show-toplevel"],
+            ["git", "-C", str(lookup), "rev-parse", "--show-toplevel"],
             check=True,
             capture_output=True,
             text=True,
@@ -1714,8 +1785,10 @@ def _require_git_root(start: Path) -> Path:
     )
 
 
-def _validate_deployments_root_target(path: Path) -> None:
+def _validate_deployments_root_target(path: Path, *, allow_missing: bool = False) -> None:
     if not path.exists():
+        if allow_missing:
+            return
         raise RuntimeError(
             f"Target directory does not exist: {path}. "
             "Create an empty folder and pass that path to create, or pass an existing "
@@ -2631,6 +2704,474 @@ def _parse_component_value_overrides(
             raise RuntimeError(f"Duplicate {option_name} override for component '{component_id}'.")
         overrides[component_id] = value
     return overrides
+
+
+_SUBNET_ATTACHED_INFRA_COMPONENT_IDS = frozenset(
+    {"mk8s", "vm", "nfs", "wireguard-gw", "ssh-jumphost"}
+)
+_NETWORK_ONLY_INFRA_COMPONENT_IDS = frozenset({"managed-postgresql"})
+_NETWORK_ATTACHED_INFRA_COMPONENT_IDS = (
+    _SUBNET_ATTACHED_INFRA_COMPONENT_IDS | _NETWORK_ONLY_INFRA_COMPONENT_IDS
+)
+_PLANNED_BINDING_TOKEN_PREFIX = "planned:"
+
+
+def _parse_vpc_id_overrides(
+    *,
+    raw_values: list[str] | None,
+    option_name: str,
+) -> tuple[tuple[str, ...], dict[tuple[str, str | None], str]]:
+    bare_values: list[str] = []
+    scoped_values: dict[tuple[str, str | None], str] = {}
+    for token in _split_multi_value_tokens(raw_values):
+        if "=" not in token:
+            value = token.strip()
+            if not value:
+                raise RuntimeError(f"Invalid {option_name} value. Value cannot be empty.")
+            bare_values.append(value)
+            continue
+
+        selector_raw, value_raw = token.split("=", maxsplit=1)
+        selector = selector_raw.strip()
+        value = value_raw.strip()
+        if not selector or not value:
+            raise RuntimeError(
+                f"Invalid {option_name} value '{token}'. Expected '<infra-component-selector>=<id>'."
+            )
+        scope, body = _parse_scoped_component_selector(selector)
+        if scope not in {None, "infra"}:
+            raise RuntimeError(
+                f"Invalid {option_name} selector '{selector}'. VPC overrides apply only to infra components."
+            )
+        component_raw, separator, instance_raw = body.partition("@")
+        component_id = normalize_component_token(component_raw)
+        instance_id = normalize_component_token(instance_raw) if separator else ""
+        if not component_id:
+            raise RuntimeError(
+                f"Invalid {option_name} selector '{selector}'. Component id is required."
+            )
+        if instance_id and not INSTANCE_ID_PATTERN.fullmatch(instance_id):
+            raise RuntimeError(
+                f"Invalid {option_name} selector '{selector}'. Instance id must use lowercase letters, digits, and hyphens."
+            )
+        key = (component_id, instance_id or None)
+        if key in scoped_values:
+            raise RuntimeError(f"Duplicate {option_name} override for selector '{selector}'.")
+        scoped_values[key] = value
+
+    if len(bare_values) > 1:
+        raise RuntimeError(f"Specify {option_name} at most once without a component selector.")
+    if bare_values and scoped_values:
+        raise RuntimeError(f"Do not mix bare and scoped {option_name} values in one command.")
+    return tuple(bare_values), scoped_values
+
+
+@dataclass(frozen=True)
+class _PlannedBindingRef:
+    source_instance: str
+    source_output: str
+    key: str | None = None
+    attribute: str | None = None
+
+
+def _parse_planned_vpc_ref(value: str, *, option_name: str, field_name: str) -> _PlannedBindingRef:
+    token = value.strip()
+    if token.startswith(_PLANNED_BINDING_TOKEN_PREFIX):
+        token = token[len(_PLANNED_BINDING_TOKEN_PREFIX) :]
+    component_selector, separator, output_selector = token.partition(".")
+    component_raw, instance_separator, instance_raw = component_selector.partition("@")
+    component_id = normalize_component_token(component_raw)
+    instance_id = normalize_component_token(instance_raw) if instance_separator else ""
+    if component_id != "vpc" or not instance_separator or not instance_id:
+        raise RuntimeError(
+            f"Invalid {option_name} value '{value}'. Expected 'vpc@<vpc-instance>.<output>'."
+        )
+    if not INSTANCE_ID_PATTERN.fullmatch(instance_id):
+        raise RuntimeError(
+            f"Invalid {option_name} value '{value}'. VPC instance id must use lowercase letters, digits, and hyphens."
+        )
+    output_parts = [part.strip() for part in output_selector.split(".") if part.strip()]
+    if not separator or not output_parts:
+        raise RuntimeError(
+            f"Invalid {option_name} value '{value}'. Expected 'vpc@<vpc-instance>.<output>'."
+        )
+    output_name = output_parts[0].replace("-", "_").lower()
+    if field_name == "network_id":
+        if output_name != "network_id" or len(output_parts) != 1:
+            raise RuntimeError(
+                f"Invalid {option_name} value '{value}'. Network refs must use "
+                "'vpc@<vpc-instance>.network_id'."
+            )
+        return _PlannedBindingRef(source_instance=instance_id, source_output="network_id")
+    if output_name != "subnets" or len(output_parts) != 3:
+        raise RuntimeError(
+            f"Invalid {option_name} value '{value}'. Subnet refs must use "
+            "'vpc@<vpc-instance>.subnets.<subnet-key>.id'."
+        )
+    subnet_key = output_parts[1]
+    attribute = output_parts[2].replace("-", "_")
+    if not subnet_key or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", attribute):
+        raise RuntimeError(
+            f"Invalid {option_name} value '{value}'. Subnet key and attribute must be non-empty."
+        )
+    if attribute != "id":
+        raise RuntimeError(
+            f"Invalid {option_name} value '{value}'. Subnet refs for subnet_id must end in '.id'."
+        )
+    return _PlannedBindingRef(
+        source_instance=instance_id,
+        source_output="subnets",
+        key=subnet_key,
+        attribute=attribute,
+    )
+
+
+def _selected_infra_rows_for_vpc_override(
+    *,
+    payload: dict[str, Any],
+    selected_infra: set[str],
+    component_ids: frozenset[str],
+) -> list[dict[str, Any]]:
+    selected_tokens = {
+        normalize_component_token(item)
+        for item in selected_infra
+        if normalize_component_token(item)
+    }
+    rows: list[dict[str, Any]] = []
+    for row in _dynamic_enabled_infra_component_rows(payload):
+        component_id = component_type_id(row)
+        instance_id = component_instance_id(row)
+        if component_id not in component_ids or not instance_id:
+            continue
+        if (
+            selected_tokens
+            and instance_id not in selected_tokens
+            and component_id not in selected_tokens
+        ):
+            continue
+        rows.append(row)
+    return rows
+
+
+def _vpc_override_selector_example(component_id: str = "vm", instance_id: str = "worker") -> str:
+    return f"infra:{component_id}@{instance_id}=<id>"
+
+
+def _resolve_vpc_override_target(
+    *,
+    rows: Sequence[dict[str, Any]],
+    selector: tuple[str, str | None],
+    option_name: str,
+) -> dict[str, Any]:
+    component_id, instance_id = selector
+    matches = [
+        row
+        for row in rows
+        if component_type_id(row) == component_id
+        and (instance_id is None or component_instance_id(row) == instance_id)
+    ]
+    if len(matches) == 1:
+        return matches[0]
+    if len(matches) > 1:
+        available = ", ".join(
+            sorted(
+                component_instance_label(component_type_id(row), component_instance_id(row))
+                for row in matches
+            )
+        )
+        raise RuntimeError(
+            f"{option_name} selector 'infra:{component_id}' matches multiple enabled infra rows. "
+            f"Use '<component-id>@<resource-name>'. Available rows: {available}"
+        )
+    selector_label = (
+        component_instance_label(component_id, instance_id)
+        if instance_id
+        else f"infra:{component_id}"
+    )
+    applicable = ", ".join(
+        sorted(
+            component_instance_label(component_type_id(row), component_instance_id(row))
+            for row in rows
+        )
+    )
+    raise RuntimeError(
+        f"{option_name} selector '{selector_label}' does not match a selected applicable infra component."
+        + (f" Applicable rows: {applicable}" if applicable else "")
+    )
+
+
+def _vpc_field_path(
+    *,
+    payload: dict[str, Any],
+    row: Mapping[str, Any],
+    field_name: str,
+) -> PayloadPath:
+    component_id = component_type_id(row)
+    instance_id = component_instance_id(row)
+    component_path = _dynamic_infra_component_path(
+        payload,
+        component_id,
+        instance_id=instance_id,
+    )
+    if component_path is None:
+        raise RuntimeError(
+            f"Could not locate infra component '{component_instance_label(component_id, instance_id)}' in config payload."
+        )
+    if component_id == "mk8s":
+        return component_path + ("inputs", "cluster", field_name)
+    return component_path + ("inputs", field_name)
+
+
+def _vpc_binding_target_path(row: Mapping[str, Any], field_name: str) -> str:
+    if component_type_id(row) == "mk8s":
+        return f"inputs.cluster.{field_name}"
+    return f"inputs.{field_name}"
+
+
+def _vpc_field_has_binding(
+    *,
+    payload: dict[str, Any],
+    row: Mapping[str, Any],
+    field_name: str,
+) -> bool:
+    component_id = component_type_id(row)
+    instance_id = component_instance_id(row)
+    component_path = _dynamic_infra_component_path(
+        payload,
+        component_id,
+        instance_id=instance_id,
+    )
+    if component_path is None:
+        return False
+    component_node = _get_payload_value(payload, component_path)
+    if not isinstance(component_node, Mapping):
+        return False
+    bindings = component_node.get("bindings")
+    return isinstance(bindings, Mapping) and _vpc_binding_target_path(row, field_name) in bindings
+
+
+def _set_vpc_field(
+    *,
+    payload: dict[str, Any],
+    row: Mapping[str, Any],
+    field_name: str,
+    value: str,
+) -> None:
+    if _vpc_field_has_binding(payload=payload, row=row, field_name=field_name):
+        raise RuntimeError(
+            f"{_format_payload_path(_vpc_field_path(payload=payload, row=row, field_name=field_name))} "
+            "cannot use a literal ID because a planned ref binding is already set."
+        )
+    _set_payload_value_creating_containers(
+        payload,
+        _vpc_field_path(payload=payload, row=row, field_name=field_name),
+        value,
+    )
+
+
+def _set_vpc_binding(
+    *,
+    payload: dict[str, Any],
+    row: Mapping[str, Any],
+    field_name: str,
+    binding_ref: _PlannedBindingRef,
+) -> None:
+    field_path = _vpc_field_path(payload=payload, row=row, field_name=field_name)
+    existing_value = _read_payload_field(payload, _format_payload_path(field_path))
+    if _has_required_prompt_value(existing_value, type_hint="string"):
+        raise RuntimeError(
+            f"{_format_payload_path(field_path)} cannot use a planned ref because a literal value is already set."
+        )
+    target_path = _vpc_binding_target_path(row, field_name)
+    component_path = field_path[:3]
+    component_node = _get_payload_value(payload, component_path)
+    if not isinstance(component_node, dict):
+        raise RuntimeError("Generated payload is missing the target infra component mapping.")
+    bindings = component_node.setdefault("bindings", {})
+    if not isinstance(bindings, dict):
+        raise RuntimeError(f"{_format_payload_path(component_path)}.bindings must be a mapping.")
+    spec = {
+        "source_component": "vpc",
+        "source_instance": binding_ref.source_instance,
+        "source_output": binding_ref.source_output,
+    }
+    if binding_ref.key is not None and binding_ref.attribute is not None:
+        spec["key"] = binding_ref.key
+        spec["attribute"] = binding_ref.attribute
+    existing_binding = bindings.get(target_path)
+    if existing_binding is not None and existing_binding != spec:
+        raise RuntimeError(
+            f"{_format_payload_path(component_path)}.bindings.{target_path} already references a different source."
+        )
+    bindings[target_path] = spec
+
+
+def _apply_vpc_id_overrides_for_field(
+    *,
+    payload: dict[str, Any],
+    selected_infra: set[str],
+    raw_values: list[str] | None,
+    option_name: str,
+    field_name: str,
+    component_ids: frozenset[str],
+) -> None:
+    bare_values, scoped_values = _parse_vpc_id_overrides(
+        raw_values=raw_values,
+        option_name=option_name,
+    )
+    if not bare_values and not scoped_values:
+        return
+    rows = _selected_infra_rows_for_vpc_override(
+        payload=payload,
+        selected_infra=selected_infra,
+        component_ids=component_ids,
+    )
+    if bare_values:
+        if len(rows) != 1:
+            available = ", ".join(
+                sorted(
+                    component_instance_label(component_type_id(row), component_instance_id(row))
+                    for row in rows
+                )
+            )
+            raise RuntimeError(
+                f"Bare {option_name} is valid only when exactly one applicable infra component is selected. "
+                f"Pass scoped values such as --{option_name.lstrip('-')} {_vpc_override_selector_example()}. "
+                + (
+                    f"Selected applicable rows: {available}"
+                    if available
+                    else "No applicable rows are selected."
+                )
+            )
+        _set_vpc_field(payload=payload, row=rows[0], field_name=field_name, value=bare_values[0])
+        return
+
+    for selector, value in scoped_values.items():
+        row = _resolve_vpc_override_target(
+            rows=rows,
+            selector=selector,
+            option_name=option_name,
+        )
+        _set_vpc_field(payload=payload, row=row, field_name=field_name, value=value)
+
+
+def _apply_vpc_ref_overrides_for_field(
+    *,
+    payload: dict[str, Any],
+    selected_infra: set[str],
+    raw_values: list[str] | None,
+    option_name: str,
+    field_name: str,
+    component_ids: frozenset[str],
+) -> None:
+    bare_values, scoped_values = _parse_vpc_id_overrides(
+        raw_values=raw_values,
+        option_name=option_name,
+    )
+    if not bare_values and not scoped_values:
+        return
+    rows = _selected_infra_rows_for_vpc_override(
+        payload=payload,
+        selected_infra=selected_infra,
+        component_ids=component_ids,
+    )
+    if bare_values:
+        if len(rows) != 1:
+            available = ", ".join(
+                sorted(
+                    component_instance_label(component_type_id(row), component_instance_id(row))
+                    for row in rows
+                )
+            )
+            raise RuntimeError(
+                f"Bare {option_name} is valid only when exactly one applicable infra component is selected. "
+                f"Pass scoped values such as --{option_name.lstrip('-')} "
+                f"infra:vm@worker="
+                f"{'vpc@worker-vpc.network_id' if field_name == 'network_id' else 'vpc@worker-vpc.subnets.worker.id'}. "
+                + (
+                    f"Selected applicable rows: {available}"
+                    if available
+                    else "No applicable rows are selected."
+                )
+            )
+        _set_vpc_binding(
+            payload=payload,
+            row=rows[0],
+            field_name=field_name,
+            binding_ref=_parse_planned_vpc_ref(
+                bare_values[0],
+                option_name=option_name,
+                field_name=field_name,
+            ),
+        )
+        return
+
+    for selector, value in scoped_values.items():
+        row = _resolve_vpc_override_target(
+            rows=rows,
+            selector=selector,
+            option_name=option_name,
+        )
+        _set_vpc_binding(
+            payload=payload,
+            row=row,
+            field_name=field_name,
+            binding_ref=_parse_planned_vpc_ref(
+                value,
+                option_name=option_name,
+                field_name=field_name,
+            ),
+        )
+
+
+def _apply_vpc_id_overrides(
+    *,
+    payload: dict[str, Any],
+    selected_infra: set[str],
+    network_ids: list[str] | None,
+    subnet_ids: list[str] | None,
+) -> None:
+    _apply_vpc_id_overrides_for_field(
+        payload=payload,
+        selected_infra=selected_infra,
+        raw_values=network_ids,
+        option_name="--network-id",
+        field_name="network_id",
+        component_ids=frozenset(_NETWORK_ATTACHED_INFRA_COMPONENT_IDS),
+    )
+    _apply_vpc_id_overrides_for_field(
+        payload=payload,
+        selected_infra=selected_infra,
+        raw_values=subnet_ids,
+        option_name="--subnet-id",
+        field_name="subnet_id",
+        component_ids=frozenset(_SUBNET_ATTACHED_INFRA_COMPONENT_IDS),
+    )
+
+
+def _apply_vpc_ref_overrides(
+    *,
+    payload: dict[str, Any],
+    selected_infra: set[str],
+    network_refs: list[str] | None,
+    subnet_refs: list[str] | None,
+) -> None:
+    _apply_vpc_ref_overrides_for_field(
+        payload=payload,
+        selected_infra=selected_infra,
+        raw_values=network_refs,
+        option_name="--network-ref",
+        field_name="network_id",
+        component_ids=frozenset(_NETWORK_ATTACHED_INFRA_COMPONENT_IDS),
+    )
+    _apply_vpc_ref_overrides_for_field(
+        payload=payload,
+        selected_infra=selected_infra,
+        raw_values=subnet_refs,
+        option_name="--subnet-ref",
+        field_name="subnet_id",
+        component_ids=frozenset(_SUBNET_ATTACHED_INFRA_COMPONENT_IDS),
+    )
 
 
 def _apply_app_release_overrides(
@@ -3683,7 +4224,10 @@ def _soperator_onboarding_component_add_target_refs(
             continue
         requested_target = normalize_component_token(target.requested_instance_id)
         if requested_target:
-            if requested_target in external_targets or requested_target in existing_onboarding_targets:
+            if (
+                requested_target in external_targets
+                or requested_target in existing_onboarding_targets
+            ):
                 refs.add(requested_target)
             continue
         refs.update(existing_onboarding_targets)
@@ -4319,9 +4863,7 @@ def _materialize_soperator_render_only_values(payload: dict[str, Any]) -> bool:
         _materialize_soperator_guided_sssd_values(values)
         _remove_guided_sssd_helper(values)
         _remove_internal_activechecks_partition(values)
-        activechecks_enabled = (
-            _mapping_path_value(values, "soperator-activechecks.enabled") is True
-        )
+        activechecks_enabled = _mapping_path_value(values, "soperator-activechecks.enabled") is True
         if activechecks_enabled:
             partition = _soperator_profile_activechecks_ready_partition(
                 profile_by_target.get(target_ref, {})
@@ -4395,6 +4937,34 @@ def _positive_int(value: Any, *, default: int) -> int:
     except (TypeError, ValueError):
         return default
     return parsed if parsed > 0 else default
+
+
+def _required_nonnegative_int(value: Any, *, field: str) -> int:
+    if isinstance(value, bool) or value is None:
+        raise ValueError(f"{field} must be an integer >= 0")
+    if isinstance(value, int):
+        if value >= 0:
+            return value
+        raise ValueError(f"{field} must be an integer >= 0")
+    if isinstance(value, float):
+        if value.is_integer() and value >= 0:
+            return int(value)
+        raise ValueError(f"{field} must be an integer >= 0")
+    try:
+        parsed = int(str(value).strip())
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{field} must be an integer >= 0") from exc
+    if parsed < 0:
+        raise ValueError(f"{field} must be an integer >= 0")
+    return parsed
+
+
+def _config_bool(value: Any, *, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    return _non_empty_text(value).lower() in {"1", "true", "yes", "on"}
 
 
 def _required_profile_positive_int(value: Any, *, field: str) -> int:
@@ -5089,6 +5659,72 @@ def _soperator_profile_node_group_count_input(
     return _positive_int(raw_value, default=default_node_count)
 
 
+def _soperator_profile_autoscaling_input(
+    *,
+    inputs: Mapping[str, Any],
+    raw_group: Mapping[str, Any],
+    default_min_node_count: int,
+    default_max_node_count: int,
+    min_max_node_count: int = 0,
+) -> dict[str, int] | None:
+    autoscaling_input = _non_empty_text(raw_group.get("autoscaling_input"))
+    if not autoscaling_input:
+        return None
+    raw_value = _mapping_path_value(inputs, autoscaling_input)
+    if not isinstance(raw_value, Mapping):
+        return None
+    if not _config_bool(raw_value.get("enabled"), default=False):
+        return None
+    min_default = max(0, default_min_node_count)
+    max_default = max(min_default, default_max_node_count)
+    min_node_count = (
+        min_default
+        if raw_value.get("min_node_count") is None
+        else _required_nonnegative_int(
+            raw_value.get("min_node_count"),
+            field=f"{autoscaling_input}.min_node_count",
+        )
+    )
+    max_node_count = (
+        max_default
+        if raw_value.get("max_node_count") is None
+        else _required_nonnegative_int(
+            raw_value.get("max_node_count"),
+            field=f"{autoscaling_input}.max_node_count",
+        )
+    )
+    if max_node_count < min_node_count:
+        raise ValueError(
+            f"{autoscaling_input}.max_node_count must be greater than or equal to "
+            f"{autoscaling_input}.min_node_count"
+        )
+    if max_node_count < min_max_node_count:
+        raise ValueError(
+            f"{autoscaling_input}.max_node_count must be at least {min_max_node_count}"
+        )
+    return {
+        "min_node_count": min_node_count,
+        "max_node_count": max_node_count,
+    }
+
+
+def _soperator_set_node_group_scale(
+    group: dict[str, Any],
+    *,
+    node_count: int,
+    autoscaling: Mapping[str, Any] | None,
+) -> None:
+    if autoscaling:
+        group.pop("node_count", None)
+        group["autoscaling"] = {
+            "min_node_count": int(autoscaling["min_node_count"]),
+            "max_node_count": int(autoscaling["max_node_count"]),
+        }
+        return
+    group.pop("autoscaling", None)
+    group["node_count"] = node_count
+
+
 def _soperator_profile_node_group_defaults(
     profile_node_groups: Mapping[str, Any],
 ) -> dict[str, Any]:
@@ -5100,6 +5736,7 @@ def _soperator_profile_node_group_defaults(
         group = copy.deepcopy(to_plain_data(raw_group))
         if isinstance(group, dict):
             group.pop("node_count_input", None)
+            group.pop("autoscaling_input", None)
         materialized[group_key] = group
     return materialized
 
@@ -5116,14 +5753,26 @@ def _soperator_apply_profile_node_group_count_inputs(
         group = node_groups.get(group_key)
         if isinstance(group, dict):
             group.pop("node_count_input", None)
+            group.pop("autoscaling_input", None)
         node_count = _soperator_profile_node_group_count_input(
             inputs=inputs,
             raw_group=raw_group,
         )
-        if node_count is None:
-            continue
         if isinstance(group, dict):
-            group["node_count"] = node_count
+            default_node_count = _positive_int(raw_group.get("node_count"), default=1)
+            scale_node_count = node_count if node_count is not None else default_node_count
+            autoscaling = _soperator_profile_autoscaling_input(
+                inputs=inputs,
+                raw_group=raw_group,
+                default_min_node_count=scale_node_count,
+                default_max_node_count=scale_node_count,
+                min_max_node_count=1,
+            )
+            _soperator_set_node_group_scale(
+                group,
+                node_count=scale_node_count,
+                autoscaling=autoscaling,
+            )
 
 
 def _soperator_node_group_filter(
@@ -5442,11 +6091,7 @@ def _soperator_fit_nodeset_resources_to_group(
                 node_config["static"] = _soperator_cpu_node_config_static(cpu_millicores)
         return
 
-    if (
-        cpu_millicores is not None
-        and current_cpu is not None
-        and current_cpu > cpu_millicores
-    ):
+    if cpu_millicores is not None and current_cpu is not None and current_cpu > cpu_millicores:
         slurmd_resources["cpu"] = _soperator_format_cpu_millicores(
             max(1000, int(cpu_millicores * 0.75))
         )
@@ -5454,9 +6099,7 @@ def _soperator_fit_nodeset_resources_to_group(
     memory_mib = resources.get("memory_mib")
     current_memory = _soperator_parse_memory_mib(slurmd_resources.get("memory"))
     if memory_mib is not None and current_memory is not None and current_memory > memory_mib:
-        slurmd_resources["memory"] = _soperator_format_memory_mib(
-            max(1024, int(memory_mib * 0.75))
-        )
+        slurmd_resources["memory"] = _soperator_format_memory_mib(max(1024, int(memory_mib * 0.75)))
 
     # Keep the legacy whole-node fallback for managed profile presets that do
     # not expose allocatable data.
@@ -5794,12 +6437,20 @@ def _materialize_soperator_mapping_chart_values(
                     (
                         group
                         for group in iter_mk8s_node_groups(inputs)
-                        if group.key == group_key and group.node_count is not None
+                        if group.key == group_key
+                        and (
+                            group.node_count is not None
+                            or group.autoscaling_max_node_count is not None
+                        )
                     ),
                     None,
                 )
                 if node_group is not None:
-                    nodeset["replicas"] = node_group.node_count
+                    nodeset["replicas"] = (
+                        node_group.node_count
+                        if node_group.node_count is not None
+                        else node_group.autoscaling_max_node_count
+                    )
                 selector_expression = _soperator_node_group_selector_expression(inputs, group_key)
                 if (
                     selector_expression.get("operator") == "In"
@@ -5954,6 +6605,15 @@ def _materialize_soperator_worker_node_groups(
         )
         if total_nodes <= 0:
             total_nodes = default_total_nodes
+        autoscaling = _soperator_profile_autoscaling_input(
+            inputs=inputs,
+            raw_group=raw_worker,
+            default_min_node_count=min(default_total_nodes, total_nodes),
+            default_max_node_count=total_nodes,
+        )
+        desired_total_nodes = autoscaling["max_node_count"] if autoscaling else total_nodes
+        if autoscaling is None and desired_total_nodes <= 0:
+            desired_total_nodes = default_total_nodes
 
         max_nodes_per_group = _required_profile_positive_int(
             raw_worker.get("max_nodes_per_group"),
@@ -5965,13 +6625,22 @@ def _materialize_soperator_worker_node_groups(
             default_nodes_per_group=default_nodes_per_group,
             max_nodes_per_group=max_nodes_per_group,
         )
-        shard_count = max(1, (total_nodes + nodes_per_group - 1) // nodes_per_group)
+        shard_count = max(1, (desired_total_nodes + nodes_per_group - 1) // nodes_per_group)
         desired_counts: dict[str, int] = {}
+        desired_autoscaling: dict[str, dict[str, int]] = {}
+        remaining_min_nodes = autoscaling["min_node_count"] if autoscaling else 0
         for index in range(shard_count):
-            remaining = total_nodes - (index * nodes_per_group)
+            remaining = desired_total_nodes - (index * nodes_per_group)
             shard_size = min(nodes_per_group, remaining)
             group_key = key_prefix if shard_count == 1 else f"{key_prefix}-{index}"
             desired_counts[group_key] = shard_size
+            if autoscaling:
+                shard_min = min(shard_size, max(0, remaining_min_nodes))
+                remaining_min_nodes -= shard_min
+                desired_autoscaling[group_key] = {
+                    "min_node_count": shard_min,
+                    "max_node_count": shard_size,
+                }
 
         base_group = raw_worker.get("node_group")
         base_group = copy.deepcopy(base_group) if isinstance(base_group, Mapping) else {}
@@ -5994,7 +6663,18 @@ def _materialize_soperator_worker_node_groups(
             if not rebuild:
                 for group_key, desired_count in desired_counts.items():
                     group = node_groups.get(group_key)
-                    if not isinstance(group, dict) or group.get("node_count") != desired_count:
+                    expected_autoscaling = desired_autoscaling.get(group_key)
+                    if not isinstance(group, dict):
+                        rebuild = True
+                        break
+                    if expected_autoscaling:
+                        if (
+                            group.get("autoscaling") != expected_autoscaling
+                            or group.get("node_count") is not None
+                        ):
+                            rebuild = True
+                            break
+                    elif group.get("node_count") != desired_count:
                         rebuild = True
                         break
             if rebuild:
@@ -6011,7 +6691,11 @@ def _materialize_soperator_worker_node_groups(
                             and current_gpu_cluster_key in gpu_clusters
                         ):
                             group.pop("gpu_cluster_key", None)
-                        group.setdefault("node_count", desired_count)
+                        _soperator_set_node_group_scale(
+                            group,
+                            node_count=desired_count,
+                            autoscaling=desired_autoscaling.get(group_key),
+                        )
                         _materialize_soperator_node_group(
                             group_key=group_key,
                             group=group,
@@ -6027,13 +6711,16 @@ def _materialize_soperator_worker_node_groups(
                     **base_group,
                     "nodeset_name": nodeset_name,
                     "workload": _non_empty_text(raw_worker.get("workload")) or "worker",
-                    "node_count": shard_size,
                     "gpu": bool(raw_worker.get("gpu", True)),
                     "jail": bool(raw_worker.get("jail", True)),
                 },
             )
             if isinstance(group, dict):
-                group.setdefault("node_count", shard_size)
+                _soperator_set_node_group_scale(
+                    group,
+                    node_count=shard_size,
+                    autoscaling=desired_autoscaling.get(group_key),
+                )
                 _materialize_soperator_node_group(
                     group_key=group_key,
                     group=group,
@@ -6063,7 +6750,8 @@ def _materialize_soperator_mk8s_profile(
         _soperator_prune_stale_profile_node_groups(inputs=inputs, profile=profile)
         _soperator_prune_stale_profile_gpu_clusters(inputs=inputs, profile=profile)
     if existing_mode or (
-        explicit_mapping
+        not replace_profile_managed_groups
+        and explicit_mapping
         and _soperator_has_external_node_groups(
             inputs=inputs,
             profile=profile,
@@ -6367,18 +7055,19 @@ def _materialize_soperator_component_defaults(payload: dict[str, Any]) -> bool:
             values.setdefault("partitionProfile", _default_soperator_partition_profile_name())
             values.setdefault("topologyProfile", _default_soperator_topology_profile_name())
             soperator_values_by_target[target_ref] = values
-            generated_node_group_mapping_by_target[target_ref] = (
-                _soperator_node_group_mapping_matches_generated_profile(
-                    values=values,
-                    inputs=mk8s_inputs_by_target.get(target_ref, {}),
-                )
+            generated_mapping = _soperator_node_group_mapping_matches_generated_profile(
+                values=values,
+                inputs=mk8s_inputs_by_target.get(target_ref, {}),
             )
+            generated_node_group_mapping_by_target[target_ref] = generated_mapping
             if not _soperator_values_node_group_mapping(values):
                 inferred_mapping = _soperator_infer_node_group_mapping(
                     inputs=mk8s_inputs_by_target.get(target_ref, {}),
                     profile=profile_by_target.get(target_ref, {}),
                 )
                 _soperator_set_node_group_mapping(values, inferred_mapping)
+                if inferred_mapping:
+                    generated_node_group_mapping_by_target[target_ref] = True
         if row != before:
             changed = True
 
@@ -6827,7 +7516,10 @@ def _align_new_infra_instance_ids_with_resource_names(
             )
         if app_id == _SOPERATOR_APP_ID:
             values = row.get("values")
-            if isinstance(values, dict) and str(values.get("clusterName", "")).strip() == target_ref:
+            if (
+                isinstance(values, dict)
+                and str(values.get("clusterName", "")).strip() == target_ref
+            ):
                 values["clusterName"] = new_target_ref
     deploy = payload.get("deploy")
     targets = deploy.get("targets") if isinstance(deploy, Mapping) else None
@@ -7141,6 +7833,62 @@ def _remove_deploy_target_rows(
     if len(retained) != len(targets):
         deploy_node["targets"] = retained
     return removed_refs
+
+
+def _remove_skipped_component_add_infra_rows(
+    *,
+    payload: dict[str, Any],
+    skipped_components: set[tuple[ComponentScope, str, str]],
+    added_infra_labels: Sequence[str],
+    infra_entries: tuple[ComponentEntry, ...],
+) -> tuple[list[str], list[str]]:
+    added_label_set = set(added_infra_labels)
+    if not skipped_components or not added_label_set:
+        return [], []
+
+    skipped_by_label = {
+        component_instance_label(component_id, instance_id): (component_id, instance_id)
+        for scope, component_id, instance_id in skipped_components
+        if scope == "infra"
+        and component_instance_label(component_id, instance_id) in added_label_set
+    }
+    if not skipped_by_label:
+        return [], []
+
+    infra_lookup = {entry.id: entry for entry in infra_entries}
+    removed_infra_labels: list[str] = []
+    removed_cluster_targets: set[str] = set()
+    for label in added_infra_labels:
+        identity = skipped_by_label.get(label)
+        if identity is None:
+            continue
+        component_id, instance_id = identity
+        removed = _remove_component_instance_row(
+            payload=payload,
+            scope="infra",
+            component_id=component_id,
+            instance_id=instance_id,
+        )
+        if removed is None:
+            continue
+        removed_infra_labels.append(label)
+        removed_entry = infra_lookup.get(component_id)
+        if removed_entry is not None and removed_entry.handoff is not None:
+            removed_cluster_targets.add(instance_id)
+
+    removed_app_labels: list[str] = []
+    if removed_cluster_targets:
+        removed_app_labels.extend(
+            _remove_target_scoped_app_rows(
+                payload=payload,
+                target_instance_ids=removed_cluster_targets,
+            )
+        )
+        _remove_deploy_target_rows(
+            payload=payload,
+            target_instance_ids=removed_cluster_targets,
+        )
+    return removed_infra_labels, removed_app_labels
 
 
 def _materialize_single_target_app_bindings(payload: dict[str, Any]) -> bool:
@@ -8156,12 +8904,22 @@ def _resolve_dynamic_field_choices(
             full_path_label=full_path_label,
             args=args,
         )
-        return provider_lookup.resolve(
+        choices = provider_lookup.resolve(
             provider=provider,
             args=args,
             payload=payload,
             field_path=full_path_label,
         )
+        if provider in {"project_networks", "project_subnets"}:
+            return _combined_vpc_choices(
+                payload=payload,
+                entry=entry,
+                full_path_label=full_path_label,
+                provider=provider,
+                args=args,
+                live_choices=choices,
+            )
+        return choices
 
     # Legacy `sources` array format
     sources = spec.get("sources")
@@ -8224,6 +8982,745 @@ def _provider_sources_for_field(
 ) -> tuple[str, ...]:
     specs = _provider_source_specs_for_field(entry=entry, full_path_label=full_path_label)
     return tuple(dict.fromkeys(provider for provider, _args in specs))
+
+
+def _planned_vpc_rows(payload: dict[str, Any]) -> list[tuple[dict[str, Any], str, dict[str, Any]]]:
+    infra = payload.get("infra")
+    components = infra.get("components") if isinstance(infra, Mapping) else None
+    if not isinstance(components, list):
+        return []
+    rows: list[tuple[dict[str, Any], str, dict[str, Any]]] = []
+    for row in components:
+        if not isinstance(row, dict) or not bool(row.get("enabled", False)):
+            continue
+        if component_type_id(row) != "vpc":
+            continue
+        instance_id = component_instance_id(row)
+        if not instance_id:
+            continue
+        inputs = row.get("inputs")
+        if not isinstance(inputs, dict):
+            inputs = {}
+        rows.append((row, instance_id, inputs))
+    return rows
+
+
+def _planned_network_choice(instance_id: str, inputs: Mapping[str, Any]) -> OptionChoice:
+    network = inputs.get("network")
+    name = ""
+    if isinstance(network, Mapping):
+        name = _non_empty_text(network.get("name"))
+    label_name = name or instance_id
+    return OptionChoice(
+        value=f"{_PLANNED_BINDING_TOKEN_PREFIX}vpc@{instance_id}.network_id",
+        label=f"planned: {label_name}  (infra:vpc@{instance_id})",
+        metadata={"planned": True, "component": "vpc", "instance_id": instance_id},
+    )
+
+
+def _planned_subnet_choices_for_vpc(
+    *,
+    instance_id: str,
+    inputs: Mapping[str, Any],
+) -> list[OptionChoice]:
+    subnets = inputs.get("subnets")
+    if not isinstance(subnets, Mapping):
+        return []
+    choices: list[OptionChoice] = []
+    for subnet_key, subnet_value in subnets.items():
+        key = str(subnet_key).strip()
+        if not key:
+            continue
+        name = ""
+        cidrs: list[str] = []
+        if isinstance(subnet_value, Mapping):
+            name = _non_empty_text(subnet_value.get("name"))
+            raw_cidrs = subnet_value.get("ipv4_private_cidrs")
+            if isinstance(raw_cidrs, list):
+                cidrs = [str(cidr).strip() for cidr in raw_cidrs if str(cidr).strip()]
+        suffix = f" ({', '.join(cidrs)})" if cidrs else ""
+        label_name = name or key
+        choices.append(
+            OptionChoice(
+                value=(f"{_PLANNED_BINDING_TOKEN_PREFIX}vpc@{instance_id}.subnets.{key}.id"),
+                label=f"planned: {label_name}  (infra:vpc@{instance_id}.subnets.{key}){suffix}",
+                metadata={
+                    "planned": True,
+                    "component": "vpc",
+                    "instance_id": instance_id,
+                    "subnet_key": key,
+                },
+            )
+        )
+    return choices
+
+
+def _combined_vpc_choices(
+    *,
+    payload: dict[str, Any],
+    entry: ComponentEntry,
+    full_path_label: str,
+    provider: str,
+    args: Mapping[str, Any],
+    live_choices: list[OptionChoice],
+) -> list[OptionChoice]:
+    choices = list(live_choices)
+    seen = {choice.value for choice in choices}
+    planned: list[OptionChoice] = []
+    if provider == "project_networks":
+        include_planned_networks = not (
+            entry.scope == "infra"
+            and entry.id == "vpc"
+            and full_path_label.endswith(".inputs.network.existing_id")
+        )
+        if include_planned_networks:
+            for _row, instance_id, inputs in _planned_vpc_rows(payload):
+                network = inputs.get("network")
+                existing_id = ""
+                if isinstance(network, Mapping):
+                    existing_id = _non_empty_text(network.get("existing_id"))
+                if existing_id:
+                    continue
+                planned.append(_planned_network_choice(instance_id, inputs))
+    elif provider == "project_subnets":
+        network_id_path = _non_empty_text(args.get("network_id_path"))
+        selected_network = (
+            _non_empty_text(_read_payload_field(payload, network_id_path))
+            if network_id_path
+            else _non_empty_text(args.get("network_id"))
+        )
+        if selected_network:
+            selected_planned_ref: _PlannedBindingRef | None = None
+            if selected_network.startswith(_PLANNED_BINDING_TOKEN_PREFIX):
+                try:
+                    selected_planned_ref = _parse_planned_vpc_ref(
+                        selected_network,
+                        option_name="planned network choice",
+                        field_name="network_id",
+                    )
+                except RuntimeError:
+                    selected_planned_ref = None
+            for _row, instance_id, inputs in _planned_vpc_rows(payload):
+                network = inputs.get("network")
+                existing_id = ""
+                if isinstance(network, Mapping):
+                    existing_id = _non_empty_text(network.get("existing_id"))
+                if selected_planned_ref is not None:
+                    if instance_id != selected_planned_ref.source_instance:
+                        continue
+                elif existing_id != selected_network:
+                    continue
+                planned.extend(
+                    _planned_subnet_choices_for_vpc(instance_id=instance_id, inputs=inputs)
+                )
+    for choice in planned:
+        if choice.value in seen:
+            continue
+        choices.append(choice)
+        seen.add(choice.value)
+    return choices
+
+
+def _private_ipv4_network(value: str) -> ipaddress.IPv4Network | None:
+    try:
+        network = ipaddress.ip_network(value, strict=False)
+    except ValueError:
+        return None
+    if network.version != 4:
+        return None
+    return cast(ipaddress.IPv4Network, network)
+
+
+def _vpc_default_private_pool_networks() -> tuple[ipaddress.IPv4Network, ...]:
+    networks: list[ipaddress.IPv4Network] = []
+    for cidr in NEBIUS_DEFAULT_PRIVATE_POOL_CIDRS_BY_REGION.values():
+        network = _private_ipv4_network(cidr)
+        if network is not None:
+            networks.append(network)
+    return tuple(networks)
+
+
+def _vpc_region_default_private_pool(region_id: str) -> str:
+    return NEBIUS_DEFAULT_PRIVATE_POOL_CIDRS_BY_REGION.get(region_id, "")
+
+
+def _vpc_default_private_pool_overlap(cidr: str) -> tuple[str, str] | None:
+    network = _private_ipv4_network(cidr)
+    if network is None:
+        return None
+    for region_id, default_cidr in NEBIUS_DEFAULT_PRIVATE_POOL_CIDRS_BY_REGION.items():
+        default_network = _private_ipv4_network(default_cidr)
+        if default_network is not None and network.overlaps(default_network):
+            return region_id, default_cidr
+    return None
+
+
+def _vpc_existing_private_cidrs(subnets: Mapping[str, object]) -> tuple[str, ...]:
+    cidrs: list[str] = []
+    for subnet in subnets.values():
+        if not isinstance(subnet, Mapping):
+            continue
+        raw_cidrs = subnet.get("ipv4_private_cidrs")
+        if isinstance(raw_cidrs, list):
+            cidrs.extend(str(cidr).strip() for cidr in raw_cidrs if str(cidr).strip())
+    return tuple(cidrs)
+
+
+def _vpc_first_private_cidr_overlap(
+    cidrs: Sequence[str],
+    *,
+    existing_cidrs: Sequence[str] = (),
+) -> tuple[str, str] | None:
+    seen_networks: list[tuple[str, ipaddress.IPv4Network]] = []
+    for existing_cidr in existing_cidrs:
+        existing_network = _private_ipv4_network(existing_cidr)
+        if existing_network is not None:
+            seen_networks.append((existing_cidr, existing_network))
+    for cidr in cidrs:
+        network = _private_ipv4_network(cidr)
+        if network is None:
+            continue
+        for seen_cidr, seen_network in seen_networks:
+            if network.overlaps(seen_network):
+                return cidr, seen_cidr
+        seen_networks.append((cidr, network))
+    return None
+
+
+def _vpc_first_private_cidr_outside_parent(
+    cidrs: Sequence[str],
+    *,
+    parent_cidrs: Sequence[str],
+) -> tuple[str, str] | None:
+    parent_networks = [
+        network for cidr in parent_cidrs if (network := _private_ipv4_network(cidr)) is not None
+    ]
+    if not parent_networks:
+        return None
+    for cidr in cidrs:
+        network = _private_ipv4_network(cidr)
+        if network is None:
+            continue
+        if not any(network.subnet_of(parent_network) for parent_network in parent_networks):
+            return cidr, ", ".join(str(parent_network) for parent_network in parent_networks)
+    return None
+
+
+def _vpc_private_cidrs_outside_parent(
+    cidrs: Sequence[str],
+    *,
+    parent_cidrs: Sequence[str],
+) -> tuple[str, ...]:
+    parent_networks = [
+        network for cidr in parent_cidrs if (network := _private_ipv4_network(cidr)) is not None
+    ]
+    if not parent_networks:
+        return ()
+    outside: list[str] = []
+    for cidr in cidrs:
+        network = _private_ipv4_network(cidr)
+        if network is None:
+            continue
+        if not any(network.subnet_of(parent_network) for parent_network in parent_networks):
+            outside.append(cidr)
+    return tuple(outside)
+
+
+def _vpc_resource_pool_ids(resource: object, field_name: str) -> tuple[str, ...]:
+    spec = getattr(resource, "spec", None)
+    pools = getattr(getattr(spec, field_name, None), "pools", []) or []
+    ids: list[str] = []
+    for pool in pools:
+        pool_id = _non_empty_text(getattr(pool, "id", None) or getattr(pool, "pool_id", None))
+        if pool_id:
+            ids.append(pool_id)
+    return tuple(dict.fromkeys(ids))
+
+
+def _vpc_pool_cidrs(resource: object) -> tuple[str, ...]:
+    cidrs: list[str] = []
+    for source in (getattr(resource, "spec", None), getattr(resource, "status", None)):
+        for raw in getattr(source, "cidrs", []) or []:
+            cidr = _non_empty_text(getattr(raw, "cidr", None) or raw)
+            if cidr:
+                cidrs.append(cidr)
+    return tuple(dict.fromkeys(cidrs))
+
+
+def _vpc_enum_matches(
+    value: object,
+    *,
+    accepted_names: set[str],
+    accepted_numbers: set[int],
+) -> bool:
+    raw = getattr(value, "value", value)
+    name = str(getattr(value, "name", "") or "").strip().upper()
+    text = str(value or "").strip().upper()
+    if not name and not text:
+        return True
+    if name in accepted_names:
+        return True
+    if text in accepted_names or any(text.endswith(f".{item}") for item in accepted_names):
+        return True
+    with suppress(TypeError, ValueError):
+        return int(raw) in accepted_numbers
+    return False
+
+
+def _wait_nebius_operation(operation: object, *, timeout_seconds: int = 120) -> None:
+    sync_wait = getattr(operation, "sync_wait", None)
+    if callable(sync_wait):
+        sync_wait(timeout=timeout_seconds)
+
+
+def _load_vpc_extension_sdk_bindings() -> Mapping[str, Any]:
+    try:
+        from nebius.api.nebius.common.v1 import ResourceMetadata
+        from nebius.api.nebius.vpc.v1 import (
+            AddressBlockState,
+            GetNetworkRequest,
+            GetPoolRequest,
+            IpVersion,
+            IpVisibility,
+            NetworkServiceClient,
+            PoolCidr,
+            PoolServiceClient,
+            PoolSpec,
+            UpdatePoolRequest,
+        )
+        from nebius.base.fieldmask import Mask
+    except Exception as exc:  # pragma: no cover - import guard
+        raise RuntimeError("Nebius VPC SDK bindings are required to extend VPC networks.") from exc
+
+    return {
+        "AddressBlockState": AddressBlockState,
+        "ResourceMetadata": ResourceMetadata,
+        "GetNetworkRequest": GetNetworkRequest,
+        "GetPoolRequest": GetPoolRequest,
+        "IpVersion": IpVersion,
+        "IpVisibility": IpVisibility,
+        "NetworkServiceClient": NetworkServiceClient,
+        "PoolCidr": PoolCidr,
+        "PoolServiceClient": PoolServiceClient,
+        "PoolSpec": PoolSpec,
+        "UpdatePoolRequest": UpdatePoolRequest,
+        "Mask": Mask,
+    }
+
+
+def _extend_existing_vpc_parent_private_cidrs(
+    *,
+    project_id: str,
+    network_id: str,
+    cidrs: Sequence[str],
+) -> tuple[str, ...]:
+    requested_cidrs = tuple(dict.fromkeys(str(cidr).strip() for cidr in cidrs if str(cidr).strip()))
+    if not requested_cidrs:
+        return ()
+    project_id = _non_empty_text(project_id)
+    network_id = _non_empty_text(network_id)
+    if not project_id:
+        raise RuntimeError("project_id is required to extend a VPC network private pool")
+    if not network_id:
+        raise RuntimeError("network_id is required to extend a VPC network private pool")
+
+    sdk_bindings = _load_vpc_extension_sdk_bindings()
+    AddressBlockState = sdk_bindings["AddressBlockState"]
+    ResourceMetadata = sdk_bindings["ResourceMetadata"]
+    GetNetworkRequest = sdk_bindings["GetNetworkRequest"]
+    GetPoolRequest = sdk_bindings["GetPoolRequest"]
+    IpVersion = sdk_bindings["IpVersion"]
+    IpVisibility = sdk_bindings["IpVisibility"]
+    NetworkServiceClient = sdk_bindings["NetworkServiceClient"]
+    PoolCidr = sdk_bindings["PoolCidr"]
+    PoolServiceClient = sdk_bindings["PoolServiceClient"]
+    PoolSpec = sdk_bindings["PoolSpec"]
+    UpdatePoolRequest = sdk_bindings["UpdatePoolRequest"]
+    Mask = sdk_bindings["Mask"]
+
+    sdk = init_nebius_sdk(
+        parent_id=project_id,
+        endpoint=_non_empty_text(os.environ.get("NEBIUS_ENDPOINT")) or None,
+        context="VPC network private-pool extension",
+        prefer_operator_auth=True,
+    )
+    try:
+        network_client = NetworkServiceClient(sdk)
+        pool_client = PoolServiceClient(sdk)
+        with suppress_expected_refresh_logs():
+            network = network_client.get(GetNetworkRequest(id=network_id)).wait()
+
+        metadata = getattr(network, "metadata", None)
+        network_parent_id = _non_empty_text(getattr(metadata, "parent_id", None))
+        if network_parent_id and network_parent_id != project_id:
+            raise RuntimeError(
+                f"VPC network '{network_id}' belongs to project '{network_parent_id}', not '{project_id}'."
+            )
+        private_pool_ids = list(_vpc_resource_pool_ids(network, "ipv4_private_pools"))
+        if not private_pool_ids:
+            raise RuntimeError(
+                f"VPC network '{network_id}' has no attached private pools to extend."
+            )
+        current_parent_cidrs: list[str] = []
+        attached_private_pools: list[tuple[str, object]] = []
+        for pool_id in private_pool_ids:
+            try:
+                pool = pool_client.get(GetPoolRequest(id=pool_id)).wait()
+            except Exception as exc:
+                raise RuntimeError(
+                    f"Could not inspect attached VPC private pool '{pool_id}' before "
+                    f"extending network '{network_id}': {exc}"
+                ) from exc
+            current_parent_cidrs.extend(_vpc_pool_cidrs(pool))
+            attached_private_pools.append((pool_id, pool))
+        current_parent_cidrs = list(dict.fromkeys(current_parent_cidrs))
+        current_parent_networks = [
+            parent_network
+            for current_cidr in current_parent_cidrs
+            if (parent_network := _private_ipv4_network(current_cidr)) is not None
+        ]
+        if not current_parent_networks:
+            raise RuntimeError(
+                f"VPC network '{network_id}' has no resolvable attached private pool CIDRs "
+                "to extend safely."
+            )
+
+        cidrs_to_add: list[str] = []
+        for cidr in requested_cidrs:
+            requested_network = _private_ipv4_network(cidr)
+            if requested_network is None:
+                raise RuntimeError(f"'{cidr}' is not a valid IPv4 CIDR.")
+            if any(requested_network.subnet_of(parent) for parent in current_parent_networks):
+                continue
+            overlapping_parent = next(
+                (parent for parent in current_parent_networks if requested_network.overlaps(parent)),
+                None,
+            )
+            if overlapping_parent is not None:
+                raise RuntimeError(
+                    f"{cidr} overlaps existing VPC network private CIDR {overlapping_parent}. "
+                    "Choose a non-overlapping parent extension CIDR."
+                )
+            cidrs_to_add.append(cidr)
+            current_parent_cidrs.append(cidr)
+            current_parent_networks.append(requested_network)
+
+        if cidrs_to_add:
+            target_pool_id, target_pool = attached_private_pools[0]
+            target_metadata = getattr(target_pool, "metadata", None)
+            target_spec = getattr(target_pool, "spec", None)
+            target_pool_name = _non_empty_text(getattr(target_metadata, "name", None))
+            target_resource_version = int(
+                getattr(target_metadata, "resource_version", 0) or 0
+            )
+            target_pool_cidrs = list(dict.fromkeys(_vpc_pool_cidrs(target_pool)))
+            updated_pool_cidrs = list(dict.fromkeys([*target_pool_cidrs, *cidrs_to_add]))
+
+            cidr_entries = []
+            by_cidr: dict[str, object] = {}
+            for raw_cidr in getattr(target_spec, "cidrs", []) or []:
+                cidr_text = _non_empty_text(getattr(raw_cidr, "cidr", None) or raw_cidr)
+                if cidr_text and cidr_text not in by_cidr:
+                    by_cidr[cidr_text] = raw_cidr
+            for cidr in updated_pool_cidrs:
+                raw_cidr = by_cidr.get(cidr)
+                entry_kwargs: dict[str, object] = {"cidr": cidr}
+                state = getattr(raw_cidr, "state", None)
+                if state is not None:
+                    entry_kwargs["state"] = state
+                elif cidr in cidrs_to_add:
+                    entry_kwargs["state"] = AddressBlockState.AVAILABLE
+                max_mask_length = getattr(raw_cidr, "max_mask_length", None)
+                if max_mask_length:
+                    entry_kwargs["max_mask_length"] = max_mask_length
+                cidr_entries.append(PoolCidr(**entry_kwargs))
+
+            metadata_kwargs: dict[str, object] = {
+                "id": target_pool_id,
+                "parent_id": project_id,
+                "resource_version": target_resource_version,
+            }
+            if target_pool_name:
+                metadata_kwargs["name"] = target_pool_name
+
+            version = getattr(target_spec, "version", None)
+            if not _vpc_enum_matches(
+                version,
+                accepted_names={"IPV4"},
+                accepted_numbers={1},
+            ):
+                version = IpVersion.IPV4
+            visibility = getattr(target_spec, "visibility", None)
+            if not _vpc_enum_matches(
+                visibility,
+                accepted_names={"PRIVATE"},
+                accepted_numbers={1},
+            ):
+                visibility = IpVisibility.PRIVATE
+            spec_kwargs: dict[str, object] = {
+                "version": version,
+                "visibility": visibility,
+                "cidrs": cidr_entries,
+            }
+            source_pool_id = _non_empty_text(getattr(target_spec, "source_pool_id", None))
+            if source_pool_id:
+                spec_kwargs["source_pool_id"] = source_pool_id
+
+            request = UpdatePoolRequest(
+                metadata=ResourceMetadata(**metadata_kwargs),
+                spec=PoolSpec(**spec_kwargs),
+            )
+            request.set_mask(Mask.unmarshal("spec.cidrs"))
+            with suppress_expected_refresh_logs():
+                try:
+                    operation = pool_client.update(request).wait()
+                    _wait_nebius_operation(operation)
+                except Exception as exc:
+                    raise RuntimeError(
+                        f"Failed to extend attached VPC private pool '{target_pool_id}' "
+                        f"for network '{network_id}': {exc}"
+                    ) from exc
+
+        return tuple(dict.fromkeys(current_parent_cidrs))
+    except Exception as exc:
+        if isinstance(exc, RuntimeError):
+            raise
+        raise RuntimeError(
+            f"Failed to extend VPC network '{network_id}' private pools: {exc}"
+        ) from exc
+    finally:
+        with suppress(Exception):
+            sdk.sync_close()
+
+
+def _vpc_custom_private_cidr_suggestions(
+    *,
+    region_id: str,
+    existing_cidrs: Sequence[str] = (),
+    parent_cidrs: Sequence[str] = (),
+    raw_suggestions: Sequence[str] | None = None,
+) -> tuple[str, ...]:
+    documented_defaults = _vpc_default_private_pool_networks()
+    existing_networks = [
+        network for cidr in existing_cidrs if (network := _private_ipv4_network(cidr)) is not None
+    ]
+    parent_networks = [
+        network for cidr in parent_cidrs if (network := _private_ipv4_network(cidr)) is not None
+    ]
+    if raw_suggestions is None:
+        raw_suggestions = _VPC_CUSTOM_PRIVATE_CIDR_SUGGESTIONS_BY_REGION.get(
+            region_id,
+            _VPC_CUSTOM_PRIVATE_CIDR_FALLBACKS,
+        )
+    suggestions: list[str] = []
+    for cidr in raw_suggestions:
+        network = _private_ipv4_network(cidr)
+        if network is None or not network.is_private:
+            continue
+        if any(network.overlaps(default_network) for default_network in documented_defaults):
+            continue
+        if parent_networks and not any(
+            network.subnet_of(parent_network) for parent_network in parent_networks
+        ):
+            continue
+        if any(network.overlaps(existing_network) for existing_network in existing_networks):
+            continue
+        suggestions.append(cidr)
+    return tuple(suggestions)
+
+
+def _vpc_custom_private_parent_cidrs() -> frozenset[str]:
+    return frozenset(
+        cidr
+        for suggestions in (
+            *_VPC_CUSTOM_PRIVATE_CIDR_SUGGESTIONS_BY_REGION.values(),
+            _VPC_CUSTOM_PRIVATE_CIDR_FALLBACKS,
+        )
+        for cidr in suggestions
+    )
+
+
+def _vpc_subnet_child_prefixlen(parent_network: ipaddress.IPv4Network) -> int:
+    if parent_network.prefixlen < _VPC_SUBNET_CHILD_LARGE_PARENT_PREFIXLEN:
+        return _VPC_SUBNET_CHILD_LARGE_PARENT_PREFIXLEN
+    if parent_network.prefixlen < _VPC_SUBNET_CHILD_SMALL_PARENT_PREFIXLEN:
+        return _VPC_SUBNET_CHILD_SMALL_PARENT_PREFIXLEN
+    return parent_network.prefixlen
+
+
+def _vpc_subnet_child_cidr_suggestions(
+    *,
+    existing_cidrs: Sequence[str],
+    parent_cidrs: Sequence[str],
+    suggest_whole_parent_cidrs: bool = False,
+    limit: int = _VPC_SUBNET_CHILD_CIDR_SUGGESTION_LIMIT,
+) -> tuple[tuple[str, str], ...]:
+    if limit <= 0:
+        return ()
+    parent_networks = [
+        network
+        for cidr in parent_cidrs
+        if (network := _private_ipv4_network(cidr)) is not None and network.is_private
+    ]
+    if not parent_networks:
+        return ()
+    existing_networks = [
+        network for cidr in existing_cidrs if (network := _private_ipv4_network(cidr)) is not None
+    ]
+    whole_parent_suggestions: list[tuple[str, str]] = []
+    if suggest_whole_parent_cidrs:
+        custom_parent_cidrs = _vpc_custom_private_parent_cidrs()
+        for parent_network in sorted(
+            parent_networks,
+            key=lambda item: (int(item.network_address), item.prefixlen),
+        ):
+            parent_cidr = str(parent_network)
+            if parent_cidr not in custom_parent_cidrs:
+                continue
+            if any(parent_network.overlaps(existing_network) for existing_network in existing_networks):
+                continue
+            whole_parent_suggestions.append((parent_cidr, parent_cidr))
+    whole_parent_cidrs = {cidr for cidr, _parent_cidr in whole_parent_suggestions}
+    suggestions: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for parent_network in sorted(
+        parent_networks,
+        key=lambda item: (int(item.network_address), item.prefixlen),
+    ):
+        if str(parent_network) in whole_parent_cidrs:
+            continue
+        parent_existing_networks = [
+            existing_network
+            for existing_network in existing_networks
+            if existing_network.overlaps(parent_network)
+        ]
+        target_prefixlen = _vpc_subnet_child_prefixlen(parent_network)
+        child_blocks: Iterable[ipaddress.IPv4Network]
+        if target_prefixlen <= parent_network.prefixlen:
+            child_blocks = (parent_network,)
+        else:
+            child_blocks = parent_network.subnets(new_prefix=target_prefixlen)
+        for child_block in child_blocks:
+            if any(
+                child_block.overlaps(existing_network)
+                for existing_network in parent_existing_networks
+            ):
+                continue
+            cidr = str(child_block)
+            if cidr in seen:
+                continue
+            seen.add(cidr)
+            suggestions.append((cidr, str(parent_network)))
+            if len(suggestions) >= limit:
+                return tuple([*suggestions, *whole_parent_suggestions])
+    return tuple([*suggestions, *whole_parent_suggestions])
+
+
+def _vpc_subnet_cidr_prompt_choices(
+    *,
+    region_id: str,
+    existing_cidrs: Sequence[str],
+    parent_cidrs: Sequence[str] = (),
+    allow_parent_extension: bool = False,
+    parent_extension_description: str = "extends Terraform-owned network before subnet",
+    suggest_whole_parent_cidrs: bool = False,
+    allow_custom_fallback: bool = True,
+) -> list[OptionChoice]:
+    choices: list[OptionChoice] = []
+    child_suggestions = _vpc_subnet_child_cidr_suggestions(
+        existing_cidrs=existing_cidrs,
+        parent_cidrs=parent_cidrs,
+        suggest_whole_parent_cidrs=suggest_whole_parent_cidrs,
+    )
+    if child_suggestions:
+        for index, (cidr, parent_cidr) in enumerate(child_suggestions):
+            choices.append(
+                OptionChoice(
+                    value=cidr,
+                    label=f"{cidr}  (subnet child range inside {parent_cidr})",
+                    recommended=index == 0,
+                    metadata={
+                        "suggestion_kind": "subnet_child",
+                        "parent_cidr": parent_cidr,
+                    },
+                )
+            )
+    if allow_parent_extension:
+        extension_existing_cidrs = tuple(dict.fromkeys([*existing_cidrs, *parent_cidrs]))
+        for index, cidr in enumerate(
+            _vpc_custom_private_cidr_suggestions(
+                region_id=region_id,
+                existing_cidrs=extension_existing_cidrs,
+                parent_cidrs=(),
+                raw_suggestions=_VPC_PARENT_EXTENSION_PRIVATE_CIDR_FALLBACKS,
+            )
+        ):
+            size_hint = "new parent private block"
+            if cidr.startswith("10."):
+                size_hint = "10.x parent private block"
+            if cidr == "192.168.0.0/16":
+                size_hint = "192.168 parent private block"
+            choices.append(
+                OptionChoice(
+                    value=cidr,
+                    label=f"{cidr}  ({size_hint}; {parent_extension_description})",
+                    recommended=not choices and index == 0,
+                    metadata={"suggestion_kind": "parent_extension"},
+                )
+            )
+    if choices:
+        return choices
+    if not allow_custom_fallback:
+        return choices
+    for index, cidr in enumerate(
+        _vpc_custom_private_cidr_suggestions(
+            region_id=region_id,
+            existing_cidrs=existing_cidrs,
+            parent_cidrs=parent_cidrs,
+        )
+    ):
+        suffix = "outside documented Nebius default private pools"
+        size_hint = "large custom private block"
+        if cidr.startswith("10."):
+            size_hint = "10.x private block"
+        if cidr == "192.168.0.0/16":
+            size_hint = "192.168 private block"
+        choices.append(
+            OptionChoice(
+                value=cidr,
+                label=f"{cidr}  ({size_hint}; {suffix})",
+                recommended=index == 0,
+                metadata={"suggestion_kind": "custom_private"},
+            )
+        )
+    return choices
+
+
+def _materialize_planned_vpc_binding_tokens(payload: dict[str, Any]) -> None:
+    for row in _dynamic_enabled_infra_component_rows(payload):
+        component_id = component_type_id(row)
+        if component_id not in _NETWORK_ATTACHED_INFRA_COMPONENT_IDS:
+            continue
+        fields = ["network_id"]
+        if component_id in _SUBNET_ATTACHED_INFRA_COMPONENT_IDS:
+            fields.append("subnet_id")
+        for field_name in fields:
+            field_path = _vpc_field_path(payload=payload, row=row, field_name=field_name)
+            value = _read_payload_field(payload, _format_payload_path(field_path))
+            if not isinstance(value, str) or not value.startswith(_PLANNED_BINDING_TOKEN_PREFIX):
+                continue
+            binding_ref = _parse_planned_vpc_ref(
+                value,
+                option_name=f"{field_name} planned choice",
+                field_name=field_name,
+            )
+            _delete_payload_value(payload, field_path)
+            _set_vpc_binding(
+                payload=payload,
+                row=row,
+                field_name=field_name,
+                binding_ref=binding_ref,
+            )
 
 
 def _provider_source_specs_for_field(
@@ -8670,6 +10167,47 @@ def _provider_fallback_warning(
     return warning
 
 
+def _field_requires_live_vpc_choices(
+    *,
+    entry: ComponentEntry,
+    full_path_label: str,
+    required: bool,
+) -> bool:
+    if not required:
+        return False
+    leaf_name = _normalize_leaf_name(full_path_label.rsplit(".", maxsplit=1)[-1])
+    if leaf_name not in {"network_id", "subnet_id"}:
+        return False
+    return any(
+        provider in {"project_networks", "project_subnets"}
+        for provider, _args in _provider_source_specs_for_field(
+            entry=entry,
+            full_path_label=full_path_label,
+        )
+    )
+
+
+def _provider_required_live_options_error(
+    *,
+    field_path_label: str,
+    provider_names: str,
+    provider_lookup: ProviderOptionLookup | None,
+) -> str:
+    message = (
+        f"Live Nebius VPC provider options are required for '{field_path_label}' "
+        f"via provider source(s): {provider_names}."
+    )
+    if provider_lookup is not None:
+        last_error = provider_lookup.last_error()
+        if last_error:
+            message += f" {last_error}"
+    message += (
+        " Resolve live project access or pass explicit --network-id/--subnet-id "
+        "or planned --network-ref/--subnet-ref values."
+    )
+    return message
+
+
 def _prompt_path_sort_key(
     path: PayloadPath,
     *,
@@ -8733,10 +10271,36 @@ def _prompt_path_sort_key(
         "deploy.targets[].secrets.mysterybox.enabled": 240,
         "deploy.targets[].secrets.mysterybox.allow_all_namespaces": 241,
         "deploy.targets[].secrets.mysterybox.sync_namespaces": 242,
+        "infra.components[].inputs.soperator.system_autoscaling.enabled": 38,
+        "infra.components[].inputs.soperator.system_autoscaling.min_node_count": 39,
+        "infra.components[].inputs.soperator.system_autoscaling.max_node_count": 40,
+        "infra.components[].inputs.soperator.system_node_count": 41,
+        "infra.components[].inputs.soperator.controller_autoscaling.enabled": 42,
+        "infra.components[].inputs.soperator.controller_autoscaling.min_node_count": 43,
+        "infra.components[].inputs.soperator.controller_autoscaling.max_node_count": 44,
+        "infra.components[].inputs.soperator.controller_node_count": 45,
+        "infra.components[].inputs.soperator.login_autoscaling.enabled": 46,
+        "infra.components[].inputs.soperator.login_autoscaling.min_node_count": 47,
+        "infra.components[].inputs.soperator.login_autoscaling.max_node_count": 48,
+        "infra.components[].inputs.soperator.login_node_count": 49,
+        "infra.components[].inputs.soperator.accounting_autoscaling.enabled": 50,
+        "infra.components[].inputs.soperator.accounting_autoscaling.min_node_count": 51,
+        "infra.components[].inputs.soperator.accounting_autoscaling.max_node_count": 52,
+        "infra.components[].inputs.soperator.accounting_node_count": 53,
+        "infra.components[].inputs.soperator.worker_autoscaling.enabled": 54,
+        "infra.components[].inputs.soperator.worker_autoscaling.min_node_count": 55,
+        "infra.components[].inputs.soperator.worker_autoscaling.max_node_count": 56,
+        "infra.components[].inputs.soperator.worker_total_nodes": 57,
+        "infra.components[].inputs.soperator.worker_nodes_per_group": 58,
     }
     leaf = path[-1] if path else ""
     leaf_name = _normalize_leaf_name(str(leaf)) if isinstance(leaf, str) else ""
     normalized_full_label = re.sub(r"deploy\.targets\[[0-9]+\]", "deploy.targets[]", full_label)
+    normalized_full_label = re.sub(
+        r"infra\.components\[[0-9]+\]",
+        "infra.components[]",
+        normalized_full_label,
+    )
     required_rank = (
         0
         if (required_prompt_labels and full_label in required_prompt_labels)
@@ -9553,21 +11117,15 @@ def _app_chart_skip_defaults_preview_lines(
     for key in _APP_SKIP_PREVIEW_TOP_LEVEL_KEYS:
         value = resolved.get(key)
         if _app_skip_preview_has_value(value):
-            items.append(
-                f"{key}={_app_skip_preview_format_value(value, path=(key,))}"
-            )
+            items.append(f"{key}={_app_skip_preview_format_value(value, path=(key,))}")
     if entry.default_release_timeout:
         items.append(f"timeout={entry.default_release_timeout}")
 
     values = resolved.get("values")
     if isinstance(values, Mapping):
-        ordered_value_keys = [
-            key for key in _APP_SKIP_PREVIEW_VALUES_PRIORITY if key in values
-        ]
+        ordered_value_keys = [key for key in _APP_SKIP_PREVIEW_VALUES_PRIORITY if key in values]
         ordered_value_keys.extend(
-            key
-            for key in values
-            if str(key) not in set(_APP_SKIP_PREVIEW_VALUES_PRIORITY)
+            key for key in values if str(key) not in set(_APP_SKIP_PREVIEW_VALUES_PRIORITY)
         )
         for raw_key in ordered_value_keys:
             key = str(raw_key)
@@ -9575,8 +11133,7 @@ def _app_chart_skip_defaults_preview_lines(
             if not _app_skip_preview_has_value(value):
                 continue
             items.append(
-                f"values.{key}="
-                f"{_app_skip_preview_format_value(value, path=('values', key))}"
+                f"values.{key}={_app_skip_preview_format_value(value, path=('values', key))}"
             )
     return _app_skip_preview_chunk_items(items, max_lines=max_lines)
 
@@ -10073,6 +11630,27 @@ def _skip_jump_host_public_ip_allocation_prompt(
     return False
 
 
+def _skip_vpc_network_name_prompt(
+    *,
+    payload: dict[str, Any],
+    entry: ComponentEntry,
+    full_path_label: str,
+) -> bool:
+    if (
+        entry.scope != "infra"
+        or entry.id != "vpc"
+        or not full_path_label.endswith(".inputs.network.name")
+    ):
+        return False
+    component_prefix = _dynamic_component_prefix(entry=entry, full_path_label=full_path_label)
+    if not component_prefix:
+        return False
+    existing_id = _non_empty_text(
+        _read_payload_field(payload, f"{component_prefix}.inputs.network.existing_id")
+    )
+    return bool(existing_id)
+
+
 def _component_prefix_for_prompt_field(
     *,
     entry: ComponentEntry,
@@ -10123,6 +11701,46 @@ def _mk8s_soperator_prompt_context(
     return has_soperator_target, install_mode
 
 
+def _soperator_autoscaling_role_from_prompt(full_path_label: str) -> tuple[str, str] | None:
+    roles = "|".join(re.escape(role) for role in _SOPERATOR_NODE_GROUP_AUTOSCALING_ROLES)
+    match = re.search(
+        rf"\.inputs\.soperator\.({roles})_autoscaling\.(enabled|min_node_count|max_node_count)$",
+        full_path_label,
+    )
+    if match is None:
+        return None
+    return match.group(1), match.group(2)
+
+
+def _soperator_count_role_from_prompt(full_path_label: str) -> str:
+    for role in ("system", "controller", "login", "accounting"):
+        if full_path_label.endswith(f".inputs.soperator.{role}_node_count"):
+            return role
+    if full_path_label.endswith(".inputs.soperator.worker_total_nodes"):
+        return "worker"
+    return ""
+
+
+def _soperator_autoscaling_enabled_for_prompt(
+    *,
+    payload: dict[str, Any],
+    entry: ComponentEntry,
+    full_path_label: str,
+    role: str,
+) -> bool:
+    component_prefix = _component_prefix_for_prompt_field(
+        entry=entry,
+        full_path_label=full_path_label,
+    )
+    if not component_prefix:
+        return False
+    enabled = _read_payload_field(
+        payload,
+        f"{component_prefix}.inputs.soperator.{role}_autoscaling.enabled",
+    )
+    return _config_bool(enabled, default=False)
+
+
 def _skip_soperator_managed_mk8s_prompt(
     *,
     payload: dict[str, Any],
@@ -10144,8 +11762,27 @@ def _skip_soperator_managed_mk8s_prompt(
             "worker_nodes_per_group",
         )
     )
+    autoscaling_prompt = _soperator_autoscaling_role_from_prompt(full_path_label)
+    if autoscaling_prompt is not None:
+        role, field = autoscaling_prompt
+        if not has_soperator_target or install_mode != _SOPERATOR_INSTALL_MODE_PRODUCTION:
+            return True
+        return field != "enabled" and not _soperator_autoscaling_enabled_for_prompt(
+            payload=payload,
+            entry=entry,
+            full_path_label=full_path_label,
+            role=role,
+        )
     if full_path_label.endswith(soperator_count_field_suffixes):
-        return not has_soperator_target or install_mode != _SOPERATOR_INSTALL_MODE_PRODUCTION
+        if not has_soperator_target or install_mode != _SOPERATOR_INSTALL_MODE_PRODUCTION:
+            return True
+        role = _soperator_count_role_from_prompt(full_path_label)
+        return bool(role) and _soperator_autoscaling_enabled_for_prompt(
+            payload=payload,
+            entry=entry,
+            full_path_label=full_path_label,
+            role=role,
+        )
     if ".inputs.node_group_defaults." in full_path_label:
         if not has_soperator_target or install_mode != _SOPERATOR_INSTALL_MODE_PRODUCTION:
             return True
@@ -10784,6 +12421,177 @@ def _choice_current_values(current: object) -> list[str]:
     return []
 
 
+def _single_vpc_subnet_cidr_error() -> str:
+    return (
+        "Enter one explicit CIDR for this prompt; comma-separated CIDRs are "
+        "supported only when the prompt is in multi-CIDR mode."
+    )
+
+
+def _prompt_single_vpc_private_cidr_override(
+    *,
+    path_label: str,
+) -> tuple[object, bool]:
+    rendered_label = _prompt_label_with_type(
+        path_label,
+        type_hint="string",
+        required=False,
+    )
+    prompt_suffix = _wizard_field_prompt_suffix(rendered_label)
+    while True:
+        try:
+            raw = typer.prompt(
+                f"{prompt_suffix}; enter one CIDR (blank keeps unset)",
+                default="",
+            ).strip()
+        except (KeyboardInterrupt, EOFError, typer.Abort):
+            return [], True
+        if raw == WIZARD_ABORT_TOKEN:
+            return [], True
+        if raw == WIZARD_EXIT_TOKEN:
+            return _WIZARD_BACKTRACK, False
+        if not raw:
+            return [], False
+        if "," in raw:
+            console.print(f"{error_markup('Invalid value')}. {_single_vpc_subnet_cidr_error()}")
+            continue
+        if _private_ipv4_network(raw) is None:
+            console.print(f"{error_markup('Invalid value')}. '{raw}' is not a valid IPv4 CIDR.")
+            continue
+        return [raw], False
+
+
+def _prompt_vpc_private_cidr_override(
+    *,
+    path_label: str,
+    current: object,
+    choices: list[OptionChoice],
+    region_id: str,
+    type_hint: str | None = None,
+    allow_multiple: bool = True,
+) -> tuple[object, bool]:
+    if not choices:
+        if not allow_multiple:
+            return _prompt_single_vpc_private_cidr_override(path_label=path_label)
+        return _prompt_scalar_override(
+            path_label,
+            current,
+            type_hint=type_hint,
+            unset_on_skip=True,
+        )
+
+    rendered_label = _prompt_label_with_type(
+        path_label,
+        type_hint=type_hint if allow_multiple else "string",
+        required=False,
+    )
+    prompt_suffix = _wizard_field_prompt_suffix(rendered_label)
+    default_choice = next((str(choice.value) for choice in choices if choice.recommended), "")
+    if not default_choice:
+        default_choice = str(choices[0].value)
+
+    if _is_tty_session():
+        try:
+            import questionary
+
+            rendered_choices = [
+                questionary.Choice(title=choice.label, value=str(choice.value))
+                for choice in choices
+            ]
+            rendered_choices.append(
+                questionary.Choice(
+                    title="Enter custom CIDR list" if allow_multiple else "Enter custom CIDR",
+                    value="__custom__",
+                )
+            )
+            selected = _ask_questionary_with_wizard_navigation(
+                questionary.select(
+                    rendered_label,
+                    choices=rendered_choices,
+                    instruction="Use arrows; q=back; qq=quit; Enter=select.",
+                    default=default_choice,
+                    qmark="",
+                )
+            )
+            if selected is None:
+                return current, True
+            if selected == _WIZARD_QUIT_CHOICE:
+                return current, True
+            if selected == _WIZARD_BACK_CHOICE:
+                return _WIZARD_BACKTRACK, False
+            if selected == "__custom__":
+                if not allow_multiple:
+                    return _prompt_single_vpc_private_cidr_override(path_label=path_label)
+                return _prompt_scalar_override(
+                    path_label,
+                    current,
+                    type_hint=type_hint,
+                    unset_on_skip=True,
+                )
+            return [str(selected).strip()], False
+        except (KeyboardInterrupt, EOFError, typer.Abort):
+            return current, True
+        except Exception:
+            pass
+
+    suggestion_kinds = {str(choice.metadata.get("suggestion_kind")) for choice in choices}
+    prompt_label = "suggested custom private CIDRs"
+    hint = "outside documented Nebius default private pools"
+    if suggestion_kinds == {"subnet_child"}:
+        prompt_label = "suggested subnet child CIDRs"
+        hint = "inside selected parent VPC network private pools"
+    elif suggestion_kinds == {"parent_extension"}:
+        prompt_label = "suggested parent-extension CIDRs"
+        hint = "new private blocks for parent VPC networks"
+    elif {"subnet_child", "parent_extension"}.issubset(suggestion_kinds):
+        prompt_label = "suggested subnet CIDRs"
+        hint = "inside parent pools, plus new parent blocks"
+    console.print(f"[cyan]{path_label} {prompt_label} ({hint}):[/cyan]")
+    for index, choice in enumerate(choices, start=1):
+        marker = "*" if choice.recommended else " "
+        console.print(f"  {marker} [{index}] {choice.label}")
+
+    prompt_detail = "index or comma-separated CIDRs" if allow_multiple else "index or CIDR"
+    while True:
+        try:
+            raw = typer.prompt(
+                f"{prompt_suffix}; select a suggested custom CIDR ({prompt_detail})",
+                default="1",
+            ).strip()
+        except (KeyboardInterrupt, EOFError, typer.Abort):
+            return current, True
+        if not raw:
+            raw = "1"
+        if raw == WIZARD_ABORT_TOKEN:
+            return current, True
+        if raw == WIZARD_EXIT_TOKEN:
+            return _WIZARD_BACKTRACK, False
+        if not allow_multiple and "," in raw:
+            console.print(f"{error_markup('Invalid value')}. {_single_vpc_subnet_cidr_error()}")
+            continue
+        selected_values: list[str] = []
+        valid = True
+        for token in [item.strip() for item in raw.split(",") if item.strip()]:
+            if token.isdigit():
+                index = int(token)
+                if 1 <= index <= len(choices):
+                    selected_values.append(str(choices[index - 1].value).strip())
+                    continue
+                console.print(f"{error_markup('Invalid option value')}: {token}")
+                valid = False
+                break
+            selected_values.append(token)
+        if not valid:
+            continue
+        selected_values = list(dict.fromkeys(selected_values))
+        if not allow_multiple and len(selected_values) > 1:
+            console.print(
+                f"{error_markup('Invalid value')}. {_single_vpc_subnet_cidr_error()}"
+            )
+            continue
+        return selected_values, False
+
+
 def _prompt_multi_choice_override(
     *,
     path_label: str,
@@ -10939,11 +12747,16 @@ def _prompt_choice_override(
                 questionary.Choice(title=choice.label, value=choice.value) for choice in choices
             ]
             if not required:
-                skip_title = (
-                    "<skip / keep unset>"
-                    if unset_on_skip or not has_explicit_current
-                    else "<keep current / skip>"
-                )
+                if path_label.endswith(".inputs.network.existing_id"):
+                    skip_title = "Create a new VPC network"
+                elif path_label.endswith(".inputs.network.ipv4_private_pool_ids"):
+                    skip_title = "Create a new private pool from CIDR"
+                else:
+                    skip_title = (
+                        "<skip / keep unset>"
+                        if unset_on_skip or not has_explicit_current
+                        else "<keep current / skip>"
+                    )
                 rendered_choices.insert(
                     0,
                     questionary.Choice(title=skip_title, value="__skip__"),
@@ -10981,10 +12794,18 @@ def _prompt_choice_override(
     if not required:
         if unset_on_skip:
             prompt_detail = "index or value; blank keeps unset"
+            if path_label.endswith(".inputs.network.existing_id"):
+                prompt_detail = "index or value; blank creates a new VPC network"
+            elif path_label.endswith(".inputs.network.ipv4_private_pool_ids"):
+                prompt_detail = "index or value; blank creates a new private pool from CIDR"
         elif has_explicit_current:
             prompt_detail = "index or value; blank keeps current"
         else:
             prompt_detail = "index or value; blank keeps unset"
+            if path_label.endswith(".inputs.network.existing_id"):
+                prompt_detail = "index or value; blank creates a new VPC network"
+            elif path_label.endswith(".inputs.network.ipv4_private_pool_ids"):
+                prompt_detail = "index or value; blank creates a new private pool from CIDR"
 
     while True:
         try:
@@ -11638,6 +13459,7 @@ def _run_component_field_wizard(
     provider_lookup: ProviderOptionLookup | None = None,
     skip_soperator_profile_prompt: bool = False,
     align_infra_resource_names_before_apps: bool = False,
+    skipped_components: set[tuple[ComponentScope, str, str]] | None = None,
 ) -> tuple[str, bool]:
     payload = yaml.safe_load(config_yaml) or {}
     if not isinstance(payload, dict):
@@ -11687,6 +13509,7 @@ def _run_component_field_wizard(
                 entry = infra_lookup.get(str(row["id"]))
                 if entry is not None:
                     selected_components.append((entry, instance_id))
+            selected_components.sort(key=lambda item: 0 if item[0].id == "vpc" else 1)
             return selected_components
         for row in _dynamic_enabled_app_chart_rows(payload):
             instance_id = str(row["instance_id"])
@@ -11970,6 +13793,18 @@ def _run_component_field_wizard(
             full_path_label=full_path_label,
         )
         return not has_soperator_target
+
+    def _vpc_subnet_loop_enabled(
+        *,
+        entry: ComponentEntry,
+        component_path: PayloadPath | None,
+    ) -> bool:
+        return (
+            entry.scope == "infra"
+            and entry.id == "vpc"
+            and component_path is not None
+            and "inputs.subnets" in entry.wizard_fields
+        )
 
     def _mk8s_provider_choices(
         *,
@@ -12696,6 +14531,639 @@ def _run_component_field_wizard(
             )
             created_any = True
 
+    def _run_vpc_subnet_loop(
+        *,
+        entry: ComponentEntry,
+        component_path: PayloadPath,
+        component_label: str,
+    ) -> tuple[object, bool]:
+        component_node = _get_payload_value(payload, component_path)
+        if not isinstance(component_node, dict):
+            return None, False
+        inputs = component_node.setdefault("inputs", {})
+        if not isinstance(inputs, dict):
+            inputs = {}
+            component_node["inputs"] = inputs
+        network = inputs.setdefault("network", {})
+        if not isinstance(network, dict):
+            network = {}
+            inputs["network"] = network
+        subnets = inputs.setdefault("subnets", {})
+        if not isinstance(subnets, dict):
+            subnets = {}
+            inputs["subnets"] = subnets
+
+        component_path_label = _format_payload_path(component_path)
+        subnet_context_label = f"{component_label} / subnets"
+        network_context_label = f"{component_label} / network"
+        region_id = (
+            _non_empty_text(_read_payload_field(payload, "client_info.nebius.region_id"))
+            or DEFAULT_REGION_ID
+        )
+        project_id = _non_empty_text(_read_payload_field(payload, "client_info.nebius.project_id"))
+
+        def _prompt_loop_value(
+            path_label: str,
+            current: object,
+            *,
+            type_hint: str | None = None,
+            required: bool = False,
+            unset_on_skip: bool = False,
+        ) -> tuple[object, str]:
+            _print_wizard_component_selection_context(
+                current_label=subnet_context_label,
+                current_scope=entry.scope,
+            )
+            updated, should_stop = _prompt_scalar_override(
+                path_label,
+                current,
+                type_hint=type_hint,
+                required=required,
+                unset_on_skip=unset_on_skip,
+            )
+            if should_stop:
+                return current, "quit"
+            if _wizard_backtrack_requested(updated):
+                return current, "back"
+            _print_wizard_selected_field(path_label, updated)
+            return updated, "ok"
+
+        def _prompt_private_cidrs(
+            path_label: str,
+            *,
+            existing_cidrs: Sequence[str] = (),
+            parent_cidrs: Sequence[str] = (),
+            allow_parent_extension: bool = False,
+            parent_extension_description: str = "extends Terraform-owned network before subnet",
+            suggest_whole_parent_cidrs: bool = False,
+            allow_custom_fallback: bool = True,
+            context_label: str,
+            guidance: str | None = None,
+            allow_multiple: bool = True,
+        ) -> tuple[object, str]:
+            _print_wizard_component_selection_context(
+                current_label=context_label,
+                current_scope=entry.scope,
+            )
+            if guidance:
+                console.print(f"[dim]{escape(guidance)}[/dim]")
+            choices = _vpc_subnet_cidr_prompt_choices(
+                region_id=region_id,
+                existing_cidrs=existing_cidrs,
+                parent_cidrs=parent_cidrs,
+                allow_parent_extension=allow_parent_extension,
+                parent_extension_description=parent_extension_description,
+                suggest_whole_parent_cidrs=suggest_whole_parent_cidrs,
+                allow_custom_fallback=allow_custom_fallback,
+            )
+            updated, should_stop = _prompt_vpc_private_cidr_override(
+                path_label=path_label,
+                current=[],
+                choices=choices,
+                region_id=region_id,
+                type_hint="list(string)",
+                allow_multiple=allow_multiple,
+            )
+            if should_stop:
+                return [], "quit"
+            if _wizard_backtrack_requested(updated):
+                return [], "back"
+            _print_wizard_selected_field(path_label, updated)
+            return updated, "ok"
+
+        def _choice_private_cidrs(choice: OptionChoice | None) -> tuple[str, ...]:
+            if choice is None:
+                return ()
+            raw_cidrs = choice.metadata.get("private_cidrs") or choice.metadata.get("cidrs")
+            if isinstance(raw_cidrs, str):
+                return (raw_cidrs,) if raw_cidrs.strip() else ()
+            if not isinstance(raw_cidrs, Sequence):
+                return ()
+            return tuple(str(cidr).strip() for cidr in raw_cidrs if str(cidr).strip())
+
+        def _choice_metadata_values(choice: OptionChoice | None, key: str) -> tuple[str, ...]:
+            if choice is None:
+                return ()
+            raw_values = choice.metadata.get(key)
+            if isinstance(raw_values, str):
+                return tuple(item.strip() for item in raw_values.split(",") if item.strip())
+            if not isinstance(raw_values, Sequence):
+                return ()
+            return tuple(str(item).strip() for item in raw_values if str(item).strip())
+
+        def _prompt_private_pool_id(path_label: str) -> tuple[str | None, tuple[str, ...], str]:
+            if provider_lookup is None:
+                return None, (), "skip"
+            _print_wizard_component_selection_context(
+                current_label=network_context_label,
+                current_scope=entry.scope,
+            )
+            choices = provider_lookup.resolve(
+                provider="project_private_pools",
+                args={},
+                payload=payload,
+                field_path=path_label,
+            )
+            if not choices:
+                return None, (), "skip"
+            updated, should_stop = _prompt_scalar_override(
+                path_label,
+                [],
+                choices=choices,
+                type_hint="string",
+                unset_on_skip=True,
+            )
+            if should_stop:
+                return None, (), "quit"
+            if _wizard_backtrack_requested(updated):
+                return None, (), "back"
+            pool_id = _non_empty_text(updated)
+            if not pool_id:
+                return None, (), "skip"
+            selected_choice = next((choice for choice in choices if choice.value == pool_id), None)
+            _print_wizard_selected_field(path_label, pool_id)
+            return pool_id, _choice_private_cidrs(selected_choice), "ok"
+
+        def _selected_existing_network_choice(network_id: str) -> OptionChoice | None:
+            if provider_lookup is None or not network_id:
+                return None
+            choices = provider_lookup.resolve(
+                provider="project_networks",
+                args={},
+                payload=payload,
+                field_path=f"{component_path_label}.inputs.network.existing_id",
+            )
+            return next((choice for choice in choices if choice.value == network_id), None)
+
+        def _selected_existing_network_private_cidrs(network_id: str) -> tuple[str, ...]:
+            selected_choice = _selected_existing_network_choice(network_id)
+            return _choice_private_cidrs(selected_choice)
+
+        def _selected_existing_network_private_pool_ids(network_id: str) -> tuple[str, ...]:
+            selected_choice = _selected_existing_network_choice(network_id)
+            return _choice_metadata_values(selected_choice, "private_pool_ids")
+
+        existing_network_subnet_lookup_error: str | None = None
+
+        def _selected_existing_network_subnet_choices(network_id: str) -> list[OptionChoice]:
+            nonlocal existing_network_subnet_lookup_error
+            existing_network_subnet_lookup_error = None
+            if provider_lookup is None or not network_id:
+                return []
+            choices = provider_lookup.resolve(
+                provider="project_subnets",
+                args={"network_id": network_id},
+                payload=payload,
+                field_path=f"{component_path_label}.inputs.subnets",
+            )
+            if provider_lookup.last_error():
+                existing_network_subnet_lookup_error = provider_lookup.last_error()
+                return []
+            return choices
+
+        def _selected_existing_network_explicit_subnet_private_cidrs(
+            network_id: str,
+        ) -> tuple[str, ...]:
+            choices = _selected_existing_network_subnet_choices(network_id)
+            cidrs: list[str] = []
+            for choice in choices:
+                cidrs.extend(_choice_private_cidrs(choice))
+            return tuple(dict.fromkeys(cidrs))
+
+        existing_network_allocation_lookup_error: str | None = None
+
+        def _selected_existing_network_private_allocation_cidrs(
+            network_id: str,
+        ) -> tuple[str, ...]:
+            nonlocal existing_network_allocation_lookup_error
+            existing_network_allocation_lookup_error = None
+            if provider_lookup is None or not network_id:
+                return ()
+            subnet_ids = tuple(
+                choice.value
+                for choice in _selected_existing_network_subnet_choices(network_id)
+                if choice.value
+            )
+            private_pool_ids = _selected_existing_network_private_pool_ids(network_id)
+            if not subnet_ids and not private_pool_ids:
+                return ()
+            choices = provider_lookup.resolve(
+                provider="project_private_allocations",
+                args={
+                    "subnet_ids": subnet_ids,
+                    "pool_ids": private_pool_ids,
+                },
+                payload=payload,
+                field_path=f"{component_path_label}.inputs.subnets",
+            )
+            if provider_lookup.last_error():
+                existing_network_allocation_lookup_error = provider_lookup.last_error()
+                return ()
+            cidrs: list[str] = []
+            for choice in choices:
+                cidrs.extend(_choice_private_cidrs(choice))
+            return tuple(dict.fromkeys(cidrs))
+
+        def _prompt_required_subnet_name(path_label: str, current: str) -> tuple[str, str]:
+            while True:
+                updated, status = _prompt_loop_value(
+                    path_label,
+                    current,
+                    type_hint="string",
+                    required=True,
+                )
+                if status != "ok":
+                    return "", status
+                subnet_key = normalize_component_token(updated)
+                if subnet_key and INSTANCE_ID_PATTERN.fullmatch(subnet_key):
+                    return subnet_key, "ok"
+                console.print(
+                    f"{error_markup('Invalid value')}. Subnet names must use lowercase "
+                    "letters, digits, and hyphens."
+                )
+
+        def _coerce_ipv4_cidrs(value: object) -> list[str]:
+            cidrs = _choice_current_values(value)
+            for cidr in cidrs:
+                try:
+                    network = ipaddress.ip_network(cidr, strict=False)
+                except ValueError as exc:
+                    raise ValueError(f"'{cidr}' is not a valid IPv4 CIDR.") from exc
+                if network.version != 4:
+                    raise ValueError(f"'{cidr}' is not an IPv4 CIDR.")
+            return cidrs
+
+        def _validate_cidrs_do_not_overlap_defaults(cidrs: Sequence[str]) -> bool:
+            default_pool_overlap = next(
+                (
+                    (cidr, overlap)
+                    for cidr in cidrs
+                    if (overlap := _vpc_default_private_pool_overlap(cidr)) is not None
+                ),
+                None,
+            )
+            if default_pool_overlap is None:
+                return True
+            cidr, (overlap_region, overlap_pool) = default_pool_overlap
+            console.print(
+                f"{error_markup('Invalid value')}. {cidr} overlaps the documented "
+                f"Nebius default private pool {overlap_pool} for {overlap_region}. "
+                "Choose a suggested custom CIDR or another non-overlapping private CIDR."
+            )
+            return False
+
+        existing_network_id = _non_empty_text(network.get("existing_id"))
+        network_private_pool_ids = _choice_current_values(network.get("ipv4_private_pool_ids"))
+        network_private_cidrs = _choice_current_values(network.get("ipv4_private_cidrs"))
+        network_private_pool_cidrs: list[str] = []
+        existing_network_private_cidrs = list(
+            _selected_existing_network_private_cidrs(existing_network_id)
+        )
+        existing_network_subnet_private_cidrs = list(
+            _selected_existing_network_explicit_subnet_private_cidrs(existing_network_id)
+        )
+        existing_network_allocation_private_cidrs = list(
+            _selected_existing_network_private_allocation_cidrs(existing_network_id)
+        )
+        if not existing_network_id and not network_private_pool_ids and not network_private_cidrs:
+            pool_id, pool_cidrs, status = _prompt_private_pool_id(
+                f"{component_path_label}.inputs.network.ipv4_private_pool_ids"
+            )
+            if status == "quit":
+                return None, True
+            if status == "back":
+                return _WIZARD_BACKTRACK, False
+            if pool_id:
+                network_private_pool_ids = [pool_id]
+                network_private_pool_cidrs = list(pool_cidrs)
+                network["ipv4_private_pool_ids"] = network_private_pool_ids
+            else:
+                console.print(
+                    "[dim]No existing private pool selected; creating a new private pool from CIDR.[/dim]"
+                )
+        if not existing_network_id and not network_private_pool_ids and not network_private_cidrs:
+            while True:
+                raw_cidrs, status = _prompt_private_cidrs(
+                    f"{component_path_label}.inputs.network.ipv4_private_cidrs",
+                    existing_cidrs=(),
+                    parent_cidrs=(),
+                    context_label=network_context_label,
+                )
+                if status == "quit":
+                    return None, True
+                if status == "back":
+                    return _WIZARD_BACKTRACK, False
+                try:
+                    network_private_cidrs = _coerce_ipv4_cidrs(raw_cidrs)
+                except ValueError as exc:
+                    console.print(f"{error_markup('Invalid value')}. {exc}")
+                    continue
+                if not network_private_cidrs:
+                    console.print(
+                        f"{error_markup('Invalid value')}. New VPC networks require at least "
+                        "one private CIDR or an explicit network private pool ID."
+                    )
+                    continue
+                if not _validate_cidrs_do_not_overlap_defaults(network_private_cidrs):
+                    continue
+                private_cidr_overlap = _vpc_first_private_cidr_overlap(network_private_cidrs)
+                if private_cidr_overlap is not None:
+                    cidr, overlap_cidr = private_cidr_overlap
+                    console.print(
+                        f"{error_markup('Invalid value')}. {cidr} overlaps {overlap_cidr}. "
+                        "VPC network private CIDR blocks must be non-overlapping."
+                    )
+                    continue
+                network["ipv4_private_cidrs"] = network_private_cidrs
+                break
+
+        def _network_parent_private_cidrs() -> tuple[str, ...]:
+            return tuple(
+                dict.fromkeys(
+                    [
+                        *existing_network_private_cidrs,
+                        *network_private_pool_cidrs,
+                        *network_private_cidrs,
+                    ]
+                )
+            )
+
+        def _existing_subnet_private_cidrs() -> tuple[str, ...]:
+            return tuple(
+                dict.fromkeys(
+                    [
+                        *existing_network_subnet_private_cidrs,
+                        *existing_network_allocation_private_cidrs,
+                        *_vpc_existing_private_cidrs(subnets),
+                    ]
+                )
+            )
+
+        def _subnet_private_cidr_guidance() -> str:
+            if existing_network_id:
+                subnet_lookup_note = (
+                    " Live subnet lookup failed; retry after live "
+                    "subnet inspection is available."
+                    if existing_network_subnet_lookup_error
+                    else ""
+                )
+                allocation_lookup_note = (
+                    " Live private allocation lookup failed; retry "
+                    "after live allocation inspection is available."
+                    if existing_network_allocation_lookup_error
+                    else ""
+                )
+                return (
+                    "Explicit subnet CIDRs are child ranges and must already fit the "
+                    "selected live network private pools; select a suggested child "
+                    "CIDR when free parent-pool space is available without live "
+                    "private allocations. An out-of-parent suggested or custom "
+                    "CIDR extends an attached private pool on the selected live "
+                    "network first. cxcli creates every declared subnet with "
+                    "explicit private pools (use_network_private_pools=false)."
+                    f"{subnet_lookup_note}"
+                    f"{allocation_lookup_note}"
+                )
+            return (
+                "Every declared subnet uses explicit child CIDRs. For a Terraform-owned new "
+                "network, select a suggested child CIDR inside the planned parent "
+                "pools or a suggested new parent block; cxcli adds out-of-parent "
+                "custom subnet CIDRs to network.ipv4_private_cidrs first so the "
+                "parent network IP space exists before the subnet."
+            )
+
+        created_any = bool(subnets)
+        pending_subnet_key: str | None = None
+        while True:
+            if pending_subnet_key is None:
+                add_prompt = f"{component_path_label}.inputs.subnets.add_another"
+                add_default = False
+                if not created_any:
+                    add_prompt = f"{component_path_label}.inputs.subnets.add"
+                    add_default = True
+                add_more, status = _prompt_loop_value(
+                    add_prompt,
+                    add_default,
+                    type_hint="bool",
+                )
+                if status == "quit":
+                    return None, True
+                if status == "back":
+                    return _WIZARD_BACKTRACK, False
+                if not bool(add_more):
+                    if not subnets:
+                        inputs.pop("subnets", None)
+                    return None, False
+
+            default_name = pending_subnet_key or (
+                "default" if not subnets else f"subnet-{len(subnets) + 1}"
+            )
+            subnet_key, status = _prompt_required_subnet_name(
+                f"{component_path_label}.inputs.subnets.<new>.name",
+                default_name,
+            )
+            if status == "quit":
+                return None, True
+            if status == "back":
+                return _WIZARD_BACKTRACK, False
+            if subnet_key in subnets:
+                console.print(
+                    f"{error_markup('Invalid value')}. Subnet '{subnet_key}' already exists."
+                )
+                continue
+            pending_subnet_key = None
+
+            subnet: dict[str, Any] = {"name": subnet_key}
+            subnets[subnet_key] = subnet
+            subnet_prefix = f"{component_path_label}.inputs.subnets.{subnet_key}"
+
+            while True:
+                raw_cidrs, status = _prompt_private_cidrs(
+                    f"{subnet_prefix}.ipv4_private_cidrs",
+                    existing_cidrs=_existing_subnet_private_cidrs(),
+                    parent_cidrs=_network_parent_private_cidrs(),
+                    allow_parent_extension=True,
+                    parent_extension_description=(
+                        "extends selected live network attached private pool"
+                        if existing_network_id
+                        else "extends Terraform-owned network before subnet"
+                    ),
+                    suggest_whole_parent_cidrs=bool(existing_network_id),
+                    allow_custom_fallback=not bool(existing_network_id),
+                    context_label=subnet_context_label,
+                    guidance=_subnet_private_cidr_guidance(),
+                    allow_multiple=True,
+                )
+                if status == "quit":
+                    return None, True
+                if status == "back":
+                    subnets.pop(subnet_key, None)
+                    pending_subnet_key = subnet_key
+                    break
+                try:
+                    cidrs = _coerce_ipv4_cidrs(raw_cidrs)
+                except ValueError as exc:
+                    console.print(f"{error_markup('Invalid value')}. {exc}")
+                    continue
+                if not cidrs:
+                    console.print(
+                        f"{error_markup('Invalid value')}. VPC subnets require explicit "
+                        "private CIDRs. Select a suggested CIDR or enter a custom CIDR."
+                    )
+                    continue
+                parent_cidrs = _network_parent_private_cidrs()
+                if existing_network_id and cidrs and not parent_cidrs:
+                    console.print(
+                        f"{error_markup('Invalid value')}. cxcli could not resolve the "
+                        "selected live VPC network private CIDR ranges, so it cannot "
+                        "prove an explicit subnet CIDR fits the parent network. Inspect "
+                        "or extend the live network private pool first."
+                    )
+                    continue
+                if existing_network_id and cidrs and existing_network_subnet_lookup_error:
+                    console.print(
+                        f"{error_markup('Invalid value')}. cxcli could not inspect live "
+                        "subnets for the selected VPC network, so it cannot prove an "
+                        "explicit subnet CIDR avoids existing subnet-owned CIDRs. "
+                        "Retry after resolving the live subnet "
+                        f"lookup error: {existing_network_subnet_lookup_error}"
+                    )
+                    continue
+                if existing_network_id and cidrs and existing_network_allocation_lookup_error:
+                    console.print(
+                        f"{error_markup('Invalid value')}. cxcli could not inspect live "
+                        "private allocations for the selected VPC network, so it cannot "
+                        "prove an explicit subnet CIDR avoids allocated IP addresses. "
+                        "Retry after resolving the live allocation "
+                        f"lookup error: {existing_network_allocation_lookup_error}"
+                    )
+                    continue
+                outside_parent = _vpc_first_private_cidr_outside_parent(
+                    cidrs,
+                    parent_cidrs=parent_cidrs,
+                )
+                if outside_parent is not None:
+                    if existing_network_id:
+                        cidr, parent_ranges = outside_parent
+                        cidrs_to_add = _vpc_private_cidrs_outside_parent(
+                            cidrs,
+                            parent_cidrs=parent_cidrs,
+                        )
+                        if not _validate_cidrs_do_not_overlap_defaults(cidrs_to_add):
+                            continue
+                        candidate_network_cidrs = [*parent_cidrs, *cidrs_to_add]
+                        network_cidr_overlap = _vpc_first_private_cidr_overlap(
+                            candidate_network_cidrs
+                        )
+                        if network_cidr_overlap is not None:
+                            overlap_cidr, overlap_existing = network_cidr_overlap
+                            console.print(
+                                f"{error_markup('Invalid value')}. {overlap_cidr} overlaps "
+                                f"{overlap_existing}. The parent VPC network private CIDR blocks "
+                                "must be non-overlapping before subnet creation."
+                            )
+                            continue
+                        private_cidr_overlap = _vpc_first_private_cidr_overlap(
+                            cidrs,
+                            existing_cidrs=_existing_subnet_private_cidrs(),
+                        )
+                        if private_cidr_overlap is not None:
+                            overlap_cidr, overlap_existing = private_cidr_overlap
+                            console.print(
+                                f"{error_markup('Invalid value')}. {overlap_cidr} overlaps "
+                                f"{overlap_existing}. Nebius requires explicit subnet CIDR blocks "
+                                "to avoid existing subnet CIDRs and private allocations in the "
+                                "selected VPC network."
+                            )
+                            continue
+                        console.print(
+                            f"{warning_markup('Live VPC network update required:')} {cidr} is "
+                            f"outside the selected VPC network private CIDR range ({parent_ranges}). "
+                            "cxcli will add this CIDR to an attached private pool on the selected "
+                            "VPC network, then create the subnet with explicit private pools "
+                            "(use_network_private_pools=false)."
+                        )
+                        try:
+                            extended_parent_cidrs = _extend_existing_vpc_parent_private_cidrs(
+                                project_id=project_id,
+                                network_id=existing_network_id,
+                                cidrs=cidrs_to_add,
+                            )
+                        except RuntimeError as exc:
+                            console.print(f"{error_markup('Invalid value')}. {exc}")
+                            continue
+                        existing_network_private_cidrs = list(
+                            dict.fromkeys([*extended_parent_cidrs, *cidrs_to_add])
+                        )
+                        console.print(
+                            "[dim]Extended selected live VPC network attached private pool with "
+                            f"{escape(', '.join(cidrs_to_add))}; continuing with explicit "
+                            "subnet child range.[/dim]"
+                        )
+                        parent_cidrs = _network_parent_private_cidrs()
+                        outside_parent = _vpc_first_private_cidr_outside_parent(
+                            cidrs,
+                            parent_cidrs=parent_cidrs,
+                        )
+                        if outside_parent is not None:
+                            console.print(
+                                f"{error_markup('Invalid value')}. cxcli extended the live VPC "
+                                "network, but the requested subnet CIDR still does not fit the "
+                                "resolved parent private CIDR ranges. Refresh live network data "
+                                "and retry."
+                            )
+                            continue
+                    if not existing_network_id:
+                        cidrs_to_add = _vpc_private_cidrs_outside_parent(
+                            cidrs,
+                            parent_cidrs=parent_cidrs,
+                        )
+                        if not _validate_cidrs_do_not_overlap_defaults(cidrs_to_add):
+                            continue
+                        candidate_network_cidrs = [*network_private_cidrs, *cidrs_to_add]
+                        network_cidr_overlap = _vpc_first_private_cidr_overlap(
+                            candidate_network_cidrs
+                        )
+                        if network_cidr_overlap is not None:
+                            cidr, overlap_cidr = network_cidr_overlap
+                            console.print(
+                                f"{error_markup('Invalid value')}. {cidr} overlaps {overlap_cidr}. "
+                                "The parent VPC network private CIDR blocks must be "
+                                "non-overlapping before subnet creation."
+                            )
+                            continue
+                        network_private_cidrs = list(dict.fromkeys(candidate_network_cidrs))
+                        network["ipv4_private_cidrs"] = network_private_cidrs
+                        console.print(
+                            "[dim]Extending planned VPC network private CIDRs with "
+                            f"{escape(', '.join(cidrs_to_add))} before creating explicit "
+                            "subnet child range.[/dim]"
+                        )
+                private_cidr_overlap = _vpc_first_private_cidr_overlap(
+                    cidrs,
+                    existing_cidrs=_existing_subnet_private_cidrs(),
+                )
+                if private_cidr_overlap is not None:
+                    cidr, overlap_cidr = private_cidr_overlap
+                    console.print(
+                        f"{error_markup('Invalid value')}. {cidr} overlaps {overlap_cidr}. "
+                        "Nebius requires explicit subnet CIDR blocks to avoid existing "
+                        "subnet CIDRs and private allocations in the selected VPC network."
+                    )
+                    continue
+                if cidrs:
+                    subnet["use_network_private_pools"] = False
+                    subnet["ipv4_private_cidrs"] = cidrs
+                break
+            if pending_subnet_key is not None:
+                continue
+
+            console.print(
+                f"[dim]Added VPC subnet {escape(subnet_key)}"
+                " with explicit private CIDRs.[/dim]"
+            )
+            created_any = True
+
     def _materialize_wizard_auto_enabled_gpu_apps() -> None:
         nonlocal payload, active_selected_apps
         if not selected_infra or not app_entries:
@@ -12889,9 +15357,7 @@ def _run_component_field_wizard(
         )
         if entry.scope == "apps":
             component_node = (
-                _get_payload_value(payload, component_path)
-                if component_path is not None
-                else None
+                _get_payload_value(payload, component_path) if component_path is not None else None
             )
             _print_app_chart_skip_defaults_preview(
                 component_node if isinstance(component_node, Mapping) else None,
@@ -12907,6 +15373,8 @@ def _run_component_field_wizard(
         if _wizard_phase_stop_requested(decision):
             return _WizardComponentOutcome.QUIT
         if not decision:
+            if skipped_components is not None:
+                skipped_components.add((entry.scope, entry.id, instance_id))
             return _WizardComponentOutcome.CONTINUE
 
         required_leaf_names = _required_leaf_names_for_entry(entry)
@@ -13435,7 +15903,15 @@ def _run_component_field_wizard(
             if _plain_mk8s_node_group_loop_enabled(entry=entry, component_path=component_path)
             else None
         )
+        vpc_subnets_prefix = (
+            component_path + ("inputs", "subnets")
+            if _vpc_subnet_loop_enabled(entry=entry, component_path=component_path)
+            else None
+        )
+        if vpc_subnets_prefix is not None and vpc_subnets_prefix not in prompt_paths:
+            prompt_paths.append(vpc_subnets_prefix)
         plain_mk8s_node_group_loop_done = False
+        vpc_subnet_loop_done = False
         prompt_index = 0
         prompt_history: list[PayloadPath] = []
         while True:
@@ -13471,6 +15947,26 @@ def _run_component_field_wizard(
                             prompt_index=prompt_index,
                             prefix=plain_mk8s_node_group_prefix,
                         )
+                    continue
+                if vpc_subnets_prefix is not None and full_path == vpc_subnets_prefix:
+                    if not vpc_subnet_loop_done:
+                        updated, should_stop = _run_vpc_subnet_loop(
+                            entry=entry,
+                            component_path=component_path,
+                            component_label=component_label,
+                        )
+                        if should_stop:
+                            return _WizardComponentOutcome.QUIT
+                        if _wizard_backtrack_requested(updated):
+                            prompt_index = _wizard_backtrack_target_index(
+                                prompt_paths=prompt_paths,
+                                prompt_history=prompt_history,
+                                current_path=full_path,
+                            )
+                            if prompt_index is None:
+                                return _WizardComponentOutcome.BACK
+                            continue
+                        vpc_subnet_loop_done = True
                     continue
                 if (
                     module_prompt_path_prefix is not None
@@ -13552,6 +16048,12 @@ def _run_component_field_wizard(
                 ):
                     continue
                 if _skip_jump_host_public_ip_allocation_prompt(
+                    payload=payload,
+                    entry=entry,
+                    full_path_label=full_path_label,
+                ):
+                    continue
+                if _skip_vpc_network_name_prompt(
                     payload=payload,
                     entry=entry,
                     full_path_label=full_path_label,
@@ -13664,7 +16166,13 @@ def _run_component_field_wizard(
                     full_path_label,
                     (set(), ()),
                 )
-                if not providers:
+                if field_choices:
+                    allowed_provider_values = {choice.value for choice in field_choices}
+                    providers = _provider_sources_for_field(
+                        entry=entry,
+                        full_path_label=full_path_label,
+                    )
+                elif not providers:
                     allowed_provider_values, providers = _provider_allowed_values_for_field(
                         payload=payload,
                         entry=entry,
@@ -13696,6 +16204,22 @@ def _run_component_field_wizard(
                     )
                 ):
                     continue
+                if (
+                    not field_choices
+                    and providers
+                    and _field_requires_live_vpc_choices(
+                        entry=entry,
+                        full_path_label=full_path_label,
+                        required=prompt_required,
+                    )
+                ):
+                    raise RuntimeError(
+                        _provider_required_live_options_error(
+                            field_path_label=full_path_label,
+                            provider_names=", ".join(providers),
+                            provider_lookup=provider_lookup,
+                        )
+                    )
                 if (
                     not field_choices
                     and providers
@@ -15591,6 +18115,98 @@ def _materialize_singleton_provider_defaults(
             _set_payload_value_creating_containers(payload, target_path, choices[0].value)
 
 
+def _field_option_name(field_name: str) -> str:
+    return "--network-id" if field_name == "network_id" else "--subnet-id"
+
+
+def _field_human_label(field_name: str) -> str:
+    return "VPC network" if field_name == "network_id" else "VPC subnet"
+
+
+def _require_vpc_networking_for_noninteractive(
+    *,
+    payload: dict[str, Any],
+    selected_infra: set[str],
+    infra_entries: tuple[ComponentEntry, ...],
+    provider_lookup: ProviderOptionLookup | None,
+) -> None:
+    if provider_lookup is None:
+        return
+    entry_by_id = {entry.id: entry for entry in infra_entries}
+    rows = _selected_infra_rows_for_vpc_override(
+        payload=payload,
+        selected_infra=selected_infra,
+        component_ids=frozenset(_NETWORK_ATTACHED_INFRA_COMPONENT_IDS),
+    )
+    for row in rows:
+        component_id = component_type_id(row)
+        instance_id = component_instance_id(row)
+        entry = entry_by_id.get(component_id)
+        if entry is None:
+            continue
+        fields = ["network_id"]
+        if component_id in _SUBNET_ATTACHED_INFRA_COMPONENT_IDS:
+            fields.append("subnet_id")
+        for field_name in fields:
+            if _vpc_field_has_binding(payload=payload, row=row, field_name=field_name):
+                continue
+            field_path = _vpc_field_path(
+                payload=payload,
+                row=row,
+                field_name=field_name,
+            )
+            field_label = _format_payload_path(field_path)
+            current_value = _read_payload_field(payload, field_label)
+            if _has_required_prompt_value(current_value, type_hint="string"):
+                continue
+            choices = _resolve_dynamic_field_choices(
+                payload=payload,
+                entry=entry,
+                full_path_label=field_label,
+                provider_lookup=provider_lookup,
+            )
+            providers = tuple(
+                dict.fromkeys(
+                    provider
+                    for provider, _args in _provider_source_specs_for_field(
+                        entry=entry,
+                        full_path_label=field_label,
+                    )
+                )
+            )
+            if len(choices) == 1:
+                _set_payload_value_creating_containers(payload, field_path, choices[0].value)
+                continue
+            provider_names = ", ".join(providers) or "(none)"
+            last_error = provider_lookup.last_error()
+            component_label = component_instance_label(component_id, instance_id)
+            option_name = _field_option_name(field_name)
+            scoped_example = (
+                f"{option_name} infra:{component_label}=<id>"
+                if "@" in component_label
+                else f"{option_name} infra:{component_id}@{instance_id}=<id>"
+            )
+            if last_error:
+                raise RuntimeError(
+                    _provider_required_live_options_error(
+                        field_path_label=field_label,
+                        provider_names=provider_names,
+                        provider_lookup=provider_lookup,
+                    )
+                )
+            if len(choices) > 1:
+                raise RuntimeError(
+                    f"Non-interactive create/component add cannot choose {_field_human_label(field_name)} "
+                    f"for infra:{component_label}: multiple live choices exist. "
+                    f"Pass a scoped {option_name} value, for example `{scoped_example}`."
+                )
+            raise RuntimeError(
+                f"Non-interactive create/component add cannot choose {_field_human_label(field_name)} "
+                f"for infra:{component_label}: live provider source(s) {provider_names} returned no choices. "
+                f"Pass {option_name} explicitly after verifying the project networking."
+            )
+
+
 def _materialize_mk8s_image_defaults(
     *,
     payload: dict[str, Any],
@@ -15818,6 +18434,15 @@ def _required_enabled_infra_field_issues(
         if not required_leaf_names:
             continue
         required_leaf_names -= input_binding_leaf_names(entry) if entry is not None else set()
+        for binding in row_input_bindings(
+            component_node,
+            field_label=f"{component_path_label}",
+        ):
+            segments = [
+                segment.strip() for segment in binding.target_path.split(".") if segment.strip()
+            ]
+            if len(segments) >= 2 and segments[0] == "inputs":
+                required_leaf_names.discard(_normalize_leaf_name(segments[1]))
         required_leaf_names -= (
             literal_default_input_leaf_names(entry) if entry is not None else set()
         )
@@ -15944,6 +18569,11 @@ def _dynamic_enabled_infra_component_rows(payload: dict[str, Any]) -> list[dict[
         if not instance_id:
             continue
         inputs = dict(item.get("inputs", {})) if isinstance(item.get("inputs"), Mapping) else {}
+        bindings = (
+            copy.deepcopy(item.get("bindings", {}))
+            if isinstance(item.get("bindings"), Mapping)
+            else {}
+        )
         entry = entry_by_id.get(component_id)
         source = _effective_catalog_component_source(row=item, entry=entry)
         version = _effective_catalog_component_version(row=item, entry=entry)
@@ -15954,6 +18584,7 @@ def _dynamic_enabled_infra_component_rows(payload: dict[str, Any]) -> list[dict[
                 "source": source,
                 "version": version,
                 "inputs": inputs,
+                "bindings": bindings,
             }
         )
     return rows
@@ -21761,7 +24392,7 @@ def _run_generated_bundle_validation(
                 "Validate MysteryBox runtime payload values",
             )
         )
-    phase_defs.append(_ValidationPhase("mk8s-preflight", "Validate MK8s network preflight"))
+    phase_defs.append(_ValidationPhase("vpc-preflight", "Validate VPC networking preflight"))
     if terraform_required:
         phase_defs.extend(
             [
@@ -21801,7 +24432,7 @@ def _run_generated_bundle_validation(
                 "mysterybox-payload-values",
                 _prepare_mysterybox_payload_values,
             )
-        progress.run("mk8s-preflight", lambda: validate_mk8s_network_preflight(config))
+        progress.run("vpc-preflight", lambda: validate_vpc_networking_preflight(config))
         if terraform_required:
             progress.run(
                 "backend",
@@ -22120,7 +24751,7 @@ def _run_terraform_apply_with_status(
     validation_env.update(runtime_env)
     _validate_mysterybox_runtime_payload_values(config, environ=validation_env)
     if run_mk8s_preflight:
-        validate_mk8s_network_preflight(config)
+        validate_vpc_networking_preflight(config)
     reporting_kwargs: dict[str, Any] = {
         "emit": _print_deployment_status_message,
     }
@@ -23668,6 +26299,50 @@ def create_command(
             ),
         ),
     ] = None,
+    network_ids_opt: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--network-id",
+            help=(
+                "VPC network ID for selected network-attached infra. Use a bare value only when "
+                "one applicable infra component is selected, or scope it as "
+                "'infra:<component-id>@<resource-name>=<vpcnetwork-id>'. Repeatable."
+            ),
+        ),
+    ] = None,
+    subnet_ids_opt: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--subnet-id",
+            help=(
+                "VPC subnet ID for selected subnet-attached infra. Use a bare value only when "
+                "one applicable infra component is selected, or scope it as "
+                "'infra:<component-id>@<resource-name>=<vpcsubnet-id>'. Repeatable."
+            ),
+        ),
+    ] = None,
+    network_refs_opt: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--network-ref",
+            help=(
+                "Planned VPC network ref for selected network-attached infra. Use a bare value only when "
+                "one applicable infra component is selected, or scope it as "
+                "'infra:<component-id>@<resource-name>=vpc@<vpc-instance>.network_id'. Repeatable."
+            ),
+        ),
+    ] = None,
+    subnet_refs_opt: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--subnet-ref",
+            help=(
+                "Planned VPC subnet ref for selected subnet-attached infra. Use a bare value only when "
+                "one applicable infra component is selected, or scope it as "
+                "'infra:<component-id>@<resource-name>=vpc@<vpc-instance>.subnets.<subnet-key>.id'. Repeatable."
+            ),
+        ),
+    ] = None,
     validate_sources: Annotated[
         bool,
         typer.Option(
@@ -23715,7 +26390,7 @@ def create_command(
         ),
     ] = False,
 ) -> None:
-    """Use DEPLOYMENTS_ROOT to bootstrap one name-based tenant/project folder with config.yaml plus generated/ skeleton, or overwrite an existing resolved project folder from scratch after confirmation.
+    """Use DEPLOYMENTS_ROOT to bootstrap one name-based tenant/project folder with config.yaml plus generated/ skeleton, or overwrite an existing resolved project folder from scratch after confirmation unless --force is provided.
 
     The post-create quota/capacity assessment is warning-only. It is not a
     reservation, not a quota request, and not a wizard-selectable deployment
@@ -23723,7 +26398,7 @@ def create_command(
     """
     try:
         base_path = target_path.resolve()
-        _validate_deployments_root_target(base_path)
+        _validate_deployments_root_target(base_path, allow_missing=True)
         deployments_root = _resolve_deployments_root(base_path)
         _assert_not_nested_deployments_root(deployments_root)
         interactive_mode = not no_interactive
@@ -23796,7 +26471,13 @@ def create_command(
                 _validate_component_sources_or_raise(selected_app_ids=set())
                 infra_source_validation_ran = True
             if interactive_mode:
-                if not _confirm_existing_project_overwrite(config_path=existing_config_path):
+                if force:
+                    _warn_existing_project_overwrite(config_path=existing_config_path)
+                    console.print(
+                        "[dim]`--force` confirms the overwrite. "
+                        "This only affects that one resolved project folder.[/dim]"
+                    )
+                elif not _confirm_existing_project_overwrite(config_path=existing_config_path):
                     console.print("No changes applied.")
                     return
             else:
@@ -23863,6 +26544,20 @@ def create_command(
                                     seed_defaults=selected_infra_raw or None,
                                 )
                                 selection_stage = "apps"
+                                if (
+                                    apps_components_opt is None
+                                    and not _selected_cluster_target_component_ids(
+                                        selected_infra_raw,
+                                        infra_entries,
+                                    )
+                                ):
+                                    selected_apps_raw = set()
+                                    console.print(
+                                        "[dim]Skipping app chart selection because no MK8s "
+                                        "target was selected. Select infra:mk8s to add Helm "
+                                        "charts or Soperator.[/dim]"
+                                    )
+                                    break
                             selected_apps_raw = _resolve_component_ids(
                                 scope="apps",
                                 raw_values=apps_components_opt,
@@ -24059,6 +26754,18 @@ def create_command(
                 starter_payload,
                 profile=soperator_profile,
             )
+        _apply_vpc_ref_overrides(
+            payload=starter_payload,
+            selected_infra=selected_infra,
+            network_refs=network_refs_opt,
+            subnet_refs=subnet_refs_opt,
+        )
+        _apply_vpc_id_overrides(
+            payload=starter_payload,
+            selected_infra=selected_infra,
+            network_ids=network_ids_opt,
+            subnet_ids=subnet_ids_opt,
+        )
         _ensure_soperator_onboarding_target(
             starter_payload,
             interactive=interactive_mode and optional_wizard_mode,
@@ -24121,6 +26828,7 @@ def create_command(
             if not isinstance(parsed_override, dict):
                 raise RuntimeError("Updated config payload must be a mapping")
             final_payload = parsed_override
+            _materialize_planned_vpc_binding_tokens(final_payload)
             selected_apps = _enabled_ids_from_runtime_payload(
                 payload=final_payload,
                 entries=app_entries,
@@ -24153,10 +26861,18 @@ def create_command(
             infra_entries=infra_entries,
             provider_lookup=provider_lookup,
         )
+        _materialize_planned_vpc_binding_tokens(final_payload)
         materialize_compute_boot_disk_defaults(
             final_payload,
             provider_lookup=provider_lookup,
         )
+        if not interactive_mode:
+            _require_vpc_networking_for_noninteractive(
+                payload=final_payload,
+                selected_infra=selected_infra,
+                infra_entries=infra_entries,
+                provider_lookup=provider_lookup,
+            )
         gpu_app_selection = resolve_mk8s_gpu_app_selection(
             final_payload,
             selected_app_ids=selected_apps,
@@ -24537,6 +27253,50 @@ def component_add_command(
             help="Disable interactive selection and field prompts.",
         ),
     ] = False,
+    network_ids_opt: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--network-id",
+            help=(
+                "VPC network ID for added network-attached infra. Use a bare value only when "
+                "one applicable infra component is added, or scope it as "
+                "'infra:<component-id>@<resource-name>=<vpcnetwork-id>'. Repeatable."
+            ),
+        ),
+    ] = None,
+    subnet_ids_opt: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--subnet-id",
+            help=(
+                "VPC subnet ID for added subnet-attached infra. Use a bare value only when "
+                "one applicable infra component is added, or scope it as "
+                "'infra:<component-id>@<resource-name>=<vpcsubnet-id>'. Repeatable."
+            ),
+        ),
+    ] = None,
+    network_refs_opt: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--network-ref",
+            help=(
+                "Planned VPC network ref for added network-attached infra. Use a bare value only when "
+                "one applicable infra component is added, or scope it as "
+                "'infra:<component-id>@<resource-name>=vpc@<vpc-instance>.network_id'. Repeatable."
+            ),
+        ),
+    ] = None,
+    subnet_refs_opt: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--subnet-ref",
+            help=(
+                "Planned VPC subnet ref for added subnet-attached infra. Use a bare value only when "
+                "one applicable infra component is added, or scope it as "
+                "'infra:<component-id>@<resource-name>=vpc@<vpc-instance>.subnets.<subnet-key>.id'. Repeatable."
+            ),
+        ),
+    ] = None,
     validate_sources: Annotated[
         bool,
         typer.Option(
@@ -24556,6 +27316,10 @@ def component_add_command(
 
       --config <config.yaml>
       --no-interactive
+      --network-id <id-or-scoped-id>
+      --subnet-id <id-or-scoped-id>
+      --network-ref <ref-or-scoped-ref>
+      --subnet-ref <ref-or-scoped-ref>
       --validate-sources --no-validate-sources
 
     Examples:
@@ -24564,7 +27328,9 @@ def component_add_command(
 
       nebius-cxcli component add infra:vm --config <config.yaml>
 
-      nebius-cxcli component add infra:vm@worker-vm --config <config.yaml> --no-interactive
+      nebius-cxcli component add infra:vm@worker-vm --config <config.yaml> --no-interactive --network-id infra:vm@worker-vm=vpcnetwork-... --subnet-id infra:vm@worker-vm=vpcsubnet-...
+
+      nebius-cxcli component add infra:vm@worker-vm --config <config.yaml> --no-interactive --network-ref infra:vm@worker-vm=vpc@worker-vpc.network_id --subnet-ref infra:vm@worker-vm=vpc@worker-vpc.subnets.worker.id
 
       nebius-cxcli component add managed-postgresql object-storage@logs-bucket --config <config.yaml> --no-interactive
 
@@ -25013,6 +27779,18 @@ def component_add_command(
             infra_entries=infra_entries,
             app_entries=app_entries,
         )
+        _apply_vpc_ref_overrides(
+            payload=next_payload,
+            selected_infra=set(added_infra_instances),
+            network_refs=network_refs_opt,
+            subnet_refs=subnet_refs_opt,
+        )
+        _apply_vpc_id_overrides(
+            payload=next_payload,
+            selected_infra=set(added_infra_instances),
+            network_ids=network_ids_opt,
+            subnet_ids=subnet_ids_opt,
+        )
         wizard_completed = True
         _materialize_singleton_provider_defaults(
             payload=next_payload,
@@ -25054,6 +27832,7 @@ def component_add_command(
             field_wizard_kwargs: dict[str, Any] = {}
             if soperator_profile is not None:
                 field_wizard_kwargs["skip_soperator_profile_prompt"] = True
+            skipped_components: set[tuple[ComponentScope, str, str]] = set()
             config_yaml_override, wizard_completed = _run_component_field_wizard(
                 config_yaml=config_yaml_override,
                 selected_infra=set(added_infra_instances),
@@ -25061,12 +27840,64 @@ def component_add_command(
                 infra_entries=infra_entries,
                 app_entries=app_entries,
                 provider_lookup=provider_lookup,
+                skipped_components=skipped_components,
                 **field_wizard_kwargs,
             )
             parsed_override = yaml.safe_load(config_yaml_override) or {}
             if not isinstance(parsed_override, dict):
                 raise RuntimeError("Updated config payload must be a mapping")
             next_payload = parsed_override
+            _materialize_planned_vpc_binding_tokens(next_payload)
+            skipped_infra_labels, skipped_infra_app_labels = (
+                _remove_skipped_component_add_infra_rows(
+                    payload=next_payload,
+                    skipped_components=skipped_components,
+                    added_infra_labels=added_infra_labels,
+                    infra_entries=infra_entries,
+                )
+            )
+            if skipped_infra_labels:
+                skipped_infra_label_set = set(skipped_infra_labels)
+                skipped_infra_app_label_set = set(skipped_infra_app_labels)
+                console.print(
+                    f"{warning_markup('Skipped newly added infra components:')} "
+                    + ", ".join(skipped_infra_labels)
+                )
+                added_infra_labels = [
+                    label for label in added_infra_labels if label not in skipped_infra_label_set
+                ]
+                added_infra_instances = [
+                    component_instance_id(row)
+                    for row in next_payload.get("infra", {}).get("components", [])
+                    if isinstance(row, dict)
+                    and component_instance_label(component_type_id(row), component_instance_id(row))
+                    in set(added_infra_labels)
+                ]
+                if skipped_infra_app_label_set:
+                    added_apps_selectors = [
+                        label
+                        for label in added_apps_selectors
+                        if label not in skipped_infra_app_label_set
+                    ]
+                    added_apps_labels = [
+                        label for label in added_apps_labels if label not in skipped_infra_app_label_set
+                    ]
+                    added_app_rows = [
+                        row
+                        for row in added_app_rows
+                        if component_instance_label(
+                            component_type_id(row), component_instance_id(row)
+                        )
+                        not in skipped_infra_app_label_set
+                    ]
+                    added_apps_instances = [component_instance_id(row) for row in added_app_rows]
+                if not added_infra_instances and not added_apps_selectors:
+                    console.print("No component changes applied.")
+                    return
+            selected_infra = _enabled_ids_from_runtime_payload(
+                payload=next_payload,
+                entries=infra_entries,
+            )
             selected_apps = _enabled_ids_from_runtime_payload(
                 payload=next_payload,
                 entries=app_entries,
@@ -25105,10 +27936,18 @@ def component_add_command(
             infra_entries=infra_entries,
             provider_lookup=provider_lookup,
         )
+        _materialize_planned_vpc_binding_tokens(next_payload)
         materialize_compute_boot_disk_defaults(
             next_payload,
             provider_lookup=provider_lookup,
         )
+        if not interactive_mode:
+            _require_vpc_networking_for_noninteractive(
+                payload=next_payload,
+                selected_infra=set(added_infra_instances),
+                infra_entries=infra_entries,
+                provider_lookup=provider_lookup,
+            )
         gpu_app_selection = resolve_mk8s_gpu_app_selection(
             next_payload,
             selected_app_ids=selected_apps,
@@ -25747,7 +28586,7 @@ def validate_command(
         ),
     ],
 ) -> None:
-    """Validate one project source config.yaml as the source config, deployment readiness, and live quota/capacity gate, including provider/chart wiring and MK8s preflight."""
+    """Validate one project source config.yaml as the source config, deployment readiness, and live quota/capacity gate, including provider/chart wiring and VPC networking preflight."""
     try:
         _run_runtime_validation(
             config_path=config_path,
@@ -28228,7 +31067,7 @@ def deploy_command(
     `generated/nebius-cxcli-manifest.json` as the authoritative deploy
     contract so source-config changes after render do not silently alter
     the deployed bundle. Before Terraform apply it runs a generated-bundle
-    deploy preflight covering strict readiness checks, MK8s network preflight,
+    deploy preflight covering strict readiness checks, VPC networking preflight,
     live Nebius quota/capacity validation, Terraform validation, and rendered
     Flux manifest validation when apps are enabled. For bundled MK8s reruns,
     that quota/capacity phase initializes the backend and discounts MK8s quota

@@ -49,7 +49,7 @@ nebius-cxcli bootstrap-ci <config.yaml>
 - `nebius-cxcli create <deployments-root>`: create one tenant/project scaffold under a deployments root.
 - `nebius-cxcli quota-check <config.yaml>`: assess live Nebius quota/capacity for enabled infra.
 - `nebius-cxcli quota-request <config.yaml>`: plan or submit requests for confirmed shortages.
-- `nebius-cxcli validate <config.yaml>`: validate source config, readiness, MK8s preflight, and live quota/capacity.
+- `nebius-cxcli validate <config.yaml>`: validate source config, readiness, VPC networking preflight, and live quota/capacity.
 - `nebius-cxcli render <config.yaml>`: turn source config into a deployable `generated/` bundle.
 - `nebius-cxcli validate-generated <generated-dir>`: validate the rendered bundle without rerendering.
 - `nebius-cxcli deploy <config.yaml>`: resolve sibling `generated/` and apply that rendered bundle.
@@ -64,7 +64,14 @@ nebius-cxcli bootstrap-ci <config.yaml>
   reconciliation. cxcli apps are installed only onto enabled built-in MK8s
   targets or onboarded external Nebius MK8s targets in the same project;
   app-only bundles without a cluster target are not supported.
-- The Nebius SDK is used for dynamic discovery, validation, status polling, quota/capacity checks, and guardrails. It does not replace Terraform as the infra reconciler.
+- The Nebius SDK is used for dynamic discovery, validation, status polling,
+  quota/capacity checks, guardrails, and bounded existing-network VPC
+  parent private-pool CIDR extension performed by the guided subnet wizard.
+  Terraform owns config-managed infra lifecycle, including VPC networks,
+  private pools, and subnets through `infra:vpc`. New VPC networks created by
+  Terraform rely on Nebius' default public pool and default route table unless
+  direct config intentionally supplies explicit public pool IDs or subnet route
+  tables.
 - Component config is dynamic: infra rows live in `infra.components[]`, app rows live in `apps.charts[]`, and reusable component types can be instantiated more than once when the `instance_id` is unique.
 - `create` is for initial project scaffolding. Day-2 component selection changes use `component list/add/remove --config <config.yaml>`; after any change, rerun `validate` and `render`.
 - For app rows, `id` names the chart type and `instance_id` names the MK8s target. Built-in MK8s targets use the cluster `instance_id` as the app target identity, so target-bound app rows use `<chart-id>@<target-id>`, such as `nvidia-gpu-operator@cluster2`.
@@ -88,7 +95,11 @@ nebius-cxcli bootstrap-ci <config.yaml>
 - Guided project creation plus day-2 `component add` and `component remove` for Terraform-backed infra modules and Helm-backed app charts.
 - Source-driven catalog model with reusable component types, dynamic Nebius-backed wizard choices, Helm dependency discovery, and target-scoped app binding to MK8s.
 - Deterministic render output under `generated/`: Terraform, Flux, Grafana dashboard assets, inventory, and `generated/nebius-cxcli-manifest.json`, the snapshot used to operate from the rendered bundle.
-- Source and generated validation, including deployment readiness, Terraform validation, Flux manifest validation, live quota/capacity checks, and MK8s subnet/service-CIDR preflight before cluster creation.
+- Source and generated validation, including deployment readiness, Terraform validation, Flux manifest validation, live quota/capacity checks, and live VPC network/subnet hierarchy preflight before subnet-attached resources are created.
+- Terraform-owned VPC creation through `infra:vpc`, with live SDK discovery
+  only for choosing and validating existing networks, subnets, and private
+  pools. New networks inherit Nebius public-pool and default-route behavior by
+  default so VM-style public IP allocations work in planned custom subnets.
 - Local deploy/destroy and Flux apply/destroy flows for rendered bundles, with Nebius service-native status.
 - GitOps bootstrap/reconcile flows for rendered Flux trees.
 - Bundled MK8s GPU automation for NVIDIA GPU Operator, Network Operator, DCGM metrics, and deploy-time GPU/NCCL validation.
@@ -206,7 +217,7 @@ Schema:
 - `component_cli_settings.yaml`:
   - `cli.flux.version`: Flux controller install version used by local `deploy` when controllers are missing and by managed `flux bootstrap` CLI download.
   - `cli.flux.release_timeout`: global default Flux `HelmRelease.spec.timeout` for rendered app releases when a chart does not set `release.timeout`.
-  - `cli.terraform.version`: Terraform CLI version used by the managed Terraform download path.
+- `cli.terraform.version`: Terraform CLI version used by the managed Terraform download path. This selects the Terraform binary; provider source/version constraints stay in generated and module `required_providers` blocks.
   - `observability.endpoints.<read|write>.<endpoint-key>`: global Monitoring, Logging, and Tracing endpoint templates used by all resource types.
   - `components.infra.<component-id>.cli`: cxcli behavior for the matching infra component.
   - `components.apps.<component-id>.cli`: cxcli behavior for the matching app component.
@@ -257,7 +268,7 @@ Matching `component_cli_settings.yaml` structure:
 ```yaml
 cli:
   terraform:
-    version: 1.14.1
+    version: 1.15.5
   flux:
     version: v2.8.0
     release_timeout: 5m
@@ -395,12 +406,60 @@ Implementation note:
 
 Built-in wizard profiles:
 
-- `mk8s`: guided typed `inputs.cluster.*` prompts followed by a concrete node-group creation loop, network-filtered subnet lookup, MK8s platform/preset chaining, labeled GPU stack-source choices that distinguish Nebius images with preinstalled NVIDIA host components from GPU Operator-managed driver installs, live GPU driver-preset choices keyed by the selected GPU platform and Kubernetes version, optional GPU reservation selection from tenant Capacity Block Groups, InfiniBand fabric choices keyed by the selected GPU platform and region when GPU clustering is enabled, and target-scoped native ESO MysteryBox sync prompts.
+- `mk8s`: guided typed `inputs.cluster.*` prompts followed by a concrete node-group creation loop, live VPC network selection, network-filtered subnet lookup, MK8s platform/preset chaining, labeled GPU stack-source choices that distinguish Nebius images with preinstalled NVIDIA host components from GPU Operator-managed driver installs, live GPU driver-preset choices keyed by the selected GPU platform and Kubernetes version, optional GPU reservation selection from tenant Capacity Block Groups, InfiniBand fabric choices keyed by the selected GPU platform and region when GPU clustering is enabled, and target-scoped native ESO MysteryBox sync prompts.
+- `vpc`: optional existing-network lookup plus guided private-pool and subnet
+  creation for the Terraform-owned VPC component. Live project-network choices
+  recommend `default-network` when it exists, so pressing Enter keeps the
+  wizard on the existing Nebius network; choosing `Create a new VPC network`
+  asks for a network name and can attach a live unassigned existing private
+  pool with at least one CIDR before falling back to
+  `inputs.network.ipv4_private_cidrs` for creating a new private pool. Direct
+  config can provide existing private pools with
+  `inputs.network.ipv4_private_pool_ids`, or set
+  `inputs.network.ipv4_private_source_pool_id` when a new managed pool must be
+  carved from an existing source pool. Suggested
+  custom private network CIDRs include non-default `10.x` `/13` ranges such as
+  `10.8.0.0/13`, `10.16.0.0/13`, `10.32.0.0/13`, `10.40.0.0/13`, and
+  `10.56.0.0/13`, plus `172.16.0.0/12` and `192.168.0.0/16`, outside
+  Nebius' documented regional default private-pool ranges. Public pools follow
+  the Nebius default-network pattern:
+  direct config can set `inputs.network.ipv4_public_pool_ids`, but leaving it
+  unset lets Nebius attach the default public pool to the new network. Declared
+  subnets always use explicit private CIDRs: the guided wizard accepts one or
+  more comma-separated explicit private CIDRs, stores them in the module's native
+  list form, and records `use_network_private_pools=false`. Public pools are still
+  inherited unless `use_network_public_pools` is set to `false`, so VM public
+  allocations work by default. A VPC row can still create a network with no
+  subnets by declining the subnet-add prompt or omitting `subnets`. Explicit
+  subnet CIDRs
+  must fit inside the selected network range, including default-network ranges
+  already attached to the parent, without overlapping other subnets or live
+  private allocations in that network.
+  When parent ranges are known, the wizard suggests child CIDRs from the
+  selected parent private pools while avoiding known explicit subnet CIDRs and
+  live private allocations.
+  For a new Terraform-owned network, if a custom subnet CIDR is
+  outside the currently planned parent ranges, the wizard adds it to
+  `inputs.network.ipv4_private_cidrs` first so Terraform extends the parent
+  network IP space before creating the explicit subnet child range; the subnet
+  prompt includes those new-parent-block suggestions when Terraform can manage
+  the network. When an existing live network is selected, the wizard skips the
+  new-network name prompt and network-CIDR prompts, then collects only planned
+  subnets under that network and suggests child CIDRs from its attached
+  private-pool ranges. Already attached RFC1918 extension blocks such as
+  `172.16.0.0/12` and `192.168.0.0/16` stay visible as explicit subnet
+  candidates when no explicit subnet CIDR or live private allocation overlaps
+  them. If the operator selects or enters an out-of-parent custom subnet CIDR,
+  cxcli adds that CIDR to an attached private pool on the selected live network
+  first, then records the subnet with explicit private pools
+  (`use_network_private_pools=false`).
+  Terraform still treats `network.existing_id` as externally managed; the
+  generated config does not claim ownership of the existing network.
 - `managed-postgresql`: VPC network lookup plus static `tier` choices.
-- `vm`: subnet lookup plus live compute platform/preset chaining, live Nebius public image-family choices keyed by the selected platform and region through the Nebius SDK `ImageServiceClient.list_public` API, static public-IP mode choices, optional InfiniBand fabric choices for GPU-cluster VM shapes, and a GPU-only preemptible path that materializes the required `recovery_policy=FAIL` when `preemptible_enabled=true`. The same shared GPU preset guidance applies here too: single-GPU shapes stay Ethernet-only/testing-oriented, while clusterable multi-GPU shapes are the InfiniBand path.
-- `wireguard-gw`: subnet lookup plus live compute platform/preset and public image-family chaining for the WireGuard VPN gateway module, which wraps the shared platform-infra `vm` module for VM resources and owns WireGuard cloud-init policy.
-- `ssh-jumphost`: subnet lookup plus live compute platform/preset and public image-family chaining for the SSH jump-host module, which wraps the shared platform-infra `vm` module for VM resources and owns SSH bastion cloud-init policy.
-- `nfs`: subnet lookup plus live compute platform/preset and public image-family chaining for the VM-based NFS module, which wraps the shared platform-infra `vm` module for VM resources and owns NFS cloud-init/export policy. The wizard asks the same guided boot-disk fields as other VM-style components and also asks the first-class secondary data-disk enabled/type/size fields.
+- `vm`: live VPC network selection, network-filtered subnet lookup, live compute platform/preset chaining, live Nebius public image-family choices keyed by the selected platform and region through the Nebius SDK `ImageServiceClient.list_public` API, static public-IP mode choices, optional InfiniBand fabric choices for GPU-cluster VM shapes, and a GPU-only preemptible path that materializes the required `recovery_policy=FAIL` when `preemptible_enabled=true`. The same shared GPU preset guidance applies here too: single-GPU shapes stay Ethernet-only/testing-oriented, while clusterable multi-GPU shapes are the InfiniBand path.
+- `wireguard-gw`: live VPC network selection, network-filtered subnet lookup, live compute platform/preset, and public image-family chaining for the WireGuard VPN gateway module, which wraps the shared platform-infra `vm` module for VM resources and owns WireGuard cloud-init policy.
+- `ssh-jumphost`: live VPC network selection, network-filtered subnet lookup, live compute platform/preset, and public image-family chaining for the SSH jump-host module, which wraps the shared platform-infra `vm` module for VM resources and owns SSH bastion cloud-init policy.
+- `nfs`: live VPC network selection, network-filtered subnet lookup, live compute platform/preset, and public image-family chaining for the VM-based NFS module, which wraps the shared platform-infra `vm` module for VM resources and owns NFS cloud-init/export policy. The wizard asks the same guided boot-disk fields as other VM-style components and also asks the first-class secondary data-disk enabled/type/size fields.
 - `object-storage`: static choices for `versioning_policy` and `object_audit_logging`.
 - `soperator`: guided `install_mode`, NodeSet profile, partition profile,
   topology profile, role-to-node-group mapping, and top-level optional
@@ -410,13 +469,18 @@ Built-in wizard profiles:
 Bundled infra component alignment:
 
 - `mk8s` uses `wizard_profile: mk8s` because its typed cluster object, network-filtered subnet, Kubernetes version, concrete node-group loop, profile-only node-group helper defaults, GPU stack source, GPU driver preset, optional GPU-cluster fabric helper, GPU reservation choices, SFS attachment keys, SSH keys, service-account attachment, and optional native ESO MysteryBox sync deploy-target fields need guided choices instead of raw YAML object prompts.
+- `vpc` uses `wizard_profile: vpc` because it owns the planned VPC resource
+  branch: the wizard can either select an existing network for new subnets or
+  collect a network name, network private CIDRs, and optional guided subnet
+  entries for Terraform to create.
 - `managed-postgresql` uses `wizard_profile: managed-postgresql` because `network_id` is Nebius-backed and `tier` is intentionally guided as a fixed choice.
-- `vm` uses `wizard_profile: vm` because `subnet_id`, `platform`, `preset`, `source_image_family`, `public_ip_mode`, guided secondary data-disk fields, optional GPU-cluster fabric choices, and preemptible GPU VM follow-up fields should come from guided catalog wiring instead of raw manual entry.
+- `vm` uses `wizard_profile: vm` because `network_id`, network-filtered `subnet_id`, `platform`, `preset`, `source_image_family`, `public_ip_mode`, guided secondary data-disk fields, optional GPU-cluster fabric choices, and preemptible GPU VM follow-up fields should come from guided catalog wiring instead of raw manual entry.
 - The shared `compute_platform_presets` provider is what keeps GPU shape labeling aligned across MK8s and VM-style wizards. When tenant/region context is available and the selected platform is GPU-backed, it queries the live Capacity Dashboard for the exact platform -> region -> preset shape, keeps matching platform rows separated even when preset names overlap, and ranks the returned presets before any fabric prompt is shown.
-- `wireguard-gw` and `ssh-jumphost` use their matching `wizard_profile` names because `subnet_id`, `platform`, `preset`, and `source_image_family` should come from live project discovery instead of module-local hardcoded defaults. The WireGuard wizard materializes `inputs.wireguard_tunnel_cidr` into `config.yaml` because it defines the server tunnel address and client allocation pool. It keeps advanced `endpoint_host`, `clients`, and `labels` off the prompt path: endpoint detection is automatic by default, day-2 clients are generated with the `wireguard` command, and the module applies useful `component`/`name` labels automatically. Both public VM profiles use the same public-IP allocation contract: either create a new allocation, or disable creation and provide `inputs.public_ip_allocation_id`; explicit `inputs.public_ip_allocation_name` values must use lowercase letters, digits, and hyphens so cxcli can reject invalid names before Terraform. The SSH jump-host wizard treats `inputs.allowed_cidrs` as the first-boot seed for SSH reachability, defaults it from the detected operator public IPv4 address when available, and expects later source-IP allowlist updates to use the `ssh-jumphost` command against the deployed VM-local helper.
+- `wireguard-gw` and `ssh-jumphost` use their matching `wizard_profile` names because `network_id`, network-filtered `subnet_id`, `platform`, `preset`, and `source_image_family` should come from live project discovery instead of module-local hardcoded defaults. The WireGuard wizard materializes `inputs.wireguard_tunnel_cidr` into `config.yaml` because it defines the server tunnel address and client allocation pool. It keeps advanced `endpoint_host`, `clients`, and `labels` off the prompt path: endpoint detection is automatic by default, day-2 clients are generated with the `wireguard` command, and the module applies useful `component`/`name` labels automatically. Both public VM profiles use the same public-IP allocation contract: either create a new allocation, or disable creation and provide `inputs.public_ip_allocation_id`; explicit `inputs.public_ip_allocation_name` values must use lowercase letters, digits, and hyphens so cxcli can reject invalid names before Terraform. The SSH jump-host wizard treats `inputs.allowed_cidrs` as the first-boot seed for SSH reachability, defaults it from the detected operator public IPv4 address when available, and expects later source-IP allowlist updates to use the `ssh-jumphost` command against the deployed VM-local helper.
 - `object-storage` uses `wizard_profile: object-storage` because `versioning_policy` and `object_audit_logging` are intentionally guided as fixed choices.
 - `nfs` uses `wizard_profile: nfs` because it is a VM-module-backed storage
-  component: `subnet_id`, `platform`, `preset`, and `source_image_family`
+  component: `network_id`, network-filtered `subnet_id`, `platform`, `preset`,
+  and `source_image_family`
   should come from live project discovery, while `data_disk_enabled`,
   `data_disk_type`, and `data_disk_size_gib` are first-class secondary-disk
   choices rather than a raw nested object prompt.
@@ -676,7 +740,7 @@ That shorthand expands to the equivalent wiring for the built-in MK8s flow, incl
 - a node-group creation loop that defaults the first group name to `system`, then lets you add more concrete `inputs.node_groups.<name>` entries
 - each node group's `platform` and `preset` from the MK8s compatibility lookup intersected with the selected project's live compute-platform inventory
 - each node group's `boot_disk` materialized from live/provider-backed choices and shared disk policy
-- `inputs.node_groups.system` is the concrete default CPU baseline node group for a plain MK8s target. `system` is just the node-group role/name in the generated config; it is not the Soperator app. Its `node_count` or `autoscaling` fields are the actual scale controls.
+- `inputs.node_groups.system` is the concrete default CPU baseline node group for a plain MK8s target. `system` is just the node-group role/name in the generated config; it is not the Soperator app. Its `node_count` or `autoscaling` fields are the actual scale controls. The plain MK8s node-group loop asks whether autoscaling is enabled for each concrete group and keeps it disabled by default; when enabled, the loop writes `autoscaling.min_node_count` and `max_node_count` instead of `node_count`.
 - `inputs.node_group_defaults.*` is a profile helper surface, not a bundled MK8s Terraform module input and not a scale control. cxcli keeps it for profile materialization such as Soperator `production-cluster`, where helper defaults are copied into real typed `inputs.node_groups` and `inputs.gpu_clusters`; plain MK8s-only create, component-add, and normalized runtime config suppress or prune those helper fields. CPU-only Soperator profiles skip and prune the inactive `inputs.node_group_defaults.gpu.*` helper scope during the wizard and runtime config normalization, so GPU fabric and stack fields are not offered or retained unless the selected profile actually creates GPU node groups. Soperator profile boot-disk defaults merge into concrete node groups and keep cxcli's computed `size_gibibytes` values so generated Terraform always carries both boot-disk type and size.
 - In profile-owned GPU flows, `inputs.node_group_defaults.gpu.infiniband_fabric` is prompted only after the GPU preset, and only when the exact selected platform/preset's live Nebius metadata says `allow_gpu_clustering=true`; setting that field creates the profile-owned `inputs.gpu_clusters` entry used by GPU node groups
 - In plain MK8s GPU node-group loops, reservation IDs are offered from tenant Capacity Block Groups filtered by the selected region, platform, and GPU-cluster fabric when a fabric is selected.
@@ -734,12 +798,12 @@ Regex and pattern behavior:
 - The same `filter_regex` is used both for displayed wizard choices and for strict provider-backed manual-entry validation, so operators cannot type a value that the catalog-level filter was meant to exclude.
 - `wizard.<field>.options.prefix` is a plain literal prefix helper for provider lookups. It is not regex.
 - `wizard.<field>.options.depends_on` is a plain field-path reference such as `inputs.node_groups.system.platform`. It is not regex.
-- `wizard.<field>.options.auto_select_single: true` tells the wizard to preselect a live provider value when exactly one compatible option exists and the field is currently unset.
-- `wizard.<field>.options.auto_select_first: true` tells the wizard to preselect the first live provider value after provider-specific ordering when the field is currently unset. For VM public images, that means Nebius `recommended_platforms` matches sort before other compatible image families.
+- `wizard.<field>.options.auto_select_single: true` tells the wizard to preselect a provider-backed compatible option when exactly one exists and the field is currently unset.
+- `wizard.<field>.options.auto_select_first: true` tells the wizard to preselect the first provider-backed compatible option after provider-specific ordering when the field is currently unset. For VM public images, that means Nebius `recommended_platforms` matches sort before other compatible image families.
 - `wizard.<field>.options.args` passes provider-specific lookup arguments through directly; the shorthand helpers `prefix` and `depends_on` are merged into that args mapping during catalog load.
 - `wizard.<field>.options.skip_prompt_if_no_choices: true` suppresses an optional provider-backed prompt when the live lookup succeeds but returns no valid choices for the current shape.
 - Component ids and instance selectors are validated against the repo's lowercase letters/digits/hyphens naming rules.
-- `component_cli_settings.yaml` `cli.flux.version` must look like `v2.8.0`; `cli.flux.release_timeout` and `release.timeout` must be Go-style durations such as `5m` or `12m30s`; `cli.terraform.version` must look like `1.14.1`.
+- `component_cli_settings.yaml` `cli.flux.version` must look like `v2.8.0`; `cli.flux.release_timeout` and `release.timeout` must be Go-style durations such as `5m` or `12m30s`; `cli.terraform.version` must look like `1.15.5`.
 
 Wizard field keys:
 
@@ -756,8 +820,8 @@ Wizard `options` keys:
 - `depends_on`: optional sibling field path used to drive provider lookup args
 - `args`: optional provider-specific argument mapping; use this for extra lookup inputs beyond the `prefix` / `depends_on` shorthands
 - `filter_regex`: optional regex post-filter for returned option values
-- `auto_select_single`: optional boolean for provider-backed fields; when true, the wizard preselects the one live compatible value if the lookup resolves to exactly one option
-- `auto_select_first`: optional boolean for provider-backed fields; when true, the wizard materializes the first live compatible value after provider-side sorting
+- `auto_select_single`: optional boolean for provider-backed fields; when true, the wizard preselects the one compatible option if the lookup resolves to exactly one option
+- `auto_select_first`: optional boolean for provider-backed fields; when true, the wizard materializes the first compatible option after provider-side sorting
 - `skip_prompt_if_no_choices`: optional boolean for provider-backed optional fields; when true, the wizard skips the prompt entirely if the live lookup returns no valid choices and no current value is set
 
 Static wizard source keys:
@@ -943,7 +1007,7 @@ cli:
     version: v2.8.0
     release_timeout: 5m
   terraform:
-    version: 1.14.1
+    version: 1.15.5
 
 observability:
   endpoints:
@@ -968,7 +1032,7 @@ components:
 
 `cli.flux.version` is the settings-controlled Flux controller version for local `deploy` and the managed Flux CLI download path.
 `cli.flux.release_timeout` is the settings-controlled default Flux `HelmRelease.spec.timeout` used when an app chart does not set `release.timeout`.
-`cli.terraform.version` is the settings-controlled Terraform CLI version for the managed Terraform download path.
+`cli.terraform.version` is the settings-controlled Terraform CLI version for the managed Terraform download path. It controls the Terraform binary only; rendered roots and platform modules still declare provider source/version compatibility in `terraform.required_providers`.
 The bundled default is `5m`, which matches the upstream Helm/Flux default action timeout. To change one global app-install timeout policy or either managed tool version, bump the value in the active `component_cli_settings.yaml`.
 
 Portable build/release behavior:
@@ -1091,8 +1155,9 @@ Wizard field behavior:
 
 - Infra input field names are discovered dynamically from Terraform module variables (required and optional).
 - Interactive `create` and `component add` offer all discoverable required and optional component fields for newly selected components.
+- When no `--app` values are provided, interactive `create` opens app chart selection only after an MK8s target is selected. Explicit app selections still run normal target validation, so non-Soperator Helm charts cannot be added without a managed or onboarded MK8s target.
 - Infra component field phases default to `y`; app chart field phases default to `n`, because chart overrides are usually optional and Helm/chart defaults still apply unless you choose to edit them.
-- Optional-wizard controls are consistent across component selection, component phase prompts, and field prompts: `q` backs up to the previous step so you can revise an earlier answer, while `qq` stops the wizard immediately and saves the current config state. Interactive TTY list and checkbox prompts bind those controls directly to the keys instead of showing Back/Quit as selectable rows. When a field has a constrained choice list, the TTY wizard shows only selectable values, plus an explicit skip row for optional unset fields; the non-TTY fallback accepts only a listed index or exact value. Manual free text is reserved for fields without resolved choices.
+- Optional-wizard controls are consistent across component selection, component phase prompts, and field prompts: `q` backs up to the previous step so you can revise an earlier answer, while `qq` stops the wizard immediately and saves the current config state. Interactive TTY list and checkbox prompts bind those controls directly to the keys instead of showing Back/Quit as selectable rows. When a field has a constrained choice list, the TTY wizard shows only selectable values, plus an explicit skip row for optional unset fields; the non-TTY fallback accepts only a listed index or exact value. Manual free text is reserved for fields without resolved choices, except required VPC network/subnet fields which fail fast when live lookup is unavailable.
 - Interactive component selection prints one resolved infra/apps summary after dependency resolution finishes. During field input, the wizard context is a one-line Rich-colored `Wizard context: Current: <scope> / <component-or-target-feature>` marker, so long app lists are not repeated before every prompt. Fields under `deploy.targets[]`, such as native MysteryBox ESO sync, are labeled as deploy-target context rather than ordinary MK8s Terraform inputs.
 - Interactive `component add` uses that target-aware summary as the component report and does not repeat final `Added infra/apps components` lines after writing `config.yaml`; non-interactive adds still print compact added-component summaries for categories that actually changed because they do not run the wizard summary.
 - Required fields are prompted first, are labeled `required`, and must receive a valid value before the wizard advances unless the operator backs out or stops the wizard.
@@ -1423,7 +1488,7 @@ Wizard field behavior:
 - `deploy.targets[].validations.mk8s_gpu.health_checker.enabled` is not a built-in runner. It is reserved for a custom catalog app with `cli.mk8s_gpu_policy.role: health_checker`. In the bundled catalog there is no such app, so the wizard hides that toggle and cxcli omits it from persisted target defaults unless an active catalog actually supplies one.
 - If the selected infra path implies a required app, the same wizard pass now auto-enables that app row before the app phase starts, so `mysterybox` plus MK8s exposes `external-secrets`, and GPU-enabled MK8s exposes `nvidia-gpu-operator` / `nvidia-network-operator`, for review in `create` or `component add` instead of only appearing later in the final `config.yaml`.
 - MK8s operator readiness is no longer tied to manual `nvidia.com/gpu.deploy.*` node labels. cxcli now uses a hybrid live check: `ClusterPolicy` and `NicClusterPolicy` are the fast control-plane signals, GPU readiness still requires allocatable `nvidia.com/gpu` on Ready nodes, and the actual GPU-cluster / InfiniBand path also requires those Ready GPU nodes to advertise scheduler-visible RDMA-style allocatable resources such as `rdma/shared_device`. The saved report now records `NicClusterPolicy.status.appliedStates` plus daemonset rollout details instead of treating a green control plane alone as proof that pod-facing RDMA is ready. If GPU Operator condition text is stale or conservative, for example a `NoGPUNodes` reason, allocatable GPUs on Ready nodes remain the data-plane signal cxcli uses.
-- The bundled MK8s flow treats typed node-group prerequisites as conditionally required: each enabled group must provide `platform` and `preset`, and either `node_count` or `autoscaling`.
+- The bundled MK8s flow treats typed node-group prerequisites as conditionally required: each enabled group must provide `platform` and `preset`, and either `node_count` or enabled `autoscaling`.
 - Soperator uses the catalog-owned `soperator_nodesets_profile`
   (`nebius-gpu-v1` by default) to seed typed MK8s node groups instead of
   hardcoded Python dictionaries. Built-in profile choices are `nebius-cpu-v1`,
@@ -1458,9 +1523,14 @@ Wizard field behavior:
   login pod has enough dedicated capacity instead of competing with generic
   cluster workloads. The production wizard now exposes curated service-role
   node count helpers under `inputs.soperator.system_node_count`,
-  `controller_node_count`, `login_node_count`, and `accounting_node_count`;
-  those values materialize into the matching CPU `inputs.node_groups.*.node_count`
-  entries while raw profile-owned `inputs.node_groups.*` prompts stay hidden.
+  `controller_node_count`, `login_node_count`, and `accounting_node_count`,
+  plus per-role autoscaling helpers under
+  `inputs.soperator.<role>_autoscaling.*` for `system`, `controller`,
+  `login`, `accounting`, and `worker`. Autoscaling helpers are disabled by
+  default. When one is enabled, cxcli materializes the matching concrete
+  `inputs.node_groups.*.autoscaling` block and omits `node_count`; otherwise it
+  writes the fixed count. Raw profile-owned `inputs.node_groups.*` prompts stay
+  hidden.
   When onboarding uses the chart-local storage mode, cxcli pins generated
   Slurm pods to one discovered node and disables accounting, Slurm REST, and
   chart-managed MariaDB because Kubernetes local PVs are node-local rather than
@@ -1508,10 +1578,16 @@ Wizard field behavior:
   `nodeConfig.features`, not partition fields. The default production worker
   count is one node, with 100 nodes per host-pool shard when the operator scales
   `soperator.worker_total_nodes` up, so a 1000-node worker pool becomes 10 MK8s
-  worker groups and a 3000-node pool becomes 30 groups. CPU service-role counts
-  are independent of worker sharding and use the dedicated
-  `inputs.soperator.*_node_count` helpers. NFS stays a VM-based sibling infra
-  component, not an MK8s node group.
+  worker groups and a 3000-node pool becomes 30 groups. When
+  `inputs.soperator.worker_autoscaling.enabled=true`, the worker max count is
+  sharded by `worker_nodes_per_group`, minimum nodes are distributed across the
+  generated groups, and NodeSet replicas reflect each shard's max, including an
+  explicit `0..0` scale-to-zero worker range. CPU
+  service-role counts are independent of worker sharding and use the dedicated
+  `inputs.soperator.*_node_count` helpers unless that role's autoscaling helper
+  is enabled; service-role autoscaling must keep `max_node_count` at least `1`.
+  NFS stays a VM-based sibling infra component, not an MK8s node
+  group.
 - The five-role Nebius Soperator production shape and Slurm topology are separate concerns. The five role groups provide workload isolation and placement for `system`, `controller`, `login`, `accounting`, and `worker`. Slurm topology is an additional worker-placement optimization for distributed jobs that care about physical or fabric locality, especially multi-node GPU/NCCL jobs.
 - For a fresh Nebius production MK8s plus Soperator deployment, use `values.topologyProfile: nebius-tiered-tree-v1` when the same provisioning flow prepares accurate `topology.nebius.com/tier-*` labels for worker nodes. Use `values.topologyProfile: nebius-nvl-rack-v1` only for GB300/NVL clusters whose nodes expose accurate `topology.nvidia.com/rack` labels. For arbitrary Kubernetes clusters and already-installed Nebius MK8s clusters, keep `values.topologyProfile: disabled` by default; operators can opt in after they have prepared and verified equivalent labels.
 - Topology labels must describe real locality. Manually pre-labeling an arbitrary cluster before installing the Soperator chart is valid only when the labels are complete, stable, and reflect the actual fabric hierarchy for all worker nodes. Misleading or stale labels can make Slurm wait for a topology that does not exist, place jobs poorly, or make multi-node jobs fail when selected nodes cannot communicate as modeled. Nebius MK8s node-group metadata labels also do not update already-created Kubernetes Nodes, so existing clusters may need explicit node relabeling or node replacement before topology is safe.
@@ -1521,15 +1597,73 @@ Wizard field behavior:
 - If live provider choices are unavailable for a field, the CLI prints a field-specific warning immediately before that prompt and explains whether the next manual-input prompt is required or can be skipped with Enter.
 - When a built-in resolver or provider plugin fails internally, the fallback warning now includes that resolver error text instead of silently degrading to a generic unavailable-options message.
 - Optional provider-backed fields now accept blank/skip answers as “leave unset” without revalidating that blank value against the live option list.
-- Provider-backed fields can now opt into `auto_select_single` or `auto_select_first`, which materialize the resolved live value into `config.yaml` during `create` and `component add` while still leaving the field editable in the wizard when prompting is enabled.
-- The bundled MK8s profile uses `auto_select_first` for the project network and subnet fields so non-interactive Soperator production creates write Terraform-required `cluster.network_id` and `cluster.subnet_id` from the provider-ranked live choices.
+- Provider-backed fields can now opt into `auto_select_single` or `auto_select_first`, which materialize the resolved option into `config.yaml` during `create` and `component add` while still leaving the field editable in the wizard when prompting is enabled.
+- The bundled VPC network and subnet fields use `auto_select_single` across the combined live/planned choice list: when exactly one valid project VPC network or planned VPC network exists, and exactly one live or planned subnet belongs to that selected network, non-interactive `create` and `component add` can materialize either literal IDs or row-level bindings. When several choices exist, the operator must choose interactively or pass scoped `--network-id` / `--subnet-id` or `--network-ref` / `--subnet-ref` values.
+- The bundled `infra:vpc` component lets the same config create a VPC network
+  with optional subnets, or create subnets under `inputs.network.existing_id`.
+  Workload rows bind to planned VPC outputs through
+  `infra.components[].bindings`, while live networks/subnets stay literal
+  `network_id` / `subnet_id` values. When `infra:vpc` is selected together
+  with MK8s or VM-style infra in the interactive field wizard, cxcli configures
+  the VPC row first so the planned network and subnet choices are available to
+  the consuming component in the same `create` or `component add` run. During
+  `render`, those row-level `inputs.*` bindings become direct Terraform module
+  arguments such as `network_id` and `subnet_id` on the consuming module.
+- Wizard VPC choices use the mental model “choose an existing resource, or
+  choose a resource this config will create”: live project networks/subnets are
+  listed beside enabled planned `infra:vpc` rows, and planned subnet choices are
+  filtered to the selected live or planned network. Live project-network choices
+  recommend `default-network` when it exists, and the `infra:vpc` field wizard
+  keeps `Create a new VPC network` as an explicit prompt row for new-network
+  creation. For that path it can select a live unassigned existing private pool
+  with at least one CIDR for `inputs.network.ipv4_private_pool_ids`; pools
+  already assigned to another network or subnet are hidden. If no pool is
+  selected, it collects `inputs.network.ipv4_private_cidrs` before any subnet
+  prompt, and it can still skip subnet creation entirely. Direct config can
+  also set `inputs.network.ipv4_private_source_pool_id` when Terraform should create a
+  managed private pool from an existing source pool. Direct config may set
+  `inputs.network.ipv4_public_pool_ids` for explicit public pools; if omitted,
+  Nebius attaches the default public pool and creates the network default route
+  table. Network
+  CIDR prompts suggest custom private non-default `10.x` `/13` ranges such as
+  `10.8.0.0/13`, `10.16.0.0/13`, `10.32.0.0/13`, `10.40.0.0/13`, and
+  `10.56.0.0/13`, plus `172.16.0.0/12` and `192.168.0.0/16`, outside
+  Nebius' documented regional default private-pool ranges. Planned subnets are
+  collected through name and subnet-specific private-CIDR prompts instead of a
+  raw YAML/JSON map prompt. Every declared subnet uses explicit private CIDRs:
+  the guided wizard accepts one or more comma-separated explicit private CIDRs,
+  stores them in the module's native list form, and records
+  `use_network_private_pools=false`. Public pools are inherited unless
+  `use_network_public_pools` is set to `false`. Explicit subnet CIDRs
+  must fit inside the selected network range, including default-network ranges
+  already attached to the parent, and must not overlap other subnets or live
+  private allocations in that network.
+  When parent ranges are known, the prompt suggests child CIDRs from the
+  selected parent private pools while avoiding known explicit subnet CIDRs and
+  live private allocations.
+  For a Terraform-owned new network, cxcli adds any out-of-parent
+  custom subnet CIDR to `inputs.network.ipv4_private_cidrs` first so the
+  parent network IP space exists before Terraform creates the explicit subnet
+  child range, and the subnet prompt includes those new-parent-block
+  suggestions when Terraform can manage the network. For
+  `inputs.network.existing_id`, cxcli suggests child CIDRs from the attached
+  parent private-pool ranges and keeps already attached RFC1918 extension
+  blocks such as `172.16.0.0/12` and `192.168.0.0/16` visible as explicit
+  subnet candidates when no explicit subnet CIDR or live private allocation
+  overlaps them. If the operator selects or enters an out-of-parent custom
+  child range, cxcli adds that CIDR to an attached private pool on the selected
+  live network first, then records the subnet with explicit private pools
+  (`use_network_private_pools=false`). Terraform still treats the selected
+  network as externally managed. The VPC component's own
+  `inputs.network.existing_id` prompt is live-only so a planned VPC row cannot
+  reference itself as an existing network.
 - Profile-backed MK8s GPU flows also use `auto_select_first` for `inputs.node_group_defaults.gpu.infiniband_fabric` when the selected shape has live fabric choices, so non-interactive Soperator GPU creates use the same capacity-aware fabric recommendation as the wizard.
 - The bundled Soperator GPU and Mixed production profiles set `reservation.policy: AUTO` on GPU worker node groups. That lets reserved-capacity fabric recommendations consume matching reservations and then fall back to suitable capacity; set the worker node group's reservation policy to `FORBID` in `config.yaml` when a deployment must avoid reservations.
 - Helm chart default values discovered from the live chart are not copied into `config.yaml`; the app wizard can show them as prompt defaults, but only explicit overrides are written back.
-- Current built-in provider option sources include `mk8s_compatible_platforms` (mk8s platform fields), `mk8s_gpu_stack_presets` and `mk8s_node_group_os_values` (mk8s image selection from the compatibility matrix), `mk8s_infiniband_fabrics` (optional mk8s GPU-cluster fabric selection gated by the selected preset's live clustering capability and sourced from live Capacity Dashboard fabric rows when available), `capacity_block_groups` (tenant Capacity Block Groups filtered by region/platform/fabric for GPU reservations), `compute_boot_disk_types`, `compute_platforms`, `compute_platform_presets` (GPU preset labels/ranking are also enriched by live Capacity Dashboard advice for the selected platform/region/preset when tenant/region context is available), `project_subnets`, `project_networks`, `tenant_projects`, `mk8s_control_plane_versions`, `soperator_nodesets_profiles`, `soperator_partition_profiles`, `soperator_topology_profiles`, and `soperator_node_groups` for target-scoped Soperator role mapping.
+- Current built-in provider option sources include `mk8s_compatible_platforms` (mk8s platform fields), `mk8s_gpu_stack_presets` and `mk8s_node_group_os_values` (mk8s image selection from the compatibility matrix), `mk8s_infiniband_fabrics` (optional mk8s GPU-cluster fabric selection gated by the selected preset's live clustering capability and sourced from live Capacity Dashboard fabric rows when available), `capacity_block_groups` (tenant Capacity Block Groups filtered by region/platform/fabric for GPU reservations), `compute_boot_disk_types`, `compute_platforms`, `compute_platform_presets` (GPU preset labels/ranking are also enriched by live Capacity Dashboard advice for the selected platform/region/preset when tenant/region context is available), `project_subnets`, `project_networks`, `project_private_pools`, `project_private_allocations`, `project_filesystems`, `tenant_projects`, `mk8s_control_plane_versions`, `soperator_nodesets_profiles`, `soperator_partition_profiles`, `soperator_topology_profiles`, and `soperator_node_groups` for target-scoped Soperator role mapping.
 - For GPU presets, cxcli uses live preset metadata as the source of truth for whether the interconnect is Ethernet-only or InfiniBand-capable; it does not hardcode preset-name lists. Today that matches the public Nebius Compute docs: the supported GPU-cluster path is the listed 8-GPU preset set, while single-GPU presets are the testing/dev path with no GPUDirect-RDMA.
 - When the selected plain MK8s GPU shape or fabric has live reserved capacity, the wizard defaults `reservation.policy` to `AUTO`; otherwise it defaults to `FORBID`. The reservation prompt stays after platform/preset/fabric selection because tenant Capacity Block Groups are matched by region, service, platform, and fabric.
-- When live provider options are unavailable, the wizard falls back to manual input.
+- When live provider options are unavailable, optional wizard fields can still fall back to manual input. Required VPC network/subnet fields fail fast instead of accepting free text, because the selected subnet must be validated against the selected project network.
 
 Shared-derived default example:
 
@@ -1660,9 +1794,13 @@ Helm values into `config.yaml`. Slurm users still own per-job choices such as
 `--qos`, `--nice`, `--time`, and `--requeue`.
 For production clusters, cxcli keeps raw profile-owned `inputs.node_groups.*`
 prompts hidden but exposes `inputs.soperator.*_node_count` helpers for CPU
-service-role counts; worker sizing stays on `soperator.worker_total_nodes` and
-`worker_nodes_per_group`. CPU service-role counts are independent of worker
-sharding.
+service-role counts and disabled-by-default `inputs.soperator.*_autoscaling`
+helpers for every Soperator-managed role. Worker fixed sizing stays on
+`soperator.worker_total_nodes` and `worker_nodes_per_group`; worker autoscaling
+uses `worker_autoscaling.max_node_count` with the same shard size and preserves
+an explicit `0..0` scale-to-zero range. CPU service-role counts are independent
+of worker sharding. CPU service-role autoscaling must keep `max_node_count` at
+least `1`.
 
 | Concept | Meaning | Handled by the Helm chart | Handled by cxcli | If not fully handled, why and how to cover it |
 | --- | --- | --- | --- | --- |
@@ -1864,7 +2002,7 @@ For operator changes, prefer profile-level config first:
 
 `create` is the bootstrap path, not the day-2 component-editing path. When the same resolved project folder for the same `tenant_id`/`project_id` already exists, `create` now warns and overwrites from scratch instead of reconciling the existing component selection. Use `component list/add/remove --config <config.yaml>` for normal edits after the project already exists.
 
-`create --force` is intentionally narrow in scope: it targets the one resolved project folder only after `client_name`, `tenant_id`, and `project_id` are known. It recreates that folder from scratch, including deleting existing generated artifacts and any other files already under that project path, but it does not delete the deployments root or unrelated projects.
+`create --force` is intentionally narrow in scope: it targets the one resolved project folder only after `tenant_id` and `project_id` are known. It recreates that folder from scratch, including deleting existing generated artifacts and any other files already under that project path, but it does not delete the deployments root or unrelated projects.
 
 If those normalized tenant/project names would collide with an existing different project's folder, `create` fails fast instead of overwriting the wrong config. Other commands accept any existing `<tenant-folder>/<project-folder>/config.yaml`; GitHub environment names, generated manifests, deploy reports, and runtime operations still read `tenant_id` / `project_id` from `config.yaml`, not from the folder names.
 
@@ -1980,7 +2118,7 @@ Idempotency guide:
 
 - Read-only commands are safe to repeat: `validate-sources`, `validate`, `quota-check`, `validate-generated`, `discover`, `terraform plan`, and `auth --validate-profile`.
 - Reconcile/apply commands are sequentially idempotent or convergent for the same target: `render`, `deploy`, `terraform apply`, `flux apply`, `flux bootstrap`, `bootstrap-ci`, `auth --create`, and `auth --bootstrap-ci`.
-- `create`: create-if-missing for a new resolved project folder; existing resolved targets for the same `tenant_id`/`project_id` require explicit overwrite confirmation instead of reconcile.
+- `create`: create-if-missing for a new resolved project folder; existing resolved targets for the same `tenant_id`/`project_id` require explicit overwrite confirmation unless `--force` is provided, and are not reconciled in place.
 - Destructive commands are sequentially convergent for the same target but intentionally remove resources: `destroy`, `terraform destroy`, and `flux destroy`. They require confirmation or `--yes`.
 - Day-2 component commands are safe to repeat for exact rows: `component list`
   is read-only, non-interactive `component add` skips already-enabled exact
@@ -2026,7 +2164,7 @@ nebius-cxcli render /path/to/config.yaml
   - Example: `nebius-cxcli grafana --dashboard-json ./dashboards/mk8s/custom.json --dashboard-folder mk8s --datasource "Nebius User Metrics" --attach`
 - `validate <config.yaml>`
   - Validates the project config contract and deployment-readiness shape in one canonical command.
-  - Runs phased validation with visible progress: config/catalog load, active source checks, dependency checks, Terraform module input/schema checks, strict readiness checks, MK8s preflight, then a fail-fast live Nebius quota/capacity phase.
+  - Runs phased validation with visible progress: config/catalog load, active source checks, dependency checks, Terraform module input/schema checks, strict readiness checks, VPC networking preflight, then a fail-fast live Nebius quota/capacity phase.
   - Prints one concise validated-scope list after the phase run, with separate `infra` and `apps` sections and per-group entries such as `Compute`, `Storage`, `Platform`, or `Workloads`.
   - Reuses the same live quota/capacity assessment as `quota-check`. GPU quota dimensions are resolved from the live Nebius Capacity Dashboard for the exact platform/preset/fabric shape, interpreted as VM slots for that preset, and converted to GPU units before comparison, while non-GPU quota dimensions still use the regular quota allowance APIs. Confirmed insufficiency fails `validate`, while unresolved live limits remain warning-only.
   - For day-2 edits to an already rendered/deployed MK8s bundle, `validate` uses the same sibling generated manifest plus Terraform state discount as `quota-check`, so an unchanged existing cluster is not treated as a fresh capacity request. Without generated state, it falls back to the full desired shape from `config.yaml`.
@@ -2095,12 +2233,12 @@ nebius-cxcli flux bootstrap /path/to/generated
   - The generated-bundle quota/capacity gate is state-aware for bundled MK8s reruns: after backend init, cxcli reads the current Terraform state and discounts MK8s quota already managed by that bundle, so rerunning an unchanged existing cluster does not fail like a fresh create. Real added capacity, such as scaling the node groups up or changing to a larger GPU shape, still has to fit live quota/capacity and will still fail fast when it does not.
   - Confirmed generated-bundle quota/capacity failures print the exact source-config follow-up commands for `quota-request` and `quota-check --all-regions`.
   - For bundled MK8s, the generated-bundle Terraform validation path now also fails fast on live MK8s cluster / derived GPU-cluster name collisions that are not already tracked in the current Terraform state, so stale Nebius resources surface as targeted preflight errors before `terraform apply`. Nebius `NOT_FOUND` responses remain non-blocking and are treated as the expected "resource does not exist yet" case.
-  - Reports visible phases for strict readiness, MK8s preflight, backend auth/bootstrap, live quota/capacity, Terraform validation, Flux manifest validation, and optional portability enforcement.
+  - Reports visible phases for strict readiness, VPC networking preflight, backend auth/bootstrap, live quota/capacity, Terraform validation, Flux manifest validation, and optional portability enforcement.
   - Add `--portable` in CI or pre-commit checks to reject generated Terraform bundles that still embed local filesystem module paths.
   - Uses the generated bundle as the deploy contract; it does not need the original render machine's local module paths.
   - Example: `nebius-cxcli validate-generated ~/deployments/tenant-name-example/project-name-example/generated --portable`
 - `deploy <config.yaml>`
-  - Full local reconcile from the generated bundle: `deploy` resolves the sibling `generated/` directory and loads `generated/nebius-cxcli-manifest.json` as the authoritative deploy input. That keeps the rendered bundle, not the latest source file edits, as the applied contract. Before Terraform apply, `deploy` runs a generated-bundle preflight covering strict deployment-readiness checks against the manifest runtime config, MK8s network preflight, live Nebius quota/capacity validation, and Terraform validation for `generated/infra`; on bundled MK8s that Terraform-validation pass now also catches live MK8s cluster / derived GPU-cluster name collisions that are not already managed in the current Terraform state, while treating Nebius `NOT_FOUND` responses as the normal "resource is absent" case. `deploy` then applies Terraform, writes an interim inventory report from infra/app artifacts, applies Flux when app charts are enabled, captures runtime status such as Grafana URLs, runs deploy-time validations, and refreshes the final `deploy-report.md`. On success, the terminal footer prints target-grouped validation PASS/FAIL, copy-paste commands, and only the generated bundle plus `generated/inventory/deploy-report.md` paths. Local runs now merge every selected built-in cluster target into `~/.kube/config`; single-target runs still switch `current-context`, while multi-target runs preserve the operator's existing `current-context` and add switchable contexts for each target. Plain multi-target `deploy` and `deploy --all-targets` reconcile every generated target, and `flux apply --all-targets` / `flux bootstrap --all-targets` leave every selected target available through `kubectl config use-context ...`. Use `deploy --target <target-id>` only when you want to narrow app and validation work to one target. If GitOps bootstrap is not configured yet, the CLI warns and includes the follow-up `flux bootstrap` command in the copy-paste footer when Flux work actually runs.
+  - Full local reconcile from the generated bundle: `deploy` resolves the sibling `generated/` directory and loads `generated/nebius-cxcli-manifest.json` as the authoritative deploy input. That keeps the rendered bundle, not the latest source file edits, as the applied contract. Before Terraform apply, `deploy` runs a generated-bundle preflight covering strict deployment-readiness checks against the manifest runtime config, VPC networking preflight, live Nebius quota/capacity validation, and Terraform validation for `generated/infra`; on bundled MK8s that Terraform-validation pass now also catches live MK8s cluster / derived GPU-cluster name collisions that are not already managed in the current Terraform state, while treating Nebius `NOT_FOUND` responses as the normal "resource is absent" case. `deploy` then applies Terraform, writes an interim inventory report from infra/app artifacts, applies Flux when app charts are enabled, captures runtime status such as Grafana URLs, runs deploy-time validations, and refreshes the final `deploy-report.md`. On success, the terminal footer prints target-grouped validation PASS/FAIL, copy-paste commands, and only the generated bundle plus `generated/inventory/deploy-report.md` paths. Local runs now merge every selected built-in cluster target into `~/.kube/config`; single-target runs still switch `current-context`, while multi-target runs preserve the operator's existing `current-context` and add switchable contexts for each target. Plain multi-target `deploy` and `deploy --all-targets` reconcile every generated target, and `flux apply --all-targets` / `flux bootstrap --all-targets` leave every selected target available through `kubectl config use-context ...`. Use `deploy --target <target-id>` only when you want to narrow app and validation work to one target. If GitOps bootstrap is not configured yet, the CLI warns and includes the follow-up `flux bootstrap` command in the copy-paste footer when Flux work actually runs.
   - The live quota/capacity preflight uses the Capacity Dashboard for GPU quota dimensions, converts matching VM-slot availability to GPU units, and is rerun-safe for existing bundled MK8s clusters: after backend init, cxcli subtracts the MK8s quota already managed in the current Terraform state before comparing the desired bundle against live quota/capacity. Unchanged reruns therefore stay idempotent instead of failing like first deploys, while real extra requested capacity still fails fast with an explicit quota/capacity message and the exact `quota-request` / `quota-check --all-regions` follow-up commands when it exceeds live availability.
 - Deploy-time MK8s GPU checks are configured per target under `deploy.targets[].validations.mk8s_gpu.*`, where each row uses `instance_id` to bind to the cluster target. The Observability Agent ingestion check is generated for each observability-enabled MK8s target when the active settings catalog leaves `components.infra.mk8s.cli.observability.primary_agent.validation` enabled; that settings-catalog switch defaults to enabled and is separate from customer `config.yaml`. Native ESO MysteryBox connectivity is generated as a required guardrail whenever target-scoped MysteryBox sync is configured, so `--skip-validations` and repeatable `--skip-validation <kind>` only skip optional checks such as `nccl`, `gpu-visibility`, or `observability-ingestion`; those CLI flags do not rewrite `config.yaml`. If a validation fails before its normal report is complete, `deploy` still writes a failure JSON report so the combined deploy summary shows `FAIL` with the underlying error instead of `NOT RUN`.
 - Ongoing GPU health and performance monitoring is intentionally outside that fast deploy loop. NVIDIA positions DCGM Exporter as the Kubernetes telemetry path for Prometheus/Grafana, while deeper DCGM diagnostics are invasive administrator workflows with different run levels and runtimes, so cxcli does not fold those checks into every local `deploy`.
@@ -2178,7 +2316,8 @@ nebius-cxcli auth --project-config /path/to/config.yaml --validate-profile
 ```
 
 - Positional target quick map:
-  - `create`: pass the deployments root directory.
+  - `create`: pass the deployments root directory; if it does not exist yet,
+    cxcli creates it before writing the tenant/project scaffold.
   - `discover`: pass the deployments root or any narrower directory under it, including one project directory or `generated/`.
   - `component list/add/remove`: pass the project `config.yaml` with `--config <config.yaml>` so component selectors can be written first.
   - `grafana`: no positional path; use `--export-dashboard <grafana-base-or-folder-url>` or `--dashboard-json <path>` and optional `--component-sources` with `--attach`.
@@ -2208,7 +2347,11 @@ nebius-cxcli auth --project-config /path/to/config.yaml --validate-profile
     targets, leave that generic NCCL path off; enable Soperator ActiveChecks
     only for benchmark/diagnostic clusters or maintenance windows.
   - Interactive mode prompts for infra first and can complete an infra-only add without selecting any app. It asks for app selection only when no infra was selected or when you explicitly choose to add apps too, then confirms the final selection, auto-resolves app chart dependencies plus `release.install_after` prerequisites, and runs the field wizard only for the newly added components. Auto-enabled app rows created by that field wizard are target-scoped to the newly selected target, so adding `mk8s@cluster2` to a config that already has `cluster1` shows and prompts only the new rows such as `grafana@cluster2`. If apps are selected without an enabled MK8s target, cxcli warns immediately and sends the operator back to select `infra:mk8s` or remove the app selection.
-  - When that wizard reaches per-component field phases, infra components default to `y` and app charts default to `n`.
+  - When that wizard reaches per-component field phases, infra components
+    default to `y` and app charts default to `n`. Answering `n` for a newly
+    added infra component cancels that pending add instead of writing an
+    unconfigured row; answering `n` for an app chart keeps the selected chart
+    with its defaults.
   - That field wizard offers all discoverable required and optional fields for each new component, including editable literal catalog defaults. Required fields must be filled before advancing; optional blanks stay implicit when they still match module/chart defaults.
   - For `apps:soperator`, the wizard first asks for `install_mode`.
     For `production-cluster`, it then asks for the worker profile before
@@ -2233,7 +2376,18 @@ nebius-cxcli auth --project-config /path/to/config.yaml --validate-profile
   - Source validation runs by default, mirroring `create`: infra sources are checked first, and app chart validation is limited to selected or auto-enabled app rows, including a final late-auto-enabled app pass before `config.yaml` is written. Use `--no-validate-sources` only when you intentionally want to skip that source check.
   - Infra-only adds do not re-resolve Helm chart dependencies for already-enabled app rows; app chart dependency resolution runs when the add request includes app components.
   - The command prompts for selected infra resource names before live provider checks, then revalidates the existing Nebius tenant/project scope before provider-backed field prompts, so missing SDK credentials or inaccessible scope are surfaced as explicit errors. Provider-backed Nebius SDK requests are bounded by `NEBIUS_CXCLI_PROVIDER_REQUEST_TIMEOUT_SECONDS` when set, or 15 seconds by default.
-  - Simple string-list Terraform inputs are edited as comma-separated values. MysteryBox `inputs.secrets` uses the guided Secret/policy/key loop. Other complex inputs such as client lists and MK8s override objects are edited as YAML/JSON values in the wizard.
+  - For subnet-attached infra, `--network-id` and `--subnet-id` can preseed the
+    added row. A bare value is valid only when exactly one applicable infra row
+    is added. With multiple applicable rows, scope each value, for example
+    `--network-id infra:vm@worker=vpcnetwork-... --subnet-id infra:vm@worker=vpcsubnet-...`.
+    Use `--network-ref` / `--subnet-ref` for planned VPC resources created by
+    the same config, for example
+    `--network-ref infra:vm@worker=vpc@worker-vpc.network_id --subnet-ref infra:vm@worker=vpc@worker-vpc.subnets.worker.id`.
+    If those flags are omitted in non-interactive mode, cxcli auto-selects
+    only when the combined live/planned choices contain exactly one valid
+    network and exactly one subnet for that network; otherwise it fails with a
+    scoped-flag hint.
+  - Simple string-list Terraform inputs are edited as comma-separated values. MysteryBox `inputs.secrets` uses the guided Secret/policy/key loop, and VPC `inputs.subnets` uses an optional guided subnet loop. Other complex inputs such as client lists and MK8s override objects are edited as YAML/JSON values in the wizard.
   - Non-interactive mode accepts component selectors directly: `<component-id>`, `infra:<component-id>`, `apps:<component-id>`, `all`, `none`, or `<component-id>@<resource-name-or-target-id>`. For example: `nebius-cxcli component add managed-postgresql object-storage --config <config.yaml> --no-interactive`.
   - In interactive mode, scalar named infra modules prompt for the resource name
     before field prompts, defaulting to the next unique normalized name such as
@@ -2263,6 +2417,9 @@ nebius-cxcli auth --project-config /path/to/config.yaml --validate-profile
   - Example: `nebius-cxcli component remove managed-postgresql@analytics-pg --config ~/deployments/tenant-name-example/project-name-example/config.yaml --no-interactive`
 - `create <deployments-root>`
   - Scaffolds one name-derived tenant/project folder with `config.yaml` and the generated-folder skeleton.
+  - The deployments root may be an existing directory or a new path; cxcli
+    creates the root directory when it is missing, then writes the resolved
+    `<tenant-folder>/<project-folder>` below it.
   - Operators still enter `tenant_id` / `project_id`; the CLI resolves names only for the folder path after ID validation succeeds.
   - Interactive `create` prompts for `tenant_id` / `project_id` first and only warns when that resolved target already exists; choosing a different new project under the same deployments root does not trigger an overwrite warning.
   - Unless you explicitly pass `--tenant-id` / `--project-id`, interactive `create` starts those identity prompts blank instead of prefilling values from an existing project under the deployments root.
@@ -2278,7 +2435,25 @@ nebius-cxcli auth --project-config /path/to/config.yaml --validate-profile
     and `--app n8n,gateway-helm --app cert-manager` select multiple infra and
     app components in one create run. App chart dependencies can still add
     required chart rows automatically.
-  - When the resolved project folder for the same `tenant_id`/`project_id` already exists, interactive `create` warns and asks for confirmation before recreating that folder from scratch; non-interactive reruns require `--force`.
+  - Interactive `create` offers app chart selection only after the infra
+    selection includes an MK8s target. To configure Soperator interactively,
+    select `infra:mk8s` first and then `apps:soperator`; non-interactive
+    `--app soperator` still expands to the production MK8s+SFS+Soperator
+    bundle.
+  - Non-interactive subnet-attached infra can receive VPC IDs with
+    `--network-id` and `--subnet-id`. A bare value is valid only when exactly
+    one applicable infra row is selected. With multiple applicable rows, scope
+    each value, for example
+    `--network-id infra:vm@worker=vpcnetwork-... --subnet-id infra:vm@worker=vpcsubnet-...`.
+    Use `--network-ref` / `--subnet-ref` instead when the target network or
+    subnet is planned by an enabled `infra:vpc` row in the same config.
+    If those flags are omitted, non-interactive create auto-selects only when
+    the combined live/planned choices contain exactly one valid VPC network and
+    exactly one subnet in that network. In interactive create, selected
+    `infra:vpc` rows are prompted before subnet-consuming infra so the operator
+    can create a subnet and then choose that planned subnet for MK8s, VM, NFS,
+    WireGuard gateway, or SSH jump-host rows in the same wizard pass.
+  - When the resolved project folder for the same `tenant_id`/`project_id` already exists, interactive `create` warns and asks for confirmation before recreating that folder from scratch unless `--force` is provided; non-interactive reruns require `--force`.
   - Uses exactly one cxcli-managed `.gitignore` at the deployments root for all tenant/project folders below it; nested cxcli-managed deployments roots are rejected instead of supported as a compatibility path.
   - Existing project `client_info` values are not offered back as defaults; overwrite restarts those prompts from the normal create defaults, existing component rows are not merged, and files already under that resolved project path are deleted during the overwrite.
   - After writing the resulting `config.yaml`, `create` runs the internal warning-only post-create validation by default. Use `--no-validate-config` only when you intentionally want to skip that post-write validation; the separate warning-only live quota/capacity assessment still runs.
@@ -2315,7 +2490,7 @@ nebius-cxcli auth --project-config /path/to/config.yaml --validate-profile
   - Generates or reconciles the customer GitHub Actions workflow, always reconciles GitHub email settings from local `email --setup`, and optionally bootstraps/syncs the required Nebius CI auth secrets. The generated workflow watches and deploys only canonical `<tenant-folder>/<project-folder>/generated/**` paths.
   - If the deployments root is the repository root, the generated workflow uses `NEBIUS_DISCOVER_TARGET: .` and the canonical `*/*/generated/**` trigger glob instead of embedding `./` in path filters.
   - The workflow file is CLI-managed. Re-running `bootstrap-ci` automatically reconciles `.github/workflows/nebius-deployments.yml` to the latest generated contract and is idempotent when no drift exists.
-  - Generated workflows validate changed bundles with `nebius-cxcli validate-generated --portable` before `nebius-cxcli terraform plan` and `nebius-cxcli terraform apply`. That generated-bundle validation now includes the same strict readiness, MK8s preflight, and live quota/capacity gate used by local deploy preflight.
+  - Generated workflows validate changed bundles with `nebius-cxcli validate-generated --portable` before `nebius-cxcli terraform plan` and `nebius-cxcli terraform apply`. That generated-bundle validation now includes the same strict readiness, VPC networking preflight, and live quota/capacity gate used by local deploy preflight.
   - Generated workflows also support manual `workflow_dispatch`. Manual runs switch discovery to `nebius-cxcli discover --all <scope>`, so every tracked project under the configured deployments scope is included even when there is no fresh git diff.
   - Generated workflows rely on the same generated-bundle CLI commands, which recreate ignored `generated/infra/terraform.auto.tfvars.json` from `generated/nebius-cxcli-manifest.json` before Terraform runs.
   - Generated workflows do not install the standalone `nebius` CLI. MK8s kubeconfig generation and token retrieval stay inside `nebius-cxcli` via the Nebius SDK.
@@ -2405,11 +2580,13 @@ nebius-cxcli auth --project-config /path/to/config.yaml --validate-profile
 Common command flags:
 
 - `component add`:
-  `--no-interactive`, `--validate-sources/--no-validate-sources`
+  `--no-interactive`, `--network-id`, `--subnet-id`, `--network-ref`,
+  `--subnet-ref`,
+  `--validate-sources/--no-validate-sources`
 - `component remove`:
   `--no-interactive`
 - `create`:
-  `--client-name`, `--tenant-id`, `--project-id`, `--region-id`, `--email`, `--infra`, `--app`, `--app-namespace`, `--app-releasename`, `--validate-sources/--no-validate-sources`, `--validate-config/--no-validate-config`, `--no-interactive`, `--force`
+  `--client-name`, `--tenant-id`, `--project-id`, `--region-id`, `--email`, `--infra`, `--app`, `--app-namespace`, `--app-releasename`, `--network-id`, `--subnet-id`, `--network-ref`, `--subnet-ref`, `--validate-sources/--no-validate-sources`, `--validate-config/--no-validate-config`, `--no-interactive`, `--force`
 - `bootstrap-ci`:
   `--auth-bootstrap/--no-auth-bootstrap`, `--github-repo`, `--github-token-env`, `--cli-ref`
 - `grafana`: `--export-dashboard`, `--dashboard-json`, `--output-dir`, `--folder-uid`, `--dashboard-uid`, `--overwrite`, `--attach`, `--component-sources`, `--dashboard-folder`, `--datasource`, `--token-env`, `--username`, `--password-env`
@@ -2528,6 +2705,7 @@ nebius-cxcli component add --config /path/to/config.yaml
 # Non-interactive add/remove
 nebius-cxcli component add managed-postgresql --config /path/to/config.yaml --no-interactive
 nebius-cxcli component add managed-postgresql object-storage@logs-bucket --config /path/to/config.yaml --no-interactive
+nebius-cxcli component add infra:vm@worker --config /path/to/config.yaml --no-interactive --network-id infra:vm@worker=vpcnetwork-123 --subnet-id infra:vm@worker=vpcsubnet-123
 nebius-cxcli component add mk8s@training-cluster mk8s@serving-cluster --config /path/to/config.yaml --no-interactive
 nebius-cxcli component add gateway-helm@serving-cluster --config /path/to/config.yaml --no-interactive
 nebius-cxcli component remove managed-postgresql@analytics-pg --config /path/to/config.yaml --no-interactive
@@ -2539,6 +2717,8 @@ nebius-cxcli create /path/to/deployments-root \
   --tenant-id tenant-123 \
   --project-id project-123 \
   --infra mk8s \
+  --network-id vpcnetwork-123 \
+  --subnet-id vpcsubnet-123 \
   --app n8n \
   --app-namespace n8n=automation \
   --app-releasename n8n=workflow-core \

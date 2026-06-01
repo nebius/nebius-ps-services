@@ -26,6 +26,7 @@ module "ssh_jump_host" {
   source = "./platform-infra/modules/ssh-jumphost"
 
   parent_id           = "project-xxxxxxxx"
+  network_id          = "vpcnetwork-xxxxxxxx"
   subnet_id           = "vpcsubnet-xxxxxxxx"
   name                = "demo-ssh-jh"
   platform            = "cpu-d3"
@@ -48,6 +49,7 @@ module "ssh_jump_host" {
   source = "git::https://github.com/nebius/nebius-ps-services.git//platform-infra/modules/ssh-jumphost?ref=v0.1.0"
 
   parent_id           = "project-xxxxxxxx"
+  network_id          = "vpcnetwork-xxxxxxxx"
   subnet_id           = "vpcsubnet-xxxxxxxx"
   name                = "demo-ssh-jh"
   platform            = "cpu-d3"
@@ -71,6 +73,7 @@ module "ssh_jump_host" {
 
 - Required:
   - `parent_id`
+  - `network_id`
   - `subnet_id`
   - `name`
   - `platform`

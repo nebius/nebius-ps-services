@@ -1,9 +1,36 @@
+data "nebius_vpc_v1_network" "cluster" {
+  id = var.cluster.network_id
+}
+
+data "nebius_vpc_v1_subnet" "selected" {
+  for_each = local.subnet_refs_to_validate
+
+  id = each.value
+}
+
 resource "nebius_mk8s_v1_cluster" "this" {
   parent_id     = var.cluster.parent_id
   name          = var.cluster.cluster_name
   labels        = length(var.cluster.labels) > 0 ? var.cluster.labels : null
   control_plane = local.cluster_control_plane
   kube_network  = length(local.cluster_kube_network) > 0 ? local.cluster_kube_network : null
+
+  lifecycle {
+    precondition {
+      condition     = data.nebius_vpc_v1_network.cluster.parent_id == var.cluster.parent_id
+      error_message = "cluster.network_id must identify a VPC network in cluster.parent_id."
+    }
+
+    precondition {
+      condition     = data.nebius_vpc_v1_subnet.selected["cluster"].parent_id == var.cluster.parent_id
+      error_message = "cluster.subnet_id must identify a VPC subnet in cluster.parent_id."
+    }
+
+    precondition {
+      condition     = data.nebius_vpc_v1_subnet.selected["cluster"].network_id == var.cluster.network_id
+      error_message = "cluster.subnet_id must belong to cluster.network_id."
+    }
+  }
 }
 
 resource "nebius_compute_v1_gpu_cluster" "this" {
@@ -33,7 +60,7 @@ resource "nebius_mk8s_v1_node_group" "this" {
   version   = coalesce(try(each.value.version, null), var.cluster.k8s_version)
 
   fixed_node_count = try(each.value.node_count, null)
-  autoscaling      = try(each.value.autoscaling, null)
+  autoscaling      = local.node_group_autoscaling[each.key]
   auto_repair      = try(each.value.auto_repair, null)
   strategy         = try(each.value.strategy, null)
 
@@ -43,9 +70,16 @@ resource "nebius_mk8s_v1_node_group" "this" {
     precondition {
       condition = !(
         try(each.value.node_count, null) != null &&
-        try(each.value.autoscaling, null) != null
+        local.node_group_autoscaling[each.key] != null
       )
-      error_message = "Node group '${each.key}' cannot set both node_count and autoscaling."
+      error_message = "Node group '${each.key}' cannot set both node_count and enabled autoscaling."
+    }
+    precondition {
+      condition = (
+        try(each.value.node_count, null) != null ||
+        local.node_group_autoscaling[each.key] != null
+      )
+      error_message = "Node group '${each.key}' requires node_count or enabled autoscaling."
     }
     precondition {
       condition = (
@@ -96,6 +130,28 @@ resource "nebius_mk8s_v1_node_group" "this" {
         length(trimspace(try(each.value.service_account.name != null ? each.value.service_account.name : "", ""))) > 0
       )
       error_message = "Node group '${each.key}' can set only one of service_account.id or service_account.name."
+    }
+    precondition {
+      condition     = data.nebius_vpc_v1_subnet.selected["node_group:${each.key}"].parent_id == var.cluster.parent_id
+      error_message = "Node group '${each.key}' subnet_id must identify a VPC subnet in cluster.parent_id."
+    }
+    precondition {
+      condition     = data.nebius_vpc_v1_subnet.selected["node_group:${each.key}"].network_id == var.cluster.network_id
+      error_message = "Node group '${each.key}' subnet_id must belong to cluster.network_id."
+    }
+    precondition {
+      condition = alltrue([
+        for index, interface in local.node_group_network_interfaces[each.key] :
+        data.nebius_vpc_v1_subnet.selected["node_group_interface:${each.key}:${index}"].parent_id == var.cluster.parent_id
+      ])
+      error_message = "Node group '${each.key}' network_interfaces subnet_id values must identify VPC subnets in cluster.parent_id."
+    }
+    precondition {
+      condition = alltrue([
+        for index, interface in local.node_group_network_interfaces[each.key] :
+        data.nebius_vpc_v1_subnet.selected["node_group_interface:${each.key}:${index}"].network_id == var.cluster.network_id
+      ])
+      error_message = "Node group '${each.key}' network_interfaces subnet_id values must belong to cluster.network_id."
     }
   }
 }
