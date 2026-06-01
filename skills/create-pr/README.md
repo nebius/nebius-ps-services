@@ -7,6 +7,9 @@ and GitHub steps.
 ## What It Does
 
 - Creates or reuses feature branches.
+- Reuses the current non-default branch as the normal path, staging existing
+  work with `git add -A`, validating the staged diff, committing it, pushing
+  it, and opening or reusing a PR without creating another branch.
 - Keeps PR branches conflict-free against the base branch when possible.
 - Repairs safe branch-owned validation, build, lint, test, or GitHub check
   failures before presenting PR creation as handled.
@@ -20,10 +23,13 @@ and GitHub steps.
 Local git state
   |
   v
-Branch selection and base refresh
+Branch selection or current-branch reuse
   |
   v
-Commit or reuse requested work
+Commit current feature-branch work or reuse requested commits
+  |
+  v
+Base refresh and conflict handling
   |
   v
 Run focused validation and repair safe branch-owned failures
@@ -41,8 +47,10 @@ Report PR number, URL, and blockers
 ## Workflow
 
 1. Inspect repository status, remotes, current branch, and base branch.
-2. Select or create the target branch.
-3. Commit requested local work when appropriate.
+2. If already on a non-default branch and no branch was named, reuse that
+   branch and commit current dirty work first with repo-root `git add -A` and
+   staged-diff validation.
+3. Select or create the target branch only when needed.
 4. Refresh against the base branch and handle safe conflicts.
 5. Run focused validation and repair safe branch-owned failures.
 6. Push the branch.
@@ -54,6 +62,8 @@ Report PR number, URL, and blockers
 ## Core Concepts
 
 - Do not leave new work on the default branch.
+- Do not create another branch when the current branch is already non-default;
+  commit, push, and open or reuse the PR from that branch.
 - Do not guess when GitHub authentication, remotes, or branch ownership are
   unclear.
 - Always stage local work from the repository root with `git add -A`; do not

@@ -128,8 +128,9 @@ without leaving new work on the default branch. It can prepare conflict-free
 PRs, repair safe branch-owned validation or GitHub check failures before
 presenting the PR as handled, avoid duplicate PRs for the same head branch,
 preserve one PR per branch, stage complete monorepo local work with
-`git add -A` when committing current dirty changes, and report readiness plus
-manual merge order.
+`git add -A` when committing current dirty changes, validate the staged diff,
+reuse the current non-default branch without creating another branch, and
+report readiness plus manual merge order.
 
 ### `config-codex`
 

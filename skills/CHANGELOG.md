@@ -129,6 +129,11 @@ All notable changes to the reusable Codex skills are tracked here.
 - Updated the `create-pr` guidance and metadata so Codex treats explicit
   user-supplied PR titles and bodies as authoritative instead of inferring a
   generic title from the branch name.
+- Tightened the `create-pr` current-feature-branch path so invoking it from a
+  non-default branch reuses that branch, stages existing work with
+  `git add -A`, validates the staged diff, commits before switching or
+  merging, pushes the branch, and opens or reuses the PR without creating
+  another branch.
 - Updated the `create-pr` guidance and metadata so PR commits always stage
   current dirty work from the repository root with `git add -A` instead of
   narrowing commits to selected paths.
@@ -170,5 +175,6 @@ All notable changes to the reusable Codex skills are tracked here.
 - Updated the shared `python-project` skill to explain when a minimal
   compatibility `setup.py` shim still makes sense alongside `pyproject.toml`.
 - Updated `create-pr` so local-work PR creation explicitly stages the complete
-  monorepo diff with `git add -A` before committing, unless the user requests a
-  narrower PR scope.
+  monorepo diff with `git add -A` before committing, and stops instead of
+  path-limiting the commit when repo-wide staging would include work that
+  should not be part of the PR.

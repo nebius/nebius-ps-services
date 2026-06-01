@@ -18,6 +18,9 @@ branch, and report the order the user should merge the PRs manually.
 - Always staging current local work from the repository root with `git add -A`
   when committing changes for a PR.
 - Reusing the current feature branch instead of creating extra branches.
+- Treating the current non-default branch as the normal PR path: stage existing
+  work with `git add -A`, commit on that branch, push it, and open or reuse the
+  PR without creating another branch.
 - Making each target branch conflict-free against the default branch, usually
   `main`, before returning the PR.
 - Repairing safe branch-owned validation, build, lint, test, or GitHub check
@@ -43,8 +46,10 @@ branch, and report the order the user should merge the PRs manually.
   branches. Preserve the user-provided order unless current Git evidence shows
   a safer dependency order.
 - If the user provides no branch name and the current branch is non-default,
-  treat the current branch as the only target branch and make it conflict-free
-  against the default branch.
+  treat the current branch as the only target branch. Do not create a new
+  branch, do not switch to another branch before committing current work, and
+  make that branch conflict-free against the default branch after the local
+  work is committed.
 - If the user provides no branch name and the current branch is the default
   branch, use the local-work PR flow: create a feature branch only when there
   is work to submit.
@@ -64,39 +69,54 @@ branch, and report the order the user should merge the PRs manually.
    - whether the current branch already has an upstream
    - whether the current branch is ahead of or behind `origin/<base>`
    - whether the user named target branches or expects current-branch fallback
-2. Refresh base-branch context.
-   Fetch `origin/<base>` and the target branch refs before deciding how to
-   branch, resolve conflicts, or open PRs. If the local default branch is clean
-   and has no local-only commits, fast-forward it first so new work starts from
-   the latest reviewed base.
-3. Resolve the target branches.
+2. Resolve and commit the current feature-branch path before any branch
+   creation or switching.
    - If `HEAD` is detached, stop and explain the problem.
+   - If no branch is named and the current branch is already non-default,
+     reuse it as the only target branch. Do not create another branch.
+   - If this current feature branch has a dirty worktree and the user invoked
+     this skill to create or update the PR for current work, stage the complete
+     repository diff from the repository root with `git add -A`, including
+     modified, deleted, and untracked files across monorepo projects. Then
+     run `git diff --cached --check`, inspect the staged diff, and commit it
+     on the current branch with a concise message before merging the base
+     branch, switching branches, pushing, or opening the PR.
+   - Do not stage only selected paths. If the dirty worktree contains changes
+     that should not be part of the PR, stop before staging and tell the user
+     that `create-pr` is configured for repo-wide `git add -A` commits.
+3. Refresh base-branch context.
+   Fetch `origin/<base>` and the target branch refs before resolving
+   conflicts, validating branch diffs, or opening PRs. If the local default
+   branch is clean and has no local-only commits, fast-forward it first so new
+   work starts from the latest reviewed base.
+4. Resolve the remaining target branches.
    - If the user named branches, check whether each exists locally or on
      `origin`. Stop for unknown branches instead of guessing.
    - If no branch is named and the current branch is the default branch, create
      a new branch from it. Prefer a short user-provided slug such as
      `prep/<project-tag>` or `fix/<topic>`. Ensure the branch name does not
      collide with an unrelated existing local or remote branch.
-   - If no branch is named and the current branch is already non-default,
-     reuse it. Do not create another branch.
-4. Make each branch reviewable.
+   - If no branch is named and the current branch is already non-default, keep
+     using the current branch selected in step 2.
+5. Make each branch reviewable.
    A PR must come from committed changes, not only a dirty worktree.
    - If the worktree is dirty on the default branch, create the feature branch
      first so the in-progress work moves off the default branch safely.
    - If the worktree is still dirty after branch selection and the user clearly
      wants to submit the current local work, stage the complete repository diff
      from the repository root with `git add -A`, including modified, deleted,
-     and untracked files across monorepo projects. Then inspect the staged diff
-     and commit it with a concise message.
+     and untracked files across monorepo projects. Then run
+     `git diff --cached --check`, inspect the staged diff, and commit it with
+     a concise message.
    - Do not stage only selected paths. If the dirty worktree contains changes
      that should not be part of the PR, stop before staging and tell the user
      that `create-pr` is configured for repo-wide `git add -A` commits.
    - If the user did not clearly ask to submit the dirty work, stop and explain
      that a PR cannot be created until the branch has reviewable commits.
-5. Confirm there is something to review for every target.
+6. Confirm there is something to review for every target.
    Compare each target branch with `origin/<base>`. If a branch has no diff and
    no unpublished commits, do not open an empty PR for that branch.
-6. Make target branches conflict-free when possible.
+7. Make target branches conflict-free when possible.
    - First test each target branch against `origin/<base>` without changing it,
      for example with
      `git merge-tree --write-tree origin/<base> <branch-or-origin/branch>`.
@@ -121,7 +141,7 @@ branch, and report the order the user should merge the PRs manually.
      Choose the non-destructive update only when the dependency is evident from
      current branch history or the user asked for an ordered multi-branch PR
      flow.
-7. Validate after conflict resolution.
+8. Validate after conflict resolution.
    Run focused checks based on touched files. At minimum, scan for conflict
    markers and whitespace errors before pushing. If relevant sibling skills
    apply to the touched surfaces, use them after the branch edits and keep the
@@ -130,13 +150,13 @@ branch, and report the order the user should merge the PRs manually.
    treating PR creation as complete. Do not stop at opening a PR link when the
    branch has fixable local test, lint, build, or CI failures. Commit and push
    the repair, then rerun the focused failing checks.
-8. Publish each branch.
+9. Publish each branch.
    If a branch has no upstream yet, push it with upstream tracking. If conflict
    resolution created new commits, push those commits to the same branch.
-9. Avoid duplicate PRs.
+10. Avoid duplicate PRs.
    Check for an existing open PR for each head branch. If one already exists,
    return that PR instead of creating another.
-10. Open each PR with the right readiness state.
+11. Open each PR with the right readiness state.
    Treat any explicit user-provided PR title as authoritative. Use it verbatim
    unless the user explicitly asks for refinement. Do not substitute a generic
    title such as "Preparation" and do not derive the PR title from a branch
@@ -154,7 +174,7 @@ branch, and report the order the user should merge the PRs manually.
    after the PR is opened and the failures are available and branch-caused,
    keep working on the same branch until the failures are resolved or clearly
    blocked by external state.
-11. Return the result.
+12. Return the result.
    Report:
 
     - head branch name for each PR
@@ -183,8 +203,20 @@ branch, and report the order the user should merge the PRs manually.
 - Complete local-work staging:
   - `git status --short`
   - `git add -A`
+  - `git diff --cached --check`
   - `git diff --cached --stat`
   - `git commit -m "<concise message>"`
+- Current feature-branch PR path:
+  - `git branch --show-current`
+  - `git status --short`
+  - `git add -A`
+  - `git diff --cached --check`
+  - `git diff --cached --stat`
+  - `git commit -m "<concise message>"`
+  - `git fetch origin --prune`
+  - `git merge-tree --write-tree origin/<base> HEAD`
+  - `git push -u origin HEAD:<branch>`
+  - `gh pr create --base <base> --head <branch> --title <title> --body <body>`
 - Ordered merge simulation:
   - `git switch --detach origin/<base>`
   - `git switch -c tmp/pr-order-check-<short-id>`
@@ -206,7 +238,9 @@ branch, and report the order the user should merge the PRs manually.
 
 - Never keep new work on the default branch once the user asks to open a PR.
 - Do not create a second feature branch if the current branch is already a
-  feature branch.
+  feature branch. With no user-named branch and a current non-default branch,
+  commit current local work on that branch first, then push it and create or
+  reuse the PR for that same branch.
 - Reuse an existing open PR for the same branch instead of creating duplicates.
 - Do not push directly to the default branch.
 - Do not merge the PRs into the default branch unless the user explicitly asks.
