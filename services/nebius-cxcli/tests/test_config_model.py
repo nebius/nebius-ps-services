@@ -6,6 +6,7 @@ import pytest
 import yaml
 from typer.testing import CliRunner
 
+import nebius_cxcli.cli as cli_module
 import nebius_cxcli.component_sources as component_sources
 from nebius_cxcli.cli import app
 from nebius_cxcli.component_sources import (
@@ -71,6 +72,21 @@ def _reset_component_state(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("nebius_cxcli.cli.module_variable_names", lambda _source: ())
     monkeypatch.setattr("nebius_cxcli.cli.module_required_variables", lambda _source: ())
     monkeypatch.setattr("nebius_cxcli.cli.helm_chart_default_values", lambda **_kwargs: {})
+    monkeypatch.setattr("nebius_cxcli.cli.validate_vpc_networking_preflight", lambda _cfg: None)
+    original_dynamic_choices = cli_module._resolve_dynamic_field_choices
+
+    def _fake_dynamic_provider_choices(**kwargs):  # type: ignore[no-untyped-def]
+        full_path_label = kwargs["full_path_label"]
+        if full_path_label.endswith(".network_id"):
+            return [cli_module.OptionChoice(value="vpcnetwork-123", label="default network")]
+        if full_path_label.endswith(".subnet_id"):
+            return [cli_module.OptionChoice(value="vpcsubnet-123", label="default subnet")]
+        return original_dynamic_choices(**kwargs)
+
+    monkeypatch.setattr(
+        "nebius_cxcli.cli._resolve_dynamic_field_choices",
+        _fake_dynamic_provider_choices,
+    )
     monkeypatch.setattr(
         "nebius_cxcli.cli._helm_chart_metadata",
         lambda *, chart_name_or_ref, chart_repo, chart_version, cache=None: (

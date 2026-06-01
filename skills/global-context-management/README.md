@@ -138,6 +138,10 @@ The main agent also owns cleanup: after spawning a helper, it should wait for
 the final summary, fold the useful result back into the parent thread, and
 close the completed subagent thread when close controls are available and no
 follow-up is needed.
+Do not spawn every configured role by default. Keep `max_threads = 4` as the
+conservative local thread budget. Use `repo_mapper` and `test_strategist` early
+only when their work is useful and independent, close them after consolidation,
+then use `risk_reviewer` near the end only for non-trivial or risky changes.
 When several helpers are running, the main agent should close each completed
 handle as soon as its terminal result arrives, then keep waiting for the
 remaining handles until all spawned helpers are closed.
@@ -218,13 +222,12 @@ For a complex task, the intended flow is:
    the current plan.
 4. Use read-only subagents only when they reduce parent-thread noise, the user
    explicitly authorized delegation when required, and the current runtime
-   permits delegation. Ask each subagent for a concise final summary, wait for
-   the result, then close the completed thread after consolidation when close
-   controls are available. For multiple subagents, close each completed handle
-   as it returns and continue waiting on the remaining handles.
+   permits delegation. Use `repo_mapper` and `test_strategist` early only when
+   useful and independent; close completed helpers after consolidation. Do not
+   spawn every configured role by default.
 5. Implement the smallest coherent change in the main thread.
 6. Inspect the diff and run focused validation.
-7. Use a read-only risk review for non-trivial or risky changes.
+7. Use `risk_reviewer` near the end only for non-trivial or risky changes.
 8. Address serious findings or record why they are out of scope.
 9. Update task state and return the final summary.
 

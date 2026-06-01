@@ -8,8 +8,8 @@ from textwrap import dedent
 from . import __version__
 
 NEBIUS_PS_SERVICES_REPO = "https://github.com/nebius/nebius-ps-services.git"
-NEBIUS_PROVIDER_SOURCE = "terraform-provider.storage.eu-north1.nebius.cloud/nebius/nebius"
-NEBIUS_PROVIDER_VERSION = ">= 0.5.217, < 0.6.0"
+NEBIUS_PROVIDER_SOURCE = "nebius/nebius"
+NEBIUS_PROVIDER_VERSION = ">= 0.6.8, < 0.7.0"
 
 
 def _is_stable_semver(version: str) -> bool:

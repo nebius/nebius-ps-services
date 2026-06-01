@@ -13,8 +13,10 @@ It supports two consumption models:
 Reusable modules under `modules/`:
 
 - [`mk8s`](modules/mk8s/README.md): Nebius Managed Kubernetes cluster and node groups.
+- [`vpc`](modules/vpc/README.md): Nebius VPC network and subnet ownership.
 - [`managed-postgresql`](modules/managed-postgresql/README.md): Nebius Managed PostgreSQL cluster.
 - [`sfs`](modules/sfs/README.md): Nebius Shared File System.
+- [`nfs`](modules/nfs/README.md): VM-backed NFS bridge for explicit NFS compatibility cases.
 - [`object-storage`](modules/object-storage/README.md): Nebius Object Storage buckets.
 - [`mysterybox`](modules/mysterybox/README.md): Nebius MysteryBox secrets and versioned payloads.
 - [`vm`](modules/vm/README.md): General Nebius Compute virtual machine provisioning.
@@ -31,11 +33,8 @@ These requirements apply to direct consumers of the modules in this repo:
 - Terraform: `>= 1.10.0, < 2.0.0`
 - `mysterybox` requires Terraform `>= 1.11.0, < 2.0.0` because it uses
   provider write-only payload fields
-- Nebius provider source:
-  `terraform-provider.storage.eu-north1.nebius.cloud/nebius/nebius`
-- Nebius provider version: `>= 0.5.55, < 0.6.0` for most modules; `vm`
-  requires `>= 0.5.217, < 0.6.0` so preemptible instances can omit the
-  deprecated priority field
+- Nebius provider source/version for all modules:
+  `nebius/nebius` with `>= 0.6.8, < 0.7.0`
 - `managed-postgresql` also requires `hashicorp/random >= 3.6.0, < 4.0.0`
 - The calling Terraform root owns backend configuration, provider configuration,
   credentials, and lock files
@@ -70,6 +69,9 @@ Key behavior when these modules are consumed through the CLI:
 - root provider/backend configuration is generated in the customer repo, not in
   this repo
 - reusable child modules must not configure provider auth or backend blocks
+- the `vpc` module owns custom VPC networks, private pools, and subnets through
+  Terraform state; when a new network omits public pool IDs, Nebius attaches
+  the default public pool and creates the network default route table
 - shared values such as admin SSH settings can be wired centrally in
   `nebius-cxcli` and then bound explicitly into module inputs
 - collection/object Terraform inputs are supported; the CLI wizard edits them as
@@ -119,8 +121,8 @@ terraform {
 
   required_providers {
     nebius = {
-      source  = "terraform-provider.storage.eu-north1.nebius.cloud/nebius/nebius"
-      version = ">= 0.5.217, < 0.6.0"
+      source  = "nebius/nebius"
+      version = ">= 0.6.8, < 0.7.0"
     }
   }
 }
@@ -128,13 +130,22 @@ terraform {
 module "mk8s" {
   source = "git::https://github.com/nebius/nebius-ps-services.git//platform-infra/modules/mk8s?ref=vX.Y.Z"
 
-  parent_id    = "project-xxxxxxxx"
-  cluster_name = "example-mk8s"
-  subnet_id    = "vpcsubnet-xxxxxxxx"
+  cluster = {
+    parent_id       = "project-xxxxxxxx"
+    cluster_name    = "example-mk8s"
+    network_id      = "vpcnetwork-xxxxxxxx"
+    subnet_id       = "vpcsubnet-xxxxxxxx"
+    k8s_version     = "1.32"
+    public_endpoint = true
+  }
 
-  cpu_nodes_count    = 2
-  cpu_nodes_platform = "cpu-d3"
-  cpu_nodes_preset   = "4vcpu-16gb"
+  node_groups = {
+    system = {
+      node_count = 2
+      platform   = "cpu-d3"
+      preset     = "4vcpu-16gb"
+    }
+  }
 }
 ```
 
@@ -154,16 +165,33 @@ to help users choose the right module quickly.
 
 - Creates one MK8s cluster and CPU/GPU node groups
 - Core required inputs:
-  - `parent_id`
-  - `cluster_name`
-  - `subnet_id`
-- Caller should set `cpu_nodes_count` explicitly when a baseline CPU node group
-  is desired; `nebius-cxcli` seeds that value into `config.yaml` through
-  `component_sources.yaml` so the resulting project config makes node count
-  visible.
+  - `cluster.parent_id`
+  - `cluster.cluster_name`
+  - `cluster.network_id`
+  - `cluster.subnet_id`
+  - `cluster.k8s_version`
+  - `cluster.public_endpoint`
+  - `node_groups`
+- Caller should set each desired node group explicitly. Every enabled node
+  group requires `platform` and `preset`, plus either `node_count` or enabled
+  `autoscaling`.
 - Examples:
   - `modules/mk8s/examples/minimal`
   - `modules/mk8s/examples/gpu`
+
+### [`vpc`](modules/vpc/README.md)
+
+- Creates a Nebius VPC network with optional subnets, or creates subnets under
+  an existing VPC network
+- Required inputs:
+  - `parent_id`
+  - `network` (`existing_id`, or `name` plus either `ipv4_private_cidrs`
+    optionally with `ipv4_private_source_pool_id`, or
+    `ipv4_private_pool_ids`)
+- Optional inputs:
+  - `subnets`
+- Example:
+  - `modules/vpc/examples/minimal`
 
 ### [`managed-postgresql`](modules/managed-postgresql/README.md)
 
@@ -184,6 +212,22 @@ to help users choose the right module quickly.
   - `size_gib`
 - Example:
   - `modules/sfs/examples/minimal`
+
+### [`nfs`](modules/nfs/README.md)
+
+- Creates a single VM-backed NFS bridge for tests, demos, short-lived
+  environments, or explicit NFS compatibility cases
+- Required inputs:
+  - `parent_id`
+  - `network_id`
+  - `subnet_id`
+  - `name`
+  - `platform`
+  - `preset`
+  - `ssh_public_key`
+- Examples:
+  - `modules/nfs/examples/minimal`
+  - `modules/nfs/examples/with-filesystems`
 
 ### [`object-storage`](modules/object-storage/README.md)
 
@@ -220,6 +264,7 @@ to help users choose the right module quickly.
   selection
 - Required inputs:
   - `parent_id`
+  - `network_id`
   - `subnet_id`
   - `name`
   - `platform`
@@ -242,6 +287,7 @@ to help users choose the right module quickly.
 - Creates an SSH jump host VM
 - Required inputs:
   - `parent_id`
+  - `network_id`
   - `subnet_id`
   - `name`
   - `platform`
@@ -257,6 +303,7 @@ to help users choose the right module quickly.
 - Creates a WireGuard VPN gateway VM
 - Required inputs:
   - `parent_id`
+  - `network_id`
   - `subnet_id`
   - `name`
   - `platform`
@@ -276,6 +323,9 @@ Examples:
 ```bash
 terraform -chdir=modules/mk8s/examples/minimal init -backend=false
 terraform -chdir=modules/mk8s/examples/minimal validate
+
+terraform -chdir=modules/vpc/examples/minimal init -backend=false
+terraform -chdir=modules/vpc/examples/minimal validate
 
 terraform -chdir=modules/managed-postgresql/examples/minimal init -backend=false
 terraform -chdir=modules/managed-postgresql/examples/minimal validate
@@ -312,6 +362,10 @@ platform-infra/
       examples/
         minimal/
         gpu/
+    vpc/
+      README.md
+      examples/
+        minimal/
     managed-postgresql/
       README.md
       examples/
@@ -320,6 +374,11 @@ platform-infra/
       README.md
       examples/
         minimal/
+    nfs/
+      README.md
+      examples/
+        minimal/
+        with-filesystems/
     object-storage/
       README.md
       examples/

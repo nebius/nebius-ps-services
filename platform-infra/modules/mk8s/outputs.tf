@@ -43,6 +43,7 @@ output "node_groups" {
       platform            = group.platform
       preset              = group.preset
       node_count          = try(group.node_count, null)
+      autoscaling         = local.node_group_autoscaling[key]
       labels              = try(group.labels, {})
       node_labels         = try(group.node_labels, {})
       service_account_id  = local.node_group_service_account_ids[key]

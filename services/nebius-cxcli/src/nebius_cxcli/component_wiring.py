@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import re
 from collections.abc import Mapping
 from typing import Any
 
@@ -11,16 +12,27 @@ from .component_defaults import (
     read_component_path,
     resolve_component_defaults,
 )
-from .component_instances import component_instance_id, component_type_id
+from .component_instances import (
+    INSTANCE_ID_PATTERN,
+    component_instance_id,
+    component_type_id,
+    normalize_component_token,
+)
 from .component_sources import ComponentInputBinding, component_input_binding_ref
 from .components import ComponentEntry, component_entries
 from .runtime_config import to_plain_data
 
 _UNRESOLVED = object()
+_ATTRIBUTE_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
 def _split_path(path: str) -> tuple[str, ...]:
     return tuple(segment.strip() for segment in str(path).split(".") if segment.strip())
+
+
+def _normalize_output_name(value: Any) -> str:
+    token = str(value or "").strip().lower().replace("-", "_")
+    return "_".join(part for part in token.split("_") if part)
 
 
 def component_output_ref(component_instance_id: str, output_name: str) -> str:
@@ -59,6 +71,70 @@ def input_binding_leaf_names(entry: ComponentEntry) -> set[str]:
         if len(segments) >= 2 and segments[0] == "inputs":
             result.add(segments[1].strip().lower().replace("-", "_"))
     return result
+
+
+def row_input_bindings(
+    component_node: Mapping[str, Any],
+    *,
+    field_label: str = "infra.components[]",
+) -> tuple[ComponentInputBinding, ...]:
+    raw = component_node.get("bindings")
+    if raw is None:
+        return ()
+    if not isinstance(raw, Mapping):
+        raise ValueError(f"{field_label}.bindings must be a mapping")
+
+    bindings: list[ComponentInputBinding] = []
+    for target_path_raw, raw_spec in raw.items():
+        target_path = str(target_path_raw or "").strip()
+        if not target_path:
+            raise ValueError(f"{field_label}.bindings entries must use non-empty target paths")
+        if not target_path.startswith("inputs."):
+            raise ValueError(
+                f"{field_label}.bindings.{target_path} must target an inputs.* path"
+            )
+        if not isinstance(raw_spec, Mapping):
+            raise ValueError(f"{field_label}.bindings.{target_path} must be a mapping")
+
+        source_component = normalize_component_token(raw_spec.get("source_component"))
+        source_output = _normalize_output_name(raw_spec.get("source_output"))
+        if not source_component or not source_output:
+            raise ValueError(
+                f"{field_label}.bindings.{target_path} must set source_component and source_output"
+            )
+
+        source_instance_raw = str(raw_spec.get("source_instance") or "").strip()
+        source_instance = normalize_component_token(source_instance_raw) if source_instance_raw else None
+        if source_instance is not None and not INSTANCE_ID_PATTERN.fullmatch(source_instance):
+            raise ValueError(
+                f"{field_label}.bindings.{target_path}.source_instance must use lowercase letters, "
+                "digits, and hyphens"
+            )
+
+        key_raw = raw_spec.get("key")
+        attr_raw = raw_spec.get("attribute")
+        key = str(key_raw).strip() if key_raw is not None else None
+        attribute = str(attr_raw).strip() if attr_raw is not None else None
+        if bool(key) != bool(attribute):
+            raise ValueError(
+                f"{field_label}.bindings.{target_path} must set key and attribute together"
+            )
+        if attribute and not _ATTRIBUTE_PATTERN.fullmatch(attribute):
+            raise ValueError(
+                f"{field_label}.bindings.{target_path}.attribute must be a simple attribute name"
+            )
+
+        bindings.append(
+            ComponentInputBinding(
+                target_path=target_path,
+                source_component_id=source_component,
+                source_output_name=source_output,
+                source_instance_id=source_instance,
+                key=key,
+                attribute=attribute,
+            )
+        )
+    return tuple(bindings)
 
 
 def managed_input_binding_payload_paths(
@@ -206,4 +282,5 @@ __all__ = [
     "resolve_component_output_value",
     "resolve_input_binding_source",
     "resolved_component_row",
+    "row_input_bindings",
 ]

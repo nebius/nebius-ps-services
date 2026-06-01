@@ -646,6 +646,43 @@ def test_soperator_managed_mk8s_skips_raw_node_group_prompts() -> None:
             full_path_label=f"infra.components[0].inputs.soperator.{field}",
         )
 
+    assert not _skip_soperator_managed_mk8s_prompt(
+        payload=payload,
+        entry=entry,
+        full_path_label="infra.components[0].inputs.soperator.system_autoscaling.enabled",
+    )
+    assert _skip_soperator_managed_mk8s_prompt(
+        payload=payload,
+        entry=entry,
+        full_path_label="infra.components[0].inputs.soperator.system_autoscaling.min_node_count",
+    )
+    soperator_inputs = payload["infra"]["components"][0]["inputs"].setdefault(
+        "soperator",
+        {},
+    )
+    soperator_inputs["system_autoscaling"] = {"enabled": True}
+    assert not _skip_soperator_managed_mk8s_prompt(
+        payload=payload,
+        entry=entry,
+        full_path_label="infra.components[0].inputs.soperator.system_autoscaling.min_node_count",
+    )
+    assert _skip_soperator_managed_mk8s_prompt(
+        payload=payload,
+        entry=entry,
+        full_path_label="infra.components[0].inputs.soperator.system_node_count",
+    )
+    soperator_inputs["worker_autoscaling"] = {"enabled": True}
+    assert _skip_soperator_managed_mk8s_prompt(
+        payload=payload,
+        entry=entry,
+        full_path_label="infra.components[0].inputs.soperator.worker_total_nodes",
+    )
+    assert not _skip_soperator_managed_mk8s_prompt(
+        payload=payload,
+        entry=entry,
+        full_path_label="infra.components[0].inputs.soperator.worker_nodes_per_group",
+    )
+
     payload["apps"]["charts"][0]["install_mode"] = "onboard-existing-cluster"
     assert _skip_soperator_managed_mk8s_prompt(
         payload=payload,

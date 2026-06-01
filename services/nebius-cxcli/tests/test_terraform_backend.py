@@ -100,7 +100,7 @@ def test_read_state_lock_info_parses_lock_json(monkeypatch: pytest.MonkeyPatch) 
             returncode=0,
             stdout=(
                 '{"ID":"lock-123","Operation":"OperationTypeApply","Info":"","Who":"rezab@host",'
-                '"Version":"1.14.1","Created":"2026-03-19T02:04:39Z","Path":"bucket/terraform.tfstate"}'
+                '"Version":"1.15.5","Created":"2026-03-19T02:04:39Z","Path":"bucket/terraform.tfstate"}'
             ),
             stderr="",
         )

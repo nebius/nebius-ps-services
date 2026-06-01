@@ -1,6 +1,6 @@
 cli:
   terraform:
-    version: 1.14.1
+    version: 1.15.5
   flux:
     version: v2.8.0
     release_timeout: 5m
@@ -673,6 +673,7 @@ components:
                     workload: system
                     node_count: 1
                     node_count_input: soperator.system_node_count
+                    autoscaling_input: soperator.system_autoscaling
                     gpu: false
                     jail: true
                   controller:
@@ -680,6 +681,7 @@ components:
                     workload: controller
                     node_count: 1
                     node_count_input: soperator.controller_node_count
+                    autoscaling_input: soperator.controller_autoscaling
                     gpu: false
                     jail: true
                     sfs_filesystem_keys:
@@ -693,6 +695,7 @@ components:
                     workload: login
                     node_count: 1
                     node_count_input: soperator.login_node_count
+                    autoscaling_input: soperator.login_autoscaling
                     gpu: false
                     jail: true
                     taints:
@@ -704,6 +707,7 @@ components:
                     workload: accounting
                     node_count: 1
                     node_count_input: soperator.accounting_node_count
+                    autoscaling_input: soperator.accounting_autoscaling
                     gpu: false
                     jail: true
                     sfs_filesystem_keys:
@@ -721,6 +725,7 @@ components:
                     jail: true
                     total_nodes_input: soperator.worker_total_nodes
                     nodes_per_group_input: soperator.worker_nodes_per_group
+                    autoscaling_input: soperator.worker_autoscaling
                     default_total_nodes: 1
                     default_nodes_per_group: 100
                     max_nodes_per_group: 100
@@ -1187,6 +1192,7 @@ components:
                     workload: system
                     node_count: 1
                     node_count_input: soperator.system_node_count
+                    autoscaling_input: soperator.system_autoscaling
                     gpu: false
                     jail: true
                   controller:
@@ -1194,6 +1200,7 @@ components:
                     workload: controller
                     node_count: 1
                     node_count_input: soperator.controller_node_count
+                    autoscaling_input: soperator.controller_autoscaling
                     gpu: false
                     jail: true
                     sfs_filesystem_keys:
@@ -1207,6 +1214,7 @@ components:
                     workload: login
                     node_count: 1
                     node_count_input: soperator.login_node_count
+                    autoscaling_input: soperator.login_autoscaling
                     gpu: false
                     jail: true
                     taints:
@@ -1218,6 +1226,7 @@ components:
                     workload: accounting
                     node_count: 1
                     node_count_input: soperator.accounting_node_count
+                    autoscaling_input: soperator.accounting_autoscaling
                     gpu: false
                     jail: true
                     sfs_filesystem_keys:
@@ -1235,6 +1244,7 @@ components:
                     jail: true
                     total_nodes_input: soperator.worker_total_nodes
                     nodes_per_group_input: soperator.worker_nodes_per_group
+                    autoscaling_input: soperator.worker_autoscaling
                     default_total_nodes: 1
                     default_nodes_per_group: 100
                     max_nodes_per_group: 100
@@ -1246,6 +1256,7 @@ components:
                     jail: true
                     total_nodes_input: soperator.worker_total_nodes
                     nodes_per_group_input: soperator.worker_nodes_per_group
+                    autoscaling_input: soperator.worker_autoscaling
                     default_total_nodes: 1
                     default_nodes_per_group: 100
                     max_nodes_per_group: 100
@@ -1863,6 +1874,7 @@ components:
                     workload: system
                     node_count: 1
                     node_count_input: soperator.system_node_count
+                    autoscaling_input: soperator.system_autoscaling
                     gpu: false
                     jail: true
                   controller:
@@ -1870,6 +1882,7 @@ components:
                     workload: controller
                     node_count: 1
                     node_count_input: soperator.controller_node_count
+                    autoscaling_input: soperator.controller_autoscaling
                     gpu: false
                     jail: true
                     sfs_filesystem_keys:
@@ -1883,6 +1896,7 @@ components:
                     workload: login
                     node_count: 1
                     node_count_input: soperator.login_node_count
+                    autoscaling_input: soperator.login_autoscaling
                     gpu: false
                     jail: true
                     taints:
@@ -1894,6 +1908,7 @@ components:
                     workload: accounting
                     node_count: 1
                     node_count_input: soperator.accounting_node_count
+                    autoscaling_input: soperator.accounting_autoscaling
                     gpu: false
                     jail: true
                     sfs_filesystem_keys:
@@ -1911,6 +1926,7 @@ components:
                     jail: true
                     total_nodes_input: soperator.worker_total_nodes
                     nodes_per_group_input: soperator.worker_nodes_per_group
+                    autoscaling_input: soperator.worker_autoscaling
                     default_total_nodes: 1
                     default_nodes_per_group: 100
                     max_nodes_per_group: 100

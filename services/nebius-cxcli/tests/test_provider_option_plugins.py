@@ -197,8 +197,45 @@ def _install_fake_vpc_module(
     monkeypatch,
     *,
     subnets: list[dict[str, object]],
+    networks: list[dict[str, object]] | None = None,
+    pools: list[dict[str, object]] | None = None,
+    allocations: list[dict[str, object]] | None = None,
 ) -> None:
     vpc_module = ModuleType("nebius.api.nebius.vpc.v1")
+
+    class ListNetworksRequest:
+        def __init__(self, *, parent_id: str, page_size: int, page_token: str) -> None:
+            self.parent_id = parent_id
+            self.page_size = page_size
+            self.page_token = page_token
+
+    class NetworkServiceClient:
+        def __init__(self, sdk: object) -> None:
+            self.sdk = sdk
+
+        def list(self, request: object, **_kwargs: object) -> SimpleNamespace:
+            assert 1 <= request.page_size <= 999
+            response = SimpleNamespace(
+                items=[
+                    SimpleNamespace(
+                        metadata=SimpleNamespace(
+                            id=item.get("id"),
+                            name=item.get("name"),
+                        ),
+                        spec=SimpleNamespace(
+                            ipv4_private_pools=SimpleNamespace(
+                                pools=[
+                                    SimpleNamespace(pool_id=pool_id)
+                                    for pool_id in list(item.get("private_pool_ids", []))
+                                ]
+                            )
+                        ),
+                    )
+                    for item in (networks or [])
+                ],
+                next_page_token="",
+            )
+            return SimpleNamespace(wait=lambda: response)
 
     class ListSubnetsRequest:
         def __init__(self, *, parent_id: str, page_size: int, page_token: str) -> None:
@@ -219,7 +256,29 @@ def _install_fake_vpc_module(
                             id=item.get("id"),
                             name=item.get("name"),
                         ),
-                        spec=SimpleNamespace(network_id=item.get("network_id")),
+                        spec=SimpleNamespace(
+                            network_id=item.get("network_id"),
+                            ipv4_private_pools=(
+                                None
+                                if item.get("private_pools_omitted")
+                                else SimpleNamespace(
+                                    use_network_pools=bool(item.get("use_network_pools", False)),
+                                    pools=[
+                                        SimpleNamespace(
+                                            cidrs=[
+                                                SimpleNamespace(cidr=cidr)
+                                                for cidr in list(
+                                                    item.get(
+                                                        "explicit_private_cidrs",
+                                                        item.get("ipv4_private_cidrs", []),
+                                                    )
+                                                )
+                                            ]
+                                        )
+                                    ],
+                                )
+                            ),
+                        ),
                         status=SimpleNamespace(
                             ipv4_private_cidrs=list(item.get("ipv4_private_cidrs", []))
                         ),
@@ -230,9 +289,196 @@ def _install_fake_vpc_module(
             )
             return SimpleNamespace(wait=lambda: response)
 
+    class ListPoolsRequest:
+        def __init__(self, *, parent_id: str, page_size: int, page_token: str) -> None:
+            self.parent_id = parent_id
+            self.page_size = page_size
+            self.page_token = page_token
+
+    class ListAllocationsRequest:
+        def __init__(self, *, parent_id: str, page_size: int, page_token: str) -> None:
+            self.parent_id = parent_id
+            self.page_size = page_size
+            self.page_token = page_token
+
+    class AllocationServiceClient:
+        def __init__(self, sdk: object) -> None:
+            self.sdk = sdk
+
+        def list(self, request: object, **_kwargs: object) -> SimpleNamespace:
+            assert 1 <= request.page_size <= 999
+            response = SimpleNamespace(
+                items=[
+                    SimpleNamespace(
+                        metadata=SimpleNamespace(
+                            id=item.get("id"),
+                            name=item.get("name"),
+                        ),
+                        spec=SimpleNamespace(
+                            ipv4_private=(
+                                None
+                                if item.get("public")
+                                else SimpleNamespace(
+                                    cidr=item.get("private_cidr"),
+                                    subnet_id=item.get("subnet_id", ""),
+                                    pool_id=item.get("pool_id", ""),
+                                )
+                            )
+                        ),
+                        status=SimpleNamespace(
+                            details=(
+                                None
+                                if item.get("public")
+                                else SimpleNamespace(
+                                    allocated_cidr=item.get(
+                                        "allocated_cidr", item.get("private_cidr")
+                                    ),
+                                    subnet_id=item.get("subnet_id", ""),
+                                    pool_id=item.get("pool_id", ""),
+                                    version=item.get("version", "IPV4"),
+                                )
+                            )
+                        ),
+                    )
+                    for item in (allocations or [])
+                ],
+                next_page_token="",
+            )
+            return SimpleNamespace(wait=lambda: response)
+
+    class GetPoolRequest:
+        def __init__(self, *, id: str) -> None:
+            self.id = id
+
+    class PoolServiceClient:
+        def __init__(self, sdk: object) -> None:
+            self.sdk = sdk
+
+        def list(self, request: object, **_kwargs: object) -> SimpleNamespace:
+            assert 1 <= request.page_size <= 999
+            response = SimpleNamespace(
+                items=[
+                    SimpleNamespace(
+                        metadata=SimpleNamespace(
+                            id=item.get("id"),
+                            name=item.get("name"),
+                        ),
+                        spec=SimpleNamespace(
+                            version=item.get("version", "IPV4"),
+                            visibility=item.get("visibility", "PRIVATE"),
+                            source_pool_id=item.get("source_pool_id", ""),
+                            cidrs=(
+                                list(item.get("cidrs", []))
+                                if item.get("cidrs_as_strings")
+                                else [
+                                    SimpleNamespace(cidr=cidr)
+                                    for cidr in list(item.get("cidrs", []))
+                                ]
+                            ),
+                        ),
+                        status=SimpleNamespace(
+                            assignment=SimpleNamespace(
+                                networks=list(item.get("assigned_networks", [])),
+                                network_ids=list(item.get("assigned_network_ids", [])),
+                                subnets=list(item.get("assigned_subnets", [])),
+                                subnet_ids=list(item.get("assigned_subnet_ids", [])),
+                            ),
+                            cidrs=(
+                                list(item.get("status_cidrs", []))
+                                if item.get("status_cidrs_as_strings")
+                                else [
+                                    SimpleNamespace(cidr=cidr)
+                                    for cidr in list(item.get("status_cidrs", []))
+                                ]
+                            ),
+                        ),
+                    )
+                    for item in (pools or [])
+                ],
+                next_page_token="",
+            )
+            return SimpleNamespace(wait=lambda: response)
+
+        def get(self, request: object, **_kwargs: object) -> SimpleNamespace:
+            pool = next((item for item in (pools or []) if item.get("id") == request.id), None)
+            if pool is None:
+                raise RuntimeError(f"pool not found: {request.id}")
+            response = SimpleNamespace(
+                metadata=SimpleNamespace(
+                    id=pool.get("id"),
+                    name=pool.get("name"),
+                ),
+                spec=SimpleNamespace(
+                    cidrs=(
+                        list(pool.get("cidrs", []))
+                        if pool.get("cidrs_as_strings")
+                        else [SimpleNamespace(cidr=cidr) for cidr in list(pool.get("cidrs", []))]
+                    ),
+                ),
+                status=SimpleNamespace(
+                    cidrs=(
+                        list(pool.get("status_cidrs", []))
+                        if pool.get("status_cidrs_as_strings")
+                        else [
+                            SimpleNamespace(cidr=cidr)
+                            for cidr in list(pool.get("status_cidrs", []))
+                        ]
+                    )
+                ),
+            )
+            return SimpleNamespace(wait=lambda: response)
+
+    vpc_module.ListNetworksRequest = ListNetworksRequest
     vpc_module.ListSubnetsRequest = ListSubnetsRequest
+    vpc_module.ListPoolsRequest = ListPoolsRequest
+    vpc_module.ListAllocationsRequest = ListAllocationsRequest
+    vpc_module.GetPoolRequest = GetPoolRequest
+    vpc_module.NetworkServiceClient = NetworkServiceClient
     vpc_module.SubnetServiceClient = SubnetServiceClient
+    vpc_module.PoolServiceClient = PoolServiceClient
+    vpc_module.AllocationServiceClient = AllocationServiceClient
     _install_module(monkeypatch, "nebius.api.nebius.vpc.v1", vpc_module)
+
+
+def _install_fake_filesystem_module(
+    monkeypatch,
+    *,
+    filesystems: list[dict[str, object]],
+) -> None:
+    compute_module = ModuleType("nebius.api.nebius.compute.v1")
+
+    class ListFilesystemsRequest:
+        def __init__(self, *, parent_id: str, page_size: int, page_token: str) -> None:
+            self.parent_id = parent_id
+            self.page_size = page_size
+            self.page_token = page_token
+
+    class FilesystemServiceClient:
+        def __init__(self, sdk: object) -> None:
+            self.sdk = sdk
+
+        def list(self, request: object, **_kwargs: object) -> SimpleNamespace:
+            assert request.parent_id == "project-123"
+            assert 1 <= request.page_size <= 999
+            response = SimpleNamespace(
+                items=[
+                    SimpleNamespace(
+                        metadata=SimpleNamespace(
+                            id=item.get("id"),
+                            name=item.get("name"),
+                        ),
+                        spec=SimpleNamespace(mount_tag=item.get("mount_tag")),
+                        status=SimpleNamespace(),
+                    )
+                    for item in filesystems
+                ],
+                next_page_token="",
+            )
+            return SimpleNamespace(wait=lambda: response)
+
+    compute_module.ListFilesystemsRequest = ListFilesystemsRequest
+    compute_module.FilesystemServiceClient = FilesystemServiceClient
+    _install_module(monkeypatch, "nebius.api.nebius.compute.v1", compute_module)
 
 
 def _install_fake_capacity_module(
@@ -615,6 +861,332 @@ def test_project_subnets_filter_by_selected_network_path(monkeypatch) -> None:
 
     assert [(choice.value, choice.label) for choice in resolved] == [
         ("vpcsubnet-b", "vpcsubnet-b  (subnet-b) (10.1.0.0/24)"),
+    ]
+    assert resolved[0].metadata["private_cidrs"] == ("10.1.0.0/24",)
+    assert resolved[0].metadata["use_network_private_pools"] is False
+
+
+def test_project_subnets_marks_inherited_network_private_pools_non_owning(monkeypatch) -> None:
+    _install_fake_vpc_module(
+        monkeypatch,
+        subnets=[
+            {
+                "id": "vpcsubnet-inherited",
+                "name": "inherited",
+                "network_id": "vpcnetwork-default",
+                "ipv4_private_cidrs": ["10.0.0.0/13"],
+                "use_network_pools": True,
+            },
+        ],
+    )
+
+    lookup = ProviderOptionLookup()
+    monkeypatch.setattr(lookup, "_sdk_or_none", lambda: object())
+
+    resolved = lookup.resolve(
+        provider="project_subnets",
+        args={"network_id": "vpcnetwork-default"},
+        payload={"client_info": {"nebius": {"project_id": "project-123"}}},
+        field_path="infra.components[0].inputs.subnets",
+    )
+
+    assert [(choice.value, choice.label) for choice in resolved] == [
+        ("vpcsubnet-inherited", "vpcsubnet-inherited  (inherited) (10.0.0.0/13)"),
+    ]
+    assert resolved[0].metadata["private_cidrs"] == ()
+    assert resolved[0].metadata["use_network_private_pools"] is True
+
+
+def test_project_subnets_treats_omitted_private_pool_spec_as_inherited(monkeypatch) -> None:
+    _install_fake_vpc_module(
+        monkeypatch,
+        subnets=[
+            {
+                "id": "vpcsubnet-inherited",
+                "name": "inherited",
+                "network_id": "vpcnetwork-default",
+                "ipv4_private_cidrs": ["10.0.0.0/13"],
+                "private_pools_omitted": True,
+            },
+        ],
+    )
+
+    lookup = ProviderOptionLookup()
+    monkeypatch.setattr(lookup, "_sdk_or_none", lambda: object())
+
+    resolved = lookup.resolve(
+        provider="project_subnets",
+        args={"network_id": "vpcnetwork-default"},
+        payload={"client_info": {"nebius": {"project_id": "project-123"}}},
+        field_path="infra.components[0].inputs.subnets",
+    )
+
+    assert resolved[0].metadata["private_cidrs"] == ()
+    assert resolved[0].metadata["use_network_private_pools"] is True
+
+
+def test_project_subnets_uses_status_cidrs_for_explicit_subnet_when_spec_cidrs_missing(
+    monkeypatch,
+) -> None:
+    _install_fake_vpc_module(
+        monkeypatch,
+        subnets=[
+            {
+                "id": "vpcsubnet-explicit",
+                "name": "explicit",
+                "network_id": "vpcnetwork-default",
+                "ipv4_private_cidrs": ["10.0.0.0/16"],
+                "explicit_private_cidrs": [],
+            },
+        ],
+    )
+
+    lookup = ProviderOptionLookup()
+    monkeypatch.setattr(lookup, "_sdk_or_none", lambda: object())
+
+    resolved = lookup.resolve(
+        provider="project_subnets",
+        args={"network_id": "vpcnetwork-default"},
+        payload={"client_info": {"nebius": {"project_id": "project-123"}}},
+        field_path="infra.components[0].inputs.subnets",
+    )
+
+    assert resolved[0].metadata["private_cidrs"] == ("10.0.0.0/16",)
+    assert resolved[0].metadata["use_network_private_pools"] is False
+
+
+def test_project_private_allocations_lists_live_private_cidrs_filtered_by_resource(
+    monkeypatch,
+) -> None:
+    _install_fake_vpc_module(
+        monkeypatch,
+        subnets=[],
+        allocations=[
+            {
+                "id": "allocation-subnet",
+                "name": "vm-private-ip",
+                "private_cidr": "10.0.0.42",
+                "subnet_id": "vpcsubnet-inherited",
+            },
+            {
+                "id": "allocation-pool",
+                "private_cidr": "10.1.0.0/24",
+                "pool_id": "vpcpool-default",
+            },
+            {
+                "id": "allocation-other",
+                "private_cidr": "10.2.0.8",
+                "subnet_id": "vpcsubnet-other",
+            },
+            {
+                "id": "allocation-public",
+                "public": True,
+            },
+        ],
+    )
+
+    lookup = ProviderOptionLookup()
+    monkeypatch.setattr(lookup, "_sdk_or_none", lambda: object())
+
+    resolved = lookup.resolve(
+        provider="project_private_allocations",
+        args={
+            "subnet_ids": ("vpcsubnet-inherited",),
+            "pool_ids": ("vpcpool-default",),
+        },
+        payload={"client_info": {"nebius": {"project_id": "project-123"}}},
+        field_path="infra.components[0].inputs.subnets",
+    )
+
+    assert [(choice.value, choice.metadata["private_cidrs"]) for choice in resolved] == [
+        ("allocation-pool", ("10.1.0.0/24",)),
+        ("allocation-subnet", ("10.0.0.42/32",)),
+    ]
+    assert resolved[1].metadata["subnet_id"] == "vpcsubnet-inherited"
+
+
+def test_project_networks_recommend_default_network(monkeypatch) -> None:
+    _install_fake_vpc_module(
+        monkeypatch,
+        networks=[
+            {
+                "id": "vpcnetwork-custom",
+                "name": "workloads",
+                "private_pool_ids": ["vpcpool-custom"],
+            },
+            {
+                "id": "vpcnetwork-default",
+                "name": "default-network",
+                "private_pool_ids": ["vpcpool-default"],
+            },
+        ],
+        subnets=[],
+        pools=[
+            {
+                "id": "vpcpool-default",
+                "name": "default-network-pool",
+                "cidrs": ["10.0.0.0/13"],
+            },
+            {
+                "id": "vpcpool-custom",
+                "name": "workloads-pool",
+                "cidrs": ["172.16.0.0/12"],
+            },
+        ],
+    )
+
+    lookup = ProviderOptionLookup()
+    monkeypatch.setattr(lookup, "_sdk_or_none", lambda: object())
+
+    resolved = lookup.resolve(
+        provider="project_networks",
+        args={},
+        payload={"client_info": {"nebius": {"project_id": "project-123"}}},
+        field_path="infra.components[0].inputs.network.existing_id",
+    )
+
+    assert [(choice.value, choice.label, choice.recommended) for choice in resolved] == [
+        ("vpcnetwork-default", "vpcnetwork-default  (default-network)", True),
+        ("vpcnetwork-custom", "vpcnetwork-custom  (workloads)", False),
+    ]
+    assert resolved[0].metadata["private_pool_ids"] == ("vpcpool-default",)
+    assert resolved[0].metadata["private_cidrs"] == ("10.0.0.0/13",)
+    assert resolved[1].metadata["private_pool_ids"] == ("vpcpool-custom",)
+    assert resolved[1].metadata["private_cidrs"] == ("172.16.0.0/12",)
+
+
+def test_project_networks_uses_pool_status_cidrs_when_spec_cidrs_missing(
+    monkeypatch,
+) -> None:
+    _install_fake_vpc_module(
+        monkeypatch,
+        networks=[
+            {
+                "id": "vpcnetwork-default",
+                "name": "default-network",
+                "private_pool_ids": ["vpcpool-default"],
+            },
+        ],
+        subnets=[],
+        pools=[
+            {
+                "id": "vpcpool-default",
+                "name": "default-network-pool",
+                "cidrs": [],
+                "status_cidrs": ["10.0.0.0/13"],
+            },
+        ],
+    )
+
+    lookup = ProviderOptionLookup()
+    monkeypatch.setattr(lookup, "_sdk_or_none", lambda: object())
+
+    resolved = lookup.resolve(
+        provider="project_networks",
+        args={},
+        payload={"client_info": {"nebius": {"project_id": "project-123"}}},
+        field_path="infra.components[0].inputs.network.existing_id",
+    )
+
+    assert resolved[0].metadata["private_cidrs"] == ("10.0.0.0/13",)
+
+
+def test_project_private_pools_lists_unassigned_live_project_private_ipv4_pools(
+    monkeypatch,
+) -> None:
+    _install_fake_vpc_module(
+        monkeypatch,
+        subnets=[],
+        pools=[
+            {
+                "id": "vpcpool-private",
+                "name": "default-network-pool",
+                "cidrs": ["10.0.0.0/13", "172.16.0.0/12"],
+                "cidrs_as_strings": True,
+                "source_pool_id": "vpcpool-source",
+                "version": SimpleNamespace(name="IPV4"),
+                "visibility": SimpleNamespace(name="PRIVATE"),
+            },
+            {
+                "id": "vpcpool-assigned-network",
+                "name": "default-network-pool-assigned",
+                "cidrs": ["10.0.0.0/13"],
+                "assigned_networks": ["vpcnetwork-default"],
+            },
+            {
+                "id": "vpcpool-assigned-subnet",
+                "name": "subnet-pool-assigned",
+                "cidrs": ["172.16.0.0/24"],
+                "assigned_subnets": ["vpcsubnet-existing"],
+            },
+            {
+                "id": "vpcpool-assigned-network-ids",
+                "name": "network-ids-pool-assigned",
+                "cidrs": ["192.168.0.0/24"],
+                "assigned_network_ids": ["vpcnetwork-live"],
+            },
+            {
+                "id": "vpcpool-empty",
+                "name": "empty-private-pool",
+            },
+            {
+                "id": "vpcpool-public",
+                "name": "public-pool",
+                "cidrs": ["203.0.113.0/24"],
+                "visibility": "PUBLIC",
+            },
+        ],
+    )
+
+    lookup = ProviderOptionLookup()
+    monkeypatch.setattr(lookup, "_sdk_or_none", lambda: object())
+
+    resolved = lookup.resolve(
+        provider="project_private_pools",
+        args={},
+        payload={"client_info": {"nebius": {"project_id": "project-123"}}},
+        field_path="infra.components[0].inputs.network.ipv4_private_pool_ids",
+    )
+
+    assert [(choice.value, choice.label) for choice in resolved] == [
+        (
+            "vpcpool-private",
+            "vpcpool-private  (default-network-pool) (10.0.0.0/13, 172.16.0.0/12)",
+        ),
+    ]
+    assert resolved[0].metadata["source_pool_id"] == "vpcpool-source"
+
+
+def test_project_filesystems_lists_live_project_filesystems(monkeypatch) -> None:
+    _install_fake_filesystem_module(
+        monkeypatch,
+        filesystems=[
+            {
+                "id": "filesystem-a",
+                "name": "scratch-a",
+                "mount_tag": "scratch",
+            },
+            {
+                "id": "filesystem-b",
+                "name": "jail-b",
+                "mount_tag": "jail",
+            },
+        ],
+    )
+
+    lookup = ProviderOptionLookup()
+    monkeypatch.setattr(lookup, "_sdk_or_none", lambda: object())
+
+    resolved = lookup.resolve(
+        provider="project_filesystems",
+        args={},
+        payload={"client_info": {"nebius": {"project_id": "project-123"}}},
+        field_path="infra.components[0].inputs.filesystems.scratch.existing_id",
+    )
+
+    assert [(choice.value, choice.metadata["mount_tag"]) for choice in resolved] == [
+        ("filesystem-a", "scratch"),
+        ("filesystem-b", "jail"),
     ]
 
 

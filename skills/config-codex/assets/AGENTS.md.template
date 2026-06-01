@@ -96,6 +96,10 @@ A skill is a set of local instructions to follow that is stored in a
   injects that request, and subagents are available and useful. Use a
   read-only risk review before finalizing non-trivial changes only when that
   delegation is explicitly authorized and permitted.
+- Keep `max_threads = 4` as the conservative local thread budget. Use
+  `repo_mapper` and `test_strategist` early only when useful and independent,
+  close completed helpers after consolidation, and use `risk_reviewer` near
+  the end only for non-trivial or risky changes.
 - When subagents are used, ask them for concise final summaries, wait for the
   result, consolidate it in the parent thread, and close completed subagent
   threads when close controls are available and no follow-up is needed.

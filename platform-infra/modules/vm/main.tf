@@ -1,3 +1,11 @@
+data "nebius_vpc_v1_network" "selected" {
+  id = var.network_id
+}
+
+data "nebius_vpc_v1_subnet" "selected" {
+  id = var.subnet_id
+}
+
 resource "nebius_compute_v1_disk" "boot" {
   count = local.create_boot_disk ? 1 : 0
 
@@ -156,6 +164,21 @@ resource "nebius_compute_v1_instance" "vm" {
         var.source_image_family == null
       )
       error_message = "Set source_image_family when the module creates the boot disk, unless you supply source_image_id or boot_disk_existing_id."
+    }
+
+    precondition {
+      condition     = data.nebius_vpc_v1_network.selected.parent_id == var.parent_id
+      error_message = "network_id must identify a VPC network in parent_id."
+    }
+
+    precondition {
+      condition     = data.nebius_vpc_v1_subnet.selected.parent_id == var.parent_id
+      error_message = "subnet_id must identify a VPC subnet in parent_id."
+    }
+
+    precondition {
+      condition     = data.nebius_vpc_v1_subnet.selected.network_id == var.network_id
+      error_message = "subnet_id must belong to network_id."
     }
 
     precondition {

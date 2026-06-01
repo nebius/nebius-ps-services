@@ -124,6 +124,12 @@ user-visible control in every Codex surface. In runtimes that require explicit
 user authorization, the prompt must say to use or spawn subagents, use
 delegation, or run parallel agents.
 
+Keep `max_threads = 4` as the conservative local thread budget. Do not spawn
+every configured read-only role by default: use `repo_mapper` and
+`test_strategist` early only when useful and independent, close completed
+helpers after consolidation, and use `risk_reviewer` near the end only for
+non-trivial or risky changes.
+
 If the user wants hook-assisted delegation for complex prompts, create this
 local-only policy file:
 
@@ -138,7 +144,8 @@ Save it as `$CODEX_HOME/hooks/global_context_policy.json`. The hook will read
 `$CODEX_HOME/config.toml`, discover configured `[agents.<name>]` entries whose
 referenced configs under `$CODEX_HOME` have `sandbox_mode = "read-only"`, and
 inject a request to use those read-only roles by name. It does not inject local
-agent config paths and does not directly call the subagent tool. The parent
+agent config paths and does not directly call the subagent tool. The injected
+request tells Codex not to spawn every configured role by default. The parent
 agent still owns lifecycle cleanup: wait for returned summaries, consolidate
 them, and close completed subagent threads when close controls are available
 and no follow-up is needed. With multiple subagents, close each completed

@@ -82,6 +82,7 @@ module "wireguard_gw" {
   source = "./platform-infra/modules/wireguard-gw"
 
   parent_id           = "project-xxxxxxxx"
+  network_id          = "vpcnetwork-xxxxxxxx"
   subnet_id           = "vpcsubnet-xxxxxxxx"
   name                = "demo-wg"
   platform            = "cpu-d3"
@@ -120,6 +121,7 @@ module "wireguard_gw" {
 Required VM inputs:
 
 - `parent_id`
+- `network_id`
 - `subnet_id`
 - `name`
 - `platform`

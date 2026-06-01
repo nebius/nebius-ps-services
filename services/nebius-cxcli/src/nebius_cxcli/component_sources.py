@@ -40,7 +40,7 @@ COMPONENT_SOURCES_FILE_ENV = "NEBIUS_CXCLI_COMPONENT_SOURCES_FILE"
 COMPONENT_SOURCES_PROFILE_ENV = "NEBIUS_CXCLI_COMPONENT_SOURCES_PROFILE"
 DEFAULT_FLUX_VERSION = "v2.8.0"
 DEFAULT_FLUX_RELEASE_TIMEOUT = "5m"
-DEFAULT_TERRAFORM_VERSION = "1.14.1"
+DEFAULT_TERRAFORM_VERSION = "1.15.5"
 GO_DURATION_RE = re.compile(r"(?:\d+(?:\.\d+)?(?:ns|us|µs|ms|s|m|h))+")
 GRAFANA_DURATION_RE = re.compile(r"(?:\d+(?:\.\d+)?(?:ns|us|µs|ms|s|m|h|d|w|M))+")
 GRAFANA_CLI_SETTING_KEYS = frozenset(
@@ -103,6 +103,8 @@ class ComponentInputBinding:
     source_component_id: str
     source_output_name: str
     source_instance_id: str | None = None
+    key: str | None = None
+    attribute: str | None = None
 
 
 @dataclass(frozen=True)
@@ -489,7 +491,12 @@ def component_input_binding_ref(binding: ComponentInputBinding) -> str:
     component_selector = binding.source_component_id
     if binding.source_instance_id:
         component_selector = f"{component_selector}@{binding.source_instance_id}"
-    return f"{component_selector}.{binding.source_output_name}"
+    ref = f"{component_selector}.{binding.source_output_name}"
+    if binding.key:
+        ref = f"{ref}.{binding.key}"
+    if binding.attribute:
+        ref = f"{ref}.{binding.attribute}"
+    return ref
 
 
 @dataclass(frozen=True)
@@ -549,9 +556,7 @@ class HelmChartSource:
     mk8s_gpu: Mk8sGpuAppPolicy = Mk8sGpuAppPolicy()
     observability: AppObservabilitySettings = AppObservabilitySettings()
     grafana: GrafanaCliSettings = GrafanaCliSettings()
-    soperator_nodesets: SoperatorNodesetsProfileSettings = (
-        SoperatorNodesetsProfileSettings()
-    )
+    soperator_nodesets: SoperatorNodesetsProfileSettings = SoperatorNodesetsProfileSettings()
 
     @property
     def chart_name(self) -> str | None:
@@ -1029,9 +1034,7 @@ def _render_chart_version_template(
     if token not in text:
         return text
     if not chart_version:
-        raise ValueError(
-            f"{field_label} references {token} but source.portable.version is empty"
-        )
+        raise ValueError(f"{field_label} references {token} but source.portable.version is empty")
     return text.replace(token, chart_version)
 
 
@@ -2679,7 +2682,9 @@ def _read_dashboard_json_file(
     try:
         dashboard_json = resource.read_text(encoding="utf-8")
     except (FileNotFoundError, OSError) as exc:
-        raise ValueError(f"{field_label} does not resolve to an existing dashboard JSON file") from exc
+        raise ValueError(
+            f"{field_label} does not resolve to an existing dashboard JSON file"
+        ) from exc
     _parse_dashboard_json_uid(dashboard_json, field_label=field_label)
     return dashboard_json
 
@@ -2787,8 +2792,7 @@ def _validate_grafana_dashboard_sources(
     folder_source_modes: dict[str, str] = {}
     for (folder, dashboard_name), dashboard in _grafana_dashboard_defaults(defaults).items():
         field_label = (
-            f"components.apps.{component_id}.defaults.values.dashboards."
-            f"{folder}.{dashboard_name}"
+            f"components.apps.{component_id}.defaults.values.dashboards.{folder}.{dashboard_name}"
         )
         gnet_id = _parse_optional_positive_int(
             dashboard.get("gnetId"),
@@ -2813,8 +2817,7 @@ def _validate_grafana_dashboard_sources(
                 )
         elif not dashboard_uid:
             raise ValueError(
-                f"{field_label} must declare gnetId plus uid or dashboard JSON "
-                "with a top-level uid"
+                f"{field_label} must declare gnetId plus uid or dashboard JSON with a top-level uid"
             )
         else:
             source_mode = "json"
@@ -3067,7 +3070,7 @@ def _parse_cli_settings(raw: Any) -> CliSettings:
 
     terraform_version = _as_text(terraform_raw.get("version")) or DEFAULT_TERRAFORM_VERSION
     if not re.fullmatch(r"[0-9]+(?:\.[0-9]+){1,2}", terraform_version):
-        raise ValueError("cli.terraform.version must be a semantic version like '1.14.1'")
+        raise ValueError("cli.terraform.version must be a semantic version like '1.15.5'")
 
     return CliSettings(
         flux=FluxSettings(version=version, release_timeout=release_timeout),
@@ -3663,8 +3666,7 @@ def _parse_component_cli_settings_payload(payload: Any) -> ComponentCliSettingsP
     unknown_root = sorted(str(key) for key in payload if str(key) not in supported_root_keys)
     if unknown_root:
         raise ValueError(
-            "component_cli_settings root has unsupported field(s): "
-            + ", ".join(unknown_root)
+            "component_cli_settings root has unsupported field(s): " + ", ".join(unknown_root)
         )
 
     components = payload.get("components", {}) or {}
@@ -3684,9 +3686,7 @@ def _parse_component_cli_settings_payload(payload: Any) -> ComponentCliSettingsP
     for scope in ("infra", "apps"):
         scope_raw = components.get(scope, {}) or {}
         if not isinstance(scope_raw, dict):
-            raise ValueError(
-                f"component_cli_settings.components.{scope} must be a mapping"
-            )
+            raise ValueError(f"component_cli_settings.components.{scope} must be a mapping")
         for component_id_raw, component_raw in scope_raw.items():
             component_id = _as_text(component_id_raw)
             if scope == "infra":
@@ -3706,8 +3706,7 @@ def _parse_component_cli_settings_payload(payload: Any) -> ComponentCliSettingsP
             if unknown_component_keys:
                 raise ValueError(
                     f"component_cli_settings.components.{scope}.{component_id} "
-                    "has unsupported field(s): "
-                    + ", ".join(unknown_component_keys)
+                    "has unsupported field(s): " + ", ".join(unknown_component_keys)
                 )
             component_cli[scope][component_id] = component_raw.get("cli")
 
@@ -4107,9 +4106,7 @@ def _load_bundled_cli_settings() -> CliSettings:
     except OSError:
         pass
 
-    prefix_candidate = (
-        Path(sys.prefix) / "nebius_cxcli" / BUNDLED_COMPONENT_CLI_SETTINGS_FILENAME
-    )
+    prefix_candidate = Path(sys.prefix) / "nebius_cxcli" / BUNDLED_COMPONENT_CLI_SETTINGS_FILENAME
     if prefix_candidate.exists() and prefix_candidate.is_file():
         return _load_cli_settings_from_path(prefix_candidate)
 

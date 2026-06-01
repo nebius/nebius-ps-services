@@ -3,7 +3,7 @@
 Reusable Terraform module that creates one Nebius Compute virtual machine with
 explicit platform/preset selection.
 
-This module requires Nebius Terraform provider `>= 0.5.217, < 0.6.0` so
+This module requires Nebius Terraform provider `>= 0.6.8, < 0.7.0` so
 preemptible VM instances can omit the deprecated Compute preemptible priority
 field.
 
@@ -12,6 +12,10 @@ Resources managed:
 - `nebius_compute_v1_instance` (VM)
 - optional `nebius_compute_v1_disk` resources (boot disk and managed data disks)
 - optional `nebius_compute_v1_gpu_cluster` (when creating a new GPU cluster)
+
+The module looks up the selected VPC network and subnet during planning and
+fails fast when `network_id` is not in `parent_id`, `subnet_id` is not in
+`parent_id`, or the subnet belongs to a different network.
 
 Out of scope:
 
@@ -30,14 +34,15 @@ Out of scope:
 module "vm" {
   source = "./platform-infra/modules/vm"
 
-  parent_id      = "project-xxxxxxxx"
-  subnet_id      = "vpcsubnet-xxxxxxxx"
-  name           = "example-vm"
-  platform       = "cpu-d3"
-  preset         = "4vcpu-16gb"
+  parent_id           = "project-xxxxxxxx"
+  network_id          = "vpcnetwork-xxxxxxxx"
+  subnet_id           = "vpcsubnet-xxxxxxxx"
+  name                = "example-vm"
+  platform            = "cpu-d3"
+  preset              = "4vcpu-16gb"
   source_image_family = "ubuntu24.04-driverless"
-  ssh_user_name  = "ubuntu"
-  ssh_public_key = "ssh-ed25519 AAAA... user@example"
+  ssh_user_name       = "ubuntu"
+  ssh_public_key      = "ssh-ed25519 AAAA... user@example"
 }
 ```
 
@@ -47,14 +52,15 @@ module "vm" {
 module "vm" {
   source = "git::https://github.com/nebius/nebius-ps-services.git//platform-infra/modules/vm?ref=v0.1.0"
 
-  parent_id      = "project-xxxxxxxx"
-  subnet_id      = "vpcsubnet-xxxxxxxx"
-  name           = "example-vm"
-  platform       = "cpu-d3"
-  preset         = "4vcpu-16gb"
+  parent_id           = "project-xxxxxxxx"
+  network_id          = "vpcnetwork-xxxxxxxx"
+  subnet_id           = "vpcsubnet-xxxxxxxx"
+  name                = "example-vm"
+  platform            = "cpu-d3"
+  preset              = "4vcpu-16gb"
   source_image_family = "ubuntu24.04-driverless"
-  ssh_user_name  = "ubuntu"
-  ssh_public_key = "ssh-ed25519 AAAA... user@example"
+  ssh_user_name       = "ubuntu"
+  ssh_public_key      = "ssh-ed25519 AAAA... user@example"
 }
 ```
 
@@ -65,14 +71,15 @@ module "vm" {
   source  = "nebius/vm/nebius"
   version = "~> 0.1"
 
-  parent_id      = "project-xxxxxxxx"
-  subnet_id      = "vpcsubnet-xxxxxxxx"
-  name           = "example-vm"
-  platform       = "cpu-d3"
-  preset         = "4vcpu-16gb"
+  parent_id           = "project-xxxxxxxx"
+  network_id          = "vpcnetwork-xxxxxxxx"
+  subnet_id           = "vpcsubnet-xxxxxxxx"
+  name                = "example-vm"
+  platform            = "cpu-d3"
+  preset              = "4vcpu-16gb"
   source_image_family = "ubuntu24.04-driverless"
-  ssh_user_name  = "ubuntu"
-  ssh_public_key = "ssh-ed25519 AAAA... user@example"
+  ssh_user_name       = "ubuntu"
+  ssh_public_key      = "ssh-ed25519 AAAA... user@example"
 }
 ```
 
@@ -88,6 +95,7 @@ module "vm" {
 
 - Required:
   - `parent_id`
+  - `network_id`
   - `subnet_id`
   - `name`
   - `platform`

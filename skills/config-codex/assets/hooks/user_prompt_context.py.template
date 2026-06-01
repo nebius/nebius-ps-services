@@ -321,20 +321,20 @@ def subagent_context(home: Path) -> str:
         [
             "",
             "For complex tasks that touch many files or require noisy exploration,",
-            "explicitly use all discovered read-only roles across the task when the",
-            "current runtime exposes subagent tools and active instructions permit",
-            "delegation.",
+            "use configured read-only roles only when they are useful, the current",
+            "runtime exposes subagent tools, and active instructions permit",
+            "delegation. Do not spawn every configured role by default.",
         ]
     )
     if exploration_or_planning:
         lines.append(
             "Use these read-only exploration/planning roles early, preferably in "
-            f"parallel when their work is independent: "
+            f"parallel only when their work is independent and useful: "
             f"{format_agent_names(exploration_or_planning)}."
         )
     if review:
         lines.append(
-            "Use these read-only review roles before finalizing non-trivial or "
+            "Use these read-only review roles near the end for non-trivial or "
             f"risky changes: {format_agent_names(review)}."
         )
     lines.append(

@@ -102,7 +102,7 @@ def test_components_discovered_from_source_file(monkeypatch, tmp_path: Path) -> 
     assert mk8s_fields["inputs.cluster.subnet_id"]["options"] == {
         "from": "project_subnets",
         "args": {"network_id_path": "inputs.cluster.network_id"},
-        "auto_select_first": True,
+        "auto_select_single": True,
     }
     assert mk8s_fields["inputs.cluster.k8s_version"]["options"] == {
         "from": "mk8s_control_plane_versions",

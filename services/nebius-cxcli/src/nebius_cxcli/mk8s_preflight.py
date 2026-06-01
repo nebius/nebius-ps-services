@@ -1,4 +1,4 @@
-"""Nebius MK8s deployment-readiness checks against live subnet state."""
+"""Nebius VPC and MK8s deployment-readiness checks against live network state."""
 
 from __future__ import annotations
 
@@ -11,10 +11,16 @@ from typing import Any
 from nebius.api.nebius.common.v1 import GetByNameRequest
 from nebius.api.nebius.compute.v1 import GpuClusterServiceClient
 from nebius.api.nebius.mk8s.v1 import ClusterServiceClient
-from nebius.api.nebius.vpc.v1 import GetSubnetRequest, SubnetServiceClient
+from nebius.api.nebius.vpc.v1 import (
+    GetNetworkRequest,
+    GetSubnetRequest,
+    NetworkServiceClient,
+    SubnetServiceClient,
+)
 
-from .component_defaults import resolve_component_defaults
+from .component_defaults import read_component_path, resolve_component_defaults
 from .component_instances import component_instance_id, component_instance_label, component_type_id
+from .component_wiring import row_input_bindings
 from .components import component_lookup
 from .mk8s_node_groups import (
     cluster_name,
@@ -47,6 +53,16 @@ class _Mk8sResolvedComponent:
     component_id: str
     project_id: str
     inputs: Mapping[str, Any]
+    raw_row: Mapping[str, Any]
+
+
+@dataclass(frozen=True)
+class _VpcNetworkingRef:
+    component_label: str
+    field_label: str
+    project_id: str
+    network_id: str
+    subnet_id: str | None = None
 
 
 def _resolved_mk8s_components(payload: Mapping[str, Any]) -> tuple[_Mk8sResolvedComponent, ...]:
@@ -94,9 +110,211 @@ def _resolved_mk8s_components(payload: Mapping[str, Any]) -> tuple[_Mk8sResolved
                 component_id=component_id,
                 project_id=project_id,
                 inputs=inputs,
+                raw_row=item,
             )
         )
     return tuple(resolved_components)
+
+
+def _default_project_id(payload: Mapping[str, Any]) -> str:
+    client_info = payload.get("client_info")
+    nebius_info = client_info.get("nebius") if isinstance(client_info, Mapping) else None
+    return _as_text(nebius_info.get("project_id") if isinstance(nebius_info, Mapping) else "")
+
+
+def _row_bindings_by_target(row: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        binding.target_path: binding
+        for binding in row_input_bindings(row, field_label="infra.components[]")
+    }
+
+
+def _binding_target(component_id: str, field_name: str) -> str:
+    if component_id == "mk8s":
+        return f"inputs.cluster.{field_name}"
+    return f"inputs.{field_name}"
+
+
+def _binding_ref(binding: Any) -> str:
+    ref = f"{binding.source_component_id}@{binding.source_instance_id}.{binding.source_output_name}"
+    if binding.key:
+        ref = f"{ref}.{binding.key}"
+    if binding.attribute:
+        ref = f"{ref}.{binding.attribute}"
+    return ref
+
+
+def _enabled_vpc_rows(payload: Mapping[str, Any]) -> dict[str, Mapping[str, Any]]:
+    infra = payload.get("infra")
+    components = infra.get("components") if isinstance(infra, Mapping) else None
+    if not isinstance(components, list):
+        return {}
+    rows: dict[str, Mapping[str, Any]] = {}
+    for row in components:
+        if not isinstance(row, Mapping) or not bool(row.get("enabled", False)):
+            continue
+        if component_type_id(row) != "vpc":
+            continue
+        instance_id = component_instance_id(row)
+        if instance_id:
+            rows[instance_id] = row
+    return rows
+
+
+def _enabled_resolved_infra_components(
+    payload: Mapping[str, Any],
+) -> tuple[tuple[str, str, str, Mapping[str, Any], Mapping[str, Any]], ...]:
+    infra = payload.get("infra")
+    if not isinstance(infra, Mapping):
+        return ()
+    components = infra.get("components")
+    if not isinstance(components, list):
+        return ()
+    entry_by_id = component_lookup("infra")
+    resolved_components: list[tuple[str, str, str, Mapping[str, Any], Mapping[str, Any]]] = []
+    for item in components:
+        if not isinstance(item, Mapping) or not bool(item.get("enabled", False)):
+            continue
+        component_id = component_type_id(item)
+        entry = entry_by_id.get(component_id)
+        if entry is None:
+            continue
+        resolved = resolve_component_defaults(
+            payload=payload,
+            component_node=dict(item),
+            entry=entry,
+            include_shared=False,
+        )
+        inputs = resolved.get("inputs")
+        if not isinstance(inputs, Mapping):
+            inputs = {}
+        instance_id = component_instance_id(item)
+        resolved_components.append(
+            (
+                component_id,
+                instance_id,
+                component_instance_label(component_id, instance_id),
+                inputs,
+                item,
+            )
+        )
+    return tuple(resolved_components)
+
+
+def _vpc_networking_refs(payload: Mapping[str, Any]) -> tuple[_VpcNetworkingRef, ...]:
+    default_project_id = _default_project_id(payload)
+    refs: list[_VpcNetworkingRef] = []
+    for component_id, _instance_id, component_label, inputs, raw_row in (
+        _enabled_resolved_infra_components(payload)
+    ):
+        bindings = _row_bindings_by_target(raw_row)
+        if component_id == "mk8s":
+            cluster_inputs = inputs.get("cluster")
+            if not isinstance(cluster_inputs, Mapping):
+                continue
+            project_id = _as_text(cluster_inputs.get("parent_id")) or default_project_id
+            network_id = _as_text(cluster_inputs.get("network_id"))
+            cluster_subnet_id = _as_text(cluster_inputs.get("subnet_id"))
+            network_binding = bindings.get("inputs.cluster.network_id")
+            subnet_binding = bindings.get("inputs.cluster.subnet_id")
+            if network_binding is None or subnet_binding is None:
+                refs.append(
+                    _VpcNetworkingRef(
+                        component_label=component_label,
+                        field_label="inputs.cluster",
+                        project_id=project_id,
+                        network_id=network_id,
+                        subnet_id=cluster_subnet_id if subnet_binding is None else None,
+                    )
+                )
+            node_groups = inputs.get("node_groups")
+            if not isinstance(node_groups, Mapping):
+                continue
+            for group_key, group in node_groups.items():
+                if not isinstance(group, Mapping) or not bool(group.get("enabled", True)):
+                    continue
+                group_label = f"inputs.node_groups.{group_key}"
+                group_subnet_id = _as_text(group.get("subnet_id"))
+                if group_subnet_id:
+                    refs.append(
+                        _VpcNetworkingRef(
+                            component_label=component_label,
+                            field_label=f"{group_label}.subnet_id",
+                            project_id=project_id,
+                            network_id=network_id,
+                            subnet_id=group_subnet_id,
+                        )
+                    )
+                network_interfaces = group.get("network_interfaces")
+                if network_interfaces is None:
+                    continue
+                if not isinstance(network_interfaces, list) or not network_interfaces:
+                    raise RuntimeError(
+                        "VPC networking preflight failed: "
+                        f"component '{component_label}' {group_label}.network_interfaces "
+                        "must be a non-empty list when set."
+                    )
+                for index, interface in enumerate(network_interfaces):
+                    subnet_id = (
+                        _as_text(interface.get("subnet_id"))
+                        if isinstance(interface, Mapping)
+                        else ""
+                    )
+                    if not subnet_id:
+                        raise RuntimeError(
+                            "VPC networking preflight failed: "
+                            f"component '{component_label}' "
+                            f"{group_label}.network_interfaces[{index}].subnet_id is required."
+                        )
+                    refs.append(
+                        _VpcNetworkingRef(
+                            component_label=component_label,
+                            field_label=f"{group_label}.network_interfaces[{index}].subnet_id",
+                            project_id=project_id,
+                            network_id=network_id,
+                            subnet_id=subnet_id,
+                        )
+                    )
+            continue
+
+        if component_id in {"vm", "nfs", "wireguard-gw", "ssh-jumphost"}:
+            network_binding = bindings.get(_binding_target(component_id, "network_id"))
+            subnet_binding = bindings.get(_binding_target(component_id, "subnet_id"))
+            if network_binding is None or subnet_binding is None:
+                refs.append(
+                    _VpcNetworkingRef(
+                        component_label=component_label,
+                        field_label="inputs",
+                        project_id=_as_text(inputs.get("parent_id")) or default_project_id,
+                        network_id=_as_text(inputs.get("network_id")),
+                        subnet_id=_as_text(inputs.get("subnet_id")) if subnet_binding is None else None,
+                    )
+                )
+            continue
+
+        if component_id == "managed-postgresql":
+            if bindings.get(_binding_target(component_id, "network_id")) is not None:
+                continue
+            refs.append(
+                _VpcNetworkingRef(
+                    component_label=component_label,
+                    field_label="inputs",
+                    project_id=_as_text(inputs.get("parent_id")) or default_project_id,
+                    network_id=_as_text(inputs.get("network_id")),
+                    subnet_id=None,
+                )
+            )
+    return tuple(refs)
+
+
+def _resource_parent_id(resource: Any) -> str:
+    metadata = getattr(resource, "metadata", None)
+    return _as_text(getattr(metadata, "parent_id", None))
+
+
+def _subnet_network_id(subnet: Any) -> str:
+    spec = getattr(subnet, "spec", None)
+    return _as_text(getattr(spec, "network_id", None))
 
 
 def _referenced_gpu_cluster_names(
@@ -177,33 +395,283 @@ def _subnet_pool_cidrs(subnet: Any) -> tuple[str, ...]:
     cidrs: list[str] = []
     for pool in pools:
         for cidr in list(getattr(pool, "cidrs", []) or []):
-            value = _as_text(getattr(cidr, "cidr", None))
+            value = _as_text(getattr(cidr, "cidr", None)) or _as_text(cidr)
             if value:
                 cidrs.append(value)
     return tuple(cidrs)
 
 
-def validate_mk8s_network_preflight(config: Any) -> None:
-    """Fail fast on known MK8s subnet/service-CIDR combinations that stall provisioning."""
+def _planned_cluster_subnet_pool_cidrs(
+    *,
+    payload: Mapping[str, Any],
+    raw_row: Mapping[str, Any],
+) -> tuple[str, ...]:
+    bindings = _row_bindings_by_target(raw_row)
+    subnet_binding = bindings.get("inputs.cluster.subnet_id")
+    if subnet_binding is None or subnet_binding.source_component_id != "vpc":
+        return ()
+    if subnet_binding.source_output_name != "subnets" or not subnet_binding.key:
+        return ()
+    vpc_row = _enabled_vpc_rows(payload).get(subnet_binding.source_instance_id or "")
+    subnet = read_component_path(vpc_row or {}, f"inputs.subnets.{subnet_binding.key}")
+    if not isinstance(subnet, Mapping):
+        return ()
+    cidrs = subnet.get("ipv4_private_cidrs")
+    if not isinstance(cidrs, (list, tuple)):
+        return ()
+    return tuple(_as_text(cidr) for cidr in cidrs if _as_text(cidr))
+
+
+def _validate_service_prefix_against_pool_cidr(
+    *,
+    component_label: str,
+    service_cidrs: list[str],
+    service_prefix: int,
+    pool_cidr: str,
+    subnet_label: str,
+) -> None:
+    try:
+        pool_prefix = ipaddress.ip_network(pool_cidr, strict=False).prefixlen
+    except ValueError as exc:
+        raise RuntimeError(
+            "VPC networking preflight failed: "
+            f"component '{component_label}' subnet {subnet_label} "
+            f"returned malformed pool CIDR {pool_cidr!r}."
+        ) from exc
+
+    if service_prefix <= pool_prefix:
+        raise RuntimeError(
+            "VPC networking preflight failed: "
+            f"component '{component_label}' "
+            "inputs.cluster.kube_network.service_cidrs="
+            f"{service_cidrs!r} "
+            f"is too large for subnet {subnet_label} pool {pool_cidr}. "
+            "Nebius reserves Kubernetes service CIDRs from the same subnet pool, so this "
+            "single-pool subnet can stall cluster provisioning before any node groups are created. "
+            'Use a smaller service CIDR such as ["/20"] or choose a larger subnet.'
+        )
+
+
+def _component_project_id(
+    *,
+    payload_default_project_id: str,
+    component_id: str,
+    inputs: Mapping[str, Any],
+) -> str:
+    if component_id == "mk8s":
+        cluster_inputs = inputs.get("cluster")
+        if isinstance(cluster_inputs, Mapping):
+            return _as_text(cluster_inputs.get("parent_id")) or payload_default_project_id
+        return payload_default_project_id
+    return _as_text(inputs.get("parent_id")) or payload_default_project_id
+
+
+def _vpc_row_project_id(
+    *,
+    payload_default_project_id: str,
+    row: Mapping[str, Any],
+) -> str:
+    inputs = row.get("inputs")
+    if isinstance(inputs, Mapping):
+        return _as_text(inputs.get("parent_id")) or payload_default_project_id
+    return payload_default_project_id
+
+
+def _validate_planned_vpc_bindings(payload: Mapping[str, Any]) -> None:
+    default_project_id = _default_project_id(payload)
+    vpc_rows = _enabled_vpc_rows(payload)
+    for component_id, _instance_id, component_label, inputs, raw_row in (
+        _enabled_resolved_infra_components(payload)
+    ):
+        bindings = _row_bindings_by_target(raw_row)
+        if not bindings:
+            continue
+        project_id = _component_project_id(
+            payload_default_project_id=default_project_id,
+            component_id=component_id,
+            inputs=inputs,
+        )
+        network_target = _binding_target(component_id, "network_id")
+        subnet_target = _binding_target(component_id, "subnet_id")
+        network_binding = bindings.get(network_target)
+        subnet_binding = bindings.get(subnet_target)
+        for target_path, binding in bindings.items():
+            if binding.source_component_id != "vpc":
+                continue
+            if not binding.source_instance_id:
+                raise RuntimeError(
+                    "VPC networking preflight failed: "
+                    f"component '{component_label}' binding {target_path} must set source_instance."
+                )
+            vpc_row = vpc_rows.get(binding.source_instance_id)
+            if vpc_row is None:
+                raise RuntimeError(
+                    "VPC networking preflight failed: "
+                    f"component '{component_label}' binding {target_path} references "
+                    f"disabled or missing infra:vpc@{binding.source_instance_id}."
+                )
+            vpc_project_id = _vpc_row_project_id(
+                payload_default_project_id=default_project_id,
+                row=vpc_row,
+            )
+            if project_id and vpc_project_id and project_id != vpc_project_id:
+                raise RuntimeError(
+                    "VPC networking preflight failed: "
+                    f"component '{component_label}' binding {target_path} uses "
+                    f"infra:vpc@{binding.source_instance_id} in project {vpc_project_id}, "
+                    f"not {project_id}."
+                )
+            if binding.source_output_name == "subnets":
+                subnets = read_component_path(vpc_row, "inputs.subnets")
+                if not binding.key or not isinstance(subnets, Mapping) or binding.key not in subnets:
+                    raise RuntimeError(
+                        "VPC networking preflight failed: "
+                        f"component '{component_label}' binding {target_path} references "
+                        f"missing VPC subnet key '{binding.key or '<empty>'}'."
+                    )
+
+        if (
+            network_binding is not None
+            and subnet_binding is not None
+            and network_binding.source_instance_id != subnet_binding.source_instance_id
+        ):
+            raise RuntimeError(
+                "VPC networking preflight failed: "
+                f"component '{component_label}' subnet binding {_binding_ref(subnet_binding)} "
+                f"does not belong to network binding {_binding_ref(network_binding)}."
+            )
+        if network_binding is None and subnet_binding is not None:
+            selected_network_id = _as_text(read_component_path(raw_row, network_target))
+            vpc_row = vpc_rows.get(subnet_binding.source_instance_id or "")
+            vpc_network = read_component_path(vpc_row or {}, "inputs.network")
+            existing_id = (
+                _as_text(vpc_network.get("existing_id"))
+                if isinstance(vpc_network, Mapping)
+                else ""
+            )
+            if selected_network_id and existing_id != selected_network_id:
+                raise RuntimeError(
+                    "VPC networking preflight failed: "
+                    f"component '{component_label}' subnet binding {_binding_ref(subnet_binding)} "
+                    f"is created under network {existing_id or '(new)'}, "
+                    f"not selected network {selected_network_id}."
+                )
+
+
+def _validate_vpc_hierarchy(payload: Mapping[str, Any]) -> None:
+    _validate_planned_vpc_bindings(payload)
+    refs = _vpc_networking_refs(payload)
+    if not refs:
+        return
+    sdk_by_project: dict[str, Any] = {}
+    network_cache: dict[tuple[str, str], Any] = {}
+    subnet_cache: dict[tuple[str, str], Any] = {}
+    try:
+        for ref in refs:
+            if not ref.project_id:
+                raise RuntimeError(
+                    "VPC networking preflight failed: "
+                    f"component '{ref.component_label}' {ref.field_label} is missing parent_id/project_id."
+                )
+            if not ref.network_id:
+                raise RuntimeError(
+                    "VPC networking preflight failed: "
+                    f"component '{ref.component_label}' {ref.field_label}.network_id is required."
+                )
+            sdk = sdk_by_project.get(ref.project_id)
+            if sdk is None:
+                sdk = init_nebius_sdk(
+                    parent_id=ref.project_id,
+                    context="VPC networking preflight",
+                )
+                sdk_by_project[ref.project_id] = sdk
+
+            network_key = (ref.project_id, ref.network_id)
+            network = network_cache.get(network_key)
+            if network is None:
+                network = NetworkServiceClient(sdk).get(
+                    GetNetworkRequest(id=ref.network_id)
+                ).wait()
+                network_cache[network_key] = network
+            network_parent_id = _resource_parent_id(network)
+            if network_parent_id != ref.project_id:
+                raise RuntimeError(
+                    "VPC networking preflight failed: "
+                    f"component '{ref.component_label}' {ref.field_label}.network_id "
+                    f"{ref.network_id} belongs to project {network_parent_id or '(unknown)'}, "
+                    f"not {ref.project_id}."
+                )
+
+            if ref.subnet_id is None:
+                continue
+            if not ref.subnet_id:
+                raise RuntimeError(
+                    "VPC networking preflight failed: "
+                    f"component '{ref.component_label}' {ref.field_label}.subnet_id is required."
+                )
+            subnet_key = (ref.project_id, ref.subnet_id)
+            subnet = subnet_cache.get(subnet_key)
+            if subnet is None:
+                subnet = SubnetServiceClient(sdk).get(GetSubnetRequest(id=ref.subnet_id)).wait()
+                subnet_cache[subnet_key] = subnet
+            subnet_parent_id = _resource_parent_id(subnet)
+            if subnet_parent_id != ref.project_id:
+                raise RuntimeError(
+                    "VPC networking preflight failed: "
+                    f"component '{ref.component_label}' {ref.field_label}.subnet_id "
+                    f"{ref.subnet_id} belongs to project {subnet_parent_id or '(unknown)'}, "
+                    f"not {ref.project_id}."
+                )
+            subnet_network_id = _subnet_network_id(subnet)
+            if subnet_network_id != ref.network_id:
+                raise RuntimeError(
+                    "VPC networking preflight failed: "
+                    f"component '{ref.component_label}' {ref.field_label}.subnet_id "
+                    f"{ref.subnet_id} belongs to network {subnet_network_id or '(unknown)'}, "
+                    f"not selected network {ref.network_id}."
+                )
+    finally:
+        for sdk in sdk_by_project.values():
+            with suppress(Exception):
+                sdk.sync_close()
+
+
+def validate_vpc_networking_preflight(config: Any) -> None:
+    """Fail fast on invalid VPC hierarchy and MK8s subnet/service-CIDR combinations."""
     payload = to_plain_data(config)
     if not isinstance(payload, Mapping):
         return
+    _validate_vpc_hierarchy(payload)
     sdk = None
     try:
         for component in _resolved_mk8s_components(payload):
             inputs = component.inputs
             subnet_id = cluster_subnet_id(inputs)
-            if not subnet_id:
-                continue
 
             service_cidrs = list(cluster_service_cidrs(inputs)) or ["/16"]
             service_prefixes = _service_cidr_prefix_lengths(service_cidrs)
             if not service_prefixes:
                 continue
+            service_prefix = service_prefixes[0]
+
+            if not subnet_id:
+                planned_pool_cidrs = _planned_cluster_subnet_pool_cidrs(
+                    payload=payload,
+                    raw_row=component.raw_row,
+                )
+                if len(planned_pool_cidrs) == 1:
+                    _validate_service_prefix_against_pool_cidr(
+                        component_label=component.component_label,
+                        service_cidrs=service_cidrs,
+                        service_prefix=service_prefix,
+                        pool_cidr=planned_pool_cidrs[0],
+                        subnet_label="planned VPC subnet",
+                    )
+                continue
 
             if sdk is None:
                 sdk = init_nebius_sdk(
-                    parent_id=component.project_id or None, context="MK8s network preflight"
+                    parent_id=component.project_id or None, context="VPC networking preflight"
                 )
             subnet_client = SubnetServiceClient(sdk)
             subnet = subnet_client.get(GetSubnetRequest(id=subnet_id)).wait()
@@ -211,28 +679,13 @@ def validate_mk8s_network_preflight(config: Any) -> None:
             if len(pool_cidrs) != 1:
                 continue
 
-            pool_cidr = pool_cidrs[0]
-            try:
-                pool_prefix = ipaddress.ip_network(pool_cidr, strict=False).prefixlen
-            except ValueError as exc:
-                raise RuntimeError(
-                    "MK8s network preflight failed: "
-                    f"component '{component.component_label}' subnet {subnet_id} "
-                    f"returned malformed pool CIDR {pool_cidr!r}."
-                ) from exc
-
-            service_prefix = service_prefixes[0]
-            if service_prefix <= pool_prefix:
-                raise RuntimeError(
-                    "MK8s network preflight failed: "
-                    f"component '{component.component_label}' "
-                    "inputs.cluster.kube_network.service_cidrs="
-                    f"{service_cidrs!r} "
-                    f"is too large for subnet {subnet_id} pool {pool_cidr}. "
-                    "Nebius reserves Kubernetes service CIDRs from the same subnet pool, so this "
-                    "single-pool subnet can stall cluster provisioning before any node groups are created. "
-                    'Use a smaller service CIDR such as ["/20"] or choose a larger subnet.'
-                )
+            _validate_service_prefix_against_pool_cidr(
+                component_label=component.component_label,
+                service_cidrs=service_cidrs,
+                service_prefix=service_prefix,
+                pool_cidr=pool_cidrs[0],
+                subnet_label=subnet_id,
+            )
     finally:
         if sdk is not None:
             with suppress(Exception):
@@ -318,6 +771,6 @@ def validate_mk8s_resource_name_preflight(
 
 __all__ = [
     "has_mk8s_resource_name_preflight_targets",
-    "validate_mk8s_network_preflight",
     "validate_mk8s_resource_name_preflight",
+    "validate_vpc_networking_preflight",
 ]

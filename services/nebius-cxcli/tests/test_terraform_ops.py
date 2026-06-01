@@ -28,7 +28,7 @@ def test_translate_terraform_failure_summarizes_provider_module_name_violation()
 ╷
 │ Error: Invalid Attribute Value Match
 │
-│   with provider["terraform-provider.storage.eu-north1.nebius.cloud/nebius/nebius"],
+│   with provider["nebius/nebius"],
 │   on providers.tf line 2, in provider "nebius":
 │    2:   module_name = var.nebius_provider_module_name
 │
@@ -130,7 +130,7 @@ def test_translate_terraform_failure_explains_remote_state_lockfile_issue() -> N
 │   Path:      tfstate-demo-project/terraform.tfstate
 │   Operation: OperationTypeApply
 │   Who:       rezab@example
-│   Version:   1.14.1
+│   Version:   1.15.5
 │   Created:   2026-03-19 02:04:39.873262 +0000 UTC
 │   Info:
 │

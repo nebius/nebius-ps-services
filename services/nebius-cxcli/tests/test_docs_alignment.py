@@ -23,6 +23,7 @@ def test_readme_quick_start_uses_current_create_target_contract() -> None:
 
     assert "nebius-cxcli create <deployments-root>" in quick_start
     assert "nebius-cxcli create <target-path>" not in quick_start
+    assert "creates it before writing the tenant/project scaffold" in readme
 
 
 def test_readme_documents_redacted_guided_create_prefill_example() -> None:
@@ -84,7 +85,9 @@ def test_readme_mk8s_gpu_workload_validation_defaults_include_soperator() -> Non
         "NCCL test is enabled by default for GPU-enabled MK8s clusters, including Soperator production targets"
         in readme
     )
-    assert "Soperator ActiveChecks stay as the opt-in Slurm-side benchmark/diagnostic path" in readme
+    assert (
+        "Soperator ActiveChecks stay as the opt-in Slurm-side benchmark/diagnostic path" in readme
+    )
     assert "Soperator targets suppress this generic workload prompt" not in readme
     assert "Soperator targets suppress the generic deploy-time NCCL workload" not in readme
 
@@ -134,6 +137,7 @@ def test_readme_supporting_commands_include_current_quota_and_target_flags() -> 
     assert (
         "- `create`:\n  `--client-name`, `--tenant-id`, `--project-id`, `--region-id`, "
         "`--email`, `--infra`, `--app`, `--app-namespace`, `--app-releasename`, "
+        "`--network-id`, `--subnet-id`, `--network-ref`, `--subnet-ref`, "
         "`--validate-sources/--no-validate-sources`, "
         "`--validate-config/--no-validate-config`, `--no-interactive`, `--force`"
     ) in common_flags
@@ -309,9 +313,9 @@ def test_soperator_docs_lock_production_training_child_chart_defaults() -> None:
     chart_design = (MONOREPO_ROOT / "helm-charts" / "soperator" / "docs" / "design.md").read_text(
         encoding="utf-8"
     )
-    checks_readme = (
-        MONOREPO_ROOT / "helm-charts" / "soperator-checks" / "README.md"
-    ).read_text(encoding="utf-8")
+    checks_readme = (MONOREPO_ROOT / "helm-charts" / "soperator-checks" / "README.md").read_text(
+        encoding="utf-8"
+    )
     activechecks_readme = (
         MONOREPO_ROOT / "helm-charts" / "soperator-activechecks" / "README.md"
     ).read_text(encoding="utf-8")
@@ -410,7 +414,9 @@ def test_soperator_chart_design_aligns_current_scheduling_qos_surfaces() -> None
     assert "The chart does not create QOS objects" not in chart_design
     assert "managed via `sacctmgr` outside the chart" not in chart_design
     assert "slurmNodes.accounting.slurmConfig.priorityWeightFairshare" not in chart_design
-    assert "Archives under `helm-charts/soperator/charts/` are generated dependency artifacts" in flat
+    assert (
+        "Archives under `helm-charts/soperator/charts/` are generated dependency artifacts" in flat
+    )
     assert "Rebooter ServiceAccount, Role, and binding resources render only when" in flat
 
 
@@ -516,10 +522,7 @@ def test_readme_explains_soperator_slurm_concept_ownership() -> None:
 
     assert "The Helm chart owns persistent Slurm resources" in section_flat
     assert "cxcli selects bundled profiles and writes Helm values" in section_flat
-    assert (
-        "per-job choices such as `--qos`, `--nice`, `--time`, and `--requeue`"
-        in section_flat
-    )
+    assert "per-job choices such as `--qos`, `--nice`, `--time`, and `--requeue`" in section_flat
     assert "The chart types `schedulingConfig.priorityWeights.partition`" in section_flat
     assert "does not currently type per-partition `PriorityJobFactor`" in section_flat
     assert "Use per-partition `config: PriorityJobFactor=<n>` today" in section_flat
@@ -577,7 +580,7 @@ def test_docs_define_validation_command_boundaries() -> None:
     assert "- `validate-generated <generated-dir>`" in readme
     assert "existing generated bundle without rerendering it" in readme
     assert (
-        "strict readiness, MK8s preflight, backend auth/bootstrap, "
+        "strict readiness, VPC networking preflight, backend auth/bootstrap, "
         "live quota/capacity, Terraform validation"
     ) in readme
     assert "### `validate-sources [component_sources.yaml]`" in design
@@ -589,7 +592,7 @@ def test_docs_define_validation_command_boundaries() -> None:
     )
     assert "### `validate-generated <generated-path>`" in design
     assert (
-        "strict readiness, MK8s preflight, backend auth preparation, "
+        "strict readiness, VPC networking preflight, backend auth preparation, "
         "live quota/capacity, Terraform validation"
     ) in design
 
@@ -676,6 +679,75 @@ def test_docs_define_wizard_string_lists_as_comma_separated() -> None:
     assert "`ns1,ns2`" in readme
     assert "simple string lists prompt for comma-separated values" in design
     assert "simple `list(string)` prompts use comma-separated input" in design
+
+
+def test_docs_define_create_app_selection_and_vpc_guided_subnet_contract() -> None:
+    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+    design = (REPO_ROOT / "docs" / "design.md").read_text(encoding="utf-8")
+
+    for text in (readme, design):
+        normalized = " ".join(text.split())
+        assert "opens app chart selection only after" in normalized
+        assert "MK8s target" in normalized
+        assert "skips the new-network name prompt" in normalized
+        assert "network with no subnets" in normalized
+        assert "inputs.network.existing_id" in normalized
+        assert "Create a new VPC network" in normalized
+        assert "recommend `default-network` when it exists" in normalized
+        assert "inputs.network.ipv4_private_cidrs" in normalized
+        assert "inputs.network.ipv4_private_pool_ids" in normalized
+        assert "unassigned existing private pool" in normalized
+        assert "inputs.network.ipv4_private_source_pool_id" in normalized
+        assert "inputs.network.ipv4_public_pool_ids" in normalized
+        assert "default public pool" in normalized
+        assert "default route table" in normalized
+        assert "prompt is live-only" in normalized
+        assert "custom private" in normalized
+        assert "10.8.0.0/13" in normalized
+        assert "172.16.0.0/12" in normalized
+        assert "172.16.0.0/13" not in normalized
+        assert "192.168.0.0/16" in normalized
+        assert "default private-pool" in normalized
+        assert "subnet CIDRs" in normalized
+        assert "Every declared subnet uses explicit private CIDRs" in normalized
+        assert "one or more comma-separated explicit private CIDRs" in normalized
+        assert "adds any out-of-parent custom subnet CIDR" in normalized
+        assert "parent network IP space" in normalized
+        assert "live private allocations" in normalized
+        assert "bounded existing-network" in normalized
+        assert "attached private pool on the selected live network" in normalized
+        assert "use_network_private_pools=false" in normalized
+        assert "same pool tree" not in normalized
+        assert "without creating another detached root pool" not in normalized
+        assert "immediately creates and attaches a live private VPC pool" not in normalized
+        assert "asks for explicit confirmation" not in normalized
+        assert "externally managed" in normalized
+        assert "default-network ranges already attached" in normalized
+        assert "Explicit subnet CIDRs must fit" in normalized
+        assert "must not overlap" in normalized
+        assert "selected network" in normalized
+        assert "guided" in normalized
+        assert "subnets" in normalized
+
+
+def test_vpc_module_examples_use_explicit_subnet_private_cidrs() -> None:
+    module_readme = (
+        MONOREPO_ROOT / "platform-infra" / "modules" / "vpc" / "README.md"
+    ).read_text(encoding="utf-8")
+    minimal_example = (
+        MONOREPO_ROOT
+        / "platform-infra"
+        / "modules"
+        / "vpc"
+        / "examples"
+        / "minimal"
+        / "main.tf"
+    ).read_text(encoding="utf-8")
+
+    for text in (module_readme, minimal_example):
+        assert "use_network_private_pools = false" in text
+        assert "ipv4_private_cidrs" in text
+    assert "fail instead of guessing containment" in module_readme
 
 
 def test_docs_list_all_builtin_wizard_profiles_and_static_sources() -> None:

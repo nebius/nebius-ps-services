@@ -33,8 +33,8 @@ payloads.
 
 - Terraform `>= 1.11.0, < 2.0.0`
 - Nebius provider
-  `terraform-provider.storage.eu-north1.nebius.cloud/nebius/nebius`
-  `>= 0.5.55, < 0.6.0`
+  `nebius/nebius`
+  `>= 0.6.8, < 0.7.0`
 
 Terraform 1.11 or later is required because this module uses provider
 write-only fields for secret payloads.

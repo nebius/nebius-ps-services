@@ -6,13 +6,25 @@ import copy
 from typing import Any
 
 
-def _project_subnets_field() -> dict[str, dict[str, Any]]:
+def _project_network_and_subnet_fields() -> dict[str, dict[str, Any]]:
     return {
+        "inputs.network_id": {
+            "options": {
+                "from": "project_networks",
+                "auto_select_single": True,
+            },
+            "required": True,
+            "type_hint": "string",
+        },
         "inputs.subnet_id": {
             "options": {
                 "from": "project_subnets",
-            }
-        }
+                "args": {"network_id_path": "inputs.network_id"},
+                "auto_select_single": True,
+            },
+            "required": True,
+            "type_hint": "string",
+        },
     }
 
 
@@ -108,6 +120,15 @@ def _sfs_layout_filesystem_fields() -> dict[str, dict[str, Any]]:
     fields: dict[str, dict[str, Any]] = {}
     field_specs: dict[str, dict[str, Any]] = {
         "name": {"type_hint": "string"},
+        "existing_id": {
+            "options": {
+                "from": "project_filesystems",
+                "auto_select_single": False,
+                "skip_prompt_if_no_choices": True,
+            },
+            "required": False,
+            "type_hint": "string",
+        },
         "size_gib": {"type_hint": "number"},
         "block_size_kib": {"type_hint": "number"},
         "mount_tag": {"type_hint": "string"},
@@ -169,6 +190,24 @@ def _soperator_node_group_mapping_fields() -> dict[str, dict[str, Any]]:
             "type_hint": "list(string)",
             "default_from": copy.deepcopy(provider_spec),
             "options": copy.deepcopy(provider_spec),
+        }
+    return fields
+
+
+def _mk8s_soperator_autoscaling_fields() -> dict[str, dict[str, Any]]:
+    fields: dict[str, dict[str, Any]] = {}
+    for role in ("system", "controller", "login", "accounting", "worker"):
+        prefix = f"inputs.soperator.{role}_autoscaling"
+        fields[f"{prefix}.enabled"] = _disabled_bool_wizard_field()
+        fields[f"{prefix}.min_node_count"] = {
+            "default": 1,
+            "write_default_to_config": True,
+            "type_hint": "number",
+        }
+        fields[f"{prefix}.max_node_count"] = {
+            "default": 1,
+            "write_default_to_config": True,
+            "type_hint": "number",
         }
     return fields
 
@@ -263,6 +302,56 @@ def _soperator_wizard_profile() -> dict[str, dict[str, Any]]:
 
 
 BUILTIN_WIZARD_PROFILES: dict[str, dict[str, dict[str, Any]]] = {
+    "vpc": {
+        "inputs.parent_id": {
+            "prompt": False,
+            "type_hint": "string",
+        },
+        "inputs.network": {
+            "prompt": False,
+            "type_hint": "object({ existing_id = optional(string), name = optional(string), labels = optional(map(string)), ipv4_private_cidrs = optional(list(string)), ipv4_private_pool_ids = optional(list(string)), ipv4_private_source_pool_id = optional(string), ipv4_public_pool_ids = optional(list(string)) })",
+        },
+        "inputs.network.existing_id": {
+            "options": {
+                "from": "project_networks",
+                "auto_select_single": False,
+                "skip_prompt_if_no_choices": True,
+            },
+            "required": False,
+            "type_hint": "string",
+        },
+        "inputs.network.name": {
+            "default": "vpc-network",
+            "write_default_to_config": True,
+            "type_hint": "string",
+        },
+        "inputs.network.ipv4_private_cidrs": {
+            "prompt": False,
+            "type_hint": "list(string)",
+        },
+        "inputs.network.ipv4_private_pool_ids": {
+            "prompt": False,
+            "type_hint": "list(string)",
+            "options": {
+                "from": "project_private_pools",
+                "auto_select_single": False,
+                "skip_prompt_if_no_choices": True,
+            },
+        },
+        "inputs.network.ipv4_private_source_pool_id": {
+            "prompt": False,
+            "type_hint": "string",
+            "options": {
+                "from": "project_private_pools",
+                "auto_select_single": False,
+                "skip_prompt_if_no_choices": True,
+            },
+        },
+        "inputs.subnets": {
+            "type_hint": "map(object({ name = optional(string), route_table_id = optional(string), use_network_private_pools = optional(bool, false), ipv4_private_cidrs = list(string), use_network_public_pools = optional(bool), ipv4_public_cidrs = optional(list(string)) }))",
+            "prompt": False,
+        },
+    },
     "mk8s": {
         "inputs.cluster": {
             "prompt": False,
@@ -279,7 +368,7 @@ BUILTIN_WIZARD_PROFILES: dict[str, dict[str, dict[str, Any]]] = {
         "inputs.cluster.network_id": {
             "options": {
                 "from": "project_networks",
-                "auto_select_first": True,
+                "auto_select_single": True,
             },
             "required": True,
             "type_hint": "string",
@@ -288,7 +377,7 @@ BUILTIN_WIZARD_PROFILES: dict[str, dict[str, dict[str, Any]]] = {
             "options": {
                 "from": "project_subnets",
                 "args": {"network_id_path": "inputs.cluster.network_id"},
-                "auto_select_first": True,
+                "auto_select_single": True,
             },
             "required": True,
             "type_hint": "string",
@@ -407,7 +496,7 @@ BUILTIN_WIZARD_PROFILES: dict[str, dict[str, dict[str, Any]]] = {
         },
         "inputs.node_groups": {
             "prompt": False,
-            "type_hint": "map(object({ platform = string, preset = string, node_count = optional(number), autoscaling = optional(any), gpu = optional(bool), os = optional(string), node_labels = optional(map(string)), taints = optional(list(any)), boot_disk = optional(any), reservation = optional(any), service_account = optional(any), ssh = optional(any), sfs_filesystem_keys = optional(list(string)), filesystems = optional(list(any)) }))",
+            "type_hint": "map(object({ platform = string, preset = string, node_count = optional(number), autoscaling = optional(object({ enabled = optional(bool), min_node_count = optional(number), max_node_count = optional(number) })), gpu = optional(bool), os = optional(string), node_labels = optional(map(string)), taints = optional(list(any)), boot_disk = optional(any), reservation = optional(any), service_account = optional(any), ssh = optional(any), sfs_filesystem_keys = optional(list(string)), filesystems = optional(list(any)) }))",
             "required": True,
         },
         "inputs.node_groups.system.node_count": {
@@ -477,6 +566,7 @@ BUILTIN_WIZARD_PROFILES: dict[str, dict[str, dict[str, Any]]] = {
             "write_default_to_config": True,
             "type_hint": "number",
         },
+        **_mk8s_soperator_autoscaling_fields(),
         "inputs.soperator.worker_total_nodes": {
             "default": 1,
             "write_default_to_config": True,
@@ -534,7 +624,10 @@ BUILTIN_WIZARD_PROFILES: dict[str, dict[str, dict[str, Any]]] = {
         "inputs.network_id": {
             "options": {
                 "from": "project_networks",
-            }
+                "auto_select_single": True,
+            },
+            "required": True,
+            "type_hint": "string",
         },
         "inputs.tier": _static_sources("small", "medium", "large"),
     },
@@ -573,7 +666,7 @@ BUILTIN_WIZARD_PROFILES: dict[str, dict[str, dict[str, Any]]] = {
         ),
     },
     "wireguard-gw": {
-        **_project_subnets_field(),
+        **_project_network_and_subnet_fields(),
         **_compute_platform_and_preset_fields(
             platform_field="inputs.platform",
             preset_field="inputs.preset",
@@ -599,7 +692,7 @@ BUILTIN_WIZARD_PROFILES: dict[str, dict[str, dict[str, Any]]] = {
         ),
     },
     "ssh-jumphost": {
-        **_project_subnets_field(),
+        **_project_network_and_subnet_fields(),
         **_compute_platform_and_preset_fields(
             platform_field="inputs.platform",
             preset_field="inputs.preset",
@@ -627,7 +720,7 @@ BUILTIN_WIZARD_PROFILES: dict[str, dict[str, dict[str, Any]]] = {
         ),
     },
     "nfs": {
-        **_project_subnets_field(),
+        **_project_network_and_subnet_fields(),
         **_compute_platform_and_preset_fields(
             platform_field="inputs.platform",
             preset_field="inputs.preset",
@@ -682,7 +775,7 @@ BUILTIN_WIZARD_PROFILES: dict[str, dict[str, dict[str, Any]]] = {
         ),
     },
     "vm": {
-        **_project_subnets_field(),
+        **_project_network_and_subnet_fields(),
         **_compute_platform_and_preset_fields(
             platform_field="inputs.platform",
             preset_field="inputs.preset",
@@ -718,6 +811,11 @@ BUILTIN_WIZARD_PROFILES: dict[str, dict[str, dict[str, Any]]] = {
                 "args": {"preset_path": "inputs.preset"},
                 "skip_prompt_if_no_choices": True,
             }
+        },
+        "inputs.sfs_attachments": {
+            "type_hint": "list(object({ source_instance = optional(string), keys = optional(list(string)), id = optional(string), mount_tag = optional(string), attach_mode = optional(string) }))",
+            "prompt_complex": True,
+            "required": False,
         },
         **_suppressed_prompt_fields(
             "inputs.boot_disk_existing_id",

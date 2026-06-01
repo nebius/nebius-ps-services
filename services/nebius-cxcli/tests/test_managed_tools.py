@@ -14,7 +14,7 @@ def test_resolve_terraform_binary_uses_managed_cache_when_missing_from_path(
     monkeypatch.setattr(
         managed_tools,
         "load_cli_settings",
-        lambda: SimpleNamespace(terraform=SimpleNamespace(version="1.14.1")),
+        lambda: SimpleNamespace(terraform=SimpleNamespace(version="1.15.5")),
     )
     monkeypatch.setattr(
         managed_tools,
@@ -31,8 +31,8 @@ def test_resolve_terraform_binary_uses_managed_cache_when_missing_from_path(
 
     resolved = managed_tools.resolve_terraform_binary()
 
-    assert resolved == "/tmp/terraform/1.14.1/terraform"
-    assert calls == [("1.14.1", "/tmp/terraform/1.14.1/terraform")]
+    assert resolved == "/tmp/terraform/1.15.5/terraform"
+    assert calls == [("1.15.5", "/tmp/terraform/1.15.5/terraform")]
 
 
 def test_resolve_flux_binary_prefers_existing_path(monkeypatch) -> None:

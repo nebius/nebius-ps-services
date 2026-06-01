@@ -614,6 +614,76 @@ def test_runtime_validation_plugins_allow_generic_mk8s_gpu_node_groups(
     )
 
 
+def test_runtime_validation_plugins_allow_mk8s_autoscaling_node_groups(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(
+        "NEBIUS_CXCLI_RUNTIME_VALIDATION_PLUGINS",
+        "nebius_cxcli.runtime_component_validation:validate_component_runtime_rules",
+    )
+    payload = {
+        "__shared_admin_ssh_user_name__": "ubuntu",
+        "infra": {
+            "mk8s": {
+                "node_groups": {
+                    "system": {
+                        "platform": "cpu-d3",
+                        "preset": "4vcpu-16gb",
+                        "autoscaling": {
+                            "min_node_count": 1,
+                            "max_node_count": 3,
+                        },
+                    }
+                },
+            }
+        },
+    }
+
+    run_runtime_validation_plugins(
+        payload=payload,
+        get_path=_get_path,
+        as_text=_as_text,
+        id_pattern=re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"),
+        env_var_pattern=re.compile(r"^[A-Z_][A-Z0-9_]*$"),
+    )
+
+
+def test_runtime_validation_plugins_reject_mk8s_node_count_with_autoscaling(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(
+        "NEBIUS_CXCLI_RUNTIME_VALIDATION_PLUGINS",
+        "nebius_cxcli.runtime_component_validation:validate_component_runtime_rules",
+    )
+    payload = {
+        "__shared_admin_ssh_user_name__": "ubuntu",
+        "infra": {
+            "mk8s": {
+                "node_groups": {
+                    "system": {
+                        "platform": "cpu-d3",
+                        "preset": "4vcpu-16gb",
+                        "node_count": 2,
+                        "autoscaling": {
+                            "min_node_count": 1,
+                            "max_node_count": 3,
+                        },
+                    }
+                },
+            }
+        },
+    }
+
+    with pytest.raises(ValueError, match="cannot set both node_count and enabled autoscaling"):
+        run_runtime_validation_plugins(
+            payload=payload,
+            get_path=_get_path,
+            as_text=_as_text,
+            id_pattern=re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"),
+            env_var_pattern=re.compile(r"^[A-Z_][A-Z0-9_]*$"),
+        )
+
+
 def test_runtime_validation_plugins_reject_non_clusterable_mk8s_gpu_preset_with_infiniband(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

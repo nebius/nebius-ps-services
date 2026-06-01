@@ -91,7 +91,11 @@ variable "node_groups" {
     labels      = optional(map(string), {})
     node_labels = optional(map(string), {})
     node_count  = optional(number)
-    autoscaling = optional(any)
+    autoscaling = optional(object({
+      enabled        = optional(bool, true)
+      min_node_count = optional(number)
+      max_node_count = optional(number)
+    }))
     auto_repair = optional(any)
     strategy    = optional(any)
     gpu         = optional(bool, false)
@@ -165,16 +169,21 @@ variable "node_groups" {
   }
   validation {
     condition = alltrue([
-      for key, group in var.node_groups : !(
-        try(group.node_count, null) != null &&
-        try(group.autoscaling, null) != null
+      for key, group in var.node_groups : (
+        try(group.enabled, true) == false ||
+        !(
+          try(group.node_count, null) != null &&
+          try(group.autoscaling, null) != null &&
+          try(group.autoscaling.enabled, true)
+        )
       )
     ])
-    error_message = "A node group cannot set both node_count and autoscaling."
+    error_message = "A node group cannot set both node_count and enabled autoscaling."
   }
   validation {
     condition = alltrue([
       for key, group in var.node_groups : (
+        try(group.enabled, true) == false ||
         try(group.node_count, null) == null ||
         (
           floor(group.node_count) == group.node_count &&
@@ -183,6 +192,62 @@ variable "node_groups" {
       )
     ])
     error_message = "node_groups[*].node_count must be an integer >= 0 when provided."
+  }
+  validation {
+    condition = alltrue([
+      for key, group in var.node_groups : (
+        try(group.enabled, true) == false ||
+        try(group.node_count, null) != null ||
+        (
+          try(group.autoscaling, null) != null &&
+          try(group.autoscaling.enabled, true)
+        )
+      )
+    ])
+    error_message = "Each enabled node group requires node_count or enabled autoscaling."
+  }
+  validation {
+    condition = alltrue([
+      for key, group in var.node_groups : (
+        try(group.enabled, true) == false ||
+        try(group.autoscaling, null) == null ||
+        try(group.autoscaling.enabled, true) == false ||
+        (
+          try(floor(group.autoscaling.min_node_count) == group.autoscaling.min_node_count, false) &&
+          try(group.autoscaling.min_node_count >= 0, false) &&
+          try(floor(group.autoscaling.max_node_count) == group.autoscaling.max_node_count, false) &&
+          try(group.autoscaling.max_node_count >= group.autoscaling.min_node_count, false)
+        )
+      )
+    ])
+    error_message = "Enabled node_groups[*].autoscaling requires integer min_node_count >= 0 and max_node_count >= min_node_count."
+  }
+  validation {
+    condition = alltrue([
+      for key, group in var.node_groups : (
+        try(group.enabled, true) == false ||
+        try(group.subnet_id, null) == null ||
+        try(length(trimspace(group.subnet_id)) > 0, true)
+      )
+    ])
+    error_message = "node_groups[*].subnet_id cannot be empty when provided."
+  }
+  validation {
+    condition = alltrue([
+      for key, group in var.node_groups : (
+        try(group.enabled, true) == false ||
+        try(group.network_interfaces, null) == null ||
+        try(
+          length(group.network_interfaces) > 0 &&
+          alltrue([
+            for interface in group.network_interfaces :
+            length(trimspace(try(interface.subnet_id, ""))) > 0
+          ]),
+          false
+        )
+      )
+    ])
+    error_message = "Explicit node_groups[*].network_interfaces entries must include non-empty subnet_id values."
   }
   validation {
     condition = alltrue([

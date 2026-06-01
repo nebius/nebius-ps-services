@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ipaddress
 import re
 from collections.abc import Mapping
 from typing import Any
@@ -18,6 +19,7 @@ from .component_instances import (
     component_type_id,
     normalize_component_token,
 )
+from .component_wiring import row_input_bindings
 from .components import (
     ComponentScope,
     component_entries,
@@ -86,6 +88,203 @@ def _mapping_path_value(node: Mapping[str, Any], dotted_path: str) -> Any:
         if current is None:
             return None
     return current
+
+
+def _private_ipv4_network(value: Any) -> ipaddress.IPv4Network | None:
+    try:
+        network = ipaddress.ip_network(str(value).strip(), strict=False)
+    except ValueError:
+        return None
+    if network.version != 4:
+        return None
+    return network
+
+
+def _planned_vpc_network_private_cidr_entries(
+    *,
+    component_index: int,
+    inputs: Mapping[str, Any],
+) -> list[tuple[str, str, ipaddress.IPv4Network]]:
+    network_value = inputs.get("network")
+    if not isinstance(network_value, Mapping):
+        return []
+    raw_cidrs = network_value.get("ipv4_private_cidrs")
+    if not isinstance(raw_cidrs, list):
+        return []
+    entries: list[tuple[str, str, ipaddress.IPv4Network]] = []
+    for cidr_index, raw_cidr in enumerate(raw_cidrs):
+        cidr = _as_text(raw_cidr)
+        if not cidr:
+            continue
+        field_label = (
+            f"infra.components[{component_index}].inputs.network.ipv4_private_cidrs[{cidr_index}]"
+        )
+        network = _private_ipv4_network(cidr)
+        if network is None:
+            raise ValueError(f"{field_label} must be an IPv4 CIDR")
+        entries.append((field_label, cidr, network))
+    return entries
+
+
+def _planned_vpc_private_cidr_entries(
+    *,
+    component_index: int,
+    inputs: Mapping[str, Any],
+) -> list[tuple[str, str, ipaddress.IPv4Network]]:
+    subnets = inputs.get("subnets")
+    if not isinstance(subnets, Mapping):
+        return []
+    entries: list[tuple[str, str, ipaddress.IPv4Network]] = []
+    for subnet_key, raw_subnet in subnets.items():
+        if not isinstance(raw_subnet, Mapping):
+            raise ValueError(
+                f"infra.components[{component_index}].inputs.subnets.{subnet_key} "
+                "must be a mapping"
+            )
+        if raw_subnet.get("use_network_private_pools") is True:
+            raise ValueError(
+                f"infra.components[{component_index}].inputs.subnets.{subnet_key}."
+                "use_network_private_pools must be false; VPC subnets created by "
+                "cxcli require explicit private CIDRs"
+            )
+        raw_cidrs = raw_subnet.get("ipv4_private_cidrs")
+        if not isinstance(raw_cidrs, list):
+            raise ValueError(
+                f"infra.components[{component_index}].inputs.subnets.{subnet_key}."
+                "ipv4_private_cidrs is required for VPC subnets"
+            )
+        subnet_has_cidr = False
+        for cidr_index, raw_cidr in enumerate(raw_cidrs):
+            cidr = _as_text(raw_cidr)
+            if not cidr:
+                continue
+            subnet_has_cidr = True
+            field_label = (
+                f"infra.components[{component_index}].inputs.subnets.{subnet_key}."
+                f"ipv4_private_cidrs[{cidr_index}]"
+            )
+            network = _private_ipv4_network(cidr)
+            if network is None:
+                raise ValueError(f"{field_label} must be an IPv4 CIDR")
+            entries.append((field_label, cidr, network))
+        if not subnet_has_cidr:
+            raise ValueError(
+                f"infra.components[{component_index}].inputs.subnets.{subnet_key}."
+                "ipv4_private_cidrs must contain at least one IPv4 CIDR"
+            )
+    return entries
+
+
+def _validate_vpc_private_cidr_entries_do_not_overlap(
+    entries: list[tuple[str, str, ipaddress.IPv4Network]],
+) -> None:
+    seen_networks: list[tuple[str, str, ipaddress.IPv4Network]] = []
+    for field_label, cidr, network in entries:
+        for seen_label, seen_cidr, seen_network in seen_networks:
+            if network.overlaps(seen_network):
+                raise ValueError(
+                    f"{field_label} overlaps {seen_label} CIDR {seen_cidr}; "
+                    "Nebius requires subnet CIDR blocks in the same VPC network "
+                    "to be non-overlapping"
+                )
+        seen_networks.append((field_label, cidr, network))
+
+
+def _validate_planned_vpc_private_cidr_overlaps(
+    *,
+    component_index: int,
+    inputs: Mapping[str, Any],
+) -> list[tuple[str, str, ipaddress.IPv4Network]]:
+    entries = _planned_vpc_private_cidr_entries(
+        component_index=component_index,
+        inputs=inputs,
+    )
+    _validate_vpc_private_cidr_entries_do_not_overlap(entries)
+    return entries
+
+
+def _planned_vpc_network_pool_ids(inputs: Mapping[str, Any], field_name: str) -> list[str]:
+    network_value = inputs.get("network")
+    if not isinstance(network_value, Mapping):
+        return []
+    raw_pool_ids = network_value.get(field_name)
+    if not isinstance(raw_pool_ids, list):
+        return []
+    return [_as_text(pool_id) for pool_id in raw_pool_ids if _as_text(pool_id)]
+
+
+def _planned_vpc_network_private_pool_ids(inputs: Mapping[str, Any]) -> list[str]:
+    return _planned_vpc_network_pool_ids(inputs, "ipv4_private_pool_ids")
+
+
+def _planned_vpc_network_private_source_pool_id(inputs: Mapping[str, Any]) -> str:
+    network_value = inputs.get("network")
+    if not isinstance(network_value, Mapping):
+        return ""
+    return _as_text(network_value.get("ipv4_private_source_pool_id"))
+
+
+def _validate_planned_vpc_private_cidr_contract(
+    *,
+    component_index: int,
+    inputs: Mapping[str, Any],
+) -> list[tuple[str, str, ipaddress.IPv4Network]]:
+    network_entries = _planned_vpc_network_private_cidr_entries(
+        component_index=component_index,
+        inputs=inputs,
+    )
+    _validate_vpc_private_cidr_entries_do_not_overlap(network_entries)
+    network_value = inputs.get("network")
+    existing_network_id = (
+        _as_text(network_value.get("existing_id")) if isinstance(network_value, Mapping) else ""
+    )
+    source_pool_id = _planned_vpc_network_private_source_pool_id(inputs)
+    private_pool_ids = _planned_vpc_network_private_pool_ids(inputs)
+    if existing_network_id:
+        if (
+            network_entries
+            or private_pool_ids
+            or source_pool_id
+            or _planned_vpc_network_pool_ids(inputs, "ipv4_public_pool_ids")
+        ):
+            raise ValueError(
+                f"infra.components[{component_index}].inputs.network private CIDRs, "
+                "source pool, or pool IDs cannot be set when network.existing_id is set; "
+                "existing networks already own their pools"
+            )
+        subnet_entries = _validate_planned_vpc_private_cidr_overlaps(
+            component_index=component_index,
+            inputs=inputs,
+        )
+        return subnet_entries
+
+    if source_pool_id and not network_entries:
+        raise ValueError(
+            f"infra.components[{component_index}].inputs.network.ipv4_private_source_pool_id "
+            "applies only when network.ipv4_private_cidrs creates managed private pools"
+        )
+
+    if not network_entries and not private_pool_ids:
+        raise ValueError(
+            f"infra.components[{component_index}].inputs.network.ipv4_private_cidrs "
+            "is required when creating a new VPC network unless "
+            "network.ipv4_private_pool_ids is set"
+        )
+
+    subnet_entries = _validate_planned_vpc_private_cidr_overlaps(
+        component_index=component_index,
+        inputs=inputs,
+    )
+    if network_entries and not private_pool_ids:
+        for subnet_label, subnet_cidr, subnet_network in subnet_entries:
+            if any(subnet_network.subnet_of(network) for _label, _cidr, network in network_entries):
+                continue
+            network_ranges = ", ".join(cidr for _label, cidr, _network in network_entries)
+            raise ValueError(
+                f"{subnet_label} CIDR {subnet_cidr} must fit inside the VPC network "
+                f"private CIDR range ({network_ranges})"
+            )
+    return subnet_entries
 
 
 def _is_scalar_resource_name_value(value: Any) -> bool:
@@ -215,9 +414,7 @@ def _validate_deploy(payload: Mapping[str, Any]) -> None:
                 else base_target_keys | {"kind"}
             )
             unknown_target_keys = sorted(
-                str(key)
-                for key in raw_target
-                if str(key) not in supported_target_keys
+                str(key) for key in raw_target if str(key) not in supported_target_keys
             )
             if unknown_target_keys:
                 raise ValueError(
@@ -643,13 +840,21 @@ def validate_dynamic_payload_structure(payload: Mapping[str, Any]) -> None:
     seen_infra_resource_names: dict[tuple[str, str], int] = {}
     cluster_target_refs: set[str] = set()
     enabled_vm_instance_ids: set[str] = set()
+    enabled_infra_rows_by_selector: dict[tuple[str, str], Mapping[str, Any]] = {}
+    enabled_infra_instances_by_id: dict[str, list[str]] = {}
+    row_bindings_to_validate: list[tuple[int, str, str, Any]] = []
+    default_project_id = _as_text(_mapping_path_value(payload, "client_info.nebius.project_id"))
+    existing_network_private_cidrs: dict[
+        tuple[str, str], list[tuple[str, str, ipaddress.IPv4Network]]
+    ] = {}
     for index, raw_component in enumerate(infra_components):
         if not isinstance(raw_component, Mapping):
             raise ValueError(f"infra.components[{index}] must be a mapping")
         unknown_keys = sorted(
             str(key)
             for key in raw_component
-            if str(key) not in {"id", "instance_id", "enabled", "source", "version", "inputs"}
+            if str(key)
+            not in {"id", "instance_id", "enabled", "source", "version", "inputs", "bindings"}
         )
         if unknown_keys:
             raise ValueError(
@@ -677,6 +882,9 @@ def validate_dynamic_payload_structure(payload: Mapping[str, Any]) -> None:
 
         if not isinstance(raw_component.get("enabled"), bool):
             raise ValueError(f"infra.components[{index}].enabled must be true or false")
+        if bool(raw_component.get("enabled", False)):
+            enabled_infra_rows_by_selector[(component_id, instance_id)] = raw_component
+            enabled_infra_instances_by_id.setdefault(component_id, []).append(instance_id)
         source_value = raw_component.get("source")
         if source_value is not None and not isinstance(source_value, str):
             raise ValueError(f"infra.components[{index}].source must be a string when set")
@@ -686,6 +894,18 @@ def validate_dynamic_payload_structure(payload: Mapping[str, Any]) -> None:
         inputs = raw_component.get("inputs")
         if not isinstance(inputs, Mapping):
             raise ValueError(f"infra.components[{index}].inputs must be a mapping")
+        row_bindings = row_input_bindings(
+            raw_component,
+            field_label=f"infra.components[{index}]",
+        )
+        for binding in row_bindings:
+            row_bindings_to_validate.append((index, component_id, instance_id, binding))
+            existing_value = read_component_path(raw_component, binding.target_path)
+            if component_path_has_material_value(existing_value):
+                raise ValueError(
+                    f"infra.components[{index}].bindings.{binding.target_path} conflicts with "
+                    f"literal {binding.target_path}"
+                )
         if "module" in inputs:
             raise ValueError(
                 f"infra.components[{index}].inputs.module is not supported; "
@@ -696,6 +916,20 @@ def validate_dynamic_payload_structure(payload: Mapping[str, Any]) -> None:
                 "infra.components[].inputs.gpu_validation_overrides is no longer supported; "
                 "use deploy.targets[].validations.mk8s_gpu.*"
             )
+        if component_id == "vpc" and bool(raw_component.get("enabled", False)):
+            cidr_entries = _validate_planned_vpc_private_cidr_contract(
+                component_index=index,
+                inputs=inputs,
+            )
+            network = inputs.get("network")
+            existing_network_id = (
+                _as_text(network.get("existing_id")) if isinstance(network, Mapping) else ""
+            )
+            if existing_network_id:
+                project_id = _as_text(inputs.get("parent_id")) or default_project_id
+                existing_network_private_cidrs.setdefault(
+                    (project_id, existing_network_id), []
+                ).extend(cidr_entries)
         entry = infra_lookup.get(component_id)
         if entry is not None and bool(raw_component.get("enabled", False)):
             name_input = _entry_scalar_resource_name_input(entry)
@@ -729,6 +963,53 @@ def validate_dynamic_payload_structure(payload: Mapping[str, Any]) -> None:
             cluster_target_refs.add(instance_id)
         if component_id == "vm" and bool(raw_component.get("enabled", False)):
             enabled_vm_instance_ids.add(instance_id)
+
+    for cidr_entries in existing_network_private_cidrs.values():
+        _validate_vpc_private_cidr_entries_do_not_overlap(cidr_entries)
+
+    for index, _component_id, _instance_id, binding in row_bindings_to_validate:
+        source_entry = infra_lookup.get(binding.source_component_id)
+        if source_entry is None:
+            raise ValueError(
+                f"infra.components[{index}].bindings.{binding.target_path} references "
+                f"unknown infra component '{binding.source_component_id}'"
+            )
+        if binding.source_output_name not in {output.name for output in source_entry.outputs}:
+            raise ValueError(
+                f"infra.components[{index}].bindings.{binding.target_path} references "
+                f"undeclared output '{binding.source_component_id}.{binding.source_output_name}'"
+            )
+        if binding.source_instance_id:
+            source_row = enabled_infra_rows_by_selector.get(
+                (binding.source_component_id, binding.source_instance_id)
+            )
+            if source_row is None:
+                raise ValueError(
+                    f"infra.components[{index}].bindings.{binding.target_path} references "
+                    f"disabled or missing infra:{binding.source_component_id}@{binding.source_instance_id}"
+                )
+        else:
+            source_instances = enabled_infra_instances_by_id.get(binding.source_component_id, [])
+            if len(source_instances) != 1:
+                raise ValueError(
+                    f"infra.components[{index}].bindings.{binding.target_path} must set "
+                    "source_instance when the source component is absent or not unique"
+                )
+            source_row = enabled_infra_rows_by_selector[
+                (binding.source_component_id, source_instances[0])
+            ]
+        if binding.source_component_id == "vpc" and binding.source_output_name == "subnets":
+            subnets = read_component_path(source_row, "inputs.subnets")
+            if not binding.key or not isinstance(subnets, Mapping) or binding.key not in subnets:
+                raise ValueError(
+                    f"infra.components[{index}].bindings.{binding.target_path} references "
+                    f"missing VPC subnet key '{binding.key or '<empty>'}'"
+                )
+            if binding.attribute != "id":
+                raise ValueError(
+                    f"infra.components[{index}].bindings.{binding.target_path} VPC subnet "
+                    "bindings must use attribute 'id'"
+                )
 
     deploy = payload.get("deploy")
     deploy_targets = deploy.get("targets") if isinstance(deploy, Mapping) else None

@@ -58,6 +58,11 @@ Implement Nebius IAM/Object Storage, VPC networking, quota-management, and MK8s 
      - reuse code from `assets/iam/`
    - VPC networking:
      - start with `references/vpc-networking.md`
+     - distinguish network parent pools, explicit subnet pools, inherited
+       subnet allocation mode, live allocations, and route-table ownership
+     - when designing subnet CIDR automation, verify parent CIDR containment,
+       explicit peer-subnet overlap, live allocation overlap, and pool-tree
+       compatibility before proposing or applying changes
    - Quota management:
      - start with `references/quota-management.md`
      - use `scripts/inspect_quotas.py` for live allowance inspection
@@ -125,6 +130,20 @@ Implement Nebius IAM/Object Storage, VPC networking, quota-management, and MK8s 
 - Wait for stateful Nebius resources to become ready before dependent actions.
 - Treat `use_network_pools=true` as inherited allocation mode, not subnet CIDR ownership.
 - Do not treat `status.ipv4_private_cidrs` as the only ownership signal for subnet automation.
+- For explicit subnet CIDRs, set `use_network_pools=false` and ensure the
+  subnet CIDR list is a child of the network private pool. Do not create
+  explicit subnet pools that overlap another explicit subnet range or a live
+  private allocation in the same network.
+- If a subnet needs a private CIDR outside the network's current private pool,
+  extend an attached network private pool first, then create the subnet with an
+  explicit child CIDR. Do not attach an arbitrary detached or wrong-tree pool
+  to an existing network.
+- When reusing pools, list all candidates and skip assigned, empty, public,
+  wrong-tree, or incompatible pools; do not stop at the first name or CIDR
+  collision.
+- For new networks, unassigned private IPv4 pools with existing CIDRs can be
+  offered as attach candidates. Hide pools already assigned to another network
+  or subnet and hide empty pools.
 - Query quota live with `quotas.v1.QuotaAllowanceService.list`; do not rely on stale hand-maintained quota tables.
 - Quota availability is granular by quota name and region. Do not assume a global quota covers a regional request.
 - Query both tenant and project allowances. When both expose limits, the effective available quota is the more restrictive value. When only the tenant exposes a limit, treat tenant quota as the effective bound instead of assuming project quota is unlimited.

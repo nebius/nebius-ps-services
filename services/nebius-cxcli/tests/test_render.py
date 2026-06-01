@@ -424,7 +424,7 @@ def test_render_creates_source_only_module_and_flux_outputs(
     tfvars = (paths.infra_dir / "terraform.auto.tfvars.json").read_text(encoding="utf-8")
 
     assert "required_providers" in versions_tf
-    assert 'version = ">= 0.5.217, < 0.6.0"' in versions_tf
+    assert 'version = ">= 0.6.8, < 0.7.0"' in versions_tf
     assert 'backend "s3"' in backend_tf
     assert "use_lockfile                = true" in backend_tf
     assert "access_key" not in backend_tf
@@ -498,7 +498,7 @@ def test_render_skips_empty_flux_repository_file_when_no_apps_are_enabled(
     assert kustomization_doc["resources"] == []
 
 
-def test_render_passes_typed_mk8s_preemptible_node_group_inputs(
+def test_render_passes_typed_mk8s_node_group_scale_and_preemptible_inputs(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _set_catalog_override(_local_catalog_path(), source_profile=SourceProfile.PORTABLE)
@@ -517,6 +517,11 @@ def test_render_passes_typed_mk8s_preemptible_node_group_inputs(
     gpu_group = node_groups["worker"]
     assert isinstance(cpu_group, dict)
     assert isinstance(gpu_group, dict)
+    cpu_group.pop("node_count", None)
+    cpu_group["autoscaling"] = {
+        "min_node_count": 1,
+        "max_node_count": 3,
+    }
     cpu_group["preemptible"] = True
     gpu_group["preemptible"] = True
     config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
@@ -538,6 +543,11 @@ def test_render_passes_typed_mk8s_preemptible_node_group_inputs(
     )
 
     assert "node_groups = var.mk8s_node_groups" in main_tf
+    assert tfvars["mk8s_node_groups"]["cpu"]["autoscaling"] == {
+        "min_node_count": 1,
+        "max_node_count": 3,
+    }
+    assert "node_count" not in tfvars["mk8s_node_groups"]["cpu"]
     assert tfvars["mk8s_node_groups"]["cpu"]["preemptible"] is True
     assert tfvars["mk8s_node_groups"]["worker"]["preemptible"] is True
 
@@ -557,6 +567,7 @@ def test_render_passes_vm_preemptible_contract_inputs(
     vm_inputs.update(
         {
             "name": "gpu-preemptible-vm",
+            "network_id": "vpcnetwork-abc123",
             "subnet_id": "subnet-abc123",
             "platform": "gpu-h100-sxm",
             "preset": "1gpu-16vcpu-200gb",
@@ -574,6 +585,7 @@ def test_render_passes_vm_preemptible_contract_inputs(
         lambda _source: (
             ModuleVariable(name="parent_id", required=False, type_hint="string"),
             ModuleVariable(name="name", required=False, type_hint="string"),
+            ModuleVariable(name="network_id", required=False, type_hint="string"),
             ModuleVariable(name="subnet_id", required=False, type_hint="string"),
             ModuleVariable(name="platform", required=False, type_hint="string"),
             ModuleVariable(name="preset", required=False, type_hint="string"),
@@ -601,6 +613,8 @@ def test_render_passes_vm_preemptible_contract_inputs(
     assert tfvars["gpu_preemptible_vm_preemptible_enabled"] is True
     assert "gpu_preemptible_vm_preemptible_priority" not in tfvars
     assert tfvars["gpu_preemptible_vm_recovery_policy"] == "FAIL"
+    assert tfvars["gpu_preemptible_vm_network_id"] == "vpcnetwork-abc123"
+    assert tfvars["gpu_preemptible_vm_subnet_id"] == "subnet-abc123"
 
 
 def test_render_keeps_duplicate_component_instances_distinct(
@@ -1602,6 +1616,11 @@ def test_render_project_materializes_soperator_profile_defaults(tmp_path: Path) 
     mk8s_row = next(row for row in payload["infra"]["components"] if row["id"] == "mk8s")
     mk8s_row.setdefault("inputs", {})["soperator"] = {
         "system_node_count": 2,
+        "system_autoscaling": {
+            "enabled": True,
+            "min_node_count": 1,
+            "max_node_count": 4,
+        },
         "controller_node_count": 2,
         "login_node_count": 1,
         "accounting_node_count": 1,
@@ -1627,7 +1646,11 @@ def test_render_project_materializes_soperator_profile_defaults(tmp_path: Path) 
         group = mk8s_inputs["node_groups"][group_name]
         assert group["platform"] == "cpu-d3"
         assert group["preset"] == "8vcpu-32gb"
-    assert mk8s_inputs["node_groups"]["system"]["node_count"] == 2
+    assert mk8s_inputs["node_groups"]["system"]["autoscaling"] == {
+        "min_node_count": 1,
+        "max_node_count": 4,
+    }
+    assert "node_count" not in mk8s_inputs["node_groups"]["system"]
     assert mk8s_inputs["node_groups"]["controller"]["node_count"] == 2
     assert mk8s_inputs["node_groups"]["login"]["node_count"] == 1
     assert mk8s_inputs["node_groups"]["accounting"]["node_count"] == 1
@@ -1638,6 +1661,10 @@ def test_render_project_materializes_soperator_profile_defaults(tmp_path: Path) 
             "effect": "NO_SCHEDULE",
         }
     ]
+    main_tf = (paths.infra_dir / "main.tf").read_text(encoding="utf-8")
+    assert "autoscaling = {" in main_tf
+    assert "min_node_count = 1" in main_tf
+    assert "max_node_count = 4" in main_tf
 
 
 def test_render_soperator_uses_cluster_target_name_not_client_name(tmp_path: Path) -> None:
@@ -1807,9 +1834,9 @@ def test_stage_local_helm_chart_replaces_stale_staged_copy(tmp_path: Path) -> No
 
     assert restaged_chart == staged_chart
     assert not (restaged_chart / "stale.yaml").exists()
-    assert "name: second" in (
-        restaged_chart / "templates" / "config.yaml"
-    ).read_text(encoding="utf-8")
+    assert "name: second" in (restaged_chart / "templates" / "config.yaml").read_text(
+        encoding="utf-8"
+    )
 
 
 def test_build_local_helm_chart_dependencies_reuses_packaged_archives(
@@ -2895,6 +2922,588 @@ def test_render_plain_mk8s_node_group_attach_explicit_sfs_keys(tmp_path: Path) -
         "mount_tag": "scratch",
         "forbid_deletion": True,
     }
+
+
+def test_render_row_level_vpc_bindings_for_mk8s(monkeypatch: pytest.MonkeyPatch) -> None:
+    def _discover_outputs(source: str) -> tuple[ComponentOutput, ...]:
+        if "modules/vpc" in str(source):
+            return (
+                ComponentOutput(
+                    name="network_id",
+                    kind="terraform_output",
+                    source_path="network_id",
+                ),
+                ComponentOutput(
+                    name="subnets",
+                    kind="terraform_output",
+                    source_path="subnets",
+                ),
+            )
+        return (
+            ComponentOutput(
+                name="cluster_id",
+                kind="terraform_output",
+                source_path="cluster_id",
+            ),
+        )
+
+    monkeypatch.setattr(component_sources, "_discover_terraform_outputs", _discover_outputs)
+    reset_component_sources_cache()
+    reset_component_entry_cache()
+
+    payload = _starter_payload(selected_infra={"mk8s", "vpc"}, selected_apps=set())
+    vpc = _infra_component_row(payload, "vpc")
+    vpc["instance_id"] = "cluster1-vpc"
+    vpc["inputs"] = {
+        "parent_id": "project-123",
+        "network": {
+            "name": "cluster1-network",
+            "ipv4_private_cidrs": ["10.10.0.0/16"],
+        },
+        "subnets": {
+            "worker": {
+                "name": "cluster1-worker",
+                "use_network_private_pools": False,
+                "ipv4_private_cidrs": ["10.10.0.0/24"],
+            }
+        },
+    }
+    mk8s = _infra_component_row(payload, "mk8s")
+    mk8s["instance_id"] = "cluster1"
+    mk8s["inputs"] = {
+        "cluster": {
+            "parent_id": "project-123",
+            "cluster_name": "cluster1",
+        }
+    }
+    mk8s["bindings"] = {
+        "inputs.cluster.network_id": {
+            "source_component": "vpc",
+            "source_instance": "cluster1-vpc",
+            "source_output": "network_id",
+        },
+        "inputs.cluster.subnet_id": {
+            "source_component": "vpc",
+            "source_instance": "cluster1-vpc",
+            "source_output": "subnets",
+            "key": "worker",
+            "attribute": "id",
+        },
+    }
+
+    plans = _build_module_plans(payload, source_profile=SourceProfile.LOCAL)
+    main_tf = "\n\n".join(_render_module_block(plan) for plan in plans)
+
+    assert 'module "cluster1_vpc" {' in main_tf
+    assert "\n  inputs = {" not in main_tf
+    assert "network_id = module.cluster1_vpc.network_id" in main_tf
+    assert 'subnet_id = module.cluster1_vpc.subnets["worker"].id' in main_tf
+
+
+def test_render_vpc_network_without_subnets(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_path = _project_config_path(tmp_path)
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+
+    payload = _starter_payload(selected_infra={"vpc"}, selected_apps=set())
+    vpc = _infra_component_row(payload, "vpc")
+    vpc["inputs"] = {
+        "parent_id": "project-456",
+        "network": {
+            "name": "mynetwork",
+            "ipv4_private_source_pool_id": "vpcpool-source",
+            "ipv4_private_cidrs": ["172.16.0.0/12"],
+        },
+    }
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    monkeypatch.setattr(
+        "nebius_cxcli.infra_render.module_variables",
+        lambda _source: (
+            ModuleVariable(name="parent_id", required=True, type_hint="string"),
+            ModuleVariable(name="network", required=True, type_hint="object"),
+            ModuleVariable(name="subnets", required=False, type_hint="map(object)"),
+        ),
+    )
+
+    config = load_config(config_path)
+    paths = resolve_project_paths(config_path)
+    validate_path_alignment(config, paths)
+    render_project(config, paths, source_profile=SourceProfile.LOCAL)
+
+    main_tf = (paths.infra_dir / "main.tf").read_text(encoding="utf-8")
+    tfvars = yaml.safe_load(
+        (paths.infra_dir / "terraform.auto.tfvars.json").read_text(encoding="utf-8")
+    )
+
+    assert 'module "vpc" {' in main_tf
+    assert "network = var.vpc_network" in main_tf
+    assert "parent_id = var.vpc_parent_id" in main_tf
+    assert "subnets = " not in main_tf
+    assert tfvars["vpc_network"] == {
+        "name": "mynetwork",
+        "ipv4_private_source_pool_id": "vpcpool-source",
+        "ipv4_private_cidrs": ["172.16.0.0/12"],
+    }
+    assert "vpc_subnets" not in tfvars
+
+
+def test_render_vpc_declared_subnet_preserves_explicit_private_cidrs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_path = _project_config_path(tmp_path)
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+
+    payload = _starter_payload(selected_infra={"vpc"}, selected_apps=set())
+    vpc = _infra_component_row(payload, "vpc")
+    vpc["inputs"] = {
+        "parent_id": "project-456",
+        "network": {"name": "mynetwork", "ipv4_private_cidrs": ["172.16.0.0/12"]},
+        "subnets": {
+            "worker": {
+                "name": "worker-subnet",
+                "use_network_private_pools": False,
+                "ipv4_private_cidrs": ["172.16.0.0/16"],
+            }
+        },
+    }
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    monkeypatch.setattr(
+        "nebius_cxcli.infra_render.module_variables",
+        lambda _source: (
+            ModuleVariable(name="parent_id", required=True, type_hint="string"),
+            ModuleVariable(name="network", required=True, type_hint="object"),
+            ModuleVariable(name="subnets", required=False, type_hint="map(object)"),
+        ),
+    )
+
+    config = load_config(config_path)
+    paths = resolve_project_paths(config_path)
+    validate_path_alignment(config, paths)
+    render_project(config, paths, source_profile=SourceProfile.LOCAL)
+
+    main_tf = (paths.infra_dir / "main.tf").read_text(encoding="utf-8")
+    tfvars = yaml.safe_load(
+        (paths.infra_dir / "terraform.auto.tfvars.json").read_text(encoding="utf-8")
+    )
+
+    assert "subnets = var.vpc_subnets" in main_tf
+    assert tfvars["vpc_subnets"] == {
+        "worker": {
+            "name": "worker-subnet",
+            "use_network_private_pools": False,
+            "ipv4_private_cidrs": ["172.16.0.0/16"],
+        }
+    }
+
+
+def test_render_vpc_explicit_subnet_cidr_preserves_child_range(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_path = _project_config_path(tmp_path)
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+
+    payload = _starter_payload(selected_infra={"vpc"}, selected_apps=set())
+    vpc = _infra_component_row(payload, "vpc")
+    vpc["inputs"] = {
+        "parent_id": "project-456",
+        "network": {"name": "mynetwork", "ipv4_private_cidrs": ["172.16.0.0/12"]},
+        "subnets": {
+            "worker": {
+                "name": "worker-subnet",
+                "use_network_private_pools": False,
+                "ipv4_private_cidrs": ["172.16.0.0/16"],
+            }
+        },
+    }
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    monkeypatch.setattr(
+        "nebius_cxcli.infra_render.module_variables",
+        lambda _source: (
+            ModuleVariable(name="parent_id", required=True, type_hint="string"),
+            ModuleVariable(name="network", required=True, type_hint="object"),
+            ModuleVariable(name="subnets", required=False, type_hint="map(object)"),
+        ),
+    )
+
+    config = load_config(config_path)
+    paths = resolve_project_paths(config_path)
+    validate_path_alignment(config, paths)
+    render_project(config, paths, source_profile=SourceProfile.LOCAL)
+
+    tfvars = yaml.safe_load(
+        (paths.infra_dir / "terraform.auto.tfvars.json").read_text(encoding="utf-8")
+    )
+
+    assert tfvars["vpc_subnets"] == {
+        "worker": {
+            "name": "worker-subnet",
+            "use_network_private_pools": False,
+            "ipv4_private_cidrs": ["172.16.0.0/16"],
+        }
+    }
+
+
+def test_render_vpc_preserves_public_pool_and_private_only_subnet(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_path = _project_config_path(tmp_path)
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+
+    payload = _starter_payload(selected_infra={"vpc"}, selected_apps=set())
+    vpc = _infra_component_row(payload, "vpc")
+    vpc["inputs"] = {
+        "parent_id": "project-456",
+        "network": {
+            "name": "mynetwork",
+            "ipv4_private_cidrs": ["172.16.0.0/12"],
+            "ipv4_public_pool_ids": ["vpcpool-public"],
+        },
+        "subnets": {
+            "private": {
+                "name": "private-subnet",
+                "use_network_private_pools": False,
+                "ipv4_private_cidrs": ["172.16.0.0/16"],
+                "use_network_public_pools": False,
+            }
+        },
+    }
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    monkeypatch.setattr(
+        "nebius_cxcli.infra_render.module_variables",
+        lambda _source: (
+            ModuleVariable(name="parent_id", required=True, type_hint="string"),
+            ModuleVariable(name="network", required=True, type_hint="object"),
+            ModuleVariable(name="subnets", required=False, type_hint="map(object)"),
+        ),
+    )
+
+    config = load_config(config_path)
+    paths = resolve_project_paths(config_path)
+    validate_path_alignment(config, paths)
+    render_project(config, paths, source_profile=SourceProfile.LOCAL)
+
+    tfvars = yaml.safe_load(
+        (paths.infra_dir / "terraform.auto.tfvars.json").read_text(encoding="utf-8")
+    )
+
+    assert tfvars["vpc_network"] == {
+        "name": "mynetwork",
+        "ipv4_private_cidrs": ["172.16.0.0/12"],
+        "ipv4_public_pool_ids": ["vpcpool-public"],
+    }
+    assert tfvars["vpc_subnets"] == {
+        "private": {
+            "name": "private-subnet",
+            "use_network_private_pools": False,
+            "ipv4_private_cidrs": ["172.16.0.0/16"],
+            "use_network_public_pools": False,
+        }
+    }
+
+
+def test_render_vpc_four_subnet_private_pool_plan(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_path = _project_config_path(tmp_path)
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+
+    payload = _starter_payload(selected_infra={"vpc"}, selected_apps=set())
+    vpc = _infra_component_row(payload, "vpc")
+    vpc["inputs"] = {
+        "parent_id": "project-456",
+        "network": {
+            "name": "cxcli-tf-172-16-network",
+            "ipv4_private_cidrs": ["172.16.0.0/12"],
+        },
+        "subnets": {
+            "subnet1": {
+                "name": "subnet1",
+                "use_network_private_pools": False,
+                "ipv4_private_cidrs": ["172.16.0.0/14"],
+            },
+            "subnet2": {
+                "name": "subnet2",
+                "use_network_private_pools": False,
+                "ipv4_private_cidrs": ["172.20.0.0/14"],
+            },
+            "subnet3": {
+                "name": "subnet3",
+                "use_network_private_pools": False,
+                "ipv4_private_cidrs": ["172.24.0.0/14"],
+            },
+            "subnet4": {
+                "name": "subnet4",
+                "use_network_private_pools": False,
+                "ipv4_private_cidrs": ["172.28.0.0/14"],
+            },
+        },
+    }
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    monkeypatch.setattr(
+        "nebius_cxcli.infra_render.module_variables",
+        lambda _source: (
+            ModuleVariable(name="parent_id", required=True, type_hint="string"),
+            ModuleVariable(name="network", required=True, type_hint="object"),
+            ModuleVariable(name="subnets", required=False, type_hint="map(object)"),
+        ),
+    )
+
+    config = load_config(config_path)
+    paths = resolve_project_paths(config_path)
+    validate_path_alignment(config, paths)
+    render_project(config, paths, source_profile=SourceProfile.LOCAL)
+
+    main_tf = (paths.infra_dir / "main.tf").read_text(encoding="utf-8")
+    tfvars = yaml.safe_load(
+        (paths.infra_dir / "terraform.auto.tfvars.json").read_text(encoding="utf-8")
+    )
+
+    assert 'module "vpc" {' in main_tf
+    assert "network = var.vpc_network" in main_tf
+    assert "subnets = var.vpc_subnets" in main_tf
+    assert tfvars["vpc_network"] == {
+        "name": "cxcli-tf-172-16-network",
+        "ipv4_private_cidrs": ["172.16.0.0/12"],
+    }
+    assert tfvars["vpc_subnets"] == {
+        "subnet1": {
+            "name": "subnet1",
+            "use_network_private_pools": False,
+            "ipv4_private_cidrs": ["172.16.0.0/14"],
+        },
+        "subnet2": {
+            "name": "subnet2",
+            "use_network_private_pools": False,
+            "ipv4_private_cidrs": ["172.20.0.0/14"],
+        },
+        "subnet3": {
+            "name": "subnet3",
+            "use_network_private_pools": False,
+            "ipv4_private_cidrs": ["172.24.0.0/14"],
+        },
+        "subnet4": {
+            "name": "subnet4",
+            "use_network_private_pools": False,
+            "ipv4_private_cidrs": ["172.28.0.0/14"],
+        },
+    }
+
+
+def _install_vpc_output_discovery(monkeypatch: pytest.MonkeyPatch) -> None:
+    def _discover_outputs(source: str) -> tuple[ComponentOutput, ...]:
+        if "modules/vpc" in str(source):
+            return (
+                ComponentOutput(
+                    name="network_id",
+                    kind="terraform_output",
+                    source_path="network_id",
+                ),
+                ComponentOutput(
+                    name="subnets",
+                    kind="terraform_output",
+                    source_path="subnets",
+                ),
+            )
+        return (
+            ComponentOutput(
+                name="instance_id",
+                kind="terraform_output",
+                source_path="instance_id",
+            ),
+        )
+
+    monkeypatch.setattr(component_sources, "_discover_terraform_outputs", _discover_outputs)
+    reset_component_sources_cache()
+    reset_component_entry_cache()
+
+
+def _planned_vpc_row(payload: dict, *, subnet_key: str) -> None:
+    vpc = _infra_component_row(payload, "vpc")
+    vpc["instance_id"] = "worker-vpc"
+    vpc["inputs"] = {
+        "parent_id": "project-123",
+        "network": {"name": "worker-network", "ipv4_private_cidrs": ["10.20.0.0/16"]},
+        "subnets": {
+            subnet_key: {
+                "name": f"worker-{subnet_key}",
+                "use_network_private_pools": False,
+                "ipv4_private_cidrs": ["10.20.0.0/24"],
+            }
+        },
+    }
+
+
+def _bind_component_to_planned_vpc(row: dict, *, subnet_key: str) -> None:
+    row["bindings"] = {
+        "inputs.network_id": {
+            "source_component": "vpc",
+            "source_instance": "worker-vpc",
+            "source_output": "network_id",
+        },
+        "inputs.subnet_id": {
+            "source_component": "vpc",
+            "source_instance": "worker-vpc",
+            "source_output": "subnets",
+            "key": subnet_key,
+            "attribute": "id",
+        },
+    }
+
+
+def test_render_row_level_vpc_bindings_for_vm(monkeypatch: pytest.MonkeyPatch) -> None:
+    _install_vpc_output_discovery(monkeypatch)
+
+    payload = _starter_payload(selected_infra={"vm", "vpc"}, selected_apps=set())
+    _planned_vpc_row(payload, subnet_key="vm")
+    vm = _infra_component_row(payload, "vm")
+    vm["instance_id"] = "worker"
+    vm["inputs"] = {
+        "parent_id": "project-123",
+        "name": "worker",
+        "platform": "cpu-d3",
+        "preset": "4vcpu-16gb",
+        "ssh_user_name": "ubuntu",
+        "ssh_public_key": _VALID_ED25519_PUBLIC_KEY,
+        "source_image_family": "ubuntu24.04",
+    }
+    _bind_component_to_planned_vpc(vm, subnet_key="vm")
+
+    plans = _build_module_plans(payload, source_profile=SourceProfile.LOCAL)
+    main_tf = "\n\n".join(_render_module_block(plan) for plan in plans)
+
+    assert 'module "worker_vpc" {' in main_tf
+    assert 'module "worker" {' in main_tf
+    assert "\n  inputs = {" not in main_tf
+    assert "network_id = module.worker_vpc.network_id" in main_tf
+    assert 'subnet_id = module.worker_vpc.subnets["vm"].id' in main_tf
+
+
+@pytest.mark.parametrize(
+    ("component_id", "instance_id", "subnet_key", "required_inputs"),
+    [
+        (
+            "nfs",
+            "worker-nfs",
+            "nfs",
+            {
+                "name": "worker-nfs",
+                "platform": "cpu-d3",
+                "preset": "4vcpu-16gb",
+                "ssh_user_name": "ubuntu",
+                "ssh_public_key": _VALID_ED25519_PUBLIC_KEY,
+                "source_image_family": "ubuntu24.04",
+                "data_disk_enabled": True,
+                "data_disk_size_gib": 128,
+            },
+        ),
+        (
+            "ssh-jumphost",
+            "ssh-jumphost",
+            "ssh",
+            {
+                "name": "ssh-jumphost",
+                "platform": "cpu-d3",
+                "preset": "4vcpu-16gb",
+                "source_image_family": "ubuntu24.04",
+                "ssh_user_name": "ubuntu",
+                "ssh_public_key": _VALID_ED25519_PUBLIC_KEY,
+                "allowed_cidrs": ["203.0.113.10/32"],
+            },
+        ),
+        (
+            "wireguard-gw",
+            "wg-gw",
+            "wg",
+            {
+                "name": "wg-gw",
+                "platform": "cpu-d3",
+                "preset": "4vcpu-16gb",
+                "source_image_family": "ubuntu24.04",
+                "ssh_user_name": "ubuntu",
+                "ssh_public_key": _VALID_ED25519_PUBLIC_KEY,
+                "wireguard_tunnel_cidr": "10.9.0.1/22",
+                "local_subnets": ["10.0.0.0/8"],
+            },
+        ),
+    ],
+)
+def test_render_row_level_vpc_bindings_for_vm_backed_wrappers(
+    monkeypatch: pytest.MonkeyPatch,
+    component_id: str,
+    instance_id: str,
+    subnet_key: str,
+    required_inputs: dict[str, object],
+) -> None:
+    _install_vpc_output_discovery(monkeypatch)
+
+    payload = _starter_payload(selected_infra={component_id, "vpc"}, selected_apps=set())
+    _planned_vpc_row(payload, subnet_key=subnet_key)
+    component = _infra_component_row(payload, component_id)
+    component["instance_id"] = instance_id
+    component["inputs"] = {
+        "parent_id": "project-123",
+        **required_inputs,
+    }
+    _bind_component_to_planned_vpc(component, subnet_key=subnet_key)
+
+    plans = _build_module_plans(payload, source_profile=SourceProfile.LOCAL)
+    main_tf = "\n\n".join(_render_module_block(plan) for plan in plans)
+
+    assert 'module "worker_vpc" {' in main_tf
+    assert f'module "{instance_id.replace("-", "_")}" {{' in main_tf
+    assert "\n  inputs = {" not in main_tf
+    assert "network_id = module.worker_vpc.network_id" in main_tf
+    assert f'subnet_id = module.worker_vpc.subnets["{subnet_key}"].id' in main_tf
+
+
+def test_render_vm_sfs_attachments_from_planned_sfs() -> None:
+    payload = _starter_payload(selected_infra={"vm", "sfs"}, selected_apps=set())
+    sfs = _infra_component_row(payload, "sfs")
+    sfs["instance_id"] = "worker-sfs"
+    sfs["inputs"] = {
+        "filesystems": {
+            "scratch": {
+                "name": "worker-scratch",
+                "size_gib": 1024,
+                "mount_tag": "scratch",
+            }
+        }
+    }
+    vm = _infra_component_row(payload, "vm")
+    vm["instance_id"] = "worker"
+    vm["inputs"] = {
+        "parent_id": "project-123",
+        "network_id": "vpcnetwork-live",
+        "subnet_id": "vpcsubnet-live",
+        "name": "worker",
+        "platform": "cpu-d3",
+        "preset": "4vcpu-16gb",
+        "ssh_user_name": "ubuntu",
+        "ssh_public_key": _VALID_ED25519_PUBLIC_KEY,
+        "source_image_family": "ubuntu24.04",
+        "sfs_attachments": [
+            {
+                "source_instance": "worker-sfs",
+                "keys": ["scratch"],
+                "attach_mode": "READ_WRITE",
+            }
+        ],
+    }
+
+    plans = _build_module_plans(payload, source_profile=SourceProfile.LOCAL)
+    main_tf = "\n\n".join(_render_module_block(plan) for plan in plans)
+
+    assert 'module "worker_sfs" {' in main_tf
+    assert 'filesystems = [for key in ["scratch"] : {' in main_tf
+    assert "mount_tag = module.worker_sfs.filesystems[key].mount_tag" in main_tf
+    assert "id = module.worker_sfs.filesystems[key].id" in main_tf
+    assert "sfs_attachments" not in main_tf
 
 
 def test_render_dynamic_chart_shape_writes_flux_manifests(tmp_path: Path) -> None:
@@ -4035,6 +4644,7 @@ def test_render_uses_materialized_shared_admin_ssh_username_for_wireguard_gw(
     wireguard = _infra_component_row(payload, "wireguard-gw")
     wireguard["inputs"] = {
         "parent_id": "project-456",
+        "network_id": "vpcnetwork-123",
         "subnet_id": "subnet-123",
         "name": "wg-gw",
         "platform": "cpu-d3",
@@ -4058,7 +4668,10 @@ def test_render_uses_materialized_shared_admin_ssh_username_for_wireguard_gw(
 
     assert 'module "wg_gw" {' in main_tf
     assert "ssh_user_name = var.wg_gw_ssh_user_name" in main_tf
+    assert "network_id = var.wg_gw_network_id" in main_tf
     assert '"wg_gw_ssh_user_name": "adminuser"' in tfvars
+    assert '"wg_gw_network_id": "vpcnetwork-123"' in tfvars
+    assert '"wg_gw_subnet_id": "subnet-123"' in tfvars
     assert '"wg_gw_wireguard_tunnel_cidr": "10.9.0.1/22"' in tfvars
     assert "wg_gw_ssh_public_key" not in tfvars
 
@@ -4078,6 +4691,7 @@ def test_render_uses_materialized_shared_admin_ssh_username_for_ssh_jumphost(
     jumphost = _infra_component_row(payload, "ssh-jumphost")
     jumphost["inputs"] = {
         "parent_id": "project-456",
+        "network_id": "vpcnetwork-123",
         "subnet_id": "subnet-123",
         "name": "ssh-jumphost",
         "platform": "cpu-d3",
@@ -4099,7 +4713,10 @@ def test_render_uses_materialized_shared_admin_ssh_username_for_ssh_jumphost(
 
     assert 'module "ssh_jumphost" {' in main_tf
     assert "ssh_user_name = var.ssh_jumphost_ssh_user_name" in main_tf
+    assert "network_id = var.ssh_jumphost_network_id" in main_tf
     assert '"ssh_jumphost_ssh_user_name": "adminuser"' in tfvars
+    assert '"ssh_jumphost_network_id": "vpcnetwork-123"' in tfvars
+    assert '"ssh_jumphost_subnet_id": "subnet-123"' in tfvars
 
 
 def test_render_uses_materialized_shared_defaults_for_app_chart_values(

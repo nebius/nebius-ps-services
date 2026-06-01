@@ -51,6 +51,17 @@ All notable changes to the reusable Codex skills are tracked here.
 
 ### Changed
 
+- Expanded the `nebius` skill's VPC networking guidance with the current
+  Nebius network-pool/subnet model: explicit subnet CIDRs use
+  `use_network_pools=false`, inherited subnets do not own every displayed
+  status CIDR, subnet suggestions must account for explicit peer subnets and
+  live allocations, existing-network out-of-parent CIDRs must extend an
+  attached compatible private pool first, and new-network pool choices should
+  hide assigned or empty private pools.
+- Aligned `global-context-management` subagent guidance around the conservative
+  `max_threads = 4` budget: use `repo_mapper` and `test_strategist` early only
+  when useful, close helpers after consolidation, and reserve `risk_reviewer`
+  for near-final review of non-trivial or risky changes.
 - Clarified the `global-context-management` and `config-codex` contracts so
   subagent delegation is described as runtime- and instruction-dependent,
   noisy parent-thread output is called out as the main context-growth risk, and

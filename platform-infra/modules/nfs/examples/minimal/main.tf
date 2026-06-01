@@ -2,6 +2,7 @@ module "nfs" {
   source = "../.."
 
   parent_id           = var.parent_id
+  network_id          = var.network_id
   name                = "example-nfs"
   subnet_id           = var.subnet_id
   platform            = "cpu-d3"
@@ -23,6 +24,11 @@ module "nfs" {
 variable "parent_id" {
   type        = string
   description = "Nebius project ID."
+}
+
+variable "network_id" {
+  type        = string
+  description = "Nebius VPC network ID."
 }
 
 variable "subnet_id" {

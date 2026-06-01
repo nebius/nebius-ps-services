@@ -288,6 +288,15 @@ def test_write_inventory_lists_each_mk8s_cluster(
                     "platform": "cpu-d3",
                     "preset": "32vcpu-128gb",
                 },
+                "burst": {
+                    "autoscaling": {
+                        "min_node_count": 1,
+                        "max_node_count": 4,
+                    },
+                    "gpu": False,
+                    "platform": "cpu-d3",
+                    "preset": "16vcpu-64gb",
+                },
                 "worker": {
                     "node_count": 2,
                     "gpu": True,
@@ -335,7 +344,11 @@ def test_write_inventory_lists_each_mk8s_cluster(
     markdown = artifacts.markdown.read_text(encoding="utf-8")
 
     assert "- `cluster1` (`cluster1`)" in markdown
-    assert "  - CPU node groups: `cpu`: `2` node(s) at `cpu-d3/32vcpu-128gb`" in markdown
+    assert (
+        "  - CPU node groups: `cpu`: `2` node(s) at `cpu-d3/32vcpu-128gb`; "
+        "`burst`: autoscaling `1`..`4` node(s) at `cpu-d3/16vcpu-64gb`"
+        in markdown
+    )
     assert (
         "  - GPU node groups: `worker`: `2` node(s) at `gpu-h100-sxm/8gpu-128vcpu-1600gb`"
         in markdown
