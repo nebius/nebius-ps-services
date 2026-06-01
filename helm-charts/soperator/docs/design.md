@@ -61,6 +61,8 @@ The short version:
   - [Scaling Workers](#scaling-workers)
   - [Immutable NodeSet Storage](#immutable-nodeset-storage)
   - [Accounting And QoS](#accounting-and-qos)
+  - [Enroot And Pyxis Cleanup](#enroot-and-pyxis-cleanup)
+  - [Slurm Scripts Inventory](#slurm-scripts-inventory)
   - [Memory Defaults](#memory-defaults)
   - [GPU Driver Capabilities](#gpu-driver-capabilities)
   - [AppArmor And User Namespaces](#apparmor-and-user-namespaces)
@@ -2187,10 +2189,10 @@ into Slurm.conf alongside the other partition tokens. See
 
 ### Enroot And Pyxis Cleanup
 
-The upstream cleanup scripts are kept as exact imports on disk. The parent chart
-overrides `cleanup_enroot.sh` through
+The upstream cleanup scripts are kept as byte-for-byte script imports on disk.
+The parent chart overrides `cleanup_enroot.sh` through
 `slurmScripts.builtIn.*.customContentFile`, pointing at local-owned
-`local_slurm_scripts/cleanup_enroot.sh`. The Slurm job epilog removes only
+`local_slurm_scripts/cleanup_enroot.sh`. The Slurm job hooks remove only
 containers for the current job. The match covers both older
 `pyxis_<jobid>...` names and newer image-derived names that end with `_<jobid>`,
 such as `pyxis_<image>.sqsh_<jobid>`.
@@ -2200,6 +2202,48 @@ The scheduled `enroot-cleanup` ActiveCheck points
 `local_scripts/enroot-cleanup.sh` and removes only job-shaped Pyxis names. It is
 not a broad `pyxis_*` deletion policy because persistent named containers are a
 site-specific operational choice.
+
+### Slurm Scripts Inventory
+
+The files under `slurm_scripts/` are rendered into the Slurm scripts ConfigMap
+and mounted at `/opt/slurm_scripts/` and `/mnt/jail.upper/opt/slurm_scripts/`.
+They are not install-time one-shot jobs and they are not always-running
+processes. Slurm starts them as short-lived hooks:
+
+- `prolog.sh`: before each job on each allocated node.
+- `epilog.sh`: after each job on each allocated node.
+- `hc_program.sh`: periodically through Slurm `HealthCheckProgram`; the GPU
+  default runs every 120 seconds.
+
+Rows that list a `.json` sidecar include both the executable and the same-name
+metadata file, such as `alloc_gpus_busy.drain.sh.json`. The sidecar is not
+executed directly; Helm renders it into
+`checks.json`, which `check_runner.py` reads to decide context, filtering, and
+node drain or undrain behavior.
+
+| File | Runtime | Used for |
+| --- | --- | --- |
+| `check_runner.py` | Short-lived runner launched by the prolog, epilog, or health-check wrapper. | Loads `checks.json`, filters checks by context, GPU platform, job allocation, and node state, runs matching commands, and applies configured drain, undrain, comment, or uncomment actions. |
+| `prolog.sh` | Job-start hook from `slurmConfig.prolog`; runs before each job on each allocated node. | Sets `CHECKS_CONTEXT=prolog` and starts `check_runner.py` for pre-job checks and setup. |
+| `epilog.sh` | Job-finish hook from `slurmConfig.epilog`; runs after each job on each allocated node. | Sets `CHECKS_CONTEXT=epilog` and starts `check_runner.py` for post-job cleanup and checks. |
+| `hc_program.sh` | Slurm-scheduled health-check hook; GPU default is every 120 seconds. | Sets `CHECKS_CONTEXT=hc_program` and starts `check_runner.py` for periodic node recovery and health checks. |
+| `alloc_gpus_busy.drain.sh` / `.json` | Job-start check for GPU jobs. | Drains and requeues when an allocated GPU already has unmanaged compute processes. |
+| `alloc_gpus_busy.undrain.sh` / `.json` | Periodic health-check recovery for drained GPU nodes. | Undrains a node once no GPU compute processes remain. |
+| `alloc_mem_used.drain.sh` / `.json` | Job-start check for all jobs. | Drains and requeues when the job's requested memory exceeds available node memory. |
+| `alloc_mem_used.undrain.sh` / `.json` | Periodic health-check recovery for drained nodes. | Undrains a node when available memory is back above the node real-memory threshold. |
+| `boot_disk_full.sh` / `.json` | Job-start and periodic health check. | Drains when root disk usage is above 80%; periodic checks can resume the node after cleanup. |
+| `chmod_enroot_layers.sh` / `.json` | Job-start and job-finish maintenance. | Keeps cached Enroot image layers under `/mnt/jail/mnt/image-storage` readable and writable. |
+| `cleanup_enroot.sh` / `.json` | Job-start and job-finish cleanup in the jail, but this chart overrides the executable by default. | The upstream file removes Pyxis/Enroot containers for the current job. The parent chart renders local-owned `local_slurm_scripts/cleanup_enroot.sh` instead. |
+| `cleanup_scratch_data.sh` / `.json` | Disabled by metadata (`contexts: ["none"]`) unless the check config is changed. | Optional scratch cleanup helper for `/mnt/jail/scratch`. |
+| `drop_page_cache.sh` / `.json` | Job-finish cleanup. | Runs `sync` and drops Linux page cache after a job. |
+| `drop_posix_shmem.sh` / `.json` | Job-finish cleanup for full-GPU jobs. | Clears `/mnt/jail/dev/shm` after GPU jobs while skipping CPU-only and partial-GPU allocations. |
+| `gpu_health_check.py` / `.json` | Job-start, job-finish, and periodic GPU health check for H100, H200, B200, and B300 nodes. | Runs the Nebius `health-checker`; failures drain the node with the first failed check in the reason. |
+| `job_tmpfs_delete.sh` / `.json` | Job-finish cleanup. | Deletes `/mnt/jail/mnt/memory/job_$SLURM_JOB_ID`. |
+| `job_tmpfs_delete_leftover.sh` / `.json` | Periodic health-check cleanup. | Deletes stale job tmpfs directories after confirming the job is no longer running. |
+| `job_tmpfs_recreate.sh` / `.json` | Job-start setup. | Creates or clears `/mnt/jail/mnt/memory/job_$SLURM_JOB_ID` before the job starts. |
+| `map_job_dcgm.sh` / `.json` | Job-start setup for GPU jobs. | Writes job IDs under `/var/run/nebius/slurm` so DCGM GPU metrics can be attributed to Slurm jobs. |
+| `nvme_raid_health.sh` / `.json` | Disabled by default; if enabled, runs as a periodic health check. | Checks NVMe-backed RAID arrays, mount read/write behavior, and recent NVMe-related `dmesg` errors; failures drain the node. |
+| `unmap_job_dcgm.sh` / `.json` | Job-finish cleanup for GPU jobs. | Removes the DCGM job mapping files written by `map_job_dcgm.sh`. |
 
 ### Memory Defaults
 
@@ -2551,14 +2595,15 @@ The lock records:
 - upstream repository.
 - upstream release and tag.
 - resolved upstream tag commit.
-- exact upstream-owned file imports copied into this repository.
+- upstream-owned script imports copied into this repository.
+- chart `appVersion` tracking for the parent and Soperator-family child charts.
 - image value imports checked against upstream chart values.
 - review-only upstream logic hashes for templates, CRDs, dashboards, custom
   ConfigMaps, and storage classes.
-- the local-owned paths that exact sync must not overwrite and image sync must
+- the local-owned paths that script sync must not overwrite and image sync must
   explicitly target.
-- a daily read-only CI check that reports when the pinned release is no longer
-  the latest public upstream release.
+- a daily CI sync path that opens a feature-branch PR when the public upstream
+  release advances.
 
 Versioning uses two fields on purpose:
 
@@ -2567,31 +2612,41 @@ version: 0.1.0
 appVersion: "3.0.4"
 ```
 
-`appVersion` is the upstream Soperator release. It should match the lock
-exactly. `version` is the independent Helm chart package version owned by this
-repository and released through `publish-helm.sh`.
+`appVersion` is the upstream Soperator release and is derived from the lock by
+the sync script. `version` is the independent Helm chart package version owned
+by this repository and released through `publish-helm.sh`.
 
-The exact upstream-owned file imports are:
+The upstream-owned script imports are:
 
 - `helm/slurm-cluster/slurm_scripts` to
   `helm-charts/soperator/slurm_scripts`.
 - `helm/soperator-activechecks/scripts` to
   `helm-charts/soperator-activechecks/scripts`.
 
-ActiveChecks keeps the upstream script files exact. The chart applies the local
-SlurmCluster name and namespace at render time in the helper that embeds those
-scripts, so script sync does not carry local patches.
+ActiveChecks keeps the upstream script files byte-for-byte. The chart applies
+the local SlurmCluster name and namespace at render time in the helper that
+embeds those scripts, so script sync does not carry local patches.
 Configured ActiveCheck script file references fail Helm rendering when the
 referenced file is not packaged with the chart, which keeps parent chart and
 cxcli renders from silently producing empty check payloads.
 
-Exact file sync does not own or overwrite:
+Full upstream sync owns only derived upstream-tracking surfaces:
 
-- `Chart.yaml`
-- `Chart.lock`
+- `Chart.yaml.appVersion` and upstream annotations.
+- upstream parent chart dependency versions and repositories that also exist in
+  the local parent chart.
+- Soperator-family child chart `appVersion` and `<upstream>-ps.1` package
+  versions.
+- parent dependency versions for those child charts.
+- `Chart.lock` when dependency metadata changes.
+- approved script imports.
+- explicit image value paths listed under `imports.images`.
+- review-only upstream hashes in the lock.
+
+It does not copy or overwrite local product-layer sources:
+
 - `README.md`
 - `CHANGELOG.md`
-- `values.yaml`
 - `values.schema.json`
 - `scripts/`
 - `templates/`
@@ -2607,30 +2662,47 @@ generated from `Chart.lock` by `helm dependency build`. It is ignored by Git,
 but it is intentionally not excluded from chart packages because packaged
 releases need the resolved dependency archives.
 
-Image value sync is narrower: it may update only the exact value paths listed
-under `imports.images`, and the target file must be declared in
+Image value sync is narrower: it may update only the value paths listed under
+`imports.images`, and the target file must be declared in
 `local_owned_paths`. If a maintainer needs to carry a patched image that differs
 from upstream, update the lock in the same PR so the verifier failure becomes
 an explicit review decision rather than hidden drift.
 
-Validate the lock and script copy with:
+Review-only hashes are updated by `--sync` so the PR records the upstream
+template, CRD, dashboard, custom ConfigMap, or storage class movement without
+copying those upstream files into this chart.
+
+Validate the lock and upstream tracking with:
 
 ```bash
 scripts/verify-upstream-soperator-sync.sh --scope all --report
 ```
 
+The report labels this lock group as `script`, matching `imports.scripts`.
+
 To intentionally move to a newer Soperator release:
 
-1. Update `upstream-soperator.lock.yaml`.
-2. Update `Chart.yaml.appVersion`, chart annotations, and tracked image tags.
-3. Run `scripts/verify-upstream-soperator-sync.sh --scope scripts --sync --report`.
-4. Run `scripts/verify-upstream-soperator-sync.sh --scope images --sync --report`
-   when tracked image values changed. This write path requires `yq`; read-only
-   verification does not.
-5. Review script diffs, image diffs, and any upstream logic hash changes.
-6. Update review-only hashes only after deciding the upstream logic change is
-   compatible with the cxcli/product contract.
-7. Run Helm render tests for the default chart and all examples.
+1. Create a feature branch.
+2. Update only `release` in `upstream-soperator.lock.yaml`.
+3. Run `scripts/verify-upstream-soperator-sync.sh --sync`.
+4. Review the PR diff, especially copied scripts, image values, dependency
+   versions, and review-only hash changes.
+
+The script refuses local `--sync` on `main` or the repository default branch.
+It refreshes the lock `tag` and resolved `commit`, updates derived chart
+metadata, copies approved scripts, updates tracked image values, updates
+review-only hashes, regenerates dependency metadata when child chart versions
+change, and runs Helm dependency, lint, and template validation. Write mode
+requires the full `all` scope plus `yq` and Helm; scoped `scripts` or `images`
+runs are read-only verification only.
+
+The scheduled GitHub workflow runs the same sync with `--latest`, pushes the
+result to `automation/soperator-upstream-sync`, and creates or updates a PR for
+human approval. `scripts/verify-upstream-soperator-sync.sh --check-latest`
+remains a read-only local or CI check.
+Before a scheduled `--latest` sync writes files, the script compares the lock
+release with GitHub's latest release. If the lock is newer, the workflow fails
+with a clear typo/stale-metadata message instead of mutating chart files.
 
 ## Reference Sources
 

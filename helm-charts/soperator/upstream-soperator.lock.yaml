@@ -3,7 +3,7 @@ release: "3.0.4"
 tag: "3.0.4"
 commit: "e80e652f98826171d81675b21b05facdf4477a78"
 imports:
-  exact:
+  scripts:
     - name: slurm-cluster slurm_scripts
       scope: scripts
       upstream_path: helm/slurm-cluster/slurm_scripts
