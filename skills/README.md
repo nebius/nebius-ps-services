@@ -315,6 +315,14 @@ script as the source and installs every sibling skill folder that contains
   Host` in VS Code.
 - A valid skill folder must contain `SKILL.md`.
 - Existing unmanaged folders in the destination are never overwritten.
+- If an install prints `Skip (existing unmanaged directory): <skill_name>`,
+  remove the destination copy and reinstall it from the current source:
+
+  ```bash
+  ./install-skills.sh --remove-skill <skill_name>
+  ./install-skills.sh
+  ```
+
 - If a skill exists but belongs to another source, it is skipped.
 - Skills previously installed from the same source are removed when they no
   longer exist in that source, so source-owned renames converge on reinstall.
