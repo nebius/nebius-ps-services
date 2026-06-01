@@ -48,21 +48,34 @@ cleanup() {
 
 show_usage() {
   printf '%b\n' "${S_BOLD}Usage:${S_RESET}"
-  printf '%b\n' "  ${S_CYAN}scripts/verify-upstream-soperator-sync.sh${S_RESET} ${S_DIM}[options]${S_RESET}"
+  printf '%b\n' "  ${S_CYAN}helm-charts/soperator/scripts/verify-upstream-soperator-sync.sh${S_RESET} ${S_DIM}[options]${S_RESET}"
   printf '\n'
   printf '%b\n' "${S_BOLD}Options:${S_RESET}"
   printf '%b\n' "  ${S_YELLOW}--lock-file PATH${S_RESET}    Lock file to read"
-  printf '%b\n' "  ${S_YELLOW}--check-latest${S_RESET}      Fail if GitHub latest release is newer than the lock"
-  printf '%b\n' "  ${S_YELLOW}--sync${S_RESET}              Apply approved exact file and image-value imports"
-  printf '%b\n' "  ${S_YELLOW}--scope SCOPE${S_RESET}       Limit to scripts, images, or all (default: all)"
-  printf '%b\n' "  ${S_YELLOW}--report${S_RESET}            Print import status for every selected item"
+  printf '%b\n' "  ${S_YELLOW}--check-latest${S_RESET}      Compare the lock release with GitHub latest without writing"
+  printf '%b\n' "  ${S_YELLOW}--sync${S_RESET}              Apply the full upstream sync on the current feature branch"
+  printf '%b\n' "  ${S_YELLOW}--latest${S_RESET}            With --sync, use GitHub latest and update the lock"
+  printf '%b\n' "  ${S_YELLOW}--scope SCOPE${S_RESET}       Limit read-only checks to scripts, images, or all (default: all)"
+  printf '%b\n' "  ${S_YELLOW}--report${S_RESET}            Print detailed per-item status"
   printf '%b\n' "  ${S_YELLOW}-h, --help${S_RESET}          Show help"
   printf '\n'
-  printf '%b\n' "${S_BOLD}Examples:${S_RESET}"
-  printf '%b\n' "  ${S_CYAN}scripts/verify-upstream-soperator-sync.sh --report${S_RESET}"
-  printf '%b\n' "  ${S_CYAN}scripts/verify-upstream-soperator-sync.sh --scope images --report${S_RESET}"
-  printf '%b\n' "  ${S_CYAN}scripts/verify-upstream-soperator-sync.sh --scope scripts --sync${S_RESET}"
-  printf '%b\n' "  ${S_CYAN}scripts/verify-upstream-soperator-sync.sh --check-latest --report${S_RESET}"
+  printf '%b\n' "${S_BOLD}Examples from repository root:${S_RESET}"
+  printf '%b\n' "  ${S_DIM}Verify all upstream tracking without writing:${S_RESET}"
+  printf '%b\n' "  ${S_CYAN}helm-charts/soperator/scripts/verify-upstream-soperator-sync.sh --scope all --report${S_RESET}"
+  printf '\n'
+  printf '%b\n' "  ${S_DIM}Check whether the lock matches GitHub latest:${S_RESET}"
+  printf '%b\n' "  ${S_CYAN}helm-charts/soperator/scripts/verify-upstream-soperator-sync.sh --check-latest${S_RESET}"
+  printf '\n'
+  printf '%b\n' "  ${S_DIM}Sync the release named in the lock on a feature branch:${S_RESET}"
+  printf '%b\n' "  ${S_CYAN}helm-charts/soperator/scripts/verify-upstream-soperator-sync.sh --sync${S_RESET}"
+  printf '%b\n' "  ${S_DIM}Add --report for detailed per-item status.${S_RESET}"
+  printf '\n'
+  printf '%b\n' "  ${S_DIM}Sync GitHub latest, used by the scheduled PR workflow:${S_RESET}"
+  printf '%b\n' "  ${S_CYAN}helm-charts/soperator/scripts/verify-upstream-soperator-sync.sh --latest --sync --report${S_RESET}"
+  printf '\n'
+  printf '%b\n' "  ${S_DIM}Read-only scoped checks:${S_RESET}"
+  printf '%b\n' "  ${S_CYAN}helm-charts/soperator/scripts/verify-upstream-soperator-sync.sh --scope scripts --report${S_RESET}"
+  printf '%b\n' "  ${S_CYAN}helm-charts/soperator/scripts/verify-upstream-soperator-sync.sh --scope images --report${S_RESET}"
 }
 
 require_cmd() {
@@ -97,6 +110,128 @@ yaml_value() {
   local file="$1"
   local key="$2"
   ruby -ryaml -e 'data = YAML.safe_load(File.read(ARGV[0]), aliases: true, permitted_classes: [Symbol]); value = data.fetch(ARGV[1]); puts value' "${file}" "${key}"
+}
+
+json_string() {
+  ruby -rjson -e 'print JSON.generate(ARGV.fetch(0))' "$1"
+}
+
+compare_releases() {
+  ruby -e '
+SEMVER = /\A(?<major>0|[1-9]\d*)\.(?<minor>0|[1-9]\d*)\.(?<patch>0|[1-9]\d*)(?:-(?<prerelease>[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?\z/
+
+def parse_version(value)
+  version = value.to_s.sub(/\Av/, "")
+  match = SEMVER.match(version)
+  unless match
+    warn "invalid release version #{value.inspect}; expected SemVer X.Y.Z"
+    exit 2
+  end
+
+  prerelease = match[:prerelease]
+  if prerelease
+    prerelease.split(".").each do |identifier|
+      if identifier.match?(/\A\d+\z/) && identifier.length > 1 && identifier.start_with?("0")
+        warn "invalid release version #{value.inspect}; numeric prerelease identifiers must not have leading zeroes"
+        exit 2
+      end
+    end
+  end
+
+  [[match[:major].to_i, match[:minor].to_i, match[:patch].to_i], prerelease]
+end
+
+def compare_prerelease(left, right)
+  return 0 if left == right
+  return 1 if left.nil?
+  return -1 if right.nil?
+
+  left_parts = left.split(".")
+  right_parts = right.split(".")
+  [left_parts.length, right_parts.length].max.times do |index|
+    left_part = left_parts[index]
+    right_part = right_parts[index]
+    return -1 if left_part.nil?
+    return 1 if right_part.nil?
+
+    left_numeric = left_part.match?(/\A\d+\z/)
+    right_numeric = right_part.match?(/\A\d+\z/)
+    comparison =
+      if left_numeric && right_numeric
+        left_part.to_i <=> right_part.to_i
+      elsif left_numeric
+        -1
+      elsif right_numeric
+        1
+      else
+        left_part <=> right_part
+      end
+    return comparison unless comparison.zero?
+  end
+  0
+end
+
+left_core, left_pre = parse_version(ARGV.fetch(0))
+right_core, right_pre = parse_version(ARGV.fetch(1))
+core_comparison = left_core <=> right_core
+puts(core_comparison.zero? ? compare_prerelease(left_pre, right_pre) : core_comparison)
+' "$1" "$2"
+}
+
+default_git_branch() {
+  local root="$1"
+  local branch
+  branch="$(git -C "${root}" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null || true)"
+  branch="${branch#origin/}"
+  printf '%s\n' "${branch:-main}"
+}
+
+ensure_sync_branch() {
+  local root="$1"
+  local current_branch default_branch
+  current_branch="$(git -C "${root}" branch --show-current 2>/dev/null || true)"
+  default_branch="$(default_git_branch "${root}")"
+
+  if [[ -z "${current_branch}" ]]; then
+    log_error "--sync requires a named feature branch. Check out or create a branch before syncing upstream Soperator."
+    exit 1
+  fi
+
+  if [[ "${current_branch}" == "${default_branch}" || "${current_branch}" == "main" || "${current_branch}" == "master" ]]; then
+    log_error "Refusing to run --sync on '${current_branch}'. Create a feature branch for the upstream Soperator update, then rerun --sync."
+    exit 1
+  fi
+}
+
+update_lock_pin() {
+  local lock_file="$1"
+  local release="$2"
+  local tag="$3"
+  local commit="$4"
+  local release_json tag_json commit_json
+  release_json="$(json_string "${release}")"
+  tag_json="$(json_string "${tag}")"
+  commit_json="$(json_string "${commit}")"
+  yq -i ".release = ${release_json} | .tag = ${tag_json} | .commit = ${commit_json}" "${lock_file}"
+}
+
+chart_metadata_paths() {
+  printf '%s\0' \
+    "helm-charts/soperator/Chart.yaml" \
+    "helm-charts/soperator-activechecks/Chart.yaml" \
+    "helm-charts/soperator-backup-config/Chart.yaml" \
+    "helm-charts/soperator-checks/Chart.yaml" \
+    "helm-charts/soperator-dcgm-exporter/Chart.yaml" \
+    "helm-charts/soperator-notifier/Chart.yaml"
+}
+
+chart_metadata_changed() {
+  local root="$1"
+  local -a paths=()
+  while IFS= read -r -d '' path; do
+    paths+=("${path}")
+  done < <(chart_metadata_paths)
+  ! git -C "${root}" diff --quiet -- "${paths[@]}"
 }
 
 resolve_tag_commit() {
@@ -167,6 +302,29 @@ fetch_release() {
   tar -xzf "${archive}" -C "${destination}/source" --strip-components=1
 }
 
+sync_chart_dependencies_and_validate() {
+  local root="$1"
+  local chart_dir="$2"
+  local chart_rel="helm-charts/soperator"
+  local chart_path="${root}/${chart_rel}"
+
+  if chart_metadata_changed "${root}"; then
+    log_note "Regenerating Soperator Chart.lock from synced dependency metadata..."
+    helm dependency update "${chart_path}" >/dev/null
+  fi
+
+  log_note "Validating synced Soperator chart..."
+  helm dependency build "${chart_path}" >/dev/null
+  helm lint --strict --with-subcharts "${chart_path}" >/dev/null
+  helm template soperator-smoke "${chart_path}" --namespace soperator >/dev/null
+
+  local example
+  for example in "${chart_dir}"/examples/*-values.yaml; do
+    [[ -f "${example}" ]] || continue
+    helm template soperator-smoke "${chart_path}" --namespace soperator -f "${example}" >/dev/null
+  done
+}
+
 verify_imports() {
   ruby - "${@}" <<'RUBY'
 require "digest"
@@ -174,7 +332,7 @@ require "fileutils"
 require "json"
 require "yaml"
 
-lock_file, repo_root, upstream_root, scope, sync_flag, report_flag = ARGV
+lock_file, repo_root, upstream_root, scope, sync_flag, report_flag, release, commit = ARGV
 sync = sync_flag == "1"
 report = report_flag == "1"
 def load_yaml_file(path)
@@ -215,7 +373,7 @@ def local_owned_paths(lock)
   Array(lock["local_owned_paths"]).map { |path| normalize_rel(path) }
 end
 
-def validate_exact_target!(lock, local_path)
+def validate_script_target!(lock, local_path)
   target = normalize_rel(local_path)
   local_owned_paths(lock).each do |owned|
     raise "sync target '#{target}' overlaps local-owned path '#{owned}'" if overlap?(target, owned)
@@ -253,7 +411,7 @@ def digest_path(path)
   digest.hexdigest
 end
 
-def copy_exact(source, target)
+def copy_script_import(source, target)
   FileUtils.rm_rf(target)
   FileUtils.mkdir_p(target)
   if File.directory?(source)
@@ -288,14 +446,35 @@ def verify_chart_versions!(repo_root, lock)
   end
 end
 
-def verify_tracked_chart_app_version!(repo_root, upstream_root, entry)
+def verify_tracked_chart_app_version!(repo_root, upstream_root, entry, verify_chart_lock:)
   upstream_chart = chart_yaml(File.join(upstream_root, entry.fetch("upstream_file")))
-  local_chart = chart_yaml(safe_join(repo_root, entry.fetch("local_file")))
+  local_file = safe_join(repo_root, entry.fetch("local_file"))
+  local_chart = chart_yaml(local_file)
   upstream_app_version = upstream_chart.fetch("appVersion")
   local_app_version = local_chart.fetch("appVersion")
-  return if upstream_app_version == local_app_version
+  unless upstream_app_version == local_app_version
+    raise "local appVersion #{local_app_version.inspect} does not match upstream #{upstream_app_version.inspect}"
+  end
 
-  raise "local appVersion #{local_app_version.inspect} does not match upstream #{upstream_app_version.inspect}"
+  if File.expand_path(local_file) == File.expand_path(parent_chart_file(repo_root))
+    verify_parent_upstream_dependencies!(repo_root, upstream_chart, verify_chart_lock: verify_chart_lock)
+    return
+  end
+
+  expected_package_version = "#{upstream_app_version}-ps.1"
+  local_package_version = local_chart.fetch("version")
+  unless local_package_version == expected_package_version
+    raise "local chart version #{local_package_version.inspect} does not match expected package version #{expected_package_version.inspect}"
+  end
+
+  chart_name = local_chart.fetch("name")
+  dependency = parent_dependency(repo_root, chart_name)
+  raise "parent chart is missing dependency #{chart_name.inspect}" unless dependency
+  unless dependency["version"] == expected_package_version
+    raise "parent dependency #{chart_name} version #{dependency["version"].inspect} does not match expected #{expected_package_version.inspect}"
+  end
+
+  verify_chart_lock_dependency!(repo_root, chart_name, dependency) if verify_chart_lock
 end
 
 def report_line(status, kind, name, detail = nil)
@@ -314,7 +493,140 @@ def yq_sync!(file, yq_path, value)
   raise "failed to update #{file} at #{yq_path}" unless ok
 end
 
+def yq_update!(file, expression)
+  raise "sync requires yq v4 in PATH" unless yq_available?
+  ok = system("yq", "-i", expression, file)
+  raise "failed to update #{file}" unless ok
+end
+
+def yq_set_string!(file, yq_path, value)
+  yq_update!(file, "#{yq_path} = #{JSON.generate(value)}")
+end
+
+def parent_chart_file(repo_root)
+  File.join(repo_root, "helm-charts/soperator/Chart.yaml")
+end
+
+def parent_chart_lock_file(repo_root)
+  File.join(repo_root, "helm-charts/soperator/Chart.lock")
+end
+
+def sync_parent_chart_metadata!(repo_root, release, commit)
+  file = parent_chart_file(repo_root)
+  chart = chart_yaml(file)
+  annotations = chart.fetch("annotations", {})
+  return if chart["appVersion"] == release &&
+    annotations["soperator.nebius.com/upstream-release"] == release &&
+    annotations["soperator.nebius.com/upstream-commit"] == commit
+
+  yq_update!(
+    file,
+    [
+      ".appVersion = #{JSON.generate(release)}",
+      ".annotations.\"soperator.nebius.com/upstream-release\" = #{JSON.generate(release)}",
+      ".annotations.\"soperator.nebius.com/upstream-commit\" = #{JSON.generate(commit)}"
+    ].join(" | ")
+  )
+end
+
+def update_parent_dependency_version!(repo_root, dependency_name, dependency_version)
+  yq_set_string!(parent_chart_file(repo_root), parent_dependency_field_path(dependency_name, "version"), dependency_version)
+end
+
+def upstream_parent_dependencies(upstream_chart)
+  Array(upstream_chart["dependencies"]).reject { |dependency| dependency["repository"].to_s.start_with?("file://") }
+end
+
+def parent_dependency_field_path(dependency_name, field)
+  "(.dependencies[] | select(.name == #{JSON.generate(dependency_name)}) | .#{field})"
+end
+
+def parent_dependency(repo_root, dependency_name)
+  parent_chart = chart_yaml(parent_chart_file(repo_root))
+  Array(parent_chart["dependencies"]).find { |item| item["name"] == dependency_name }
+end
+
+def parent_lock_dependency(repo_root, dependency_name)
+  chart_lock = chart_yaml(parent_chart_lock_file(repo_root))
+  Array(chart_lock["dependencies"]).find { |item| item["name"] == dependency_name }
+end
+
+def verify_chart_lock_dependency!(repo_root, dependency_name, dependency)
+  lock_dependency = parent_lock_dependency(repo_root, dependency_name)
+  raise "Chart.lock is missing dependency #{dependency_name.inspect}" unless lock_dependency
+
+  %w[version repository].each do |field|
+    next if lock_dependency[field] == dependency[field]
+
+    raise "Chart.lock dependency #{dependency_name} #{field} #{lock_dependency[field].inspect} does not match Chart.yaml #{dependency[field].inspect}"
+  end
+end
+
+def verify_parent_upstream_dependencies!(repo_root, upstream_chart, verify_chart_lock:)
+  upstream_parent_dependencies(upstream_chart).each do |dependency|
+    local_dependency = parent_dependency(repo_root, dependency.fetch("name"))
+    raise "local parent chart is missing upstream dependency #{dependency.fetch("name")}" unless local_dependency
+
+    %w[version repository].each do |field|
+      next if local_dependency[field] == dependency[field]
+
+      raise "local parent dependency #{dependency.fetch("name")} #{field} #{local_dependency[field].inspect} does not match upstream #{dependency[field].inspect}"
+    end
+    verify_chart_lock_dependency!(repo_root, dependency.fetch("name"), local_dependency) if verify_chart_lock
+  end
+end
+
+def sync_parent_upstream_dependencies!(repo_root, upstream_chart)
+  upstream_parent_dependencies(upstream_chart).each do |dependency|
+    local_dependency = parent_dependency(repo_root, dependency.fetch("name"))
+    raise "local parent chart is missing upstream dependency #{dependency.fetch("name")}" unless local_dependency
+
+    updates = []
+    unless local_dependency["version"] == dependency["version"]
+      updates << "#{parent_dependency_field_path(dependency.fetch("name"), "version")} = #{JSON.generate(dependency["version"])}"
+    end
+    unless local_dependency["repository"] == dependency["repository"]
+      updates << "#{parent_dependency_field_path(dependency.fetch("name"), "repository")} = #{JSON.generate(dependency["repository"])}"
+    end
+    next if updates.empty?
+
+    yq_update!(parent_chart_file(repo_root), updates.join(" | "))
+  end
+end
+
+def sync_tracked_chart_version!(repo_root, upstream_root, entry)
+  upstream_chart = chart_yaml(File.join(upstream_root, entry.fetch("upstream_file")))
+  local_file = safe_join(repo_root, entry.fetch("local_file"))
+  local_chart = chart_yaml(local_file)
+  upstream_app_version = upstream_chart.fetch("appVersion")
+  annotations = local_chart.fetch("annotations", {})
+
+  chart_updates = []
+  chart_updates << ".appVersion = #{JSON.generate(upstream_app_version)}" unless local_chart["appVersion"] == upstream_app_version
+  unless annotations["soperator.nebius.com/upstream-release"] == upstream_app_version
+    chart_updates << ".annotations.\"soperator.nebius.com/upstream-release\" = #{JSON.generate(upstream_app_version)}"
+  end
+  yq_update!(local_file, chart_updates.join(" | ")) unless chart_updates.empty?
+
+  if File.expand_path(local_file) == File.expand_path(parent_chart_file(repo_root))
+    sync_parent_upstream_dependencies!(repo_root, upstream_chart)
+    return
+  end
+
+  package_version = "#{upstream_app_version}-ps.1"
+  chart_name = local_chart.fetch("name")
+  yq_set_string!(local_file, ".version", package_version) unless local_chart["version"] == package_version
+
+  parent_chart = chart_yaml(parent_chart_file(repo_root))
+  dependency = Array(parent_chart["dependencies"]).find { |item| item["name"] == chart_name }
+  update_parent_dependency_version!(repo_root, chart_name, package_version) unless dependency && dependency["version"] == package_version
+end
+
 failures = []
+
+if sync && scope == "all"
+  sync_parent_chart_metadata!(repo_root, release, commit)
+end
 
 begin
   verify_chart_versions!(repo_root, lock)
@@ -328,7 +640,8 @@ Array(lock.dig("imports", "chart_versions")).each do |entry|
   next unless scope == "all"
   name = entry.fetch("name")
   begin
-    verify_tracked_chart_app_version!(repo_root, upstream_root, entry)
+    sync_tracked_chart_version!(repo_root, upstream_root, entry) if sync
+    verify_tracked_chart_app_version!(repo_root, upstream_root, entry, verify_chart_lock: !sync)
     report_line("ok", "chart", name) if report
   rescue StandardError => e
     failures << "#{name}: #{e.message}"
@@ -336,20 +649,20 @@ Array(lock.dig("imports", "chart_versions")).each do |entry|
   end
 end
 
-Array(lock.dig("imports", "exact")).each do |entry|
+Array(lock.dig("imports", "scripts")).each do |entry|
   next unless selected?(entry, scope)
   name = entry.fetch("name")
   begin
-    raise "exact import #{name} is not approved for --sync" if sync && !entry["sync"]
-    validate_exact_target!(lock, entry.fetch("local_path"))
+    raise "script import #{name} is not approved for --sync" if sync && !entry["sync"]
+    validate_script_target!(lock, entry.fetch("local_path"))
     upstream_path = File.join(upstream_root, entry.fetch("upstream_path"))
     local_path = safe_join(repo_root, entry.fetch("local_path"))
-    raise "upstream exact import not found: #{entry.fetch("upstream_path")}" unless File.exist?(upstream_path)
-    copy_exact(upstream_path, local_path) if sync
+    raise "upstream script import not found: #{entry.fetch("upstream_path")}" unless File.exist?(upstream_path)
+    copy_script_import(upstream_path, local_path) if sync
     upstream_digest = digest_path(upstream_path)
     local_digest = digest_path(local_path)
     if upstream_digest == local_digest
-      report_line("ok", "exact", name) if report
+      report_line("ok", "script", name) if report
     else
       if report
         system("diff", "-ruN", "#{upstream_path}/", "#{local_path}/") if File.directory?(upstream_path) && File.directory?(local_path)
@@ -358,7 +671,7 @@ Array(lock.dig("imports", "exact")).each do |entry|
     end
   rescue StandardError => e
     failures << "#{name}: #{e.message}"
-    report_line("fail", "exact", name, e.message)
+    report_line("fail", "script", name, e.message)
   end
 end
 
@@ -387,15 +700,20 @@ Array(lock.dig("imports", "images")).each do |entry|
   end
 end
 
-Array(lock.dig("imports", "review")).each do |entry|
+Array(lock.dig("imports", "review")).each_with_index do |entry, index|
   next unless scope == "all"
   name = entry.fetch("name")
   begin
     upstream_path = File.join(upstream_root, entry.fetch("upstream_path"))
     actual = digest_path(upstream_path)
     expected = entry.fetch("sha256")
+    updated_hash = actual != expected && sync
+    if updated_hash
+      yq_set_string!(lock_file, ".imports.review[#{index}].sha256", actual)
+      expected = actual
+    end
     if actual == expected
-      report_line("ok", "logic", name) if report
+      report_line("ok", "logic", name, updated_hash ? "updated review hash" : nil) if report
     else
       raise "tracked upstream logic changed; expected #{expected}, got #{actual}"
     end
@@ -420,6 +738,7 @@ main() {
   init_output_style
 
   local check_latest=0
+  local sync_latest=0
   local sync=0
   local report=0
   local scope="all"
@@ -445,6 +764,10 @@ main() {
         ;;
       --sync)
         sync=1
+        shift
+        ;;
+      --latest)
+        sync_latest=1
         shift
         ;;
       --scope)
@@ -492,6 +815,21 @@ main() {
       ;;
   esac
 
+  if [[ "${sync_latest}" -eq 1 && "${sync}" -ne 1 ]]; then
+    log_error "--latest updates the lock and must be used with --sync."
+    exit 1
+  fi
+
+  if [[ "${check_latest}" -eq 1 && ( "${sync}" -eq 1 || "${sync_latest}" -eq 1 ) ]]; then
+    log_error "--check-latest is read-only and cannot be combined with --sync or --latest."
+    exit 1
+  fi
+
+  if [[ "${sync}" -eq 1 && "${scope}" != "all" ]]; then
+    log_error "--sync must use --scope all under the single-release sync contract. Use --scope only for read-only verification."
+    exit 1
+  fi
+
   require_cmd "awk"
   require_cmd "curl"
   require_cmd "diff"
@@ -499,6 +837,12 @@ main() {
   require_cmd "mktemp"
   require_cmd "ruby"
   require_cmd "tar"
+
+  if [[ "${sync}" -eq 1 ]]; then
+    require_cmd "helm"
+    require_cmd "yq"
+    ensure_sync_branch "${root}"
+  fi
 
   if [[ ! -f "${lock_file}" ]]; then
     log_error "Lock file not found: ${lock_file}"
@@ -516,25 +860,61 @@ main() {
     exit 1
   fi
 
-  local resolved_commit
-  resolved_commit="$(resolve_tag_commit "${repo}" "${tag}")"
-  if [[ "${resolved_commit}" != "${commit}" ]]; then
-    log_error "Tag '${tag}' resolves to '${resolved_commit}', but lock expects '${commit}'."
-    exit 1
-  fi
-
   if [[ "${check_latest}" -eq 1 ]]; then
-    local latest
-    latest="$(latest_release_tag "${repo}")"
-    if [[ -z "${latest}" ]]; then
+    local github_latest
+    github_latest="$(latest_release_tag "${repo}")"
+    if [[ -z "${github_latest}" ]]; then
       log_error "Could not determine latest GitHub release for ${repo}."
       exit 1
     fi
-    if [[ "${latest}" != "${release}" ]]; then
-      log_error "Latest Soperator release is '${latest}', but lock is pinned to '${release}'. Create a feature branch, update the lock, run this verifier with --sync for approved imports, test, and open a PR."
+    local release_comparison
+    if ! release_comparison="$(compare_releases "${release}" "${github_latest}")"; then
+      log_error "Could not compare locked release '${release}' with GitHub latest '${github_latest}'."
+      exit 1
+    fi
+    if [[ "${release_comparison}" -lt 0 ]]; then
+      log_error "Latest Soperator release is '${github_latest}', but lock is pinned to '${release}'. Create a feature branch, update the lock release, and run --sync."
+      exit 1
+    elif [[ "${release_comparison}" -gt 0 ]]; then
+      log_error "Locked Soperator release '${release}' is newer than GitHub latest '${github_latest}'. Check the lock for a typo or wait for GitHub latest metadata before syncing."
       exit 1
     fi
     log_success "Pinned Soperator release '${release}' is the latest GitHub release."
+    exit 0
+  fi
+
+  if [[ "${sync_latest}" -eq 1 ]]; then
+    local github_latest
+    github_latest="$(latest_release_tag "${repo}")"
+    if [[ -z "${github_latest}" ]]; then
+      log_error "Could not determine latest GitHub release for ${repo}."
+      exit 1
+    fi
+    local release_comparison
+    if ! release_comparison="$(compare_releases "${release}" "${github_latest}")"; then
+      log_error "Could not compare locked release '${release}' with GitHub latest '${github_latest}'."
+      exit 1
+    fi
+    if [[ "${release_comparison}" -gt 0 ]]; then
+      log_error "Locked Soperator release '${release}' is newer than GitHub latest '${github_latest}'. Refusing --latest sync before mutating files; check the lock for a typo or wait for GitHub latest metadata."
+      exit 1
+    fi
+    release="${github_latest}"
+    tag="${github_latest}"
+  elif [[ "${sync}" -eq 1 ]]; then
+    tag="${release}"
+  fi
+
+  local resolved_commit
+  resolved_commit="$(resolve_tag_commit "${repo}" "${tag}")"
+  if [[ "${sync}" -eq 1 ]]; then
+    commit="${resolved_commit}"
+    if [[ "$(yaml_value "${lock_file}" "release")" != "${release}" || "$(yaml_value "${lock_file}" "tag")" != "${tag}" || "$(yaml_value "${lock_file}" "commit")" != "${commit}" ]]; then
+      update_lock_pin "${lock_file}" "${release}" "${tag}" "${commit}"
+    fi
+  elif [[ "${resolved_commit}" != "${commit}" ]]; then
+    log_error "Tag '${tag}' resolves to '${resolved_commit}', but lock expects '${commit}'."
+    exit 1
   fi
 
   TMP_DIR="$(mktemp -d)"
@@ -543,7 +923,10 @@ main() {
   log_note "Fetching ${repo} release ${tag}..."
   fetch_release "${repo}" "${tag}" "${TMP_DIR}"
 
-  verify_imports "${lock_file}" "${root}" "${TMP_DIR}/source" "${scope}" "${sync}" "${report}"
+  verify_imports "${lock_file}" "${root}" "${TMP_DIR}/source" "${scope}" "${sync}" "${report}" "${release}" "${commit}"
+  if [[ "${sync}" -eq 1 ]]; then
+    sync_chart_dependencies_and_validate "${root}" "${chart_dir}"
+  fi
   log_success "Upstream import verification completed for scope '${scope}'."
 }
 

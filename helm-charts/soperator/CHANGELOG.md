@@ -4,6 +4,23 @@ All notable changes to this chart are tracked here.
 
 ## [Unreleased]
 
+- Added a design-doc inventory for the imported `slurm_scripts/` files,
+  including their trigger contexts, scheduling model, and runtime purpose.
+- Renamed the upstream Soperator sync lock group to `imports.scripts`, so the
+  lock schema, report output, and `--scope scripts` terminology match.
+- Made `upstream-soperator.lock.yaml` the single manual upstream-release input:
+  `verify-upstream-soperator-sync.sh --sync` now derives chart appVersions,
+  upstream parent dependency versions, child dependency versions, script
+  imports, image values, review-only hashes, and Helm validation from the lock,
+  while the scheduled workflow opens an upstream-sync PR from an automation
+  branch.
+- Added a pre-mutation release-order guard so scheduled `--latest` sync fails
+  clearly when the lock release is newer than GitHub's latest release.
+- Hardened upstream sync verification so read-only checks validate child chart
+  package versions, parent dependency pins, and `Chart.lock`, while scoped
+  script/image runs stay read-only.
+- Aligned the upstream sync script `--help` examples with the single-release
+  sync flow, read-only scoped checks, and scheduled `--latest` PR workflow.
 - Made the chart-owned Soperator webhook Certificate render
   `privateKey.rotationPolicy: Always` by default, matching cert-manager 1.18+
   behavior explicitly and avoiding default-change warnings.
