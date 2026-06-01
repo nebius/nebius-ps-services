@@ -78,16 +78,18 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git switch -c "${branch}"
+          base_sha="$(git rev-parse HEAD)"
 
           helm-charts/soperator/scripts/verify-upstream-soperator-sync.sh --latest --sync --report
 
           release="$(ruby -ryaml -e 'puts YAML.safe_load(File.read("helm-charts/soperator/upstream-soperator.lock.yaml"), aliases: true).fetch("release")')"
+          head_sha="$(git rev-parse HEAD)"
           {
             echo "branch=${branch}"
             echo "release=${release}"
           } >> "${GITHUB_OUTPUT}"
 
-          if [[ -z "$(git status --porcelain --untracked-files=no)" ]]; then
+          if [[ "${head_sha}" == "${base_sha}" ]]; then
             echo "changed=false" >> "${GITHUB_OUTPUT}"
           else
             echo "changed=true" >> "${GITHUB_OUTPUT}"
@@ -102,15 +104,6 @@ jobs:
         run: |
           set -euo pipefail
 
-          git add \
-            helm-charts/soperator \
-            helm-charts/soperator-activechecks \
-            helm-charts/soperator-backup-config \
-            helm-charts/soperator-checks \
-            helm-charts/soperator-dcgm-exporter \
-            helm-charts/soperator-notifier
-          git commit -m "Sync Soperator upstream ${RELEASE}"
-
           remote_sha="$(git ls-remote --heads origin "${BRANCH}" | awk '{print $1}')"
           if [[ -n "${remote_sha}" ]]; then
             git push --force-with-lease="refs/heads/${BRANCH}:${remote_sha}" origin "HEAD:${BRANCH}"
@@ -122,7 +115,7 @@ jobs:
           cat > "${body_file}" <<BODY
           Syncs the Nebius Soperator Helm chart tracking files to upstream Soperator ${RELEASE}.
 
-          This PR was created by the scheduled upstream sync workflow. The sync script updated the lock pin, script imports, tracked image values, chart appVersions, local child-chart dependency versions, and review-only upstream hashes without copying review-only templates.
+          This PR was created by the scheduled upstream sync workflow. The sync script updated the lock pin, script imports, tracked image values, chart package versions, chart appVersions, local child-chart dependency versions, and review-only upstream hashes without copying review-only templates.
 
           Validation run by the workflow:
           - helm dependency build

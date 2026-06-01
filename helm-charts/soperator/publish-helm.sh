@@ -46,17 +46,17 @@ log_success() {
 
 show_usage() {
   printf '%b\n' "${S_BOLD}Usage:${S_RESET}"
-  printf '%b\n' "  ${S_CYAN}./publish-helm.sh${S_RESET} ${S_DIM}--prep X.Y.Z [--no-push]${S_RESET}"
-  printf '%b\n' "  ${S_CYAN}./publish-helm.sh${S_RESET} ${S_DIM}--publish X.Y.Z [--allow-non-main]${S_RESET}"
+  printf '%b\n' "  ${S_CYAN}./publish-helm.sh${S_RESET} ${S_DIM}--prep X.Y.Z[-prerelease] [--no-push]${S_RESET}"
+  printf '%b\n' "  ${S_CYAN}./publish-helm.sh${S_RESET} ${S_DIM}--publish X.Y.Z[-prerelease] [--allow-non-main]${S_RESET}"
   printf '\n'
 
   printf '%b\n' "${S_BOLD}Modes:${S_RESET}"
   printf '%b\n' "  ${S_YELLOW}--prep${S_RESET}     Update ${CHANGELOG_FILE} and ${CHART_FILE}, validate the chart, commit the release prep, and push the current branch."
   printf '%b\n' "                 First push auto-sets origin/<current-branch> as upstream when needed."
   printf '%b\n' "                 Clean-worktree check is strict and includes untracked files."
-  printf '%b\n' "                 Fails if tag ${TAG_PREFIX}-vX.Y.Z already exists locally or on origin."
-  printf '%b\n' "  ${S_YELLOW}--publish${S_RESET}  Create and push tag ${TAG_PREFIX}-vX.Y.Z."
-  printf '%b\n' "                 Fails if ${CHART_FILE} does not already declare version X.Y.Z."
+  printf '%b\n' "                 Fails if tag ${TAG_PREFIX}-vX.Y.Z[-prerelease] already exists locally or on origin."
+  printf '%b\n' "  ${S_YELLOW}--publish${S_RESET}  Create and push tag ${TAG_PREFIX}-vX.Y.Z[-prerelease]."
+  printf '%b\n' "                 Fails if ${CHART_FILE} does not already declare the release version."
   printf '%b\n' "                 Tag push triggers .github/workflows/helm-chart-publish.yml."
   printf '\n'
 
@@ -67,8 +67,8 @@ show_usage() {
   printf '\n'
 
   printf '%b\n' "${S_BOLD}Examples:${S_RESET}"
-  printf '%b\n' "  ${S_CYAN}./publish-helm.sh --prep 0.1.0${S_RESET}"
-  printf '%b\n' "  ${S_CYAN}./publish-helm.sh --publish 0.1.0${S_RESET}"
+  printf '%b\n' "  ${S_CYAN}./publish-helm.sh --prep 3.0.4-ps.1${S_RESET}"
+  printf '%b\n' "  ${S_CYAN}./publish-helm.sh --publish 3.0.4-ps.1${S_RESET}"
 }
 
 require_cmd() {
@@ -93,15 +93,16 @@ ensure_repo_ready() {
 
 normalize_tag() {
   local raw="$1"
-  if [[ "${raw}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  local semver_re='[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?'
+  if [[ "${raw}" =~ ^${semver_re}$ ]]; then
     printf '%s\n' "${TAG_PREFIX}-v${raw}"
     return 0
   fi
-  if [[ "${raw}" =~ ^${TAG_PREFIX}-v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  if [[ "${raw}" =~ ^${TAG_PREFIX}-v${semver_re}$ ]]; then
     printf '%s\n' "${raw}"
     return 0
   fi
-  log_error "Version/tag must be X.Y.Z or ${TAG_PREFIX}-vX.Y.Z"
+  log_error "Version/tag must be X.Y.Z[-prerelease] or ${TAG_PREFIX}-vX.Y.Z[-prerelease]"
   exit 1
 }
 

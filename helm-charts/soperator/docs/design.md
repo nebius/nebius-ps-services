@@ -2549,29 +2549,28 @@ Exporter path.
 
 ## Chart Release And OCI Publish
 
-The chart package version is independent from the upstream Soperator release.
-`Chart.yaml.version` is this repository's SemVer for the packaged Helm chart.
+The chart package version follows the upstream Soperator release with a Nebius
+package suffix. `Chart.yaml.version` uses `<upstream>-ps.N`, while
 `Chart.yaml.appVersion` is the upstream Soperator release and must match
 `upstream-soperator.lock.yaml`.
 
 ```yaml
-version: 0.1.0
+version: 3.0.4-ps.1
 appVersion: "3.0.4"
 ```
 
-This separation lets the chart release packaging, docs, examples, cxcli wiring,
-or values improvements without implying that Nebius Soperator itself released a
-new version.
+The suffix lets this repository publish package respins without implying that
+Nebius Soperator itself released a different upstream version.
 
 Release prep and publish are intentionally local and explicit:
 
 1. Add release notes under `CHANGELOG.md` `## [Unreleased]`.
-2. Run `./publish-helm.sh --prep X.Y.Z` to move notes into a dated release
+2. Run `./publish-helm.sh --prep X.Y.Z-ps.N` to move notes into a dated release
    section, update `Chart.yaml.version`, validate the chart, commit, and push
    the branch.
 3. Merge to `main`.
-4. Run `./publish-helm.sh --publish X.Y.Z` from `main` to create and push the
-   `soperator-chart-vX.Y.Z` tag.
+4. Run `./publish-helm.sh --publish X.Y.Z-ps.N` from `main` to create and push
+   the `soperator-chart-vX.Y.Z-ps.N` tag.
 5. The tag starts `.github/workflows/helm-chart-publish.yml`, which reads
    `.github/helm-chart-publish.json`, packages the chart, pushes it to Nebius
    OCI, verifies anonymous pull, and writes a publish manifest artifact.
@@ -2582,8 +2581,8 @@ intended to be public.
 
 The workflow pushes to the OCI repository root, for example
 `oci://cr.<region>.nebius.cloud/<registry-short-id>/charts`. Helm derives the
-final `soperator` repository and `X.Y.Z` tag from the packaged chart, matching
-the [Helm OCI registry contract](https://helm.sh/docs/topics/registries/#the-push-subcommand).
+final `soperator` repository and `X.Y.Z-ps.N` tag from the packaged chart,
+matching the [Helm OCI registry contract](https://helm.sh/docs/topics/registries/#the-push-subcommand).
 
 ## Upstream Release Contract
 
@@ -2608,13 +2607,14 @@ The lock records:
 Versioning uses two fields on purpose:
 
 ```yaml
-version: 0.1.0
+version: 3.0.4-ps.1
 appVersion: "3.0.4"
 ```
 
 `appVersion` is the upstream Soperator release and is derived from the lock by
-the sync script. `version` is the independent Helm chart package version owned
-by this repository and released through `publish-helm.sh`.
+the sync script. `version` is this repository's Helm chart package version; full
+upstream sync sets it to `<upstream>-ps.1`, and explicit parent-chart package
+respins may use `<upstream>-ps.N`.
 
 The upstream-owned script imports are:
 
@@ -2633,6 +2633,7 @@ cxcli renders from silently producing empty check payloads.
 Full upstream sync owns only derived upstream-tracking surfaces:
 
 - `Chart.yaml.appVersion` and upstream annotations.
+- parent `Chart.yaml.version` as `<upstream>-ps.1`.
 - upstream parent chart dependency versions and repositories that also exist in
   the local parent chart.
 - Soperator-family child chart `appVersion` and `<upstream>-ps.1` package
@@ -2682,24 +2683,28 @@ The report labels this lock group as `script`, matching `imports.scripts`.
 
 To intentionally move to a newer Soperator release:
 
-1. Create a feature branch.
-2. Update only `release` in `upstream-soperator.lock.yaml`.
-3. Run `scripts/verify-upstream-soperator-sync.sh --sync`.
-4. Review the PR diff, especially copied scripts, image values, dependency
-   versions, and review-only hash changes.
+1. From any clean working tree, run
+   `scripts/verify-upstream-soperator-sync.sh --latest --sync --report`.
+2. Open the PR. The PR is the human approval gate for copied scripts, image
+   values, dependency versions, and review-only hash changes.
 
-The script refuses local `--sync` on `main` or the repository default branch.
-It refreshes the lock `tag` and resolved `commit`, updates derived chart
-metadata, copies approved scripts, updates tracked image values, updates
-review-only hashes, regenerates dependency metadata when child chart versions
-change, and runs Helm dependency, lint, and template validation. Write mode
-requires the full `all` scope plus `yq` and Helm; scoped `scripts` or `images`
-runs are read-only verification only.
+The script refuses local `--sync` from a dirty working tree. When run from
+`main`, `master`, or the repository default branch, it creates a clean
+`sync-soperator-<release>` feature branch before mutating files. It refreshes
+the lock `tag` and resolved `commit`, updates derived chart metadata, copies
+approved scripts, updates tracked image values, updates review-only hashes,
+regenerates dependency metadata when chart versions change, runs Helm
+dependency, lint, and template validation, and commits the resulting diff as
+one local commit. Write mode requires the full `all` scope plus `yq` v4 and
+Helm; scoped `scripts` or `images` runs are read-only verification only. With
+`--report`, it also prints the sync commit file list before committing.
+Missing-tool errors include macOS and Linux install hints, but the script does
+not install packages automatically. Local runs do not push or create the PR.
 
 The scheduled GitHub workflow runs the same sync with `--latest`, pushes the
 result to `automation/soperator-upstream-sync`, and creates or updates a PR for
 human approval. `scripts/verify-upstream-soperator-sync.sh --check-latest`
-remains a read-only local or CI check.
+remains a read-only local or CI check and is not required before sync.
 Before a scheduled `--latest` sync writes files, the script compares the lock
 release with GitHub's latest release. If the lock is newer, the workflow fails
 with a clear typo/stale-metadata message instead of mutating chart files.

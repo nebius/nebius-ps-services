@@ -44,8 +44,8 @@ jobs:
         run: |
           set -euo pipefail
 
-          if [[ ! "${REF_NAME}" =~ ^(.+)-v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
-            echo "::error::Tag '${REF_NAME}' must match <chart-tag-prefix>-vMAJOR.MINOR.PATCH"
+          if [[ ! "${REF_NAME}" =~ ^(.+)-v([0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?)$ ]]; then
+            echo "::error::Tag '${REF_NAME}' must match <chart-tag-prefix>-vMAJOR.MINOR.PATCH[-prerelease]"
             exit 1
           fi
 

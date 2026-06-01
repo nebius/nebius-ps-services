@@ -51,12 +51,12 @@ show_usage() {
   printf '%b\n' "  ${S_CYAN}helm-charts/soperator/scripts/verify-upstream-soperator-sync.sh${S_RESET} ${S_DIM}[options]${S_RESET}"
   printf '\n'
   printf '%b\n' "${S_BOLD}Options:${S_RESET}"
-  printf '%b\n' "  ${S_YELLOW}--lock-file PATH${S_RESET}    Lock file to read"
+  printf '%b\n' "  ${S_YELLOW}--lock-file PATH${S_RESET}    Lock file to read (default: chart upstream-soperator.lock.yaml)"
   printf '%b\n' "  ${S_YELLOW}--check-latest${S_RESET}      Compare the lock release with GitHub latest without writing"
-  printf '%b\n' "  ${S_YELLOW}--sync${S_RESET}              Apply the full upstream sync on the current feature branch"
-  printf '%b\n' "  ${S_YELLOW}--latest${S_RESET}            With --sync, use GitHub latest and update the lock"
+  printf '%b\n' "  ${S_YELLOW}--sync${S_RESET}              Apply full upstream sync, validate it, and create one local commit"
+  printf '%b\n' "  ${S_YELLOW}--latest${S_RESET}            With --sync, use GitHub latest release and update the lock"
   printf '%b\n' "  ${S_YELLOW}--scope SCOPE${S_RESET}       Limit read-only checks to scripts, images, or all (default: all)"
-  printf '%b\n' "  ${S_YELLOW}--report${S_RESET}            Print detailed per-item status"
+  printf '%b\n' "  ${S_YELLOW}--report${S_RESET}            Print detailed per-item status; with --sync, print commit files"
   printf '%b\n' "  ${S_YELLOW}-h, --help${S_RESET}          Show help"
   printf '\n'
   printf '%b\n' "${S_BOLD}Examples from repository root:${S_RESET}"
@@ -66,22 +66,72 @@ show_usage() {
   printf '%b\n' "  ${S_DIM}Check whether the lock matches GitHub latest:${S_RESET}"
   printf '%b\n' "  ${S_CYAN}helm-charts/soperator/scripts/verify-upstream-soperator-sync.sh --check-latest${S_RESET}"
   printf '\n'
-  printf '%b\n' "  ${S_DIM}Sync the release named in the lock on a feature branch:${S_RESET}"
-  printf '%b\n' "  ${S_CYAN}helm-charts/soperator/scripts/verify-upstream-soperator-sync.sh --sync${S_RESET}"
-  printf '%b\n' "  ${S_DIM}Add --report for detailed per-item status.${S_RESET}"
+  printf '%b\n' "  ${S_DIM}Refresh and commit the release already named in the lock:${S_RESET}"
+  printf '%b\n' "  ${S_CYAN}helm-charts/soperator/scripts/verify-upstream-soperator-sync.sh --sync --report${S_RESET}"
   printf '\n'
-  printf '%b\n' "  ${S_DIM}Sync GitHub latest, used by the scheduled PR workflow:${S_RESET}"
+  printf '%b\n' "  ${S_DIM}Sync GitHub latest, create a branch when needed, validate, and commit:${S_RESET}"
   printf '%b\n' "  ${S_CYAN}helm-charts/soperator/scripts/verify-upstream-soperator-sync.sh --latest --sync --report${S_RESET}"
   printf '\n'
   printf '%b\n' "  ${S_DIM}Read-only scoped checks:${S_RESET}"
   printf '%b\n' "  ${S_CYAN}helm-charts/soperator/scripts/verify-upstream-soperator-sync.sh --scope scripts --report${S_RESET}"
   printf '%b\n' "  ${S_CYAN}helm-charts/soperator/scripts/verify-upstream-soperator-sync.sh --scope images --report${S_RESET}"
+  printf '\n'
+  printf '%b\n' "${S_BOLD}Write-mode notes:${S_RESET}"
+  printf '%b\n' "  ${S_DIM}--sync requires a clean working tree and always uses the full upstream release contract.${S_RESET}"
+  printf '%b\n' "  ${S_DIM}When run from main, master, the default branch, or detached HEAD, it creates sync-soperator-<release>.${S_RESET}"
+  printf '%b\n' "  ${S_DIM}Local --sync creates the commit only; it does not install tools, push, open a PR, or merge.${S_RESET}"
 }
 
 require_cmd() {
   local cmd="$1"
   if ! command -v "${cmd}" >/dev/null 2>&1; then
     log_error "Required command not found: ${cmd}"
+    print_install_hint "${cmd}"
+    exit 1
+  fi
+}
+
+print_install_hint() {
+  local cmd="$1"
+  local os=""
+  os="$(uname -s 2>/dev/null || true)"
+
+  case "${os}" in
+    Darwin)
+      case "${cmd}" in
+        helm) log_warn "Install on macOS: brew install helm" ;;
+        yq) log_warn "Install on macOS: brew install yq" ;;
+        git) log_warn "Install on macOS: brew install git" ;;
+        curl) log_warn "Install on macOS: brew install curl" ;;
+        ruby) log_warn "Install on macOS: brew install ruby" ;;
+        awk|diff|mktemp|sed|tar) log_warn "Install macOS command line tools: xcode-select --install" ;;
+        *) log_warn "Install '${cmd}' with Homebrew or macOS command line tools." ;;
+      esac
+      ;;
+    Linux)
+      case "${cmd}" in
+        helm) log_warn "Install on Linux: https://helm.sh/docs/intro/install/" ;;
+        yq) log_warn "Install on Linux: sudo sh -c 'curl -fsSL https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64 -o /usr/local/bin/yq && chmod +x /usr/local/bin/yq'" ;;
+        awk) log_warn "Install on Debian/Ubuntu: sudo apt-get update && sudo apt-get install -y gawk" ;;
+        diff) log_warn "Install on Debian/Ubuntu: sudo apt-get update && sudo apt-get install -y diffutils" ;;
+        mktemp) log_warn "Install on Debian/Ubuntu: sudo apt-get update && sudo apt-get install -y coreutils" ;;
+        curl|git|ruby|sed|tar) log_warn "Install on Debian/Ubuntu: sudo apt-get update && sudo apt-get install -y ${cmd}" ;;
+        *) log_warn "Install '${cmd}' with your Linux package manager." ;;
+      esac
+      ;;
+    *)
+      log_warn "Install '${cmd}' for your operating system, then rerun this command."
+      ;;
+  esac
+}
+
+require_yq_v4() {
+  require_cmd "yq"
+  local version_output=""
+  version_output="$(yq --version 2>/dev/null || true)"
+  if [[ ! "${version_output}" =~ version[[:space:]]v?4\. ]]; then
+    log_error "Required command 'yq' must be mikefarah yq v4; found: ${version_output:-unknown version}"
+    print_install_hint "yq"
     exit 1
   fi
 }
@@ -186,19 +236,61 @@ default_git_branch() {
   printf '%s\n' "${branch:-main}"
 }
 
+safe_branch_fragment() {
+  printf '%s\n' "$1" | sed -E 's/[^A-Za-z0-9._-]+/-/g; s/^-+//; s/-+$//'
+}
+
+branch_exists() {
+  local root="$1"
+  local branch="$2"
+  git -C "${root}" show-ref --verify --quiet "refs/heads/${branch}"
+}
+
+next_available_sync_branch() {
+  local root="$1"
+  local release="$2"
+  local base candidate index
+  base="sync-soperator-$(safe_branch_fragment "${release}")"
+  candidate="${base}"
+  index=2
+  while branch_exists "${root}" "${candidate}"; do
+    candidate="${base}-${index}"
+    index=$((index + 1))
+  done
+  printf '%s\n' "${candidate}"
+}
+
 ensure_sync_branch() {
   local root="$1"
+  local release="$2"
   local current_branch default_branch
   current_branch="$(git -C "${root}" branch --show-current 2>/dev/null || true)"
   default_branch="$(default_git_branch "${root}")"
 
   if [[ -z "${current_branch}" ]]; then
-    log_error "--sync requires a named feature branch. Check out or create a branch before syncing upstream Soperator."
-    exit 1
+    local sync_branch
+    sync_branch="$(next_available_sync_branch "${root}" "${release}")"
+    log_note "Creating feature branch '${sync_branch}' for upstream Soperator sync..."
+    git -C "${root}" switch -c "${sync_branch}" >/dev/null
+    return 0
   fi
 
   if [[ "${current_branch}" == "${default_branch}" || "${current_branch}" == "main" || "${current_branch}" == "master" ]]; then
-    log_error "Refusing to run --sync on '${current_branch}'. Create a feature branch for the upstream Soperator update, then rerun --sync."
+    local sync_branch
+    sync_branch="$(next_available_sync_branch "${root}" "${release}")"
+    log_note "Creating feature branch '${sync_branch}' for upstream Soperator sync..."
+    git -C "${root}" switch -c "${sync_branch}" >/dev/null
+    return 0
+  fi
+}
+
+ensure_clean_worktree() {
+  local root="$1"
+  local status_output=""
+  status_output="$(git -C "${root}" status --short --untracked-files=all)"
+  if [[ -n "${status_output}" ]]; then
+    log_error "--sync requires a clean working tree before it mutates files."
+    printf '%s\n' "${status_output}" >&2
     exit 1
   fi
 }
@@ -232,6 +324,95 @@ chart_metadata_changed() {
     paths+=("${path}")
   done < <(chart_metadata_paths)
   ! git -C "${root}" diff --quiet -- "${paths[@]}"
+}
+
+sync_pathspecs() {
+  printf '%s\0' \
+    "helm-charts/soperator" \
+    "helm-charts/soperator-activechecks" \
+    "helm-charts/soperator-backup-config" \
+    "helm-charts/soperator-checks" \
+    "helm-charts/soperator-dcgm-exporter" \
+    "helm-charts/soperator-notifier"
+}
+
+git_status_short() {
+  local root="$1"
+  git -C "${root}" status --short --untracked-files=all
+}
+
+report_changed_files() {
+  local root="$1"
+  local status_output=""
+  status_output="$(git_status_short "${root}")"
+  if [[ -z "${status_output}" ]]; then
+    log_note "Changed files for sync commit: none."
+    return 0
+  fi
+
+  printf '%b\n' "${S_BOLD}Changed files for sync commit:${S_RESET}"
+  printf '%s\n' "${status_output}"
+}
+
+stage_sync_changes() {
+  local root="$1"
+  local -a paths=()
+  while IFS= read -r -d '' path; do
+    paths+=("${path}")
+  done < <(sync_pathspecs)
+  git -C "${root}" add -- "${paths[@]}"
+}
+
+git_config_value() {
+  local root="$1"
+  local key="$2"
+  git -C "${root}" config --get "${key}" 2>/dev/null || true
+}
+
+commit_sync_changes() {
+  local root="$1"
+  local release="$2"
+  local status_output unstaged_status user_name user_email commit_sha
+  local -a commit_args=()
+
+  stage_sync_changes "${root}"
+  status_output="$(git_status_short "${root}")"
+  if [[ -z "${status_output}" ]]; then
+    log_note "No sync changes to commit."
+    return 0
+  fi
+
+  unstaged_status="$(printf '%s\n' "${status_output}" | awk 'substr($0, 1, 2) == "??" || substr($0, 2, 1) != " " { print }')"
+  if [[ -n "${unstaged_status}" ]]; then
+    log_error "Sync produced files outside the expected staged chart paths."
+    printf '%s\n' "${status_output}" >&2
+    exit 1
+  fi
+
+  if git -C "${root}" diff --cached --quiet; then
+    log_note "No sync changes to commit."
+    return 0
+  fi
+
+  user_name="$(git_config_value "${root}" "user.name")"
+  user_email="$(git_config_value "${root}" "user.email")"
+  if [[ -z "${user_name}" ]]; then
+    commit_args+=("-c" "user.name=Soperator Sync")
+  fi
+  if [[ -z "${user_email}" ]]; then
+    commit_args+=("-c" "user.email=soperator-sync@users.noreply.github.com")
+  fi
+
+  git -C "${root}" "${commit_args[@]}" commit -m "Sync Soperator upstream ${release}" >/dev/null
+  commit_sha="$(git -C "${root}" rev-parse --short HEAD)"
+  log_success "Committed upstream sync as ${commit_sha}."
+
+  status_output="$(git_status_short "${root}")"
+  if [[ -n "${status_output}" ]]; then
+    log_error "Sync commit left the working tree dirty."
+    printf '%s\n' "${status_output}" >&2
+    exit 1
+  fi
 }
 
 resolve_tag_commit() {
@@ -350,6 +531,10 @@ def chart_yaml(path)
   load_yaml_file(path)
 end
 
+def package_version(release)
+  "#{release}-ps.1"
+end
+
 def normalize_rel(path)
   path = path.to_s.sub(%r{\A\./}, "").sub(%r{/\z}, "")
   raise "empty path is not allowed" if path.empty?
@@ -441,8 +626,9 @@ def verify_chart_versions!(repo_root, lock)
   chart_version = chart.fetch("version")
 
   raise "Chart.yaml appVersion '#{app_version}' does not match upstream release '#{release}'." unless app_version == release
-  unless chart_version.match?(/\A\d+\.\d+\.\d+\z/)
-    raise "Chart.yaml version '#{chart_version}' must be the chart package SemVer X.Y.Z. The upstream Soperator release belongs in appVersion."
+  package_version_re = /\A#{Regexp.escape(release)}-ps\.[1-9]\d*\z/
+  unless chart_version.match?(package_version_re)
+    raise "Chart.yaml version '#{chart_version}' must match '#{release}-ps.N'."
   end
 end
 
@@ -515,13 +701,16 @@ def sync_parent_chart_metadata!(repo_root, release, commit)
   file = parent_chart_file(repo_root)
   chart = chart_yaml(file)
   annotations = chart.fetch("annotations", {})
+  expected_package_version = package_version(release)
   return if chart["appVersion"] == release &&
+    chart["version"] == expected_package_version &&
     annotations["soperator.nebius.com/upstream-release"] == release &&
     annotations["soperator.nebius.com/upstream-commit"] == commit
 
   yq_update!(
     file,
     [
+      ".version = #{JSON.generate(expected_package_version)}",
       ".appVersion = #{JSON.generate(release)}",
       ".annotations.\"soperator.nebius.com/upstream-release\" = #{JSON.generate(release)}",
       ".annotations.\"soperator.nebius.com/upstream-commit\" = #{JSON.generate(commit)}"
@@ -613,13 +802,13 @@ def sync_tracked_chart_version!(repo_root, upstream_root, entry)
     return
   end
 
-  package_version = "#{upstream_app_version}-ps.1"
+  expected_package_version = package_version(upstream_app_version)
   chart_name = local_chart.fetch("name")
-  yq_set_string!(local_file, ".version", package_version) unless local_chart["version"] == package_version
+  yq_set_string!(local_file, ".version", expected_package_version) unless local_chart["version"] == expected_package_version
 
   parent_chart = chart_yaml(parent_chart_file(repo_root))
   dependency = Array(parent_chart["dependencies"]).find { |item| item["name"] == chart_name }
-  update_parent_dependency_version!(repo_root, chart_name, package_version) unless dependency && dependency["version"] == package_version
+  update_parent_dependency_version!(repo_root, chart_name, expected_package_version) unless dependency && dependency["version"] == expected_package_version
 end
 
 failures = []
@@ -630,10 +819,10 @@ end
 
 begin
   verify_chart_versions!(repo_root, lock)
-  report_line("ok", "lock", "chart SemVer and upstream appVersion") if report
+  report_line("ok", "lock", "chart package version and upstream appVersion") if report
 rescue StandardError => e
   failures << e.message
-  report_line("fail", "lock", "chart SemVer and upstream appVersion", e.message)
+  report_line("fail", "lock", "chart package version and upstream appVersion", e.message)
 end
 
 Array(lock.dig("imports", "chart_versions")).each do |entry|
@@ -836,12 +1025,13 @@ main() {
   require_cmd "git"
   require_cmd "mktemp"
   require_cmd "ruby"
+  require_cmd "sed"
   require_cmd "tar"
 
   if [[ "${sync}" -eq 1 ]]; then
     require_cmd "helm"
-    require_cmd "yq"
-    ensure_sync_branch "${root}"
+    require_yq_v4
+    ensure_clean_worktree "${root}"
   fi
 
   if [[ ! -f "${lock_file}" ]]; then
@@ -873,7 +1063,7 @@ main() {
       exit 1
     fi
     if [[ "${release_comparison}" -lt 0 ]]; then
-      log_error "Latest Soperator release is '${github_latest}', but lock is pinned to '${release}'. Create a feature branch, update the lock release, and run --sync."
+      log_error "Latest Soperator release is '${github_latest}', but lock is pinned to '${release}'. Run --latest --sync --report from a clean working tree."
       exit 1
     elif [[ "${release_comparison}" -gt 0 ]]; then
       log_error "Locked Soperator release '${release}' is newer than GitHub latest '${github_latest}'. Check the lock for a typo or wait for GitHub latest metadata before syncing."
@@ -905,6 +1095,10 @@ main() {
     tag="${release}"
   fi
 
+  if [[ "${sync}" -eq 1 ]]; then
+    ensure_sync_branch "${root}" "${release}"
+  fi
+
   local resolved_commit
   resolved_commit="$(resolve_tag_commit "${repo}" "${tag}")"
   if [[ "${sync}" -eq 1 ]]; then
@@ -926,6 +1120,10 @@ main() {
   verify_imports "${lock_file}" "${root}" "${TMP_DIR}/source" "${scope}" "${sync}" "${report}" "${release}" "${commit}"
   if [[ "${sync}" -eq 1 ]]; then
     sync_chart_dependencies_and_validate "${root}" "${chart_dir}"
+    if [[ "${report}" -eq 1 ]]; then
+      report_changed_files "${root}"
+    fi
+    commit_sync_changes "${root}" "${release}"
   fi
   log_success "Upstream import verification completed for scope '${scope}'."
 }
