@@ -15,8 +15,8 @@ branch, and report the order the user should merge the PRs manually.
 - Opening a PR from local changes or local commits.
 - Opening or reusing PRs for one or more named branches.
 - Moving in-progress work off the default branch before publishing it.
-- Staging complete monorepo work with `git add -A` when the user wants the
-  current local changes submitted as one PR.
+- Always staging current local work from the repository root with `git add -A`
+  when committing changes for a PR.
 - Reusing the current feature branch instead of creating extra branches.
 - Making each target branch conflict-free against the default branch, usually
   `main`, before returning the PR.
@@ -88,8 +88,9 @@ branch, and report the order the user should merge the PRs manually.
      from the repository root with `git add -A`, including modified, deleted,
      and untracked files across monorepo projects. Then inspect the staged diff
      and commit it with a concise message.
-   - Use path-limited staging only when the user explicitly requests a narrower
-     PR scope. Otherwise, do not leave related monorepo edits unstaged.
+   - Do not stage only selected paths. If the dirty worktree contains changes
+     that should not be part of the PR, stop before staging and tell the user
+     that `create-pr` is configured for repo-wide `git add -A` commits.
    - If the user did not clearly ask to submit the dirty work, stop and explain
      that a PR cannot be created until the branch has reviewable commits.
 5. Confirm there is something to review for every target.
@@ -211,10 +212,10 @@ branch, and report the order the user should merge the PRs manually.
 - Do not merge the PRs into the default branch unless the user explicitly asks.
   This skill prepares PRs so the user can merge them manually.
 - Do not open a PR from uncommitted changes alone. Commit first or stop.
-- For local-work PRs, do not stage only a subset of the worktree unless the
-  user explicitly asks for a narrower PR. The default staging command is
-  `git add -A` from the repository root so monorepo-wide related changes stay
-  together.
+- For local-work PRs, always stage from the repository root with `git add -A`
+  so monorepo-wide related changes stay together. Do not path-limit staging; if
+  repo-wide staging would include work that should not be in the PR, stop and
+  ask the user to split or clean the worktree first.
 - Do not open an empty PR with no branch diff against the base branch.
 - Do not combine multiple requested branches into one PR.
 - Do not rewrite published branch history unless the user explicitly asks and
