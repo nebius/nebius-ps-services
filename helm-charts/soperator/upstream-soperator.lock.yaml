@@ -1,7 +1,7 @@
 repository: "https://github.com/nebius/soperator"
-release: "3.0.4"
-tag: "3.0.4"
-commit: "e80e652f98826171d81675b21b05facdf4477a78"
+release: "3.0.5"
+tag: "3.0.5"
+commit: "22f3ae8f0edb0df97b563670bd38ccd2bb9e9e97"
 imports:
   scripts:
     - name: slurm-cluster slurm_scripts
@@ -354,7 +354,7 @@ imports:
     - name: core operator CRDs
       scope: logic
       upstream_path: helm/soperator/crds
-      sha256: 0bbe5af6da05c558452a92922afdcd001eb7872be5374b967a6f554d5d244af8
+      sha256: 9a3de59dcd05b7259256313004297c22666f0edb6c8b7ab4c020f7f7f68ee283
     - name: SlurmCluster templates
       scope: logic
       upstream_path: helm/slurm-cluster/templates
@@ -394,15 +394,15 @@ imports:
     - name: custom ConfigMaps chart
       scope: logic
       upstream_path: helm/soperator-custom-configmaps
-      sha256: 65affefffd28c9c789d461b8e23f395a345ee17d731018d8f45f8934bded8a36
+      sha256: 77224c95244893e5f199c43de944071e9e9b6dd7f7fdebbd7dab899c09ba34a6
     - name: monitoring dashboards chart
       scope: logic
       upstream_path: helm/soperator-monitoring-dashboards
-      sha256: 0d5653a9ad466b4190007ada09ede1c3d075732ad4a045bb816c6d9c8750d393
+      sha256: 5b2b5e41ef4edf43602d42080b0c990e80cc91455ae17bc1637083476d37e9ba
     - name: storageclasses chart
       scope: logic
       upstream_path: helm/storageclasses
-      sha256: a1e4439ff88240a7c4fe9dd74f6cce94ccdd8a1eafe5b69697457a3b629e69a3
+      sha256: 6762d2c101360179d1356dd8f9e2360f1b4fa96dbd07a5f434bc74e50c622334
 local_owned_paths:
   - helm-charts/soperator/.helmignore
   - helm-charts/soperator/CHANGELOG.md

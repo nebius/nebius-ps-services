@@ -2,7 +2,7 @@ apiVersion: v2
 name: soperator-dcgm-exporter
 description: NVIDIA DCGM exporter with Soperator Slurm job mapping labels.
 type: application
-version: 3.0.4-ps.1
-appVersion: "3.0.4"
+version: 3.0.5-ps.1
+appVersion: "3.0.5"
 annotations:
-  soperator.nebius.com/upstream-release: "3.0.4"
+  soperator.nebius.com/upstream-release: "3.0.5"

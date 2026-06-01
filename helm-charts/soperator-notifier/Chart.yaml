@@ -2,11 +2,11 @@ apiVersion: v2
 name: soperator-notifier
 description: Slack job notifications for Nebius Soperator through VictoriaMetrics Alertmanager
 type: application
-version: 3.0.4-ps.1
-appVersion: "3.0.4"
+version: 3.0.5-ps.1
+appVersion: "3.0.5"
 kubeVersion: ">=1.29.0-0"
 annotations:
-  soperator.nebius.com/upstream-release: "3.0.4"
+  soperator.nebius.com/upstream-release: "3.0.5"
 home: https://docs.nebius.com/slurm-soperator/
 sources:
   - https://github.com/nebius/soperator

@@ -24,7 +24,6 @@ maintenance: "none"
 clusterType: gpu
 # CUDA version used for populate-jail image selection.
 cudaVersion: 12.9.0
-
 # ---------------------------------------------------------------------------
 # Optional Soperator-family child charts
 # ---------------------------------------------------------------------------
@@ -38,7 +37,6 @@ soperator-checks:
   fullnameOverride: soperator-checks
   serviceMonitor:
     enabled: false
-
 soperator-activechecks:
   enabled: false
   fullnameOverride: soperator-activechecks
@@ -71,7 +69,6 @@ soperator-activechecks:
       runAfterCreation: false
     prepull-container-image:
       runAfterCreation: false
-
 soperator-notifier:
   enabled: false
   fullnameOverride: soperator-notifier
@@ -88,7 +85,6 @@ soperator-notifier:
     oauth:
       clientId: ""
       redirectUri: ""
-
 soperator-backup-config:
   enabled: false
   fullnameOverride: soperator-jail-backup
@@ -98,13 +94,11 @@ soperator-backup-config:
       accessKeyID: aws-access-key-id
       secretAccessKey: aws-access-secret-key
       backupPassword: backup-password
-
 soperator-dcgm-exporter:
   enabled: false
   fullnameOverride: soperator-dcgm-exporter
   serviceMonitor:
     enabled: false
-
 # ---------------------------------------------------------------------------
 # Slurm partition, node filter, and volume source model
 # ---------------------------------------------------------------------------
@@ -177,22 +171,22 @@ partitionConfiguration:
         priorityTier: 10
         preemptMode: "OFF"
         overSubscribe: "YES"
-  # Example partitions with NodeSet references:
-  #  - name: "gpu"
-  #    nodeSetRefs:
-  #      - "gpu-nodesets"
-  #    policy:
-  #      default: true
-  #      maxTime: "8:00:00"
-  #      priorityTier: 10
-  #      allowQos: ["normal", "high"]
-  #  - name: "cpu"
-  #    nodeSetRefs:
-  #      - "cpu-nodesets"
-  #    policy:
-  #      maxTime: "INFINITE"
-  #      priorityTier: 5
-  #    config: "OverSubscribe=YES"   # escape hatch, appended after typed tokens
+        # Example partitions with NodeSet references:
+        #  - name: "gpu"
+        #    nodeSetRefs:
+        #      - "gpu-nodesets"
+        #    policy:
+        #      default: true
+        #      maxTime: "8:00:00"
+        #      priorityTier: 10
+        #      allowQos: ["normal", "high"]
+        #  - name: "cpu"
+        #    nodeSetRefs:
+        #      - "cpu-nodesets"
+        #    policy:
+        #      maxTime: "INFINITE"
+        #      priorityTier: 5
+        #    config: "OverSubscribe=YES"   # escape hatch, appended after typed tokens
 # Slurm features are defined per worker NodeSet under nodesets[].nodeConfig.features.
 # Partitions reference NodeSet names through partitionConfiguration.partitions[].nodeSetRefs.
 # To expose hardware labels such as h100, highmem, or infiniband, put those labels
@@ -368,82 +362,82 @@ customSlurmConfig: ""
 # Reference: Slurm scheduling and preemption behavior. See the chart design
 # guide for the public policy model and supported typed fields.
 schedulingConfig: {}
-  # Each field below is optional. Set only what you intend to emit; absent
-  # keys mean "do not emit" and Slurm uses its built-in defaults.
-  #
-  # preemptType:
-  #   Global preemption plugin. Selects which running jobs are preemption
-  #   victims. One of: preempt/partition_prio, preempt/qos, preempt/none.
-  #
-  # accountingStorageEnforce:
-  #   List of AccountingStorageEnforce tokens, comma-joined into Slurm.conf.
-  #   Common QOS/fairshare enforcement uses [associations, limits, qos].
-  #   Valid tokens include: all, associations, limits, nojobs, nosteps, qos,
-  #   safe, wckeys.
-  #
-  # enforcePartLimits:
-  #   Submit-time partition-limit enforcement. One of: ALL, ANY, NO.
-  #   Common QOS partition profiles use ANY so multi-partition submissions are
-  #   accepted when at least one requested partition satisfies the limits.
-  #
-  # preemptMode:
-  #   Cluster-wide default preemption mode applied to victim jobs.
-  #   Partitions and QOS can override per-victim. One of: OFF, CANCEL,
-  #   REQUEUE, SUSPEND, GANG (or a comma-joined combination, e.g.
-  #   "REQUEUE,GANG"). For REQUEUE to take effect, victim jobs must be
-  #   submitted with --requeue or schedulingConfig.jobRequeue must be 1.
-  #
-  # preemptParameters:
-  #   List of PreemptParameters tokens (comma-joined into the Slurm.conf
-  #   value). Common: send_user_signal, youngest_first, reclaim_licenses,
-  #   strict_order.
-  #
-  # jobRequeue:
-  #   Cluster-wide default for whether jobs are requeueable. 0 disables
-  #   global requeue; 1 enables it for jobs without explicit --requeue or
-  #   --no-requeue.
-  #
-  # schedulerType:
-  #   Scheduler plugin. Typical: sched/backfill (default), sched/builtin.
-  #
-  # schedulerParameters:
-  #   List of SchedulerParameters tokens (comma-joined). Used for
-  #   large-cluster tuning (sched_min_interval, max_depend_depth,
-  #   bf_continue, bf_max_job_test, ...).
-  #
-  # priorityType:
-  #   PriorityType plugin. Typical: priority/multifactor, priority/basic.
-  #
-  # priorityWeights:
-  #   age:       integer; PriorityWeightAge multiplier for queue wait time.
-  #   assoc:     integer; PriorityWeightAssoc multiplier for association
-  #     priority.
-  #   fairshare: integer; PriorityWeightFairshare multiplier for accounting
-  #     fair-share.
-  #   partition: integer; PriorityWeightPartition multiplier for the
-  #     partition's priority job factor in the multifactor priority formula.
-  #   jobSize:   integer; PriorityWeightJobSize multiplier for the job-size
-  #     component.
-  #   qos:       integer; PriorityWeightQOS multiplier for QOS priority.
-  #   tres:      string; PriorityWeightTRES list, for example
-  #     "gres/gpu=1000,cpu=100".
-  #
-  # Example:
-  #   schedulingConfig:
-  #     preemptType: preempt/partition_prio
-  #     accountingStorageEnforce: [associations, limits, qos]
-  #     enforcePartLimits: ANY
-  #     preemptMode: REQUEUE
-  #     preemptParameters: [send_user_signal]
-  #     jobRequeue: 1
-  #     schedulerParameters:
-  #       - sched_min_interval=2000000
-  #       - bf_max_job_test=2000
-  #     priorityType: priority/multifactor
-  #     priorityWeights:
-  #       partition: 1000
-  #       jobSize: 500
-  #       qos: 1000
+# Each field below is optional. Set only what you intend to emit; absent
+# keys mean "do not emit" and Slurm uses its built-in defaults.
+#
+# preemptType:
+#   Global preemption plugin. Selects which running jobs are preemption
+#   victims. One of: preempt/partition_prio, preempt/qos, preempt/none.
+#
+# accountingStorageEnforce:
+#   List of AccountingStorageEnforce tokens, comma-joined into Slurm.conf.
+#   Common QOS/fairshare enforcement uses [associations, limits, qos].
+#   Valid tokens include: all, associations, limits, nojobs, nosteps, qos,
+#   safe, wckeys.
+#
+# enforcePartLimits:
+#   Submit-time partition-limit enforcement. One of: ALL, ANY, NO.
+#   Common QOS partition profiles use ANY so multi-partition submissions are
+#   accepted when at least one requested partition satisfies the limits.
+#
+# preemptMode:
+#   Cluster-wide default preemption mode applied to victim jobs.
+#   Partitions and QOS can override per-victim. One of: OFF, CANCEL,
+#   REQUEUE, SUSPEND, GANG (or a comma-joined combination, e.g.
+#   "REQUEUE,GANG"). For REQUEUE to take effect, victim jobs must be
+#   submitted with --requeue or schedulingConfig.jobRequeue must be 1.
+#
+# preemptParameters:
+#   List of PreemptParameters tokens (comma-joined into the Slurm.conf
+#   value). Common: send_user_signal, youngest_first, reclaim_licenses,
+#   strict_order.
+#
+# jobRequeue:
+#   Cluster-wide default for whether jobs are requeueable. 0 disables
+#   global requeue; 1 enables it for jobs without explicit --requeue or
+#   --no-requeue.
+#
+# schedulerType:
+#   Scheduler plugin. Typical: sched/backfill (default), sched/builtin.
+#
+# schedulerParameters:
+#   List of SchedulerParameters tokens (comma-joined). Used for
+#   large-cluster tuning (sched_min_interval, max_depend_depth,
+#   bf_continue, bf_max_job_test, ...).
+#
+# priorityType:
+#   PriorityType plugin. Typical: priority/multifactor, priority/basic.
+#
+# priorityWeights:
+#   age:       integer; PriorityWeightAge multiplier for queue wait time.
+#   assoc:     integer; PriorityWeightAssoc multiplier for association
+#     priority.
+#   fairshare: integer; PriorityWeightFairshare multiplier for accounting
+#     fair-share.
+#   partition: integer; PriorityWeightPartition multiplier for the
+#     partition's priority job factor in the multifactor priority formula.
+#   jobSize:   integer; PriorityWeightJobSize multiplier for the job-size
+#     component.
+#   qos:       integer; PriorityWeightQOS multiplier for QOS priority.
+#   tres:      string; PriorityWeightTRES list, for example
+#     "gres/gpu=1000,cpu=100".
+#
+# Example:
+#   schedulingConfig:
+#     preemptType: preempt/partition_prio
+#     accountingStorageEnforce: [associations, limits, qos]
+#     enforcePartLimits: ANY
+#     preemptMode: REQUEUE
+#     preemptParameters: [send_user_signal]
+#     jobRequeue: 1
+#     schedulerParameters:
+#       - sched_min_interval=2000000
+#       - bf_max_job_test=2000
+#     priorityType: priority/multifactor
+#     priorityWeights:
+#       partition: 1000
+#       jobSize: 500
+#       qos: 1000
 
 # Optional declarative QOS lifecycle. When enabled, a post-install /
 # post-upgrade Helm hook Job runs `sacctmgr` against the live SlurmDBD to
@@ -934,17 +928,17 @@ slurmNodes:
         cpu: "250m"
         memory: "256Mi"
         ephemeralStorage: "500Mi"
-      # command: []
-      # args: []
-      # customEnv: []
-      # livenessProbe:
-      #   httpGet:
-      #     path: /healthz
-      #     port: 8081
-      # readinessProbe:
-      #   httpGet:
-      #     path: /readyz
-      #     port: 8081
+        # command: []
+        # args: []
+        # customEnv: []
+        # livenessProbe:
+        #   httpGet:
+        #     path: /healthz
+        #     port: 8081
+        # readinessProbe:
+        #   httpGet:
+        #     path: /readyz
+        #     port: 8081
     munge:
       imagePullPolicy: "IfNotPresent"
       appArmorProfile: "unconfined"
@@ -1026,18 +1020,18 @@ sConfigController:
 images:
   # Flat image references used by SlurmCluster components and as NodeSet image
   # fallbacks when a NodeSet omits its own image.repository/image.tag.
-  slurmctld: "cr.eu-north1.nebius.cloud/soperator/controller_slurmctld:3.0.4-slurm25.11.3"
-  slurmrestd: "cr.eu-north1.nebius.cloud/soperator/slurmrestd:3.0.4-slurm25.11.3"
-  slurmd: "cr.eu-north1.nebius.cloud/soperator/worker_slurmd:3.0.4-slurm25.11.3"
-  sshd: "cr.eu-north1.nebius.cloud/soperator/login_sshd:3.0.4-slurm25.11.3"
-  munge: "cr.eu-north1.nebius.cloud/soperator/munge:3.0.4-slurm25.11.3"
+  slurmctld: "cr.eu-north1.nebius.cloud/soperator/controller_slurmctld:3.0.5-slurm25.11.3"
+  slurmrestd: "cr.eu-north1.nebius.cloud/soperator/slurmrestd:3.0.5-slurm25.11.3"
+  slurmd: "cr.eu-north1.nebius.cloud/soperator/worker_slurmd:3.0.5-slurm25.11.3"
+  sshd: "cr.eu-north1.nebius.cloud/soperator/login_sshd:3.0.5-slurm25.11.3"
+  munge: "cr.eu-north1.nebius.cloud/soperator/munge:3.0.5-slurm25.11.3"
   sssd: "cr.eu-north1.nebius.cloud/soperator/sssd:2.9.4-1-63"
   populateJail: ""
   populateJailRepository: "cr.eu-north1.nebius.cloud/soperator/populate_jail"
-  populateJailTag: "3.0.4-slurm25.11.3"
-  slurmdbd: "cr.eu-north1.nebius.cloud/soperator/controller_slurmdbd:3.0.4-slurm25.11.3"
-  soperatorExporter: "cr.eu-north1.nebius.cloud/soperator/soperator-exporter:3.0.4-slurm25.11.3"
-  sConfigController: "cr.eu-north1.nebius.cloud/soperator/sconfigcontroller:3.0.4"
+  populateJailTag: "3.0.5-slurm25.11.3"
+  slurmdbd: "cr.eu-north1.nebius.cloud/soperator/controller_slurmdbd:3.0.5-slurm25.11.3"
+  soperatorExporter: "cr.eu-north1.nebius.cloud/soperator/soperator-exporter:3.0.5-slurm25.11.3"
+  sConfigController: "cr.eu-north1.nebius.cloud/soperator/sconfigcontroller:3.0.5"
   mariaDB: "docker-registry1.mariadb.com/library/mariadb:12.1.2"
 # Slurm script ConfigMap content.
 slurmScripts:
@@ -1208,7 +1202,7 @@ controllerManager:
       burst: ""
     image:
       repository: cr.eu-north1.nebius.cloud/soperator/slurm-operator
-      tag: 3.0.4
+      tag: 3.0.5
     imagePullPolicy: IfNotPresent
     resources:
       limits:
@@ -1424,7 +1418,7 @@ rebooter:
   env: []
   image:
     repository: cr.eu-north1.nebius.cloud/soperator/rebooter
-    tag: 3.0.4
+    tag: 3.0.5
     pullPolicy: IfNotPresent
   nodeSelector: {}
   resources: {}
@@ -1498,7 +1492,7 @@ nodesets:
     slurmd:
       image:
         repository: cr.eu-north1.nebius.cloud/soperator/worker_slurmd
-        tag: 3.0.4-slurm25.11.3
+        tag: 3.0.5-slurm25.11.3
         pullPolicy: IfNotPresent
       customEnv:
         - name: NVIDIA_DRIVER_CAPABILITIES
@@ -1526,7 +1520,7 @@ nodesets:
     munge:
       image:
         repository: cr.eu-north1.nebius.cloud/soperator/munge
-        tag: 3.0.4-slurm25.11.3
+        tag: 3.0.5-slurm25.11.3
         pullPolicy: IfNotPresent
       resources:
         cpu: 200m
