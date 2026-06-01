@@ -43,15 +43,102 @@ jobs:
       - name: Verify pinned upstream imports
         run: helm-charts/soperator/scripts/verify-upstream-soperator-sync.sh --scope all --report
 
-  soperator-upstream-release-check:
-    name: soperator upstream release check
+  soperator-upstream-auto-sync-pr:
+    name: soperator upstream auto sync PR
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 0
 
-      - name: Check latest upstream release
+      - name: Setup Helm
+        uses: azure/setup-helm@v5
+
+      - name: Install yq
+        run: |
+          set -euo pipefail
+          sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/download/v4.45.4/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
+          yq --version
+
+      - name: Sync latest upstream release
+        id: sync
         env:
           GITHUB_TOKEN: ${{ github.token }}
-        run: helm-charts/soperator/scripts/verify-upstream-soperator-sync.sh --check-latest --scope all --report
+        run: |
+          set -euo pipefail
+
+          branch="automation/soperator-upstream-sync"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c "${branch}"
+
+          helm-charts/soperator/scripts/verify-upstream-soperator-sync.sh --latest --sync --report
+
+          release="$(ruby -ryaml -e 'puts YAML.safe_load(File.read("helm-charts/soperator/upstream-soperator.lock.yaml"), aliases: true).fetch("release")')"
+          {
+            echo "branch=${branch}"
+            echo "release=${release}"
+          } >> "${GITHUB_OUTPUT}"
+
+          if [[ -z "$(git status --porcelain --untracked-files=no)" ]]; then
+            echo "changed=false" >> "${GITHUB_OUTPUT}"
+          else
+            echo "changed=true" >> "${GITHUB_OUTPUT}"
+          fi
+
+      - name: Create or update sync PR
+        if: steps.sync.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRANCH: ${{ steps.sync.outputs.branch }}
+          RELEASE: ${{ steps.sync.outputs.release }}
+        run: |
+          set -euo pipefail
+
+          git add \
+            helm-charts/soperator \
+            helm-charts/soperator-activechecks \
+            helm-charts/soperator-backup-config \
+            helm-charts/soperator-checks \
+            helm-charts/soperator-dcgm-exporter \
+            helm-charts/soperator-notifier
+          git commit -m "Sync Soperator upstream ${RELEASE}"
+
+          remote_sha="$(git ls-remote --heads origin "${BRANCH}" | awk '{print $1}')"
+          if [[ -n "${remote_sha}" ]]; then
+            git push --force-with-lease="refs/heads/${BRANCH}:${remote_sha}" origin "HEAD:${BRANCH}"
+          else
+            git push origin "HEAD:${BRANCH}"
+          fi
+
+          body_file="$(mktemp)"
+          cat > "${body_file}" <<BODY
+          Syncs the Nebius Soperator Helm chart tracking files to upstream Soperator ${RELEASE}.
+
+          This PR was created by the scheduled upstream sync workflow. The sync script updated the lock pin, script imports, tracked image values, chart appVersions, local child-chart dependency versions, and review-only upstream hashes without copying review-only templates.
+
+          Validation run by the workflow:
+          - helm dependency build
+          - helm lint --strict --with-subcharts
+          - helm template default and example values
+          BODY
+
+          pr_number="$(gh pr list --head "${BRANCH}" --state open --json number --jq '.[0].number // empty')"
+          if [[ -n "${pr_number}" ]]; then
+            gh pr edit "${pr_number}" \
+              --title "Sync Soperator upstream ${RELEASE}" \
+              --body-file "${body_file}"
+          else
+            gh pr create \
+              --base main \
+              --head "${BRANCH}" \
+              --title "Sync Soperator upstream ${RELEASE}" \
+              --body-file "${body_file}"
+          fi

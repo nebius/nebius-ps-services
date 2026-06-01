@@ -56,6 +56,8 @@ Report PR number, URL, and blockers
 - Do not leave new work on the default branch.
 - Do not guess when GitHub authentication, remotes, or branch ownership are
   unclear.
+- Always stage local work from the repository root with `git add -A`; do not
+  narrow PR commits to selected paths.
 - Use draft PRs for incomplete work when that better matches readiness.
 - Preserve one PR per branch.
 - Treat a known fixable branch-owned failure as unfinished PR creation, not as

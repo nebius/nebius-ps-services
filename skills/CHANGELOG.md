@@ -129,6 +129,9 @@ All notable changes to the reusable Codex skills are tracked here.
 - Updated the `create-pr` guidance and metadata so Codex treats explicit
   user-supplied PR titles and bodies as authoritative instead of inferring a
   generic title from the branch name.
+- Updated the `create-pr` guidance and metadata so PR commits always stage
+  current dirty work from the repository root with `git add -A` instead of
+  narrowing commits to selected paths.
 - Expanded `create-pr` so Codex can prepare one or more conflict-free PR
   branches against the default branch, use the current branch as the target
   when no branch is provided, check ordered multi-branch merge paths, preserve
