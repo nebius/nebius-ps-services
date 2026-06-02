@@ -14,6 +14,12 @@ imports:
       upstream_path: helm/soperator-activechecks/scripts
       local_path: helm-charts/soperator-activechecks/scripts
       sync: true
+  crds:
+    - name: core operator CRDs
+      scope: crds
+      upstream_path: helm/soperator/crds
+      local_path: helm-charts/soperator/crds
+      sync: true
   chart_versions:
     - name: parent soperator chart
       upstream_file: helm/soperator/Chart.yaml
@@ -351,10 +357,6 @@ imports:
       scope: logic
       upstream_path: helm/soperator/templates
       sha256: 78dbe08199b3d54840976b29d9142c8e28d6c98c623c0abe3b27cdc388d6d732
-    - name: core operator CRDs
-      scope: logic
-      upstream_path: helm/soperator/crds
-      sha256: 9a3de59dcd05b7259256313004297c22666f0edb6c8b7ab4c020f7f7f68ee283
     - name: SlurmCluster templates
       scope: logic
       upstream_path: helm/slurm-cluster/templates

@@ -53,10 +53,10 @@ show_usage() {
   printf '%b\n' "${S_BOLD}Options:${S_RESET}"
   printf '%b\n' "  ${S_YELLOW}--lock-file PATH${S_RESET}    Lock file to read (default: chart upstream-soperator.lock.yaml)"
   printf '%b\n' "  ${S_YELLOW}--check-latest${S_RESET}      Compare the lock release with GitHub latest without writing"
-  printf '%b\n' "  ${S_YELLOW}--sync${S_RESET}              Apply full upstream sync, validate it, and create one local commit"
+  printf '%b\n' "  ${S_YELLOW}--sync${S_RESET}              Apply full upstream sync and validate it without staging changes"
   printf '%b\n' "  ${S_YELLOW}--latest${S_RESET}            With --sync, use GitHub latest release and update the lock"
-  printf '%b\n' "  ${S_YELLOW}--scope SCOPE${S_RESET}       Limit read-only checks to scripts, images, or all (default: all)"
-  printf '%b\n' "  ${S_YELLOW}--report${S_RESET}            Print detailed per-item status; with --sync, print commit files"
+  printf '%b\n' "  ${S_YELLOW}--scope SCOPE${S_RESET}       Limit read-only checks to scripts, crds, images, or all (default: all)"
+  printf '%b\n' "  ${S_YELLOW}--report${S_RESET}            Print detailed per-item status; with --sync, print changed files"
   printf '%b\n' "  ${S_YELLOW}-h, --help${S_RESET}          Show help"
   printf '\n'
   printf '%b\n' "${S_BOLD}Examples from repository root:${S_RESET}"
@@ -66,20 +66,21 @@ show_usage() {
   printf '%b\n' "  ${S_DIM}Check whether the lock matches GitHub latest:${S_RESET}"
   printf '%b\n' "  ${S_CYAN}helm-charts/soperator/scripts/verify-upstream-soperator-sync.sh --check-latest${S_RESET}"
   printf '\n'
-  printf '%b\n' "  ${S_DIM}Refresh and commit the release already named in the lock:${S_RESET}"
+  printf '%b\n' "  ${S_DIM}Refresh the release already named in the lock and leave changes unstaged:${S_RESET}"
   printf '%b\n' "  ${S_CYAN}helm-charts/soperator/scripts/verify-upstream-soperator-sync.sh --sync --report${S_RESET}"
   printf '\n'
-  printf '%b\n' "  ${S_DIM}Sync GitHub latest, create a branch when needed, validate, and commit:${S_RESET}"
+  printf '%b\n' "  ${S_DIM}Sync GitHub latest, create a branch when needed, validate, and leave changes unstaged:${S_RESET}"
   printf '%b\n' "  ${S_CYAN}helm-charts/soperator/scripts/verify-upstream-soperator-sync.sh --latest --sync --report${S_RESET}"
   printf '\n'
   printf '%b\n' "  ${S_DIM}Read-only scoped checks:${S_RESET}"
   printf '%b\n' "  ${S_CYAN}helm-charts/soperator/scripts/verify-upstream-soperator-sync.sh --scope scripts --report${S_RESET}"
+  printf '%b\n' "  ${S_CYAN}helm-charts/soperator/scripts/verify-upstream-soperator-sync.sh --scope crds --report${S_RESET}"
   printf '%b\n' "  ${S_CYAN}helm-charts/soperator/scripts/verify-upstream-soperator-sync.sh --scope images --report${S_RESET}"
   printf '\n'
   printf '%b\n' "${S_BOLD}Write-mode notes:${S_RESET}"
   printf '%b\n' "  ${S_DIM}--sync requires a clean working tree and always uses the full upstream release contract.${S_RESET}"
   printf '%b\n' "  ${S_DIM}When run from main, master, the default branch, or detached HEAD, it creates sync-soperator-<release>.${S_RESET}"
-  printf '%b\n' "  ${S_DIM}Local --sync creates the commit only; it does not install tools, push, open a PR, or merge.${S_RESET}"
+  printf '%b\n' "  ${S_DIM}Local --sync does not stage, commit, install tools, push, open a PR, or merge.${S_RESET}"
 }
 
 require_cmd() {
@@ -326,16 +327,6 @@ chart_metadata_changed() {
   ! git -C "${root}" diff --quiet -- "${paths[@]}"
 }
 
-sync_pathspecs() {
-  printf '%s\0' \
-    "helm-charts/soperator" \
-    "helm-charts/soperator-activechecks" \
-    "helm-charts/soperator-backup-config" \
-    "helm-charts/soperator-checks" \
-    "helm-charts/soperator-dcgm-exporter" \
-    "helm-charts/soperator-notifier"
-}
-
 git_status_short() {
   local root="$1"
   git -C "${root}" status --short --untracked-files=all
@@ -346,73 +337,12 @@ report_changed_files() {
   local status_output=""
   status_output="$(git_status_short "${root}")"
   if [[ -z "${status_output}" ]]; then
-    log_note "Changed files for sync commit: none."
+    log_note "Changed files after sync: none."
     return 0
   fi
 
-  printf '%b\n' "${S_BOLD}Changed files for sync commit:${S_RESET}"
+  printf '%b\n' "${S_BOLD}Changed files after sync:${S_RESET}"
   printf '%s\n' "${status_output}"
-}
-
-stage_sync_changes() {
-  local root="$1"
-  local -a paths=()
-  while IFS= read -r -d '' path; do
-    paths+=("${path}")
-  done < <(sync_pathspecs)
-  git -C "${root}" add -- "${paths[@]}"
-}
-
-git_config_value() {
-  local root="$1"
-  local key="$2"
-  git -C "${root}" config --get "${key}" 2>/dev/null || true
-}
-
-commit_sync_changes() {
-  local root="$1"
-  local release="$2"
-  local status_output unstaged_status user_name user_email commit_sha
-  local -a commit_args=()
-
-  stage_sync_changes "${root}"
-  status_output="$(git_status_short "${root}")"
-  if [[ -z "${status_output}" ]]; then
-    log_note "No sync changes to commit."
-    return 0
-  fi
-
-  unstaged_status="$(printf '%s\n' "${status_output}" | awk 'substr($0, 1, 2) == "??" || substr($0, 2, 1) != " " { print }')"
-  if [[ -n "${unstaged_status}" ]]; then
-    log_error "Sync produced files outside the expected staged chart paths."
-    printf '%s\n' "${status_output}" >&2
-    exit 1
-  fi
-
-  if git -C "${root}" diff --cached --quiet; then
-    log_note "No sync changes to commit."
-    return 0
-  fi
-
-  user_name="$(git_config_value "${root}" "user.name")"
-  user_email="$(git_config_value "${root}" "user.email")"
-  if [[ -z "${user_name}" ]]; then
-    commit_args+=("-c" "user.name=Soperator Sync")
-  fi
-  if [[ -z "${user_email}" ]]; then
-    commit_args+=("-c" "user.email=soperator-sync@users.noreply.github.com")
-  fi
-
-  git -C "${root}" "${commit_args[@]}" commit -m "Sync Soperator upstream ${release}" >/dev/null
-  commit_sha="$(git -C "${root}" rev-parse --short HEAD)"
-  log_success "Committed upstream sync as ${commit_sha}."
-
-  status_output="$(git_status_short "${root}")"
-  if [[ -n "${status_output}" ]]; then
-    log_error "Sync commit left the working tree dirty."
-    printf '%s\n' "${status_output}" >&2
-    exit 1
-  fi
 }
 
 resolve_tag_commit() {
@@ -522,8 +452,8 @@ end
 
 lock = load_yaml_file(lock_file)
 
-unless %w[scripts images all].include?(scope)
-  warn "ERROR: --scope must be one of scripts, images, or all."
+unless %w[scripts crds images all].include?(scope)
+  warn "ERROR: --scope must be one of scripts, crds, images, or all."
   exit 2
 end
 
@@ -558,10 +488,10 @@ def local_owned_paths(lock)
   Array(lock["local_owned_paths"]).map { |path| normalize_rel(path) }
 end
 
-def validate_script_target!(lock, local_path)
+def validate_exact_import_target!(lock, local_path, kind)
   target = normalize_rel(local_path)
   local_owned_paths(lock).each do |owned|
-    raise "sync target '#{target}' overlaps local-owned path '#{owned}'" if overlap?(target, owned)
+    raise "#{kind} sync target '#{target}' overlaps local-owned path '#{owned}'" if overlap?(target, owned)
   end
 end
 
@@ -596,7 +526,7 @@ def digest_path(path)
   digest.hexdigest
 end
 
-def copy_script_import(source, target)
+def copy_exact_import(source, target)
   FileUtils.rm_rf(target)
   FileUtils.mkdir_p(target)
   if File.directory?(source)
@@ -843,11 +773,11 @@ Array(lock.dig("imports", "scripts")).each do |entry|
   name = entry.fetch("name")
   begin
     raise "script import #{name} is not approved for --sync" if sync && !entry["sync"]
-    validate_script_target!(lock, entry.fetch("local_path"))
+    validate_exact_import_target!(lock, entry.fetch("local_path"), "script")
     upstream_path = File.join(upstream_root, entry.fetch("upstream_path"))
     local_path = safe_join(repo_root, entry.fetch("local_path"))
     raise "upstream script import not found: #{entry.fetch("upstream_path")}" unless File.exist?(upstream_path)
-    copy_script_import(upstream_path, local_path) if sync
+    copy_exact_import(upstream_path, local_path) if sync
     upstream_digest = digest_path(upstream_path)
     local_digest = digest_path(local_path)
     if upstream_digest == local_digest
@@ -861,6 +791,32 @@ Array(lock.dig("imports", "scripts")).each do |entry|
   rescue StandardError => e
     failures << "#{name}: #{e.message}"
     report_line("fail", "script", name, e.message)
+  end
+end
+
+Array(lock.dig("imports", "crds")).each do |entry|
+  next unless selected?(entry, scope)
+  name = entry.fetch("name")
+  begin
+    raise "CRD import #{name} is not approved for --sync" if sync && !entry["sync"]
+    validate_exact_import_target!(lock, entry.fetch("local_path"), "CRD")
+    upstream_path = File.join(upstream_root, entry.fetch("upstream_path"))
+    local_path = safe_join(repo_root, entry.fetch("local_path"))
+    raise "upstream CRD import not found: #{entry.fetch("upstream_path")}" unless File.exist?(upstream_path)
+    copy_exact_import(upstream_path, local_path) if sync
+    upstream_digest = digest_path(upstream_path)
+    local_digest = digest_path(local_path)
+    if upstream_digest == local_digest
+      report_line("ok", "crd", name) if report
+    else
+      if report
+        system("diff", "-ruN", "#{upstream_path}/", "#{local_path}/") if File.directory?(upstream_path) && File.directory?(local_path)
+      end
+      raise "local path #{entry.fetch("local_path")} does not match #{entry.fetch("upstream_path")}"
+    end
+  rescue StandardError => e
+    failures << "#{name}: #{e.message}"
+    report_line("fail", "crd", name, e.message)
   end
 end
 
@@ -961,7 +917,7 @@ main() {
         ;;
       --scope)
         if [[ $# -lt 2 ]]; then
-          log_error "--scope requires scripts, images, or all."
+          log_error "--scope requires scripts, crds, images, or all."
           exit 1
         fi
         scope="$2"
@@ -997,9 +953,9 @@ main() {
   done
 
   case "${scope}" in
-    scripts|images|all) ;;
+    scripts|crds|images|all) ;;
     *)
-      log_error "--scope must be one of: scripts, images, all"
+      log_error "--scope must be one of: scripts, crds, images, all"
       exit 1
       ;;
   esac
@@ -1123,7 +1079,6 @@ main() {
     if [[ "${report}" -eq 1 ]]; then
       report_changed_files "${root}"
     fi
-    commit_sync_changes "${root}" "${release}"
   fi
   log_success "Upstream import verification completed for scope '${scope}'."
 }

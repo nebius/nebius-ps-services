@@ -8,8 +8,12 @@ All notable changes to this chart are tracked here.
   clean working tree, automatically creates a `sync-soperator-<release>` branch
   when run from the default branch, validates `yq` v4, provides macOS/Linux
   install hints for missing tools without installing packages automatically, and
-  commits the validated sync diff as one local commit while printing a
-  changed-file summary when `--report` is used.
+  leaves the validated sync diff unstaged for local review while printing a
+  changed-file summary when `--report` is used. The scheduled workflow still
+  stages and commits automation PR changes after validation.
+- Promoted Soperator CRDs from review-only hash tracking to exact upstream sync
+  imports, so `--sync` refreshes `crds/` alongside the pinned operator image and
+  catches upstream API schema additions such as `slurmConfig.suspendTime`.
 - Aligned the parent `soperator` chart package version with the
   Soperator-family `<upstream>-ps.N` format. Upstream sync now sets the parent
   and child chart package versions to `<upstream>-ps.1`, and chart publish
@@ -22,9 +26,9 @@ All notable changes to this chart are tracked here.
 - Made `upstream-soperator.lock.yaml` the single upstream-release source of
   truth: `verify-upstream-soperator-sync.sh --latest --sync` now updates the
   lock pin and derives chart appVersions, upstream parent dependency versions,
-  child dependency versions, script imports, image values, review-only hashes,
-  Helm validation, and the local sync commit, while the scheduled workflow
-  opens an upstream-sync PR from an automation branch.
+  child dependency versions, script imports, CRD imports, image values,
+  review-only hashes, and Helm validation, while the scheduled workflow commits
+  and opens an upstream-sync PR from an automation branch.
 - Added a pre-mutation release-order guard so scheduled `--latest` sync fails
   clearly when the lock release is newer than GitHub's latest release.
 - Hardened upstream sync verification so read-only checks validate child chart
