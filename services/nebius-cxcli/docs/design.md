@@ -510,6 +510,11 @@ Source validation requirements (`validate-sources`):
   - `NEBIUS_CXCLI_HELM_TIMEOUT_SECONDS` can raise the validation timeout for slow OCI registries or chart sources without changing the catalog.
   - Fast chart-contract validation also materializes the resolved chart and checks for `Chart.yaml`, `values.yaml`, `templates/`, and essential `Chart.yaml` metadata (`apiVersion`, `name`, `version`).
   - Missing `README.md` is a warning only for local chart paths; remote Helm chart packages may omit it without warning because that is upstream packaging policy rather than a customer action item.
+  - Local chart locators may omit `chart` or `version`; when
+    `source.local.path` resolves to a checked-out chart, cxcli derives missing
+    metadata from that chart's `Chart.yaml` so local-profile `config.yaml`
+    rows expose the active local version while keeping `repo` blank for static
+    local chart rendering.
 
 Accepted Terraform module source examples:
 
@@ -801,7 +806,7 @@ NodeConfigurator switch, not a per-NodeSet switch, and does not reboot nodes
 during installation. cxcli may mirror worker NodeSet tolerations onto the helper
 for placement on tainted worker hosts, but the helper only acts after a runtime
 maintenance flow sets the node's `SlurmNodeDrain` or `SlurmNodeReboot`
-condition. In upstream Soperator 3.0.4,
+condition. In upstream Soperator 3.0.5,
 drain is implemented by cordoning the node, adding a `NoExecute` taint, and
 waiting for non-DaemonSet pods without matching tolerations to leave. The chart
 does not create a reboot schedule or CronJob by itself and this is not a Slurm

@@ -4,6 +4,13 @@ All notable changes to this chart are tracked here.
 
 ## [Unreleased]
 
+- Fixed upstream sync Helm validation on clean GitHub runners by having
+  `verify-upstream-soperator-sync.sh --sync` seed a temporary Helm repository
+  config/cache from the parent chart's remote dependencies before running
+  `helm dependency update` or `helm dependency build`, removing the need for
+  ambient `helm repo add` state.
+- Aligned Soperator example values and the Slurm memory validation message with
+  the chart's upstream `3.0.5` image/defaults baseline.
 - Hardened `verify-upstream-soperator-sync.sh --sync` so write mode requires a
   clean working tree, automatically creates a `sync-soperator-<release>` branch
   when run from the default branch, validates `yq` v4, provides macOS/Linux

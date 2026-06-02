@@ -3579,7 +3579,9 @@ def _parse_helm_chart_locator(
     if not path and not repo and not raw_chart_name and not version:
         return HelmChartLocator()
     if path:
-        chart_name = raw_chart_name or default_chart_name
+        metadata_chart_name, metadata_version = _local_helm_chart_metadata(path)
+        chart_name = raw_chart_name or metadata_chart_name or default_chart_name
+        version = version or metadata_version or None
         return HelmChartLocator(chart_name=chart_name, version=version, path=path)
     if allow_path:
         raise ValueError(f"{field_label}.path is required")
@@ -3587,6 +3589,17 @@ def _parse_helm_chart_locator(
         raise ValueError(f"{field_label}.repo is required")
     chart_name = raw_chart_name or default_chart_name
     return HelmChartLocator(repo=repo, chart_name=chart_name, version=version)
+
+
+def _local_helm_chart_metadata(path: str) -> tuple[str, str]:
+    chart_yaml = Path(path).expanduser() / "Chart.yaml"
+    if not chart_yaml.exists() or not chart_yaml.is_file():
+        return "", ""
+    with suppress(Exception):
+        payload = yaml.safe_load(chart_yaml.read_text(encoding="utf-8")) or {}
+        if isinstance(payload, Mapping):
+            return _as_text(payload.get("name")), _as_text(payload.get("version"))
+    return "", ""
 
 
 def _parse_helm_chart_source_block(

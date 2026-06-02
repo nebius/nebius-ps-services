@@ -22,6 +22,12 @@ All notable changes to this project are tracked here. This changelog follows
   official public Nebius Terraform provider source `nebius/nebius` with the
   shared constraint `>= 0.6.8, < 0.7.0`, and updated the cxcli-managed
   Terraform client version to `1.15.5`.
+- Updated the bundled Soperator app catalog pin to chart version
+  `3.0.5-ps.1`, and made local-profile Helm chart sources derive missing
+  chart name/version metadata from their checked-out `Chart.yaml` so generated
+  `config.yaml` rows show the active local chart version. The bundled
+  Soperator profile defaults now use the matching `3.0.5-slurm25.11.3`
+  worker and Munge image tags.
 - Added live VPC network/subnet selection for subnet-attached infra in `create`
   and `component add`. `mk8s`, `vm`, `nfs`, `wireguard-gw`, and
   `ssh-jumphost` now list project VPC networks first, list only subnets in the

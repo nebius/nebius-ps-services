@@ -913,6 +913,10 @@ Source requirements enforced by `validate-sources`:
     - fails when `Chart.yaml` is missing `apiVersion`, `name`, or `version`
     - warns when the chart is not on canonical Helm v2 metadata
     - warns when a local chart path is missing `README.md`; remote Helm chart packages are allowed to omit it
+  - For `source.local.path`, missing catalog `chart` or `version` metadata is
+    derived from the checked-out chart's `Chart.yaml`, so local-profile
+    generated `config.yaml` rows show the active local chart version while
+    still leaving `repo` blank for static local chart rendering.
   - App `defaults` seed `values.*` when missing.
   - `release.namespace` and `release.name` are the default Helm namespace and release name used by `create`.
 
@@ -1439,7 +1443,7 @@ Wizard field behavior:
   worker NodeSet tolerations onto the helper so it can run on tainted worker
   hosts, but the helper acts only after a runtime maintenance flow sets the
   node's `SlurmNodeDrain` or `SlurmNodeReboot` condition. In upstream Soperator
-  3.0.4,
+  3.0.5,
   drain is implemented by cordoning the node, adding a `NoExecute` taint, and
   waiting for non-DaemonSet pods without matching tolerations to leave. The
   chart still keeps a no-op NodeConfigurator custom container enabled so

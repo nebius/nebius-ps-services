@@ -210,7 +210,7 @@ components:
         portable:
           repo: https://github.com/nebius/nebius-ps-services/tree/main/helm-charts/soperator
           chart: soperator
-          version: 0.1.0
+          version: 3.0.5-ps.1
         local:
           path: ../../helm-charts/soperator
       ui:

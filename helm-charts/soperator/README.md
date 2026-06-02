@@ -469,6 +469,9 @@ Use this flow when upstream Soperator publishes a newer Helm chart release:
    in the lock; it does not query GitHub latest.
    `--report` prints detailed per-import status and the changed-file list after
    sync validation.
+   Sync validation seeds a temporary Helm repository config/cache from the
+   remote dependencies in `Chart.yaml` before dependency update/build, so clean
+   runners do not need preconfigured `helm repo add` state.
 
 2. Review and test the unstaged diff locally.
 3. Stage and commit the reviewed sync changes.
@@ -498,8 +501,11 @@ named `sync-soperator-<release>` before mutating files. It refreshes the lock
 tracked image values, updates parent and child chart `appVersion` and
 `<upstream>-ps.1` package versions, refreshes upstream parent dependency
 versions, regenerates dependency metadata when needed, runs Helm dependency,
-lint, and template validation, and leaves the resulting diff unstaged for local
-review and testing. Local runs do not stage, commit, push, or create the PR.
+lint, and template validation under a temporary Helm repository config/cache,
+and leaves the resulting diff unstaged for local review and testing. The
+temporary Helm config is populated from the remote repositories declared in
+`Chart.yaml`, so local and CI sync runs do not require ambient `helm repo add`
+state. Local runs do not stage, commit, push, or create the PR.
 Scoped `--scope scripts`, `--scope crds`, and `--scope images` runs are
 read-only checks only; write-mode sync always uses the full upstream release
 contract.

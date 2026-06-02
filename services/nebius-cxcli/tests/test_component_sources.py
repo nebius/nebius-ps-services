@@ -394,7 +394,9 @@ def test_bundled_catalog_exposes_soperator_and_nfs_local_sources() -> None:
     soperator = next(chart for chart in sources.helm_charts if chart.name == "soperator")
     assert soperator.source.path is not None
     assert soperator.source.path.endswith("helm-charts/soperator")
-    assert soperator.portable_source.version == "0.1.0"
+    assert soperator.version == "3.0.5-ps.1"
+    assert soperator.local_source.version == "3.0.5-ps.1"
+    assert soperator.portable_source.version == "3.0.5-ps.1"
     assert soperator.namespace == "soperator"
     assert soperator.release_name == "soperator"
     assert soperator.release_timeout == "90m"
@@ -4323,6 +4325,8 @@ def test_load_component_sources_resolves_local_nccl_chart_source(tmp_path: Path)
 
     assert mk8s.mk8s_gpu.validations.nccl.chart_component_id == "nccl-test"
     assert nccl_chart.path == str(chart_dir.resolve())
+    assert nccl_chart.chart_name == "nccl-test"
+    assert nccl_chart.version == "0.1.0"
 
 
 def test_load_component_sources_rejects_invalid_mk8s_gpu_app_role_value(tmp_path: Path) -> None:

@@ -11,6 +11,7 @@ import nebius_cxcli.component_sources as component_sources
 from nebius_cxcli.cli import app
 from nebius_cxcli.component_sources import (
     ComponentOutput,
+    SourceProfile,
     reset_component_sources_cache,
     set_component_sources_file_override,
 )
@@ -330,6 +331,35 @@ def test_starter_payload_names_target_bound_app_instances() -> None:
 
     assert charts["n8n"]["instance_id"] == "mk8s"
     assert "target_ref" not in charts["n8n"]
+
+
+def test_starter_payload_local_profile_uses_local_chart_and_portable_fallback() -> None:
+    payload = yaml.safe_load(
+        starter_config_yaml(
+            client_name="client-a",
+            tenant_id="tenant-123",
+            project_id="project-456",
+            region_id="us-central1",
+            email="ops@example.com",
+            selected_infra={"mk8s"},
+            selected_apps={"cert-manager", "soperator"},
+            infra_entries=component_entries("infra", source_profile=SourceProfile.LOCAL),
+            app_entries=component_entries("apps", source_profile=SourceProfile.LOCAL),
+        )
+    )
+    assert isinstance(payload, dict)
+    charts = {
+        str(item.get("id")): item for item in payload["apps"]["charts"] if isinstance(item, dict)
+    }
+    soperator = charts["soperator"]
+    cert_manager = charts["cert-manager"]
+
+    assert soperator["enabled"] is True
+    assert soperator["repo"] == ""
+    assert soperator["version"] == "3.0.5-ps.1"
+    assert cert_manager["enabled"] is True
+    assert cert_manager["repo"] == "oci://quay.io/jetstack/charts/cert-manager"
+    assert cert_manager["version"] == "v1.19.2"
 
 
 def test_create_writes_runtime_shape_with_selected_components(tmp_path: Path) -> None:

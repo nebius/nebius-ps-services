@@ -413,27 +413,89 @@ fetch_release() {
   tar -xzf "${archive}" -C "${destination}/source" --strip-components=1
 }
 
+chart_dependency_remote_repositories() {
+  local chart_path="$1"
+  ruby -ryaml -e '
+chart_file = File.join(ARGV.fetch(0), "Chart.yaml")
+chart = YAML.safe_load(File.read(chart_file), aliases: true, permitted_classes: [Symbol])
+seen_urls = {}
+Array(chart["dependencies"]).each_with_index do |dependency, index|
+  repository = dependency["repository"].to_s.strip
+  next unless repository.start_with?("http://", "https://")
+  next if seen_urls.key?(repository)
+
+  name = dependency["name"].to_s.strip
+  name = "repo-#{index + 1}" if name.empty?
+  name = name.gsub(/[^A-Za-z0-9_.-]/, "-")
+  name = "repo-#{index + 1}" if name.empty?
+  seen_urls[repository] = name
+end
+
+seen_names = {}
+seen_urls.each_with_index do |(repository, name), index|
+  base = name.empty? ? "repo-#{index + 1}" : name
+  candidate = base
+  suffix = 2
+  while seen_names.key?(candidate)
+    candidate = "#{base}-#{suffix}"
+    suffix += 1
+  end
+  seen_names[candidate] = true
+  puts [candidate, repository].join("\t")
+end
+' "${chart_path}"
+}
+
+seed_chart_dependency_repositories() {
+  local chart_path="$1"
+  local repo_name repo_url seeded
+  seeded=0
+
+  while IFS=$'\t' read -r repo_name repo_url; do
+    [[ -n "${repo_name}" && -n "${repo_url}" ]] || continue
+    if [[ "${seeded}" -eq 0 ]]; then
+      log_note "Preparing temporary Helm repository config for remote chart dependencies..."
+      seeded=1
+    fi
+    helm repo add "${repo_name}" "${repo_url}" >/dev/null
+  done < <(chart_dependency_remote_repositories "${chart_path}")
+}
+
 sync_chart_dependencies_and_validate() {
   local root="$1"
   local chart_dir="$2"
   local chart_rel="helm-charts/soperator"
   local chart_path="${root}/${chart_rel}"
-
-  if chart_metadata_changed "${root}"; then
-    log_note "Regenerating Soperator Chart.lock from synced dependency metadata..."
-    helm dependency update "${chart_path}" >/dev/null
+  if [[ -z "${TMP_DIR:-}" ]]; then
+    log_error "Internal error: temporary workspace is not initialized before Helm validation."
+    exit 1
   fi
 
-  log_note "Validating synced Soperator chart..."
-  helm dependency build "${chart_path}" >/dev/null
-  helm lint --strict --with-subcharts "${chart_path}" >/dev/null
-  helm template soperator-smoke "${chart_path}" --namespace soperator >/dev/null
+  local helm_state="${TMP_DIR}/helm-repositories"
 
-  local example
-  for example in "${chart_dir}"/examples/*-values.yaml; do
-    [[ -f "${example}" ]] || continue
-    helm template soperator-smoke "${chart_path}" --namespace soperator -f "${example}" >/dev/null
-  done
+  mkdir -p "${helm_state}/repository"
+
+  (
+    export HELM_REPOSITORY_CACHE="${helm_state}/repository"
+    export HELM_REPOSITORY_CONFIG="${helm_state}/repositories.yaml"
+    seed_chart_dependency_repositories "${chart_path}"
+
+    if chart_metadata_changed "${root}"; then
+      log_note "Regenerating Soperator Chart.lock from synced dependency metadata..."
+      helm dependency update "${chart_path}" >/dev/null
+    fi
+
+    log_note "Validating synced Soperator chart..."
+    helm dependency build "${chart_path}" >/dev/null
+    helm lint --strict --with-subcharts "${chart_path}" >/dev/null
+    helm template soperator-smoke "${chart_path}" --namespace soperator >/dev/null
+
+    local example
+    for example in "${chart_dir}"/examples/*-values.yaml; do
+      [[ -f "${example}" ]] || continue
+      helm template soperator-smoke "${chart_path}" --namespace soperator -f "${example}" >/dev/null
+    done
+  )
 }
 
 verify_imports() {

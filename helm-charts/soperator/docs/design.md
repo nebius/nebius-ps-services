@@ -2701,11 +2701,14 @@ The script refuses local `--sync` from a dirty working tree. When run from
 the lock `tag` and resolved `commit`, updates derived chart metadata, copies
 approved scripts and CRDs, updates tracked image values, updates review-only
 hashes, regenerates dependency metadata when chart versions change, runs Helm
-dependency, lint, and template validation, and leaves the resulting diff
-unstaged for local review and testing. Write mode requires the full `all` scope
-plus `yq` v4 and Helm; scoped `scripts`, `crds`, or `images` runs are read-only
-verification only. With `--report`, it also prints the changed-file list after
-sync validation.
+dependency, lint, and template validation under a temporary Helm repository
+config/cache, and leaves the resulting diff unstaged for local review and
+testing. The temporary Helm config is populated from the parent chart's remote
+dependency repositories, so local and CI sync runs do not require ambient
+`helm repo add` state. Write mode requires the full `all` scope plus `yq` v4
+and Helm; scoped `scripts`, `crds`, or `images` runs are read-only verification
+only. With `--report`, it also prints the changed-file list after sync
+validation.
 Missing-tool errors include macOS and Linux install hints, but the script does
 not install packages automatically. Local runs do not stage, commit, push, or
 create the PR.

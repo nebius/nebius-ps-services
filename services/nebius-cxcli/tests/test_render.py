@@ -1284,7 +1284,7 @@ def test_render_local_soperator_chart_source_writes_static_manifest(tmp_path: Pa
     assert activechecks_pod_template["template"]["spec"]["containers"] == [
         {
             "name": "create-user-soperatorchecks",
-            "image": "cr.eu-north1.nebius.cloud/soperator/k8s_check_job:3.0.4-slurm25.11.3",
+            "image": "cr.eu-north1.nebius.cloud/soperator/k8s_check_job:3.0.5-slurm25.11.3",
         }
     ]
     activecheck = next(
