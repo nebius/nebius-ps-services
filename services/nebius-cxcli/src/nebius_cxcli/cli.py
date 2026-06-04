@@ -23,7 +23,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from collections import deque
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from contextlib import ExitStack, contextmanager, suppress
 from contextvars import ContextVar
 from dataclasses import dataclass, field, replace
@@ -456,6 +456,10 @@ console = Console()
 _DEPLOY_VALIDATION_WARNING_CACHE: ContextVar[set[str] | None] = ContextVar(
     "deploy_validation_warning_cache",
     default=None,
+)
+_RENDER_DEPLOY_HINT_SUPPRESSED: ContextVar[bool] = ContextVar(
+    "render_deploy_hint_suppressed",
+    default=False,
 )
 
 _SOPERATOR_CHILD_CHART_VALUE_KEYS = frozenset(
@@ -1205,7 +1209,8 @@ _CONFIG_YAML_ARGUMENT_HELP = (
     "(<tenant-folder>/<project-folder>/config.yaml)."
 )
 _COMPONENT_CONFIG_OPTION_HELP = (
-    "Project config.yaml to inspect or edit; selectors stay unambiguous and are not path arguments."
+    "Required project config.yaml to inspect or edit; pass it with --config, "
+    "not as a positional path."
 )
 _MK8S_TARGET_ID_HELP = (
     "MK8s target cluster instance_id (the normalized cluster resource name "
@@ -1351,7 +1356,8 @@ component_app = typer.Typer(
     help=(
         "Inspect or edit enabled source-driven infra/app component instances in an "
         "existing config.yaml. Use --config CONFIG_YAML after create for day-2 "
-        "add/remove/list changes."
+        "add/remove/list changes; config.yaml is not a positional component "
+        "selector."
     )
 )
 terraform_app = typer.Typer(
@@ -2816,7 +2822,7 @@ def _run_vm_os_image_upgrade(
         f"Updated {config_path} for VM OS image upgrade to {request.target_os}.",
         soft_wrap=True,
     )
-    render_command(config_path, force=True)
+    _run_internal_render_command(config_path, force=True)
     staged_config, staged_paths, staged_manifest = _load_deploy_context(config_path)
     mysterybox_payload_env = _run_generated_bundle_validation(
         staged_config,
@@ -3206,7 +3212,7 @@ def upgrade_k8s_version_command(
                     render_updated_source_payload(source_payload), encoding="utf-8"
                 )
                 console.print(f"Updated {config_path} for {stage_label}: {title}.", soft_wrap=True)
-                render_command(config_path, force=True)
+                _run_internal_render_command(config_path, force=True)
                 staged_config, staged_paths, staged_manifest = _load_deploy_context(config_path)
                 mysterybox_payload_env = _run_generated_bundle_validation(
                     staged_config,
@@ -3253,7 +3259,7 @@ def upgrade_k8s_version_command(
                             render_updated_source_payload(source_payload),
                             encoding="utf-8",
                         )
-                        render_command(config_path, force=True)
+                        _run_internal_render_command(config_path, force=True)
                         console.print(
                             "Restored temporary node-group upgrade strategy in config.yaml "
                             "and generated/ after failed upgrade stage."
@@ -3372,7 +3378,10 @@ def upgrade_k8s_version_command(
 
 @upgrade_app.command(
     "node-template",
-    short_help="Upgrade MK8s Kubernetes version, OS image, and GPU stack together.",
+    short_help=(
+        "Upgrade MK8s Kubernetes version, OS image, and GPU stack together in "
+        "one non-interactive command; see examples below."
+    ),
     epilog=_UPGRADE_NODE_TEMPLATE_EPILOG,
 )
 def upgrade_node_template_command(
@@ -3455,7 +3464,9 @@ def upgrade_node_template_command(
         ),
     ] = None,
 ) -> None:
-    """Upgrade a Terraform-managed MK8s node template in one staged command."""
+    """Upgrade MK8s Kubernetes version, OS image, and GPU stack together in one
+    non-interactive command; see the example below.
+    """
 
     sdk: Any | None = None
     warning_cache_token = _DEPLOY_VALIDATION_WARNING_CACHE.set(set())
@@ -3721,7 +3732,7 @@ def upgrade_node_template_command(
                     encoding="utf-8",
                 )
                 console.print(f"Updated {config_path} for {stage_label}: {title}.", soft_wrap=True)
-                render_command(config_path, force=True)
+                _run_internal_render_command(config_path, force=True)
                 staged_config, staged_paths, staged_manifest = _load_deploy_context(config_path)
                 mysterybox_payload_env = _run_generated_bundle_validation(
                     staged_config,
@@ -3768,7 +3779,7 @@ def upgrade_node_template_command(
                             render_updated_source_payload(source_payload),
                             encoding="utf-8",
                         )
-                        render_command(config_path, force=True)
+                        _run_internal_render_command(config_path, force=True)
                         console.print(
                             "Restored temporary node-group upgrade strategy in config.yaml "
                             "and generated/ after failed node-template stage."
@@ -4256,7 +4267,7 @@ def upgrade_os_image_command(
                     encoding="utf-8",
                 )
                 console.print(f"Updated {config_path} for {stage_label}: {title}.", soft_wrap=True)
-                render_command(config_path, force=True)
+                _run_internal_render_command(config_path, force=True)
                 staged_config, staged_paths, staged_manifest = _load_deploy_context(config_path)
                 mysterybox_payload_env = _run_generated_bundle_validation(
                     staged_config,
@@ -4303,7 +4314,7 @@ def upgrade_os_image_command(
                             render_updated_source_payload(source_payload),
                             encoding="utf-8",
                         )
-                        render_command(config_path, force=True)
+                        _run_internal_render_command(config_path, force=True)
                         console.print(
                             "Restored temporary node-group upgrade strategy in config.yaml "
                             "and generated/ after failed OS image stage."
@@ -4685,7 +4696,7 @@ def _run_mk8s_node_layer_upgrade_command(
                     encoding="utf-8",
                 )
                 console.print(f"Updated {config_path} for {stage_label}: {title}.", soft_wrap=True)
-                render_command(config_path, force=True)
+                _run_internal_render_command(config_path, force=True)
                 staged_config, staged_paths, staged_manifest = _load_deploy_context(config_path)
                 mysterybox_payload_env = _run_generated_bundle_validation(
                     staged_config,
@@ -4732,7 +4743,7 @@ def _run_mk8s_node_layer_upgrade_command(
                             render_updated_source_payload(source_payload),
                             encoding="utf-8",
                         )
-                        render_command(config_path, force=True)
+                        _run_internal_render_command(config_path, force=True)
                         console.print(
                             "Restored temporary node-group upgrade strategy in config.yaml "
                             f"and generated/ after failed {spec.target_label} stage."
@@ -5227,7 +5238,7 @@ def upgrade_helm_chart_command(
             f"Updated {config_path} for Helm chart {target.selector} upgrade to {target_version}.",
             soft_wrap=True,
         )
-        render_command(config_path, force=True)
+        _run_internal_render_command(config_path, force=True)
         staged_config, staged_paths, staged_manifest = _load_deploy_context(config_path)
         _run_generated_bundle_validation(
             staged_config,
@@ -5973,6 +5984,25 @@ def _config_cli_arg(config_path: Path) -> str:
     return shlex.quote(str(config_path.resolve()))
 
 
+def _print_render_deploy_hint(config_path: Path) -> None:
+    config_arg = _config_cli_arg(config_path)
+    console.print(f"Next step: `nebius-cxcli deploy {config_arg}`", soft_wrap=True)
+
+
+@contextmanager
+def _suppress_render_deploy_hint() -> Iterator[None]:
+    token = _RENDER_DEPLOY_HINT_SUPPRESSED.set(True)
+    try:
+        yield
+    finally:
+        _RENDER_DEPLOY_HINT_SUPPRESSED.reset(token)
+
+
+def _run_internal_render_command(config_path: Path, *, force: bool) -> None:
+    with _suppress_render_deploy_hint():
+        render_command(config_path, force=force)
+
+
 def _print_component_edit_next_steps(config_path: Path) -> None:
     config_arg = _config_cli_arg(config_path)
     console.print(
@@ -6376,7 +6406,8 @@ def _parse_scoped_component_selector(token: str) -> tuple[ComponentScope | None,
     scope = cast(ComponentScope, scope_raw)
     if scope not in {"infra", "apps"}:
         raise RuntimeError(
-            f"Invalid component selector '{token}'. Use '<component-id>' or 'infra:<id>' / 'apps:<id>'."
+            f"Invalid component selector '{token}'. Use '<component-id>' or "
+            "scoped 'infra:<id>' / 'apps:<id>' (plural apps:, not app:)."
         )
     return scope, body.strip()
 
@@ -31122,16 +31153,22 @@ def component_list_command(
 
 @component_app.command(
     "add",
-    short_help="Add component selectors to --config CONFIG_YAML.",
+    short_help="Add component selectors to required --config CONFIG_YAML.",
     epilog=(
         "Examples: "
         "nebius-cxcli component add apps:soperator --config ./deployments/acme/config.yaml "
         "(adds Soperator and prompts for install mode + nodesets/partition/topology profiles); "
-        "nebius-cxcli component add 'apps:soperator@target-mk8s-prod' (binds Soperator to a specific MK8s target_ref); "
+        "nebius-cxcli component add apps:external-secrets@target-mk8s-prod "
+        "--config ./deployments/acme/config.yaml --no-interactive "
+        "(adds External Secrets to a specific MK8s target_ref); "
+        "nebius-cxcli component add apps:soperator@target-mk8s-prod "
+        "--config ./deployments/acme/config.yaml "
+        "(binds Soperator to a specific MK8s target_ref); "
         "nebius-cxcli component add managed-postgresql object-storage@logs-bucket "
         "--config ./deployments/acme/config.yaml --no-interactive "
         "(adds multiple components in one call); "
-        "nebius-cxcli component add apps:soperator --no-interactive "
+        "nebius-cxcli component add apps:soperator "
+        "--config ./deployments/acme/config.yaml --no-interactive "
         "(uses catalog defaults: nebius-gpu-v1 / shape-default / topology disabled)."
     ),
 )
@@ -31144,16 +31181,20 @@ def component_add_command(
                 "Optional infra module or app chart selector(s) to add. Use "
                 "'<id>', 'infra:<id>', 'apps:<id>', 'all', 'none', or "
                 "'<id>@<resource-name-or-target-id>'. Omit to prompt "
-                "interactively; infra-only interactive adds are valid. "
+                "interactively. Pass the project config with --config; config.yaml "
+                "is not a positional argument. The app scope prefix is plural "
+                "'apps:', not 'app:'. "
+                "For target-bound app charts, use 'apps:<app-id>@<target-id>' "
+                "(or bare '<app-id>@<target-id>' when unambiguous); one chart row "
+                "is allowed per app id and cluster target, and the suffix becomes "
+                "the app row instance_id. Infra-only interactive adds are valid. "
                 "In interactive mode, scalar named infra modules prompt for the "
                 "resource name first and derive the saved instance_id from that "
                 "name. In non-interactive mode, bare infra selectors create the "
                 "default named row when absent; use '<id>@<resource-name>' to "
                 "choose the resource name or create another named infra row. "
-                "For target-bound app charts, use '<app-id>@<target-id>'; one chart row "
-                "is allowed per app id and cluster target, and the suffix becomes the "
-                "app row instance_id. Apps are Helm charts and require an enabled MK8s "
-                "target in the same project. For apps:soperator, the wizard first asks "
+                "Apps are Helm charts and require an enabled MK8s target in the "
+                "same project. For apps:soperator, the wizard first asks "
                 "for an install mode: onboarding registers an external Nebius MK8s target "
                 "and maps roles onto discovered node groups, while production cluster "
                 "creates the MK8s+SFS+Soperator bundle."
@@ -31244,6 +31285,14 @@ def component_add_command(
       --subnet-ref <ref-or-scoped-ref>
       --validate-sources --no-validate-sources
 
+    Selector notes:
+
+      Pass the project config with --config <config.yaml>; config.yaml is not a
+      positional argument.
+
+      App selectors use the plural apps:<chart-id> scope, for example
+      apps:external-secrets@mk8s. The singular app:<chart-id> scope is invalid.
+
     Examples:
 
       nebius-cxcli component add --config <config.yaml>
@@ -31256,9 +31305,11 @@ def component_add_command(
 
       nebius-cxcli component add managed-postgresql object-storage@logs-bucket --config <config.yaml> --no-interactive
 
-      nebius-cxcli component add soperator@training-cluster --config <config.yaml>
+      nebius-cxcli component add apps:external-secrets@training-cluster --config <config.yaml> --no-interactive
 
-      nebius-cxcli component add gateway-helm@serving-cluster --config <config.yaml> --no-interactive
+      nebius-cxcli component add apps:soperator@training-cluster --config <config.yaml>
+
+      nebius-cxcli component add apps:gateway-helm@serving-cluster --config <config.yaml> --no-interactive
     """
     try:
         config_path = _require_component_config_option(config_path)
@@ -34854,6 +34905,8 @@ def render_command(
             console.print(
                 f"Generated Terraform lock file: {paths.infra_dir / '.terraform.lock.hcl'}"
             )
+        if not _RENDER_DEPLOY_HINT_SUPPRESSED.get():
+            _print_render_deploy_hint(config_path)
     except typer.Exit:
         raise
     except Exception as exc:  # pragma: no cover - CLI surface

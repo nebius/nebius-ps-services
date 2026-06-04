@@ -5473,6 +5473,9 @@ def test_render_command_invokes_renderer(tmp_path: Path, monkeypatch: pytest.Mon
 
     assert result.exit_code == 0, result.output
     assert "Rendered 2 file(s)" in _plain_output(result.output)
+    assert _plain_output(result.output).splitlines()[-1] == (
+        f"Next step: `nebius-cxcli deploy {str((tmp_path / 'config.yaml').resolve())}`"
+    )
     assert calls["terraform_config"] == "cfg"
     assert calls["terraform_profile"] == SourceProfile.PORTABLE
     assert calls["outputs_config"] == "cfg"
@@ -5493,6 +5496,22 @@ def test_render_command_invokes_renderer(tmp_path: Path, monkeypatch: pytest.Mon
     assert calls["manifest_kwargs"]["output_path"] == (
         staged_paths.generated_dir / "nebius-cxcli-manifest.json"
     )
+
+
+def test_internal_render_command_suppresses_deploy_hint_context(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    observed: list[tuple[Path, bool, bool]] = []
+
+    def fake_render_command(config_path: Path, *, force: bool) -> None:
+        observed.append((config_path, force, cli._RENDER_DEPLOY_HINT_SUPPRESSED.get()))
+
+    monkeypatch.setattr(cli, "render_command", fake_render_command)
+
+    cli._run_internal_render_command(tmp_path / "config.yaml", force=True)
+
+    assert observed == [(tmp_path / "config.yaml", True, True)]
+    assert cli._RENDER_DEPLOY_HINT_SUPPRESSED.get() is False
 
 
 def test_render_command_persists_quota_report_and_warns(
@@ -5607,6 +5626,9 @@ def test_render_command_persists_quota_report_and_warns(
     assert "Render completed with quota warnings." in _plain_output(result.output)
     assert "compute.instance.count requires 1, available 0" in _plain_output(result.output)
     assert "boot-disk quota could not be fully evaluated" not in _plain_output(result.output)
+    assert _plain_output(result.output).splitlines()[-1] == (
+        f"Next step: `nebius-cxcli deploy {str((tmp_path / 'config.yaml').resolve())}`"
+    )
 
 
 def test_render_command_accepts_local_source_profile(
@@ -7034,6 +7056,7 @@ def test_render_command_decline_is_clean_cancel_not_error(
 
     assert result.exit_code == 0, result.output
     assert "Render cancelled" in _plain_output(result.output)
+    assert "nebius-cxcli deploy" not in _plain_output(result.output)
     assert "ERROR:" not in _plain_output(result.output)
     assert calls["rendered"] is False
 
@@ -15496,6 +15519,8 @@ def test_help_text_aligns_render_and_apply_surfaces() -> None:
         "nebius-cxcli upgrade node-template <config.yaml> infra:mk8s@<target> "
         "--to-version 1.33 --to-os ubuntu24.04 --to-gpu-stack-preset cuda13.0"
     ) in upgrade_help
+    assert "one non-interactive command" in upgrade_help
+    assert "see examples below" in upgrade_help
     assert (
         "nebius-cxcli upgrade gpu-stack-preset <config.yaml> infra:mk8s@<target> "
         "--to-gpu-stack-preset cuda13.0"
@@ -15538,7 +15563,10 @@ def test_help_text_aligns_render_and_apply_surfaces() -> None:
         f"nebius-cxcli upgrade k8s-version {upgrade_example_config} "
         "infra:mk8s@mk8s --to-version 1.33 --disruption-policy force-delete"
     ) in upgrade_k8s_help
-    assert "upgrade a terraform-managed mk8s node template" in upgrade_node_template_help
+    assert (
+        "upgrade mk8s kubernetes version, os image, and gpu stack together in "
+        "one non-interactive command; see the example below"
+    ) in upgrade_node_template_help
     assert "config_yaml target" in upgrade_node_template_help
     assert "--to-version" in upgrade_node_template_help
     assert "--to-os" in upgrade_node_template_help
@@ -15801,9 +15829,10 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "source-driven" in normalized_component_help
     assert "component instances" in normalized_component_help
     assert (
-        "Use --config CONFIG_YAML after create for day-2 add/remove/list changes."
+        "Use --config CONFIG_YAML after create for day-2 add/remove/list changes"
         in normalized_component_help
     )
+    assert "config.yaml is not a positional component selector" in normalized_component_help
     normalized_create_help = " ".join(create_help.split())
     assert (
         "bootstrap one name-based tenant/project folder with config.yaml plus generated/ skeleton"
@@ -15846,7 +15875,9 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "nebius-cxcli component list --config <config.yaml>" in normalized_component_list_help
     assert "add [OPTIONS] [COMPONENT_SELECTOR]..." in component_add_help
     assert "--config CONFIG_YAML" in normalized_component_add_help
-    assert "Project" in normalized_component_add_help
+    assert "Required project config.yaml" in normalized_component_add_help
+    assert "not as a positional path" in normalized_component_add_help
+    assert "project config.yaml" in normalized_component_add_help
     assert "config.yaml" in normalized_component_add_help
     assert "inspect or edit" in normalized_component_add_help
     assert (
@@ -15860,11 +15891,22 @@ def test_command_help_usage_labels_positional_target_types() -> None:
         "nebius-cxcli component add managed-postgresql object-storage@logs-bucket "
         "--config <config.yaml> --no-interactive"
     ) in normalized_component_add_help
+    assert (
+        "nebius-cxcli component add apps:external-secrets@training-cluster "
+        "--config <config.yaml> --no-interactive"
+    ) in normalized_component_add_help
+    assert (
+        "nebius-cxcli component add apps:external-secrets@target-mk8s-prod "
+        "--config ./deployments/acme/config.yaml --no-interactive"
+    ) in normalized_component_add_help
     assert "apps:nccl-test" not in normalized_component_add_help
+    assert "config.yaml is not a positional argument" in normalized_component_add_help
+    assert "plural apps:" in normalized_component_add_help
+    assert "not 'app:'" in normalized_component_add_help
     assert "Omit" in normalized_component_add_help
     assert "prompt" in normalized_component_add_help
     assert "interactively" in normalized_component_add_help
-    assert "infra-only" in normalized_component_add_help
+    assert "Infra-only" in normalized_component_add_help
     assert "interactive adds" in normalized_component_add_help
     assert "valid" in normalized_component_add_help
     assert "scalar named infra modules" in normalized_component_add_help
@@ -15896,13 +15938,18 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "enabled" in normalized_component_add_help
     assert "MK8s target" in normalized_component_add_help
     assert "apps:soperator" in normalized_component_add_help
+    assert "apps:soperator@target-mk8s-prod" in normalized_component_add_help
     assert "install mode" in normalized_component_add_help
     assert "onboarding registers an external Nebius MK8s target" in normalized_component_add_help
     assert "production cluster creates" in normalized_component_add_help
     assert (
-        "nebius-cxcli component add soperator@training-cluster --config <config.yaml>"
+        "nebius-cxcli component add apps:soperator@training-cluster --config <config.yaml>"
         in normalized_component_add_help
     )
+    assert (
+        "nebius-cxcli component add apps:gateway-helm@serving-cluster "
+        "--config <config.yaml> --no-interactive"
+    ) in normalized_component_add_help
     assert "requires a managed" in normalized_create_help
     assert "managed or onboarded MK8s target" in normalized_create_help
     assert "selecting soperator prompts" in normalized_create_help
@@ -16370,6 +16417,7 @@ def test_render_command_fails_before_render_when_active_source_validation_fails(
 
     assert result.exit_code == 1, result.output
     assert "broken source" in _plain_output(result.output)
+    assert "nebius-cxcli deploy" not in _plain_output(result.output)
 
 
 def test_validate_active_component_sources_uses_active_catalog_not_config_source_override(

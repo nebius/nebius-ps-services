@@ -6603,6 +6603,25 @@ def test_component_add_allows_multiple_mk8s_instances(tmp_path: Path) -> None:
     ]
 
 
+def test_component_add_rejects_singular_app_scope_with_plural_hint(tmp_path: Path) -> None:
+    deployments_root = tmp_path / "deployments"
+    deployments_root.mkdir(parents=True, exist_ok=True)
+
+    created = _create_non_interactive(deployments_root, "--infra", "mk8s", "--app", "none")
+    assert created.exit_code == 0, created.output
+
+    config_path = _project_config_path(deployments_root)
+    result = _component_add(
+        config_path,
+        "app:external-secrets@mk8s",
+        "--no-interactive",
+    )
+
+    assert result.exit_code != 0
+    assert "Invalid component selector 'app:external-secrets@mk8s'" in result.output
+    assert "plural apps:, not app:" in result.output
+
+
 def test_component_add_list_remove_bind_app_instance_to_explicit_mk8s_target(
     tmp_path: Path,
 ) -> None:

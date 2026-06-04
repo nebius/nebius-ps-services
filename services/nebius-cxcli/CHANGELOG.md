@@ -6,6 +6,16 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Added a final `Next step: nebius-cxcli deploy <config.yaml>` helper line to
+  successful `render` command output, while suppressing that hint for internal
+  rerenders used by upgrade flows.
+- Clarified `component add` help and examples so `--config` is shown as the
+  required config path option, target-bound app examples use the plural
+  `apps:<chart>@<target>` selector form, and singular `app:` selector errors
+  point operators at `apps:`.
+- Clarified `upgrade node-template` help so the command list and subcommand
+  help call out that Kubernetes version, OS image, and GPU stack move together
+  in one non-interactive command with examples below.
 - Updated the development lockfile to `aiohttp` 3.14.0 to resolve the open
   Dependabot alerts on `services/nebius-cxcli/uv.lock`.
 - Fixed high-priority teardown, recovery, notification, and observability

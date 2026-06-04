@@ -61,6 +61,7 @@ def test_readme_render_warning_lives_in_recommended_workflow() -> None:
     readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
     intro = readme.split("## Table of Contents", maxsplit=1)[0]
     workflow = _section(readme, "## Recommended Workflow", "## Upgrade")
+    workflow_flat = _squash(workflow)
 
     warning = "After any manual or wizard change to `config.yaml`, run"
     assert warning not in intro
@@ -71,6 +72,8 @@ def test_readme_render_warning_lives_in_recommended_workflow() -> None:
     assert "Passing `config.yaml` to `deploy` only locates the" in workflow
     assert "`deploy` runs generated-bundle preflight and Terraform validation before" in workflow
     assert "it does not rerender `config.yaml`" in workflow
+    assert "final terminal line prints the copy-paste deploy helper" in workflow_flat
+    assert "`Next step: nebius-cxcli deploy <config.yaml>`" in workflow_flat
     assert "terraform validate` after render" not in readme
 
 
@@ -562,6 +565,11 @@ def test_docs_define_component_selector_contract() -> None:
     assert (
         "`<component-id>`, `infra:<component-id>`, `apps:<component-id>`, `all`, `none`" in readme
     )
+    assert "Scoped app selectors use the plural `apps:` prefix" in readme
+    assert "singular `app:` is invalid" in readme
+    assert "`apps:<chart-id>@<target-id>`" in readme
+    assert "`apps:<chart-id>@<target-id>`" in design
+    assert "nebius-cxcli component add apps:external-secrets@mk8s --config <config.yaml> --no-interactive" in readme
     assert "`<row-id>`, or `<component-id>@<resource-name-or-target-id>`" in readme
     assert "becomes" in readme
     assert "`apps.charts[].instance_id`" in readme
@@ -585,7 +593,7 @@ def test_docs_define_component_selector_contract() -> None:
     assert "`onboard-existing-cluster` registers an external Nebius MK8s target" in readme
     assert "Onboarding is deliberately not a Terraform import or takeover" in readme_flat
     assert "mainly for Soperator install and future upgrade workflows" in readme_flat
-    assert "Non-interactive `component add soperator@<target>`" in readme
+    assert "Non-interactive `component add apps:soperator@<target>`" in readme
     assert "it does not create Terraform-managed MK8s/SFS rows" in readme_flat
     assert "`values.nodeGroupMapping.*`" in readme
     assert "worker` on GPU node groups" in readme_flat
@@ -593,7 +601,7 @@ def test_docs_define_component_selector_contract() -> None:
     assert "`deploy.targets[].inventory.node_groups`" in design
     assert "This is primarily a day-2 Soperator management and upgrade path" in design_flat
     assert "not a Terraform-managed MK8s row" in design_flat
-    assert "Non-interactive `component add soperator@<target>`" in design_flat
+    assert "component add apps:soperator@<target>" in design_flat
     assert "skips Terraform MK8s/SFS row creation" in design_flat
     assert "`production-cluster` materializes the complete MK8s+SFS+Soperator" in design
     assert "`onboard-existing-cluster` resolves the selected" in design_flat
@@ -1001,3 +1009,5 @@ def test_customer_docs_use_exact_generated_bundle_wrapper_commands() -> None:
     assert "`nebius-cxcli terraform apply <generated>`" in readme
     assert "`nebius-cxcli deploy <config.yaml>`" in readme
     assert "`nebius-cxcli terraform plan` and `nebius-cxcli terraform apply`" in design
+    assert "`Next step: nebius-cxcli deploy <config.yaml>`" in design
+    assert "Internal rerenders used by upgrade flows suppress this helper" in design

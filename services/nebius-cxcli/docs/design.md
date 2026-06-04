@@ -221,7 +221,7 @@ Sections:
 - when `wizard.<field>.sources` is used, the supported bundled source is `source: static` with `values`; each value may be a plain string or a `{value, label}` mapping so the saved config value can stay concise while the wizard shows a richer operator-facing label
 - `wizard.<field>.write_default_to_config: true` is reserved for declared wizard field specs where accepting the displayed default is a real persisted config choice instead of a virtual convenience default; the bundled MK8s profile uses it for the native MysteryBox ESO sync defaults so selecting MysteryBox with MK8s writes `deploy.targets[].secrets.mysterybox.enabled: true`, `deploy.targets[].secrets.mysterybox.allow_all_namespaces: true`, `deploy.targets[].secrets.mysterybox.refresh_interval: 15m`, and `deploy.targets[].secrets.mysterybox.sync_namespaces: [default]`
 - explicit `wizard` entries can also suppress raw parent prompts with `prompt: false`; exact descendant entries remain promptable so a chart can hide broad `values` introspection while still exposing a small guided surface such as Soperator profile, partition, topology, and top-level optional-service gates
-- interactive component-selection prompts emit one resolved infra/apps summary after dependency resolution finishes; target-bound apps are rendered as labels such as `soperator on mk8s`; auto-enabled app rows created during a target-scoped field wizard are selected by exact `<chart-id>@<target-id>` selectors so a day-2 `component add mk8s@cluster2` does not accidentally pull existing `cluster1` app rows into the current app phase; during field input the wizard context stays compact as one Rich-colored line, `Wizard context: Current: <scope> / <component-or-target-feature>`, so long app lists are not repeated before every prompt; fields under `deploy.targets[]` use deploy-target context labels because they are not Terraform module inputs, and those deploy-target prompts are ordered after the current component's Terraform inputs so one component can finish before target customization starts; interactive `component add` treats this target-aware summary as authoritative and skips the final redundant `Added infra/apps components` lines, while non-interactive adds keep compact summaries only for categories that actually changed
+- interactive component-selection prompts emit one resolved infra/apps summary after dependency resolution finishes; target-bound apps are rendered as labels such as `soperator on mk8s`; auto-enabled app rows created during a target-scoped field wizard are selected by exact `apps:<chart-id>@<target-id>` selectors so a day-2 `component add mk8s@cluster2` does not accidentally pull existing `cluster1` app rows into the current app phase; during field input the wizard context stays compact as one Rich-colored line, `Wizard context: Current: <scope> / <component-or-target-feature>`, so long app lists are not repeated before every prompt; fields under `deploy.targets[]` use deploy-target context labels because they are not Terraform module inputs, and those deploy-target prompts are ordered after the current component's Terraform inputs so one component can finish before target customization starts; interactive `component add` treats this target-aware summary as authoritative and skips the final redundant `Added infra/apps components` lines, while non-interactive adds keep compact summaries only for categories that actually changed
 - During interactive `create`, scalar-named infra targets such as MK8s are
   aligned to the entered resource name before the app wizard section starts.
   That means app prompt labels, skipped-default previews, derived
@@ -787,7 +787,7 @@ not make Terraform responsible for that cluster lifecycle. Multi-target
 onboarding keeps each `apps:soperator` row bound to its matching
 `kind: external-mk8s` target row instead of reusing the first external target;
 multiple unbound onboarding rows are rejected. Non-interactive
-`component add soperator@<target>` infers `onboard-existing-cluster` when
+`component add apps:soperator@<target>` infers `onboard-existing-cluster` when
 `<target>` is an existing external MK8s target, skips Terraform MK8s/SFS row
 creation, and repairs missing target-scoped Soperator-required app rows on that
 same target. The analyzer treats only exact
@@ -2393,7 +2393,7 @@ The command boundary is intentional:
   cordons, drains, and replaces nodes. The saved external target is not a
   Terraform-managed MK8s row; it is the stable app/remediation target used by
   render, deploy, destroy, and future Soperator upgrades. Non-interactive
-  `component add soperator@<target>` uses this same onboarding path when
+  `component add apps:soperator@<target>` uses this same onboarding path when
   `<target>` is an existing external MK8s target.
 - Accepts simple string-list Terraform inputs as comma-separated prompt values and other complex inputs such as maps/objects/object-lists as single-line YAML/JSON prompt values so reusable modules do not need CLI-specific scalar shims.
 - Validates active infra source/settings entries by default before editing `config.yaml`, matching `create`. If the add request includes app charts, it validates only those selected app chart sources plus auto-enabled app dependencies.
@@ -2698,6 +2698,7 @@ The command boundary is intentional:
 - Renders into a hidden sibling staging directory first and swaps it into `generated/` only after the replacement bundle is complete, so a failed rerender leaves the current bundle intact.
 - When Terraform is available from `PATH` or the managed download path, attempts backend-disabled `terraform init -backend=false` to produce/update `.terraform.lock.hcl`.
 - Removes transient `.terraform/` workdir state after lockfile generation so the canonical rendered bundle stays clean.
+- On successful CLI `render`, the final terminal line prints a deploy helper command for the same project config: `Next step: nebius-cxcli deploy <config.yaml>`. Internal rerenders used by upgrade flows suppress this helper so stage output can continue with validation/apply progress.
 
 ### `validate-generated <generated-path>`
 

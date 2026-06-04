@@ -1560,7 +1560,7 @@ Wizard field behavior:
   chart-managed MariaDB because Kubernetes local PVs are node-local rather than
   a shared RWX filesystem. SConfigController stays enabled so Slurm config is
   projected into the local jail.
-  Non-interactive `component add soperator@<target>` also selects onboarding
+  Non-interactive `component add apps:soperator@<target>` also selects onboarding
   automatically when `<target>` is an existing external MK8s target; it does
   not create Terraform-managed MK8s/SFS rows and it ensures the required
   target-scoped Soperator app dependencies exist on that same target.
@@ -1569,7 +1569,7 @@ Wizard field behavior:
   NodeSets, storage selectors, partition refs, and NodeConfigurator rebooter
   tolerations from that one map; taints on the selected MK8s groups are
   converted into the required Soperator tolerations for those rendered
-  selectors. The day-2 workflow is `component add soperator@<target>`,
+  selectors. The day-2 workflow is `component add apps:soperator@<target>`,
   review/accept the onboarding analysis and role mapping, `validate`, `render`,
   and `deploy`; later Soperator upgrades reuse the same external target binding
   and accepted ownership boundary. Onboarding also caps generated worker
@@ -2003,6 +2003,8 @@ For operator changes, prefer profile-level config first:
 4. Validate the project config: `nebius-cxcli validate <config.yaml>`
 5. `nebius-cxcli render <config.yaml>`
    `render` expects the project `config.yaml` path, not the `generated/` directory.
+   On successful render, the final terminal line prints the copy-paste deploy
+   helper: `Next step: nebius-cxcli deploy <config.yaml>`.
 
    > **IMPORTANT:** After any manual or wizard change to `config.yaml`, run
    > `nebius-cxcli render <config.yaml>` again before `nebius-cxcli deploy`,
@@ -2683,6 +2685,7 @@ nebius-cxcli render /path/to/config.yaml
   - Use `--component-sources-file` or `NEBIUS_CXCLI_COMPONENT_SOURCES_FILE` only when you need to select a non-default catalog file.
   - If `generated/` already contains files, `render` prompts before overwrite in an interactive terminal.
   - In non-interactive contexts, use `nebius-cxcli render --force <config.yaml>` to confirm the replacement explicitly.
+  - On successful render, the final terminal line prints the copy-paste deploy helper: `Next step: nebius-cxcli deploy <config.yaml>`.
   - Example: `nebius-cxcli render ~/deployments/tenant-name-example/project-name-example/config.yaml`
 
 ### Customer-side Commands
@@ -2762,7 +2765,7 @@ nebius-cxcli flux bootstrap /path/to/generated
 ```bash
 nebius-cxcli component list --config /path/to/config.yaml
 nebius-cxcli component add infra:vm --config /path/to/config.yaml
-nebius-cxcli component add soperator@training-cluster --config /path/to/config.yaml
+nebius-cxcli component add apps:soperator@training-cluster --config /path/to/config.yaml
 nebius-cxcli component remove managed-postgresql --config /path/to/config.yaml
 nebius-cxcli create /path/to/deployments-root
 nebius-cxcli grafana --export-dashboard https://grafana.example.invalid/ --folder-uid folder-uid --dashboard-uid dashboard-uid --dashboard-folder mk8s --datasource "Nebius User Metrics" --attach
@@ -2816,7 +2819,7 @@ nebius-cxcli auth --project-config /path/to/config.yaml --validate-profile
   manual desired-state fallback.
 - `component add [component-selector...] --config <config.yaml>`
   - Adds source-defined infra module rows or app chart rows to an existing project config without recreating the project scaffold.
-  - Catalog entries are reusable component types. Each newly added infra row has its own `instance_id`; for scalar named infra modules, the user-facing `inputs.name` or catalog-declared scalar `status.name_input` is the source of truth and `instance_id` is derived from that normalized name. Target-bound app chart rows are selected as `<chart-id>@<target-id>`. For target-bound charts, the app `instance_id` is the cluster target id, and the same chart can be enabled only once per target.
+  - Catalog entries are reusable component types. Each newly added infra row has its own `instance_id`; for scalar named infra modules, the user-facing `inputs.name` or catalog-declared scalar `status.name_input` is the source of truth and `instance_id` is derived from that normalized name. Target-bound app chart rows are selected as `apps:<chart-id>@<target-id>` (bare `<chart-id>@<target-id>` is also accepted when unambiguous). For target-bound charts, the app `instance_id` is the cluster target id, and the same chart can be enabled only once per target.
   - Transient catalog charts such as `nccl-test` are not `--app` or
     `component add` selectors. They declare `usage.lifecycle: transient` and
     `usage.config.ref`, so selector errors point to the target-facing config
@@ -2867,7 +2870,7 @@ nebius-cxcli auth --project-config /path/to/config.yaml --validate-profile
     network and exactly one subnet for that network; otherwise it fails with a
     scoped-flag hint.
   - Simple string-list Terraform inputs are edited as comma-separated values. MysteryBox `inputs.secrets` uses the guided Secret/policy/key loop, and VPC `inputs.subnets` uses an optional guided subnet loop. Other complex inputs such as client lists and MK8s override objects are edited as YAML/JSON values in the wizard.
-  - Non-interactive mode accepts component selectors directly: `<component-id>`, `infra:<component-id>`, `apps:<component-id>`, `all`, `none`, or `<component-id>@<resource-name-or-target-id>`. For example: `nebius-cxcli component add managed-postgresql object-storage --config <config.yaml> --no-interactive`.
+  - Non-interactive mode accepts component selectors directly: `<component-id>`, `infra:<component-id>`, `apps:<component-id>`, `all`, `none`, or `<component-id>@<resource-name-or-target-id>`. Scoped app selectors use the plural `apps:` prefix; singular `app:` is invalid. For example: `nebius-cxcli component add apps:external-secrets@mk8s --config <config.yaml> --no-interactive`.
   - In interactive mode, scalar named infra modules prompt for the resource name
     before field prompts, defaulting to the next unique normalized name such as
     `vm-2`. The saved `instance_id` is derived from that normalized name and
@@ -2879,9 +2882,9 @@ nebius-cxcli auth --project-config /path/to/config.yaml --validate-profile
     `object-storage@logs-bucket` or `mk8s@training-cluster`. For app charts, the
     explicit suffix is the cluster target id and becomes
     `apps.charts[].instance_id`; duplicate
-    `<chart-id>@<target-id>` installs are skipped. When more than one cluster
+    `apps:<chart-id>@<target-id>` installs are skipped. When more than one cluster
     target is enabled, app charts must be added with an explicit target
-    instance, for example `n8n@cluster2`.
+    instance, for example `apps:n8n@cluster2`.
   - `object-storage` now represents one bucket per enabled module instance and requires `inputs.name`.
   - Existing component values are preserved. The command updates only `config.yaml`; existing `generated/` artifacts and live resources are unchanged until you run `render` and then deploy/destroy as needed. After the edit, run `validate` and `render` again.
   - Example: `nebius-cxcli component add managed-postgresql --config ~/deployments/tenant-name-example/project-name-example/config.yaml --no-interactive`
@@ -3191,7 +3194,8 @@ nebius-cxcli component add managed-postgresql --config /path/to/config.yaml --no
 nebius-cxcli component add managed-postgresql object-storage@logs-bucket --config /path/to/config.yaml --no-interactive
 nebius-cxcli component add infra:vm@worker --config /path/to/config.yaml --no-interactive --network-id infra:vm@worker=vpcnetwork-123 --subnet-id infra:vm@worker=vpcsubnet-123
 nebius-cxcli component add mk8s@training-cluster mk8s@serving-cluster --config /path/to/config.yaml --no-interactive
-nebius-cxcli component add gateway-helm@serving-cluster --config /path/to/config.yaml --no-interactive
+nebius-cxcli component add apps:external-secrets@serving-cluster --config /path/to/config.yaml --no-interactive
+nebius-cxcli component add apps:gateway-helm@serving-cluster --config /path/to/config.yaml --no-interactive
 nebius-cxcli component remove managed-postgresql@analytics-pg --config /path/to/config.yaml --no-interactive
 nebius-cxcli component remove gateway-helm@serving-cluster --config /path/to/config.yaml --no-interactive
 
