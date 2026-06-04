@@ -17,6 +17,13 @@ change what gets applied.
 - [Catalog File Reference](#catalog-file-reference)
   - [Soperator Slurm Scheduling And Command Examples](#soperator-slurm-scheduling-and-command-examples)
 - [Recommended Workflow](#recommended-workflow)
+- [Upgrade](#upgrade)
+  - [Upgrade Principles](#upgrade-principles)
+  - [Kubernetes Version Upgrade](#kubernetes-version-upgrade)
+  - [OS Image Upgrade](#os-image-upgrade)
+  - [Disruption Policies](#disruption-policies)
+  - [Upgrade Examples](#upgrade-examples)
+  - [Node-Layer And Helm Upgrades](#node-layer-and-helm-upgrades)
 - [Releases](#releases)
 - [Commands](#commands)
   - [Generator-side Commands](#generator-side-commands)
@@ -101,6 +108,10 @@ nebius-cxcli bootstrap-ci <config.yaml>
   pools. New networks inherit Nebius public-pool and default-route behavior by
   default so VM-style public IP allocations work in planned custom subnets.
 - Local deploy/destroy and Flux apply/destroy flows for rendered bundles, with Nebius service-native status.
+- `upgrade k8s-version` performs SDK-backed MK8s planning and staged
+  Terraform upgrades for Terraform-managed MK8s targets; `upgrade os-image`
+  can guide MK8s node-template OS upgrades or generic VM
+  `source_image_family` upgrades from the same config.
 - GitOps bootstrap/reconcile flows for rendered Flux trees.
 - Bundled MK8s GPU automation for NVIDIA GPU Operator, Network Operator, DCGM metrics, and deploy-time GPU/NCCL validation.
 - Bundled Soperator self-deployment chart entry plus sibling MK8s, SFS, and
@@ -126,7 +137,7 @@ nebius-cxcli bootstrap-ci <config.yaml>
 ### Runtime baseline
 
 - Python `3.12`, `3.13`, or `3.14` is required (`requires-python = ">=3.12,<3.15"`).
-- Nebius API credentials/profile are required for commands that talk to Nebius APIs such as `validate`, `quota-check`, `quota-request`, `render`, `deploy`, and `auth`.
+- Nebius API credentials/profile are required for commands that talk to Nebius APIs such as `validate`, `quota-check`, `quota-request`, `render`, `deploy`, `upgrade`, and `auth`.
 - A standalone `nebius` CLI install is not required for the normal query/render/deploy flow; `nebius-cxcli` uses the Nebius Python SDK directly for those paths. The automatic submission branch of `quota-request` is internal-only: it reuses `nebius iam get-access-token` plus the internal `npc` CLI, so it works only on the Nebius internal network for Nebius employees/operators.
 
 ### Access requirements
@@ -135,7 +146,7 @@ nebius-cxcli bootstrap-ci <config.yaml>
 - If you rely on managed Flux downloads, the machine needs network access to GitHub releases.
 - `bootstrap-ci` needs GitHub API access plus `GH_TOKEN` or `GITHUB_TOKEN` (or `--github-token-env <ENV>`).
 - `discover` is local git/filesystem discovery over readable project `config.yaml` files; it does not need Nebius API credentials.
-- If the target MK8s control-plane endpoint is private, `deploy`, `destroy`, `flux apply`, `flux destroy`, and `flux bootstrap` require an existing private network path to that cluster.
+- If the target MK8s control-plane endpoint is private, `deploy`, `upgrade`, `destroy`, `flux apply`, `flux destroy`, and `flux bootstrap` require an existing private network path to that cluster.
 
 ### Install `nebius-cxcli`
 
@@ -368,6 +379,9 @@ Field guide:
   - `source.portable.chart`: optional chart name. Defaults to the component id when omitted. When it differs, runtime validation, dependency lookup, and Flux rendering use the configured chart basename instead of the app id.
   - `source.portable.version`: optional chart version.
   - `ui.title`, `ui.group`, `ui.enabled`: display metadata and default wizard checkbox state.
+  - `ui.selectable`: optional selector metadata. Omit it for normal persistent app chart sources. Set it to `false` only for cataloged chart sources that cxcli owns through another runtime flow.
+  - `usage.lifecycle`: optional chart lifecycle metadata. Omit it for normal persistent app chart sources. `transient` marks a reusable Helm source for a cxcli-owned runtime flow; transient charts must also set `ui.enabled: false` and `ui.selectable: false`.
+  - `usage.config.ref`: required with `usage.lifecycle: transient`. It points to the customer-facing config field that activates the runtime flow, for example `deploy.targets[].validations.mk8s_gpu.nccl`.
   - `release.namespace`, `release.name`: default Helm namespace and release name used during `create`.
   - `release.timeout`: optional Flux `HelmRelease.spec.timeout` duration such as `10m` or `12m30s`. When omitted, the chart inherits `cli.flux.release_timeout`.
   - `release.install_after`: app prerequisite list. cxcli auto-selects the
@@ -401,12 +415,16 @@ Wizard shorthand and wiring:
 Implementation note:
 
 - Built-in component `wizard_profile` definitions are currently centralized in [src/nebius_cxcli/wizard_profiles.py](src/nebius_cxcli/wizard_profiles.py). They are not split into one Python file per component today.
+- Provider-backed wizard options use one shared metadata resolver for
+  interactive choices, strict live-value validation, and auto-selected
+  defaults, so `options.from`, normalized `args`, `filter`, and planned VPC
+  choices stay aligned across create and component-add flows.
 - Bundled infra runtime validation selection is centralized in [src/nebius_cxcli/validation_profiles.py](src/nebius_cxcli/validation_profiles.py). It is code-owned internal metadata, not a supported public `component_sources.yaml` field.
 - Central onboarding guidance for new Nebius Terraform modules lives in [../../skills/onboard-nebius-cxcli/SKILL.md](../../skills/onboard-nebius-cxcli/SKILL.md). Use it when a module needs to be added to `component_sources.yaml` and you need to decide whether onboarding also requires wizard/provider/status/validation/handoff code changes.
 
 Built-in wizard profiles:
 
-- `mk8s`: guided typed `inputs.cluster.*` prompts followed by a concrete node-group creation loop, live VPC network selection, network-filtered subnet lookup, MK8s platform/preset chaining, labeled GPU stack-source choices that distinguish Nebius images with preinstalled NVIDIA host components from GPU Operator-managed driver installs, live GPU driver-preset choices keyed by the selected GPU platform and Kubernetes version, optional GPU reservation selection from tenant Capacity Block Groups, InfiniBand fabric choices keyed by the selected GPU platform and region when GPU clustering is enabled, and target-scoped native ESO MysteryBox sync prompts.
+- `mk8s`: guided typed `inputs.cluster.*` prompts followed by a concrete node-group creation loop, live VPC network selection, network-filtered subnet lookup, MK8s platform/preset chaining, labeled GPU stack-source choices that distinguish Nebius images with preinstalled NVIDIA host components from GPU Operator-managed driver installs, live GPU driver-preset choices keyed by the selected GPU platform, OS, and Kubernetes version, optional GPU reservation selection from tenant Capacity Block Groups, InfiniBand fabric choices keyed by the selected GPU platform and region when GPU clustering is enabled, and target-scoped native ESO MysteryBox sync prompts.
 - `vpc`: optional existing-network lookup plus guided private-pool and subnet
   creation for the Terraform-owned VPC component. Live project-network choices
   recommend `default-network` when it exists, so pressing Enter keeps the
@@ -701,7 +719,7 @@ Bundled MK8s GPU app policy:
 - cxcli treats GPU-cluster / RDMA as a two-stage decision. First it queries the live Nebius project platform/preset inventory for the exact selected GPU platform and preset and uses `allow_gpu_clustering` as the source of truth for whether the shape is cluster-capable at all. Second, the deployment only enters the GPU-cluster / InfiniBand / GPUDirect-RDMA path when a GPU node group references `inputs.gpu_clusters` with an `infiniband_fabric`. Resource-name preflight still checks every GPU cluster referenced by a node group's `gpu_cluster_key`, even before a fabric is selected, so stale live GPU-cluster names are caught early. In the plain MK8s node-group wizard, a live-confirmed cluster-capable GPU shape defaults the GPU-cluster toggle to enabled so the operator can choose the fabric directly; turning it off, or omitting the referenced fabric in manual config, keeps the target on the Ethernet-only path for rendering, validation, and app auto-selection.
 - `nvidia-gpu-operator` is auto-enabled for every MK8s cluster with at least one GPU `inputs.node_groups` entry. `inputs.node_group_defaults.gpu.*` helper values alone never make a target GPU-enabled; they must be materialized into a real GPU node group first. `nvidia-network-operator` is auto-enabled only on that actual GPU-cluster path, plus the special `gpu_stack_source: operator_managed` B200/B200A path that still needs RDMA plumbing. When Network Operator is required, cxcli renders a Flux `dependsOn` edge so it reconciles before GPU Operator, suppresses GPU Operator's own NFD so the bundled stack keeps only one NFD instance, explicitly enables Network Operator NFD/NodeFeatureRules because the chart defaults them off, and renders an explicit `NicClusterPolicy` patch for `rdma/shared_device` on the InfiniBand path instead of relying on chart defaults. That patch disables the RDMA shared-device plugin's periodic host-device rescan with `periodicUpdateInterval: 0`, while preserving startup discovery and pod-facing RDMA resource advertisement. The bundled catalog keeps Network Operator NFD enablement, Network Operator driverful node selection, and GPU Operator non-cluster Nebius-image NFD affinity as separate named policy sets, so NFD ownership stays explicit and selector details stay catalog-owned without being repeated inline in multiple rules. Those MK8s GPU policy-managed chart-value paths are authoritative on `create`, `component add`, direct `config.yaml` normalization, and `render`: cxcli rewrites the currently applicable paths from the catalog and clears no-longer-applicable policy paths instead of preserving stale older operator values from `config.yaml`. Stale policy-managed GPU app rows can be pruned when no target needs them, including auto target-scoped rows that carry catalog source metadata, but explicitly authored enabled app rows with their own repo/version/namespace remain selected. In multi-target projects, cxcli seeds any missing target-bound required app rows and evaluates policy per target-bound app row, so an RDMA cluster and an Ethernet-only 1-GPU test cluster can coexist without sharing incompatible GPU Operator or Network Operator values.
 - GPU Visibility test is enabled by default for GPU-backed MK8s deploys, including Soperator production targets, but it remains intentionally workload-based instead of stopping at a node `allocatable` check: by default it runs the CUDA sample on at most 3 Ready GPU nodes, reports live pod phase progress, bulk-cleans the validation pods afterward, and now also saves the underlying device-plugin allocatable snapshot in the report for comparison. If existing workloads such as Slurm workers already reserve every GPU on every Ready GPU node, cxcli records the visibility check as skipped instead of failing on an expected scheduler admission rejection.
-- NCCL test is enabled by default for GPU-enabled MK8s clusters, including Soperator production targets, not only the GPU-cluster / InfiniBand path. Soperator ActiveChecks stay as the opt-in Slurm-side benchmark/diagnostic path; the default deploy-time NCCL path uses cxcli's transient Kubernetes validation. The NCCL workload manifest comes from the first-party `helm-charts/nccl-test` chart: `source.local.path` points at the checked-in chart for developer/local use, and `source.portable` is pinned to `oci://cr.<region>.nebius.cloud/<registry-short-id>/charts/nccl-test --version 0.2.8`. The shared image/tag plus the pragmatic benchmark defaults are now sourced directly from the chart's own `values.yaml`, and local/unit-test default hydration falls back to that checked-in file when `helm` is unavailable so the NCCL validation spec keeps the same first-party defaults. The source chart now keeps conservative 1-GPU smoke-test worker defaults for direct Helm use, while `nebius-cxcli` auto-selects the NCCL transport from the resolved MK8s shape: Ethernet-only shapes run the benchmark in Socket/TCPIP mode, while GPU-cluster / InfiniBand shapes switch to the RDMA path and enforce the configured bus-bandwidth threshold there. On that RDMA path, cxcli appends the settings-owned `NCCL_DMABUF_ENABLE=1` MPI environment export so validation stays on NVIDIA's recommended DMA-BUF GPUDirect RDMA path instead of the legacy `nvidia-peermem` path. This is not a GPU Operator or Network Operator Helm value: those charts prepare the driver/RDMA stack, while `NCCL_DMABUF_ENABLE` must be present in the NCCL workload process. cxcli owns that default in `component_cli_settings.yaml` at `components.infra.mk8s.cli.gpu.validations.nccl.rdma_mpi_extra_args`; direct `nccl-test` chart users can set the same runtime export through `benchmark.mpiExtraArgs`. This follows NVIDIA's NCCL environment-variable docs, which describe `NCCL_DMABUF_ENABLE` as enabling GPUDirect RDMA buffer registration through Linux DMA-BUF and default it to enabled when supported, and NVIDIA's GPU Operator GPUDirect RDMA docs, which recommend DMA-BUF over the legacy `nvidia-peermem` kernel module. cxcli still derives the NCCL worker GPU count from that resolved MK8s shape, but it caps deploy-time worker GPU requests to scheduler-free GPUs and skips the run when every Ready GPU node is fully allocated by existing workloads. Worker CPU/memory requests are sized at validation runtime from live Kubernetes scheduler headroom on the selected GPU nodes, and the launcher is pinned onto Ready non-GPU nodes only when those nodes have enough scheduler-visible CPU/memory headroom; otherwise cxcli leaves the launcher unpinned and subtracts its request from GPU-node worker headroom. The app entry keeps only the catalog-owned Blackwell `-mca coll ^hcoll` overlay: B200/B200A inherit it from the official Nebius B200 NCCL example, and B300/GB300 inherit it from NVIDIA HPC-X known issues that mark HCOLL unsupported on GB200/GB300. The override stays scoped in the settings catalog instead of becoming a shared chart default. See: [NVIDIA NCCL `NCCL_DMABUF_ENABLE`](https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/env.html#nccl-dmabuf-enable), [NVIDIA GPU Operator GPUDirect RDMA](https://docs.nvidia.com/datacenter/cloud-native/gpu-operator/25.10/gpu-operator-rdma.html), [Nebius NCCL guide](https://docs.nebius.com/kubernetes/gpu/nccl-test), [NVIDIA HPC-X General Support](https://docs.nvidia.com/networking/display/hpcvx225/hpc-x-general-support), and [NVIDIA HPC-X Known Issues](https://docs.nvidia.com/networking/display/hpcxv2251/known-issues). `nebius-cxcli` also keeps the Kubeflow Training Operator as a transient NCCL prerequisite pinned in the catalog and installs/removes it on demand. The saved NCCL JSON report and the combined `deploy-report.md` summary include `NCCL_DMABUF_ENABLE`, its source, and the derived GPUDirect mode so operators can see whether the validation used the explicit DMA-BUF path or an unset/default path; the Markdown report bolds the measured average bus-bandwidth value for scanning. Saved GPU validation reports remain intentionally compact ordered JSON: practical summary fields stay up front, success cases omit noisy raw logs, and failures keep only the relevant log excerpts.
+- NCCL test is enabled by default for GPU-enabled MK8s clusters, including Soperator production targets, not only the GPU-cluster / InfiniBand path. Soperator ActiveChecks stay as the opt-in Slurm-side benchmark/diagnostic path; the default deploy-time NCCL path uses cxcli's transient Kubernetes validation. The NCCL workload manifest comes from the first-party `helm-charts/nccl-test` chart: `source.local.path` points at the checked-in chart for developer/local use, and `source.portable` is pinned to `oci://cr.<region>.nebius.cloud/<registry-short-id>/charts/nccl-test --version 0.2.8`. The shared image/tag plus the pragmatic benchmark defaults are now sourced directly from the chart's own `values.yaml`, and local/unit-test default hydration falls back to that checked-in file when `helm` is unavailable so the NCCL validation spec keeps the same first-party defaults. The source chart now keeps conservative 1-GPU smoke-test worker defaults for direct Helm use, while `nebius-cxcli` auto-selects the NCCL transport from the resolved MK8s shape: Ethernet-only shapes run the benchmark in Socket/TCPIP mode, while GPU-cluster / InfiniBand shapes switch to the RDMA path. A Socket/TCPIP run that resolves to one rank, one worker node with one requested GPU, is treated as a smoke pass when the launcher succeeds and NCCL reports out-of-bounds OK, even though no collective bus bandwidth is expected; multi-rank runs still require observed bandwidth, and RDMA runs still enforce the configured bus-bandwidth threshold. On that RDMA path, cxcli appends the settings-owned `NCCL_DMABUF_ENABLE=1` MPI environment export so validation stays on NVIDIA's recommended DMA-BUF GPUDirect RDMA path instead of the legacy `nvidia-peermem` path. This is not a GPU Operator or Network Operator Helm value: those charts prepare the driver/RDMA stack, while `NCCL_DMABUF_ENABLE` must be present in the NCCL workload process. cxcli owns that default in `component_cli_settings.yaml` at `components.infra.mk8s.cli.gpu.validations.nccl.rdma_mpi_extra_args`; direct `nccl-test` chart users can set the same runtime export through `benchmark.mpiExtraArgs`. This follows NVIDIA's NCCL environment-variable docs, which describe `NCCL_DMABUF_ENABLE` as enabling GPUDirect RDMA buffer registration through Linux DMA-BUF and default it to enabled when supported, and NVIDIA's GPU Operator GPUDirect RDMA docs, which recommend DMA-BUF over the legacy `nvidia-peermem` kernel module. cxcli still derives the NCCL worker GPU count from that resolved MK8s shape, but it caps deploy-time worker GPU requests to scheduler-free GPUs and skips the run when every Ready GPU node is fully allocated by existing workloads. Worker CPU/memory requests are sized at validation runtime from live Kubernetes scheduler headroom on the selected GPU nodes, and the launcher is pinned onto Ready non-GPU nodes only when those nodes have enough scheduler-visible CPU/memory headroom; otherwise cxcli leaves the launcher unpinned and subtracts its request from GPU-node worker headroom. The app entry keeps only the catalog-owned Blackwell `-mca coll ^hcoll` overlay: B200/B200A inherit it from the official Nebius B200 NCCL example, and B300/GB300 inherit it from NVIDIA HPC-X known issues that mark HCOLL unsupported on GB200/GB300. The override stays scoped in the settings catalog instead of becoming a shared chart default. See: [NVIDIA NCCL `NCCL_DMABUF_ENABLE`](https://docs.nvidia.com/deeplearning/nccl/user-guide/docs/env.html#nccl-dmabuf-enable), [NVIDIA GPU Operator GPUDirect RDMA](https://docs.nvidia.com/datacenter/cloud-native/gpu-operator/25.10/gpu-operator-rdma.html), [Nebius NCCL guide](https://docs.nebius.com/kubernetes/gpu/nccl-test), [NVIDIA HPC-X General Support](https://docs.nvidia.com/networking/display/hpcvx225/hpc-x-general-support), and [NVIDIA HPC-X Known Issues](https://docs.nvidia.com/networking/display/hpcxv2251/known-issues). `nebius-cxcli` also keeps the Kubeflow Training Operator as a transient NCCL prerequisite pinned in the catalog and installs/removes it on demand. The saved NCCL JSON report and the combined `deploy-report.md` summary include `NCCL_DMABUF_ENABLE`, its source, and the derived GPUDirect mode so operators can see whether the validation used the explicit DMA-BUF path or an unset/default path; the Markdown report bolds measured average bus-bandwidth values for multi-rank runs and states when a single-rank smoke run has no collective bandwidth to report. Saved GPU validation reports remain intentionally compact ordered JSON: practical summary fields stay up front, success cases omit noisy raw logs, and failures keep only the relevant log excerpts.
 
 What `wizard` is doing:
 
@@ -1072,7 +1090,7 @@ Managed vs external local tools:
   - `terraform` for Terraform-backed validation, render lockfile generation, `terraform plan`, `terraform apply`, `terraform unlock`, and backend-backed Terraform output lookups
   - `flux` for `flux bootstrap`
 - Still external prerequisites:
-  - `kubectl` for `validate-generated`, `deploy`, `destroy`, `flux apply`, `flux destroy`, `flux bootstrap`, and Flux readiness checks
+  - `kubectl` for `validate-generated`, `deploy`, `upgrade`, `destroy`, `flux apply`, `flux destroy`, `flux bootstrap`, and Flux readiness checks
   - `helm` for `validate-sources` and other live Helm chart source/metadata validation paths; not for the normal `deploy`/`flux apply` flow
   - `aws` CLI for `terraform unlock` remote lock inspection
   - `git` for `bootstrap-ci` repo-origin auto-detection and Git tree chart sources
@@ -1179,16 +1197,17 @@ Wizard field behavior:
 - `component_sources.yaml` can declare top-level `shared` values and shared-derived `defaults` so components read shared values from the active source catalog instead of duplicating them under component `inputs` or chart `values`.
 - The bundled `mk8s` catalog entry defaults `inputs.cluster.public_endpoint: true`, and the built-in MK8s cluster handoff derives access dynamically from that input. If you switch the control plane to private-only, local app operations still work, but only from a machine that already has private network reachability to the MK8s API endpoint.
 - The bundled `mk8s` catalog entry also defaults `inputs.cluster.kube_network.service_cidrs: ["/20"]`. Nebius treats an omitted MK8s service CIDR as `["/16"]`; on a single-pool `/16` subnet that can consume the whole pool and leave no address space for control-plane allocations, which looks like a long `PROVISIONING` stall.
-- The bundled `mk8s` catalog entry now uses `wizard_profile: mk8s`, which wires typed cluster fields to live VPC/subnet/version providers and then opens a node-group loop that writes concrete `inputs.node_groups.<name>` entries. The loop prompts for each node group's name, autoscaling or fixed size, CPU/GPU resource type, preemptible flag, GPU reservation policy and Capacity Block Group IDs when relevant, platform, preset, optional GPU cluster fabric, OS, boot disk, SFS attachments, SSH, and service account settings. For a plain MK8s-only target, the default concrete CPU baseline group name is `system`.
-- In the plain MK8s node-group loop, platform, preset, GPU stack, OS, fabric, reservation, and boot-disk choices are resolved from live Nebius-backed providers when tenant/project/region context is available. A single compatible OS from the MK8s compatibility matrix is materialized without asking a redundant OS question; multiple compatible OS values still prompt, and skipping leaves `os` unset so the Terraform provider/module default applies. Boot-disk type defaults to the shared compute boot-disk policy, currently `NETWORK_SSD`, and boot-disk size is recommended from the selected platform/preset instead of a fixed value. The SSH toggle defaults to enabled, but cxcli writes an `ssh` block only when the operator accepts that prompt and provides a public key. Pressing `q` while drafting a node group restarts that draft group instead of jumping out to the add-another prompt.
+- The bundled `mk8s` catalog entry now uses `wizard_profile: mk8s`, which wires typed cluster fields to live VPC/subnet/version providers and then opens a node-group loop that writes concrete `inputs.node_groups.<name>` entries. The loop prompts for each node group's name, autoscaling or fixed size, CPU/GPU resource type, preemptible flag, GPU reservation policy and Capacity Block Group IDs when relevant, platform, preset, optional GPU cluster fabric, OS, boot disk, SFS attachments, SSH, and service account settings. Node groups default to no service account assignment; operators can instead use an existing service account ID or create one by name. For a plain MK8s-only target, the default concrete CPU baseline group name is `system`.
+- In the plain MK8s node-group loop, platform, preset, GPU stack, OS, fabric, reservation, and boot-disk choices are resolved from live Nebius-backed providers when tenant/project/region context is available. GPU stack choices are constrained by the selected platform, Kubernetes version, and selected/defaulted OS when present, so a stale catalog preference is not kept when the live compatibility matrix excludes that tuple. A single compatible OS from the MK8s compatibility matrix is materialized without asking a redundant OS question; multiple compatible OS values still prompt. For Nebius-image GPU node groups, `gpu_stack_preset` compatibility is OS-specific, so deploy preflight requires an explicit `os` instead of letting Terraform/provider defaults choose one implicitly. Boot-disk type defaults to the shared compute boot-disk policy, currently `NETWORK_SSD`, and boot-disk size is recommended from the selected platform/preset instead of a fixed value. The SSH toggle defaults to enabled, but cxcli writes an `ssh` block only when the operator accepts that prompt and provides a public key. Pressing `q` while drafting a node group restarts that draft group instead of jumping out to the add-another prompt.
 - The bundled `mk8s` wizard keeps preemptible, reservation, service-account, SSH, and SFS decisions on each typed node-group entry. Advanced MK8s node-group fields such as public IPs, taints, and arbitrary labels remain manual `config.yaml` fields or profile materialization output. `inputs.node_group_defaults.*` is kept only as a profile helper for flows such as Soperator `production-cluster`, where those helper values are copied into real `inputs.node_groups` and `inputs.gpu_clusters`; plain MK8s-only configs should not persist that helper block after create, component add, or runtime normalization.
 - The bundled `mk8s` flow now exposes source-driven observability controls under `deploy.targets[].observability.*`. When enabled, cxcli auto-enables the bundled `nebius-observability-agent` chart for that target, persists the target-facing logs/metrics/traces toggles in `config.yaml`, and keeps the auth path public-safe by relying on the chart's metadata/IAM token-file default instead of asking operators to paste secrets into repo config. In wizard mode, MK8s Terraform inputs are completed before target-scoped deploy settings such as observability and GPU validations are prompted, and the auto-enable notice is emitted immediately after the observability answer makes the chart required; in multi-target `component add` runs, that notice and the following app phase stay scoped to exact rows such as `grafana@cluster2` rather than every existing `grafana` row. The later app prompt only controls whether to customize values or keep defaults.
 - When the Terraform `mysterybox` component is selected with MK8s, the bundled `mk8s` flow exposes target-scoped `deploy.targets[].secrets.mysterybox.*` fields for native ESO MysteryBox sync. These are Kubernetes sync settings for the MK8s target, not Terraform inputs for creating MysteryBox payloads. The sync toggle defaults to `true` in this context, and accepting defaults persists `enabled: true`, `allow_all_namespaces: true`, `refresh_interval: 15m`, and `sync_namespaces: [default]` into `config.yaml`. That default is a cluster-wide store with no rendered `conditions`; it can be narrowed with `allow_all_namespaces: false`, in which case the same `sync_namespaces` list is rendered to `ClusterSecretStore.spec.conditions.namespaces`. cxcli creates one key-mapped `ExternalSecret` per declared MysteryBox Secret per sync namespace, uses `inputs.secrets[].kubernetes_secret_name` as the Kubernetes target Secret name when set, resolves Terraform-created MysteryBox secret IDs after apply, and omits `remoteRef.version` by default so ESO follows the current MysteryBox primary version. The same flow supports explicit `manual-version-pinning` from a real `version_id` and auto-enables the target's `external-secrets` chart row while keeping the `mysterybox-sa` Subject Credentials Secret runtime-only.
 - The bundled `mk8s` flow exposes source-driven GPU validation controls under the target-facing `deploy.targets[].validations.mk8s_gpu.*` contract. In wizard mode, when `inputs.node_groups` includes at least one GPU group, operators can enable or disable operator-readiness, GPU-visibility, and NCCL checks per MK8s target, including Soperator production targets, and tune `gpu_visibility.max_nodes` plus `nccl.max_nodes`; when a workload validation is enabled, its catalog-owned node cap is materialized instead of left as an optional unset value. The RDMA bus-bandwidth threshold remains part of the same target contract, but the wizard only exposes that threshold field when the current MK8s shape is actually on the GPU-cluster / fabric path. The settings catalog still owns the defaults in `component_cli_settings.yaml` `components.infra.mk8s.cli.gpu.validations`, but the chosen per-target values now persist in `config.yaml` as deploy settings instead of pretending to be Terraform inputs. Soperator ActiveChecks remain opt-in benchmark/diagnostic workloads, not production-training defaults.
-- If an operator leaves `deploy.targets[].validations.mk8s_gpu.nccl.enabled=true` on a non-cluster/Ethernet-only GPU shape, cxcli now warns that the run will use Socket/TCPIP rather than InfiniBand / GPUDirect-RDMA. On 1-GPU shapes that warning is explicit that the result is degraded and not representative of a production distributed-training environment, but the NCCL benchmark still runs so operators can compare the measured bandwidth with RDMA-capable environments.
+- If an operator leaves `deploy.targets[].validations.mk8s_gpu.nccl.enabled=true` on a non-cluster/Ethernet-only GPU shape, cxcli now warns that the run will use Socket/TCPIP rather than InfiniBand / GPUDirect-RDMA. On 1-GPU shapes that warning is explicit that the run is a smoke check only: it proves the NCCL workload can launch and complete, but no collective bandwidth is expected and the result is not representative of a production distributed-training environment.
+- `validate-generated`, deploy preflight, and direct generated-bundle `terraform apply` also check Nebius-image GPU node groups against the live MK8s compatibility matrix and fail before Terraform when `platform`, `os`, and `gpu_stack_preset` do not form a supported tuple.
 - That target-facing config contract intentionally chooses what to run, not where to write it. The human-readable report path is fixed at `generated/inventory/deploy-report.md` so deploy output stays deterministic and generated-bundle-centric rather than adding per-target file-path knobs under `deploy:`.
 - The old fake module-input path `infra.components[].inputs.gpu_validation_overrides` is no longer supported. The canonical per-target contract is `deploy.targets[].validations.mk8s_gpu.*` only.
-- The bundled NVIDIA path intentionally keeps deploy-time validation fast and scoped: operator readiness checks the operator control plane plus scheduler-visible GPUs, GPU visibility runs a bounded CUDA sample on selected Ready GPU nodes, and NCCL remains the optional multi-node communication benchmark. On Ethernet-only shapes it runs in Socket/TCPIP mode for comparative benchmarking; on GPU-cluster / InfiniBand shapes it switches to the RDMA path and becomes the GPUDirect-oriented performance gate. That matches NVIDIA's own split between install verification, sample GPU workload validation, and DCGM-based observability rather than a single heavy post-deploy "health checker". See [About the NVIDIA GPU Operator](https://docs.nvidia.com/datacenter/cloud-native/gpu-operator/24.9/index.html), [GPU Operator Getting Started](https://docs.nvidia.com/datacenter/cloud-native/gpu-operator/23.9.0/getting-started.html), [NVIDIA GPU Telemetry](https://docs.nvidia.com/datacenter/cloud-native/gpu-telemetry/latest/index.html), and [DCGM Diagnostics](https://docs.nvidia.com/datacenter/dcgm/latest/user-guide/dcgm-diagnostics.html).
+- The bundled NVIDIA path intentionally keeps deploy-time validation fast and scoped: operator readiness checks the operator control plane plus scheduler-visible GPUs, GPU visibility runs a bounded CUDA sample on selected Ready GPU nodes, and NCCL remains the optional multi-node communication benchmark. On Ethernet-only shapes it runs in Socket/TCPIP mode for smoke or comparative validation; single-rank 1-GPU runs prove only that the NCCL workload launched and completed. On GPU-cluster / InfiniBand shapes it switches to the RDMA path and becomes the GPUDirect-oriented performance gate. That matches NVIDIA's own split between install verification, sample GPU workload validation, and DCGM-based observability rather than a single heavy post-deploy "health checker". See [About the NVIDIA GPU Operator](https://docs.nvidia.com/datacenter/cloud-native/gpu-operator/24.9/index.html), [GPU Operator Getting Started](https://docs.nvidia.com/datacenter/cloud-native/gpu-operator/23.9.0/getting-started.html), [NVIDIA GPU Telemetry](https://docs.nvidia.com/datacenter/cloud-native/gpu-telemetry/latest/index.html), and [DCGM Diagnostics](https://docs.nvidia.com/datacenter/dcgm/latest/user-guide/dcgm-diagnostics.html).
 - VM-backed `nfs` is a general MK8s RWX storage component, not a
   Soperator-only path. When an enabled `nfs` instance sets
   `inputs.kubernetes_target_ref`, cxcli binds that export to the named MK8s
@@ -1374,9 +1393,9 @@ Wizard field behavior:
   readiness partition and any internal hidden partition are profile plumbing,
   not wizard fields or source-config knobs. For Soperator targets, the create
   wizard still asks the cxcli-owned MK8s GPU validation toggles for GPU
-  visibility, and NCCL. `nccl-test` stays an internal transient
-  validation chart rather than a selectable app, and Soperator ActiveChecks
-  stay disabled unless an operator explicitly chooses Slurm-level diagnostics.
+  visibility, and NCCL. `nccl-test` declares `usage.lifecycle: transient`
+  rather than behaving as a selectable app, and Soperator ActiveChecks stay
+  disabled unless an operator explicitly chooses Slurm-level diagnostics.
   If Soperator NCCL ActiveChecks and cxcli deploy-time NCCL are both runnable,
   cxcli prints a deploy-validation warning because the Slurm NCCL checks and
   transient Kubernetes `MPIJob` can compete for GPUs and RDMA bandwidth, skew
@@ -1664,7 +1683,7 @@ Wizard field behavior:
 - Profile-backed MK8s GPU flows also use `auto_select_first` for `inputs.node_group_defaults.gpu.infiniband_fabric` when the selected shape has live fabric choices, so non-interactive Soperator GPU creates use the same capacity-aware fabric recommendation as the wizard.
 - The bundled Soperator GPU and Mixed production profiles set `reservation.policy: AUTO` on GPU worker node groups. That lets reserved-capacity fabric recommendations consume matching reservations and then fall back to suitable capacity; set the worker node group's reservation policy to `FORBID` in `config.yaml` when a deployment must avoid reservations.
 - Helm chart default values discovered from the live chart are not copied into `config.yaml`; the app wizard can show them as prompt defaults, but only explicit overrides are written back.
-- Current built-in provider option sources include `mk8s_compatible_platforms` (mk8s platform fields), `mk8s_gpu_stack_presets` and `mk8s_node_group_os_values` (mk8s image selection from the compatibility matrix), `mk8s_infiniband_fabrics` (optional mk8s GPU-cluster fabric selection gated by the selected preset's live clustering capability and sourced from live Capacity Dashboard fabric rows when available), `capacity_block_groups` (tenant Capacity Block Groups filtered by region/platform/fabric for GPU reservations), `compute_boot_disk_types`, `compute_platforms`, `compute_platform_presets` (GPU preset labels/ranking are also enriched by live Capacity Dashboard advice for the selected platform/region/preset when tenant/region context is available), `project_subnets`, `project_networks`, `project_private_pools`, `project_private_allocations`, `project_filesystems`, `tenant_projects`, `mk8s_control_plane_versions`, `soperator_nodesets_profiles`, `soperator_partition_profiles`, `soperator_topology_profiles`, and `soperator_node_groups` for target-scoped Soperator role mapping.
+- Current built-in provider option sources include `mk8s_compatible_platforms` (mk8s platform fields), `mk8s_gpu_stack_presets` and `mk8s_node_group_os_values` (mk8s image selection from the compatibility matrix, including selected-OS filtering for GPU stack presets), `mk8s_infiniband_fabrics` (optional mk8s GPU-cluster fabric selection gated by the selected preset's live clustering capability and sourced from live Capacity Dashboard fabric rows when available), `capacity_block_groups` (tenant Capacity Block Groups filtered by region/platform/fabric for GPU reservations), `compute_boot_disk_types`, `compute_platforms`, `compute_platform_presets` (GPU preset labels/ranking are also enriched by live Capacity Dashboard advice for the selected platform/region/preset when tenant/region context is available), `project_subnets`, `project_networks`, `project_private_pools`, `project_private_allocations`, `project_filesystems`, `tenant_projects`, `mk8s_control_plane_versions`, `soperator_nodesets_profiles`, `soperator_partition_profiles`, `soperator_topology_profiles`, and `soperator_node_groups` for target-scoped Soperator role mapping.
 - For GPU presets, cxcli uses live preset metadata as the source of truth for whether the interconnect is Ethernet-only or InfiniBand-capable; it does not hardcode preset-name lists. Today that matches the public Nebius Compute docs: the supported GPU-cluster path is the listed 8-GPU preset set, while single-GPU presets are the testing/dev path with no GPUDirect-RDMA.
 - When the selected plain MK8s GPU shape or fabric has live reserved capacity, the wizard defaults `reservation.policy` to `AUTO`; otherwise it defaults to `FORBID`. The reservation prompt stays after platform/preset/fabric selection because tenant Capacity Block Groups are matched by region, service, platform, and fabric.
 - When live provider options are unavailable, optional wizard fields can still fall back to manual input. Required VPC network/subnet fields fail fast instead of accepting free text, because the selected subnet must be validated against the selected project network.
@@ -2076,6 +2095,9 @@ Local `deploy`/`flux bootstrap` behavior when apps + the bundled `mk8s` componen
 - If all rendered workload resources are already `Ready` and only rendered Flux source objects remain pending without publishing a `Ready` condition, the CLI stops waiting and completes with a concise note instead of hanging until the full timeout. The note points operators at `kubectl get helmreleases.helm.toolkit.fluxcd.io -A` to verify the installed workload releases directly.
 - `deploy` and `flux apply` are intentionally local direct-apply paths. They do not bootstrap GitOps automatically, because that would require implicit GitHub/Flux bootstrap side effects. If the cluster is not bootstrapped yet, the CLI now finishes the local apply and prints a warning with the exact `nebius-cxcli flux bootstrap <generated-dir>` follow-up command. That command takes the local generated bundle path; `flux bootstrap` resolves the GitHub repository separately from `GITHUB_REPOSITORY` or the local git `origin`, and the rendered `generated/flux` path must be committed and pushed before continuous GitOps sync can reproduce local apply.
 - At the end of `deploy`, cxcli prints a compact `Deployment summary` footer with three sections: target-grouped validation PASS/FAIL, copy-paste commands such as `wg-quick up/down`, SSH `ProxyJump`, and GitOps bootstrap follow-ups, and important paths limited to the generated bundle plus `generated/inventory/deploy-report.md`. Machine-readable validation JSON reports remain under `generated/inventory/` for troubleshooting but are not printed in the footer.
+- For day-2 component upgrades, use the top-level `upgrade` command group. See
+  [Upgrade](#upgrade) for supported layers, safety policies, and copy-paste
+  examples.
 - `flux apply` uses that same local app-deploy path without running Terraform apply, so it is the apps-only command for day-2 chart deploys after infra already exists.
 - `terraform apply` is safe to rerun sequentially with the same `generated/infra`: it validates the existing generated infra bundle and then relies on Terraform state convergence. It is not safe to run concurrently against the same backend state; Terraform remote locking is the protection there.
 - `flux apply` is safe to rerun sequentially with the same rendered Flux tree (`generated/flux` or `generated/flux/targets/<target-id>`): it applies the existing rendered manifests, skips Flux controller installation when controllers are already present, and waits for the rendered Flux resources to become `Ready`.
@@ -2090,6 +2112,395 @@ Local `deploy`/`flux bootstrap` behavior when apps + the bundled `mk8s` componen
 - `flux bootstrap` still needs network access to GitHub releases when the managed Flux CLI download path is used.
 - The managed Terraform download path needs network access to HashiCorp releases when Terraform is not already in `PATH`.
 - If your Nebius SDK config already has auth, `deploy` can reuse that SDK config. Otherwise rerun with runtime auth material available, for example `--auto-auth-bootstrap`.
+
+## Upgrade
+
+`nebius-cxcli upgrade` is the day-2 lifecycle surface for version and component
+changes that need cxcli safety gates before live reconciliation. V1 implements
+Kubernetes version upgrades for Terraform-managed MK8s clusters, OS image
+upgrades for Terraform-managed MK8s node groups and generic VM components,
+MK8s node-layer upgrades for GPU stack, platform, CPU preset, and GPU preset
+changes, and target-scoped Helm chart version upgrades.
+
+### Upgrade Principles
+
+- Upgrade commands always take an explicit layer, target selector, and target
+  version or target value, or prompt for missing required values in an
+  interactive terminal. For MK8s Kubernetes upgrades, the selector is
+  `infra:mk8s@<target>`. For OS-image upgrades, the selector can be
+  `infra:mk8s@<target>` or `infra:vm@<target>`.
+- Terraform remains the mutation path for Terraform-managed infrastructure.
+  cxcli updates `config.yaml`, rerenders `generated/`, validates the bundle,
+  runs Terraform plan, then runs Terraform apply in staged order.
+- The Nebius SDK is used for live discovery, version compatibility checks,
+  generated handoff, Kubernetes preflight, progress/error watching, and final
+  rollout verification. cxcli does not shell out to the Nebius CLI for MK8s
+  upgrades.
+- The guided target picker shows only the managed target selector, for example
+  `infra:mk8s@cluster1` or `infra:vm@worker`. Public/private endpoint access is
+  not part of MK8s target identity; it only affects local Kubernetes preflight
+  and post-upgrade validation reachability.
+- Guided upgrade value prompts use the same reusable `OptionChoice` provider
+  path as the main create wizard when live Nebius choices are available. MK8s
+  platform, OS image, GPU stack, CPU preset, and GPU preset choices are resolved
+  from the live SDK-backed compatibility matrix, compute platform inventory,
+  and compute preset inventory before falling back to manual input.
+- `--dry-run` performs live discovery and prints the plan plus a wrapped
+  repeat dry-run command without changing `config.yaml`, `generated/`,
+  Terraform backend state, or live Nebius resources.
+- Upgrade layers stay separate. cxcli does not mix Kubernetes version, OS image,
+  GPU stack, hardware shape, and app/chart concerns in one command. Node
+  firmware is maintained by the Nebius hardware team and is not a customer
+  upgrade layer.
+- Manual desired-state upgrades remain supported outside the `upgrade` command:
+  operators can edit `config.yaml` directly, for example bump
+  `inputs.cluster.k8s_version`, explicit `inputs.node_groups.*.version`, OS,
+  GPU stack, platform, or preset values, then run `render`, review the generated
+  diff and Terraform plan, and use `deploy` or `terraform apply` to reconcile
+  that desired state. This path does not require `upgrade k8s-version`, but it
+  still goes through the guardrails of the chosen generated-bundle command:
+  `deploy` runs the full generated-bundle preflight, including schema/readiness
+  checks, VPC/resource-name preflight, live quota/capacity checks, MK8s
+  GPU-stack compatibility for Nebius-image GPU node groups, Terraform/provider
+  validation, and Flux validation; `terraform apply` is the infra-only path and
+  still runs the MK8s infra preflights plus Terraform/provider validation before
+  apply. Resource replacements or deletes are still governed by the generated
+  diff and Terraform plan.
+
+### Kubernetes Version Upgrade
+
+The implemented V1 command can run as a guided wizard from only `config.yaml`:
+
+```bash
+nebius-cxcli upgrade k8s-version <config.yaml>
+```
+
+In interactive mode the wizard prompts for the Terraform-managed MK8s target,
+target Kubernetes version, dry-run/apply choice, disruption policy, drain
+timeout, and optional post-upgrade validations. Automation should pass the
+explicit target and version, or use `--no-interactive` to fail fast when those
+required values are missing:
+
+```bash
+nebius-cxcli upgrade k8s-version <config.yaml> infra:mk8s@<target> \
+  --to-version <major.minor>
+```
+
+For MK8s Kubernetes version upgrades, cxcli:
+
+- accepts only Terraform-managed `infra:mk8s` targets;
+- can prompt for the target, version, and core optional choices when the
+  target selector or `--to-version` is omitted in an interactive terminal;
+- rejects app and external-cluster selectors;
+- rejects downgrades and skipped minor-version hops. This follows upstream
+  Kubernetes guidance: the
+  [kubeadm upgrade docs](https://kubernetes.io/docs/tasks/administer-cluster/kubeadm/kubeadm-upgrade/)
+  say skipped minor upgrades are unsupported, and the
+  [version-skew policy](https://kubernetes.io/releases/version-skew-policy/)
+  requires `kube-apiserver` upgrades not to skip minor versions;
+- resolves the live cluster through the Nebius SDK by the configured cluster
+  name;
+- queries live control-plane versions and node-group compatibility;
+- updates `inputs.cluster.k8s_version` and every enabled
+  `inputs.node_groups.*.version`;
+- matches live node groups by source key, explicit name, or Terraform-default
+  name `<cluster_name>-<group_key>`;
+- runs each staged Terraform plan as a quiet safety gate, then applies
+  Terraform in order: control plane first, then node groups one at a time, with
+  CPU/system groups before GPU groups;
+- prints an execution-stage summary before live mutation. Stages are per
+  control-plane hop and per node group, not per node; a 1,000-node cluster in
+  one node group is still one node-group stage while Nebius performs the
+  rolling replacement inside that provider-managed group;
+- refuses live node groups that already report a Kubernetes minor above the
+  requested target/control-plane version instead of attempting to plan a
+  downgrade or hidden skew repair;
+- waits for provider node-group status to report target ready/node counts, no
+  outdated nodes, and no active reconciliation;
+- treats GPU validation as a post-upgrade canary phase: after GPU node groups
+  settle, cxcli runs the enabled target-scoped deploy validations such as GPU
+  stack readiness, GPU Visibility, and NCCL unless skipped;
+- prints repeated deploy-validation advisories only once within one upgrade
+  run, even though each rendered stage is validated independently;
+- summarizes `emptyDir` preflight findings as a single advisory because
+  `emptyDir` data is ephemeral by Kubernetes design; this is not a
+  persistent-data blocker when persistent state is stored on PVC-backed volumes
+  and `emptyDir` is used only for scratch or intermediate data;
+- prints a complete repeatable dry-run command after guided dry runs, using
+  the selected config path, target selector, target version, disruption policy,
+  and any non-default drain timeout;
+- resumes already-started rollouts on rerun instead of starting a second
+  upgrade;
+- reconciles stale source/generated files through Terraform plan/apply even
+  when live resources are already at the target version.
+
+If a staged run fails after adding a temporary node-group disruption strategy,
+cxcli restores `config.yaml` and `generated/` to the non-temporary strategy
+state before returning the original error. The rendered MK8s Terraform module
+types that strategy object explicitly, so staged plans can update one node group
+without requiring the same temporary strategy field on every node group. It does
+not attempt a live Terraform rollback inside the exception handler.
+
+If the current OS image or GPU stack is not compatible with the target
+Kubernetes version, cxcli fails with node-layer follow-up guidance instead of
+mixing that layer into the Kubernetes upgrade. For OS changes, that follow-up
+can be the implemented `upgrade os-image` command; GPU stack changes remain a
+separate future layer.
+
+Add-on and app chart changes stay outside `upgrade k8s-version`; validate their
+compatibility before the Kubernetes upgrade and roll them through a controlled
+chart/Flux phase. Rollback is not an in-place Kubernetes downgrade. For
+high-risk GPU or production workloads, prefer a blue/green cluster or new
+node-group migration and move workloads only after validation.
+
+### OS Image Upgrade
+
+`upgrade os-image` can run as a guided wizard from only `config.yaml`:
+
+```bash
+nebius-cxcli upgrade os-image <config.yaml>
+```
+
+In interactive mode the wizard lists upgradeable Terraform-managed
+`infra:mk8s@<target>` and generic `infra:vm@<target>` components, prompts for
+the target OS image value, and defaults to a dry run. Its prompts mirror the
+command flags: leave the optional MK8s `node_group` field blank to omit
+`--node-group` and upgrade every managed node group, or enter a source key or
+live name only when narrowing the flag to one node group. Automation should
+pass the explicit selector and `--to-os`, or use `--no-interactive` to fail fast
+when required values are missing.
+
+For MK8s, `upgrade os-image` changes the Nebius node template OS, such as
+`ubuntu24.04`, for Terraform-managed node groups:
+
+```bash
+nebius-cxcli upgrade os-image <config.yaml> infra:mk8s@<target> \
+  --to-os ubuntu24.04
+```
+
+For MK8s OS image upgrades, cxcli:
+
+- accepts only Terraform-managed `infra:mk8s` targets;
+- treats OS as `inputs.node_groups.<group>.os` / Terraform
+  `template.os`, not as VM public image family selection and not as SSH or
+  apt-based package management;
+- resolves the live cluster and node groups through the Nebius SDK, then checks
+  the live MK8s compatibility matrix for the current Kubernetes version,
+  platform, OS, and GPU `drivers_preset` combination;
+- can update all managed node groups by leaving `--node-group` unset, or one
+  group by passing `--node-group <source-key-or-live-name>`;
+- updates `config.yaml`, rerenders `generated/`, validates the bundle, runs a
+  quiet Terraform plan, then applies one node group at a time in the same
+  CPU/system-before-GPU order used by Kubernetes version upgrades;
+- waits for Managed Kubernetes to finish rolling replacement for each selected
+  node group before moving on;
+- uses the same disruption policies and drain-timeout defaults as
+  `upgrade k8s-version`.
+
+Nebius documents node-template changes as Managed Kubernetes rolling updates:
+replacement nodes are created, old nodes are cordoned, drained, and deleted
+according to the node-group deployment strategy. If the requested OS is not
+compatible with the current Kubernetes version, platform, or GPU stack preset,
+cxcli fails before writing files and prints the compatibility blocker.
+
+For generic VM components, `upgrade os-image` changes
+`infra:vm@<target>.inputs.source_image_family` through Terraform desired state:
+
+```bash
+nebius-cxcli upgrade os-image <config.yaml> infra:vm@<target> \
+  --to-os ubuntu24.04-driverless
+```
+
+For VM OS image upgrades, cxcli:
+
+- accepts only enabled generic `infra:vm` components that use
+  `inputs.source_image_family` with a module-managed boot disk;
+- lists live Nebius public image-family choices for the selected VM platform
+  when the SDK-backed provider lookup is available;
+- refuses VM rows that use `inputs.source_image_id` or
+  `inputs.boot_disk_existing_id`, because those boot sources are explicit
+  operator choices outside this command;
+- updates `config.yaml`, rerenders `generated/`, validates the bundle, runs a
+  quiet Terraform plan, then applies Terraform with the existing compute
+  instance status watcher for the selected VM;
+- treats `--node-group`, `--disruption-policy allow-unavailable`, and
+  `--disruption-policy force-delete` as MK8s-only semantics;
+- does not SSH to VMs, run apt, or mutate packages in place.
+
+### Disruption Policies
+
+`upgrade k8s-version` and `upgrade os-image` use `--disruption-policy` plus
+`--drain-timeout` to control node replacement safety:
+
+```text
+safe              -> none
+allow-unavailable -> 30m
+force-delete      -> 10m
+```
+
+- `safe` is the default. It requires rolling replacement headroom, respects
+  PDBs, and rejects finite drain timeouts. cxcli always prints a general
+  safe-mode warning because this policy usually needs spare quota/capacity; it
+  fails preflight when quota assessment reports a shortage.
+- `allow-unavailable` uses zero surge, one unavailable node, and a bounded
+  drain timeout. Workloads may become unavailable, Pods may stay Pending until
+  replacement capacity returns, and PDB blockers still stop preflight.
+- `force-delete` is a last-resort mode selected explicitly through the
+  disruption policy. It sets a finite Terraform node-group `drain_timeout` so
+  Managed Kubernetes may fall back to Pod deletion after the timeout.
+
+`--drain-timeout auto` resolves to the defaults above. Duration values use
+Go-style units such as `10m`, `30m`, or `1h`; finite values are accepted only
+with `allow-unavailable` or `force-delete`.
+
+The drain timeout is the provider drain fallback, not cxcli's whole rollout
+watch. cxcli's SDK node-group rollout watch starts after each Terraform apply,
+is for the whole node group, and uses `max(1h, 10m * target node count)`.
+
+cxcli never deletes PVC/PV objects. Persistent volumes remain Kubernetes
+storage objects, but forced Pod deletion can still create application-level
+consistency risk when old processes, shared storage, locks, or external APIs are
+involved.
+
+Kubernetes preflight inspection failures block non-dry runs for every
+disruption policy, including `force-delete`, because cxcli cannot safely
+distinguish known blockers from unknown cluster state.
+
+### Upgrade Examples
+
+Run the guided Kubernetes upgrade wizard:
+
+```bash
+nebius-cxcli upgrade k8s-version \
+  ~/deployments/tenant-name-example/project-name-example/config.yaml
+```
+
+Plan a Kubernetes upgrade without writes:
+
+```bash
+nebius-cxcli upgrade k8s-version \
+  ~/deployments/tenant-name-example/project-name-example/config.yaml \
+  infra:mk8s@mk8s \
+  --to-version 1.33 \
+  --dry-run
+```
+
+Run a safe Kubernetes upgrade:
+
+```bash
+nebius-cxcli upgrade k8s-version \
+  ~/deployments/tenant-name-example/project-name-example/config.yaml \
+  infra:mk8s@mk8s \
+  --to-version 1.33
+```
+
+Run an upgrade when downtime is acceptable but graceful drain semantics should
+still be used:
+
+```bash
+nebius-cxcli upgrade k8s-version \
+  ~/deployments/tenant-name-example/project-name-example/config.yaml \
+  infra:mk8s@mk8s \
+  --to-version 1.33 \
+  --disruption-policy allow-unavailable
+```
+
+Use a custom bounded drain timeout for `allow-unavailable`:
+
+```bash
+nebius-cxcli upgrade k8s-version \
+  ~/deployments/tenant-name-example/project-name-example/config.yaml \
+  infra:mk8s@mk8s \
+  --to-version 1.33 \
+  --disruption-policy allow-unavailable \
+  --drain-timeout 45m
+```
+
+Use the last-resort force-delete policy:
+
+```bash
+nebius-cxcli upgrade k8s-version \
+  ~/deployments/tenant-name-example/project-name-example/config.yaml \
+  infra:mk8s@mk8s \
+  --to-version 1.33 \
+  --disruption-policy force-delete
+```
+
+Skip optional post-upgrade deploy validations:
+
+```bash
+nebius-cxcli upgrade k8s-version \
+  ~/deployments/tenant-name-example/project-name-example/config.yaml \
+  infra:mk8s@mk8s \
+  --to-version 1.33 \
+  --skip-validations
+```
+
+Run the guided OS image upgrade wizard:
+
+```bash
+nebius-cxcli upgrade os-image \
+  ~/deployments/tenant-name-example/project-name-example/config.yaml
+```
+
+Plan an OS image upgrade for one node group:
+
+```bash
+nebius-cxcli upgrade os-image \
+  ~/deployments/tenant-name-example/project-name-example/config.yaml \
+  infra:mk8s@mk8s \
+  --to-os ubuntu24.04 \
+  --node-group system \
+  --dry-run
+```
+
+Plan a generic VM source image-family upgrade without writes:
+
+```bash
+nebius-cxcli upgrade os-image \
+  ~/deployments/tenant-name-example/project-name-example/config.yaml \
+  infra:vm@worker \
+  --to-os ubuntu24.04-driverless \
+  --dry-run
+```
+
+### Node-Layer And Helm Upgrades
+
+For MK8s node-template layers, pass `config.yaml` alone in an interactive
+terminal to choose the managed MK8s target and flags through the wizard, or pass
+the selector and target flag explicitly for automation:
+
+```bash
+nebius-cxcli upgrade gpu-stack-preset <config.yaml> infra:mk8s@<target> --to-preset cuda13.0
+nebius-cxcli upgrade platform <config.yaml> infra:mk8s@<target> --to-platform cpu-d3
+nebius-cxcli upgrade cpu-preset <config.yaml> infra:mk8s@<target> --to-preset <preset>
+nebius-cxcli upgrade gpu-preset <config.yaml> infra:mk8s@<target> --to-preset <preset>
+nebius-cxcli upgrade helm-chart <config.yaml> apps:<chart>@<target> --to-version <chart-version>
+```
+
+- `gpu-stack-preset` means the MK8s `drivers_preset` /
+  cxcli `gpu_stack_preset`, such as `cuda13.0`.
+- `platform`, `cpu-preset`, and `gpu-preset` update MK8s node-group
+  desired-state fields through the same render, validation, Terraform
+  plan/apply, and Managed Kubernetes rollout wait path as the other MK8s
+  upgrade commands. `cpu-preset` targets CPU/system node groups, while
+  `gpu-preset` targets GPU node groups.
+- In guided mode, `to_platform`, `to_preset`, and OS-image prompts are live
+  provider-driven lists when Nebius SDK/provider data is available. The
+  optional `node_group` prompt stays a simple flag-value prompt; blank keeps
+  `--node-group` unset and applies the command's normal group filter.
+- `helm-chart` updates the selected target-scoped `apps.charts[]` row version,
+  rerenders, validates, and applies the selected target's Flux bundle. It has
+  no node-drain flags.
+- Operators can still upgrade manually by editing the required desired-state
+  values in `config.yaml`, such as Kubernetes version, OS image, platform,
+  preset, GPU stack preset, or chart version, then running `render` and
+  `deploy` or the narrower Terraform/Flux command. Use the structured
+  `upgrade` command for these specific changes when you want its live
+  discovery, compatibility checks, preflight checks, staged output, and repeat
+  dry-run command.
+- Node firmware is maintained by the Nebius hardware team and is not a customer
+  upgrade responsibility.
 
 ## Releases
 
@@ -2242,7 +2653,7 @@ nebius-cxcli flux bootstrap /path/to/generated
   - Uses the generated bundle as the deploy contract; it does not need the original render machine's local module paths.
   - Example: `nebius-cxcli validate-generated ~/deployments/tenant-name-example/project-name-example/generated --portable`
 - `deploy <config.yaml>`
-  - Full local reconcile from the generated bundle: `deploy` resolves the sibling `generated/` directory and loads `generated/nebius-cxcli-manifest.json` as the authoritative deploy input. That keeps the rendered bundle, not the latest source file edits, as the applied contract. Before Terraform apply, `deploy` runs a generated-bundle preflight covering strict deployment-readiness checks against the manifest runtime config, VPC networking preflight, live Nebius quota/capacity validation, and Terraform validation for `generated/infra`; on bundled MK8s that Terraform-validation pass now also catches live MK8s cluster / derived GPU-cluster name collisions that are not already managed in the current Terraform state, while treating Nebius `NOT_FOUND` responses as the normal "resource is absent" case. `deploy` then applies Terraform, writes an interim inventory report from infra/app artifacts, applies Flux when app charts are enabled, captures runtime status such as Grafana URLs, runs deploy-time validations, and refreshes the final `deploy-report.md`. On success, the terminal footer prints target-grouped validation PASS/FAIL, copy-paste commands, and only the generated bundle plus `generated/inventory/deploy-report.md` paths. Local runs now merge every selected built-in cluster target into `~/.kube/config`; single-target runs still switch `current-context`, while multi-target runs preserve the operator's existing `current-context` and add switchable contexts for each target. Plain multi-target `deploy` and `deploy --all-targets` reconcile every generated target, and `flux apply --all-targets` / `flux bootstrap --all-targets` leave every selected target available through `kubectl config use-context ...`. Use `deploy --target <target-id>` only when you want to narrow app and validation work to one target. If GitOps bootstrap is not configured yet, the CLI warns and includes the follow-up `flux bootstrap` command in the copy-paste footer when Flux work actually runs.
+  - Full local reconcile from the generated bundle: `deploy` resolves the sibling `generated/` directory and loads `generated/nebius-cxcli-manifest.json` as the authoritative deploy input. That keeps the rendered bundle, not the latest source file edits, as the applied contract. Before Terraform apply, `deploy` runs a generated-bundle preflight covering strict deployment-readiness checks against the manifest runtime config, VPC networking preflight, live Nebius quota/capacity validation, Terraform validation for `generated/infra`, and MK8s GPU-stack compatibility for Nebius-image GPU node groups; on bundled MK8s that Terraform-validation pass now also catches live MK8s cluster / derived GPU-cluster name collisions that are not already managed in the current Terraform state, while treating Nebius `NOT_FOUND` responses as the normal "resource is absent" case. `deploy` then applies Terraform, writes an interim inventory report from infra/app artifacts, applies Flux when app charts are enabled, captures runtime status such as Grafana URLs, runs deploy-time validations, and refreshes the final `deploy-report.md`. On success, the terminal footer prints target-grouped validation PASS/FAIL, copy-paste commands, and only the generated bundle plus `generated/inventory/deploy-report.md` paths. Local runs now merge every selected built-in cluster target into `~/.kube/config`; single-target runs still switch `current-context`, while multi-target runs preserve the operator's existing `current-context` and add switchable contexts for each target. Plain multi-target `deploy` and `deploy --all-targets` reconcile every generated target, and `flux apply --all-targets` / `flux bootstrap --all-targets` leave every selected target available through `kubectl config use-context ...`. Use `deploy --target <target-id>` only when you want to narrow app and validation work to one target. If GitOps bootstrap is not configured yet, the CLI warns and includes the follow-up `flux bootstrap` command in the copy-paste footer when Flux work actually runs.
   - The live quota/capacity preflight uses the Capacity Dashboard for GPU quota dimensions, converts matching VM-slot availability to GPU units, and is rerun-safe for existing bundled MK8s clusters: after backend init, cxcli subtracts the MK8s quota already managed in the current Terraform state before comparing the desired bundle against live quota/capacity. Unchanged reruns therefore stay idempotent instead of failing like first deploys, while real extra requested capacity still fails fast with an explicit quota/capacity message and the exact `quota-request` / `quota-check --all-regions` follow-up commands when it exceeds live availability.
 - Deploy-time MK8s GPU checks are configured per target under `deploy.targets[].validations.mk8s_gpu.*`, where each row uses `instance_id` to bind to the cluster target. The Observability Agent ingestion check is generated for each observability-enabled MK8s target when the active settings catalog leaves `components.infra.mk8s.cli.observability.primary_agent.validation` enabled; that settings-catalog switch defaults to enabled and is separate from customer `config.yaml`. Native ESO MysteryBox connectivity is generated as a required guardrail whenever target-scoped MysteryBox sync is configured, so `--skip-validations` and repeatable `--skip-validation <kind>` only skip optional checks such as `nccl`, `gpu-visibility`, or `observability-ingestion`; those CLI flags do not rewrite `config.yaml`. If a validation fails before its normal report is complete, `deploy` still writes a failure JSON report so the combined deploy summary shows `FAIL` with the underlying error instead of `NOT RUN`.
 - Ongoing GPU health and performance monitoring is intentionally outside that fast deploy loop. NVIDIA positions DCGM Exporter as the Kubernetes telemetry path for Prometheus/Grafana, while deeper DCGM diagnostics are invasive administrator workflows with different run levels and runtimes, so cxcli does not fold those checks into every local `deploy`.
@@ -2260,7 +2671,7 @@ nebius-cxcli flux bootstrap /path/to/generated
   - Full local teardown from the generated bundle. `destroy` resolves sibling `generated/` from the project config, then uses the generated manifest as the authoritative teardown contract for all rendered project resources. When app charts are enabled, it deletes rendered Flux and locally applied post-Flux app resources first so Kubernetes finalizers and CSI cleanup can run, then runs Terraform destroy against the rendered infra bundle. For generated bundles with built-in MK8s handoff metadata, Terraform still removes the handed-off cluster after app teardown.
   - For onboarded external MK8s targets, the cluster and node groups are not Terraform-owned and are not destroyed. `destroy` removes only rendered app resources from that external target plus any explicitly cxcli-owned add-on infra in the generated bundle.
   - `destroy` is the destructive inverse of `deploy` and is intentionally project-wide. It does not rerender from `config.yaml`, and it does not uninstall Flux controllers or mutate GitHub CI/bootstrap state.
-  - Rendered app teardown is best-effort when Terraform will destroy a managed cluster afterward. For an external MK8s target with no Terraform cluster destroy fallback, rendered app teardown failure is fatal so cxcli does not silently leave selected apps half-managed.
+  - Rendered app teardown failure is fatal before Terraform destroy when app charts are enabled, even for managed clusters that Terraform will remove afterward. In multi-target generated bundles, cxcli attempts all selected targets first and then reports the collected teardown failure so Kubernetes finalizers and CSI cleanup are not skipped silently.
   - During destroy recovery, the CLI can automatically clear a stale Terraform backend lock and retry once. If destroy is still blocked by a live MK8s node-group create that is stuck in terminal-error provisioning, the CLI can delete that stuck node group via the Nebius SDK and retry destroy again.
   - The command requires explicit confirmation in interactive mode and `--yes` in non-interactive mode.
   - If you only want the infra teardown, use `terraform destroy`. If you only want the rendered app teardown, use `flux destroy`.
@@ -2269,6 +2680,7 @@ nebius-cxcli flux bootstrap /path/to/generated
   - Infra-only apply from the generated Terraform bundle. Safe to rerun sequentially for convergence, and does not depend on resolving the original source catalog's module paths.
   - Accepts the project `generated/` directory or a path under `generated/infra/`; other generated subtrees such as `generated/flux/` are rejected so infra-only commands cannot accidentally target app manifests.
   - In a fresh checkout, use this cxcli wrapper instead of raw `terraform apply`: it loads `generated/nebius-cxcli-manifest.json`, recreates the ignored `generated/infra/terraform.auto.tfvars.json`, prepares backend auth, and then runs Terraform from `generated/infra`.
+  - For bundled MK8s, it runs VPC networking and Nebius-image GPU-stack compatibility preflight before Terraform apply, so unsupported `platform` + `os` + `gpu_stack_preset` tuples fail in cxcli instead of surfacing as provider API errors during apply.
   - Example: `nebius-cxcli terraform apply ~/deployments/tenant-name-example/project-name-example/generated`
 - `terraform destroy <generated-dir>`
   - Infra-only destroy from the generated Terraform bundle. Destructive by intent, requires confirmation or `--yes`, and reuses the same generated-bundle runtime auth/backend/status machinery as `terraform apply`.
@@ -2325,7 +2737,9 @@ nebius-cxcli auth --project-config /path/to/config.yaml --validate-profile
   - `discover`: pass the deployments root or any narrower directory under it, including one project directory or `generated/`.
   - `component list/add/remove`: pass the project `config.yaml` with `--config <config.yaml>` so component selectors can be written first.
   - `grafana`: no positional path; use `--export-dashboard <grafana-base-or-folder-url>` or `--dashboard-json <path>` and optional `--component-sources` with `--attach`.
-  - `component`, `validate`, `validate-dashboards`, `quota-check`, `quota-request`, `render`, `deploy`, `bootstrap-ci`, `wireguard`, `ssh-jumphost`, `destroy`, `email`: operate on the project `config.yaml`.
+  - `component`, `validate`, `validate-dashboards`, `quota-check`, `quota-request`, `render`, `deploy`, `upgrade`, `bootstrap-ci`, `wireguard`, `ssh-jumphost`, `destroy`, `email`: operate on the project `config.yaml`.
+  - `upgrade k8s-version`: pass `config.yaml` alone in an interactive terminal to choose the managed MK8s target, version, and options through the wizard; pass an explicit `infra:mk8s@<target>` selector plus `--to-version <major.minor>` for automation. V1 supports Terraform-managed MK8s targets only.
+  - `upgrade os-image`: pass `config.yaml` alone in an interactive terminal to choose an upgradeable `infra:mk8s@<target>` or `infra:vm@<target>` component through the wizard; pass an explicit selector plus `--to-os <os>` for automation. MK8s selectors update node template OS values and can use `--node-group <source-key-or-live-name>` to narrow the rolling update to one group. VM selectors update generic `infra:vm` `inputs.source_image_family`.
   - `validate-generated`: pass `generated/`, one of its subdirectories, or a file under that tree.
   - `terraform *`: pass the project `generated/` directory or a path under `generated/infra/`.
   - `flux *`: pass the project `generated/` directory or a path under `generated/flux/`.
@@ -2341,15 +2755,21 @@ nebius-cxcli auth --project-config /path/to/config.yaml --validate-profile
   - Interactive API exports show sorted folder/dashboard lists; type a starting letter or digit to jump within the list.
   - Example: `nebius-cxcli grafana --export-dashboard https://grafana.example.invalid/ --folder-uid folder-uid --dashboard-uid dashboard-uid --dashboard-folder mk8s --datasource "Nebius User Metrics" --attach`
   - Example: `nebius-cxcli grafana --dashboard-json ./dashboards/mk8s/custom.json --dashboard-folder mk8s --datasource "Nebius User Metrics" --attach`
+- Upgrade commands have a dedicated operator section. See [Upgrade](#upgrade)
+  for the copy-paste commands, disruption policies, drain-timeout defaults,
+  Terraform/SDK ownership model, node-layer upgrades, Helm chart upgrades, and
+  manual desired-state fallback.
 - `component add [component-selector...] --config <config.yaml>`
   - Adds source-defined infra module rows or app chart rows to an existing project config without recreating the project scaffold.
   - Catalog entries are reusable component types. Each newly added infra row has its own `instance_id`; for scalar named infra modules, the user-facing `inputs.name` or catalog-declared scalar `status.name_input` is the source of truth and `instance_id` is derived from that normalized name. Target-bound app chart rows are selected as `<chart-id>@<target-id>`. For target-bound charts, the app `instance_id` is the cluster target id, and the same chart can be enabled only once per target.
-  - Catalog-internal validation charts such as `nccl-test` are not `--app` or
-    `component add` selectors. Enable NCCL through the target-facing
-    `deploy.targets[].validations.mk8s_gpu.nccl.enabled` setting or the MK8s
-    create wizard GPU validation prompts. For Soperator production-training
-    targets, leave that generic NCCL path off; enable Soperator ActiveChecks
-    only for benchmark/diagnostic clusters or maintenance windows.
+  - Transient catalog charts such as `nccl-test` are not `--app` or
+    `component add` selectors. They declare `usage.lifecycle: transient` and
+    `usage.config.ref`, so selector errors point to the target-facing config
+    field that activates the runtime flow. Enable NCCL through
+    `deploy.targets[].validations.mk8s_gpu.nccl` or the MK8s create wizard GPU
+    validation prompts. For Soperator production-training targets, leave that
+    generic NCCL path off; enable Soperator ActiveChecks only for
+    benchmark/diagnostic clusters or maintenance windows.
   - Interactive mode prompts for infra first and can complete an infra-only add without selecting any app. It asks for app selection only when no infra was selected or when you explicitly choose to add apps too, then confirms the final selection, auto-resolves app chart dependencies plus `release.install_after` prerequisites, and runs the field wizard only for the newly added components. Auto-enabled app rows created by that field wizard are target-scoped to the newly selected target, so adding `mk8s@cluster2` to a config that already has `cluster1` shows and prompts only the new rows such as `grafana@cluster2`. If apps are selected without an enabled MK8s target, cxcli warns immediately and sends the operator back to select `infra:mk8s` or remove the app selection.
   - When that wizard reaches per-component field phases, infra components
     default to `y` and app charts default to `n`. Answering `n` for a newly
@@ -2571,10 +2991,10 @@ nebius-cxcli auth --project-config /path/to/config.yaml --validate-profile
   - Resolves sibling `generated/` automatically and reads the recipient/runtime snapshot from the generated manifest rather than live source edits.
   - The recipient email comes from the generated-bundle runtime config snapshot in `generated/nebius-cxcli-manifest.json`, not from the rendered report artifact.
   - SMTP is disabled by default. Run `nebius-cxcli email --setup` to create, update, or remove local SMTP settings under `~/.config/nebius-cxcli/email.yaml`.
-  - Local email config stores host/port/STARTTLS/from and optional username/password. Runtime `SMTP_HOST`, `SMTP_PORT`, `SMTP_STARTTLS`, `SMTP_FROM`, `SMTP_USERNAME`, and `SMTP_PASSWORD` still override those local values when set.
+  - Local email config stores host/port/STARTTLS/from and optional username/password. Runtime `SMTP_HOST`, `SMTP_PORT`, `SMTP_STARTTLS`, `SMTP_FROM`, `SMTP_USERNAME`, and `SMTP_PASSWORD` still override those local values when set. Setup, GitHub sync, and sending require STARTTLS so report contents and optional SMTP credentials are not sent in plaintext.
   - Per-client send/no-send stays in `config.yaml`: `client_info.notifications.email_enabled: true|false`.
   - When `client_info.notifications.email_enabled` is `true` but SMTP is missing, the command warns and exits successfully instead of failing the deploy/email workflow.
-  - The email path masks tenant and project identifiers in the subject/body down to their last 4 characters; the on-disk `deploy-report.md` stays unchanged.
+  - The email path redacts tenant and project identifiers in the subject/body; the on-disk `deploy-report.md` stays unchanged.
   - Example: `nebius-cxcli email ~/deployments/tenant-name-example/project-name-example/config.yaml`
 - `auth`
   - Manages runtime auth profiles and optional GitHub environment secret sync.
@@ -2600,6 +3020,10 @@ Common command flags:
 - `validate-generated`: `--auto-auth-bootstrap/--no-auto-auth-bootstrap`, `--portable`
 - `render`: `--force`
 - `deploy`: `--auto-auth-bootstrap/--no-auto-auth-bootstrap`, `--skip-validations`, `--skip-validation`, `--target`, `--all-targets`
+- `upgrade k8s-version`: `--to-version`, `--dry-run`, `--disruption-policy`, `--drain-timeout`, `--auto-auth-bootstrap/--no-auto-auth-bootstrap`, `--skip-validations`, `--skip-validation`, `--interactive/--no-interactive`
+- `upgrade os-image`: `--to-os`, `--node-group`, `--dry-run`, `--disruption-policy`, `--drain-timeout`, `--interactive/--no-interactive`
+- Node-layer upgrades (`upgrade gpu-stack-preset`, `upgrade platform`, `upgrade cpu-preset`, `upgrade gpu-preset`): target flag (`--to-preset` or `--to-platform`), `--node-group`, `--dry-run`, `--disruption-policy`, `--drain-timeout`, `--interactive/--no-interactive`
+- `upgrade helm-chart`: `--to-version`, `--dry-run`, `--interactive/--no-interactive`
 - `destroy`: `--auto-auth-bootstrap/--no-auto-auth-bootstrap`, `--yes`
 - `discover`: `--all`
 - `wireguard`:

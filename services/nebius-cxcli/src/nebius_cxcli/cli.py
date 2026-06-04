@@ -25,6 +25,7 @@ import urllib.request
 from collections import deque
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from contextlib import ExitStack, contextmanager, suppress
+from contextvars import ContextVar
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from functools import lru_cache
@@ -249,9 +250,49 @@ from .mk8s_node_groups import (
     iter_node_groups as iter_mk8s_node_groups,
 )
 from .mk8s_preflight import (
+    has_mk8s_gpu_stack_compatibility_preflight_targets,
     has_mk8s_resource_name_preflight_targets,
+    validate_mk8s_gpu_stack_compatibility_preflight,
     validate_mk8s_resource_name_preflight,
     validate_vpc_networking_preflight,
+)
+from .mk8s_upgrade import (
+    DISRUPTION_POLICY_ALLOW_UNAVAILABLE,
+    DISRUPTION_POLICY_FORCE_DELETE,
+    DISRUPTION_POLICY_SAFE,
+    MK8S_COMPONENT_ID,
+    DrainTimeout,
+    Mk8sKubernetesVersionExecutor,
+    NodeLayerUpgradeSpec,
+    blocking_preflight_findings,
+    collect_kubernetes_preflight_findings,
+    find_source_mk8s_component,
+    format_node_layer_upgrade_plan,
+    format_os_image_upgrade_plan,
+    format_upgrade_plan,
+    node_group_layer_rollout_complete,
+    node_group_os_rollout_complete,
+    parse_k8s_version,
+    parse_upgrade_selector,
+    plan_k8s_upgrade,
+    plan_node_layer_upgrade,
+    plan_os_image_upgrade,
+    render_updated_source_payload,
+    resolve_drain_timeout,
+    set_source_node_group_strategies,
+    source_mk8s_cluster_name,
+    source_node_group_strategy_snapshot,
+    source_node_group_versions_for_plan,
+    terraform_node_group_strategy_for_policy,
+    update_source_k8s_versions,
+    update_source_node_group_field,
+    update_source_node_group_os,
+    validate_disruption_policy,
+    validate_node_layer_value,
+    validate_os_image_value,
+    wait_for_node_group_rollout,
+    wait_for_node_layer_rollout,
+    wait_for_os_image_rollout,
 )
 from .mysterybox_eso import (
     EXTERNAL_SECRETS_APP_ID,
@@ -285,6 +326,16 @@ from .observability import (
 from .observability_validation import (
     OBSERVABILITY_INGESTION_VALIDATION_KIND,
     run_observability_validations,
+)
+from .os_image_upgrade import (
+    VM_COMPONENT_ID,
+    find_source_vm_component,
+    format_vm_os_image_upgrade_plan,
+    plan_vm_os_image_upgrade,
+    source_vm_image_family,
+    source_vm_platform,
+    source_vm_uses_managed_image_family,
+    update_source_vm_image_family,
 )
 from .paths import (
     ProjectPaths,
@@ -376,6 +427,11 @@ from .terraform_ops import (
     terraform_validate,
 )
 from .terraform_provider import build_provider_module_name
+from .upgrade_wizard import (
+    mk8s_os_image_choices,
+    node_layer_value_choices,
+    recommended_choice_value,
+)
 from .wireguard_clients import (
     WireGuardClientGenerationRequest,
     WireGuardLocalSubnetUpdateRequest,
@@ -390,6 +446,10 @@ from .wireguard_clients import (
 )
 
 console = Console()
+_DEPLOY_VALIDATION_WARNING_CACHE: ContextVar[set[str] | None] = ContextVar(
+    "deploy_validation_warning_cache",
+    default=None,
+)
 
 _SOPERATOR_CHILD_CHART_VALUE_KEYS = frozenset(
     {
@@ -1176,6 +1236,60 @@ def _require_component_config_option(config_path: Path | None) -> Path:
     return config_path
 
 
+_UPGRADE_EXAMPLE_CONFIG = "~/deployments/tenant-name-example/project-name-example/config.yaml"
+_UPGRADE_GROUP_EPILOG = (
+    "Examples: "
+    f"nebius-cxcli upgrade k8s-version {_UPGRADE_EXAMPLE_CONFIG} "
+    "(guided wizard)  |  "
+    f"nebius-cxcli upgrade k8s-version {_UPGRADE_EXAMPLE_CONFIG} "
+    "infra:mk8s@mk8s --to-version 1.33 --dry-run  |  "
+    f"nebius-cxcli upgrade os-image {_UPGRADE_EXAMPLE_CONFIG} "
+    "(guided wizard)  |  "
+    f"nebius-cxcli upgrade os-image {_UPGRADE_EXAMPLE_CONFIG} "
+    "infra:mk8s@mk8s --to-os ubuntu24.04 --dry-run  |  "
+    f"nebius-cxcli upgrade os-image {_UPGRADE_EXAMPLE_CONFIG} "
+    "infra:vm@worker --to-os ubuntu24.04-driverless --dry-run  |  "
+    f"nebius-cxcli upgrade k8s-version {_UPGRADE_EXAMPLE_CONFIG} "
+    "infra:mk8s@mk8s --to-version 1.33 --disruption-policy allow-unavailable  |  "
+    "nebius-cxcli upgrade gpu-stack-preset <config.yaml> infra:mk8s@<target> --to-preset cuda13.0  |  "
+    "nebius-cxcli upgrade platform <config.yaml> infra:mk8s@<target> --to-platform cpu-d3  |  "
+    "nebius-cxcli upgrade cpu-preset <config.yaml> infra:mk8s@<target> --to-preset <preset>  |  "
+    "nebius-cxcli upgrade gpu-preset <config.yaml> infra:mk8s@<target> --to-preset <preset>  |  "
+    "nebius-cxcli upgrade helm-chart <config.yaml> apps:<chart>@<target> --to-version <chart-version>."
+)
+_UPGRADE_K8S_EPILOG = (
+    "Examples: "
+    f"Guided wizard: nebius-cxcli upgrade k8s-version {_UPGRADE_EXAMPLE_CONFIG}  |  "
+    f"Dry-run plan: nebius-cxcli upgrade k8s-version {_UPGRADE_EXAMPLE_CONFIG} "
+    "infra:mk8s@mk8s --to-version 1.33 --dry-run  |  "
+    f"Safe upgrade: nebius-cxcli upgrade k8s-version {_UPGRADE_EXAMPLE_CONFIG} "
+    "infra:mk8s@mk8s --to-version 1.33  |  "
+    f"Allow unavailable: nebius-cxcli upgrade k8s-version {_UPGRADE_EXAMPLE_CONFIG} "
+    "infra:mk8s@mk8s --to-version 1.33 --disruption-policy allow-unavailable  |  "
+    f"Custom drain timeout: nebius-cxcli upgrade k8s-version {_UPGRADE_EXAMPLE_CONFIG} "
+    "infra:mk8s@mk8s --to-version 1.33 --disruption-policy allow-unavailable "
+    "--drain-timeout 45m  |  "
+    f"Last-resort force-delete: nebius-cxcli upgrade k8s-version {_UPGRADE_EXAMPLE_CONFIG} "
+    "infra:mk8s@mk8s --to-version 1.33 --disruption-policy force-delete. "
+    "Defaults: safe -> none, allow-unavailable -> 30m, force-delete -> 10m. "
+    "force-delete never deletes PVC/PV objects."
+)
+_UPGRADE_OS_IMAGE_EPILOG = (
+    "Examples: "
+    f"Guided wizard: nebius-cxcli upgrade os-image {_UPGRADE_EXAMPLE_CONFIG}  |  "
+    f"Dry-run plan: nebius-cxcli upgrade os-image {_UPGRADE_EXAMPLE_CONFIG} "
+    "infra:mk8s@mk8s --to-os ubuntu24.04 --dry-run  |  "
+    f"VM dry-run plan: nebius-cxcli upgrade os-image {_UPGRADE_EXAMPLE_CONFIG} "
+    "infra:vm@worker --to-os ubuntu24.04-driverless --dry-run  |  "
+    f"One node group: nebius-cxcli upgrade os-image {_UPGRADE_EXAMPLE_CONFIG} "
+    "infra:mk8s@mk8s --to-os ubuntu24.04 --node-group system  |  "
+    f"Allow unavailable: nebius-cxcli upgrade os-image {_UPGRADE_EXAMPLE_CONFIG} "
+    "infra:mk8s@mk8s --to-os ubuntu24.04 --disruption-policy allow-unavailable. "
+    "Defaults: safe -> none, allow-unavailable -> 30m, force-delete -> 10m. "
+    "This changes the MK8s node template OS through Terraform and Managed "
+    "Kubernetes rolling node replacement, or a generic VM source_image_family "
+    "through Terraform replacement; it does not SSH to nodes or run apt."
+)
 app = typer.Typer(
     add_completion=False,
     help=(
@@ -1187,7 +1301,7 @@ app = typer.Typer(
         "discover uses a deployment-scope directory; grafana exports dashboard JSON from a "
         "Grafana API or local JSON file and only edits component_sources.yaml with --attach; "
         "validate, validate-dashboards, quota-check, quota-request, render, deploy, "
-        "and bootstrap-ci use config.yaml; "
+        "upgrade, and bootstrap-ci use config.yaml; "
         "destroy uses config.yaml to tear down all rendered project resources from sibling generated/; "
         "email also uses config.yaml and resolves sibling generated/ automatically; "
         "wireguard uses config.yaml to generate client configs and manage VM-local "
@@ -1209,6 +1323,9 @@ app = typer.Typer(
         "nebius-cxcli component add apps:soperator --config ./deployments/acme/config.yaml  |  "
         "nebius-cxcli render ./deployments/acme/config.yaml  |  "
         "nebius-cxcli deploy ./deployments/acme/config.yaml. "
+        f"Upgrade example: nebius-cxcli upgrade k8s-version {_UPGRADE_EXAMPLE_CONFIG} "
+        "infra:mk8s@mk8s --to-version 1.33 --dry-run. "
+        "Run `nebius-cxcli upgrade --help` for disruption-policy and node-layer examples. "
         "Soperator wizards expose schedulingConfig, partitionConfiguration.partitions[].policy, "
         "qosConfiguration plus catalog choices for partition_profile and topology_profile "
         "(nebius-nvl-rack-v1 covers GB300/NVL)."
@@ -1227,10 +1344,19 @@ terraform_app = typer.Typer(
 flux_app = typer.Typer(
     help="Apply, bootstrap, or destroy Flux resources using generated/ or generated/flux."
 )
+upgrade_app = typer.Typer(
+    help=(
+        "Run day-2 lifecycle upgrades from config.yaml. V1 implements MK8s "
+        "Kubernetes version, OS-image, node-layer, and target-scoped Helm chart "
+        "upgrades with dry-run planning and guardrails."
+    ),
+    epilog=_UPGRADE_GROUP_EPILOG,
+)
 
 app.add_typer(component_app, name="component")
 app.add_typer(terraform_app, name="terraform")
 app.add_typer(flux_app, name="flux")
+app.add_typer(upgrade_app, name="upgrade")
 
 
 def _version_callback(value: bool) -> bool:
@@ -1376,6 +1502,3168 @@ def _load_generated_flux_context(target_path: Path) -> tuple:
 def _load_deploy_context(target_path: Path) -> tuple:
     paths = resolve_deploy_config_paths(target_path)
     return _load_manifest_backed_context(paths)
+
+
+def _load_deploy_context_readonly(target_path: Path) -> tuple:
+    paths = resolve_deploy_config_paths(target_path)
+    manifest = load_generated_manifest(paths.generated_dir)
+    _apply_generated_tool_version_overrides(manifest)
+    config = runtime_config_from_manifest(manifest)
+    return config, paths, manifest
+
+
+def _load_source_payload(config_path: Path) -> dict[str, Any]:
+    if not config_path.exists():
+        raise ValueError(f"Config file not found: {config_path}")
+    if config_path.is_dir():
+        raise ValueError(
+            "Expected a project config.yaml file path, but got a directory: "
+            f"{config_path}. Pass <tenant-folder>/<project-folder>/config.yaml."
+        )
+    payload = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+    if not isinstance(payload, dict):
+        raise ValueError("config.yaml root must be a mapping")
+    return payload
+
+
+def _resolve_managed_mk8s_upgrade_target(
+    manifest: Mapping[str, Any],
+    *,
+    target_instance_id: str,
+) -> dict[str, str]:
+    selected_targets = _resolve_selected_deploy_targets(
+        manifest,
+        requested_target_ref=target_instance_id,
+        all_targets=False,
+    )
+    if len(selected_targets) != 1:
+        raise RuntimeError(f"Could not resolve MK8s target '{target_instance_id}'.")
+    selected_target = selected_targets[0]
+    if str(selected_target.get(DEPLOY_TARGET_KIND_FIELD, "")).strip() == EXTERNAL_MK8S_TARGET_KIND:
+        raise RuntimeError(
+            "upgrade v1 supports Terraform-managed infra:mk8s targets only. "
+            f"Target '{target_instance_id}' is an external MK8s app-management binding."
+        )
+    component_id = str(selected_target.get("component_id", "")).strip()
+    if component_id != MK8S_COMPONENT_ID:
+        raise RuntimeError(
+            "MK8s upgrade commands require a generated infra:mk8s target. "
+            f"Target '{target_instance_id}' is component '{component_id or 'unknown'}'."
+        )
+    return selected_target
+
+
+def _managed_mk8s_target_with_cluster_id(
+    target: Mapping[str, str],
+    *,
+    cluster_id: str,
+) -> dict[str, str]:
+    resolved = dict(target)
+    resolved["cluster_id"] = cluster_id
+    return resolved
+
+
+def _live_mk8s_cluster_id(cluster: Any, *, cluster_name: str) -> str:
+    metadata = getattr(cluster, "metadata", None)
+    cluster_id = _non_empty_text(getattr(metadata, "id", None))
+    if not cluster_id:
+        raise RuntimeError(f"Nebius MK8s cluster '{cluster_name}' did not return metadata.id.")
+    return cluster_id
+
+
+def _upgrade_interactive_prompts_enabled() -> bool:
+    return _is_tty_session()
+
+
+def _require_upgrade_interactive_prompts(*, missing: str) -> None:
+    if _upgrade_interactive_prompts_enabled():
+        return
+    raise RuntimeError(
+        f"Missing {missing}. Pass the required upgrade arguments/options explicitly "
+        "or rerun from an interactive terminal to use the upgrade wizard."
+    )
+
+
+def _managed_mk8s_upgrade_target_choices(manifest: Mapping[str, Any]) -> list[OptionChoice]:
+    choices: list[OptionChoice] = []
+    for target in _manifest_deploy_targets(manifest):
+        if str(target.get(DEPLOY_TARGET_OWNERSHIP_FIELD, "")).strip() == EXTERNAL_TARGET_OWNERSHIP:
+            continue
+        if str(target.get("component_id", "")).strip() != MK8S_COMPONENT_ID:
+            continue
+        target_ref = normalize_component_token(target.get(TARGET_REF_FIELD))
+        if not target_ref:
+            continue
+        selector = f"infra:{MK8S_COMPONENT_ID}@{target_ref}"
+        choices.append(
+            OptionChoice(
+                value=selector,
+                label=selector,
+                recommended=not choices,
+            )
+        )
+    return choices
+
+
+@dataclass(frozen=True)
+class _OsImageUpgradeTarget:
+    selector: str
+    component_id: str
+    instance_id: str
+
+
+@dataclass(frozen=True)
+class _OsImageUpgradeRequest:
+    target: _OsImageUpgradeTarget
+    target_os: str
+    node_group: str
+    dry_run: bool
+    disruption_policy: str
+    drain_timeout: DrainTimeout
+    guided: bool
+
+
+@dataclass(frozen=True)
+class _NodeLayerUpgradeRequest:
+    target_selector: str
+    target_value: str
+    node_group: str
+    dry_run: bool
+    disruption_policy: str
+    drain_timeout: DrainTimeout
+    guided: bool
+
+
+@dataclass(frozen=True)
+class _HelmChartUpgradeTarget:
+    selector: str
+    chart_id: str
+    target_ref: str
+
+
+@dataclass(frozen=True)
+class _HelmChartUpgradePlan:
+    target: _HelmChartUpgradeTarget
+    instance_id: str
+    namespace: str
+    release_name: str
+    current_version: str
+    target_version: str
+
+    @property
+    def mutates(self) -> bool:
+        return self.current_version != self.target_version
+
+
+_NODE_LAYER_UPGRADE_SPECS: dict[str, NodeLayerUpgradeSpec] = {
+    "gpu-stack-preset": NodeLayerUpgradeSpec(
+        command="gpu-stack-preset",
+        title="MK8s GPU stack preset",
+        source_field="gpu_stack_preset",
+        live_field="drivers_preset",
+        target_label="GPU stack preset",
+        group_filter="gpu",
+    ),
+    "platform": NodeLayerUpgradeSpec(
+        command="platform",
+        title="MK8s node platform",
+        source_field="platform",
+        live_field="platform",
+        target_label="platform",
+        group_filter="all",
+    ),
+    "cpu-preset": NodeLayerUpgradeSpec(
+        command="cpu-preset",
+        title="MK8s CPU preset",
+        source_field="preset",
+        live_field="preset",
+        target_label="CPU preset",
+        group_filter="cpu",
+    ),
+    "gpu-preset": NodeLayerUpgradeSpec(
+        command="gpu-preset",
+        title="MK8s GPU preset",
+        source_field="preset",
+        live_field="preset",
+        target_label="GPU preset",
+        group_filter="gpu",
+    ),
+}
+
+
+def _parse_os_image_upgrade_selector(selector: str) -> _OsImageUpgradeTarget:
+    raw = _non_empty_text(selector)
+    if not raw:
+        raise ValueError(
+            "Target selector is required. Use infra:mk8s@<cluster-instance-id> "
+            "or infra:vm@<vm-instance-id>."
+        )
+    if not raw.startswith("infra:") or "@" not in raw:
+        raise ValueError(
+            "OS-image upgrades require an explicit infra target selector: "
+            "infra:mk8s@<cluster-instance-id> or infra:vm@<vm-instance-id>."
+        )
+    component_raw, instance_raw = raw[len("infra:") :].split("@", maxsplit=1)
+    component_id = normalize_component_token(component_raw)
+    instance_id = normalize_component_token(instance_raw)
+    if component_id not in {MK8S_COMPONENT_ID, VM_COMPONENT_ID}:
+        raise ValueError("OS-image upgrades support infra:mk8s and infra:vm targets only.")
+    if not instance_id:
+        raise ValueError(
+            f"Missing {component_id} target instance id. Use infra:{component_id}@<instance-id>."
+        )
+    if any(char.isspace() for char in raw):
+        raise ValueError("OS-image target selector must not contain whitespace.")
+    selector_text = f"infra:{component_id}@{instance_id}"
+    return _OsImageUpgradeTarget(
+        selector=selector_text,
+        component_id=component_id,
+        instance_id=instance_id,
+    )
+
+
+def _parse_helm_chart_upgrade_selector(selector: str) -> _HelmChartUpgradeTarget:
+    raw = _non_empty_text(selector)
+    if not raw:
+        raise ValueError("App target selector is required. Use apps:<chart>@<target-ref>.")
+    if not raw.startswith("apps:") or "@" not in raw:
+        raise ValueError(
+            "Helm chart upgrades require an explicit app target selector: "
+            "apps:<chart>@<target-ref>."
+        )
+    chart_raw, target_raw = raw[len("apps:") :].split("@", maxsplit=1)
+    chart_id = normalize_component_token(chart_raw)
+    target_ref = normalize_component_token(target_raw)
+    if not chart_id:
+        raise ValueError("Missing app chart id. Use apps:<chart>@<target-ref>.")
+    if not target_ref:
+        raise ValueError("Missing app target ref. Use apps:<chart>@<target-ref>.")
+    if any(char.isspace() for char in raw):
+        raise ValueError("Helm chart target selector must not contain whitespace.")
+    return _HelmChartUpgradeTarget(
+        selector=f"apps:{chart_id}@{target_ref}",
+        chart_id=chart_id,
+        target_ref=target_ref,
+    )
+
+
+def _source_helm_chart_target_ref(
+    source_payload: Mapping[str, Any],
+    row: Mapping[str, Any],
+) -> str:
+    cluster_target_refs = set(enabled_cluster_target_refs(source_payload))
+    instance_id = component_instance_id(row)
+    if instance_id in cluster_target_refs:
+        return instance_id
+    return app_chart_target_ref(row)
+
+
+def _source_helm_chart_target_choices(
+    source_payload: Mapping[str, Any],
+) -> list[OptionChoice]:
+    apps = source_payload.get("apps")
+    charts = apps.get("charts") if isinstance(apps, Mapping) else None
+    if not isinstance(charts, list):
+        return []
+    choices: list[OptionChoice] = []
+    for row in charts:
+        if not isinstance(row, Mapping) or row.get("enabled") is False:
+            continue
+        chart_id = component_type_id(row)
+        target_ref = _source_helm_chart_target_ref(source_payload, row)
+        if not chart_id or not target_ref:
+            continue
+        version = _non_empty_text(row.get("version")) or "unversioned/local"
+        selector = f"apps:{chart_id}@{target_ref}"
+        choices.append(
+            OptionChoice(
+                value=selector,
+                label=f"{selector}  (Helm chart version: {version})",
+                recommended=not choices,
+            )
+        )
+    return choices
+
+
+def _prompt_upgrade_helm_chart_target_selector_if_needed(
+    *,
+    source_payload: Mapping[str, Any],
+    target_selector: str | None,
+) -> _HelmChartUpgradeTarget:
+    current = _non_empty_text(target_selector)
+    if current:
+        return _parse_helm_chart_upgrade_selector(current)
+    choices = _source_helm_chart_target_choices(source_payload)
+    if not choices:
+        raise RuntimeError(
+            "No enabled apps.charts[] rows are declared in config.yaml. "
+            "Choose an enabled Helm chart target or add one before running upgrade helm-chart."
+        )
+    selector = _prompt_upgrade_choice(
+        "upgrade.helm_chart.target",
+        recommended_choice_value(choices),
+        choices=choices,
+        missing="upgrade app target selector",
+    )
+    return _parse_helm_chart_upgrade_selector(selector)
+
+
+def _validate_helm_chart_version_value(value: str) -> str:
+    raw = _non_empty_text(value)
+    if not raw:
+        raise ValueError("--to-version must not be empty.")
+    if any(char.isspace() for char in raw):
+        raise ValueError("--to-version must not contain whitespace.")
+    return raw
+
+
+def _prompt_upgrade_helm_chart_to_version_if_needed(
+    *,
+    to_version: str | None,
+) -> str:
+    current = _non_empty_text(to_version)
+    if current:
+        return _validate_helm_chart_version_value(current)
+    value = _prompt_upgrade_scalar(
+        "upgrade.helm_chart.to_version",
+        "",
+        type_hint="string",
+        missing="--to-version <chart-version>",
+    )
+    return _validate_helm_chart_version_value(str(value))
+
+
+def _source_vm_os_image_upgrade_target_choices(
+    source_payload: Mapping[str, Any],
+) -> list[OptionChoice]:
+    infra = source_payload.get("infra")
+    components = infra.get("components") if isinstance(infra, Mapping) else None
+    if not isinstance(components, list):
+        return []
+    choices: list[OptionChoice] = []
+    for row in components:
+        if not isinstance(row, Mapping) or row.get("enabled") is False:
+            continue
+        if component_type_id(row) != VM_COMPONENT_ID:
+            continue
+        if not source_vm_uses_managed_image_family(row):
+            continue
+        current = source_vm_image_family(row)
+        if not current:
+            continue
+        instance_id = component_instance_id(row)
+        if not instance_id:
+            continue
+        selector = f"infra:{VM_COMPONENT_ID}@{instance_id}"
+        label = f"{selector}  (VM source image family: {current})"
+        choices.append(
+            OptionChoice(
+                value=selector,
+                label=label,
+                recommended=False,
+            )
+        )
+    return choices
+
+
+def _os_image_upgrade_target_choices(
+    *,
+    source_payload: Mapping[str, Any],
+    manifest: Mapping[str, Any],
+) -> list[OptionChoice]:
+    choices: list[OptionChoice] = []
+    for choice in _managed_mk8s_upgrade_target_choices(manifest):
+        choices.append(
+            OptionChoice(
+                value=choice.value,
+                label=f"{choice.value}  (MK8s node-group OS image)",
+                recommended=not choices,
+            )
+        )
+    for choice in _source_vm_os_image_upgrade_target_choices(source_payload):
+        choices.append(
+            OptionChoice(
+                value=choice.value,
+                label=choice.label,
+                recommended=not choices and choice.recommended,
+            )
+        )
+    if choices and not any(choice.recommended for choice in choices):
+        first = choices[0]
+        choices[0] = OptionChoice(
+            value=first.value,
+            label=first.label,
+            recommended=True,
+            metadata=first.metadata,
+        )
+    return choices
+
+
+def _prompt_upgrade_choice(
+    path_label: str,
+    current: object,
+    *,
+    choices: list[OptionChoice],
+    required: bool = True,
+    missing: str,
+) -> str:
+    _require_upgrade_interactive_prompts(missing=missing)
+    value, should_stop = _prompt_scalar_override(
+        path_label,
+        current,
+        choices=choices,
+        required=required,
+    )
+    if should_stop or _wizard_backtrack_requested(value):
+        raise RuntimeError("Upgrade wizard cancelled.")
+    return str(value or "").strip()
+
+
+def _prompt_upgrade_scalar(
+    path_label: str,
+    current: object,
+    *,
+    type_hint: str | None = None,
+    required: bool = True,
+    missing: str,
+) -> object:
+    _require_upgrade_interactive_prompts(missing=missing)
+    value, should_stop = _prompt_scalar_override(
+        path_label,
+        current,
+        type_hint=type_hint,
+        required=required,
+    )
+    if should_stop or _wizard_backtrack_requested(value):
+        raise RuntimeError("Upgrade wizard cancelled.")
+    return value
+
+
+def _prompt_upgrade_os_image_target_selector_if_needed(
+    *,
+    source_payload: Mapping[str, Any],
+    manifest: Mapping[str, Any],
+    target_selector: str | None,
+) -> _OsImageUpgradeTarget:
+    current = _non_empty_text(target_selector)
+    if current:
+        return _parse_os_image_upgrade_selector(current)
+    choices = _os_image_upgrade_target_choices(
+        source_payload=source_payload,
+        manifest=manifest,
+    )
+    if not choices:
+        raise RuntimeError(
+            "No Terraform-managed infra:mk8s targets or generic infra:vm components "
+            "with source_image_family are declared in this generated bundle. Run render "
+            "first and choose a managed OS-image target."
+        )
+    selector = _prompt_upgrade_choice(
+        "upgrade.os_image.target",
+        recommended_choice_value(choices),
+        choices=choices,
+        missing="upgrade target selector",
+    )
+    return _parse_os_image_upgrade_selector(selector)
+
+
+def _prompt_upgrade_k8s_target_selector_if_needed(
+    *,
+    manifest: Mapping[str, Any],
+    target_selector: str | None,
+    path_label: str = "upgrade.k8s_version.target",
+) -> str:
+    current = _non_empty_text(target_selector)
+    if current:
+        return current
+    choices = _managed_mk8s_upgrade_target_choices(manifest)
+    if not choices:
+        raise RuntimeError(
+            "No Terraform-managed infra:mk8s targets are declared in the generated bundle. "
+            "Run render first and choose a managed MK8s target."
+        )
+    return _prompt_upgrade_choice(
+        path_label,
+        recommended_choice_value(choices),
+        choices=choices,
+        missing="upgrade target selector",
+    )
+
+
+def _cluster_control_plane_minor_version(cluster: Any, *, cluster_id: str) -> str:
+    version = _non_empty_text(
+        getattr(getattr(getattr(cluster, "spec", None), "control_plane", None), "version", None)
+    )
+    if not version:
+        raise RuntimeError(
+            f"MK8s cluster '{cluster_id}' did not return spec.control_plane.version."
+        )
+    return parse_k8s_version(version).minor_text
+
+
+def _upgrade_k8s_version_choices(
+    *,
+    current_version: str,
+    supported_versions: tuple[str, ...],
+) -> list[OptionChoice]:
+    current = parse_k8s_version(current_version)
+    by_minor: dict[str, Any] = {current.minor_text: current}
+    for raw_version in supported_versions:
+        try:
+            parsed = parse_k8s_version(raw_version)
+        except ValueError:
+            continue
+        if parsed.major != current.major or parsed.minor < current.minor:
+            continue
+        if parsed.minor > current.minor + 1:
+            continue
+        by_minor.setdefault(parsed.minor_text, parsed)
+    recommended = f"{current.major}.{current.minor + 1}"
+    if recommended not in by_minor:
+        recommended = current.minor_text
+    choices: list[OptionChoice] = []
+    for minor_text in sorted(by_minor, key=lambda item: parse_k8s_version(item).minor):
+        if minor_text == current.minor_text:
+            label = f"{minor_text}  (current/live; reconcile source and generated state)"
+        else:
+            label = (
+                f"{minor_text}  (next supported minor; "
+                "upstream Kubernetes does not support skipped minors)"
+            )
+        choices.append(
+            OptionChoice(
+                value=minor_text,
+                label=label,
+                recommended=minor_text == recommended,
+            )
+        )
+    return choices
+
+
+def _prompt_upgrade_k8s_to_version_if_needed(
+    *,
+    cluster: Any,
+    cluster_id: str,
+    supported_versions: tuple[str, ...],
+    to_version: str | None,
+) -> str:
+    current = _non_empty_text(to_version)
+    if current:
+        return parse_k8s_version(current).minor_text
+    live_version = _cluster_control_plane_minor_version(cluster, cluster_id=cluster_id)
+    choices = _upgrade_k8s_version_choices(
+        current_version=live_version,
+        supported_versions=supported_versions,
+    )
+    if choices:
+        return _prompt_upgrade_choice(
+            "upgrade.k8s_version.to_version",
+            recommended_choice_value(choices),
+            choices=choices,
+            missing="--to-version <major.minor>",
+        )
+    value = _prompt_upgrade_scalar(
+        "upgrade.k8s_version.to_version",
+        "",
+        type_hint="string",
+        missing="--to-version <major.minor>",
+    )
+    return parse_k8s_version(str(value)).minor_text
+
+
+def _prompt_upgrade_disruption_options_if_guided(
+    *,
+    path_prefix: str,
+    guided: bool,
+    dry_run: bool,
+    disruption_policy: str,
+    drain_timeout: str,
+    skip_validations: bool,
+) -> tuple[bool, str, str, bool]:
+    if not guided:
+        return dry_run, disruption_policy, drain_timeout, skip_validations
+    if not dry_run:
+        prompted_dry_run = _prompt_upgrade_scalar(
+            f"{path_prefix}.dry_run",
+            True,
+            type_hint="bool",
+            required=True,
+            missing="--dry-run choice",
+        )
+        dry_run = bool(prompted_dry_run)
+    if disruption_policy == DISRUPTION_POLICY_SAFE:
+        disruption_policy = _prompt_upgrade_choice(
+            f"{path_prefix}.disruption_policy",
+            DISRUPTION_POLICY_SAFE,
+            choices=[
+                OptionChoice(
+                    value=DISRUPTION_POLICY_SAFE,
+                    label="safe  (rolling headroom; no finite drain timeout)",
+                    recommended=True,
+                ),
+                OptionChoice(
+                    value=DISRUPTION_POLICY_ALLOW_UNAVAILABLE,
+                    label="allow-unavailable  (zero surge; default drain timeout 30m)",
+                ),
+                OptionChoice(
+                    value=DISRUPTION_POLICY_FORCE_DELETE,
+                    label="force-delete  (last resort; default drain timeout 10m)",
+                ),
+            ],
+            missing="--disruption-policy",
+        )
+    if drain_timeout == "auto":
+        prompted_timeout = _prompt_upgrade_scalar(
+            f"{path_prefix}.drain_timeout",
+            "auto",
+            type_hint="string",
+            required=True,
+            missing="--drain-timeout",
+        )
+        drain_timeout = str(prompted_timeout or "auto").strip() or "auto"
+    if not skip_validations:
+        run_validations = _prompt_upgrade_scalar(
+            f"{path_prefix}.run_post_upgrade_validations",
+            True,
+            type_hint="bool",
+            required=True,
+            missing="post-upgrade validation choice",
+        )
+        skip_validations = not bool(run_validations)
+    if not dry_run:
+        confirm_apply = _prompt_upgrade_scalar(
+            f"{path_prefix}.confirm_apply",
+            False,
+            type_hint="bool",
+            required=True,
+            missing="live apply confirmation",
+        )
+        if not bool(confirm_apply):
+            raise RuntimeError("Upgrade wizard cancelled before applying live changes.")
+    return dry_run, disruption_policy, drain_timeout, skip_validations
+
+
+def _prompt_upgrade_k8s_options_if_guided(
+    *,
+    guided: bool,
+    dry_run: bool,
+    disruption_policy: str,
+    drain_timeout: str,
+    skip_validations: bool,
+) -> tuple[bool, str, str, bool]:
+    return _prompt_upgrade_disruption_options_if_guided(
+        path_prefix="upgrade.k8s_version",
+        guided=guided,
+        dry_run=dry_run,
+        disruption_policy=disruption_policy,
+        drain_timeout=drain_timeout,
+        skip_validations=skip_validations,
+    )
+
+
+def _prompt_upgrade_os_image_node_group_if_guided(
+    *,
+    guided: bool,
+    node_group: str,
+) -> str:
+    current = _non_empty_text(node_group)
+    if current or not guided:
+        return current
+
+    _require_upgrade_interactive_prompts(missing="--node-group <source-key-or-live-name>")
+    value, should_stop = _prompt_scalar_override(
+        "upgrade.os_image.node_group",
+        None,
+        type_hint="string",
+        required=False,
+        unset_on_skip=True,
+    )
+    if should_stop or _wizard_backtrack_requested(value):
+        raise RuntimeError("Upgrade wizard cancelled.")
+    return _non_empty_text(value)
+
+
+def _prompt_upgrade_node_group_if_guided(
+    *,
+    path_prefix: str,
+    guided: bool,
+    node_group: str,
+) -> str:
+    current = _non_empty_text(node_group)
+    if current or not guided:
+        return current
+
+    _require_upgrade_interactive_prompts(missing="--node-group <source-key-or-live-name>")
+    value, should_stop = _prompt_scalar_override(
+        f"{path_prefix}.node_group",
+        None,
+        type_hint="string",
+        required=False,
+        unset_on_skip=True,
+    )
+    if should_stop or _wizard_backtrack_requested(value):
+        raise RuntimeError("Upgrade wizard cancelled.")
+    return _non_empty_text(value)
+
+
+def _prompt_upgrade_node_layer_target_value_if_needed(
+    *,
+    path_label: str,
+    value: str | None,
+    option_name: str,
+    choices: list[OptionChoice] | None = None,
+) -> str:
+    current = _non_empty_text(value)
+    if current:
+        return validate_node_layer_value(current, flag_name=option_name)
+    if choices:
+        selected = _prompt_upgrade_choice(
+            path_label,
+            recommended_choice_value(choices),
+            choices=choices,
+            missing=f"{option_name} <value>",
+        )
+        return validate_node_layer_value(selected, flag_name=option_name)
+    prompted = _prompt_upgrade_scalar(
+        path_label,
+        "",
+        type_hint="string",
+        missing=f"{option_name} <value>",
+    )
+    return validate_node_layer_value(str(prompted), flag_name=option_name)
+
+
+def _vm_os_image_choices(
+    *,
+    source_payload: dict[str, Any],
+    source_component: Mapping[str, Any],
+    instance_id: str,
+) -> list[OptionChoice]:
+    platform = source_vm_platform(source_component)
+    component_path = _dynamic_infra_component_path(
+        source_payload,
+        VM_COMPONENT_ID,
+        instance_id=instance_id,
+    )
+    if component_path is None:
+        return []
+    field_path = f"{_format_payload_path(component_path)}.inputs.source_image_family"
+    choices = ProviderOptionLookup().resolve(
+        provider="compute_public_image_families",
+        args={"platform_path": f"{_format_payload_path(component_path)}.inputs.platform"},
+        payload=source_payload,
+        field_path=field_path,
+    )
+    current = source_vm_image_family(source_component)
+    resolved: list[OptionChoice] = []
+    for choice in choices:
+        label = choice.label
+        if choice.value == current:
+            label = f"{choice.label}  (current)"
+        resolved.append(
+            OptionChoice(
+                value=choice.value,
+                label=label,
+                recommended=choice.recommended and choice.value != current,
+                metadata=choice.metadata,
+            )
+        )
+    if platform and not resolved:
+        return []
+    return resolved
+
+
+def _prompt_upgrade_os_image_to_os_if_needed(
+    *,
+    path_label: str,
+    to_os: str | None,
+    choices: list[OptionChoice],
+) -> str:
+    current = _non_empty_text(to_os)
+    if current:
+        return validate_os_image_value(current)
+    if choices:
+        selected = _prompt_upgrade_choice(
+            path_label,
+            recommended_choice_value(choices),
+            choices=choices,
+            missing="--to-os <os>",
+        )
+        return validate_os_image_value(selected)
+    value = _prompt_upgrade_scalar(
+        path_label,
+        "",
+        type_hint="string",
+        missing="--to-os <os>",
+    )
+    return validate_os_image_value(str(value))
+
+
+def _resolve_os_image_disruption_request(
+    *,
+    guided: bool,
+    dry_run: bool,
+    disruption_policy: str,
+    drain_timeout: str,
+    path_prefix: str = "upgrade.os_image",
+) -> tuple[bool, str, DrainTimeout]:
+    dry_run, disruption_policy, drain_timeout, _skip_validations = (
+        _prompt_upgrade_disruption_options_if_guided(
+            path_prefix=path_prefix,
+            guided=guided,
+            dry_run=dry_run,
+            disruption_policy=disruption_policy,
+            drain_timeout=drain_timeout,
+            skip_validations=True,
+        )
+    )
+    policy = validate_disruption_policy(disruption_policy)
+    resolved_timeout = resolve_drain_timeout(policy, drain_timeout)
+    if policy == DISRUPTION_POLICY_SAFE and resolved_timeout.seconds is not None:
+        raise RuntimeError(
+            "--drain-timeout <duration> is only supported with "
+            "--disruption-policy allow-unavailable or force-delete. In Nebius MK8s "
+            "node-group strategy, a finite drain_timeout allows Managed Kubernetes "
+            "to fall back to Pod deletion after the timeout."
+        )
+    return dry_run, policy, resolved_timeout
+
+
+def _resolve_vm_os_image_request_options(
+    *,
+    guided: bool,
+    dry_run: bool,
+    disruption_policy: str,
+    drain_timeout: str,
+) -> tuple[bool, str, DrainTimeout]:
+    policy = validate_disruption_policy(disruption_policy)
+    resolved_timeout = resolve_drain_timeout(policy, drain_timeout)
+    if guided and not dry_run:
+        prompted_dry_run = _prompt_upgrade_scalar(
+            "upgrade.os_image.dry_run",
+            True,
+            type_hint="bool",
+            required=True,
+            missing="--dry-run choice",
+        )
+        dry_run = bool(prompted_dry_run)
+    if guided and not dry_run:
+        confirm_apply = _prompt_upgrade_scalar(
+            "upgrade.os_image.confirm_apply",
+            False,
+            type_hint="bool",
+            required=True,
+            missing="live apply confirmation",
+        )
+        if not bool(confirm_apply):
+            raise RuntimeError("Upgrade wizard cancelled before applying live changes.")
+    return dry_run, policy, resolved_timeout
+
+
+def _resolve_helm_chart_upgrade_options(
+    *,
+    guided: bool,
+    dry_run: bool,
+) -> bool:
+    if guided and not dry_run:
+        prompted_dry_run = _prompt_upgrade_scalar(
+            "upgrade.helm_chart.dry_run",
+            True,
+            type_hint="bool",
+            required=True,
+            missing="--dry-run choice",
+        )
+        dry_run = bool(prompted_dry_run)
+    if guided and not dry_run:
+        confirm_apply = _prompt_upgrade_scalar(
+            "upgrade.helm_chart.confirm_apply",
+            False,
+            type_hint="bool",
+            required=True,
+            missing="live apply confirmation",
+        )
+        if not bool(confirm_apply):
+            raise RuntimeError("Upgrade wizard cancelled before applying live changes.")
+    return dry_run
+
+
+def _upgrade_k8s_dry_run_command(
+    *,
+    config_path: Path,
+    target_selector: str,
+    to_version: str,
+    disruption_policy: str,
+    drain_timeout: DrainTimeout,
+) -> str:
+    args = [
+        "nebius-cxcli",
+        "upgrade",
+        "k8s-version",
+        str(config_path),
+        target_selector,
+        "--to-version",
+        to_version,
+        "--disruption-policy",
+        disruption_policy,
+    ]
+    if str(drain_timeout.raw).strip().lower() not in {"", "auto"}:
+        args.extend(["--drain-timeout", drain_timeout.raw])
+    args.append("--dry-run")
+    return shlex.join(args)
+
+
+def _upgrade_os_image_dry_run_command(
+    *,
+    config_path: Path,
+    target_selector: str,
+    to_os: str,
+    node_group: str,
+    disruption_policy: str,
+    drain_timeout: DrainTimeout,
+) -> str:
+    args = [
+        "nebius-cxcli",
+        "upgrade",
+        "os-image",
+        str(config_path),
+        target_selector,
+        "--to-os",
+        to_os,
+        "--disruption-policy",
+        disruption_policy,
+    ]
+    if node_group:
+        args.extend(["--node-group", node_group])
+    if str(drain_timeout.raw).strip().lower() not in {"", "auto"}:
+        args.extend(["--drain-timeout", drain_timeout.raw])
+    args.append("--dry-run")
+    return shlex.join(args)
+
+
+def _upgrade_node_layer_dry_run_command(
+    *,
+    config_path: Path,
+    command: str,
+    target_selector: str,
+    option_name: str,
+    target_value: str,
+    node_group: str,
+    disruption_policy: str,
+    drain_timeout: DrainTimeout,
+) -> str:
+    args = [
+        "nebius-cxcli",
+        "upgrade",
+        command,
+        str(config_path),
+        target_selector,
+        option_name,
+        target_value,
+        "--disruption-policy",
+        disruption_policy,
+    ]
+    if node_group:
+        args.extend(["--node-group", node_group])
+    if str(drain_timeout.raw).strip().lower() not in {"", "auto"}:
+        args.extend(["--drain-timeout", drain_timeout.raw])
+    args.append("--dry-run")
+    return shlex.join(args)
+
+
+def _upgrade_vm_os_image_dry_run_command(
+    *,
+    config_path: Path,
+    target_selector: str,
+    to_os: str,
+) -> str:
+    return shlex.join(
+        [
+            "nebius-cxcli",
+            "upgrade",
+            "os-image",
+            str(config_path),
+            target_selector,
+            "--to-os",
+            to_os,
+            "--dry-run",
+        ]
+    )
+
+
+def _upgrade_helm_chart_dry_run_command(
+    *,
+    config_path: Path,
+    target_selector: str,
+    to_version: str,
+) -> str:
+    return shlex.join(
+        [
+            "nebius-cxcli",
+            "upgrade",
+            "helm-chart",
+            str(config_path),
+            target_selector,
+            "--to-version",
+            to_version,
+            "--dry-run",
+        ]
+    )
+
+
+def _source_helm_chart_row_path(
+    payload: dict[str, Any],
+    target: _HelmChartUpgradeTarget,
+) -> PayloadPath | None:
+    apps = payload.get("apps")
+    charts = apps.get("charts") if isinstance(apps, Mapping) else None
+    if not isinstance(charts, list):
+        return None
+    for index, row in enumerate(charts):
+        if not isinstance(row, Mapping) or row.get("enabled") is False:
+            continue
+        if component_type_id(row) != target.chart_id:
+            continue
+        if _source_helm_chart_target_ref(payload, row) != target.target_ref:
+            continue
+        return ("apps", "charts", index)
+    return None
+
+
+def _source_helm_chart_row(
+    payload: dict[str, Any],
+    target: _HelmChartUpgradeTarget,
+) -> dict[str, Any]:
+    row_path = _source_helm_chart_row_path(payload, target)
+    if row_path is None:
+        raise ValueError(f"Could not find enabled {target.selector} in config.yaml apps.charts[].")
+    row = _get_payload_value(payload, row_path)
+    if not isinstance(row, dict):
+        raise ValueError(f"{target.selector} row must be a mapping.")
+    return row
+
+
+def _plan_helm_chart_upgrade(
+    *,
+    payload: dict[str, Any],
+    target: _HelmChartUpgradeTarget,
+    target_version: str,
+) -> _HelmChartUpgradePlan:
+    row = _source_helm_chart_row(payload, target)
+    instance_id = component_instance_id(row)
+    return _HelmChartUpgradePlan(
+        target=target,
+        instance_id=instance_id,
+        namespace=_non_empty_text(row.get("namespace")),
+        release_name=_non_empty_text(row.get("release-name")) or instance_id,
+        current_version=_non_empty_text(row.get("version")),
+        target_version=_validate_helm_chart_version_value(target_version),
+    )
+
+
+def _update_source_helm_chart_version(
+    payload: dict[str, Any],
+    *,
+    target: _HelmChartUpgradeTarget,
+    target_version: str,
+) -> bool:
+    row = _source_helm_chart_row(payload, target)
+    version = _validate_helm_chart_version_value(target_version)
+    if row.get("version") == version:
+        return False
+    row["version"] = version
+    return True
+
+
+def _format_helm_chart_upgrade_plan(
+    plan: _HelmChartUpgradePlan,
+    *,
+    dry_run: bool,
+    repeat_dry_run_command: str | None = None,
+) -> tuple[str, ...]:
+    lines = [
+        "Helm chart upgrade plan",
+        f"- target: {plan.target.selector}",
+        f"- chart: {plan.target.chart_id}",
+        f"- target ref: {plan.target.target_ref}",
+        f"- app instance: {plan.instance_id}",
+        f"- namespace: {plan.namespace or 'default'}",
+        f"- release: {plan.release_name}",
+        f"- chart version: {plan.current_version or 'unset'} -> {plan.target_version}",
+    ]
+    if dry_run:
+        if repeat_dry_run_command:
+            lines.append("- repeat dry-run command:")
+            lines.append(f"  {repeat_dry_run_command}")
+        lines.append(
+            "Dry run only: no config.yaml write, generated bundle render, "
+            "or Flux apply was performed."
+        )
+    return tuple(lines)
+
+
+def _status_watchers_for_component(
+    watchers: Sequence[Mapping[str, Any]],
+    *,
+    component_id: str,
+    instance_id: str,
+) -> list[dict[str, str]]:
+    normalized_component = normalize_component_token(component_id)
+    normalized_instance = normalize_component_token(instance_id)
+    return [
+        dict(watcher)
+        for watcher in watchers
+        if normalize_component_token(watcher.get("component_id")) == normalized_component
+        and normalize_component_token(watcher.get("instance_id")) == normalized_instance
+    ]
+
+
+def _shell_command_display_lines(line: str) -> tuple[str, ...]:
+    indent = line[: len(line) - len(line.lstrip())]
+    command = line.strip()
+    if not command:
+        return (line,)
+    try:
+        args = shlex.split(command)
+    except ValueError:
+        return (line,)
+    if len(args) <= 1:
+        return (line,)
+
+    command_prefix_size = 3 if args[:2] == ["nebius-cxcli", "upgrade"] and len(args) >= 3 else 1
+    segments = [shlex.join(args[:command_prefix_size])]
+    index = command_prefix_size
+    while index < len(args):
+        item = args[index]
+        if item.startswith("-") and index + 1 < len(args) and not args[index + 1].startswith("-"):
+            segments.append(shlex.join(args[index : index + 2]))
+            index += 2
+            continue
+        segments.append(shlex.join([item]))
+        index += 1
+
+    wrapped: list[str] = []
+    continuation_indent = f"{indent}  "
+    for segment_index, segment in enumerate(segments):
+        prefix = indent if segment_index == 0 else continuation_indent
+        suffix = " \\" if segment_index < len(segments) - 1 else ""
+        wrapped.append(f"{prefix}{segment}{suffix}")
+    return tuple(wrapped)
+
+
+def _print_upgrade_plan_lines(lines: Sequence[str]) -> None:
+    in_warnings = False
+    in_repeat_dry_run_command = False
+    for line in lines:
+        if line == "- warnings:":
+            in_warnings = True
+            in_repeat_dry_run_command = False
+            console.print(f"- {warning_markup('warnings:', bold=True)}")
+            continue
+        if in_warnings and line.startswith("  - "):
+            console.print(f"  - {warning_markup(line[4:])}")
+            continue
+        if line == "- repeat dry-run command:":
+            in_warnings = False
+            in_repeat_dry_run_command = True
+            console.print(line)
+            continue
+        if in_repeat_dry_run_command and line.startswith("  "):
+            for wrapped_line in _shell_command_display_lines(line):
+                console.print(wrapped_line, soft_wrap=True)
+            continue
+        in_warnings = False
+        in_repeat_dry_run_command = False
+        console.print(line)
+
+
+def _run_vm_os_image_upgrade(
+    *,
+    config_path: Path,
+    source_payload: dict[str, Any],
+    generated_config: Any,
+    paths: ProjectPaths,
+    manifest: Mapping[str, Any],
+    request: _OsImageUpgradeRequest,
+) -> None:
+    if request.node_group:
+        raise RuntimeError("--node-group is supported only for infra:mk8s OS-image upgrades.")
+    if (
+        request.disruption_policy != DISRUPTION_POLICY_SAFE
+        or request.drain_timeout.seconds is not None
+    ):
+        raise RuntimeError(
+            "--disruption-policy and finite --drain-timeout are supported only for "
+            "infra:mk8s OS-image upgrades."
+        )
+
+    source_component = find_source_vm_component(
+        source_payload,
+        request.target.instance_id,
+    )
+    plan = plan_vm_os_image_upgrade(
+        selector=request.target.selector,
+        source_component=source_component,
+        target_image_family=request.target_os,
+    )
+    repeat_dry_run_command = (
+        _upgrade_vm_os_image_dry_run_command(
+            config_path=config_path,
+            target_selector=request.target.selector,
+            to_os=request.target_os,
+        )
+        if request.dry_run
+        else None
+    )
+    _print_upgrade_plan_lines(
+        format_vm_os_image_upgrade_plan(
+            plan,
+            dry_run=request.dry_run,
+            repeat_dry_run_command=repeat_dry_run_command,
+        )
+    )
+
+    if request.dry_run:
+        return
+    if not plan.mutates:
+        console.print(
+            f"VM target {request.target.selector} already uses source image family "
+            f"{request.target_os}."
+        )
+        return
+
+    _run_generated_bundle_validation(
+        generated_config,
+        paths,
+        auto_auth_bootstrap=True,
+        title="VM OS image upgrade preflight",
+        quota_phase="upgrade",
+        flux_command_name="upgrade",
+        manifest=manifest,
+        prompt_mysterybox_payload_values=False,
+    )
+
+    changed = update_source_vm_image_family(
+        source_payload,
+        instance_id=request.target.instance_id,
+        target_image_family=request.target_os,
+    )
+    if not changed:
+        console.print(
+            f"VM target {request.target.selector} already uses source image family "
+            f"{request.target_os}."
+        )
+        return
+    config_path.write_text(render_updated_source_payload(source_payload), encoding="utf-8")
+    console.print(
+        f"Updated {config_path} for VM OS image upgrade to {request.target_os}.",
+        soft_wrap=True,
+    )
+    render_command(config_path, force=True)
+    staged_config, staged_paths, staged_manifest = _load_deploy_context(config_path)
+    mysterybox_payload_env = _run_generated_bundle_validation(
+        staged_config,
+        staged_paths,
+        auto_auth_bootstrap=True,
+        title=f"Validate rendered VM OS image upgrade to {request.target_os}",
+        quota_phase="upgrade",
+        flux_command_name="upgrade",
+        manifest=staged_manifest,
+        prompt_mysterybox_payload_values=False,
+    )
+    status_watchers = _status_watchers_for_component(
+        _manifest_status_watchers(staged_manifest) or _enabled_status_watcher_specs(staged_config),
+        component_id=VM_COMPONENT_ID,
+        instance_id=request.target.instance_id,
+    )
+    apply_kwargs: dict[str, Any] = {
+        "initialize": False,
+        "run_mk8s_preflight": False,
+    }
+    if status_watchers:
+        apply_kwargs["status_watchers"] = status_watchers
+    if mysterybox_payload_env:
+        apply_kwargs["extra_env"] = mysterybox_payload_env
+    plan_env = _terraform_runtime_env(staged_config)
+    if mysterybox_payload_env:
+        plan_env.update(mysterybox_payload_env)
+    console.print(
+        f"Planning Terraform VM OS image upgrade to {request.target_os}.",
+        soft_wrap=True,
+    )
+    terraform_plan(staged_paths.infra_dir, extra_env=plan_env, quiet=True)
+    console.print(
+        f"Applying Terraform VM OS image upgrade to {request.target_os}.",
+        soft_wrap=True,
+    )
+    _run_terraform_apply_with_status(staged_config, staged_paths, **apply_kwargs)
+    console.print(
+        f"[green]VM OS image upgrade completed[/green]: "
+        f"{request.target.selector} -> {request.target_os}"
+    )
+
+
+@upgrade_app.command(
+    "k8s-version",
+    short_help="Upgrade a Terraform-managed MK8s target one Kubernetes minor version.",
+    epilog=_UPGRADE_K8S_EPILOG,
+)
+def upgrade_k8s_version_command(
+    config_path: Annotated[
+        Path,
+        typer.Argument(
+            metavar="CONFIG_YAML",
+            help=_CONFIG_YAML_ARGUMENT_HELP,
+        ),
+    ],
+    target_selector: Annotated[
+        str | None,
+        typer.Argument(
+            metavar="TARGET",
+            help=(
+                "Optional target selector, for example infra:mk8s@mk8s. "
+                "Omit to choose from Terraform-managed MK8s targets interactively."
+            ),
+        ),
+    ] = None,
+    to_version: Annotated[
+        str | None,
+        typer.Option(
+            "--to-version",
+            help=(
+                "Target Kubernetes major.minor version, for example 1.33. "
+                "Omit with TARGET to choose interactively."
+            ),
+        ),
+    ] = None,
+    dry_run: Annotated[
+        bool,
+        typer.Option(
+            "--dry-run",
+            help="Print the live upgrade plan without writing config/generated files or applying Terraform.",
+        ),
+    ] = False,
+    disruption_policy: Annotated[
+        str,
+        typer.Option(
+            "--disruption-policy",
+            help="Upgrade disruption policy: safe, allow-unavailable, or force-delete.",
+        ),
+    ] = "safe",
+    drain_timeout: Annotated[
+        str,
+        typer.Option(
+            "--drain-timeout",
+            help="Node drain timeout: auto, none, or a Go-style duration such as 10m, 30m, 1h.",
+        ),
+    ] = "auto",
+    auto_auth_bootstrap: Annotated[
+        bool,
+        typer.Option(
+            "--auto-auth-bootstrap/--no-auto-auth-bootstrap",
+            help="Automatically bootstrap runtime auth material for generated-bundle validation.",
+        ),
+    ] = True,
+    skip_validations: Annotated[
+        bool,
+        typer.Option(
+            "--skip-validations",
+            help="Skip optional post-upgrade deploy validations; required generated validations still run.",
+        ),
+    ] = False,
+    skip_validation: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--skip-validation",
+            help="Skip one optional post-upgrade validation kind; repeatable.",
+        ),
+    ] = None,
+    interactive: Annotated[
+        bool,
+        typer.Option(
+            "--interactive/--no-interactive",
+            help="Prompt for missing upgrade target/version/options when running from a terminal.",
+        ),
+    ] = True,
+) -> None:
+    """Upgrade a Terraform-managed MK8s cluster and node groups to a Kubernetes version."""
+
+    sdk: Any | None = None
+    warning_cache_token = _DEPLOY_VALIDATION_WARNING_CACHE.set(set())
+    try:
+        guided = not _non_empty_text(target_selector) or not _non_empty_text(to_version)
+        if guided and not interactive:
+            missing = []
+            if not _non_empty_text(target_selector):
+                missing.append("target selector")
+            if not _non_empty_text(to_version):
+                missing.append("--to-version <major.minor>")
+            raise RuntimeError(
+                "Missing "
+                + " and ".join(missing)
+                + ". Pass explicit upgrade options or allow interactive prompting."
+            )
+        if not guided:
+            initial_policy = validate_disruption_policy(disruption_policy)
+            initial_timeout = resolve_drain_timeout(initial_policy, drain_timeout)
+            if initial_policy == DISRUPTION_POLICY_SAFE and initial_timeout.seconds is not None:
+                raise RuntimeError(
+                    "--drain-timeout <duration> is only supported with "
+                    "--disruption-policy allow-unavailable or force-delete. In Nebius MK8s "
+                    "node-group strategy, a finite drain_timeout allows Managed Kubernetes "
+                    "to fall back to Pod deletion after the timeout."
+                )
+
+        source_payload = _load_source_payload(config_path)
+        generated_config, paths, manifest = _load_deploy_context_readonly(config_path)
+        target_selector = _prompt_upgrade_k8s_target_selector_if_needed(
+            manifest=manifest,
+            target_selector=target_selector,
+        )
+        target = parse_upgrade_selector(target_selector)
+        source_component = find_source_mk8s_component(source_payload, target.instance_id)
+        selected_target = _resolve_managed_mk8s_upgrade_target(
+            manifest,
+            target_instance_id=target.instance_id,
+        )
+
+        project_id = str(generated_config.client_info.nebius.project_id).strip()
+        sdk = init_nebius_sdk(
+            parent_id=project_id or None,
+            endpoint=_non_empty_text(os.environ.get("NEBIUS_ENDPOINT")) or None,
+            context="MK8s Kubernetes version upgrade",
+            prefer_operator_auth=True,
+        )
+        executor = Mk8sKubernetesVersionExecutor(sdk)
+        cluster_name = source_mk8s_cluster_name(source_component, fallback=target.instance_id)
+        try:
+            cluster = executor.get_cluster_by_name(project_id=project_id, name=cluster_name)
+        except Exception as exc:
+            raise RuntimeError(
+                f"Could not find live MK8s cluster '{cluster_name}' in project '{project_id}'. "
+                "Deploy the generated MK8s infrastructure before running upgrade k8s-version."
+            ) from exc
+        cluster_id = _live_mk8s_cluster_id(cluster, cluster_name=cluster_name)
+        selected_target = _managed_mk8s_target_with_cluster_id(
+            selected_target,
+            cluster_id=cluster_id,
+        )
+        supported_versions = tuple(executor.control_plane_versions())
+        normalized_to_version = _prompt_upgrade_k8s_to_version_if_needed(
+            cluster=cluster,
+            cluster_id=cluster_id,
+            supported_versions=supported_versions,
+            to_version=to_version,
+        )
+        dry_run, disruption_policy, drain_timeout, skip_validations = (
+            _prompt_upgrade_k8s_options_if_guided(
+                guided=guided,
+                dry_run=dry_run,
+                disruption_policy=disruption_policy,
+                drain_timeout=drain_timeout,
+                skip_validations=skip_validations,
+            )
+        )
+        policy = validate_disruption_policy(disruption_policy)
+        resolved_timeout = resolve_drain_timeout(policy, drain_timeout)
+        if policy == DISRUPTION_POLICY_SAFE and resolved_timeout.seconds is not None:
+            raise RuntimeError(
+                "--drain-timeout <duration> is only supported with "
+                "--disruption-policy allow-unavailable or force-delete. In Nebius MK8s "
+                "node-group strategy, a finite drain_timeout allows Managed Kubernetes "
+                "to fall back to Pod deletion after the timeout."
+            )
+        supported_minors = {parse_k8s_version(version).minor_text for version in supported_versions}
+        if supported_minors and normalized_to_version not in supported_minors:
+            raise RuntimeError(
+                f"Kubernetes {normalized_to_version} is not currently listed by the Nebius "
+                "MK8s control-plane version API. Available versions: "
+                + ", ".join(sorted(supported_minors))
+            )
+
+        live_node_groups = executor.list_node_groups(cluster_id)
+        with ExitStack() as stack:
+            kube_env = _prepare_cluster_handoff_kube_env(
+                generated_config,
+                paths,
+                stack=stack,
+                target=selected_target,
+                persist_local_kubeconfig=False,
+                set_current_context=False,
+            )
+            preflight_findings = collect_kubernetes_preflight_findings(kube_env=kube_env)
+            plan = plan_k8s_upgrade(
+                config_path=str(config_path),
+                target=target,
+                cluster=cluster,
+                cluster_id=cluster_id,
+                source_component=source_component,
+                target_version=normalized_to_version,
+                disruption_policy=policy,
+                drain_timeout=resolved_timeout,
+                live_node_groups=live_node_groups,
+                compatibility_lookup=executor.compatibility_choices,
+                preflight_findings=preflight_findings,
+            )
+            repeat_dry_run_command = (
+                _upgrade_k8s_dry_run_command(
+                    config_path=config_path,
+                    target_selector=target.selector,
+                    to_version=normalized_to_version,
+                    disruption_policy=policy,
+                    drain_timeout=resolved_timeout,
+                )
+                if dry_run
+                else None
+            )
+            _print_upgrade_plan_lines(
+                format_upgrade_plan(
+                    plan,
+                    dry_run=dry_run,
+                    repeat_dry_run_command=repeat_dry_run_command,
+                )
+            )
+
+            if dry_run:
+                return
+            unmanaged_live_groups = tuple(
+                group.name for group in plan.node_groups if group.source is None
+            )
+            if unmanaged_live_groups:
+                raise RuntimeError(
+                    "Live MK8s node groups are not declared in config.yaml, so cxcli cannot "
+                    "safely upgrade them through Terraform: " + ", ".join(unmanaged_live_groups)
+                )
+            if plan.compatibility_failures:
+                raise RuntimeError(
+                    "Kubernetes version upgrade is blocked by OS/GPU stack compatibility. "
+                    "Apply the listed node-layer follow-up first, then rerun upgrade k8s-version."
+                )
+            current_group_versions = source_node_group_versions_for_plan(plan)
+            desired_group_versions = dict(current_group_versions)
+            final_group_versions = source_node_group_versions_for_plan(
+                plan,
+                default_version=normalized_to_version,
+            )
+            source_sync_payload = copy.deepcopy(source_payload)
+            source_sync_required = update_source_k8s_versions(
+                source_sync_payload,
+                instance_id=target.instance_id,
+                target_version=normalized_to_version,
+                node_group_versions=final_group_versions,
+            )
+            if plan.mutates:
+                blockers = blocking_preflight_findings(
+                    plan.preflight_findings,
+                    disruption_policy=policy,
+                )
+                if blockers:
+                    blocker_labels = ", ".join(
+                        f"{finding.kind}:{finding.namespace}/{finding.name}" for finding in blockers
+                    )
+                    raise RuntimeError(
+                        f"Upgrade preflight blockers must be resolved first: {blocker_labels}"
+                    )
+            if not plan.mutates and not plan.rollout_incomplete and not source_sync_required:
+                console.print(
+                    f"MK8s target {target.selector} is already on Kubernetes {normalized_to_version}."
+                )
+                return
+            if not plan.mutates and not plan.rollout_incomplete and source_sync_required:
+                console.print(
+                    "Live MK8s resources are already on the requested Kubernetes version; "
+                    "reconciling config.yaml and generated Terraform so desired state stays authoritative."
+                )
+            if not plan.mutates and plan.rollout_incomplete:
+                console.print(
+                    "MK8s Kubernetes version is already requested on the live resources; "
+                    "waiting for the in-progress node-group rollout to finish."
+                )
+            _run_generated_bundle_validation(
+                generated_config,
+                paths,
+                auto_auth_bootstrap=auto_auth_bootstrap,
+                title="Upgrade preflight",
+                quota_phase="upgrade",
+                flux_command_name="upgrade",
+                manifest=manifest,
+                prompt_mysterybox_payload_values=False,
+            )
+
+            original_strategies = source_node_group_strategy_snapshot(
+                source_payload,
+                instance_id=target.instance_id,
+            )
+            temporary_strategy = terraform_node_group_strategy_for_policy(policy, resolved_timeout)
+            node_group_stage_count = sum(
+                1
+                for planned_group in plan.node_groups
+                if planned_group.source is not None
+                and current_group_versions.get(planned_group.source.key) != normalized_to_version
+            )
+            planned_stage_count = len(plan.hops) + node_group_stage_count
+            extra_stage_summaries: list[str] = []
+            if planned_stage_count == 0 and source_sync_required:
+                planned_stage_count = 1
+                extra_stage_summaries.append("1 source-sync stage")
+            elif temporary_strategy is not None and node_group_stage_count:
+                planned_stage_count += 1
+                extra_stage_summaries.append("1 strategy-restore stage")
+            if planned_stage_count:
+                stage_summaries = [
+                    f"{len(plan.hops)} control-plane stage(s)",
+                    f"{node_group_stage_count} node-group stage(s)",
+                    *extra_stage_summaries,
+                ]
+                console.print(
+                    "Upgrade execution stages are per control-plane hop and per node group, "
+                    "not per node: " + ", ".join(stage_summaries) + ".",
+                    soft_wrap=True,
+                )
+            stage_number = 0
+            stage_applied = False
+
+            def _stage_strategy(active_group_key: str | None = None) -> bool:
+                if temporary_strategy is None:
+                    return False
+                strategies = dict(original_strategies)
+                if active_group_key:
+                    strategies[active_group_key] = temporary_strategy
+                return set_source_node_group_strategies(
+                    source_payload,
+                    instance_id=target.instance_id,
+                    strategies=strategies,
+                )
+
+            def _render_validate_apply_stage(
+                title: str,
+            ) -> tuple[Any, ProjectPaths, Mapping[str, Any]]:
+                nonlocal stage_applied, stage_number
+                stage_number += 1
+                stage_label = (
+                    f"stage {stage_number}/{planned_stage_count}"
+                    if planned_stage_count
+                    else f"stage {stage_number}"
+                )
+                config_path.write_text(
+                    render_updated_source_payload(source_payload), encoding="utf-8"
+                )
+                console.print(f"Updated {config_path} for {stage_label}: {title}.", soft_wrap=True)
+                render_command(config_path, force=True)
+                staged_config, staged_paths, staged_manifest = _load_deploy_context(config_path)
+                mysterybox_payload_env = _run_generated_bundle_validation(
+                    staged_config,
+                    staged_paths,
+                    auto_auth_bootstrap=auto_auth_bootstrap,
+                    title=f"Validate rendered {stage_label}: {title}",
+                    quota_phase="upgrade",
+                    flux_command_name="upgrade",
+                    manifest=staged_manifest,
+                    prompt_mysterybox_payload_values=False,
+                )
+                status_watchers = _manifest_status_watchers(
+                    staged_manifest
+                ) or _enabled_status_watcher_specs(staged_config)
+                apply_kwargs: dict[str, Any] = {
+                    "initialize": False,
+                    "run_mk8s_preflight": False,
+                }
+                if status_watchers:
+                    apply_kwargs["status_watchers"] = status_watchers
+                if mysterybox_payload_env:
+                    apply_kwargs["extra_env"] = mysterybox_payload_env
+                plan_env = _terraform_runtime_env(staged_config)
+                if mysterybox_payload_env:
+                    plan_env.update(mysterybox_payload_env)
+                console.print(f"Planning Terraform {stage_label}: {title}.", soft_wrap=True)
+                terraform_plan(staged_paths.infra_dir, extra_env=plan_env, quiet=True)
+                console.print(f"Applying Terraform {stage_label}: {title}.", soft_wrap=True)
+                _run_terraform_apply_with_status(staged_config, staged_paths, **apply_kwargs)
+                stage_applied = True
+                return staged_config, staged_paths, staged_manifest
+
+            def _restore_temporary_strategy_files_after_error() -> None:
+                if temporary_strategy is None:
+                    return
+                try:
+                    restored = set_source_node_group_strategies(
+                        source_payload,
+                        instance_id=target.instance_id,
+                        strategies=original_strategies,
+                    )
+                    if restored:
+                        config_path.write_text(
+                            render_updated_source_payload(source_payload),
+                            encoding="utf-8",
+                        )
+                        render_command(config_path, force=True)
+                        console.print(
+                            "Restored temporary node-group upgrade strategy in config.yaml "
+                            "and generated/ after failed upgrade stage."
+                        )
+                except Exception as cleanup_exc:
+                    console.print(
+                        "[yellow]Could not restore temporary node-group upgrade strategy "
+                        f"after failed stage:[/yellow] {cleanup_exc}"
+                    )
+
+            try:
+                for hop in plan.hops:
+                    update_source_k8s_versions(
+                        source_payload,
+                        instance_id=target.instance_id,
+                        target_version=hop.to_version,
+                        node_group_versions=desired_group_versions,
+                    )
+                    _stage_strategy(None)
+                    generated_config, paths, manifest = _render_validate_apply_stage(
+                        f"control-plane upgrade to Kubernetes {hop.to_version}"
+                    )
+                    executor.wait_cluster_version(
+                        cluster_id=plan.cluster_id,
+                        version=hop.to_version,
+                    )
+
+                for planned_group in plan.node_groups:
+                    if planned_group.source is None:
+                        raise RuntimeError(
+                            f"Live node group '{planned_group.name}' is not declared in config.yaml; "
+                            "cxcli cannot safely upgrade it through Terraform."
+                        )
+                    group_key = planned_group.source.key
+                    if current_group_versions.get(group_key) == normalized_to_version:
+                        if plan.rollout_incomplete:
+                            wait_for_node_group_rollout(
+                                executor=executor,
+                                plan=plan,
+                                planned_group=planned_group,
+                            )
+                        desired_group_versions[group_key] = normalized_to_version
+                        continue
+                    desired_group_versions[group_key] = normalized_to_version
+                    update_source_k8s_versions(
+                        source_payload,
+                        instance_id=target.instance_id,
+                        target_version=normalized_to_version,
+                        node_group_versions=desired_group_versions,
+                    )
+                    _stage_strategy(group_key)
+                    generated_config, paths, manifest = _render_validate_apply_stage(
+                        f"node-group {planned_group.name} upgrade to Kubernetes {normalized_to_version}"
+                    )
+                    wait_for_node_group_rollout(
+                        executor=executor,
+                        plan=plan,
+                        planned_group=planned_group,
+                    )
+
+                final_versions_changed = False
+                if final_group_versions:
+                    final_versions_changed = update_source_k8s_versions(
+                        source_payload,
+                        instance_id=target.instance_id,
+                        target_version=normalized_to_version,
+                        node_group_versions=final_group_versions,
+                    )
+                strategy_restored = _stage_strategy(None)
+                if (
+                    final_versions_changed
+                    or strategy_restored
+                    or (source_sync_required and not stage_applied)
+                ):
+                    stage_title = (
+                        "node-group strategy restore"
+                        if strategy_restored
+                        else f"source version sync to Kubernetes {normalized_to_version}"
+                    )
+                    generated_config, paths, manifest = _render_validate_apply_stage(stage_title)
+            except Exception:
+                _restore_temporary_strategy_files_after_error()
+                raise
+
+            validations = _filter_validations_for_target(
+                _manifest_deploy_validations(manifest),
+                target_ref=target.instance_id,
+            )
+            skip_kinds = _resolve_deploy_validation_skip_kinds(tuple(skip_validation or ()))
+            validations = _filter_deploy_validations(
+                validations,
+                skip_validations=skip_validations,
+                skip_kinds=skip_kinds,
+            )
+            if validations:
+                _run_deploy_validations(
+                    validations,
+                    inventory_dir=paths.inventory_dir,
+                    extra_env=kube_env,
+                    emit=lambda message: console.print(message, highlight=False),
+                )
+            console.print(
+                f"[green]MK8s Kubernetes upgrade completed[/green]: "
+                f"{target.selector} -> {normalized_to_version}"
+            )
+    except typer.Exit:
+        raise
+    except Exception as exc:  # pragma: no cover - CLI surface
+        _exit_with_error(exc)
+    finally:
+        _DEPLOY_VALIDATION_WARNING_CACHE.reset(warning_cache_token)
+        if sdk is not None:
+            with suppress(Exception):
+                sdk.sync_close()
+
+
+@upgrade_app.command(
+    "os-image",
+    short_help="Upgrade MK8s node-group or generic VM OS images.",
+    epilog=_UPGRADE_OS_IMAGE_EPILOG,
+)
+def upgrade_os_image_command(
+    config_path: Annotated[
+        Path,
+        typer.Argument(metavar="CONFIG_YAML", help=_CONFIG_YAML_ARGUMENT_HELP),
+    ],
+    target_selector: Annotated[
+        str | None,
+        typer.Argument(
+            metavar="TARGET",
+            help=(
+                "Optional target selector, for example infra:mk8s@mk8s or infra:vm@worker. "
+                "Omit to choose interactively."
+            ),
+        ),
+    ] = None,
+    to_os: Annotated[
+        str | None,
+        typer.Option(
+            "--to-os",
+            help=(
+                "Target OS image value. For MK8s this is a node template OS such as "
+                "ubuntu24.04; for VM this is source_image_family."
+            ),
+        ),
+    ] = None,
+    node_group: Annotated[
+        str,
+        typer.Option("--node-group", help="Optional concrete node-group name to upgrade."),
+    ] = "",
+    dry_run: Annotated[
+        bool,
+        typer.Option(
+            "--dry-run", help="Print the live upgrade plan without writing files or applying."
+        ),
+    ] = False,
+    disruption_policy: Annotated[
+        str,
+        typer.Option(
+            "--disruption-policy",
+            help="Upgrade disruption policy: safe, allow-unavailable, or force-delete.",
+        ),
+    ] = "safe",
+    drain_timeout: Annotated[
+        str,
+        typer.Option(
+            "--drain-timeout",
+            help="Node drain timeout: auto, none, or a Go-style duration such as 10m.",
+        ),
+    ] = "auto",
+    interactive: Annotated[
+        bool,
+        typer.Option(
+            "--interactive/--no-interactive",
+            help="Prompt for missing OS-image target/options when running from a terminal.",
+        ),
+    ] = True,
+) -> None:
+    """Upgrade MK8s node-group or generic VM OS images through Terraform desired state."""
+
+    sdk: Any | None = None
+    warning_cache_token = _DEPLOY_VALIDATION_WARNING_CACHE.set(set())
+    try:
+        guided = not _non_empty_text(target_selector) or not _non_empty_text(to_os)
+        if guided and not interactive:
+            missing = []
+            if not _non_empty_text(target_selector):
+                missing.append("target selector")
+            if not _non_empty_text(to_os):
+                missing.append("--to-os <os>")
+            raise RuntimeError(
+                "Missing "
+                + " and ".join(missing)
+                + ". Pass explicit upgrade options or allow interactive prompting."
+            )
+        if not guided:
+            _resolve_os_image_disruption_request(
+                guided=False,
+                dry_run=dry_run,
+                disruption_policy=disruption_policy,
+                drain_timeout=drain_timeout,
+            )
+
+        source_payload = _load_source_payload(config_path)
+        generated_config, paths, manifest = _load_deploy_context_readonly(config_path)
+        os_target = _prompt_upgrade_os_image_target_selector_if_needed(
+            source_payload=source_payload,
+            manifest=manifest,
+            target_selector=target_selector,
+        )
+        if os_target.component_id == VM_COMPONENT_ID:
+            source_component = find_source_vm_component(source_payload, os_target.instance_id)
+            target_os = _prompt_upgrade_os_image_to_os_if_needed(
+                path_label="upgrade.os_image.to_os",
+                to_os=to_os,
+                choices=_vm_os_image_choices(
+                    source_payload=source_payload,
+                    source_component=source_component,
+                    instance_id=os_target.instance_id,
+                ),
+            )
+            dry_run, policy, resolved_timeout = _resolve_vm_os_image_request_options(
+                guided=guided,
+                dry_run=dry_run,
+                disruption_policy=disruption_policy,
+                drain_timeout=drain_timeout,
+            )
+            request = _OsImageUpgradeRequest(
+                target=os_target,
+                target_os=target_os,
+                node_group=_non_empty_text(node_group),
+                dry_run=dry_run,
+                disruption_policy=policy,
+                drain_timeout=resolved_timeout,
+                guided=guided,
+            )
+            _run_vm_os_image_upgrade(
+                config_path=config_path,
+                source_payload=source_payload,
+                generated_config=generated_config,
+                paths=paths,
+                manifest=manifest,
+                request=request,
+            )
+            return
+
+        target = parse_upgrade_selector(os_target.selector)
+        source_component = find_source_mk8s_component(source_payload, target.instance_id)
+        selected_target = _resolve_managed_mk8s_upgrade_target(
+            manifest,
+            target_instance_id=target.instance_id,
+        )
+
+        project_id = str(generated_config.client_info.nebius.project_id).strip()
+        sdk = init_nebius_sdk(
+            parent_id=project_id or None,
+            endpoint=_non_empty_text(os.environ.get("NEBIUS_ENDPOINT")) or None,
+            context="MK8s OS image upgrade",
+            prefer_operator_auth=True,
+        )
+        executor = Mk8sKubernetesVersionExecutor(sdk)
+        cluster_name = source_mk8s_cluster_name(source_component, fallback=target.instance_id)
+        try:
+            cluster = executor.get_cluster_by_name(project_id=project_id, name=cluster_name)
+        except Exception as exc:
+            raise RuntimeError(
+                f"Could not find live MK8s cluster '{cluster_name}' in project '{project_id}'. "
+                "Deploy the generated MK8s infrastructure before running upgrade os-image."
+            ) from exc
+        cluster_id = _live_mk8s_cluster_id(cluster, cluster_name=cluster_name)
+        selected_target = _managed_mk8s_target_with_cluster_id(
+            selected_target,
+            cluster_id=cluster_id,
+        )
+        live_node_groups = executor.list_node_groups(cluster_id)
+        node_group = _prompt_upgrade_os_image_node_group_if_guided(
+            guided=guided,
+            node_group=node_group,
+        )
+        k8s_version = _cluster_control_plane_minor_version(
+            cluster,
+            cluster_id=cluster_id,
+        )
+        component_path = _dynamic_infra_component_path(
+            source_payload,
+            MK8S_COMPONENT_ID,
+            instance_id=target.instance_id,
+        )
+        component_path_label = _format_payload_path(component_path) if component_path else ""
+        target_os = _prompt_upgrade_os_image_to_os_if_needed(
+            path_label="upgrade.os_image.to_os",
+            to_os=to_os,
+            choices=mk8s_os_image_choices(
+                provider_lookup=ProviderOptionLookup(),
+                source_payload=source_payload,
+                source_component=source_component,
+                component_path_label=component_path_label,
+                k8s_version=k8s_version,
+                live_node_groups=live_node_groups,
+                node_group=node_group,
+            ),
+        )
+        dry_run, policy, resolved_timeout = _resolve_os_image_disruption_request(
+            guided=guided,
+            dry_run=dry_run,
+            disruption_policy=disruption_policy,
+            drain_timeout=drain_timeout,
+        )
+        with ExitStack() as stack:
+            kube_env = _prepare_cluster_handoff_kube_env(
+                generated_config,
+                paths,
+                stack=stack,
+                target=selected_target,
+                persist_local_kubeconfig=False,
+                set_current_context=False,
+            )
+            preflight_findings = collect_kubernetes_preflight_findings(kube_env=kube_env)
+            plan = plan_os_image_upgrade(
+                target=target,
+                cluster=cluster,
+                cluster_id=cluster_id,
+                source_component=source_component,
+                target_os=target_os,
+                disruption_policy=policy,
+                drain_timeout=resolved_timeout,
+                live_node_groups=live_node_groups,
+                compatibility_lookup=executor.compatibility_choices,
+                node_group=node_group,
+                preflight_findings=preflight_findings,
+            )
+            repeat_dry_run_command = (
+                _upgrade_os_image_dry_run_command(
+                    config_path=config_path,
+                    target_selector=target.selector,
+                    to_os=target_os,
+                    node_group=node_group,
+                    disruption_policy=policy,
+                    drain_timeout=resolved_timeout,
+                )
+                if dry_run
+                else None
+            )
+            _print_upgrade_plan_lines(
+                format_os_image_upgrade_plan(
+                    plan,
+                    dry_run=dry_run,
+                    repeat_dry_run_command=repeat_dry_run_command,
+                )
+            )
+
+            if dry_run:
+                return
+            if plan.compatibility_failures:
+                raise RuntimeError(
+                    "OS image upgrade is blocked by the live Nebius MK8s "
+                    "compatibility matrix. Apply the listed node-layer follow-up, "
+                    "then rerun upgrade os-image."
+                )
+
+            source_group_keys = tuple(
+                group.source.key for group in plan.node_groups if group.source is not None
+            )
+            source_sync_payload = copy.deepcopy(source_payload)
+            source_sync_required = update_source_node_group_os(
+                source_sync_payload,
+                instance_id=target.instance_id,
+                target_os=target_os,
+                node_group_keys=source_group_keys,
+            )
+            if plan.mutates:
+                blockers = blocking_preflight_findings(
+                    plan.preflight_findings,
+                    disruption_policy=policy,
+                )
+                if blockers:
+                    blocker_labels = ", ".join(
+                        f"{finding.kind}:{finding.namespace}/{finding.name}" for finding in blockers
+                    )
+                    raise RuntimeError(
+                        f"Upgrade preflight blockers must be resolved first: {blocker_labels}"
+                    )
+            if not plan.mutates and not plan.rollout_incomplete and not source_sync_required:
+                console.print(f"MK8s target {target.selector} is already on OS image {target_os}.")
+                return
+            if not plan.mutates and not plan.rollout_incomplete and source_sync_required:
+                console.print(
+                    "Live MK8s node groups are already on the requested OS image; "
+                    "reconciling config.yaml and generated Terraform so desired state "
+                    "stays authoritative."
+                )
+            if not plan.mutates and plan.rollout_incomplete:
+                console.print(
+                    "MK8s OS image is already requested on the live node groups; "
+                    "waiting for the in-progress node-group rollout to finish."
+                )
+
+            _run_generated_bundle_validation(
+                generated_config,
+                paths,
+                auto_auth_bootstrap=True,
+                title="OS image upgrade preflight",
+                quota_phase="upgrade",
+                flux_command_name="upgrade",
+                manifest=manifest,
+                prompt_mysterybox_payload_values=False,
+            )
+
+            original_strategies = source_node_group_strategy_snapshot(
+                source_payload,
+                instance_id=target.instance_id,
+            )
+            temporary_strategy = terraform_node_group_strategy_for_policy(
+                policy,
+                resolved_timeout,
+            )
+            node_group_stage_count = sum(
+                1 for planned_group in plan.node_groups if planned_group.os != target_os
+            )
+            planned_stage_count = node_group_stage_count
+            extra_stage_summaries: list[str] = []
+            if planned_stage_count == 0 and source_sync_required:
+                planned_stage_count = 1
+                extra_stage_summaries.append("1 source-sync stage")
+            elif temporary_strategy is not None and node_group_stage_count:
+                planned_stage_count += 1
+                extra_stage_summaries.append("1 strategy-restore stage")
+            if planned_stage_count:
+                stage_summaries = [
+                    f"{node_group_stage_count} node-group stage(s)",
+                    *extra_stage_summaries,
+                ]
+                console.print(
+                    "OS image upgrade execution stages are per node group, not per node: "
+                    + ", ".join(stage_summaries)
+                    + ".",
+                    soft_wrap=True,
+                )
+            stage_number = 0
+            stage_applied = False
+
+            def _stage_strategy(active_group_key: str | None = None) -> bool:
+                if temporary_strategy is None:
+                    return False
+                strategies = dict(original_strategies)
+                if active_group_key:
+                    strategies[active_group_key] = temporary_strategy
+                return set_source_node_group_strategies(
+                    source_payload,
+                    instance_id=target.instance_id,
+                    strategies=strategies,
+                )
+
+            def _render_validate_apply_stage(
+                title: str,
+            ) -> tuple[Any, ProjectPaths, Mapping[str, Any]]:
+                nonlocal stage_applied, stage_number
+                stage_number += 1
+                stage_label = (
+                    f"stage {stage_number}/{planned_stage_count}"
+                    if planned_stage_count
+                    else f"stage {stage_number}"
+                )
+                config_path.write_text(
+                    render_updated_source_payload(source_payload),
+                    encoding="utf-8",
+                )
+                console.print(f"Updated {config_path} for {stage_label}: {title}.", soft_wrap=True)
+                render_command(config_path, force=True)
+                staged_config, staged_paths, staged_manifest = _load_deploy_context(config_path)
+                mysterybox_payload_env = _run_generated_bundle_validation(
+                    staged_config,
+                    staged_paths,
+                    auto_auth_bootstrap=True,
+                    title=f"Validate rendered {stage_label}: {title}",
+                    quota_phase="upgrade",
+                    flux_command_name="upgrade",
+                    manifest=staged_manifest,
+                    prompt_mysterybox_payload_values=False,
+                )
+                status_watchers = _manifest_status_watchers(
+                    staged_manifest
+                ) or _enabled_status_watcher_specs(staged_config)
+                apply_kwargs: dict[str, Any] = {
+                    "initialize": False,
+                    "run_mk8s_preflight": False,
+                }
+                if status_watchers:
+                    apply_kwargs["status_watchers"] = status_watchers
+                if mysterybox_payload_env:
+                    apply_kwargs["extra_env"] = mysterybox_payload_env
+                plan_env = _terraform_runtime_env(staged_config)
+                if mysterybox_payload_env:
+                    plan_env.update(mysterybox_payload_env)
+                console.print(f"Planning Terraform {stage_label}: {title}.", soft_wrap=True)
+                terraform_plan(staged_paths.infra_dir, extra_env=plan_env, quiet=True)
+                console.print(f"Applying Terraform {stage_label}: {title}.", soft_wrap=True)
+                _run_terraform_apply_with_status(staged_config, staged_paths, **apply_kwargs)
+                stage_applied = True
+                return staged_config, staged_paths, staged_manifest
+
+            def _restore_temporary_strategy_files_after_error() -> None:
+                if temporary_strategy is None:
+                    return
+                try:
+                    restored = set_source_node_group_strategies(
+                        source_payload,
+                        instance_id=target.instance_id,
+                        strategies=original_strategies,
+                    )
+                    if restored:
+                        config_path.write_text(
+                            render_updated_source_payload(source_payload),
+                            encoding="utf-8",
+                        )
+                        render_command(config_path, force=True)
+                        console.print(
+                            "Restored temporary node-group upgrade strategy in config.yaml "
+                            "and generated/ after failed OS image stage."
+                        )
+                except Exception as cleanup_exc:
+                    console.print(
+                        "[yellow]Could not restore temporary node-group upgrade strategy "
+                        f"after failed OS image stage:[/yellow] {cleanup_exc}"
+                    )
+
+            try:
+                for planned_group in plan.node_groups:
+                    if planned_group.source is None:
+                        raise RuntimeError(
+                            f"Live node group '{planned_group.name}' is not declared in config.yaml; "
+                            "cxcli cannot safely upgrade it through Terraform."
+                        )
+                    group_key = planned_group.source.key
+                    if planned_group.os == target_os:
+                        if not node_group_os_rollout_complete(
+                            planned_group.raw,
+                            os=target_os,
+                        ):
+                            wait_for_os_image_rollout(
+                                executor=executor,
+                                plan=plan,
+                                planned_group=planned_group,
+                            )
+                        continue
+                    update_source_node_group_os(
+                        source_payload,
+                        instance_id=target.instance_id,
+                        target_os=target_os,
+                        node_group_keys=(group_key,),
+                    )
+                    _stage_strategy(group_key)
+                    generated_config, paths, manifest = _render_validate_apply_stage(
+                        f"node-group {planned_group.name} OS image upgrade to {target_os}"
+                    )
+                    wait_for_os_image_rollout(
+                        executor=executor,
+                        plan=plan,
+                        planned_group=planned_group,
+                    )
+
+                final_os_changed = update_source_node_group_os(
+                    source_payload,
+                    instance_id=target.instance_id,
+                    target_os=target_os,
+                    node_group_keys=source_group_keys,
+                )
+                strategy_restored = _stage_strategy(None)
+                if (
+                    final_os_changed
+                    or strategy_restored
+                    or (source_sync_required and not stage_applied)
+                ):
+                    stage_title = (
+                        "node-group strategy restore"
+                        if strategy_restored
+                        else f"source OS image sync to {target_os}"
+                    )
+                    generated_config, paths, manifest = _render_validate_apply_stage(stage_title)
+            except Exception:
+                _restore_temporary_strategy_files_after_error()
+                raise
+
+            console.print(
+                f"[green]MK8s OS image upgrade completed[/green]: {target.selector} -> {target_os}"
+            )
+    except typer.Exit:
+        raise
+    except Exception as exc:  # pragma: no cover - CLI surface
+        _exit_with_error(exc)
+    finally:
+        _DEPLOY_VALIDATION_WARNING_CACHE.reset(warning_cache_token)
+        if sdk is not None:
+            with suppress(Exception):
+                sdk.sync_close()
+
+
+def _run_mk8s_node_layer_upgrade_command(
+    *,
+    config_path: Path,
+    spec: NodeLayerUpgradeSpec,
+    target_selector: str | None,
+    target_value: str | None,
+    option_name: str,
+    path_prefix: str,
+    node_group: str,
+    dry_run: bool,
+    disruption_policy: str,
+    drain_timeout: str,
+    interactive: bool,
+) -> None:
+    """Run one MK8s node-template layer upgrade command."""
+
+    sdk: Any | None = None
+    warning_cache_token = _DEPLOY_VALIDATION_WARNING_CACHE.set(set())
+    try:
+        guided = not _non_empty_text(target_selector) or not _non_empty_text(target_value)
+        if guided and not interactive:
+            missing = []
+            if not _non_empty_text(target_selector):
+                missing.append("target selector")
+            if not _non_empty_text(target_value):
+                missing.append(f"{option_name} <value>")
+            raise RuntimeError(
+                "Missing "
+                + " and ".join(missing)
+                + ". Pass explicit upgrade options or allow interactive prompting."
+            )
+        if not guided:
+            _resolve_os_image_disruption_request(
+                guided=False,
+                dry_run=dry_run,
+                disruption_policy=disruption_policy,
+                drain_timeout=drain_timeout,
+                path_prefix=path_prefix,
+            )
+
+        source_payload = _load_source_payload(config_path)
+        generated_config, paths, manifest = _load_deploy_context_readonly(config_path)
+        resolved_selector = _prompt_upgrade_k8s_target_selector_if_needed(
+            manifest=manifest,
+            target_selector=target_selector,
+            path_label=f"{path_prefix}.target",
+        )
+        target = parse_upgrade_selector(resolved_selector)
+        source_component = find_source_mk8s_component(source_payload, target.instance_id)
+        selected_target = _resolve_managed_mk8s_upgrade_target(
+            manifest,
+            target_instance_id=target.instance_id,
+        )
+
+        project_id = str(generated_config.client_info.nebius.project_id).strip()
+        sdk = init_nebius_sdk(
+            parent_id=project_id or None,
+            endpoint=_non_empty_text(os.environ.get("NEBIUS_ENDPOINT")) or None,
+            context=f"MK8s {spec.target_label} upgrade",
+            prefer_operator_auth=True,
+        )
+        executor = Mk8sKubernetesVersionExecutor(sdk)
+        cluster_name = source_mk8s_cluster_name(source_component, fallback=target.instance_id)
+        try:
+            cluster = executor.get_cluster_by_name(project_id=project_id, name=cluster_name)
+        except Exception as exc:
+            raise RuntimeError(
+                f"Could not find live MK8s cluster '{cluster_name}' in project '{project_id}'. "
+                f"Deploy the generated MK8s infrastructure before running upgrade {spec.command}."
+            ) from exc
+        cluster_id = _live_mk8s_cluster_id(cluster, cluster_name=cluster_name)
+        selected_target = _managed_mk8s_target_with_cluster_id(
+            selected_target,
+            cluster_id=cluster_id,
+        )
+        live_node_groups = executor.list_node_groups(cluster_id)
+        node_group = _prompt_upgrade_node_group_if_guided(
+            path_prefix=path_prefix,
+            guided=guided,
+            node_group=node_group,
+        )
+        k8s_version = _cluster_control_plane_minor_version(
+            cluster,
+            cluster_id=cluster_id,
+        )
+        component_path = _dynamic_infra_component_path(
+            source_payload,
+            MK8S_COMPONENT_ID,
+            instance_id=target.instance_id,
+        )
+        component_path_label = _format_payload_path(component_path) if component_path else ""
+        nebius_info = getattr(generated_config.client_info, "nebius", None)
+        choices = node_layer_value_choices(
+            provider_lookup=ProviderOptionLookup(),
+            source_payload=source_payload,
+            source_component=source_component,
+            component_path_label=component_path_label,
+            project_id=project_id,
+            tenant_id=_non_empty_text(getattr(nebius_info, "tenant_id", None)),
+            region_id=_non_empty_text(getattr(nebius_info, "region_id", None)),
+            k8s_version=k8s_version,
+            spec=spec,
+            live_node_groups=live_node_groups,
+            node_group=node_group,
+        )
+        resolved_value = _prompt_upgrade_node_layer_target_value_if_needed(
+            path_label=(
+                f"{path_prefix}.to_platform"
+                if option_name == "--to-platform"
+                else f"{path_prefix}.to_preset"
+            ),
+            value=target_value,
+            option_name=option_name,
+            choices=choices,
+        )
+        dry_run, policy, resolved_timeout = _resolve_os_image_disruption_request(
+            guided=guided,
+            dry_run=dry_run,
+            disruption_policy=disruption_policy,
+            drain_timeout=drain_timeout,
+            path_prefix=path_prefix,
+        )
+        request = _NodeLayerUpgradeRequest(
+            target_selector=target.selector,
+            target_value=resolved_value,
+            node_group=node_group,
+            dry_run=dry_run,
+            disruption_policy=policy,
+            drain_timeout=resolved_timeout,
+            guided=guided,
+        )
+
+        with ExitStack() as stack:
+            kube_env = _prepare_cluster_handoff_kube_env(
+                generated_config,
+                paths,
+                stack=stack,
+                target=selected_target,
+                persist_local_kubeconfig=False,
+                set_current_context=False,
+            )
+            preflight_findings = collect_kubernetes_preflight_findings(kube_env=kube_env)
+            plan = plan_node_layer_upgrade(
+                target=target,
+                cluster=cluster,
+                cluster_id=cluster_id,
+                source_component=source_component,
+                spec=spec,
+                target_value=request.target_value,
+                disruption_policy=request.disruption_policy,
+                drain_timeout=request.drain_timeout,
+                live_node_groups=live_node_groups,
+                compatibility_lookup=executor.compatibility_choices,
+                node_group=request.node_group,
+                preflight_findings=preflight_findings,
+            )
+            repeat_dry_run_command = (
+                _upgrade_node_layer_dry_run_command(
+                    config_path=config_path,
+                    command=spec.command,
+                    target_selector=request.target_selector,
+                    option_name=option_name,
+                    target_value=request.target_value,
+                    node_group=request.node_group,
+                    disruption_policy=request.disruption_policy,
+                    drain_timeout=request.drain_timeout,
+                )
+                if request.dry_run
+                else None
+            )
+            _print_upgrade_plan_lines(
+                format_node_layer_upgrade_plan(
+                    plan,
+                    dry_run=request.dry_run,
+                    repeat_dry_run_command=repeat_dry_run_command,
+                )
+            )
+
+            if request.dry_run:
+                return
+            if plan.compatibility_failures:
+                raise RuntimeError(
+                    f"{spec.target_label} upgrade is blocked by the live Nebius MK8s "
+                    "compatibility matrix. Apply the listed node-layer follow-up, "
+                    f"then rerun upgrade {spec.command}."
+                )
+
+            source_group_keys = tuple(
+                group.source.key for group in plan.node_groups if group.source is not None
+            )
+            source_sync_payload = copy.deepcopy(source_payload)
+            source_sync_required = update_source_node_group_field(
+                source_sync_payload,
+                instance_id=target.instance_id,
+                field=spec.source_field,
+                value=request.target_value,
+                node_group_keys=source_group_keys,
+            )
+            if plan.mutates:
+                blockers = blocking_preflight_findings(
+                    plan.preflight_findings,
+                    disruption_policy=request.disruption_policy,
+                )
+                if blockers:
+                    blocker_labels = ", ".join(
+                        f"{finding.kind}:{finding.namespace}/{finding.name}" for finding in blockers
+                    )
+                    raise RuntimeError(
+                        f"Upgrade preflight blockers must be resolved first: {blocker_labels}"
+                    )
+            if not plan.mutates and not plan.rollout_incomplete and not source_sync_required:
+                console.print(
+                    f"MK8s target {target.selector} is already on {spec.target_label} "
+                    f"{request.target_value}."
+                )
+                return
+            if not plan.mutates and not plan.rollout_incomplete and source_sync_required:
+                console.print(
+                    f"Live MK8s node groups already use the requested {spec.target_label}; "
+                    "reconciling config.yaml and generated Terraform so desired state "
+                    "stays authoritative."
+                )
+            if not plan.mutates and plan.rollout_incomplete:
+                console.print(
+                    f"MK8s {spec.target_label} is already requested on the live node groups; "
+                    "waiting for the in-progress node-group rollout to finish."
+                )
+
+            _run_generated_bundle_validation(
+                generated_config,
+                paths,
+                auto_auth_bootstrap=True,
+                title=f"{spec.target_label} upgrade preflight",
+                quota_phase="upgrade",
+                flux_command_name="upgrade",
+                manifest=manifest,
+                prompt_mysterybox_payload_values=False,
+            )
+
+            original_strategies = source_node_group_strategy_snapshot(
+                source_payload,
+                instance_id=target.instance_id,
+            )
+            temporary_strategy = terraform_node_group_strategy_for_policy(
+                request.disruption_policy,
+                request.drain_timeout,
+            )
+            node_group_stage_count = sum(
+                1
+                for planned_group in plan.node_groups
+                if (
+                    planned_group.source is not None
+                    and _non_empty_text(getattr(planned_group, spec.live_field, ""))
+                    != request.target_value
+                )
+            )
+            planned_stage_count = node_group_stage_count
+            extra_stage_summaries: list[str] = []
+            if planned_stage_count == 0 and source_sync_required:
+                planned_stage_count = 1
+                extra_stage_summaries.append("1 source-sync stage")
+            elif temporary_strategy is not None and node_group_stage_count:
+                planned_stage_count += 1
+                extra_stage_summaries.append("1 strategy-restore stage")
+            if planned_stage_count:
+                stage_summaries = [
+                    f"{node_group_stage_count} node-group stage(s)",
+                    *extra_stage_summaries,
+                ]
+                console.print(
+                    f"{spec.target_label} upgrade execution stages are per node group, "
+                    "not per node: " + ", ".join(stage_summaries) + ".",
+                    soft_wrap=True,
+                )
+            stage_number = 0
+            stage_applied = False
+
+            def _stage_strategy(active_group_key: str | None = None) -> bool:
+                if temporary_strategy is None:
+                    return False
+                strategies = dict(original_strategies)
+                if active_group_key:
+                    strategies[active_group_key] = temporary_strategy
+                return set_source_node_group_strategies(
+                    source_payload,
+                    instance_id=target.instance_id,
+                    strategies=strategies,
+                )
+
+            def _render_validate_apply_stage(
+                title: str,
+            ) -> tuple[Any, ProjectPaths, Mapping[str, Any]]:
+                nonlocal stage_applied, stage_number
+                stage_number += 1
+                stage_label = (
+                    f"stage {stage_number}/{planned_stage_count}"
+                    if planned_stage_count
+                    else f"stage {stage_number}"
+                )
+                config_path.write_text(
+                    render_updated_source_payload(source_payload),
+                    encoding="utf-8",
+                )
+                console.print(f"Updated {config_path} for {stage_label}: {title}.", soft_wrap=True)
+                render_command(config_path, force=True)
+                staged_config, staged_paths, staged_manifest = _load_deploy_context(config_path)
+                mysterybox_payload_env = _run_generated_bundle_validation(
+                    staged_config,
+                    staged_paths,
+                    auto_auth_bootstrap=True,
+                    title=f"Validate rendered {stage_label}: {title}",
+                    quota_phase="upgrade",
+                    flux_command_name="upgrade",
+                    manifest=staged_manifest,
+                    prompt_mysterybox_payload_values=False,
+                )
+                status_watchers = _manifest_status_watchers(
+                    staged_manifest
+                ) or _enabled_status_watcher_specs(staged_config)
+                apply_kwargs: dict[str, Any] = {
+                    "initialize": False,
+                    "run_mk8s_preflight": False,
+                }
+                if status_watchers:
+                    apply_kwargs["status_watchers"] = status_watchers
+                if mysterybox_payload_env:
+                    apply_kwargs["extra_env"] = mysterybox_payload_env
+                plan_env = _terraform_runtime_env(staged_config)
+                if mysterybox_payload_env:
+                    plan_env.update(mysterybox_payload_env)
+                console.print(f"Planning Terraform {stage_label}: {title}.", soft_wrap=True)
+                terraform_plan(staged_paths.infra_dir, extra_env=plan_env, quiet=True)
+                console.print(f"Applying Terraform {stage_label}: {title}.", soft_wrap=True)
+                _run_terraform_apply_with_status(staged_config, staged_paths, **apply_kwargs)
+                stage_applied = True
+                return staged_config, staged_paths, staged_manifest
+
+            def _restore_temporary_strategy_files_after_error() -> None:
+                if temporary_strategy is None:
+                    return
+                try:
+                    restored = set_source_node_group_strategies(
+                        source_payload,
+                        instance_id=target.instance_id,
+                        strategies=original_strategies,
+                    )
+                    if restored:
+                        config_path.write_text(
+                            render_updated_source_payload(source_payload),
+                            encoding="utf-8",
+                        )
+                        render_command(config_path, force=True)
+                        console.print(
+                            "Restored temporary node-group upgrade strategy in config.yaml "
+                            f"and generated/ after failed {spec.target_label} stage."
+                        )
+                except Exception as cleanup_exc:
+                    console.print(
+                        "[yellow]Could not restore temporary node-group upgrade strategy "
+                        f"after failed {spec.target_label} stage:[/yellow] {cleanup_exc}"
+                    )
+
+            try:
+                for planned_group in plan.node_groups:
+                    if planned_group.source is None:
+                        raise RuntimeError(
+                            f"Live node group '{planned_group.name}' is not declared in config.yaml; "
+                            "cxcli cannot safely upgrade it through Terraform."
+                        )
+                    group_key = planned_group.source.key
+                    if node_group_layer_rollout_complete(
+                        planned_group.raw,
+                        field=spec.live_field,
+                        value=request.target_value,
+                    ):
+                        continue
+                    if (
+                        _non_empty_text(getattr(planned_group, spec.live_field, ""))
+                        == request.target_value
+                    ):
+                        wait_for_node_layer_rollout(
+                            executor=executor,
+                            plan=plan,
+                            planned_group=planned_group,
+                        )
+                        continue
+                    update_source_node_group_field(
+                        source_payload,
+                        instance_id=target.instance_id,
+                        field=spec.source_field,
+                        value=request.target_value,
+                        node_group_keys=(group_key,),
+                    )
+                    _stage_strategy(group_key)
+                    generated_config, paths, manifest = _render_validate_apply_stage(
+                        f"node-group {planned_group.name} {spec.target_label} upgrade to "
+                        f"{request.target_value}"
+                    )
+                    wait_for_node_layer_rollout(
+                        executor=executor,
+                        plan=plan,
+                        planned_group=planned_group,
+                    )
+
+                final_changed = update_source_node_group_field(
+                    source_payload,
+                    instance_id=target.instance_id,
+                    field=spec.source_field,
+                    value=request.target_value,
+                    node_group_keys=source_group_keys,
+                )
+                strategy_restored = _stage_strategy(None)
+                if (
+                    final_changed
+                    or strategy_restored
+                    or (source_sync_required and not stage_applied)
+                ):
+                    stage_title = (
+                        "node-group strategy restore"
+                        if strategy_restored
+                        else f"source {spec.target_label} sync to {request.target_value}"
+                    )
+                    generated_config, paths, manifest = _render_validate_apply_stage(stage_title)
+            except Exception:
+                _restore_temporary_strategy_files_after_error()
+                raise
+
+            console.print(
+                f"[green]MK8s {spec.target_label} upgrade completed[/green]: "
+                f"{target.selector} -> {request.target_value}"
+            )
+    except typer.Exit:
+        raise
+    except Exception as exc:  # pragma: no cover - CLI surface
+        _exit_with_error(exc)
+    finally:
+        _DEPLOY_VALIDATION_WARNING_CACHE.reset(warning_cache_token)
+        if sdk is not None:
+            with suppress(Exception):
+                sdk.sync_close()
+
+
+@upgrade_app.command(
+    "gpu-stack-preset",
+    short_help="Upgrade MK8s GPU node-group GPU stack presets.",
+    epilog=(
+        "Example: nebius-cxcli upgrade gpu-stack-preset <config.yaml> "
+        "infra:mk8s@<target> --to-preset cuda13.0 --dry-run."
+    ),
+)
+def upgrade_gpu_stack_preset_command(
+    config_path: Annotated[
+        Path,
+        typer.Argument(metavar="CONFIG_YAML", help=_CONFIG_YAML_ARGUMENT_HELP),
+    ],
+    target_selector: Annotated[
+        str | None,
+        typer.Argument(
+            metavar="TARGET",
+            help="Optional target selector, for example infra:mk8s@mk8s.",
+        ),
+    ] = None,
+    to_preset: Annotated[
+        str | None,
+        typer.Option(
+            "--to-preset",
+            help="Target Nebius GPU stack/drivers_preset value, for example cuda13.0.",
+        ),
+    ] = None,
+    node_group: Annotated[
+        str,
+        typer.Option("--node-group", help="Optional concrete GPU node-group name to upgrade."),
+    ] = "",
+    dry_run: Annotated[
+        bool,
+        typer.Option("--dry-run", help="Print the upgrade plan without writing files or applying."),
+    ] = False,
+    disruption_policy: Annotated[
+        str,
+        typer.Option(
+            "--disruption-policy",
+            help="Upgrade disruption policy: safe, allow-unavailable, or force-delete.",
+        ),
+    ] = "safe",
+    drain_timeout: Annotated[
+        str,
+        typer.Option(
+            "--drain-timeout",
+            help="Node drain timeout: auto, none, or a Go-style duration such as 10m.",
+        ),
+    ] = "auto",
+    interactive: Annotated[
+        bool,
+        typer.Option(
+            "--interactive/--no-interactive",
+            help="Prompt for missing GPU stack preset upgrade flags when running from a terminal.",
+        ),
+    ] = True,
+) -> None:
+    _run_mk8s_node_layer_upgrade_command(
+        config_path=config_path,
+        spec=_NODE_LAYER_UPGRADE_SPECS["gpu-stack-preset"],
+        target_selector=target_selector,
+        target_value=to_preset,
+        option_name="--to-preset",
+        path_prefix="upgrade.gpu_stack_preset",
+        node_group=node_group,
+        dry_run=dry_run,
+        disruption_policy=disruption_policy,
+        drain_timeout=drain_timeout,
+        interactive=interactive,
+    )
+
+
+@upgrade_app.command(
+    "platform",
+    short_help="Upgrade MK8s node-group platforms.",
+    epilog=(
+        "Example: nebius-cxcli upgrade platform <config.yaml> "
+        "infra:mk8s@<target> --to-platform cpu-d3 --node-group worker --dry-run."
+    ),
+)
+def upgrade_platform_command(
+    config_path: Annotated[
+        Path,
+        typer.Argument(metavar="CONFIG_YAML", help=_CONFIG_YAML_ARGUMENT_HELP),
+    ],
+    target_selector: Annotated[
+        str | None,
+        typer.Argument(
+            metavar="TARGET",
+            help="Optional target selector, for example infra:mk8s@mk8s.",
+        ),
+    ] = None,
+    to_platform: Annotated[
+        str | None,
+        typer.Option("--to-platform", help="Target node platform, for example cpu-d3."),
+    ] = None,
+    node_group: Annotated[
+        str,
+        typer.Option("--node-group", help="Optional concrete node-group name to migrate."),
+    ] = "",
+    dry_run: Annotated[
+        bool,
+        typer.Option(
+            "--dry-run", help="Print the migration plan without writing files or applying."
+        ),
+    ] = False,
+    disruption_policy: Annotated[
+        str,
+        typer.Option(
+            "--disruption-policy",
+            help="Upgrade disruption policy: safe, allow-unavailable, or force-delete.",
+        ),
+    ] = "safe",
+    drain_timeout: Annotated[
+        str,
+        typer.Option(
+            "--drain-timeout",
+            help="Node drain timeout: auto, none, or a Go-style duration such as 10m.",
+        ),
+    ] = "auto",
+    interactive: Annotated[
+        bool,
+        typer.Option(
+            "--interactive/--no-interactive",
+            help="Prompt for missing platform upgrade flags when running from a terminal.",
+        ),
+    ] = True,
+) -> None:
+    _run_mk8s_node_layer_upgrade_command(
+        config_path=config_path,
+        spec=_NODE_LAYER_UPGRADE_SPECS["platform"],
+        target_selector=target_selector,
+        target_value=to_platform,
+        option_name="--to-platform",
+        path_prefix="upgrade.platform",
+        node_group=node_group,
+        dry_run=dry_run,
+        disruption_policy=disruption_policy,
+        drain_timeout=drain_timeout,
+        interactive=interactive,
+    )
+
+
+@upgrade_app.command(
+    "cpu-preset",
+    short_help="Upgrade MK8s CPU/system node-group presets.",
+    epilog=(
+        "Example: nebius-cxcli upgrade cpu-preset <config.yaml> "
+        "infra:mk8s@<target> --to-preset <preset> --node-group system --dry-run."
+    ),
+)
+def upgrade_cpu_preset_command(
+    config_path: Annotated[
+        Path,
+        typer.Argument(metavar="CONFIG_YAML", help=_CONFIG_YAML_ARGUMENT_HELP),
+    ],
+    target_selector: Annotated[
+        str | None,
+        typer.Argument(
+            metavar="TARGET",
+            help="Optional target selector, for example infra:mk8s@mk8s.",
+        ),
+    ] = None,
+    to_preset: Annotated[
+        str | None,
+        typer.Option("--to-preset", help="Target CPU hardware preset."),
+    ] = None,
+    node_group: Annotated[
+        str,
+        typer.Option("--node-group", help="Optional concrete CPU node-group name to migrate."),
+    ] = "",
+    dry_run: Annotated[
+        bool,
+        typer.Option(
+            "--dry-run", help="Print the migration plan without writing files or applying."
+        ),
+    ] = False,
+    disruption_policy: Annotated[
+        str,
+        typer.Option(
+            "--disruption-policy",
+            help="Upgrade disruption policy: safe, allow-unavailable, or force-delete.",
+        ),
+    ] = "safe",
+    drain_timeout: Annotated[
+        str,
+        typer.Option(
+            "--drain-timeout",
+            help="Node drain timeout: auto, none, or a Go-style duration such as 10m.",
+        ),
+    ] = "auto",
+    interactive: Annotated[
+        bool,
+        typer.Option(
+            "--interactive/--no-interactive",
+            help="Prompt for missing CPU preset upgrade flags when running from a terminal.",
+        ),
+    ] = True,
+) -> None:
+    _run_mk8s_node_layer_upgrade_command(
+        config_path=config_path,
+        spec=_NODE_LAYER_UPGRADE_SPECS["cpu-preset"],
+        target_selector=target_selector,
+        target_value=to_preset,
+        option_name="--to-preset",
+        path_prefix="upgrade.cpu_preset",
+        node_group=node_group,
+        dry_run=dry_run,
+        disruption_policy=disruption_policy,
+        drain_timeout=drain_timeout,
+        interactive=interactive,
+    )
+
+
+@upgrade_app.command(
+    "gpu-preset",
+    short_help="Upgrade MK8s GPU node-group hardware presets.",
+    epilog=(
+        "Example: nebius-cxcli upgrade gpu-preset <config.yaml> "
+        "infra:mk8s@<target> --to-preset <preset> --node-group worker --dry-run."
+    ),
+)
+def upgrade_gpu_preset_command(
+    config_path: Annotated[
+        Path,
+        typer.Argument(metavar="CONFIG_YAML", help=_CONFIG_YAML_ARGUMENT_HELP),
+    ],
+    target_selector: Annotated[
+        str | None,
+        typer.Argument(
+            metavar="TARGET",
+            help="Optional target selector, for example infra:mk8s@mk8s.",
+        ),
+    ] = None,
+    to_preset: Annotated[
+        str | None,
+        typer.Option("--to-preset", help="Target GPU hardware preset."),
+    ] = None,
+    node_group: Annotated[
+        str,
+        typer.Option("--node-group", help="Optional concrete GPU node-group name to migrate."),
+    ] = "",
+    dry_run: Annotated[
+        bool,
+        typer.Option(
+            "--dry-run", help="Print the migration plan without writing files or applying."
+        ),
+    ] = False,
+    disruption_policy: Annotated[
+        str,
+        typer.Option(
+            "--disruption-policy",
+            help="Upgrade disruption policy: safe, allow-unavailable, or force-delete.",
+        ),
+    ] = "safe",
+    drain_timeout: Annotated[
+        str,
+        typer.Option(
+            "--drain-timeout",
+            help="Node drain timeout: auto, none, or a Go-style duration such as 10m.",
+        ),
+    ] = "auto",
+    interactive: Annotated[
+        bool,
+        typer.Option(
+            "--interactive/--no-interactive",
+            help="Prompt for missing GPU preset upgrade flags when running from a terminal.",
+        ),
+    ] = True,
+) -> None:
+    _run_mk8s_node_layer_upgrade_command(
+        config_path=config_path,
+        spec=_NODE_LAYER_UPGRADE_SPECS["gpu-preset"],
+        target_selector=target_selector,
+        target_value=to_preset,
+        option_name="--to-preset",
+        path_prefix="upgrade.gpu_preset",
+        node_group=node_group,
+        dry_run=dry_run,
+        disruption_policy=disruption_policy,
+        drain_timeout=drain_timeout,
+        interactive=interactive,
+    )
+
+
+@upgrade_app.command(
+    "helm-chart",
+    short_help="Upgrade a target-scoped app Helm chart version.",
+    epilog=(
+        "Example: nebius-cxcli upgrade helm-chart <config.yaml> "
+        "apps:soperator@mk8s --to-version <chart-version> --dry-run."
+    ),
+)
+def upgrade_helm_chart_command(
+    config_path: Annotated[
+        Path,
+        typer.Argument(metavar="CONFIG_YAML", help=_CONFIG_YAML_ARGUMENT_HELP),
+    ],
+    target_selector: Annotated[
+        str | None,
+        typer.Argument(
+            metavar="TARGET",
+            help="Optional app selector, for example apps:soperator@mk8s.",
+        ),
+    ] = None,
+    to_version: Annotated[
+        str | None,
+        typer.Option("--to-version", help="Target chart/app version."),
+    ] = None,
+    dry_run: Annotated[
+        bool,
+        typer.Option(
+            "--dry-run", help="Print the app upgrade plan without writing files or applying."
+        ),
+    ] = False,
+    interactive: Annotated[
+        bool,
+        typer.Option(
+            "--interactive/--no-interactive",
+            help="Prompt for missing Helm chart upgrade flags when running from a terminal.",
+        ),
+    ] = True,
+) -> None:
+    try:
+        guided = not _non_empty_text(target_selector) or not _non_empty_text(to_version)
+        if guided and not interactive:
+            missing = []
+            if not _non_empty_text(target_selector):
+                missing.append("target selector")
+            if not _non_empty_text(to_version):
+                missing.append("--to-version <chart-version>")
+            raise RuntimeError(
+                "Missing "
+                + " and ".join(missing)
+                + ". Pass explicit upgrade options or allow interactive prompting."
+            )
+
+        source_payload = _load_source_payload(config_path)
+        generated_config, paths, manifest = _load_deploy_context_readonly(config_path)
+        target = _prompt_upgrade_helm_chart_target_selector_if_needed(
+            source_payload=source_payload,
+            target_selector=target_selector,
+        )
+        target_version = _prompt_upgrade_helm_chart_to_version_if_needed(
+            to_version=to_version,
+        )
+        dry_run = _resolve_helm_chart_upgrade_options(
+            guided=guided,
+            dry_run=dry_run,
+        )
+        plan = _plan_helm_chart_upgrade(
+            payload=source_payload,
+            target=target,
+            target_version=target_version,
+        )
+        repeat_dry_run_command = (
+            _upgrade_helm_chart_dry_run_command(
+                config_path=config_path,
+                target_selector=target.selector,
+                to_version=target_version,
+            )
+            if dry_run
+            else None
+        )
+        _print_upgrade_plan_lines(
+            _format_helm_chart_upgrade_plan(
+                plan,
+                dry_run=dry_run,
+                repeat_dry_run_command=repeat_dry_run_command,
+            )
+        )
+        if dry_run:
+            return
+        if not plan.mutates:
+            console.print(
+                f"Helm chart target {target.selector} already uses version {target_version}."
+            )
+            return
+
+        _run_generated_bundle_validation(
+            generated_config,
+            paths,
+            auto_auth_bootstrap=True,
+            title="Helm chart upgrade preflight",
+            quota_phase="upgrade",
+            flux_command_name="upgrade",
+            manifest=manifest,
+            prompt_mysterybox_payload_values=False,
+        )
+        changed = _update_source_helm_chart_version(
+            source_payload,
+            target=target,
+            target_version=target_version,
+        )
+        if not changed:
+            console.print(
+                f"Helm chart target {target.selector} already uses version {target_version}."
+            )
+            return
+        config_path.write_text(render_updated_source_payload(source_payload), encoding="utf-8")
+        console.print(
+            f"Updated {config_path} for Helm chart {target.selector} upgrade to {target_version}.",
+            soft_wrap=True,
+        )
+        render_command(config_path, force=True)
+        staged_config, staged_paths, staged_manifest = _load_deploy_context(config_path)
+        _run_generated_bundle_validation(
+            staged_config,
+            staged_paths,
+            auto_auth_bootstrap=True,
+            title=f"Validate rendered Helm chart upgrade to {target_version}",
+            quota_phase="upgrade",
+            flux_command_name="upgrade",
+            manifest=staged_manifest,
+            prompt_mysterybox_payload_values=False,
+        )
+        flux_apply_command(
+            staged_paths.generated_dir,
+            auto_auth_bootstrap=True,
+            target_ref=target.target_ref,
+            all_targets=False,
+        )
+        console.print(
+            f"[green]Helm chart upgrade completed[/green]: {target.selector} -> {target_version}"
+        )
+    except typer.Exit:
+        raise
+    except Exception as exc:  # pragma: no cover - CLI surface
+        _exit_with_error(exc)
 
 
 def _load_destroy_context(target_path: Path) -> tuple:
@@ -1680,9 +4968,20 @@ def _run_runtime_validation(
 
 
 def _print_mk8s_gpu_validation_warnings(payload_or_config: Any) -> None:
+    warning_cache = _DEPLOY_VALIDATION_WARNING_CACHE.get()
     for warning in mk8s_gpu_validation_warnings(payload_or_config):
+        warning_key = f"mk8s-gpu:{warning}"
+        if warning_cache is not None:
+            if warning_key in warning_cache:
+                continue
+            warning_cache.add(warning_key)
         console.print(f"{warning_markup('Deploy validation warning:')} {warning}")
     for warning in soperator_child_chart_warnings(payload_or_config):
+        warning_key = f"soperator-child-chart:{warning}"
+        if warning_cache is not None:
+            if warning_key in warning_cache:
+                continue
+            warning_cache.add(warning_key)
         console.print(f"{warning_markup('Deploy validation warning:')} {warning}")
 
 
@@ -3281,13 +6580,18 @@ def _internal_component_selector_message(*, scope: ComponentScope, component_id:
             continue
         if chart.selectable:
             return ""
-        if normalized == "nccl-test":
+        usage = getattr(chart, "usage", None)
+        if getattr(usage, "lifecycle", "") == "transient":
+            config_ref = _non_empty_text(getattr(usage, "config_ref", ""))
+            config_guidance = (
+                f" Configure it through {config_ref} in config.yaml"
+                if config_ref
+                else " Configure it through its catalog-declared runtime flow"
+            )
             return (
-                "apps component id 'nccl-test' exists in the active catalog but is "
-                "internal to deploy-time NCCL validation. Enable "
-                "deploy.targets[].validations.mk8s_gpu.nccl.enabled with the MK8s "
-                "create wizard or config.yaml instead of selecting it with --app "
-                "or component add."
+                f"apps component id '{normalized}' exists in the active catalog but is "
+                f"a transient runtime chart, not a selectable persistent app.{config_guidance} "
+                "instead of selecting it with --app or component add."
             )
         return (
             f"{scope} component id '{normalized}' exists in the active catalog but "
@@ -8888,37 +12192,37 @@ def _resolve_dynamic_field_choices(
     if spec is None:
         return []
 
-    # New flat `options` format: {from: <provider>, args?: {...}, filter?: <regex>}
     options = spec.get("options") if isinstance(spec, dict) else None
     if isinstance(options, dict):
-        provider = str(options.get("from", "")).strip()
-        if not provider or provider_lookup is None:
-            return []
-        args_raw = options.get("args")
-        args: dict[str, Any] = dict(args_raw) if isinstance(args_raw, dict) else {}
-        filter_pattern = str(options.get("filter", "")).strip()
-        if filter_pattern:
-            args["_filter"] = filter_pattern
-        args = _normalize_provider_args(
+        provider_specs = _provider_source_specs_for_field(
             entry=entry,
             full_path_label=full_path_label,
-            args=args,
         )
-        choices = provider_lookup.resolve(
-            provider=provider,
-            args=args,
-            payload=payload,
-            field_path=full_path_label,
-        )
-        if provider in {"project_networks", "project_subnets"}:
-            return _combined_vpc_choices(
-                payload=payload,
-                entry=entry,
-                full_path_label=full_path_label,
+        if not provider_specs or provider_lookup is None:
+            return []
+        choices: list[OptionChoice] = []
+        seen: set[str] = set()
+        for provider, args in provider_specs:
+            provider_choices = provider_lookup.resolve(
                 provider=provider,
                 args=args,
-                live_choices=choices,
+                payload=payload,
+                field_path=full_path_label,
             )
+            if provider in {"project_networks", "project_subnets"}:
+                provider_choices = _combined_vpc_choices(
+                    payload=payload,
+                    entry=entry,
+                    full_path_label=full_path_label,
+                    provider=provider,
+                    args=args,
+                    live_choices=provider_choices,
+                )
+            for item in provider_choices:
+                if item.value in seen:
+                    continue
+                choices.append(item)
+                seen.add(item.value)
         return choices
 
     # Legacy `sources` array format
@@ -9393,7 +12697,11 @@ def _extend_existing_vpc_parent_private_cidrs(
             if any(requested_network.subnet_of(parent) for parent in current_parent_networks):
                 continue
             overlapping_parent = next(
-                (parent for parent in current_parent_networks if requested_network.overlaps(parent)),
+                (
+                    parent
+                    for parent in current_parent_networks
+                    if requested_network.overlaps(parent)
+                ),
                 None,
             )
             if overlapping_parent is not None:
@@ -9410,9 +12718,7 @@ def _extend_existing_vpc_parent_private_cidrs(
             target_metadata = getattr(target_pool, "metadata", None)
             target_spec = getattr(target_pool, "spec", None)
             target_pool_name = _non_empty_text(getattr(target_metadata, "name", None))
-            target_resource_version = int(
-                getattr(target_metadata, "resource_version", 0) or 0
-            )
+            target_resource_version = int(getattr(target_metadata, "resource_version", 0) or 0)
             target_pool_cidrs = list(dict.fromkeys(_vpc_pool_cidrs(target_pool)))
             updated_pool_cidrs = list(dict.fromkeys([*target_pool_cidrs, *cidrs_to_add]))
 
@@ -9577,7 +12883,9 @@ def _vpc_subnet_child_cidr_suggestions(
             parent_cidr = str(parent_network)
             if parent_cidr not in custom_parent_cidrs:
                 continue
-            if any(parent_network.overlaps(existing_network) for existing_network in existing_networks):
+            if any(
+                parent_network.overlaps(existing_network) for existing_network in existing_networks
+            ):
                 continue
             whole_parent_suggestions.append((parent_cidr, parent_cidr))
     whole_parent_cidrs = {cidr for cidr, _parent_cidr in whole_parent_suggestions}
@@ -9829,13 +13137,11 @@ def _provider_auto_select_single_enabled(
     entry: ComponentEntry,
     full_path_label: str,
 ) -> bool:
-    spec = _resolve_wizard_field_spec(entry=entry, full_path_label=full_path_label)
-    if spec is None:
-        return False
-    options = spec.get("options") if isinstance(spec, dict) else None
-    if not isinstance(options, dict):
-        return False
-    return bool(options.get("auto_select_single"))
+    return _provider_option_flag_enabled(
+        entry=entry,
+        full_path_label=full_path_label,
+        flag="auto_select_single",
+    )
 
 
 def _provider_auto_select_first_enabled(
@@ -9843,13 +13149,11 @@ def _provider_auto_select_first_enabled(
     entry: ComponentEntry,
     full_path_label: str,
 ) -> bool:
-    spec = _resolve_wizard_field_spec(entry=entry, full_path_label=full_path_label)
-    if spec is None:
-        return False
-    options = spec.get("options") if isinstance(spec, dict) else None
-    if not isinstance(options, dict):
-        return False
-    return bool(options.get("auto_select_first"))
+    return _provider_option_flag_enabled(
+        entry=entry,
+        full_path_label=full_path_label,
+        flag="auto_select_first",
+    )
 
 
 def _provider_skip_prompt_if_no_choices_enabled(
@@ -9857,13 +13161,26 @@ def _provider_skip_prompt_if_no_choices_enabled(
     entry: ComponentEntry,
     full_path_label: str,
 ) -> bool:
+    return _provider_option_flag_enabled(
+        entry=entry,
+        full_path_label=full_path_label,
+        flag="skip_prompt_if_no_choices",
+    )
+
+
+def _provider_option_flag_enabled(
+    *,
+    entry: ComponentEntry,
+    full_path_label: str,
+    flag: str,
+) -> bool:
     spec = _resolve_wizard_field_spec(entry=entry, full_path_label=full_path_label)
     if spec is None:
         return False
     options = spec.get("options") if isinstance(spec, dict) else None
     if not isinstance(options, dict):
         return False
-    return bool(options.get("skip_prompt_if_no_choices"))
+    return bool(options.get(flag))
 
 
 def _relative_wizard_field_paths(
@@ -12585,9 +15902,7 @@ def _prompt_vpc_private_cidr_override(
             continue
         selected_values = list(dict.fromkeys(selected_values))
         if not allow_multiple and len(selected_values) > 1:
-            console.print(
-                f"{error_markup('Invalid value')}. {_single_vpc_subnet_cidr_error()}"
-            )
+            console.print(f"{error_markup('Invalid value')}. {_single_vpc_subnet_cidr_error()}")
             continue
         return selected_values, False
 
@@ -12746,7 +16061,10 @@ def _prompt_choice_override(
             rendered_choices = [
                 questionary.Choice(title=choice.label, value=choice.value) for choice in choices
             ]
-            if not required:
+            has_semantic_none_choice = path_label.endswith(".service_account.mode") and any(
+                str(choice.value).strip() == "none" for choice in choices
+            )
+            if not required and not has_semantic_none_choice:
                 if path_label.endswith(".inputs.network.existing_id"):
                     skip_title = "Create a new VPC network"
                 elif path_label.endswith(".inputs.network.ipv4_private_pool_ids"):
@@ -14489,9 +17807,13 @@ def _run_component_field_wizard(
                 f"{group_prefix}.service_account.mode",
                 "none",
                 choices=[
-                    OptionChoice(value="none", label="none"),
-                    OptionChoice(value="existing_id", label="existing_id"),
-                    OptionChoice(value="create_name", label="create_name"),
+                    OptionChoice(value="none", label="none  (do not assign a service account)"),
+                    OptionChoice(
+                        value="existing_id", label="existing_id  (use existing service account ID)"
+                    ),
+                    OptionChoice(
+                        value="create_name", label="create_name  (create service account by name)"
+                    ),
                 ],
             )
             if status == "quit":
@@ -14902,8 +18224,7 @@ def _run_component_field_wizard(
         def _subnet_private_cidr_guidance() -> str:
             if existing_network_id:
                 subnet_lookup_note = (
-                    " Live subnet lookup failed; retry after live "
-                    "subnet inspection is available."
+                    " Live subnet lookup failed; retry after live subnet inspection is available."
                     if existing_network_subnet_lookup_error
                     else ""
                 )
@@ -15159,8 +18480,7 @@ def _run_component_field_wizard(
                 continue
 
             console.print(
-                f"[dim]Added VPC subnet {escape(subnet_key)}"
-                " with explicit private CIDRs.[/dim]"
+                f"[dim]Added VPC subnet {escape(subnet_key)} with explicit private CIDRs.[/dim]"
             )
             created_any = True
 
@@ -17613,6 +20933,11 @@ def _validate_component_sources_registry(
         for component_id, (scope, _source_entry) in declared_entries.items()
         if scope == "apps"
     }
+    declared_app_sources = {
+        component_id.lower(): source_entry
+        for component_id, (scope, source_entry) in declared_entries.items()
+        if scope == "apps"
+    }
     mk8s_entry = next(
         (
             source_entry
@@ -17665,6 +20990,20 @@ def _validate_component_sources_registry(
             issues.append(
                 "components.infra.mk8s.cli.gpu.validations.nccl must set chart_component_id, timeout, and training operator settings when enabled_by_default=true"
             )
+        nccl_chart_id = _non_empty_text(nccl_settings.chart_component_id).lower()
+        if nccl_chart_id:
+            nccl_chart = declared_app_sources.get(nccl_chart_id)
+            if nccl_chart is None:
+                issues.append(
+                    "components.infra.mk8s.cli.gpu.validations.nccl.chart_component_id "
+                    f"references unknown apps component '{nccl_chart_id}'"
+                )
+            elif getattr(getattr(nccl_chart, "usage", None), "lifecycle", "") != "transient":
+                issues.append(
+                    "components.infra.mk8s.cli.gpu.validations.nccl.chart_component_id "
+                    f"references apps component '{nccl_chart_id}', which must declare "
+                    "usage.lifecycle=transient"
+                )
 
     for component_id, (scope, source_entry) in declared_entries.items():
         if selected_app_filter is not None and component_id not in active_entry_ids:
@@ -18304,6 +21643,7 @@ def _materialize_mk8s_image_defaults(
             _set_first_provider_choice(
                 entry=entry,
                 full_path_label=gpu_stack_preset_field,
+                replace_if_invalid=True,
             )
         else:
             target_path = _parse_payload_path_label(gpu_stack_preset_field)
@@ -18314,7 +21654,7 @@ def _materialize_mk8s_image_defaults(
         _set_first_provider_choice(
             entry=entry,
             full_path_label=gpu_os_field,
-            replace_if_invalid=(stack_source == "operator_managed"),
+            replace_if_invalid=True,
         )
 
 
@@ -22576,11 +25916,13 @@ def _prepare_cluster_handoff_kube_env(
             GRAFANA_TARGET_KUBE_CONTEXT_ENV: spec.context_name,
         }
 
-    cluster_id = terraform_output_raw(
-        paths.infra_dir,
-        str(resolved_target["cluster_id_output_name"]),
-        extra_env=_terraform_runtime_env(config),
-    )
+    cluster_id = _non_empty_text(resolved_target.get("cluster_id"))
+    if not cluster_id:
+        cluster_id = terraform_output_raw(
+            paths.infra_dir,
+            str(resolved_target["cluster_id_output_name"]),
+            extra_env=_terraform_runtime_env(config),
+        )
     if not cluster_id:
         raise RuntimeError(
             f"Terraform output `{resolved_target['cluster_id_output_name']}` is empty. The rendered Terraform root must expose "
@@ -24393,6 +27735,10 @@ def _run_generated_bundle_validation(
             )
         )
     phase_defs.append(_ValidationPhase("vpc-preflight", "Validate VPC networking preflight"))
+    if has_mk8s_gpu_stack_compatibility_preflight_targets(config):
+        phase_defs.append(
+            _ValidationPhase("mk8s-gpu-stack", "Validate MK8s GPU stack compatibility")
+        )
     if terraform_required:
         phase_defs.extend(
             [
@@ -24433,6 +27779,11 @@ def _run_generated_bundle_validation(
                 _prepare_mysterybox_payload_values,
             )
         progress.run("vpc-preflight", lambda: validate_vpc_networking_preflight(config))
+        if has_mk8s_gpu_stack_compatibility_preflight_targets(config):
+            progress.run(
+                "mk8s-gpu-stack",
+                lambda: validate_mk8s_gpu_stack_compatibility_preflight(config),
+            )
         if terraform_required:
             progress.run(
                 "backend",
@@ -24679,41 +28030,23 @@ def _destroy_generated_artifacts(
     terraform_required = _config_has_enabled_infra_components(config)
     if terraform_required:
         _ensure_terraform_backend_ready(config, auto_auth_bootstrap=auto_auth_bootstrap)
-    flux_teardown_error: Exception | None = None
     if _destroy_should_delete_rendered_flux_first(config, manifest):
         try:
             _destroy_rendered_flux_bundle(config, paths, manifest, all_targets=True)
         except Exception as exc:
-            flux_teardown_error = exc
             if terraform_required:
-                console.print(
-                    (
-                        f"{warning_markup('WARNING:', bold=True)} "
-                        "Rendered app teardown failed before infra destroy. "
-                        "Continuing with Terraform destroy because the generated infra bundle "
-                        f"remains the authoritative teardown path. Reason: {exc}"
-                    )
-                    if not _manifest_has_external_deploy_targets(manifest)
-                    else (
-                        f"{warning_markup('WARNING:', bold=True)} "
-                        "Rendered app teardown failed for an external MK8s target. "
-                        "No Terraform cluster destroy fallback is available for that target."
-                    )
-                )
-            else:
-                console.print(
-                    f"{warning_markup('WARNING:', bold=True)} "
-                    "Rendered app teardown failed for an external MK8s target. "
-                    "No Terraform cluster destroy fallback is available."
-                )
-    status_watchers = _manifest_status_watchers(manifest) or _enabled_status_watcher_specs(config)
-    if terraform_required:
-        if flux_teardown_error is not None and _manifest_has_external_deploy_targets(manifest):
+                raise RuntimeError(
+                    "Rendered app teardown failed before Terraform destroy; refusing to destroy "
+                    "cxcli-managed infra while app resources, Kubernetes finalizers, or CSI "
+                    f"cleanup may still need the target cluster. Reason: {exc}"
+                ) from exc
             raise RuntimeError(
                 "Rendered app teardown failed for an external MK8s target and there is no "
-                "Terraform cluster destroy fallback for that target. App resources may still "
-                f"be installed. Reason: {flux_teardown_error}"
-            ) from flux_teardown_error
+                "cxcli-managed Terraform cluster destroy fallback. App resources may still "
+                f"be installed. Reason: {exc}"
+            ) from exc
+    status_watchers = _manifest_status_watchers(manifest) or _enabled_status_watcher_specs(config)
+    if terraform_required:
         _run_terraform_destroy_with_recovery(
             config,
             paths,
@@ -24723,12 +28056,6 @@ def _destroy_generated_artifacts(
             status_watchers=status_watchers or None,
         )
     else:
-        if flux_teardown_error is not None:
-            raise RuntimeError(
-                "Rendered app teardown failed for an external MK8s target and there is no "
-                "cxcli-managed Terraform cluster destroy fallback. App resources may still "
-                f"be installed. Reason: {flux_teardown_error}"
-            ) from flux_teardown_error
         console.print(
             "No cxcli-managed Terraform infra is enabled; skipping Terraform destroy. "
             "External MK8s cluster and node groups were not destroyed."
@@ -24752,6 +28079,8 @@ def _run_terraform_apply_with_status(
     _validate_mysterybox_runtime_payload_values(config, environ=validation_env)
     if run_mk8s_preflight:
         validate_vpc_networking_preflight(config)
+        if has_mk8s_gpu_stack_compatibility_preflight_targets(config):
+            validate_mk8s_gpu_stack_compatibility_preflight(config)
     reporting_kwargs: dict[str, Any] = {
         "emit": _print_deployment_status_message,
     }
@@ -24994,7 +28323,12 @@ def _unlock_terraform_state_lock(
                 "Wait for those commands to finish, or rerun `terraform unlock --force` only after you have confirmed the lock is stale."
             )
         current_owner = _current_lock_owner_identity()
-        if lock_info.who and lock_info.who != current_owner:
+        if not lock_info.who:
+            raise RuntimeError(
+                "Refusing to unlock Terraform state lock with no owner metadata. "
+                "Rerun with `terraform unlock --force` only after you have confirmed that operation is no longer running."
+            )
+        if lock_info.who != current_owner:
             raise RuntimeError(
                 "Refusing to unlock Terraform state lock owned by "
                 f"`{lock_info.who}` from current identity `{current_owner}`. "
@@ -27880,7 +31214,9 @@ def component_add_command(
                         if label not in skipped_infra_app_label_set
                     ]
                     added_apps_labels = [
-                        label for label in added_apps_labels if label not in skipped_infra_app_label_set
+                        label
+                        for label in added_apps_labels
+                        if label not in skipped_infra_app_label_set
                     ]
                     added_app_rows = [
                         row
@@ -31897,7 +35233,6 @@ def _interactive_email_settings_setup(*, config_path: Path | None) -> tuple[Emai
     if port <= 0:
         raise RuntimeError("SMTP port must be a positive integer.")
 
-    starttls = typer.confirm("Use STARTTLS?", default=current.starttls)
     from_addr = typer.prompt(
         "SMTP from address (blank uses username or noreply@localhost)",
         default=current.from_addr,
@@ -31923,7 +35258,7 @@ def _interactive_email_settings_setup(*, config_path: Path | None) -> tuple[Emai
     settings = EmailSettings(
         host=host,
         port=port,
-        starttls=starttls,
+        starttls=True,
         from_addr=from_addr,
         username=username,
         password=password,

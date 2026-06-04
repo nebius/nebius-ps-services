@@ -131,6 +131,8 @@ used for Terraform addressing and outputs. A node group accepts:
 - `gpu`, `platform`, `preset`, `os`, `boot_disk`, `preemptible`, and optional
   public IP/network-interface settings.
 - Kubernetes `node_labels` and `taints`.
+- Provider-style `strategy` with optional `drain_timeout`, `max_surge`, and
+  `max_unavailable` fields for controlled rolling node replacement.
 - `reservation.policy` and `reservation.reservation_ids` for GPU reservations.
 - `service_account.id` or `service_account.name`, never both.
 - `ssh.username` and `ssh.public_keys`; cloud-init is rendered only when SSH

@@ -3872,6 +3872,48 @@ def test_prompt_choice_override_tty_keeps_current_for_optional_existing_value(
     assert titles[0] == "<keep current / skip>"
 
 
+def test_prompt_choice_override_tty_can_hide_skip_choice_for_semantic_none(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(cli, "_is_tty_session", lambda: True)
+    captured: dict[str, object] = {}
+
+    class _FakePrompt:
+        def ask(self):
+            return "none"
+
+    def _fake_select(*args, **kwargs):
+        captured["choices"] = kwargs.get("choices")
+        return _FakePrompt()
+
+    fake_questionary = SimpleNamespace(
+        Choice=lambda **kwargs: kwargs,
+        select=_fake_select,
+    )
+    monkeypatch.setitem(sys.modules, "questionary", fake_questionary)
+
+    value, should_stop = cli._prompt_choice_override(
+        path_label="infra.components[0].inputs.node_groups.system.service_account.mode",
+        current="none",
+        choices=[
+            OptionChoice(value="none", label="none  (do not assign a service account)"),
+            OptionChoice(value="existing_id", label="existing_id  (use existing service account ID)"),
+            OptionChoice(value="create_name", label="create_name  (create service account by name)"),
+        ],
+        type_hint="string",
+        required=False,
+    )
+
+    assert should_stop is False
+    assert value == "none"
+    titles = [choice["title"] for choice in captured["choices"]]
+    assert titles == [
+        "none  (do not assign a service account)",
+        "existing_id  (use existing service account ID)",
+        "create_name  (create service account by name)",
+    ]
+
+
 def test_prompt_choice_override_tty_can_leave_optional_auto_choice_unset(
     monkeypatch,
 ) -> None:

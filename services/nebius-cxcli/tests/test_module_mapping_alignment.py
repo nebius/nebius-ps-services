@@ -185,6 +185,53 @@ def test_render_tfvars_are_backed_by_declared_variables(tmp_path: Path) -> None:
         assert f"var.{key}" in main_tf or f"var.{key}" in providers_tf
 
 
+def test_render_types_mk8s_node_group_strategy_for_staged_upgrades(tmp_path: Path) -> None:
+    _set_catalog_profile(SourceProfile.LOCAL)
+    reset_component_entry_cache()
+    config_path = _project_config_path(tmp_path)
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = _payload_with_mk8s()
+    mk8s = next(
+        row
+        for row in payload["infra"]["components"]
+        if isinstance(row, dict) and row.get("id") == "mk8s"
+    )
+    inputs = mk8s["inputs"]
+    node_groups = inputs["node_groups"]
+    node_groups["cpu"]["strategy"] = {
+        "drain_timeout": "10m",
+        "max_surge": {"count": 0},
+        "max_unavailable": {"count": 1},
+    }
+    node_groups["gpu"] = {
+        "node_count": 1,
+        "gpu": True,
+        "platform": "gpu-h100-sxm",
+        "preset": "1gpu-16vcpu-200gb",
+        "os": "ubuntu24.04",
+        "gpu_stack_source": "nebius_image",
+        "gpu_stack_preset": "cuda13.0",
+    }
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    config = load_config(config_path)
+    paths = resolve_project_paths(config_path)
+    validate_path_alignment(config, paths)
+    render_project(config, paths, source_profile=SourceProfile.LOCAL)
+
+    variables_tf = (paths.infra_dir / "variables.tf").read_text(encoding="utf-8")
+    tfvars_payload = json.loads(
+        (paths.infra_dir / "terraform.auto.tfvars.json").read_text(encoding="utf-8")
+    )
+
+    assert "strategy = optional(object({" in variables_tf
+    assert "max_unavailable = optional(object({" in variables_tf
+    assert "strategy    = optional(any)" not in variables_tf
+    rendered_groups = tfvars_payload["cluster_a_node_groups"]
+    assert "strategy" in rendered_groups["cpu"]
+    assert "strategy" not in rendered_groups["gpu"]
+
+
 def test_render_mysterybox_payload_values_as_runtime_only_root_variable(
     tmp_path: Path,
 ) -> None:

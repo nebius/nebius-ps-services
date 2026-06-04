@@ -347,6 +347,12 @@ def _nccl_footer_summary(payload: Mapping[str, Any]) -> str:
     worker_label = f"{worker_count} {_plural_word(worker_count, 'worker')}"
     transport = str(payload.get("transport_label", "") or "").strip() or "auto"
     parts = [phase]
+    if bool(payload.get("single_rank_smoke")) and not bool(payload.get("bandwidth_observed")):
+        parts.append(f"{transport} single-rank smoke across {worker_label}")
+        parts.append("no collective bandwidth observed")
+        if not bool(payload.get("threshold_enforced", True)):
+            parts.append("RDMA threshold not enforced")
+        return "; ".join(parts) + "."
     if bool(payload.get("threshold_enforced", True)):
         parts.append(
             f"{transport} {avg:.1f} Gbps (threshold {threshold:.1f}) across {worker_label}"
@@ -445,6 +451,18 @@ def _nccl_summary(payload: Mapping[str, Any]) -> str:
     worker_count = int(payload.get("selected_worker_node_count", 0) or 0)
     transport = str(payload.get("transport_label", "") or "").strip() or "auto"
     dmabuf = _nccl_dmabuf_summary(payload)
+    if bool(payload.get("single_rank_smoke")) and not bool(payload.get("bandwidth_observed")):
+        dmabuf_text = f"; {dmabuf}" if dmabuf else ""
+        threshold_text = (
+            "; RDMA threshold not enforced for this run"
+            if not bool(payload.get("threshold_enforced", True))
+            else ""
+        )
+        return (
+            f"Launcher phase {phase}; {transport} single-rank smoke run across "
+            f"{worker_count} worker node(s); no collective bus bandwidth observed"
+            f"{dmabuf_text}{threshold_text}."
+        )
     if not bool(payload.get("threshold_enforced", True)):
         dmabuf_text = f"; {dmabuf}" if dmabuf else ""
         return (

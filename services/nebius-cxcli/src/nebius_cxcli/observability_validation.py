@@ -376,7 +376,7 @@ def _otlp_service_check(
                 continue
             endpoint_sample_count += 1
             conditions = _mapping(endpoint.get("conditions"))
-            if conditions.get("ready") is not False:
+            if conditions.get("ready") is True:
                 ready_endpoint_found = True
                 break
         if ready_endpoint_found:

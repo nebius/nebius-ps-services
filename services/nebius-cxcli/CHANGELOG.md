@@ -6,6 +6,140 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Fixed high-priority teardown, recovery, notification, and observability
+  guardrails: `destroy` now stops before Terraform when rendered app teardown
+  fails, MK8s destroy recovery refuses unconfirmable node-group delete
+  operations, non-force Terraform unlock refuses ownerless locks, deploy-report
+  email setup/sync/send require STARTTLS and redact tenant/project identifiers,
+  and OTLP EndpointSlice readiness now requires `ready=true`.
+- Added `usage.lifecycle: transient` and `usage.config.ref` metadata for
+  deploy-time Helm chart sources such as `nccl-test`, with catalog validation
+  and selector guidance driven from that metadata instead of a hard-coded chart
+  id.
+- Fixed NCCL deploy validation on one-GPU Ethernet-only MK8s targets so a
+  successful single-rank smoke run passes without requiring collective bus
+  bandwidth, while multi-rank checks still require observed bandwidth and RDMA
+  checks still enforce the configured threshold.
+- Fixed MK8s Nebius-image GPU stack selection so live compatibility matrix
+  choices are constrained by the selected/defaulted OS, stale profile defaults
+  are replaced during create/component add when live choices exclude them, and
+  `validate-generated`, deploy, and direct generated-bundle `terraform apply`
+  fail before Terraform if an existing config combines an unsupported GPU
+  platform, OS, and `gpu_stack_preset` or omits OS while setting an
+  OS-specific GPU stack preset. The live compatibility lookup now shares the
+  provider timeout policy and accepts both top-level and version-nested matrix
+  response shapes.
+- Added the top-level `upgrade` command group with `upgrade k8s-version
+  <config.yaml> [infra:mk8s@<target>] --to-version <major.minor>` implemented for
+  Terraform-managed MK8s targets. The new flow plans with live Nebius SDK data,
+  prompts for target/version/core options from a config-only interactive
+  wizard, supports `--no-interactive` fail-fast automation, `--dry-run`,
+  disruption policies, and drain-timeout defaults, syncs `config.yaml` plus
+  `generated/`, runs Terraform plan and apply in staged control-plane then
+  per-node-group order, writes explicit node-group versions during the upgrade,
+  uses the SDK for live discovery/status/error watching rather than MK8s
+  mutation, keeps provider drain timeout separate from cxcli's rollout wait
+  budget, sizes SDK node-group rollout watches by node-group size, defaults
+  `allow-unavailable` drain timeout to `30m`, uses the explicit disruption
+  policy instead of a separate upgrade `--yes` confirmation, matches live node
+  groups by Terraform-default names, blocks mutation when Kubernetes preflight
+  inspection cannot prove safety, restores temporary node-group disruption
+  strategies in source/generated files after failed stages,
+  reconciles stale source config even when live resources are already at the
+  target version, resumes already-started rollouts, and reserves explicit
+  command/flag shapes for GPU stack, platform, hardware preset, and Helm chart
+  layers.
+- Implemented `upgrade os-image <config.yaml> infra:mk8s@<target> --to-os <os>`
+  for Terraform-managed MK8s node groups. The command validates the requested
+  node-template OS against the live Nebius MK8s compatibility matrix for the
+  current Kubernetes version, platform, and GPU stack preset, updates
+  `inputs.node_groups.*.os`, rerenders and validates `generated/`, runs quiet
+  Terraform plan/apply stages one node group at a time in CPU/system-before-GPU
+  order, supports `--node-group`, `--dry-run`, disruption policies, and
+  drain-timeout defaults, and waits for Managed Kubernetes rolling replacement
+  to finish without SSHing to nodes or running apt-based OS upgrades.
+- Added a guided `upgrade os-image <config.yaml>` wizard that lists
+  Terraform-managed `infra:mk8s@<target>` targets and generic
+  `infra:vm@<target>` components, prompts for missing OS-image values, defaults
+  guided runs to dry-run, supports `--no-interactive` fail-fast automation, and
+  implements generic `infra:vm@<target>` `source_image_family` upgrades through
+  the same config/render/validate/Terraform plan/apply path with the selected
+  VM status watcher. VM upgrades are limited to module-managed boot disks that
+  use `inputs.source_image_family`; `source_image_id`, `boot_disk_existing_id`,
+  node-group, and MK8s disruption-policy semantics remain outside the VM path.
+- Simplified the guided MK8s `upgrade os-image` `node_group` prompt so it maps
+  directly to the optional `--node-group` flag: blank omits the flag and updates
+  all managed node groups, while a typed source key or live name narrows the
+  upgrade to one group.
+- Wrapped upgrade dry-run repeat commands across shell-safe continuation lines
+  so long config paths and selected flags remain readable and copy-pasteable.
+- Implemented `upgrade gpu-stack-preset`, `upgrade platform`,
+  `upgrade cpu-preset`, `upgrade gpu-preset`, and `upgrade helm-chart` with the
+  same wizard/non-interactive flag contract as `k8s-version` and `os-image`.
+  The node-layer commands update selected MK8s node-group desired-state fields,
+  support `--node-group`, `--dry-run`, disruption policies, drain-timeout
+  defaults, rendered-bundle validation, quiet Terraform plan/apply, and rollout
+  waits; CPU preset changes target only CPU/system groups, GPU preset and GPU
+  stack changes target only GPU groups, and GPU stack/platform changes use the
+  live MK8s compatibility matrix where applicable. The Helm chart command
+  updates the selected target-scoped `apps.charts[]` version, rerenders,
+  validates, and applies that target's Flux bundle.
+- Refactored guided upgrade value prompts through a reusable upgrade wizard
+  choice builder and provider lookup path. MK8s OS image, GPU stack preset,
+  platform, CPU preset, and GPU preset prompts now show live SDK/provider-driven
+  choices when available instead of falling back immediately to raw required
+  scalar input; non-interactive flags continue to use the same shared execution
+  path.
+- Aligned component wizard provider-option parsing so interactive choice
+  rendering, strict provider-value validation, and auto-selected defaults use
+  the same wizard metadata resolver while preserving planned VPC choices and
+  legacy static-choice prompts.
+- Reorganized README upgrade guidance into a dedicated top-level `Upgrade`
+  section with a visible table-of-contents entry, disruption-policy
+  drain-timeout defaults, copy-paste Kubernetes upgrade examples, node-layer
+  upgrade examples, Helm chart upgrade examples, and manual desired-state
+  fallback guidance.
+- Aligned `upgrade --help` and upgrade subcommand help output with the README
+  upgrade examples, including implemented Kubernetes dry-run/disruption-policy
+  examples, node-layer examples, and Helm chart examples.
+- Removed public/private endpoint access from the guided `upgrade k8s-version`
+  target picker labels so managed MK8s targets are shown by selector only,
+  avoiding confusion with external-cluster ownership.
+- Clarified guided and explicit `upgrade k8s-version` multi-minor handling with
+  upstream Kubernetes guidance that skipped minor upgrades are unsupported.
+- Improved guided `upgrade k8s-version --dry-run` output by aggregating
+  `emptyDir` pod findings into one PVC-aware advisory, printing a repeatable
+  dry-run command with the selected arguments, and styling the warnings section
+  with the shared amber warning color.
+- Suppressed raw Terraform plan dumps during live `upgrade k8s-version` staged
+  applies while still running each staged plan as a safety gate before apply.
+- Fixed live `upgrade k8s-version` staged Terraform plans when a temporary
+  node-group disruption strategy is applied to only the node group currently
+  being upgraded.
+- Hardened `upgrade k8s-version` ordering by rejecting live node groups that
+  are already above the requested control-plane minor, and documented the
+  post-upgrade GPU canary, add-on, and rollback boundaries.
+- Clarified live `upgrade k8s-version` output so execution stages are labeled
+  as per control-plane hop and per node group rather than per node, and
+  de-duplicated repeated deploy-validation advisories across nested render and
+  validation calls within one upgrade run.
+- Clarified `upgrade k8s-version` OS/platform/GPU compatibility blockers so
+  implemented OS-image, platform, and GPU-stack node-layer commands are printed
+  as runnable follow-up commands where available, while manual
+  config/render/deploy follow-up remains documented. Also tightened the
+  `force-delete` warning around graceful shutdown and in-flight application
+  state.
+- Documented that manual desired-state upgrades through `config.yaml`, render,
+  plan review, and `deploy`/`terraform apply` remain supported outside the
+  structured `upgrade` command, with `deploy` running full generated-bundle
+  preflight and `terraform apply` preserving the infra-only MK8s preflight and
+  Terraform/provider validation path.
+- Removed the reserved `upgrade firmware` command surface and documented node
+  firmware as owned by the Nebius hardware team rather than a customer upgrade
+  responsibility.
+- Clarified the MK8s node-group service-account wizard prompt so the default
+  no-service-account path is the first semantic choice, without an extra
+  generic skip row, and the existing/create choices explain what they do.
 - Changed `create <deployments-root>` to create the deployments root directory
   when it is missing, while keeping `discover` strict about existing
   deployment-scope directories and preserving the nested managed-root guard.
@@ -412,11 +546,10 @@ All notable changes to this project are tracked here. This changelog follows
 - Extended the catalog-owned NCCL `-mca coll ^hcoll` MPI overlay to the Nebius
   B300/GB300 shape alongside B200/B200A, keeping Blackwell-specific MPI policy in
   `component_cli_settings.yaml` instead of the shared `nccl-test` chart.
-- Clarified the NCCL validation chart contract: `nccl-test` remains an
-  internal deploy-time validation chart rather than a selectable `--app` /
-  `component add` target, and the CLI now points operators to
-  `deploy.targets[].validations.mk8s_gpu.nccl.enabled` when they try to select
-  it directly.
+- Clarified the NCCL validation chart contract: `nccl-test` is a transient
+  deploy-time chart source rather than a selectable `--app` / `component add`
+  target, and selector guidance now comes from the catalog's
+  `usage.config.ref`.
 - Fixed Soperator production profile materialization so catalog-owned CPU shape
   defaults are applied to the `system`, `controller`, `login`, `accounting`,
   and CPU worker MK8s node groups before Terraform render.

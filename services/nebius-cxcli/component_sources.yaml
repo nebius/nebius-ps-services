@@ -196,6 +196,10 @@ components:
           version: 0.2.8
         local:
           path: ../../helm-charts/nccl-test
+      usage:
+        lifecycle: transient
+        config:
+          ref: deploy.targets[].validations.mk8s_gpu.nccl
       ui:
         title: NCCL benchmark validation chart
         group: Validations

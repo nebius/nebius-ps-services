@@ -416,17 +416,22 @@ def terraform_plan(
     *,
     extra_env: dict[str, str] | None = None,
     initialize: bool = True,
+    quiet: bool = False,
 ) -> None:
     """Run terraform plan in the rendered infra directory."""
     terraform_bin = _require_terraform()
     if initialize:
         terraform_init(infra_dir, extra_env=extra_env)
-    _run(
-        [terraform_bin, "plan", "-input=false", "-lock-timeout=5m"],
-        cwd=infra_dir,
-        timeout=1800,
-        extra_env=extra_env,
-    )
+    cmd = [terraform_bin, "plan", "-input=false", "-lock-timeout=5m"]
+    if quiet:
+        _run_capture(cmd, cwd=infra_dir, timeout=1800, extra_env=extra_env)
+    else:
+        _run(
+            cmd,
+            cwd=infra_dir,
+            timeout=1800,
+            extra_env=extra_env,
+        )
 
 
 def terraform_validate(

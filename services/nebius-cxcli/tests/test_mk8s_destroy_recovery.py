@@ -3,6 +3,8 @@ from __future__ import annotations
 from enum import Enum
 from types import SimpleNamespace
 
+import pytest
+
 import nebius_cxcli.mk8s_destroy_recovery as recovery
 
 
@@ -151,3 +153,33 @@ def test_delete_node_group_waits_for_delete_operation(monkeypatch) -> None:
 
     assert operation_id == "op-delete-ng-1"
     assert recorded == [("delete", "ng-1"), ("wait", 42)]
+
+
+def test_delete_node_group_rejects_unconfirmable_delete_operation(monkeypatch) -> None:
+    sdk = SimpleNamespace(sync_close=lambda: None)
+    operation = SimpleNamespace(id="op-delete-ng-1")
+
+    class _FakeNodeGroupClient:
+        def __init__(self, current_sdk):
+            assert current_sdk is sdk
+
+        def delete(self, request):
+            assert request.id == "ng-1"
+            return SimpleNamespace(wait=lambda: operation)
+
+    monkeypatch.setattr(recovery, "init_nebius_sdk", lambda **_kwargs: sdk)
+    monkeypatch.setattr(recovery, "NodeGroupServiceClient", _FakeNodeGroupClient)
+
+    with pytest.raises(RuntimeError, match="cannot be confirmed"):
+        recovery.delete_node_group(
+            recovery.Mk8sNodeGroupDestroyCandidate(
+                project_id="project-u123",
+                cluster_name="cluster1",
+                cluster_id="mk8scluster-123",
+                node_group_name="cluster1-ng-gpu",
+                node_group_id="ng-1",
+                create_operation_id="op-create-ng-1",
+                reason="demo",
+            ),
+            timeout_seconds=42,
+        )

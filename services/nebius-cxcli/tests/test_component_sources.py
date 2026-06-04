@@ -278,6 +278,10 @@ def test_bundled_catalog_exposes_soperator_and_nfs_local_sources() -> None:
         "auto_select_single": True,
     }
     assert nfs.wizard_fields["inputs.network_id"]["required"] is True
+
+    nccl_chart = next(chart for chart in sources.helm_charts if chart.name == "nccl-test")
+    assert nccl_chart.usage.lifecycle == "transient"
+    assert nccl_chart.usage.config_ref == "deploy.targets[].validations.mk8s_gpu.nccl"
     assert nfs.wizard_fields["inputs.platform"]["options"] == {
         "from": "compute_platforms",
     }
@@ -3968,6 +3972,12 @@ def test_load_component_sources_parses_mk8s_gpu_cli_settings(tmp_path: Path) -> 
                             "path": "../../helm-charts/nccl-test",
                         }
                     },
+                    "usage": {
+                        "lifecycle": "transient",
+                        "config": {
+                            "ref": "deploy.targets[].validations.mk8s_gpu.nccl",
+                        },
+                    },
                     "release": {
                         "namespace": "nccl-test",
                         "name": "nccl-test",
@@ -3998,6 +4008,7 @@ def test_load_component_sources_parses_mk8s_gpu_cli_settings(tmp_path: Path) -> 
     mk8s = next(module for module in loaded.tf_modules if module.module == "mk8s")
     gpu_operator = next(chart for chart in loaded.helm_charts if chart.name == "gpu-operator")
     network_operator = next(chart for chart in loaded.helm_charts if chart.name == "network-op")
+    nccl_chart = next(chart for chart in loaded.helm_charts if chart.name == "nccl-test")
 
     assert mk8s.mk8s_gpu.default_stack_source == "nebius_image"
     assert mk8s.mk8s_gpu.image_preferences.preferred_gpu_stack_presets == (
@@ -4093,6 +4104,8 @@ def test_load_component_sources_parses_mk8s_gpu_cli_settings(tmp_path: Path) -> 
     assert mk8s.mk8s_gpu.validations.gpu_visibility.max_nodes == 4
     assert mk8s.mk8s_gpu.validations.nccl.chart_component_id == "nccl-test"
     assert mk8s.mk8s_gpu.validations.nccl.max_nodes == 6
+    assert nccl_chart.usage.lifecycle == "transient"
+    assert nccl_chart.usage.config_ref == "deploy.targets[].validations.mk8s_gpu.nccl"
     assert mk8s.observability.mode == "kubernetes_agent"
     assert mk8s.observability.chart_component_id == "nebius-observability-agent"
     assert mk8s.observability.logs.excluded_namespaces == ("kube-system",)
@@ -4291,7 +4304,9 @@ def test_load_component_sources_resolves_local_nccl_chart_source(tmp_path: Path)
                                     "enabled_by_default": True,
                                     "chart_component_id": "nccl-test",
                                     "timeout": "45m",
-                                    "training_operator_manifest": "github.com/example/training-operator?ref=v1.0.0",
+                                    "training_operator_manifest": (
+                                        "github.com/example/training-operator?ref=v1.0.0"
+                                    ),
                                     "training_operator_namespace": "kubeflow",
                                 }
                             }
@@ -4305,6 +4320,12 @@ def test_load_component_sources_resolves_local_nccl_chart_source(tmp_path: Path)
                         "local": {
                             "path": "./helm-charts/nccl-test",
                         }
+                    },
+                    "usage": {
+                        "lifecycle": "transient",
+                        "config": {
+                            "ref": "deploy.targets[].validations.mk8s_gpu.nccl",
+                        },
                     },
                     "release": {
                         "namespace": "nccl-test",
@@ -4327,6 +4348,157 @@ def test_load_component_sources_resolves_local_nccl_chart_source(tmp_path: Path)
     assert nccl_chart.path == str(chart_dir.resolve())
     assert nccl_chart.chart_name == "nccl-test"
     assert nccl_chart.version == "0.1.0"
+    assert nccl_chart.usage.lifecycle == "transient"
+    assert nccl_chart.usage.config_ref == "deploy.targets[].validations.mk8s_gpu.nccl"
+
+
+@pytest.mark.parametrize(
+    ("ui", "message"),
+    (
+        (
+            {"enabled": True, "selectable": False},
+            r"components\.apps\.transient-tool\.ui\.enabled must be false",
+        ),
+        (
+            {"enabled": False, "selectable": True},
+            r"components\.apps\.transient-tool\.ui\.selectable must be false",
+        ),
+    ),
+)
+def test_load_component_sources_rejects_transient_chart_enabled_or_selectable(
+    tmp_path: Path,
+    ui: dict[str, object],
+    message: str,
+) -> None:
+    sources_file = tmp_path / "component_sources.yaml"
+    _write_catalog_file(
+        sources_file,
+        _catalog(
+            apps={
+                "transient-tool": {
+                    "source": _portable_chart_source(
+                        repo="oci://example.com/charts/transient-tool",
+                        chart="transient-tool",
+                        version="1.0.0",
+                    ),
+                    "usage": {
+                        "lifecycle": "transient",
+                        "config": {
+                            "ref": "deploy.targets[].checks.transient_tool",
+                        },
+                    },
+                    "ui": ui,
+                }
+            },
+        ),
+    )
+
+    with pytest.raises(ValueError, match=message):
+        load_component_sources(explicit=sources_file)
+
+
+def test_load_component_sources_rejects_transient_chart_without_config_ref(
+    tmp_path: Path,
+) -> None:
+    sources_file = tmp_path / "component_sources.yaml"
+    _write_catalog_file(
+        sources_file,
+        _catalog(
+            apps={
+                "transient-tool": {
+                    "source": _portable_chart_source(
+                        repo="oci://example.com/charts/transient-tool",
+                        chart="transient-tool",
+                        version="1.0.0",
+                    ),
+                    "usage": {
+                        "lifecycle": "transient",
+                    },
+                    "ui": {
+                        "enabled": False,
+                        "selectable": False,
+                    },
+                }
+            },
+        ),
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=r"components\.apps\.transient-tool\.usage\.config\.ref is required",
+    ):
+        load_component_sources(explicit=sources_file)
+
+
+def test_load_component_sources_rejects_usage_config_without_lifecycle(
+    tmp_path: Path,
+) -> None:
+    sources_file = tmp_path / "component_sources.yaml"
+    _write_catalog_file(
+        sources_file,
+        _catalog(
+            apps={
+                "transient-tool": {
+                    "source": _portable_chart_source(
+                        repo="oci://example.com/charts/transient-tool",
+                        chart="transient-tool",
+                        version="1.0.0",
+                    ),
+                    "usage": {
+                        "config": {
+                            "ref": "deploy.targets[].checks.transient_tool",
+                        },
+                    },
+                    "ui": {
+                        "enabled": False,
+                        "selectable": False,
+                    },
+                }
+            },
+        ),
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=r"components\.apps\.transient-tool\.usage\.lifecycle is required",
+    ):
+        load_component_sources(explicit=sources_file)
+
+
+def test_load_component_sources_rejects_unsupported_helm_chart_lifecycle(
+    tmp_path: Path,
+) -> None:
+    sources_file = tmp_path / "component_sources.yaml"
+    _write_catalog_file(
+        sources_file,
+        _catalog(
+            apps={
+                "ephemeral-tool": {
+                    "source": _portable_chart_source(
+                        repo="oci://example.com/charts/ephemeral-tool",
+                        chart="ephemeral-tool",
+                        version="1.0.0",
+                    ),
+                    "usage": {
+                        "lifecycle": "ephemeral",
+                        "config": {
+                            "ref": "deploy.targets[].checks.ephemeral_tool",
+                        },
+                    },
+                    "ui": {
+                        "enabled": False,
+                        "selectable": False,
+                    },
+                }
+            },
+        ),
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=r"components\.apps\.ephemeral-tool\.usage\.lifecycle must be 'transient'",
+    ):
+        load_component_sources(explicit=sources_file)
 
 
 def test_load_component_sources_rejects_invalid_mk8s_gpu_app_role_value(tmp_path: Path) -> None:
@@ -4824,6 +4996,72 @@ def test_validate_sources_reports_chart_contract_findings(
 
     assert any("missing Chart.yaml" in issue for issue in issues)
     assert not any("missing README.md" in warning for warning in warnings)
+
+
+def test_validate_sources_reports_nccl_chart_without_transient_lifecycle(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    sources_file = tmp_path / "component_sources.yaml"
+    _write_catalog_file(
+        sources_file,
+        _catalog(
+            infra={
+                "mk8s": {
+                    "source": {
+                        "portable": "git::https://example.invalid/modules/mk8s?ref=main",
+                    },
+                    "ui": {"enabled": True},
+                    "cli": {
+                        "gpu": {
+                            "validations": {
+                                "nccl": {
+                                    "enabled_by_default": True,
+                                    "chart_component_id": "nccl-test",
+                                    "timeout": "45m",
+                                    "training_operator_manifest": "github.com/example/training-operator?ref=v1.0.0",
+                                    "training_operator_namespace": "kubeflow",
+                                }
+                            }
+                        }
+                    },
+                }
+            },
+            apps={
+                "nccl-test": {
+                    "source": _portable_chart_source(
+                        repo="oci://example.com/charts/nccl-test",
+                        chart="nccl-test",
+                        version="1.0.0",
+                    ),
+                    "ui": {
+                        "enabled": False,
+                        "selectable": False,
+                    },
+                }
+            },
+        ),
+    )
+
+    monkeypatch.setattr(
+        "nebius_cxcli.cli._resolve_helm_chart_validation_issues",
+        lambda **_kwargs: (),
+    )
+    monkeypatch.setattr(
+        "nebius_cxcli.cli.chart_cli_contract_findings",
+        lambda **_kwargs: ((), ()),
+    )
+    monkeypatch.chdir(tmp_path)
+    set_component_sources_file_override(sources_file)
+    reset_component_sources_cache()
+
+    _resolved_path, issues, _warnings = _validate_component_sources_registry()
+
+    assert any(
+        "components.infra.mk8s.cli.gpu.validations.nccl.chart_component_id "
+        "references apps component 'nccl-test', which must declare "
+        "usage.lifecycle=transient" in issue
+        for issue in issues
+    )
 
 
 def test_validate_sources_registry_filters_app_charts_to_selected_ids(

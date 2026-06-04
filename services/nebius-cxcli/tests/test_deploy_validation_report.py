@@ -211,6 +211,58 @@ def test_build_deploy_validation_report_formats_socket_mode_nccl_summary(tmp_pat
     )
 
 
+def test_build_deploy_validation_report_formats_single_rank_nccl_smoke(
+    tmp_path: Path,
+) -> None:
+    validations = [
+        {
+            "kind": "mk8s_nccl",
+            "name": "NCCL test",
+            "report_file": "nccl-test-report.json",
+        }
+    ]
+    (tmp_path / "nccl-test-report.json").write_text(
+        json.dumps(
+            {
+                "passed": True,
+                "launcher_phase": "Succeeded",
+                "transport_label": "Socket/TCPIP",
+                "avg_bus_bandwidth_gbps": 0.0,
+                "threshold_gbps": 300.0,
+                "threshold_enforced": False,
+                "bandwidth_observed": False,
+                "single_rank_smoke": True,
+                "selected_worker_node_count": 1,
+                "nccl_dmabuf_env_name": "NCCL_DMABUF_ENABLE",
+                "nccl_dmabuf_enable": "unset",
+                "nccl_dmabuf_enable_source": "unset",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    report = build_deploy_validation_report(validations, inventory_dir=tmp_path)
+
+    assert format_deploy_validation_summary_lines(report) == [
+        "Deploy validation summary:",
+        "  Overall: PASS (1/1 completed, 0 not run)",
+        "  PASS NCCL test: Launcher phase Succeeded; Socket/TCPIP single-rank smoke run across 1 worker node(s); no collective bus bandwidth observed; NCCL_DMABUF_ENABLE=unset; RDMA threshold not enforced for this run.",
+        f"  Combined report: {tmp_path / DEPLOY_REPORT_FILENAME}",
+        f"  JSON detail: {tmp_path / 'nccl-test-report.json'}",
+    ]
+    assert (
+        "- Summary: Launcher phase Succeeded; Socket/TCPIP single-rank smoke run "
+        "across 1 worker node(s); no collective bus bandwidth observed; "
+        "NCCL_DMABUF_ENABLE=unset; RDMA threshold not enforced for this run."
+        in validation_section_lines(report)
+    )
+    assert report.results[0].footer_summary == (
+        "Succeeded; Socket/TCPIP single-rank smoke across 1 worker; "
+        "no collective bandwidth observed; RDMA threshold not enforced."
+    )
+
+
 def test_build_deploy_validation_report_formats_skipped_gpu_workload_summary(
     tmp_path: Path,
 ) -> None:

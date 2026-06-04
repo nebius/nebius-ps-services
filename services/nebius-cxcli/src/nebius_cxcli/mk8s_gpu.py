@@ -1085,7 +1085,8 @@ def mk8s_gpu_validation_warnings(
             warnings.append(
                 "NCCL validation is enabled for 1-GPU Ethernet-only MK8s shape "
                 f"{shape_label}; it will use Ethernet/TCPIP, not InfiniBand / GPUDirect-RDMA, "
-                "so the result is degraded and not production-training representative."
+                "so the run is a smoke check only: no collective bandwidth is expected and "
+                "the result is not production-training representative."
             )
             continue
         if allow_gpu_clustering is False:
@@ -3759,11 +3760,13 @@ def _run_nccl_validation(
             transport_mode=transport_mode,
             benchmark_map=benchmark_map,
         )
+        single_rank_smoke = len(worker_nodes) * worker_gpu_count <= 1
         bandwidth_observed = avg_bus_bandwidth > 0
+        bandwidth_ok = bandwidth_observed or single_rank_smoke
         passed = (
             launcher_phase == "Succeeded"
             and bool(out_of_bounds_ok)
-            and bandwidth_observed
+            and bandwidth_ok
             and (not threshold_enforced or avg_bus_bandwidth > threshold_gbps)
         )
         report = {
@@ -3791,6 +3794,7 @@ def _run_nccl_validation(
             "threshold_gbps": threshold_gbps,
             "threshold_enforced": threshold_enforced,
             "bandwidth_observed": bandwidth_observed,
+            "single_rank_smoke": single_rank_smoke,
             "out_of_bounds_ok": bool(out_of_bounds_ok),
             "launcher_phase": launcher_phase,
             "training_operator_installed_transiently": not operator_preexisting,

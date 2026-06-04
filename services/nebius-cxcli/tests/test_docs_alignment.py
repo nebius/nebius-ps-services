@@ -60,7 +60,7 @@ def test_readme_documents_redacted_guided_create_prefill_example() -> None:
 def test_readme_render_warning_lives_in_recommended_workflow() -> None:
     readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
     intro = readme.split("## Table of Contents", maxsplit=1)[0]
-    workflow = _section(readme, "## Recommended Workflow", "## Releases")
+    workflow = _section(readme, "## Recommended Workflow", "## Upgrade")
 
     warning = "After any manual or wizard change to `config.yaml`, run"
     assert warning not in intro
@@ -120,7 +120,7 @@ def test_readme_supporting_commands_include_current_quota_and_target_flags() -> 
     ) in supporting
     assert (
         "`component`, `validate`, `validate-dashboards`, `quota-check`, "
-        "`quota-request`, `render`, `deploy`, `bootstrap-ci`, `wireguard`, "
+        "`quota-request`, `render`, `deploy`, `upgrade`, `bootstrap-ci`, `wireguard`, "
         "`ssh-jumphost`, `destroy`, `email`"
     ) in supporting
     assert (
@@ -132,6 +132,8 @@ def test_readme_supporting_commands_include_current_quota_and_target_flags() -> 
         "`grafana --dashboard-json <path>`"
     ) in supporting
     assert "- `quota-request <config.yaml>`" in supporting
+    assert "See [Upgrade](#upgrade)" in supporting
+    assert "drain-timeout defaults" in supporting
 
     common_flags = supporting.split("Common command flags:", maxsplit=1)[1]
     assert (
@@ -144,6 +146,25 @@ def test_readme_supporting_commands_include_current_quota_and_target_flags() -> 
     assert (
         "- `deploy`: `--auto-auth-bootstrap/--no-auto-auth-bootstrap`, "
         "`--skip-validations`, `--skip-validation`, `--target`, `--all-targets`"
+    ) in common_flags
+    assert (
+        "- `upgrade k8s-version`: `--to-version`, `--dry-run`, "
+        "`--disruption-policy`, `--drain-timeout`, "
+        "`--auto-auth-bootstrap/--no-auto-auth-bootstrap`, "
+        "`--skip-validations`, `--skip-validation`, `--interactive/--no-interactive`"
+    ) in common_flags
+    assert (
+        "- `upgrade os-image`: `--to-os`, `--node-group`, `--dry-run`, "
+        "`--disruption-policy`, `--drain-timeout`, `--interactive/--no-interactive`"
+    ) in common_flags
+    assert (
+        "- Node-layer upgrades (`upgrade gpu-stack-preset`, "
+        "`upgrade platform`, `upgrade cpu-preset`, `upgrade gpu-preset`): target flag "
+        "(`--to-preset` or `--to-platform`), `--node-group`, `--dry-run`, "
+        "`--disruption-policy`, `--drain-timeout`, `--interactive/--no-interactive`"
+    ) in common_flags
+    assert (
+        "- `upgrade helm-chart`: `--to-version`, `--dry-run`, `--interactive/--no-interactive`"
     ) in common_flags
     assert (
         "- `grafana`: `--export-dashboard`, `--dashboard-json`, `--output-dir`, `--folder-uid`, "
@@ -165,13 +186,100 @@ def test_readme_supporting_commands_include_current_quota_and_target_flags() -> 
     ) in common_flags
 
 
+def test_readme_upgrade_section_is_visible_and_consolidated() -> None:
+    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+    changelog = (REPO_ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+    toc = _section(readme, "## Table of Contents", "## Quick Start Guide")
+    quick_start = _section(readme, "## Quick Start Guide", "## Core Concepts")
+    upgrade = _section(readme, "## Upgrade", "## Releases")
+    upgrade_flat = _squash(upgrade)
+    supporting = _section(readme, "### Supporting Commands", "## Auth Workflow")
+    unreleased = changelog.split("## [Unreleased]", maxsplit=1)[1].split("\n## [", maxsplit=1)[0]
+    unreleased_flat = _squash(unreleased)
+
+    assert "- [Upgrade](#upgrade)" in toc
+    assert "  - [Upgrade Principles](#upgrade-principles)" in toc
+    assert "  - [Kubernetes Version Upgrade](#kubernetes-version-upgrade)" in toc
+    assert "  - [OS Image Upgrade](#os-image-upgrade)" in toc
+    assert "  - [Disruption Policies](#disruption-policies)" in toc
+    assert "  - [Upgrade Examples](#upgrade-examples)" in toc
+    assert "  - [Node-Layer And Helm Upgrades](#node-layer-and-helm-upgrades)" in toc
+
+    assert "### Upgrade Principles" in upgrade
+    assert "### Kubernetes Version Upgrade" in upgrade
+    assert "### OS Image Upgrade" in upgrade
+    assert "### Disruption Policies" in upgrade
+    assert "### Upgrade Examples" in upgrade
+    assert "### Node-Layer And Helm Upgrades" in upgrade
+    assert "target-scoped Helm chart version upgrades" in upgrade
+    assert "reserves the command shape" not in upgrade
+    assert "Terraform remains the mutation path for Terraform-managed infrastructure." in upgrade
+    assert "The Nebius SDK is used for live discovery" in upgrade
+    assert "safe              -> none" in upgrade
+    assert "allow-unavailable -> 30m" in upgrade
+    assert "force-delete      -> 10m" in upgrade
+    assert "not cxcli's whole rollout" in upgrade
+    assert "max(1h, 10m * target node count)" in upgrade
+    assert "wrapped repeat dry-run command" in upgrade_flat
+    assert "Kubernetes preflight inspection failures block non-dry runs" in upgrade
+    assert "temporary node-group disruption strategy" in upgrade
+    assert "source/generated files through Terraform plan/apply" in upgrade
+    assert "Manual desired-state upgrades remain supported outside the `upgrade` command" in upgrade
+    assert "Guided upgrade value prompts use the same reusable `OptionChoice` provider" in upgrade
+    assert "live SDK-backed compatibility matrix" in upgrade
+    assert "review the generated" in upgrade
+    assert "Terraform plan" in upgrade
+    assert "`deploy` runs the full generated-bundle preflight" in upgrade
+    assert "`terraform apply` is the infra-only path" in upgrade
+    assert "MK8s infra preflights plus Terraform/provider validation" in upgrade
+    assert "guided Kubernetes upgrade wizard" in upgrade
+    assert "dry-run/apply choice, disruption policy, drain" in upgrade
+    assert "nebius-cxcli upgrade k8s-version" in upgrade
+    assert "--disruption-policy allow-unavailable" in upgrade
+    assert "--disruption-policy force-delete" in upgrade
+    assert "--drain-timeout 45m" in upgrade
+    assert "upgrade os-image <config.yaml>" in upgrade
+    assert "`infra:mk8s@<target>` and generic `infra:vm@<target>` components" in upgrade
+    assert "infra:vm@<target>.inputs.source_image_family" in upgrade
+    assert "prompts mirror the command flags" in upgrade_flat
+    assert "leave the optional MK8s `node_group` field blank" in upgrade_flat
+    assert "treats OS as `inputs.node_groups.<group>.os`" in upgrade
+    assert "all managed node groups by leaving `--node-group` unset" in upgrade
+    assert "one node group at a time in the same CPU/system-before-GPU order" in upgrade_flat
+    assert "will not SSH to nodes and run apt-based Ubuntu upgrades" not in upgrade
+    assert "not as SSH or apt-based package management" in upgrade_flat
+    assert "does not SSH to VMs, run apt, or mutate packages in place" in upgrade
+    assert (
+        "upgrade gpu-stack-preset <config.yaml> infra:mk8s@<target> --to-preset cuda13.0"
+    ) in upgrade
+    assert "upgrade platform <config.yaml> infra:mk8s@<target> --to-platform cpu-d3" in upgrade
+    assert "upgrade cpu-preset <config.yaml> infra:mk8s@<target> --to-preset <preset>" in upgrade
+    assert "upgrade gpu-preset <config.yaml> infra:mk8s@<target> --to-preset <preset>" in upgrade
+    assert (
+        "upgrade helm-chart <config.yaml> apps:<chart>@<target> --to-version <chart-version>"
+    ) in upgrade
+    assert "Node firmware is maintained by the Nebius hardware team" in upgrade_flat
+    assert "not a customer upgrade responsibility" in upgrade_flat
+    assert (
+        "`to_platform`, `to_preset`, and OS-image prompts are live provider-driven"
+        in upgrade_flat
+    )
+    assert "optional `node_group` prompt stays a simple flag-value prompt" in upgrade
+    assert "nebius-cxcli upgrade k8s-version" not in quick_start
+    assert "pass `config.yaml` alone in an interactive terminal" in supporting
+    assert "plus `--to-version <major.minor>` for automation" in supporting
+    assert "generic `infra:vm@<target>` `source_image_family` upgrades" in unreleased
+    assert "reusable upgrade wizard choice builder" in unreleased_flat
+
+
 def test_docs_define_discover_and_bootstrap_ci_boundaries() -> None:
     readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
     design = (REPO_ROOT / "docs" / "design.md").read_text(encoding="utf-8")
 
     assert (
         "Nebius API credentials/profile are required for commands that talk to Nebius APIs "
-        "such as `validate`, `quota-check`, `quota-request`, `render`, `deploy`, and `auth`."
+        "such as `validate`, `quota-check`, `quota-request`, `render`, `deploy`, "
+        "`upgrade`, and `auth`."
     ) in readme
     assert "deploy`, `discover`, and `auth`" not in readme
     assert (
@@ -233,7 +341,10 @@ def test_docs_define_destroy_as_project_wide_destructive_teardown() -> None:
     assert "locally applied post-Flux app resources first" in readme_flat
     assert "locally applied post-Flux app resources first" in design_flat
     assert "destroy` never destroys the external cluster or its node groups" in design_flat
-    assert "rendered app teardown failure is fatal" in design
+    assert "Rendered app teardown failure is fatal before Terraform destroy" in readme
+    assert "Rendered app teardown failure is fatal before Terraform destroy" in design
+    assert "Rendered app teardown is best-effort when Terraform will destroy" not in readme
+    assert "Rendered app teardown is best-effort when Terraform will destroy" not in design
     assert "### `destroy <config.yaml>`" in design
     assert "Project-wide destructive teardown from the generated bundle" in design
     assert "external or current cluster" not in readme
@@ -445,6 +556,10 @@ def test_docs_define_component_selector_contract() -> None:
     assert "skips the final redundant `Added infra/apps components` lines" in design
     assert "only for categories that actually changed" in design
     assert "removes app chart rows and `deploy.targets[]` settings" in design
+    assert "`usage.lifecycle: transient`" in readme
+    assert "`usage.config.ref`" in readme
+    assert "`usage.lifecycle: transient`" in design
+    assert "`usage.config.ref`" in design
     assert "`apps:soperator`" in readme
     assert "`install_mode`" in readme
     assert "`production-cluster` creates the complete MK8s+SFS+Soperator" in readme
@@ -681,6 +796,22 @@ def test_docs_define_wizard_string_lists_as_comma_separated() -> None:
     assert "simple `list(string)` prompts use comma-separated input" in design
 
 
+def test_docs_define_mk8s_node_group_service_account_default() -> None:
+    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+    design = (REPO_ROOT / "docs" / "design.md").read_text(encoding="utf-8")
+
+    readme_flat = _squash(readme)
+    design_flat = _squash(design)
+
+    assert "Node groups default to no service account assignment" in readme_flat
+    assert "use an existing service account ID or create one by name" in readme_flat
+    assert "Node-group service-account assignment defaults to none" in design_flat
+    assert (
+        "only writes `service_account` when the operator selects an existing "
+        "service account ID or a create-by-name path"
+    ) in design_flat
+
+
 def test_docs_define_create_app_selection_and_vpc_guided_subnet_contract() -> None:
     readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
     design = (REPO_ROOT / "docs" / "design.md").read_text(encoding="utf-8")
@@ -731,17 +862,11 @@ def test_docs_define_create_app_selection_and_vpc_guided_subnet_contract() -> No
 
 
 def test_vpc_module_examples_use_explicit_subnet_private_cidrs() -> None:
-    module_readme = (
-        MONOREPO_ROOT / "platform-infra" / "modules" / "vpc" / "README.md"
-    ).read_text(encoding="utf-8")
+    module_readme = (MONOREPO_ROOT / "platform-infra" / "modules" / "vpc" / "README.md").read_text(
+        encoding="utf-8"
+    )
     minimal_example = (
-        MONOREPO_ROOT
-        / "platform-infra"
-        / "modules"
-        / "vpc"
-        / "examples"
-        / "minimal"
-        / "main.tf"
+        MONOREPO_ROOT / "platform-infra" / "modules" / "vpc" / "examples" / "minimal" / "main.tf"
     ).read_text(encoding="utf-8")
 
     for text in (module_readme, minimal_example):
@@ -808,10 +933,37 @@ def test_design_documents_grafana_dashboard_binding_workflow() -> None:
 def test_design_supporting_commands_include_quota_request_and_flux_targets() -> None:
     design = (REPO_ROOT / "docs" / "design.md").read_text(encoding="utf-8")
     supporting = _section(design, "## Supporting Commands", "## Idempotency Rules")
+    supporting_flat = _squash(supporting)
 
     assert "- `quota-request <config.yaml>`" in supporting
+    assert "- `upgrade k8s-version <config.yaml> [infra:mk8s@<target>]`" in supporting
+    assert "Prompts for the target selector" in supporting
+    assert (
+        "- `upgrade os-image <config.yaml> [infra:mk8s@<target>|infra:vm@<target>] --to-os <os>`"
+    ) in supporting
+    assert "listing Terraform-managed MK8s targets and generic VM components" in supporting
+    assert "one node group at a time in CPU/system-before-GPU order" in supporting_flat
+    assert "wrapped repeat dry-run command" in supporting_flat
+    assert "plain optional flag-value prompt" in supporting_flat
+    assert "blank omits the flag and updates every managed node group" in supporting_flat
+    assert "updates only `inputs.source_image_family` on generic VM components" in supporting_flat
+    assert "does not SSH to nodes or VMs, run apt-based Ubuntu" in supporting_flat
+    assert (
+        "upgrade platform <config.yaml> infra:mk8s@<target> --to-platform <platform>"
+        in supporting_flat
+    )
+    assert "upgrade helm-chart <config.yaml> apps:<chart>@<target> --to-version" in supporting_flat
+    assert "Node firmware is maintained by the Nebius hardware team" in supporting_flat
+    assert "not a customer upgrade responsibility" in supporting_flat
     assert "- `ssh-jumphost <config.yaml>`" in supporting
     assert "`QuotaAllowance` reads separate from `QuotaRequest` submission" in supporting
+    assert "--disruption-policy safe|allow-unavailable|force-delete" in supporting
+    assert "uses max(`1h`, `10m * target node count`)" in supporting
+    assert "preflight inspection failures block non-dry runs" in supporting
+    assert (
+        "Temporary `allow-unavailable` or `force-delete` node-group strategy settings" in supporting
+    )
+    assert "source config is stale" in supporting
     assert "- `flux apply <generated-path>`" in supporting
     assert "- `flux destroy <generated-path>`" in supporting
     assert "- `flux bootstrap <generated-path>`" in supporting

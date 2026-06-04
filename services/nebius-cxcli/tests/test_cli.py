@@ -5329,8 +5329,9 @@ def test_create_rejects_internal_nccl_test_app_with_validation_guidance(
     result = _create_non_interactive(deployments_root, "--infra", "mk8s", "--app", "nccl-test")
 
     assert result.exit_code == 1, result.output
-    assert "internal to deploy-time NCCL validation" in result.output
-    assert "deploy.targets[].validations.mk8s_gpu.nccl.enabled" in result.output
+    assert "transient runtime chart" in result.output
+    assert "not a selectable persistent app" in result.output
+    assert "deploy.targets[].validations.mk8s_gpu.nccl" in result.output
     assert "--app" in result.output
     assert not _project_config_path(deployments_root).exists()
 

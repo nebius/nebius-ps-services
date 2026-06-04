@@ -395,6 +395,34 @@ def test_terraform_plan_and_apply_can_skip_init(monkeypatch) -> None:
     ]
 
 
+def test_terraform_plan_quiet_captures_output_without_printing(monkeypatch) -> None:
+    calls: list[tuple[str, object]] = []
+
+    monkeypatch.setattr("nebius_cxcli.terraform_ops._require_terraform", lambda: "terraform")
+    monkeypatch.setattr(
+        "nebius_cxcli.terraform_ops._run",
+        lambda *args, **kwargs: calls.append(("run", args, kwargs)),
+    )
+    monkeypatch.setattr(
+        "nebius_cxcli.terraform_ops._run_capture",
+        lambda cmd, *, cwd, timeout, extra_env=None: (
+            calls.append(("capture", tuple(cmd), cwd, timeout, extra_env)) or ("plan", "")
+        ),
+    )
+
+    terraform_plan(Path("/tmp/demo"), initialize=False, quiet=True)
+
+    assert calls == [
+        (
+            "capture",
+            ("terraform", "plan", "-input=false", "-lock-timeout=5m"),
+            Path("/tmp/demo"),
+            1800,
+            None,
+        )
+    ]
+
+
 def test_stream_json_events_aborts_early_when_abort_check_requests_it(
     monkeypatch, tmp_path: Path
 ) -> None:
