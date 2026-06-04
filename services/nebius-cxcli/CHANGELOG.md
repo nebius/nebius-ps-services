@@ -6,6 +6,8 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Updated the development lockfile to `aiohttp` 3.14.0 to resolve the open
+  Dependabot alerts on `services/nebius-cxcli/uv.lock`.
 - Fixed high-priority teardown, recovery, notification, and observability
   guardrails: `destroy` now stops before Terraform when rendered app teardown
   fails, MK8s destroy recovery refuses unconfirmable node-group delete
