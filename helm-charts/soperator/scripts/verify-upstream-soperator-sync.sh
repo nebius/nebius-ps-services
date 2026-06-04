@@ -56,7 +56,7 @@ show_usage() {
   printf '%b\n' "  ${S_YELLOW}--sync${S_RESET}              Apply full upstream sync and validate it without staging changes"
   printf '%b\n' "  ${S_YELLOW}--latest${S_RESET}            With --sync, use GitHub latest release and update the lock"
   printf '%b\n' "  ${S_YELLOW}--scope SCOPE${S_RESET}       Limit read-only checks to scripts, crds, images, or all (default: all)"
-  printf '%b\n' "  ${S_YELLOW}--report${S_RESET}            Print detailed per-item status; with --sync, print changed files"
+  printf '%b\n' "  ${S_YELLOW}--report${S_RESET}            Print detailed per-item status; with --sync, print a readable changed-file summary"
   printf '%b\n' "  ${S_YELLOW}-h, --help${S_RESET}          Show help"
   printf '\n'
   printf '%b\n' "${S_BOLD}Examples from repository root:${S_RESET}"
@@ -332,6 +332,37 @@ git_status_short() {
   git -C "${root}" status --short --untracked-files=all
 }
 
+git_short_status_label() {
+  local short_status="$1"
+  case "${short_status}" in
+    "??") printf '%s\n' "new" ;;
+    "!!") printf '%s\n' "ignored" ;;
+    DD|AU|UD|UA|DU|AA|UU) printf '%s\n' "unmerged" ;;
+    *R*) printf '%s\n' "renamed" ;;
+    *C*) printf '%s\n' "copied" ;;
+    *D*) printf '%s\n' "deleted" ;;
+    *A*) printf '%s\n' "added" ;;
+    *M*) printf '%s\n' "modified" ;;
+    *T*) printf '%s\n' "typechange" ;;
+    *) printf '%s\n' "changed" ;;
+  esac
+}
+
+format_git_status_short() {
+  local line short_status path label
+  while IFS= read -r line; do
+    [[ -z "${line}" ]] && continue
+    if [[ "${#line}" -lt 4 ]]; then
+      printf '  %-10s %s\n' "changed" "${line}"
+      continue
+    fi
+    short_status="${line:0:2}"
+    path="${line:3}"
+    label="$(git_short_status_label "${short_status}")"
+    printf '  %-10s %s\n' "${label}" "${path}"
+  done
+}
+
 report_changed_files() {
   local root="$1"
   local status_output=""
@@ -342,7 +373,7 @@ report_changed_files() {
   fi
 
   printf '%b\n' "${S_BOLD}Changed files after sync:${S_RESET}"
-  printf '%s\n' "${status_output}"
+  format_git_status_short <<<"${status_output}"
 }
 
 resolve_tag_commit() {

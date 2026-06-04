@@ -4,6 +4,8 @@ All notable changes to this chart are tracked here.
 
 ## [Unreleased]
 
+- Made the upstream sync `--report` changed-file summary use readable status
+  labels such as `modified` and `new` instead of raw Git short-status codes.
 - Fixed upstream sync Helm validation on clean GitHub runners by having
   `verify-upstream-soperator-sync.sh --sync` seed a temporary Helm repository
   config/cache from the parent chart's remote dependencies before running

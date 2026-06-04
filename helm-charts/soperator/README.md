@@ -467,8 +467,8 @@ Use this flow when upstream Soperator publishes a newer Helm chart release:
    changes.
    Use plain `--sync` only when you want to refresh the release already pinned
    in the lock; it does not query GitHub latest.
-   `--report` prints detailed per-import status and the changed-file list after
-   sync validation.
+   `--report` prints detailed per-import status and the changed-file list with
+   readable status labels after sync validation.
    Sync validation seeds a temporary Helm repository config/cache from the
    remote dependencies in `Chart.yaml` before dependency update/build, so clean
    runners do not need preconfigured `helm repo add` state.

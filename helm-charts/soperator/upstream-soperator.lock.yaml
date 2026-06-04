@@ -1,7 +1,7 @@
 repository: "https://github.com/nebius/soperator"
-release: "3.0.5"
-tag: "3.0.5"
-commit: "22f3ae8f0edb0df97b563670bd38ccd2bb9e9e97"
+release: "4.0.1"
+tag: "4.0.1"
+commit: "cc7f4e8157b76a323ffafc2a792981edf3cd808b"
 imports:
   scripts:
     - name: slurm-cluster slurm_scripts
@@ -356,19 +356,19 @@ imports:
     - name: core operator templates
       scope: logic
       upstream_path: helm/soperator/templates
-      sha256: 78dbe08199b3d54840976b29d9142c8e28d6c98c623c0abe3b27cdc388d6d732
+      sha256: 94759d58bc00b1dd4b55e662688c98dd92216db99c471ef5535c5a6dc325a96f
     - name: SlurmCluster templates
       scope: logic
       upstream_path: helm/slurm-cluster/templates
-      sha256: 23710a3b25b0cc0cc1afbb60bac64f4d38add55bf8b0a66995773077b3c3cbfc
+      sha256: bb3ded7be3410bfb7a91df67f817d5ab441fd2e4fb020b419a9d34ef7baeff02
     - name: Slurm storage templates
       scope: logic
       upstream_path: helm/slurm-cluster-storage/templates
-      sha256: fb36062ebd7885daf28f1227fd0fd299686f5c31e9b9f9b8d0cac2b58b05efef
+      sha256: 4ce56ae7ef85ca3f3a21557999997d68c13090db3e789b07502814cda9efdb6b
     - name: NodeSet templates
       scope: logic
       upstream_path: helm/nodesets/templates
-      sha256: 8273b3df5a8dfda84b0979cf9cf052961e7ac8b664ba293bd801caadcc5f2d19
+      sha256: c49a8345c3649f9f1b60485c43aaff0a7b30269a654591bf52e9799b5c9deeb3
     - name: NodeConfigurator templates
       scope: logic
       upstream_path: helm/nodeconfigurator/templates
@@ -376,7 +376,7 @@ imports:
     - name: ActiveChecks templates
       scope: logic
       upstream_path: helm/soperator-activechecks/templates
-      sha256: 4c4a1befddd644c6a35780ee60c86de47295c2924e25592a7e08a211052b99fc
+      sha256: 12c063a99f22eb9a4fa3fb4f157e558bd031bf1b8b0170e9d3d4ac2d2110a0aa
     - name: SoperatorChecks templates
       scope: logic
       upstream_path: helm/soperatorchecks/templates
@@ -396,15 +396,15 @@ imports:
     - name: custom ConfigMaps chart
       scope: logic
       upstream_path: helm/soperator-custom-configmaps
-      sha256: 77224c95244893e5f199c43de944071e9e9b6dd7f7fdebbd7dab899c09ba34a6
+      sha256: 39f33deac359ac98cdaefa985b4b9d73e22ac32b0e8855e9338e606b429af076
     - name: monitoring dashboards chart
       scope: logic
       upstream_path: helm/soperator-monitoring-dashboards
-      sha256: 5b2b5e41ef4edf43602d42080b0c990e80cc91455ae17bc1637083476d37e9ba
+      sha256: bc2dcbf8aed9ec4b5182ab8dc0e7809f1f21cf3f5095c4b7a66b22eeafe0ee6e
     - name: storageclasses chart
       scope: logic
       upstream_path: helm/storageclasses
-      sha256: 6762d2c101360179d1356dd8f9e2360f1b4fa96dbd07a5f434bc74e50c622334
+      sha256: 6f1719056f009d6068087b6e9253983e2ce4dae2daa5e942c7ef223c3a929bb6
 local_owned_paths:
   - helm-charts/soperator/.helmignore
   - helm-charts/soperator/CHANGELOG.md

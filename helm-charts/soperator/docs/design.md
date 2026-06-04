@@ -2707,8 +2707,8 @@ testing. The temporary Helm config is populated from the parent chart's remote
 dependency repositories, so local and CI sync runs do not require ambient
 `helm repo add` state. Write mode requires the full `all` scope plus `yq` v4
 and Helm; scoped `scripts`, `crds`, or `images` runs are read-only verification
-only. With `--report`, it also prints the changed-file list after sync
-validation.
+only. With `--report`, it also prints the changed-file list with readable
+status labels after sync validation.
 Missing-tool errors include macOS and Linux install hints, but the script does
 not install packages automatically. Local runs do not stage, commit, push, or
 create the PR.
