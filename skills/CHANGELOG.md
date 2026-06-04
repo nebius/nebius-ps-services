@@ -51,6 +51,10 @@ All notable changes to the reusable Codex skills are tracked here.
 
 ### Changed
 
+- Clarified that `commit-push` always commits the whole Git repository from
+  the Git root with `git add -A`, regardless of the service, package, chart, or
+  project directory where the agent starts. Project-folder, current-directory,
+  and pathspec-limited staging remain out of scope for this skill.
 - Tightened `commit-push` so remote branch refresh uses the full
   `refs/heads/<branch>:refs/remotes/origin/<branch>` refspec and staged
   validation can repair small mechanical whitespace blockers, such as trailing

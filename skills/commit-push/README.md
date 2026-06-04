@@ -1,14 +1,15 @@
 # Commit Push
 
-`commit-push` commits all current local changes on the active non-default
-feature branch and pushes that branch to `origin`. It is intentionally smaller
-than `create-pr`: it does not create PRs, change branches, merge, rebase, or
-repair remote divergence.
+`commit-push` commits all current local changes across the whole Git
+repository on the active non-default feature branch and pushes that branch to
+`origin`. It is intentionally smaller than `create-pr`: it does not create
+PRs, change branches, merge, rebase, or repair remote divergence.
 
 ## What It Does
 
 - Verifies the current Git state is safe for a branch-local commit and push.
-- Stages the complete monorepo diff with `git add -A`.
+- Stages the complete repository diff with repo-root `git add -A`, regardless
+  of the project or subdirectory where the agent started.
 - Repairs small mechanical whitespace blockers reported by
   `git diff --cached --check` when the fix is local and unambiguous.
 - Creates a commit with a user-provided or generated message.
@@ -24,7 +25,7 @@ Current git branch
 Safety checks
   |
   v
-Full monorepo staging
+Full repository staging
   |
   v
 Lightweight staged validation
@@ -54,15 +55,18 @@ Final status report
 4. If the branch is clean but ahead, push the existing commits.
 5. If the branch is clean, has no upstream, and has local work relative to the
    default branch, push it with upstream tracking.
-6. If the branch is dirty, run `git add -A`, validate the staged diff, repair
-   simple whitespace-only validation blockers when safe, commit with a provided
-   or generated message, and push.
+6. If the branch is dirty, run `git add -A` from the repository root with no
+   pathspec, validate the staged diff, repair simple whitespace-only validation
+   blockers when safe, commit with a provided or generated message, and push.
 7. Report the final branch status and whether the worktree is clean.
 
 ## Core Concepts
 
 - The skill is current-branch only.
-- `git add -A` is the default because monorepo changes often span projects.
+- `git add -A` is mandatory and always runs from the Git repository root
+  because monorepo changes often span projects.
+- The current working directory, service folder, chart folder, or package
+  folder never narrows the commit scope for this skill.
 - Divergence recovery is intentionally out of scope; it needs a separate
   explicit request.
 - The remote branch refresh uses a full `refs/heads/<branch>` source ref so the

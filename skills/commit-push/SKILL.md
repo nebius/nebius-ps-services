@@ -1,18 +1,20 @@
 ---
 name: commit-push
-description: Commit all current local changes on the active non-default feature branch with git add -A, repair simple staged whitespace validation blockers when safe, generate or use a commit message, push the branch to origin, and report final worktree cleanliness. Use when the user explicitly asks to commit and push the current branch without opening a pull request.
+description: Commit all current local changes across the whole Git repository on the active non-default feature branch with repo-root git add -A, repair simple staged whitespace validation blockers when safe, generate or use a commit message, push the branch to origin, and report final worktree cleanliness. Use when the user explicitly asks to commit and push the current branch without opening a pull request.
 ---
 
 # Commit Push
 
 Use this skill to publish the current feature branch by committing all local
-work and pushing that branch to GitHub. Keep the workflow narrow: commit,
-push, verify status, and report blockers.
+work across the whole Git repository and pushing that branch to GitHub. Keep
+the workflow narrow: commit, push, verify status, and report blockers.
 
 ## Use This Skill For
 
-- Committing all current local changes on the active feature branch.
-- Staging complete monorepo changes with `git add -A`.
+- Committing all current local changes on the active feature branch across the
+  whole Git repository.
+- Staging complete repository changes with `git add -A` from the repository
+  root, regardless of the project or subdirectory where the agent started.
 - Generating a concise commit message when the user does not provide one.
 - Repairing simple mechanical whitespace blockers found by
   `git diff --cached --check`, such as trailing whitespace or a final extra
@@ -30,9 +32,9 @@ push, verify status, and report blockers.
 - Do not force-push, use `--force-with-lease`, or bypass hooks with
   `--no-verify`.
 - Do not push the repository default branch.
-- Do not stage a partial pathspec. This skill always stages the complete
-  repository diff with `git add -A`; use another explicit Git workflow for
-  narrowed commits.
+- Do not stage a partial pathspec or project-scoped path. This skill always
+  stages the complete repository diff with `git add -A` from the Git root; use
+  another explicit Git workflow for narrowed commits.
 - Do not repair semantic code, test, dependency, merge, or conflict-marker
   failures. Only mechanical whitespace validation blockers are in scope.
 
@@ -41,6 +43,9 @@ push, verify status, and report blockers.
 1. Enter the repository root.
    - Use `git rev-parse --show-toplevel`, then run all Git commands from that
      root.
+   - Treat that Git root as the commit scope even when the current working
+     directory is a nested service, chart, app, package, or project folder.
+     Never infer a narrower staging scope from the starting directory.
 2. Inspect branch and repository safety.
    - Stop on detached `HEAD`.
    - Stop if there is no `origin` remote.
@@ -78,7 +83,8 @@ push, verify status, and report blockers.
      report that there is nothing to push.
 5. Commit dirty work.
    - Inspect `git status --short` before staging.
-   - Run `git add -A` from the repository root.
+   - Run `git add -A` from the repository root. Do not pass a pathspec, current
+     project directory, or service directory.
    - Run `git diff --cached --check`.
    - If staged validation fails only because of simple mechanical whitespace
      issues, inspect the exact files and lines, repair the smallest safe
@@ -128,7 +134,7 @@ push, verify status, and report blockers.
 - Remote branch check: `git ls-remote --exit-code --heads origin <branch>`
 - Remote branch refresh:
   `git fetch origin refs/heads/<branch>:refs/remotes/origin/<branch>`
-- Staging: `git add -A`
+- Staging: `git add -A` from the repository root, with no pathspec
 - Staged validation: `git diff --cached --check`
 - Staged summary: `git diff --cached --stat`
 - Upstream: `git rev-parse --abbrev-ref --symbolic-full-name @{upstream}`
@@ -144,6 +150,8 @@ push, verify status, and report blockers.
   add, commit, and push commands for the current branch only.
 - Never run `git add -A` until branch safety, repository state, and conflict
   checks pass.
+- Never use project-folder, package-folder, or current-directory staging for
+  this skill. The only staging command in scope is repo-root `git add -A`.
 - Never push from the default branch, detached `HEAD`, or a branch whose
   default-branch status cannot be determined.
 - Never recover branch divergence inside this skill. Report the blocker and
