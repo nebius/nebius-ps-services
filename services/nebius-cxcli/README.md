@@ -20,6 +20,7 @@ change what gets applied.
 - [Upgrade](#upgrade)
   - [Upgrade Principles](#upgrade-principles)
   - [Kubernetes Version Upgrade](#kubernetes-version-upgrade)
+  - [Node Template Upgrade](#node-template-upgrade)
   - [OS Image Upgrade](#os-image-upgrade)
   - [Disruption Policies](#disruption-policies)
   - [Upgrade Examples](#upgrade-examples)
@@ -2117,10 +2118,11 @@ Local `deploy`/`flux bootstrap` behavior when apps + the bundled `mk8s` componen
 
 `nebius-cxcli upgrade` is the day-2 lifecycle surface for version and component
 changes that need cxcli safety gates before live reconciliation. V1 implements
-Kubernetes version upgrades for Terraform-managed MK8s clusters, OS image
-upgrades for Terraform-managed MK8s node groups and generic VM components,
-MK8s node-layer upgrades for GPU stack, platform, CPU preset, and GPU preset
-changes, and target-scoped Helm chart version upgrades.
+Kubernetes version upgrades for Terraform-managed MK8s clusters, combined MK8s
+node-template upgrades for Kubernetes version, OS, and Nebius-image GPU stack,
+OS image upgrades for Terraform-managed MK8s node groups and generic VM
+components, MK8s node-layer upgrades for GPU stack, platform, CPU preset, and
+GPU preset changes, and target-scoped Helm chart version upgrades.
 
 ### Upgrade Principles
 
@@ -2148,9 +2150,11 @@ changes, and target-scoped Helm chart version upgrades.
 - `--dry-run` performs live discovery and prints the plan plus a wrapped
   repeat dry-run command without changing `config.yaml`, `generated/`,
   Terraform backend state, or live Nebius resources.
-- Upgrade layers stay separate. cxcli does not mix Kubernetes version, OS image,
-  GPU stack, hardware shape, and app/chart concerns in one command. Node
-  firmware is maintained by the Nebius hardware team and is not a customer
+- Upgrade layers stay separate except for `upgrade node-template`, which is the
+  explicit non-interactive path for moving Kubernetes version, node-template OS,
+  and Nebius-image GPU stack together so a selected node group rolls once.
+  Hardware shape, platform, GPU cluster, and app/chart concerns remain separate.
+  Node firmware is maintained by the Nebius hardware team and is not a customer
   upgrade layer.
 - Manual desired-state upgrades remain supported outside the `upgrade` command:
   operators can edit `config.yaml` directly, for example bump
@@ -2244,14 +2248,52 @@ not attempt a live Terraform rollback inside the exception handler.
 If the current OS image or GPU stack is not compatible with the target
 Kubernetes version, cxcli fails with node-layer follow-up guidance instead of
 mixing that layer into the Kubernetes upgrade. For OS changes, that follow-up
-can be the implemented `upgrade os-image` command; GPU stack changes remain a
-separate future layer.
+can be `upgrade os-image`; for GPU stack changes, that follow-up can be
+`upgrade gpu-stack-preset` with `--to-gpu-stack-preset`.
 
 Add-on and app chart changes stay outside `upgrade k8s-version`; validate their
 compatibility before the Kubernetes upgrade and roll them through a controlled
 chart/Flux phase. Rollback is not an in-place Kubernetes downgrade. For
 high-risk GPU or production workloads, prefer a blue/green cluster or new
 node-group migration and move workloads only after validation.
+
+### Node Template Upgrade
+
+Use `upgrade node-template` when a Kubernetes minor, node OS image, and
+Nebius-image GPU stack preset should be rolled together. This command is
+non-interactive only:
+
+```bash
+nebius-cxcli upgrade node-template <config.yaml> infra:mk8s@<target> \
+  --to-version <major.minor> \
+  --to-os <os> \
+  --to-gpu-stack-preset <cuda...>
+```
+
+For each selected live node group, cxcli validates the target tuple through the
+Nebius SDK compatibility matrix using the requested Kubernetes version and that
+group's live platform. The matching tuple must include the requested OS and,
+for Nebius-image GPU groups, the requested `drivers_preset`/CUDA stack.
+During the intermediate control-plane stage, generated-bundle compatibility
+validation honors explicit `inputs.node_groups.*.version` pins, so node groups
+still waiting for their own stage are checked against their current Kubernetes
+minor instead of the newly staged control-plane minor.
+
+The rollout order is control plane first, then selected node groups in the same
+CPU/system-before-GPU order as other MK8s upgrades. During a node-group stage,
+cxcli writes the node-group Kubernetes version, OS, and Nebius-image
+`gpu_stack_preset` together, rerenders, validates, runs Terraform plan/apply,
+and waits for the Managed Kubernetes rolling replacement to finish. Leave
+`--node-group` unset to select all managed node groups, or pass one source key
+or live name to narrow the command.
+
+`--to-gpu-stack-preset` is required when the selected groups include
+Nebius-image GPU groups, and rejected when none of the selected groups can
+consume a Nebius `drivers_preset`. Operator-managed GPU groups can still
+receive Kubernetes version and OS changes through this command; they do not get
+a Nebius GPU stack preset. Existing node-group platform, hardware preset, and
+GPU cluster remain out of scope because Nebius does not allow changing those
+fields on an existing node group.
 
 ### OS Image Upgrade
 
@@ -2464,6 +2506,18 @@ nebius-cxcli upgrade os-image \
   --dry-run
 ```
 
+Plan a combined MK8s node-template upgrade without writes:
+
+```bash
+nebius-cxcli upgrade node-template \
+  ~/deployments/tenant-name-example/project-name-example/config.yaml \
+  infra:mk8s@mk8s \
+  --to-version 1.33 \
+  --to-os ubuntu24.04 \
+  --to-gpu-stack-preset cuda13.0 \
+  --dry-run
+```
+
 ### Node-Layer And Helm Upgrades
 
 For MK8s node-template layers, pass `config.yaml` alone in an interactive
@@ -2471,7 +2525,7 @@ terminal to choose the managed MK8s target and flags through the wizard, or pass
 the selector and target flag explicitly for automation:
 
 ```bash
-nebius-cxcli upgrade gpu-stack-preset <config.yaml> infra:mk8s@<target> --to-preset cuda13.0
+nebius-cxcli upgrade gpu-stack-preset <config.yaml> infra:mk8s@<target> --to-gpu-stack-preset cuda13.0
 nebius-cxcli upgrade platform <config.yaml> infra:mk8s@<target> --to-platform cpu-d3
 nebius-cxcli upgrade cpu-preset <config.yaml> infra:mk8s@<target> --to-preset <preset>
 nebius-cxcli upgrade gpu-preset <config.yaml> infra:mk8s@<target> --to-preset <preset>
@@ -2485,10 +2539,11 @@ nebius-cxcli upgrade helm-chart <config.yaml> apps:<chart>@<target> --to-version
   plan/apply, and Managed Kubernetes rollout wait path as the other MK8s
   upgrade commands. `cpu-preset` targets CPU/system node groups, while
   `gpu-preset` targets GPU node groups.
-- In guided mode, `to_platform`, `to_preset`, and OS-image prompts are live
-  provider-driven lists when Nebius SDK/provider data is available. The
-  optional `node_group` prompt stays a simple flag-value prompt; blank keeps
-  `--node-group` unset and applies the command's normal group filter.
+- In guided mode, `to_platform`, hardware `to_preset`,
+  `to_gpu_stack_preset`, and OS-image prompts are live provider-driven lists
+  when Nebius SDK/provider data is available. The optional `node_group` prompt
+  stays a simple flag-value prompt; blank keeps `--node-group` unset and
+  applies the command's normal group filter.
 - `helm-chart` updates the selected target-scoped `apps.charts[]` row version,
   rerenders, validates, and applies the selected target's Flux bundle. It has
   no node-drain flags.
@@ -3021,8 +3076,9 @@ Common command flags:
 - `render`: `--force`
 - `deploy`: `--auto-auth-bootstrap/--no-auto-auth-bootstrap`, `--skip-validations`, `--skip-validation`, `--target`, `--all-targets`
 - `upgrade k8s-version`: `--to-version`, `--dry-run`, `--disruption-policy`, `--drain-timeout`, `--auto-auth-bootstrap/--no-auto-auth-bootstrap`, `--skip-validations`, `--skip-validation`, `--interactive/--no-interactive`
+- `upgrade node-template`: `--to-version`, `--to-os`, `--to-gpu-stack-preset`, `--node-group`, `--dry-run`, `--disruption-policy`, `--drain-timeout`, `--auto-auth-bootstrap/--no-auto-auth-bootstrap`, `--skip-validations`, `--skip-validation`
 - `upgrade os-image`: `--to-os`, `--node-group`, `--dry-run`, `--disruption-policy`, `--drain-timeout`, `--interactive/--no-interactive`
-- Node-layer upgrades (`upgrade gpu-stack-preset`, `upgrade platform`, `upgrade cpu-preset`, `upgrade gpu-preset`): target flag (`--to-preset` or `--to-platform`), `--node-group`, `--dry-run`, `--disruption-policy`, `--drain-timeout`, `--interactive/--no-interactive`
+- Node-layer upgrades (`upgrade gpu-stack-preset`, `upgrade platform`, `upgrade cpu-preset`, `upgrade gpu-preset`): target flag (`--to-gpu-stack-preset`, `--to-preset`, or `--to-platform`), `--node-group`, `--dry-run`, `--disruption-policy`, `--drain-timeout`, `--interactive/--no-interactive`
 - `upgrade helm-chart`: `--to-version`, `--dry-run`, `--interactive/--no-interactive`
 - `destroy`: `--auto-auth-bootstrap/--no-auto-auth-bootstrap`, `--yes`
 - `discover`: `--all`

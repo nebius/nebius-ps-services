@@ -238,6 +238,50 @@ class Mk8sNodeLayerUpgradePlan:
         )
 
 
+@dataclass(frozen=True)
+class Mk8sNodeTemplateUpgradePlan:
+    """Concrete combined MK8s node-template upgrade plan."""
+
+    target: UpgradeTarget
+    cluster_id: str
+    cluster_name: str
+    current_version: str
+    target_version: str
+    target_os: str
+    target_gpu_stack_preset: str
+    hops: tuple[UpgradeHop, ...]
+    disruption_policy: str
+    drain_timeout: DrainTimeout
+    all_node_groups: tuple[LiveNodeGroup, ...]
+    node_groups: tuple[LiveNodeGroup, ...]
+    compatibility_failures: tuple[CompatibilityFailure, ...]
+    preflight_findings: tuple[PreflightFinding, ...] = ()
+    warnings: tuple[str, ...] = ()
+
+    @property
+    def node_group_updates_required(self) -> bool:
+        return any(
+            not node_group_node_template_rollout_complete(
+                group.raw,
+                version=self.target_version,
+                os=self.target_os,
+                drivers_preset=node_template_target_drivers_preset(
+                    group,
+                    target_gpu_stack_preset=self.target_gpu_stack_preset,
+                ),
+            )
+            for group in self.node_groups
+        )
+
+    @property
+    def mutates(self) -> bool:
+        return bool(self.hops) or self.node_group_updates_required
+
+    @property
+    def rollout_incomplete(self) -> bool:
+        return self.node_group_updates_required
+
+
 def _text(value: Any) -> str:
     return str(value or "").strip()
 
@@ -455,20 +499,33 @@ def _minor_text_or_raw(value: str) -> str:
         return raw.lstrip("v")
 
 
-def source_node_group_versions_for_plan(
-    plan: Mk8sUpgradePlan,
+def source_node_group_versions_for_groups(
+    groups: Sequence[LiveNodeGroup],
     *,
     default_version: str | None = None,
 ) -> dict[str, str]:
     """Return source node-group keys mapped to live or explicit default versions."""
 
     versions: dict[str, str] = {}
-    for group in plan.node_groups:
+    for group in groups:
         if group.source is None:
             continue
         version = default_version if default_version is not None else group.version
         versions[group.source.key] = _minor_text_or_raw(version)
     return versions
+
+
+def source_node_group_versions_for_plan(
+    plan: Mk8sUpgradePlan,
+    *,
+    default_version: str | None = None,
+) -> dict[str, str]:
+    """Return selected source node-group versions for a Kubernetes upgrade plan."""
+
+    return source_node_group_versions_for_groups(
+        plan.node_groups,
+        default_version=default_version,
+    )
 
 
 def update_source_k8s_versions(
@@ -530,6 +587,16 @@ def validate_node_layer_value(value: str, *, flag_name: str) -> str:
     return raw
 
 
+def node_layer_option_name(spec: NodeLayerUpgradeSpec) -> str:
+    """Return the public CLI option for a node-template layer command."""
+
+    if spec.source_field == "platform":
+        return "--to-platform"
+    if spec.source_field == "gpu_stack_preset":
+        return "--to-gpu-stack-preset"
+    return "--to-preset"
+
+
 def update_source_node_group_os(
     payload: dict[str, Any],
     *,
@@ -582,6 +649,92 @@ def update_source_node_group_field(
         matched.add(key)
         if raw_group.get(field) != target_value:
             raw_group[field] = target_value
+            changed = True
+    missing = sorted(wanted_keys - matched)
+    if missing:
+        raise ValueError(
+            "Could not find enabled MK8s node group(s) in config.yaml: " + ", ".join(missing)
+        )
+    return changed
+
+
+def _raw_bool(value: Any, *, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    return _text(value).lower() in {"1", "true", "yes", "on"}
+
+
+def _raw_group_uses_nebius_gpu_image(raw_group: Mapping[str, Any]) -> bool:
+    if not _raw_bool(raw_group.get("gpu"), default=False):
+        return False
+    stack_source = _text(raw_group.get("gpu_stack_source")).lower()
+    return stack_source in {"", "nebius_image"}
+
+
+def update_source_node_template(
+    payload: dict[str, Any],
+    *,
+    instance_id: str,
+    target_version: str,
+    target_os: str,
+    target_gpu_stack_preset: str = "",
+    node_group_keys: Sequence[str] | None = None,
+    node_group_versions: Mapping[str, str] | None = None,
+) -> bool:
+    """Update combined node-template version, OS, and Nebius-image GPU stack fields."""
+
+    target_version = parse_k8s_version(target_version).minor_text
+    target_os = validate_os_image_value(target_os)
+    target_gpu_stack_preset = (
+        validate_node_layer_value(
+            target_gpu_stack_preset,
+            flag_name="--to-gpu-stack-preset",
+        )
+        if _text(target_gpu_stack_preset)
+        else ""
+    )
+    wanted_keys = {_text(key) for key in tuple(node_group_keys or ()) if _text(key)}
+    row = find_source_mk8s_component(payload, instance_id)
+    inputs = row.setdefault("inputs", {})
+    if not isinstance(inputs, dict):
+        raise ValueError(f"infra:mk8s@{instance_id}.inputs must be a mapping.")
+    cluster = inputs.setdefault("cluster", {})
+    if not isinstance(cluster, dict):
+        raise ValueError(f"infra:mk8s@{instance_id}.inputs.cluster must be a mapping.")
+    changed = False
+    if cluster.get("k8s_version") != target_version:
+        cluster["k8s_version"] = target_version
+        changed = True
+    version_overrides = {
+        _text(key): _minor_text_or_raw(value)
+        for key, value in dict(node_group_versions or {}).items()
+        if _text(key) and _text(value)
+    }
+    matched: set[str] = set()
+    for key, raw_group in _enabled_source_node_group_rows(row):
+        resolved_version = target_version
+        for lookup_key in _node_group_row_lookup_key(key, raw_group):
+            if lookup_key in version_overrides:
+                resolved_version = version_overrides[lookup_key]
+                break
+        if raw_group.get("version") != resolved_version:
+            raw_group["version"] = resolved_version
+            changed = True
+
+        if wanted_keys and key not in wanted_keys:
+            continue
+        matched.add(key)
+        if raw_group.get("os") != target_os:
+            raw_group["os"] = target_os
+            changed = True
+        if (
+            target_gpu_stack_preset
+            and _raw_group_uses_nebius_gpu_image(raw_group)
+            and raw_group.get("gpu_stack_preset") != target_gpu_stack_preset
+        ):
+            raw_group["gpu_stack_preset"] = target_gpu_stack_preset
             changed = True
     missing = sorted(wanted_keys - matched)
     if missing:
@@ -905,7 +1058,7 @@ def _node_layer_follow_up(
     if layer_command == "gpu-stack-preset":
         command = (
             f"nebius-cxcli upgrade gpu-stack-preset {config_path} {target_selector} "
-            f"--to-preset {value}"
+            f"--to-gpu-stack-preset {value}"
         )
         return (
             f"Run `{command}` before rerunning upgrade k8s-version, or set "
@@ -1189,6 +1342,127 @@ def node_layer_compatibility_failures_for_node_group(
                 "matrix for this node group, or make the required combined "
                 "config.yaml node-layer changes manually and rerender/deploy."
             ),
+        ),
+    )
+
+
+def node_group_uses_nebius_gpu_image(group: LiveNodeGroup) -> bool:
+    source = group.source
+    return bool(
+        group.gpu
+        and source is not None
+        and _text(source.gpu_stack_source).lower() == "nebius_image"
+    )
+
+
+def node_template_target_drivers_preset(
+    group: LiveNodeGroup,
+    *,
+    target_gpu_stack_preset: str,
+) -> str | None:
+    """Return desired node-template drivers_preset, or None when irrelevant."""
+
+    if not group.gpu:
+        return None
+    if node_group_uses_nebius_gpu_image(group):
+        return target_gpu_stack_preset
+    return ""
+
+
+def _choice_matches_node_template(
+    choice: CompatibilityChoice,
+    group: LiveNodeGroup,
+    *,
+    target_os: str,
+    target_gpu_stack_preset: str,
+) -> bool:
+    if choice.platform and group.platform and choice.platform != group.platform:
+        return False
+    if choice.os != target_os:
+        return False
+    drivers_preset = node_template_target_drivers_preset(
+        group,
+        target_gpu_stack_preset=target_gpu_stack_preset,
+    )
+    if drivers_preset is None:
+        return not choice.drivers_preset
+    return choice.drivers_preset == drivers_preset
+
+
+def _node_template_gpu_stack_label(
+    group: LiveNodeGroup,
+    *,
+    target_gpu_stack_preset: str,
+) -> str:
+    drivers_preset = node_template_target_drivers_preset(
+        group,
+        target_gpu_stack_preset=target_gpu_stack_preset,
+    )
+    if drivers_preset is None:
+        return "driverless"
+    return drivers_preset or "driverless/operator-managed"
+
+
+def node_template_compatibility_failures_for_node_group(
+    *,
+    target_version: str,
+    target_os: str,
+    target_gpu_stack_preset: str,
+    group: LiveNodeGroup,
+    choices: Sequence[CompatibilityChoice],
+) -> tuple[CompatibilityFailure, ...]:
+    """Return compatibility blockers for the combined node-template target tuple."""
+
+    target_os = validate_os_image_value(target_os)
+    if _text(target_gpu_stack_preset):
+        target_gpu_stack_preset = validate_node_layer_value(
+            target_gpu_stack_preset,
+            flag_name="--to-gpu-stack-preset",
+        )
+    if any(
+        _choice_matches_node_template(
+            choice,
+            group,
+            target_os=target_os,
+            target_gpu_stack_preset=target_gpu_stack_preset,
+        )
+        for choice in choices
+    ):
+        return ()
+    matching_platform = tuple(
+        choice
+        for choice in choices
+        if not choice.platform or not group.platform or choice.platform == group.platform
+    )
+    os_values = tuple(dict.fromkeys(choice.os for choice in matching_platform if choice.os))
+    driver_values = tuple(
+        dict.fromkeys(
+            choice.drivers_preset or "driverless/operator-managed"
+            for choice in matching_platform
+            if choice.os == target_os
+        )
+    )
+    follow_up_parts = [
+        "Choose a tuple returned by the live Nebius MK8s compatibility matrix "
+        f"for Kubernetes {target_version} and platform '{group.platform or 'unknown'}'."
+    ]
+    if os_values:
+        follow_up_parts.append("Compatible OS values: " + ", ".join(os_values) + ".")
+    if driver_values:
+        follow_up_parts.append(
+            "Compatible GPU stack values for the requested OS: "
+            + ", ".join(driver_values)
+            + "."
+        )
+    return (
+        CompatibilityFailure(
+            node_group=group.name,
+            reason=(
+                f"node group '{group.name}' cannot use Kubernetes {target_version}, "
+                f"OS '{target_os}', platform '{group.platform or 'unknown'}', "
+                f"GPU stack '{_node_template_gpu_stack_label(group, target_gpu_stack_preset=target_gpu_stack_preset)}'."
+            ),
+            follow_up=" ".join(follow_up_parts),
         ),
     )
 
@@ -1584,6 +1858,70 @@ def format_node_layer_upgrade_plan(
     return tuple(lines)
 
 
+def format_node_template_upgrade_plan(
+    plan: Mk8sNodeTemplateUpgradePlan,
+    *,
+    dry_run: bool,
+    repeat_dry_run_command: str | None = None,
+) -> tuple[str, ...]:
+    lines = [
+        "MK8s node-template upgrade plan",
+        f"- target: {plan.target.selector}",
+        f"- cluster: {plan.cluster_name or plan.cluster_id} ({plan.cluster_id})",
+        f"- current version: {plan.current_version}",
+        f"- target version: {plan.target_version}",
+        f"- target OS image: {plan.target_os}",
+        (
+            f"- target GPU stack preset: {plan.target_gpu_stack_preset}"
+            if plan.target_gpu_stack_preset
+            else "- target GPU stack preset: not requested"
+        ),
+        f"- disruption policy: {plan.disruption_policy}",
+        f"- drain timeout: {plan.drain_timeout.label}",
+    ]
+    if plan.hops:
+        lines.append("- version hops:")
+        lines.extend(
+            f"  - control plane: {hop.from_version} -> {hop.to_version}" for hop in plan.hops
+        )
+    else:
+        lines.append("- version hops: none; cluster is already on the requested minor version")
+    if plan.node_groups:
+        lines.append("- node-group order:")
+        for group in plan.node_groups:
+            gpu_stack = _node_template_gpu_stack_label(
+                group,
+                target_gpu_stack_preset=plan.target_gpu_stack_preset,
+            )
+            current_stack = _os_image_driver_label(group)
+            lines.append(
+                f"  - {group.name}: version {group.version or 'unknown'} -> {plan.target_version}, "
+                f"OS {group.os or 'unknown'} -> {plan.target_os}, "
+                f"GPU stack {current_stack} -> {gpu_stack} "
+                f"({'gpu' if group.gpu else 'cpu/system'})"
+            )
+    if plan.preflight_findings:
+        lines.append("- preflight findings:")
+        lines.extend(_preflight_finding_summary_lines(plan.preflight_findings))
+    if plan.compatibility_failures:
+        lines.append("- compatibility blockers:")
+        for failure in plan.compatibility_failures:
+            lines.append(f"  - {failure.node_group}: {failure.reason}")
+            lines.append(f"    follow-up: {failure.follow_up}")
+    if plan.warnings:
+        lines.append("- warnings:")
+        lines.extend(f"  - {warning}" for warning in plan.warnings)
+    if dry_run:
+        if repeat_dry_run_command:
+            lines.append("- repeat dry-run command:")
+            lines.append(f"  {repeat_dry_run_command}")
+        lines.append(
+            "Dry run only: no config.yaml write, generated bundle render, "
+            "or Terraform plan/apply was performed."
+        )
+    return tuple(lines)
+
+
 def _metadata_name(metadata: Any) -> str:
     return _text(getattr(metadata, "name", None))
 
@@ -1675,6 +2013,23 @@ def node_group_layer_rollout_complete(
     return _node_group_status_ready(node_group)
 
 
+def node_group_node_template_rollout_complete(
+    node_group: Any,
+    *,
+    version: str,
+    os: str,
+    drivers_preset: str | None,
+) -> bool:
+    if not node_group_rollout_complete(node_group, version=version):
+        return False
+    if _node_group_template_os(node_group) != validate_os_image_value(os):
+        return False
+    return (
+        drivers_preset is None
+        or _node_group_template_layer_value(node_group, field="drivers_preset") == drivers_preset
+    )
+
+
 def node_group_rollout_summary(node_group: Any) -> str:
     metadata = getattr(node_group, "metadata", None)
     status = getattr(node_group, "status", None)
@@ -1710,6 +2065,23 @@ def node_group_layer_rollout_summary(node_group: Any, *, field: str) -> str:
     name = _metadata_name(metadata) or _text(getattr(metadata, "id", None)) or "unknown"
     return (
         f"{name}: {field}={_node_group_template_layer_value(node_group, field=field) or 'unknown'}, "
+        f"ready={getattr(status, 'ready_node_count', None)}/"
+        f"{getattr(status, 'target_node_count', None)}, "
+        f"nodes={getattr(status, 'node_count', None)}, "
+        f"outdated={getattr(status, 'outdated_node_count', None)}, "
+        f"reconciling={getattr(status, 'reconciling', None)}"
+    )
+
+
+def node_group_node_template_rollout_summary(node_group: Any) -> str:
+    metadata = getattr(node_group, "metadata", None)
+    status = getattr(node_group, "status", None)
+    name = _metadata_name(metadata) or _text(getattr(metadata, "id", None)) or "unknown"
+    spec = getattr(node_group, "spec", None)
+    return (
+        f"{name}: version={_text(getattr(spec, 'version', None)) or 'unknown'}, "
+        f"os={_node_group_template_os(node_group) or 'unknown'}, "
+        f"drivers_preset={_node_group_template_layer_value(node_group, field='drivers_preset') or 'driverless'}, "
         f"ready={getattr(status, 'ready_node_count', None)}/"
         f"{getattr(status, 'target_node_count', None)}, "
         f"nodes={getattr(status, 'node_count', None)}, "
@@ -1950,6 +2322,46 @@ class Mk8sKubernetesVersionExecutor:
                 )
             time.sleep(poll_seconds)
 
+    def wait_node_group_node_template(
+        self,
+        *,
+        cluster_id: str,
+        node_group_id: str,
+        version: str,
+        os: str,
+        drivers_preset: str | None,
+        timeout_seconds: int = 3600,
+        poll_seconds: float = 15.0,
+    ) -> Any:
+        target_version = parse_k8s_version(version).minor_text
+        target_os = validate_os_image_value(os)
+        deadline = time.monotonic() + timeout_seconds
+        while True:
+            for candidate in self.list_node_groups(cluster_id):
+                metadata = getattr(candidate, "metadata", None)
+                if _text(getattr(metadata, "id", None)) != node_group_id:
+                    continue
+                if node_group_node_template_rollout_complete(
+                    candidate,
+                    version=target_version,
+                    os=target_os,
+                    drivers_preset=drivers_preset,
+                ):
+                    return candidate
+                last_summary = node_group_node_template_rollout_summary(candidate)
+                break
+            else:
+                last_summary = f"node group {node_group_id} was not found"
+            if time.monotonic() >= deadline:
+                raise TimeoutError(
+                    "Timed out waiting for MK8s node group "
+                    f"{node_group_id} to finish node-template rollout to "
+                    f"Kubernetes {target_version}, OS {target_os}, GPU stack "
+                    f"{drivers_preset if drivers_preset is not None else 'n/a'}: "
+                    f"{last_summary}."
+                )
+            time.sleep(poll_seconds)
+
 
 def plan_k8s_upgrade(
     *,
@@ -2176,7 +2588,7 @@ def plan_node_layer_upgrade(
 
     target_value = validate_node_layer_value(
         target_value,
-        flag_name="--to-platform" if spec.source_field == "platform" else "--to-preset",
+        flag_name=node_layer_option_name(spec),
     )
     cluster_metadata = getattr(cluster, "metadata", None)
     cluster_name = _text(getattr(cluster_metadata, "name", None)) or target.instance_id
@@ -2239,6 +2651,118 @@ def plan_node_layer_upgrade(
     )
 
 
+def plan_node_template_upgrade(
+    *,
+    target: UpgradeTarget,
+    cluster: Any,
+    cluster_id: str,
+    source_component: Mapping[str, Any],
+    target_version: str,
+    target_os: str,
+    target_gpu_stack_preset: str = "",
+    disruption_policy: str,
+    drain_timeout: DrainTimeout,
+    live_node_groups: Sequence[Any],
+    compatibility_lookup,
+    node_group: str = "",
+    preflight_findings: Sequence[PreflightFinding] = (),
+) -> Mk8sNodeTemplateUpgradePlan:
+    """Build a combined Kubernetes version, OS-image, and GPU-stack upgrade plan."""
+
+    target_version = parse_k8s_version(target_version).minor_text
+    target_os = validate_os_image_value(target_os)
+    target_gpu_stack_preset = (
+        validate_node_layer_value(
+            target_gpu_stack_preset,
+            flag_name="--to-gpu-stack-preset",
+        )
+        if _text(target_gpu_stack_preset)
+        else ""
+    )
+    cluster_metadata = getattr(cluster, "metadata", None)
+    cluster_name = _text(getattr(cluster_metadata, "name", None)) or target.instance_id
+    current_version = _text(
+        getattr(getattr(getattr(cluster, "spec", None), "control_plane", None), "version", None)
+    )
+    if not current_version:
+        raise ValueError(f"MK8s cluster '{cluster_id}' did not return spec.control_plane.version.")
+    hops = require_single_minor_hop(current_version, target_version)
+    source_groups = source_node_groups_by_name(source_component)
+    live_groups = sort_live_node_groups(
+        tuple(
+            live_node_group_from_sdk(raw, source=source_groups.get(_node_group_name(raw)))
+            for raw in live_node_groups
+        )
+    )
+    selected_groups = select_live_node_groups_for_os_image(
+        live_groups,
+        node_group=node_group,
+    )
+    unmanaged = tuple(group.name for group in selected_groups if group.source is None)
+    if unmanaged:
+        raise ValueError(
+            "Live MK8s node groups are not declared in config.yaml, so cxcli cannot "
+            "safely upgrade their node template through Terraform: " + ", ".join(unmanaged)
+        )
+    higher_live_groups = live_node_groups_above_control_plane_version(
+        selected_groups,
+        control_plane_version=target_version,
+    )
+    if higher_live_groups:
+        details = ", ".join(
+            f"{group.name} ({_minor_version_label(group.version)})" for group in higher_live_groups
+        )
+        raise ValueError(
+            "MK8s node groups must not run a Kubernetes minor version above the "
+            f"target/control-plane version {target_version}. Resolve live version "
+            f"skew before running the node-template upgrade: {details}."
+        )
+    nebius_image_gpu_groups = tuple(
+        group for group in selected_groups if node_group_uses_nebius_gpu_image(group)
+    )
+    if nebius_image_gpu_groups and not target_gpu_stack_preset:
+        names = ", ".join(group.name for group in nebius_image_gpu_groups)
+        raise ValueError(
+            "--to-gpu-stack-preset is required when selected node groups include "
+            f"Nebius-image GPU groups: {names}."
+        )
+    if target_gpu_stack_preset and not nebius_image_gpu_groups:
+        raise ValueError(
+            "--to-gpu-stack-preset was provided, but no selected node group uses "
+            "Nebius-image GPU drivers_preset. Operator-managed GPU groups can receive "
+            "Kubernetes version and OS changes, but not a Nebius GPU stack preset."
+        )
+    failures: list[CompatibilityFailure] = []
+    for group in selected_groups:
+        choices = compatibility_lookup(target_version=target_version, platform=group.platform)
+        failures.extend(
+            node_template_compatibility_failures_for_node_group(
+                target_version=target_version,
+                target_os=target_os,
+                target_gpu_stack_preset=target_gpu_stack_preset,
+                group=group,
+                choices=choices,
+            )
+        )
+    return Mk8sNodeTemplateUpgradePlan(
+        target=target,
+        cluster_id=cluster_id,
+        cluster_name=cluster_name,
+        current_version=current_version,
+        target_version=target_version,
+        target_os=target_os,
+        target_gpu_stack_preset=target_gpu_stack_preset,
+        hops=hops,
+        disruption_policy=disruption_policy,
+        drain_timeout=drain_timeout,
+        all_node_groups=live_groups,
+        node_groups=selected_groups,
+        compatibility_failures=tuple(failures),
+        preflight_findings=tuple(preflight_findings),
+        warnings=_node_layer_warning_lines(disruption_policy),
+    )
+
+
 def wait_for_node_group_rollout(
     *,
     executor: Mk8sKubernetesVersionExecutor,
@@ -2284,5 +2808,26 @@ def wait_for_node_layer_rollout(
         node_group_id=planned_group.id,
         field=plan.spec.live_field,
         value=plan.target_value,
+        timeout_seconds=node_group_rollout_wait_seconds(planned_group),
+    )
+
+
+def wait_for_node_template_rollout(
+    *,
+    executor: Mk8sKubernetesVersionExecutor,
+    plan: Mk8sNodeTemplateUpgradePlan,
+    planned_group: LiveNodeGroup,
+) -> None:
+    """Wait for one Terraform-requested combined node-template rollout to finish."""
+
+    executor.wait_node_group_node_template(
+        cluster_id=plan.cluster_id,
+        node_group_id=planned_group.id,
+        version=plan.target_version,
+        os=plan.target_os,
+        drivers_preset=node_template_target_drivers_preset(
+            planned_group,
+            target_gpu_stack_preset=plan.target_gpu_stack_preset,
+        ),
         timeout_seconds=node_group_rollout_wait_seconds(planned_group),
     )

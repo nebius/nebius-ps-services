@@ -46,6 +46,7 @@ def _source_node_group(
     platform: str = "cpu-platform",
     preset: str = "cpu-4-16",
     os: str = "ubuntu24.04",
+    gpu_stack_source: str = "operator_managed",
     gpu_stack_preset: str = "",
     node_count: int | None = 2,
 ) -> upgrade.Mk8sNodeGroup:
@@ -59,7 +60,7 @@ def _source_node_group(
         node_count=node_count,
         autoscaling_min_node_count=None,
         autoscaling_max_node_count=None,
-        gpu_stack_source="operator_managed",
+        gpu_stack_source=gpu_stack_source,
         gpu_stack_preset=gpu_stack_preset,
         gpu_cluster_key="",
         gpu_cluster_id="",
@@ -324,6 +325,70 @@ def test_update_source_node_group_field_rejects_unknown_source_key() -> None:
             value="cpu-8-32",
             node_group_keys=("missing",),
         )
+
+
+def test_update_source_node_template_updates_selected_tuple_and_pins_versions() -> None:
+    payload = {
+        "infra": {
+            "components": [
+                {
+                    "id": "mk8s",
+                    "instance_id": "prod",
+                    "enabled": True,
+                    "inputs": {
+                        "cluster": {"k8s_version": "1.32"},
+                        "node_groups": {
+                            "system": {
+                                "version": "1.32",
+                                "os": "ubuntu22.04",
+                                "platform": "cpu-platform",
+                            },
+                            "gpu": {
+                                "gpu": True,
+                                "version": "1.32",
+                                "os": "ubuntu22.04",
+                                "gpu_stack_source": "nebius_image",
+                                "gpu_stack_preset": "cuda12.8",
+                            },
+                            "operator-gpu": {
+                                "gpu": True,
+                                "version": "1.32",
+                                "os": "ubuntu22.04",
+                                "gpu_stack_source": "operator_managed",
+                            },
+                        },
+                    },
+                }
+            ]
+        }
+    }
+
+    changed = upgrade.update_source_node_template(
+        payload,
+        instance_id="prod",
+        target_version="1.33",
+        target_os="ubuntu24.04",
+        target_gpu_stack_preset="cuda13.0",
+        node_group_keys=("system", "gpu", "operator-gpu"),
+        node_group_versions={
+            "system": "1.33",
+            "gpu": "1.33",
+            "operator-gpu": "1.32",
+        },
+    )
+
+    groups = payload["infra"]["components"][0]["inputs"]["node_groups"]
+    assert changed is True
+    assert payload["infra"]["components"][0]["inputs"]["cluster"]["k8s_version"] == "1.33"
+    assert groups["system"]["version"] == "1.33"
+    assert groups["system"]["os"] == "ubuntu24.04"
+    assert "gpu_stack_preset" not in groups["system"]
+    assert groups["gpu"]["version"] == "1.33"
+    assert groups["gpu"]["os"] == "ubuntu24.04"
+    assert groups["gpu"]["gpu_stack_preset"] == "cuda13.0"
+    assert groups["operator-gpu"]["version"] == "1.32"
+    assert groups["operator-gpu"]["os"] == "ubuntu24.04"
+    assert "gpu_stack_preset" not in groups["operator-gpu"]
 
 
 def test_terraform_node_group_strategy_for_policy_matches_nebius_provider_schema() -> None:
@@ -601,7 +666,8 @@ def test_compatibility_failure_points_to_gpu_stack_layer() -> None:
     assert len(failures) == 1
     assert "inputs.node_groups.gpu-nodegroup1.gpu_stack_preset to cuda13.0" in failures[0].follow_up
     assert (
-        "nebius-cxcli upgrade gpu-stack-preset config.yaml infra:mk8s@prod --to-preset cuda13.0"
+        "nebius-cxcli upgrade gpu-stack-preset config.yaml infra:mk8s@prod "
+        "--to-gpu-stack-preset cuda13.0"
     ) in failures[0].follow_up
     assert "`upgrade gpu-stack-preset` command shape is reserved" not in failures[0].follow_up
 
@@ -896,6 +962,265 @@ def test_plan_os_image_upgrade_rejects_unmanaged_live_node_groups() -> None:
                 ),
             ],
         )
+
+
+def test_plan_node_template_upgrade_validates_combined_matrix_tuple() -> None:
+    target = upgrade.parse_upgrade_selector("infra:mk8s@prod")
+    source = {
+        "id": "mk8s",
+        "instance_id": "prod",
+        "enabled": True,
+        "inputs": {
+            "node_groups": {
+                "system": {
+                    "platform": "cpu-platform",
+                    "preset": "cpu-4-16",
+                    "os": "ubuntu22.04",
+                },
+                "gpu": {
+                    "gpu": True,
+                    "gpu_stack_source": "nebius_image",
+                    "platform": "gpu-platform",
+                    "preset": "8gpu",
+                    "os": "ubuntu22.04",
+                    "gpu_stack_preset": "cuda12.8",
+                },
+            }
+        },
+    }
+
+    plan = upgrade.plan_node_template_upgrade(
+        target=target,
+        cluster=_cluster(version="1.32"),
+        cluster_id="cluster-1",
+        source_component=source,
+        target_version="1.33",
+        target_os="ubuntu24.04",
+        target_gpu_stack_preset="cuda13.0",
+        disruption_policy="safe",
+        drain_timeout=upgrade.resolve_drain_timeout("safe", "auto"),
+        live_node_groups=[
+            _node_group(
+                id="ng-gpu",
+                name="gpu",
+                platform="gpu-platform",
+                preset="8gpu",
+                os="ubuntu22.04",
+                drivers_preset="cuda12.8",
+            ),
+            _node_group(id="ng-system", name="system", os="ubuntu22.04"),
+        ],
+        compatibility_lookup=lambda **kwargs: [
+            upgrade.CompatibilityChoice(
+                platform=kwargs["platform"],
+                os="ubuntu24.04",
+                drivers_preset="cuda13.0" if kwargs["platform"] == "gpu-platform" else "",
+            )
+        ],
+    )
+
+    assert [group.name for group in plan.node_groups] == ["system", "gpu"]
+    assert plan.hops == (upgrade.UpgradeHop(from_version="1.32", to_version="1.33"),)
+    assert plan.target_os == "ubuntu24.04"
+    assert plan.target_gpu_stack_preset == "cuda13.0"
+    assert plan.mutates is True
+    assert not plan.compatibility_failures
+    rendered = "\n".join(upgrade.format_node_template_upgrade_plan(plan, dry_run=True))
+    assert "MK8s node-template upgrade plan" in rendered
+    assert "system: version 1.32 -> 1.33, OS ubuntu22.04 -> ubuntu24.04" in rendered
+    assert "gpu: version 1.32 -> 1.33, OS ubuntu22.04 -> ubuntu24.04" in rendered
+    assert "GPU stack cuda12.8 -> cuda13.0" in rendered
+
+
+def test_plan_node_template_upgrade_requires_gpu_stack_for_nebius_image_gpu() -> None:
+    target = upgrade.parse_upgrade_selector("infra:mk8s@prod")
+    source = {
+        "id": "mk8s",
+        "instance_id": "prod",
+        "enabled": True,
+        "inputs": {
+            "node_groups": {
+                "gpu": {
+                    "gpu": True,
+                    "gpu_stack_source": "nebius_image",
+                    "platform": "gpu-platform",
+                    "preset": "8gpu",
+                    "os": "ubuntu22.04",
+                    "gpu_stack_preset": "cuda12.8",
+                },
+            }
+        },
+    }
+
+    with pytest.raises(ValueError, match="--to-gpu-stack-preset is required"):
+        upgrade.plan_node_template_upgrade(
+            target=target,
+            cluster=_cluster(version="1.32"),
+            cluster_id="cluster-1",
+            source_component=source,
+            target_version="1.33",
+            target_os="ubuntu24.04",
+            disruption_policy="safe",
+            drain_timeout=upgrade.resolve_drain_timeout("safe", "auto"),
+            live_node_groups=[
+                _node_group(
+                    id="ng-gpu",
+                    name="gpu",
+                    platform="gpu-platform",
+                    preset="8gpu",
+                    os="ubuntu22.04",
+                    drivers_preset="cuda12.8",
+                ),
+            ],
+            compatibility_lookup=lambda **_kwargs: (),
+        )
+
+
+def test_plan_node_template_upgrade_rejects_unused_gpu_stack_flag() -> None:
+    target = upgrade.parse_upgrade_selector("infra:mk8s@prod")
+    source = {
+        "id": "mk8s",
+        "instance_id": "prod",
+        "enabled": True,
+        "inputs": {
+            "node_groups": {
+                "system": {
+                    "platform": "cpu-platform",
+                    "preset": "cpu-4-16",
+                    "os": "ubuntu22.04",
+                },
+            }
+        },
+    }
+
+    with pytest.raises(ValueError, match="no selected node group uses Nebius-image"):
+        upgrade.plan_node_template_upgrade(
+            target=target,
+            cluster=_cluster(version="1.32"),
+            cluster_id="cluster-1",
+            source_component=source,
+            target_version="1.33",
+            target_os="ubuntu24.04",
+            target_gpu_stack_preset="cuda13.0",
+            disruption_policy="safe",
+            drain_timeout=upgrade.resolve_drain_timeout("safe", "auto"),
+            live_node_groups=[
+                _node_group(id="ng-system", name="system", os="ubuntu22.04"),
+            ],
+            compatibility_lookup=lambda **_kwargs: (),
+        )
+
+
+def test_plan_node_template_upgrade_allows_operator_managed_gpu_without_driver_preset() -> None:
+    target = upgrade.parse_upgrade_selector("infra:mk8s@prod")
+    source = {
+        "id": "mk8s",
+        "instance_id": "prod",
+        "enabled": True,
+        "inputs": {
+            "node_groups": {
+                "gpu": {
+                    "gpu": True,
+                    "gpu_stack_source": "operator_managed",
+                    "platform": "gpu-platform",
+                    "preset": "8gpu",
+                    "os": "ubuntu22.04",
+                },
+            }
+        },
+    }
+
+    plan = upgrade.plan_node_template_upgrade(
+        target=target,
+        cluster=_cluster(version="1.32"),
+        cluster_id="cluster-1",
+        source_component=source,
+        target_version="1.33",
+        target_os="ubuntu24.04",
+        disruption_policy="safe",
+        drain_timeout=upgrade.resolve_drain_timeout("safe", "auto"),
+        live_node_groups=[
+            _node_group(
+                id="ng-gpu",
+                name="gpu",
+                platform="gpu-platform",
+                preset="8gpu",
+                os="ubuntu22.04",
+                drivers_preset="",
+            ),
+        ],
+        compatibility_lookup=lambda **kwargs: [
+            upgrade.CompatibilityChoice(
+                platform=kwargs["platform"],
+                os="ubuntu24.04",
+                drivers_preset="",
+            )
+        ],
+    )
+
+    assert plan.mutates is True
+    assert not plan.compatibility_failures
+    assert (
+        upgrade.node_template_target_drivers_preset(
+            plan.node_groups[0],
+            target_gpu_stack_preset=plan.target_gpu_stack_preset,
+        )
+        == ""
+    )
+
+
+def test_plan_node_template_upgrade_reports_invalid_matrix_tuple() -> None:
+    target = upgrade.parse_upgrade_selector("infra:mk8s@prod")
+    source = {
+        "id": "mk8s",
+        "instance_id": "prod",
+        "enabled": True,
+        "inputs": {
+            "node_groups": {
+                "gpu": {
+                    "gpu": True,
+                    "gpu_stack_source": "nebius_image",
+                    "platform": "gpu-platform",
+                    "preset": "8gpu",
+                    "os": "ubuntu22.04",
+                    "gpu_stack_preset": "cuda12.8",
+                },
+            }
+        },
+    }
+
+    plan = upgrade.plan_node_template_upgrade(
+        target=target,
+        cluster=_cluster(version="1.32"),
+        cluster_id="cluster-1",
+        source_component=source,
+        target_version="1.33",
+        target_os="ubuntu24.04",
+        target_gpu_stack_preset="cuda13.0",
+        disruption_policy="safe",
+        drain_timeout=upgrade.resolve_drain_timeout("safe", "auto"),
+        live_node_groups=[
+            _node_group(
+                id="ng-gpu",
+                name="gpu",
+                platform="gpu-platform",
+                preset="8gpu",
+                os="ubuntu22.04",
+                drivers_preset="cuda12.8",
+            ),
+        ],
+        compatibility_lookup=lambda **kwargs: [
+            upgrade.CompatibilityChoice(
+                platform=kwargs["platform"],
+                os="ubuntu24.04",
+                drivers_preset="cuda12.8",
+            )
+        ],
+    )
+
+    assert len(plan.compatibility_failures) == 1
+    assert "cannot use Kubernetes 1.33, OS 'ubuntu24.04'" in plan.compatibility_failures[0].reason
+    assert "Compatible GPU stack values" in plan.compatibility_failures[0].follow_up
 
 
 def test_plan_node_layer_upgrade_filters_cpu_and_gpu_groups() -> None:

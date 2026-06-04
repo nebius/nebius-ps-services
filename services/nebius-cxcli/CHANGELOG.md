@@ -60,6 +60,18 @@ All notable changes to this project are tracked here. This changelog follows
   order, supports `--node-group`, `--dry-run`, disruption policies, and
   drain-timeout defaults, and waits for Managed Kubernetes rolling replacement
   to finish without SSHing to nodes or running apt-based OS upgrades.
+- Implemented non-interactive
+  `upgrade node-template <config.yaml> infra:mk8s@<target> --to-version <major.minor> --to-os <os> [--to-gpu-stack-preset <preset>]`
+  for combined MK8s control-plane, node-group Kubernetes version, node OS, and
+  Nebius-image GPU stack upgrades. The command validates the requested tuple
+  through the SDK compatibility matrix, stages control plane first, then writes
+  version, OS, and Nebius-image `gpu_stack_preset` together for each selected
+  node group in CPU/system-before-GPU order so the group rolls once. The GPU
+  stack flag is required for selected Nebius-image GPU groups and rejected for
+  CPU-only or operator-managed GPU selections. Generated-bundle GPU stack
+  compatibility validation now honors explicit node-group `version` values, so
+  a staged control-plane hop can validate old node templates against their
+  pinned node-group version until the node-group stage writes the new template.
 - Added a guided `upgrade os-image <config.yaml>` wizard that lists
   Terraform-managed `infra:mk8s@<target>` targets and generic
   `infra:vm@<target>` components, prompts for missing OS-image values, defaults
@@ -85,7 +97,9 @@ All notable changes to this project are tracked here. This changelog follows
   stack changes target only GPU groups, and GPU stack/platform changes use the
   live MK8s compatibility matrix where applicable. The Helm chart command
   updates the selected target-scoped `apps.charts[]` version, rerenders,
-  validates, and applies that target's Flux bundle.
+  validates, and applies that target's Flux bundle. The GPU-stack command uses
+  the explicit `--to-gpu-stack-preset` flag for Nebius `drivers_preset`; hardware
+  CPU/GPU preset commands keep `--to-preset`.
 - Refactored guided upgrade value prompts through a reusable upgrade wizard
   choice builder and provider lookup path. MK8s OS image, GPU stack preset,
   platform, CPU preset, and GPU preset prompts now show live SDK/provider-driven

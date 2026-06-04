@@ -77,6 +77,13 @@ class _Mk8sGpuStackCompatibilityChoice:
     drivers_preset: str
 
 
+@dataclass(frozen=True)
+class _Mk8sGpuStackCompatibilityTarget:
+    component: _Mk8sResolvedComponent
+    group: Any
+    version: str
+
+
 def _resolved_mk8s_components(payload: Mapping[str, Any]) -> tuple[_Mk8sResolvedComponent, ...]:
     infra = payload.get("infra")
     if not isinstance(infra, Mapping):
@@ -135,19 +142,37 @@ def _cluster_k8s_version(inputs: Mapping[str, Any]) -> str:
     return _as_text(cluster_inputs.get("k8s_version"))
 
 
+def _node_group_k8s_version(inputs: Mapping[str, Any], group: Any) -> str:
+    raw_groups = inputs.get("node_groups")
+    if isinstance(raw_groups, Mapping):
+        raw_group = raw_groups.get(getattr(group, "key", ""))
+        if isinstance(raw_group, Mapping):
+            version = _as_text(raw_group.get("version"))
+            if version:
+                return version
+    return _cluster_k8s_version(inputs)
+
+
 def _gpu_stack_compatibility_targets(
     payload: Mapping[str, Any],
-) -> tuple[tuple[_Mk8sResolvedComponent, Any], ...]:
-    targets: list[tuple[_Mk8sResolvedComponent, Any]] = []
+) -> tuple[_Mk8sGpuStackCompatibilityTarget, ...]:
+    targets: list[_Mk8sGpuStackCompatibilityTarget] = []
     for component in _resolved_mk8s_components(payload):
-        if not _cluster_k8s_version(component.inputs):
-            continue
         for group in gpu_node_groups(component.inputs):
+            version = _node_group_k8s_version(component.inputs, group)
+            if not version:
+                continue
             if group.gpu_stack_source != "nebius_image":
                 continue
             if not group.platform or not group.gpu_stack_preset:
                 continue
-            targets.append((component, group))
+            targets.append(
+                _Mk8sGpuStackCompatibilityTarget(
+                    component=component,
+                    group=group,
+                    version=version,
+                )
+            )
     return tuple(targets)
 
 
@@ -305,8 +330,10 @@ def validate_mk8s_gpu_stack_compatibility_preflight(config: Any) -> None:
         tuple[str, str], tuple[_Mk8sGpuStackCompatibilityChoice, ...]
     ] = {}
     try:
-        for component, group in targets:
-            version = _cluster_k8s_version(component.inputs)
+        for target in targets:
+            component = target.component
+            group = target.group
+            version = target.version
             cache_key = (component.project_id, version)
             choices = choices_by_project_version.get(cache_key)
             if choices is None:

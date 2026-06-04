@@ -526,6 +526,25 @@ layered deliberately:
   OS image means a Nebius MK8s node template OS such as `ubuntu24.04` or a
   generic VM source image family such as `ubuntu24.04-driverless`, not SSH/apt
   package upgrades.
+- `upgrade node-template <config.yaml> infra:mk8s@<target> --to-version <major.minor> --to-os <os> [--to-gpu-stack-preset <preset>]`
+  is the non-interactive combined MK8s node-template path for cases where a
+  Kubernetes minor, OS image, and Nebius-image GPU stack should roll together.
+  It validates the requested Kubernetes version plus live node-group platform
+  against the SDK compatibility matrix, requiring the requested OS and, for
+  Nebius-image GPU groups, the requested `drivers_preset`. The staged rollout is
+  control plane first, then selected node groups in CPU/system-before-GPU order,
+  and generated-bundle compatibility validation honors explicit node-group
+  `version` pins during the intermediate control-plane stage. That keeps old
+  node templates validated against their current node-group Kubernetes minor
+  until their own stage writes the new template. Each node-group stage writes
+  version, OS, and Nebius-image
+  `gpu_stack_preset` together so the group replaces nodes once. The GPU stack
+  flag is required when selected groups include Nebius-image GPU groups and is
+  rejected when none of the selected groups can consume a Nebius
+  `drivers_preset`; operator-managed GPU groups can still receive version and
+  OS changes. Existing node-group platform, hardware preset, and GPU cluster
+  remain outside this command because Nebius requires creating a new node group
+  for those fields.
 - `upgrade gpu-stack-preset`, `upgrade platform`, `upgrade cpu-preset`,
   `upgrade gpu-preset`, and `upgrade helm-chart` are implemented focused
   upgrade layers. The MK8s node-layer commands update selected desired-state
@@ -2924,9 +2943,27 @@ Modules that expose collection/object inputs, such as `mysterybox.secrets`, `ssh
     `upgrade k8s-version` for MK8s targets. Those node-drain flags and
     `--node-group` are rejected for VM targets. It does not SSH to nodes or
     VMs, run apt-based Ubuntu upgrades, or mutate packages in place.
+- `upgrade node-template <config.yaml> infra:mk8s@<target> --to-version <major.minor> --to-os <os> [--to-gpu-stack-preset <preset>]`
+  - Non-interactive only; missing target, version, or OS is a hard automation
+    error instead of a wizard prompt.
+  - Uses the SDK compatibility matrix with
+    `cluster_kubernetes_version=<target-version>` and each live node group's
+    platform. A valid row must match the requested OS and, for Nebius-image GPU
+    groups, the requested `drivers_preset`.
+  - Requires `--to-gpu-stack-preset` when selected groups include
+    Nebius-image GPU groups and rejects it when the selected groups are CPU-only
+    or operator-managed GPU groups.
+  - Stages control plane first, then selected node groups in
+    CPU/system-before-GPU order. Each node-group stage writes
+    `inputs.node_groups.<group>.version`, `.os`, and Nebius-image
+    `.gpu_stack_preset` together before render/validate/Terraform
+    plan/apply/wait, so the group rolls once for the combined template change.
+  - Carries the same `--node-group`, `--dry-run`, `--disruption-policy`,
+    `--drain-timeout`, auth bootstrap, and validation skip guardrails as the
+    other MK8s upgrade commands. It has no `--yes` and no interactive flags.
 - Node-layer upgrade commands keep wizard prompts aligned with their explicit
   flags. `upgrade gpu-stack-preset <config.yaml> infra:mk8s@<target>
-  --to-preset <preset>` updates GPU node-group `gpu_stack_preset` /
+  --to-gpu-stack-preset <preset>` updates GPU node-group `gpu_stack_preset` /
   Nebius `drivers_preset`; `upgrade platform <config.yaml>
   infra:mk8s@<target> --to-platform <platform>` updates selected MK8s
   node-group platforms; `upgrade cpu-preset <config.yaml> infra:mk8s@<target>

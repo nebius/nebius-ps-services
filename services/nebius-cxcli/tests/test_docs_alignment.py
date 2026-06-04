@@ -154,13 +154,20 @@ def test_readme_supporting_commands_include_current_quota_and_target_flags() -> 
         "`--skip-validations`, `--skip-validation`, `--interactive/--no-interactive`"
     ) in common_flags
     assert (
+        "- `upgrade node-template`: `--to-version`, `--to-os`, "
+        "`--to-gpu-stack-preset`, `--node-group`, `--dry-run`, "
+        "`--disruption-policy`, `--drain-timeout`, "
+        "`--auto-auth-bootstrap/--no-auto-auth-bootstrap`, "
+        "`--skip-validations`, `--skip-validation`"
+    ) in common_flags
+    assert (
         "- `upgrade os-image`: `--to-os`, `--node-group`, `--dry-run`, "
         "`--disruption-policy`, `--drain-timeout`, `--interactive/--no-interactive`"
     ) in common_flags
     assert (
         "- Node-layer upgrades (`upgrade gpu-stack-preset`, "
         "`upgrade platform`, `upgrade cpu-preset`, `upgrade gpu-preset`): target flag "
-        "(`--to-preset` or `--to-platform`), `--node-group`, `--dry-run`, "
+        "(`--to-gpu-stack-preset`, `--to-preset`, or `--to-platform`), `--node-group`, `--dry-run`, "
         "`--disruption-policy`, `--drain-timeout`, `--interactive/--no-interactive`"
     ) in common_flags
     assert (
@@ -200,6 +207,7 @@ def test_readme_upgrade_section_is_visible_and_consolidated() -> None:
     assert "- [Upgrade](#upgrade)" in toc
     assert "  - [Upgrade Principles](#upgrade-principles)" in toc
     assert "  - [Kubernetes Version Upgrade](#kubernetes-version-upgrade)" in toc
+    assert "  - [Node Template Upgrade](#node-template-upgrade)" in toc
     assert "  - [OS Image Upgrade](#os-image-upgrade)" in toc
     assert "  - [Disruption Policies](#disruption-policies)" in toc
     assert "  - [Upgrade Examples](#upgrade-examples)" in toc
@@ -207,6 +215,7 @@ def test_readme_upgrade_section_is_visible_and_consolidated() -> None:
 
     assert "### Upgrade Principles" in upgrade
     assert "### Kubernetes Version Upgrade" in upgrade
+    assert "### Node Template Upgrade" in upgrade
     assert "### OS Image Upgrade" in upgrade
     assert "### Disruption Policies" in upgrade
     assert "### Upgrade Examples" in upgrade
@@ -235,6 +244,14 @@ def test_readme_upgrade_section_is_visible_and_consolidated() -> None:
     assert "guided Kubernetes upgrade wizard" in upgrade
     assert "dry-run/apply choice, disruption policy, drain" in upgrade
     assert "nebius-cxcli upgrade k8s-version" in upgrade
+    assert "nebius-cxcli upgrade node-template" in upgrade
+    assert "--to-gpu-stack-preset" in upgrade
+    assert "selected node group rolls once" in upgrade
+    assert "Nebius SDK compatibility matrix" in upgrade
+    assert (
+        "Operator-managed GPU groups can still receive Kubernetes version and OS changes"
+        in upgrade_flat
+    )
     assert "--disruption-policy allow-unavailable" in upgrade
     assert "--disruption-policy force-delete" in upgrade
     assert "--drain-timeout 45m" in upgrade
@@ -250,7 +267,7 @@ def test_readme_upgrade_section_is_visible_and_consolidated() -> None:
     assert "not as SSH or apt-based package management" in upgrade_flat
     assert "does not SSH to VMs, run apt, or mutate packages in place" in upgrade
     assert (
-        "upgrade gpu-stack-preset <config.yaml> infra:mk8s@<target> --to-preset cuda13.0"
+        "upgrade gpu-stack-preset <config.yaml> infra:mk8s@<target> --to-gpu-stack-preset cuda13.0"
     ) in upgrade
     assert "upgrade platform <config.yaml> infra:mk8s@<target> --to-platform cpu-d3" in upgrade
     assert "upgrade cpu-preset <config.yaml> infra:mk8s@<target> --to-preset <preset>" in upgrade
@@ -261,14 +278,16 @@ def test_readme_upgrade_section_is_visible_and_consolidated() -> None:
     assert "Node firmware is maintained by the Nebius hardware team" in upgrade_flat
     assert "not a customer upgrade responsibility" in upgrade_flat
     assert (
-        "`to_platform`, `to_preset`, and OS-image prompts are live provider-driven"
+        "`to_platform`, hardware `to_preset`, `to_gpu_stack_preset`, and OS-image prompts are live provider-driven"
         in upgrade_flat
     )
-    assert "optional `node_group` prompt stays a simple flag-value prompt" in upgrade
+    assert "optional `node_group` prompt stays a simple flag-value prompt" in upgrade_flat
     assert "nebius-cxcli upgrade k8s-version" not in quick_start
     assert "pass `config.yaml` alone in an interactive terminal" in supporting
     assert "plus `--to-version <major.minor>` for automation" in supporting
     assert "generic `infra:vm@<target>` `source_image_family` upgrades" in unreleased
+    assert "`upgrade node-template <config.yaml> infra:mk8s@<target>" in unreleased
+    assert "`--to-gpu-stack-preset` flag" in unreleased
     assert "reusable upgrade wizard choice builder" in unreleased_flat
 
 

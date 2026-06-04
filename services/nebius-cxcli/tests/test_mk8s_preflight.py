@@ -115,16 +115,25 @@ def _gpu_stack_config(*, stack_preset: str, os_value: str | None = "ubuntu24.04"
 def _patch_mk8s_gpu_stack_compatibility(
     monkeypatch: pytest.MonkeyPatch,
     *,
-    compatibility_items: list[dict[str, object]],
-) -> None:
+    compatibility_items: list[dict[str, object]] | None = None,
+    compatibility_by_version: dict[str, list[dict[str, object]]] | None = None,
+) -> list[str]:
+    requested_versions: list[str] = []
+
     class _FakeNodeGroupServiceClient:
         def __init__(self, sdk: object) -> None:
             self.sdk = sdk
 
         def get_compatibility_matrix(self, request: object, **kwargs: object) -> SimpleNamespace:
-            assert request.cluster_kubernetes_version == "1.33"
+            requested_version = request.cluster_kubernetes_version
+            requested_versions.append(requested_version)
             assert kwargs["timeout"] > 0
             assert kwargs["retries"] == 0
+            if compatibility_by_version is not None:
+                resolved_items = compatibility_by_version[requested_version]
+            else:
+                assert requested_version == "1.33"
+                resolved_items = compatibility_items or []
             response = SimpleNamespace(
                 versions=[
                     SimpleNamespace(
@@ -136,7 +145,7 @@ def _patch_mk8s_gpu_stack_compatibility(
                                 drivers_preset=item.get("drivers_preset"),
                                 os=item.get("os"),
                             )
-                            for item in compatibility_items
+                            for item in resolved_items
                         ],
                     )
                 ]
@@ -152,6 +161,7 @@ def _patch_mk8s_gpu_stack_compatibility(
         "nebius_cxcli.mk8s_preflight.NodeGroupServiceClient",
         _FakeNodeGroupServiceClient,
     )
+    return requested_versions
 
 
 def test_validate_mk8s_gpu_stack_compatibility_preflight_rejects_invalid_tuple(
@@ -230,6 +240,38 @@ def test_validate_mk8s_gpu_stack_compatibility_preflight_accepts_valid_tuple(
     validate_mk8s_gpu_stack_compatibility_preflight(
         _gpu_stack_config(stack_preset="cuda12.8")
     )
+
+
+def test_validate_mk8s_gpu_stack_compatibility_preflight_uses_node_group_version(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    requested_versions = _patch_mk8s_gpu_stack_compatibility(
+        monkeypatch,
+        compatibility_by_version={
+            "1.31": [
+                {
+                    "compatible_platforms": ["gpu-h100-sxm"],
+                    "drivers_preset": "cuda12.4",
+                    "os": "ubuntu22.04",
+                },
+            ],
+            "1.32": [
+                {
+                    "compatible_platforms": ["gpu-h100-sxm"],
+                    "drivers_preset": "cuda13.0",
+                    "os": "ubuntu24.04",
+                },
+            ],
+        },
+    )
+    config = _gpu_stack_config(stack_preset="cuda12.4", os_value="ubuntu22.04")
+    inputs = config["infra"]["components"][0]["inputs"]
+    inputs["cluster"]["k8s_version"] = "1.32"
+    inputs["node_groups"]["worker"]["version"] = "1.31"
+
+    validate_mk8s_gpu_stack_compatibility_preflight(config)
+
+    assert requested_versions == ["1.31"]
 
 
 def _patch_vpc_clients(
