@@ -1,6 +1,6 @@
 ---
 name: commit-push
-description: Commit all current local changes on the active non-default feature branch with git add -A, generate or use a commit message, push the branch to origin, and report final worktree cleanliness. Use when the user explicitly asks to commit and push the current branch without opening a pull request.
+description: Commit all current local changes on the active non-default feature branch with git add -A, repair simple staged whitespace validation blockers when safe, generate or use a commit message, push the branch to origin, and report final worktree cleanliness. Use when the user explicitly asks to commit and push the current branch without opening a pull request.
 ---
 
 # Commit Push
@@ -14,6 +14,9 @@ push, verify status, and report blockers.
 - Committing all current local changes on the active feature branch.
 - Staging complete monorepo changes with `git add -A`.
 - Generating a concise commit message when the user does not provide one.
+- Repairing simple mechanical whitespace blockers found by
+  `git diff --cached --check`, such as trailing whitespace or a final extra
+  blank line, when the fix is unambiguous and safe.
 - Pushing the current branch to `origin`.
 - Re-running safely when there is nothing new to commit or push.
 - Leaving the worktree clean after a successful commit and push.
@@ -30,6 +33,8 @@ push, verify status, and report blockers.
 - Do not stage a partial pathspec. This skill always stages the complete
   repository diff with `git add -A`; use another explicit Git workflow for
   narrowed commits.
+- Do not repair semantic code, test, dependency, merge, or conflict-marker
+  failures. Only mechanical whitespace validation blockers are in scope.
 
 ## Workflow
 
@@ -49,7 +54,10 @@ push, verify status, and report blockers.
    - Stop if unresolved conflicts exist.
 3. Refresh the current branch's remote tracking context.
    - Check whether `origin/<branch>` exists, then fetch the current branch ref
-     into `refs/remotes/origin/<branch>` when it exists.
+     into `refs/remotes/origin/<branch>` when it exists. Use the full remote
+     source ref `refs/heads/<branch>:refs/remotes/origin/<branch>` instead of
+     the abbreviated `<branch>:refs/remotes/origin/<branch>` form so branch
+     names are resolved from the remote heads namespace explicitly.
    - Determine the branch upstream before staging. If an upstream exists and is
      not exactly `origin/<branch>`, stop and report the exact upstream instead
      of committing work that this skill will refuse to push.
@@ -71,8 +79,16 @@ push, verify status, and report blockers.
 5. Commit dirty work.
    - Inspect `git status --short` before staging.
    - Run `git add -A` from the repository root.
-   - Run `git diff --cached --check` and stop on whitespace or conflict marker
-     errors.
+   - Run `git diff --cached --check`.
+   - If staged validation fails only because of simple mechanical whitespace
+     issues, inspect the exact files and lines, repair the smallest safe
+     whitespace-only issue, run `git add -A`, and rerun
+     `git diff --cached --check`. Keep this repair loop bounded to at most two
+     passes before stopping and reporting the remaining blocker.
+   - Stop on conflict markers, unresolved conflicts, semantic failures, broad
+     formatter churn, generated-artifact uncertainty, or any staged validation
+     failure whose repair is not plainly mechanical and local to the reported
+     lines.
    - Inspect `git diff --cached --stat` and, when needed, a focused staged
      diff before writing the commit message.
    - If the staged diff is empty after `git add -A`, report that there is
@@ -111,7 +127,7 @@ push, verify status, and report blockers.
 - Conflict check: `git diff --name-only --diff-filter=U`
 - Remote branch check: `git ls-remote --exit-code --heads origin <branch>`
 - Remote branch refresh:
-  `git fetch origin <branch>:refs/remotes/origin/<branch>`
+  `git fetch origin refs/heads/<branch>:refs/remotes/origin/<branch>`
 - Staging: `git add -A`
 - Staged validation: `git diff --cached --check`
 - Staged summary: `git diff --cached --stat`
@@ -132,6 +148,14 @@ push, verify status, and report blockers.
   default-branch status cannot be determined.
 - Never recover branch divergence inside this skill. Report the blocker and
   wait for a separate explicit request.
+- Never treat conflict markers as auto-repairable whitespace. If
+  `git diff --cached --check` reports conflict markers or unresolved conflicts,
+  stop and report the blocker.
+- Never run broad formatters or dependency update commands just to satisfy
+  staged validation. Auto-repair is limited to small, obvious whitespace edits
+  in files already included in the repo-wide staged diff.
+- Never continue after a staged-validation repair unless a fresh
+  `git add -A` and `git diff --cached --check` pass.
 - Never use `git commit --allow-empty`; an empty staged diff is a no-op.
 - Never use `--no-verify`; commit and push hooks should run normally.
 - Never make the final answer sound clean if `git status --short --branch`
@@ -145,5 +169,6 @@ Return:
 - The current branch and push target.
 - The commit hash and commit message when a commit was created.
 - The lightweight validation performed.
+- Any whitespace validation repairs performed before commit.
 - Final `git status --short --branch` interpretation.
 - Any blocker that stopped the workflow.

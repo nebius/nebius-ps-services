@@ -9,6 +9,8 @@ repair remote divergence.
 
 - Verifies the current Git state is safe for a branch-local commit and push.
 - Stages the complete monorepo diff with `git add -A`.
+- Repairs small mechanical whitespace blockers reported by
+  `git diff --cached --check` when the fix is local and unambiguous.
 - Creates a commit with a user-provided or generated message.
 - Pushes the current branch to `origin`.
 - Reports whether the final worktree is clean.
@@ -26,6 +28,9 @@ Full monorepo staging
   |
   v
 Lightweight staged validation
+  |
+  v
+Bounded whitespace repair when safe
   |
   v
 Commit when needed
@@ -49,8 +54,9 @@ Final status report
 4. If the branch is clean but ahead, push the existing commits.
 5. If the branch is clean, has no upstream, and has local work relative to the
    default branch, push it with upstream tracking.
-6. If the branch is dirty, run `git add -A`, validate the staged diff, commit
-   with a provided or generated message, and push.
+6. If the branch is dirty, run `git add -A`, validate the staged diff, repair
+   simple whitespace-only validation blockers when safe, commit with a provided
+   or generated message, and push.
 7. Report the final branch status and whether the worktree is clean.
 
 ## Core Concepts
@@ -59,6 +65,12 @@ Final status report
 - `git add -A` is the default because monorepo changes often span projects.
 - Divergence recovery is intentionally out of scope; it needs a separate
   explicit request.
+- The remote branch refresh uses a full `refs/heads/<branch>` source ref so the
+  update target is explicit.
+- Whitespace repair is intentionally narrow: trailing whitespace and final
+  extra blank lines can be fixed, but conflict markers, unresolved conflicts,
+  semantic changes, broad formatter churn, and dependency updates still stop the
+  workflow.
 - Commit and push hooks should run normally.
 - Idempotence means safe no-op or push-only behavior, not hidden branch repair.
 

@@ -51,6 +51,12 @@ All notable changes to the reusable Codex skills are tracked here.
 
 ### Changed
 
+- Tightened `commit-push` so remote branch refresh uses the full
+  `refs/heads/<branch>:refs/remotes/origin/<branch>` refspec and staged
+  validation can repair small mechanical whitespace blockers, such as trailing
+  whitespace or an extra blank line at EOF, before committing. Conflict markers,
+  unresolved conflicts, broad formatter churn, semantic changes, dependency
+  updates, and branch divergence still stop the workflow.
 - Expanded the `nebius` skill's VPC networking guidance with the current
   Nebius network-pool/subnet model: explicit subnet CIDRs use
   `use_network_pools=false`, inherited subnets do not own every displayed
