@@ -4018,8 +4018,56 @@ def test_soperator_onboard_deployments_root_existing_config_restores_gitignore(
 
     assert result.exit_code == 0, result.output
     assert "Created project:" not in result.output
+    assert "Existing project config detected." in result.output
+    assert "`soperator onboard` will update" in result.output
     assert "Ensured deployments .gitignore:" in result.output
     assert cli_module._DEPLOYMENTS_GITIGNORE_BEGIN in gitignore_path.read_text(encoding="utf-8")
+
+
+def test_soperator_onboard_interactive_existing_root_requires_confirmation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    deployments_root = tmp_path / "deployments"
+    deployments_root.mkdir(parents=True, exist_ok=True)
+    created = _create_non_interactive(
+        deployments_root,
+        "--infra",
+        "none",
+        "--app",
+        "none",
+        "--no-validate-config",
+    )
+    assert created.exit_code == 0, created.output
+    config_path = _project_config_path(deployments_root)
+    original = config_path.read_text(encoding="utf-8")
+
+    monkeypatch.setattr(
+        cli_module,
+        "_prompt_soperator_onboarding_target_row",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("Declining existing config update should stop before discovery")
+        ),
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "soperator",
+            "onboard",
+            str(deployments_root),
+            "--no-validate-sources",
+        ],
+        input="tenant-123\nproject-456\nn\n",
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Tenant ID" in result.output
+    assert "Project ID" in result.output
+    assert "Existing project config detected." in result.output
+    assert "Continue and update the existing config.yaml with Soperator onboarding?" in result.output
+    assert "No changes applied." in result.output
+    assert config_path.read_text(encoding="utf-8") == original
 
 
 def test_soperator_onboard_interactive_honors_storage_mode_option(
@@ -4109,6 +4157,66 @@ def test_soperator_onboarding_defaults_require_aligned_sfs_for_old_layout() -> N
     assert onboarding["storage_mode"] == "create-aligned-sfs"
     assert "create-aligned-sfs" in onboarding["actions"]
     assert "plan-soperator-data-migration" in onboarding["actions"]
+
+
+def test_soperator_onboarding_storage_mode_label_uses_no_change_wording() -> None:
+    choices = cli_module._soperator_onboarding_storage_mode_choices("keep-existing-storage")
+
+    assert choices[0].value == "keep-existing-storage"
+    assert choices[0].label == "Keep existing storage with no changes"
+
+
+def test_soperator_onboard_option_path_rejects_keep_existing_when_storage_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _snapshot(*, kube_context: str) -> dict[str, object]:
+        assert kube_context == "training-context"
+        return {
+            "node_groups": {"cpu-pool": {"gpu": False, "node_count": 2}},
+            "helm_releases": [],
+            "crds": [],
+            "namespaces": [],
+            "pvs": [],
+            "pvcs": [],
+            "collection_errors": [],
+        }
+
+    monkeypatch.setattr(cli_module, "collect_kubectl_soperator_snapshot", _snapshot)
+
+    with pytest.raises(RuntimeError, match="no target-compatible Soperator storage layout"):
+        cli_module._soperator_onboarding_target_row_from_options(
+            target_ref="training-cluster",
+            kube_context="training-context",
+            storage_mode="keep-existing-storage",
+        )
+
+
+def test_soperator_onboard_option_path_defaults_to_aligned_sfs_when_storage_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _snapshot(*, kube_context: str) -> dict[str, object]:
+        assert kube_context == "training-context"
+        return {
+            "node_groups": {"cpu-pool": {"gpu": False, "node_count": 2}},
+            "helm_releases": [],
+            "crds": [],
+            "namespaces": [],
+            "pvs": [],
+            "pvcs": [],
+            "collection_errors": [],
+        }
+
+    monkeypatch.setattr(cli_module, "collect_kubectl_soperator_snapshot", _snapshot)
+
+    target = cli_module._soperator_onboarding_target_row_from_options(
+        target_ref="training-cluster",
+        kube_context="training-context",
+        storage_mode=None,
+    )
+
+    onboarding = target["soperator_onboarding"]
+    assert onboarding["storage_mode"] == "create-aligned-sfs"
+    assert "create-aligned-sfs" in onboarding["actions"]
 
 
 def test_soperator_migrate_dry_run_prints_onboarding_migration_plan(tmp_path: Path) -> None:

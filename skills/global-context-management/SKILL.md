@@ -1,6 +1,6 @@
 ---
 name: global-context-management
-description: Use automatically for complex Codex repository work, including implementation, debugging, refactoring, migration, architecture, reviews, tests, CI failures, and multi-file tasks. Keeps long sessions accurate by externalizing durable task state, limiting parent-thread noise, using bounded read-only subagents when explicitly authorized, available, and permitted, and reviewing risk before final answers.
+description: "Use for complex Codex work: planning, implementation, debugging, refactoring, migration, architecture, reviews, tests, CI failures, or multi-file tasks. Keep parent context concise with durable task state, optional authorized read-only subagents, focused validation, and final risk review."
 ---
 
 # Global Context Management

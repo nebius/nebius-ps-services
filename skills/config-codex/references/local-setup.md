@@ -16,9 +16,31 @@ PROJECT_ROOT=<PROJECT_ROOT>
 
 Use real paths only in local rendered files and commands. Do not commit them.
 
+## Idempotency First
+
+Before writing anything, inspect the current local setup and build a patch
+plan. If no file needs to change, do not create backups and do not rewrite
+files just to match template formatting.
+
+For a laptop expected to match this repo's canonical local setup exactly, run:
+
+```bash
+CODEX_HOME="${CODEX_HOME:-$HOME/.codex}"
+
+python3 config-codex/scripts/check-local-idempotency.py \
+  --codex-home "$CODEX_HOME" \
+  --strict-agents-template
+```
+
+If the check passes, report that no local changes are required for the checked
+surfaces. If it fails, patch only the failed surfaces.
+
 ## Backup
 
-Back up existing files before editing:
+Back up only files that the patch plan will change. Do not create backup files
+for a no-op run.
+
+Example backup helper for the files that will be changed:
 
 ```bash
 CODEX_HOME="${CODEX_HOME:-$HOME/.codex}"
@@ -26,7 +48,7 @@ ts="$(date +%Y%m%d%H%M%S)"
 
 mkdir -p "$CODEX_HOME"
 
-for file in AGENTS.md config.toml hooks.json; do
+for file in "$@"; do
   if [ -f "$CODEX_HOME/$file" ]; then
     cp "$CODEX_HOME/$file" "$CODEX_HOME/$file.bak.$ts"
   fi
@@ -67,6 +89,16 @@ assets/agents/risk_reviewer.toml.template
   -> $CODEX_HOME/agents/risk_reviewer.toml
 ```
 
+For hook scripts, custom-agent TOML files, and optional policy files, use
+replace-if-unmodified behavior:
+
+- Copy the file when the target is missing.
+- Leave the file unchanged when the target already matches the current
+  template.
+- Replace the file only when it still matches the previous known template, or
+  after the user reviews the diff and confirms the local customization should
+  be discarded.
+
 Replace placeholders:
 
 - `{{CODEX_HOME}}` with the user's Codex home.
@@ -92,18 +124,24 @@ Recommended managed block markers:
 
 If `$CODEX_HOME/config.toml` is missing, create it from
 `assets/config.toml.template` after replacing placeholders. If it exists, do not
-replace it. Parse it first, then add only missing settings:
+replace it. Parse it first, then add only missing settings required by the
+requested setup:
 
 - `[features]` entries such as `hooks` and `multi_agent`.
 - `[agents]` limits and `[agents.<name>]` custom-agent references.
-- Missing MCP server tables.
-- Missing `[[skills.config]]` entries for skill folder paths.
-- Missing trusted project entries the user explicitly wants.
+- MCP server tables only for integrations the user explicitly requested.
+- `[[skills.config]]` entries only when skill discovery is not already working
+  and the user wants explicit entries.
+- Trusted project entries only for project roots the user explicitly wants.
 
 Preserve existing user values, comments, profiles, project trust entries, MCP
 servers, app settings, and unrelated feature flags. If an existing value
 conflicts with the template, report the difference and ask before changing it.
 Do not silently relax approval or sandbox settings.
+
+Do not add template-only model defaults, app/plugin settings, MCP servers,
+project entries, skill entries, or writable roots to an existing config merely
+because they appear in `assets/config.toml.template`.
 
 ## Optional Hook-Assisted Subagent Policy
 
@@ -148,6 +186,14 @@ Store those exports in the user's preferred local shell or secret-management
 setup. Do not commit them.
 
 ## Validation
+
+Run the read-only idempotency preflight:
+
+```bash
+python3 config-codex/scripts/check-local-idempotency.py \
+  --codex-home "$CODEX_HOME" \
+  --strict-agents-template
+```
 
 Compile hooks:
 

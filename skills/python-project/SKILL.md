@@ -1,6 +1,6 @@
 ---
 name: python-project
-description: Scaffold and harden Python projects using reusable defaults (pyproject/setuptools-scm, src layout, Ruff, pytest, Typer, Pydantic) plus best practices for CLI tools, systemd services, APIs/UI apps, IaC/automation, security/networking, and AI/ML workflows.
+description: "Use for Python repo scaffolding and hardening: pyproject/setuptools-scm, src layout, Ruff, pytest, Typer, Pydantic, CLI tools, systemd services, APIs/UI apps, and Python project CI. Do not use for domain-specific Nebius automation, Terraform modules, Helm charts, or generic non-Python projects."
 ---
 
 # Python Project

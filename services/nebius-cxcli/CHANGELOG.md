@@ -21,6 +21,15 @@ All notable changes to this project are tracked here. This changelog follows
   package variants plan an upgrade to the cxcli target, and old-layout
   migration plans persist `create-aligned-sfs` whenever aligned SFS data
   migration is required.
+- Tightened Soperator onboarding storage selection: the prompt now labels
+  `keep-existing-storage` as keeping storage unchanged, and cxcli rejects that
+  mode when discovery finds missing, partial, or incompatible storage for the
+  target Soperator version. Such targets must choose `create-aligned-sfs` or
+  rerun onboarding with compatible storage mappings.
+- Matched Soperator onboarding deployments-root behavior to the `create`
+  identity flow: after resolving tenant/project, interactive runs warn and ask
+  before updating an existing resolved `config.yaml`, while non-interactive
+  `--tenant-id`/`--project-id` runs print the warning and continue.
 - Added `nebius-cxcli soperator migrate <config.yaml>` as the explicit
   Soperator migration command surface. It validates the accepted onboarding
   analysis, reads `source-soperator-cluster-discovery-report.json`, prints the

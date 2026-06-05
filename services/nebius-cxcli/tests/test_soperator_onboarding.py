@@ -7,6 +7,7 @@ import pytest
 
 from nebius_cxcli.runtime_validation import validate_runtime_payload
 from nebius_cxcli.soperator_onboarding import (
+    ONBOARDING_ACTION_CREATE_ALIGNED_SFS,
     ONBOARDING_ACTION_INSTALL_SOPERATOR,
     ONBOARDING_ACTION_PLAN_COMPUTE_MIGRATION,
     ONBOARDING_ACTION_UPGRADE_SOPERATOR,
@@ -59,9 +60,75 @@ def test_soperator_onboarding_analyzer_detects_vanilla_cluster_actions() -> None
 
     assert report.state == "no-soperator-detected"
     assert report.target_version == "0.25.0"
-    assert ONBOARDING_ACTION_INSTALL_SOPERATOR in {action.id for action in report.actions}
+    action_ids = {action.id for action in report.actions}
+    assert ONBOARDING_ACTION_INSTALL_SOPERATOR in action_ids
+    assert ONBOARDING_ACTION_CREATE_ALIGNED_SFS in action_ids
     assert any(finding.layer == "storage-sfs" for finding in report.findings)
     assert any(finding.layer == "topology" and finding.status == "available" for finding in report.findings)
+
+
+def test_soperator_onboarding_analyzer_allows_target_compatible_existing_storage() -> None:
+    snapshot = _snapshot()
+    snapshot["storage"] = {
+        "jail": {"source": "pvc/jail"},
+        "controller-spool": {"source": "pvc/controller-spool"},
+        "accounting": {"source": "pvc/accounting"},
+    }
+
+    report = analyze_soperator_onboarding_snapshot(
+        snapshot,
+        target_ref="cluster1",
+        pinned_chart_version="4.0.1-ps.1",
+        pinned_app_version="4.0.1",
+    )
+
+    assert report.state == "no-soperator-detected"
+    assert not any(action.id == ONBOARDING_ACTION_CREATE_ALIGNED_SFS for action in report.actions)
+    assert any(
+        finding.layer == "storage-sfs" and finding.status == "target-compatible"
+        for finding in report.findings
+    )
+
+
+def test_soperator_onboarding_analyzer_infers_storage_layout_from_pvc_names() -> None:
+    snapshot = _snapshot()
+    snapshot["pvcs"] = [
+        {"metadata": {"name": "soperator-jail"}},
+        {"metadata": {"name": "soperator-controller-spool"}},
+        {"metadata": {"name": "soperator-accounting"}},
+    ]
+
+    report = analyze_soperator_onboarding_snapshot(
+        snapshot,
+        target_ref="cluster1",
+        pinned_chart_version="4.0.1-ps.1",
+        pinned_app_version="4.0.1",
+    )
+
+    assert not any(action.id == ONBOARDING_ACTION_CREATE_ALIGNED_SFS for action in report.actions)
+    assert any(
+        finding.layer == "storage-sfs" and finding.status == "target-compatible"
+        for finding in report.findings
+    )
+
+
+def test_soperator_onboarding_analyzer_rejects_partial_existing_storage_layout() -> None:
+    snapshot = _snapshot()
+    snapshot["storage"] = {"jail": {"source": "pvc/jail"}}
+    snapshot["pvcs"] = [{"metadata": {"name": "jail"}}]
+
+    report = analyze_soperator_onboarding_snapshot(
+        snapshot,
+        target_ref="cluster1",
+        pinned_chart_version="4.0.1-ps.1",
+        pinned_app_version="4.0.1",
+    )
+
+    assert ONBOARDING_ACTION_CREATE_ALIGNED_SFS in {action.id for action in report.actions}
+    assert any(
+        finding.layer == "storage-sfs" and finding.status == "incompatible"
+        for finding in report.findings
+    )
 
 
 def test_soperator_onboarding_analyzer_ignores_noncanonical_slurm_nebius_crds() -> None:
@@ -437,11 +504,14 @@ def _onboarding_payload() -> dict[str, object]:
                         "accepted": True,
                         "analysis_fingerprint": "",
                         "state": "no-soperator-detected",
-                        "storage_mode": "keep-existing-storage",
+                        "storage_mode": "create-aligned-sfs",
                         "target_version": "4.0.1-ps.1",
                         "source_version": "",
                         "migration_profile_id": "",
-                        "actions": [ONBOARDING_ACTION_INSTALL_SOPERATOR],
+                        "actions": [
+                            ONBOARDING_ACTION_INSTALL_SOPERATOR,
+                            ONBOARDING_ACTION_CREATE_ALIGNED_SFS,
+                        ],
                     },
                 }
             ]
@@ -530,6 +600,21 @@ def test_onboarding_fingerprint_allows_day2_soperator_chart_pin_changes() -> Non
     assert soperator_onboarding_fingerprint(payload, target_ref="cluster1") == original
     validate_soperator_onboarding_acceptance(payload, target_ref="cluster1")
     validate_runtime_payload(payload)
+
+
+def test_onboarding_acceptance_rejects_keep_existing_when_aligned_sfs_required() -> None:
+    payload = _onboarding_payload()
+    target = payload["deploy"]["targets"][0]  # type: ignore[index]
+    onboarding = target["soperator_onboarding"]  # type: ignore[index]
+    onboarding["storage_mode"] = "keep-existing-storage"
+    onboarding["analysis_fingerprint"] = soperator_onboarding_fingerprint(
+        payload,
+        target_ref="cluster1",
+    )
+
+    assert not soperator_onboarding_is_accepted(payload, target_ref="cluster1")
+    with pytest.raises(ValueError, match="requires .*storage_mode 'create-aligned-sfs'"):
+        validate_soperator_onboarding_acceptance(payload, target_ref="cluster1")
 
 
 def test_onboarding_fingerprint_ignores_ephemeral_helm_release_metadata() -> None:

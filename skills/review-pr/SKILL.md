@@ -1,6 +1,6 @@
 ---
 name: review-pr
-description: Review any GitHub pull request by number, URL, or current branch against its base branch, usually main; inspect issues, checks, reviews, and conflicts; fix safe issues on branches that can be safely updated; resolve safe conflicts with the base branch when possible; and report whether the PR is ready to merge. Use when a user wants a PR from their own branch or another contributor's branch reviewed and, when permissions allow, brought closer to merge-ready.
+description: "Use for GitHub PR review by number, URL, or current branch: inspect base/head, issues, checks, reviews, conflicts, and changed files; fix safe issues or conflicts on writable branches; route to sibling skills; report merge readiness and blockers."
 ---
 
 # Review PR

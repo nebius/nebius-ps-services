@@ -1,84 +1,57 @@
 # Global AGENTS.md
 
-## Purpose
+## Scope
 
-- AGENTS.md is intended as a predictable place to give an agent persistent
-  context and rules that are always on.
-- Keep this file minimal and stable.
+- Keep this file minimal and stable: only durable defaults that should apply
+  across most work belong here.
+- Move repeatable workflows, detailed checklists, task-specific templates, and
+  tool or project-specific scripts into skills or repo docs.
 
-## What Belongs Here
+## Working Defaults
 
-- Conventions that apply to most tasks.
-- Security and publication guardrails.
-- Stable coding and review preferences.
-- Global context-management routing.
-- Skill-routing policy.
-
-## What Does Not Belong Here
-
-- On-demand workflows, long step-by-step recipes, or task-specific templates.
-- Raw logs, broad command output, stack traces, or temporary notes.
-- Tool or project-specific scripts and implementations.
-
-## Global Decisions
-
-- Default policy for logic, API, and CLI behavior changes is no legacy
-  compatibility layer and no backward-compatibility shims.
-- When behavior changes, prefer fail-fast behavior and a single canonical path
-  instead of dual old/new code paths.
-- Keep legacy flags, aliases, deprecated branches, migration shims, and
-  compatibility wrappers only when the user explicitly requests them.
+- Default policy for logic/API/CLI behavior changes is **no legacy compatibility layer** and **no backward-compatibility shims**.
+- When behavior changes, prefer fail-fast and a single canonical path instead of dual old/new code paths.
+- Keep legacy flags, aliases, deprecated branches, migration shims, and compatibility wrappers **only** when the user explicitly requests them.
 - When making code changes, also update relevant design docs, `README.md`, and
-  the `[Unreleased]` section of `CHANGELOG.md` in the same turn when those
-  files exist and are relevant.
+  the `[Unreleased]` section of `CHANGELOG.md` when those files exist and are
+  in scope.
+- Preserve unrelated user changes. Make focused edits, inspect the diff, and
+  verify with the narrowest relevant checks before broadening.
 
 ## Security and Publication
 
-- Do not publish or commit any of the following to public repositories or
-  public channels:
+- Do not publish or commit any of the following to public repositories or public channels:
   - API keys, tokens, certificates, or other secrets.
   - Private endpoints, internal hostnames, or non-public URLs.
   - Internal confidential materials or customer data.
   - Proprietary scripts or automation that touches internal infrastructure.
-  - Content copied from internal repos or docs that are not explicitly
+  - Content copied from internal repos/docs that are not explicitly
     open-sourced.
-- Never print, persist, or copy secrets into generated files, examples, logs,
-  documentation, task-state files, or final responses.
-- Codex skills should remain public, generic, and reusable, using placeholders
-  for sensitive or environment-specific values.
+- Do not print or persist secrets in generated files, examples, logs, task
+  state, memories, documentation, or final responses.
+- Codex Skills should remain public, generic, and reusable, using placeholders for any sensitive or environment-specific information.
 
 ## Skills
 
-A skill is a set of local instructions to follow that is stored in a
-`SKILL.md` file.
-
-- Skills are discovered dynamically from installed skill directories; do not
-  maintain a static list of all skills in this file.
-- Use a skill for repeatable workflows that should not bloat AGENTS.md.
-- Scripts in skills may be executed for read-only inspection or validation
-  when they do not modify files, services, external systems, credentials, or
-  persistent state.
-- Execute scripts that make changes only when the user explicitly requests
-  execution and begins the request with Run, Execute, or an equivalent
-  instruction.
-
-### Skill Auto-Routing
-
+- Skills are discovered dynamically from installed skill directories; do not maintain a static list in this file.
+- Use skills for repeatable or on-demand workflows, and load only the matching
+  skill(s). Explicit `/skill` or `$skill` requests take precedence.
 - For non-trivial planning, implementation, debugging, refactoring, migration,
   architecture, review, testing, CI failure, or multi-file coding tasks, use
-  the `global-context-management` skill.
+  `global-context-management`.
 - For Codex runtime setup, config, hooks, custom agents, or `$CODEX_HOME`
-  layout work, use the `config-codex` skill.
-- For any request to create, update, fix, or standardize `.gitignore`, always
-  use the `gitignore` skill.
-- For any request to create, refactor, review, or harden shell scripts, Bash,
-  or shell CLI automation, always use the `shell-scripting` skill.
-- For any request to lint, auto-fix, or standardize Shell, Markdown, or Python
-  code quality, always use the `linter` skill.
-- If multiple skill-routing rules apply, use all relevant skills and keep scope
-  minimal.
-- Explicit user requests with `/skill` or `$skill` take precedence.
-- After each pass of code changes, apply the `align` skill.
+  layout work, use `config-codex`.
+- For `.gitignore`, shell/Bash automation, or Shell/Markdown/Python linting
+  work, use the matching `gitignore`, `shell-scripting`, and/or `linter` skill.
+- When skill guidance or reference code depends on a product, cloud, API, CLI,
+  SDK, framework, or package manager, verify version-sensitive behavior against
+  current official vendor documentation before changing or recommending it.
+- If a repo-owned skill is outdated or misaligned, update the source under
+  `nebius-ps-services/skills/` first.
+- Skill scripts may run for read-only inspection or validation when they do not
+  modify files, services, external systems, credentials, or persistent state.
+  Run mutating scripts only when explicitly requested with Run, Execute, or an
+  equivalent instruction.
 
 ## Context Management
 
@@ -93,55 +66,9 @@ A skill is a set of local instructions to follow that is stored in a
   the parent thread.
 - Use bounded read-only subagents for noisy exploration when the user
   explicitly requests delegation, or when a user-enabled local hook policy
-  injects that request, and subagents are available and useful. Use a
-  read-only risk review before finalizing non-trivial changes only when that
-  delegation is explicitly authorized and permitted.
-- Keep `max_threads = 4` as the conservative local thread budget. Use
-  `repo_mapper` and `test_strategist` early only when useful and independent,
-  close completed helpers after consolidation, and use `risk_reviewer` near
-  the end only for non-trivial or risky changes.
-- When subagents are used, ask them for concise final summaries, wait for the
-  result, consolidate it in the parent thread, and close completed subagent
-  threads when close controls are available and no follow-up is needed.
-  With multiple subagents, close each completed handle as its terminal result
-  arrives, then continue waiting on the remaining handles.
-  Treat both `wait_agent` completions and asynchronous subagent completion
-  notifications as terminal results that should be consolidated and closed.
-
-## Memory Policy
-
-- Use Codex memories for stable recurring preferences and repeated
-  project-independent facts.
-- Do not rely on memories for hard requirements. Hard requirements belong in
-  source-controlled project files, tests, CI configuration, AGENTS.md, explicit
-  user instructions, or task-state files.
-- Do not store secrets, private URLs, customer data, or temporary task details
-  in memory.
-
-## Implementation Policy
-
-- Before editing when a task affects multiple files or behavior is unclear,
-  identify the smallest change that satisfies the objective, likely files to
-  change, relevant tests or commands, risks, and rollback points.
-- During implementation, prefer targeted reads over broad scans, implement in
-  small coherent patches, follow existing project conventions, and avoid new
-  dependencies unless necessary.
-- Inspect the diff before running broad checks.
-- Run the narrowest relevant tests first, then broader lint, type, or test
-  commands when appropriate.
-- If tests cannot be run, explain exactly why and provide the command that
-  should be run.
-
-## Vendor Documentation
-
-- For technology, architecture, product, or design questions, verify
-  vendor-specific behavior against official vendor documentation.
-- Do not infer vendor-specific behavior when official documentation is
-  available.
-- If vendor behavior cannot be confirmed from authoritative sources, state that
-  explicitly.
-
-## Final Response Policy
-
-- For code changes, end with a concise summary, files changed, verification
-  performed, and remaining risks or follow-ups.
+  injects that request, and subagents are available and permitted. Ask helpers
+  for concise summaries, consolidate results, and close completed helpers when
+  close controls are available.
+- After making code changes in a turn, before the final response, explicitly
+  use `$align` for the changed scope unless the user says not to. If `$align`
+  is unavailable, perform the equivalent local alignment checklist and say so.

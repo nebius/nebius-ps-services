@@ -268,6 +268,10 @@ def soperator_onboarding_is_accepted(
     collection_errors = onboarding.get("collection_errors")
     if isinstance(collection_errors, list) and collection_errors:
         return False
+    if _required_storage_mode_from_onboarding(onboarding) and not _onboarding_storage_mode_is_valid(
+        onboarding
+    ):
+        return False
     recorded = str(onboarding.get("analysis_fingerprint", "") or "").strip()
     if not recorded:
         return False
@@ -295,11 +299,46 @@ def validate_soperator_onboarding_acceptance(
     if soperator_onboarding_is_accepted(payload_or_config, target_ref=target_ref):
         return
     target = normalize_component_token(target_ref) or target_ref
+    onboarding_target = soperator_onboarding_target(payload_or_config, target_ref=target_ref)
+    onboarding = (
+        onboarding_target.get("soperator_onboarding", {})
+        if isinstance(onboarding_target, Mapping)
+        else {}
+    )
+    if isinstance(onboarding, Mapping) and _required_storage_mode_from_onboarding(onboarding):
+        required_storage_mode = _required_storage_mode_from_onboarding(onboarding)
+        configured_storage_mode = str(onboarding.get("storage_mode", "") or "").strip()
+        if configured_storage_mode != required_storage_mode:
+            raise ValueError(
+                f"apps:soperator target '{target}' requires "
+                f"deploy.targets[].soperator_onboarding.storage_mode "
+                f"'{required_storage_mode}' because the accepted onboarding actions require "
+                "aligned SFS storage migration. Rerun Soperator onboarding or choose "
+                "create-aligned-sfs."
+            )
     raise ValueError(
         f"apps:soperator target '{target}' uses onboard-existing-cluster but does not have "
         "a current accepted deploy.targets[].soperator_onboarding analysis. Rerun the "
         "Soperator onboarding wizard or refresh the analysis fingerprint before render/deploy."
     )
+
+
+def _required_storage_mode_from_onboarding(onboarding: Mapping[str, Any]) -> str:
+    actions = {
+        str(action or "").strip()
+        for action in onboarding.get("actions", []) or []
+        if str(action or "").strip()
+    }
+    if ONBOARDING_ACTION_CREATE_ALIGNED_SFS in actions or ONBOARDING_ACTION_PLAN_DATA_MIGRATION in actions:
+        return "create-aligned-sfs"
+    return ""
+
+
+def _onboarding_storage_mode_is_valid(onboarding: Mapping[str, Any]) -> bool:
+    required_storage_mode = _required_storage_mode_from_onboarding(onboarding)
+    if not required_storage_mode:
+        return True
+    return str(onboarding.get("storage_mode", "") or "").strip() == required_storage_mode
 
 
 def _node_group_inventory_from_target(target: Mapping[str, Any] | None) -> Mapping[str, Any]:
@@ -376,6 +415,45 @@ def _sequence_of_names(value: Any) -> set[str]:
         if text:
             names.add(text)
     return names
+
+
+def _storage_layout_keys(
+    *,
+    storage: Mapping[str, Any],
+    pvcs: Sequence[Mapping[str, Any]],
+    pvs: Sequence[Mapping[str, Any]],
+) -> set[str]:
+    keys = {normalize_component_token(key) for key in storage}
+    required_keys = set(ONBOARDING_REQUIRED_STORAGE_KEYS)
+    for resource in (*pvcs, *pvs):
+        candidates = _storage_resource_name_candidates(resource)
+        for candidate in candidates:
+            normalized = normalize_component_token(candidate)
+            if not normalized:
+                continue
+            for required_key in required_keys:
+                if (
+                    normalized == required_key
+                    or normalized.startswith(f"{required_key}-")
+                    or normalized.endswith(f"-{required_key}")
+                    or f"-{required_key}-" in normalized
+                ):
+                    keys.add(required_key)
+    return keys
+
+
+def _storage_resource_name_candidates(resource: Mapping[str, Any]) -> tuple[str, ...]:
+    candidates: list[str] = []
+    metadata = resource.get("metadata")
+    if isinstance(metadata, Mapping):
+        candidates.append(str(metadata.get("name", "") or ""))
+    spec = resource.get("spec")
+    if isinstance(spec, Mapping):
+        candidates.append(str(spec.get("volumeName", "") or ""))
+        claim_ref = spec.get("claimRef")
+        if isinstance(claim_ref, Mapping):
+            candidates.append(str(claim_ref.get("name", "") or ""))
+    return tuple(candidate for candidate in candidates if candidate.strip())
 
 
 def _version_tuple(version: str) -> tuple[int, ...] | None:
@@ -736,7 +814,7 @@ def analyze_soperator_onboarding_snapshot(
     pvcs = _sequence_of_mappings(snapshot.get("pvcs"))
     pvs = _sequence_of_mappings(snapshot.get("pvs"))
     storage = snapshot.get("storage") if isinstance(snapshot.get("storage"), Mapping) else {}
-    storage_keys = {normalize_component_token(key) for key in storage} if isinstance(storage, Mapping) else set()
+    storage_keys = _storage_layout_keys(storage=storage, pvcs=pvcs, pvs=pvs)
     rdma_groups = _node_groups_with_rdma(node_groups)
     topology_groups = _node_groups_with_topology_labels(node_groups)
 
@@ -878,16 +956,65 @@ def analyze_soperator_onboarding_snapshot(
             )
         )
 
-    storage_present = bool(storage_keys & set(ONBOARDING_REQUIRED_STORAGE_KEYS)) or bool(pvcs or pvs)
+    required_storage_keys = set(ONBOARDING_REQUIRED_STORAGE_KEYS)
+    detected_required_storage_keys = storage_keys & required_storage_keys
+    storage_present = detected_required_storage_keys == required_storage_keys
+    storage_primitives_present = bool(storage_keys or pvcs or pvs)
     if storage_present:
         findings.append(
             SoperatorOnboardingFinding(
                 layer="storage-sfs",
-                status="detected",
+                status="target-compatible",
                 severity="info",
-                message="Existing storage primitives were detected for onboarding/adoption review.",
+                message=(
+                    "Existing jail, controller-spool, and accounting storage layout was "
+                    "detected and can be kept unchanged after customer approval."
+                ),
                 evidence={"storage_keys": sorted(storage_keys), "pvcs": len(pvcs), "pvs": len(pvs)},
             )
+        )
+    elif storage_primitives_present:
+        missing_storage_keys = sorted(required_storage_keys - detected_required_storage_keys)
+        findings.append(
+            SoperatorOnboardingFinding(
+                layer="storage-sfs",
+                status="incompatible",
+                severity="recommended",
+                message=(
+                    "Existing storage primitives were detected, but the target Soperator "
+                    "storage layout is incomplete. Missing required storage keys: "
+                    f"{', '.join(missing_storage_keys)}. Select create-aligned-sfs; "
+                    "keep-existing-storage will be rejected unless compatible storage "
+                    "mappings are supplied and discovery is rerun."
+                ),
+                action_id=ONBOARDING_ACTION_CONFIGURE_STORAGE,
+                evidence={
+                    "storage_keys": sorted(storage_keys),
+                    "missing_storage_keys": missing_storage_keys,
+                    "pvcs": len(pvcs),
+                    "pvs": len(pvs),
+                },
+            )
+        )
+        actions.extend(
+            [
+                SoperatorOnboardingAction(
+                    id=ONBOARDING_ACTION_CONFIGURE_STORAGE,
+                    title="Configure Soperator storage",
+                    layer="storage-sfs",
+                    selected=True,
+                    disruptive=True,
+                    reason="Storage must match the target Soperator layout before onboarding.",
+                ),
+                SoperatorOnboardingAction(
+                    id=ONBOARDING_ACTION_CREATE_ALIGNED_SFS,
+                    title="Create aligned SFS filesystems before storage cutover",
+                    layer="storage-sfs",
+                    selected=True,
+                    disruptive=True,
+                    reason="Detected storage is not compatible with the target Soperator layout.",
+                ),
+            ]
         )
     else:
         findings.append(
@@ -911,6 +1038,16 @@ def analyze_soperator_onboarding_snapshot(
                 selected=True,
                 disruptive=True,
                 reason="Storage is required for production-grade Soperator operation.",
+            )
+        )
+        actions.append(
+            SoperatorOnboardingAction(
+                id=ONBOARDING_ACTION_CREATE_ALIGNED_SFS,
+                title="Create aligned SFS filesystems before storage cutover",
+                layer="storage-sfs",
+                selected=True,
+                disruptive=True,
+                reason="No compatible existing storage layout was discovered.",
             )
         )
 

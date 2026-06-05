@@ -51,6 +51,14 @@ All notable changes to the reusable Codex skills are tracked here.
 
 ### Changed
 
+- Minimized the global AGENTS template to durable always-on policy, moved
+  detailed workflow guidance back to skills, preserved the explicit `$align`
+  post-edit rule, and shortened high-impact skill descriptions so implicit
+  routing front-loads trigger keywords.
+- Tightened `config-codex` idempotency guidance so existing laptop
+  `AGENTS.md` and `config.toml` files are inspected before backup or patching,
+  template-only config settings are not backfilled on already working setups,
+  and a read-only local preflight can verify that no changes are required.
 - Clarified that `commit-push` always commits the whole Git repository from
   the Git root with `git add -A`, regardless of the service, package, chart, or
   project directory where the agent starts. Project-folder, current-directory,

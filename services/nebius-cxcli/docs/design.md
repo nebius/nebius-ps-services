@@ -771,9 +771,13 @@ source-cluster discovery snapshot is written beside
 the project config as `source-soperator-cluster-discovery-report.json`; the
 config keeps only stable onboarding decisions and fingerprints. Onboarding
 storage choices are `keep-existing-storage` or `create-aligned-sfs`. The
-aligned-SFS path is a migration plan: create and attach new SFS filesystems,
-keep old storage active, run online bulk data sync, then perform final delta
-sync and storage-reference cutover during a controlled Slurm quiet window.
+keep-existing path is valid only when discovery finds a target-compatible jail,
+controller-spool, and accounting layout. Missing, partial, or incompatible
+storage fails fast unless the operator chooses `create-aligned-sfs` for the
+Soperator version pinned in `component_sources.yaml`. The aligned-SFS path is a
+migration plan: create and attach new SFS filesystems, keep old storage active,
+run online bulk data sync, then perform final delta sync and storage-reference
+cutover during a controlled Slurm quiet window.
 Compute changes are planned as a rolling drain/validate migration so cxcli does
 not force-kill running jobs.
 Onboarding also applies compact OpenKruise, MariaDB, Slurm control-plane, and
@@ -799,11 +803,15 @@ with progress bars or spinners, watch Nebius API, Kubernetes, Soperator, and
 Slurm failure signals, apply bounded safe retry/remedy steps where the phase
 contract allows it, and persist timeout-guarded checkpoints so interrupted
 migrations can resume without redoing completed safe work or retiring old
-storage and compute early. Existing projects should pass `config.yaml` or the
-project directory containing it;
-first-time onboarding can pass the deployments root plus identity options so
-cxcli creates the project config before writing the target. The interactive
-flow does not accept
+storage and compute early. Existing projects can pass `config.yaml` or the
+project directory containing it. Deployments-root onboarding resolves the
+tenant/project folder from identity inputs; if that resolved project already
+has `config.yaml`, the interactive flow warns after tenant/project selection
+and asks before overwriting the config in place with Soperator onboarding
+changes. Non-interactive deployments-root onboarding with `--tenant-id` and
+`--project-id` prints the same warning and continues. First-time onboarding can
+also pass the deployments root plus identity options so cxcli creates the
+project config before writing the target. The interactive flow does not accept
 arbitrary vanilla Kubernetes clusters; it selects from the live Nebius MK8s
 clusters in the resolved project and onboards one target per cxcli run.
 Fingerprint validation compares the

@@ -1,6 +1,6 @@
 ---
 name: create-pr
-description: Create or reuse one or more feature branches, make each branch conflict-free against the default branch when possible, repair safe branch-owned validation or check failures, push it, open or reuse GitHub pull requests, and return the PR numbers, URLs, validation state, and merge order. Use when a user wants local work or named branches turned into reviewable PRs without hand-driving Git and GitHub steps, including when they provide the exact PR title or body to use.
+description: "Use for GitHub PR creation from local work or named branches: reuse or prepare feature branches, stage repo-root changes with git add -A when committing, push, open or reuse PRs, resolve safe conflicts/check failures, and report PR URLs/readiness. Do not use for direct commit-and-push only."
 ---
 
 # Create PR

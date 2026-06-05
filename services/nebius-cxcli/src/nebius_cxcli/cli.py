@@ -1221,7 +1221,8 @@ _CONFIG_YAML_ARGUMENT_HELP = (
 _SOPERATOR_ONBOARD_TARGET_ARGUMENT_HELP = (
     "Existing project config.yaml, project directory containing config.yaml, "
     "or deployments root directory. When a deployments root is passed, onboard "
-    "creates the canonical <tenant-folder>/<project-folder>/config.yaml first."
+    "resolves or creates the canonical <tenant-folder>/<project-folder>/config.yaml "
+    "from tenant/project identity."
 )
 _COMPONENT_CONFIG_OPTION_HELP = (
     "Required project config.yaml to inspect or edit; pass it with --config, "
@@ -5881,6 +5882,26 @@ def _confirm_existing_project_overwrite(*, config_path: Path) -> bool:
     )
 
 
+def _warn_soperator_onboard_existing_config(*, config_path: Path) -> None:
+    console.print(
+        f"{warning_markup('Existing project config detected.')} "
+        f"`soperator onboard` will update [bold]{config_path}[/bold] with Soperator "
+        "onboarding target, app, fingerprint, and discovery-report decisions."
+    )
+    console.print(
+        "[dim]The project folder and generated artifacts are not recreated, but the existing "
+        "config.yaml will be overwritten in place with the accepted onboarding changes.[/dim]"
+    )
+
+
+def _confirm_soperator_onboard_existing_config(*, config_path: Path) -> bool:
+    _warn_soperator_onboard_existing_config(config_path=config_path)
+    return _wizard_continue_phase(
+        "Continue and update the existing config.yaml with Soperator onboarding?",
+        default=False,
+    )
+
+
 def _is_tty_session() -> bool:
     return sys.stdin.isatty() and sys.stdout.isatty()
 
@@ -7920,7 +7941,7 @@ def _print_soperator_onboarding_report_summary(report: Any) -> None:
 
 def _soperator_onboarding_storage_mode_choices(default: str) -> list[OptionChoice]:
     labels = {
-        "keep-existing-storage": "Keep existing Soperator storage",
+        "keep-existing-storage": "Keep existing storage with no changes",
         "create-aligned-sfs": "Create aligned target Soperator SFS filesystems",
     }
     return [
@@ -7937,6 +7958,11 @@ def _soperator_onboarding_required_storage_mode_for_report(report: Any) -> str:
     }
     if ONBOARDING_ACTION_CREATE_ALIGNED_SFS in selected_actions:
         return "create-aligned-sfs"
+    for finding in getattr(report, "findings", ()) or ():
+        if str(getattr(finding, "layer", "") or "").strip() != "storage-sfs":
+            continue
+        if str(getattr(finding, "status", "") or "").strip() in {"missing", "incompatible"}:
+            return "create-aligned-sfs"
     return ""
 
 
@@ -7948,9 +7974,29 @@ def _validate_soperator_onboarding_storage_mode_for_report(
     normalized_storage_mode = _normalize_soperator_onboarding_storage_mode(storage_mode)
     required_storage_mode = _soperator_onboarding_required_storage_mode_for_report(report)
     if required_storage_mode and normalized_storage_mode != required_storage_mode:
+        storage_reason = ""
+        target_version = _non_empty_text(getattr(report, "target_version", ""))
+        for finding in getattr(report, "findings", ()) or ():
+            if str(getattr(finding, "layer", "") or "").strip() != "storage-sfs":
+                continue
+            status = str(getattr(finding, "status", "") or "").strip()
+            if status == "missing":
+                storage_reason = (
+                    "no target-compatible Soperator storage layout was discovered"
+                )
+                break
+            if status == "incompatible":
+                version_suffix = f" {target_version}" if target_version else ""
+                storage_reason = (
+                    f"the discovered storage layout is not compatible with target "
+                    f"Soperator{version_suffix}"
+                )
+                break
+        if not storage_reason:
+            storage_reason = "aligned SFS data migration is selected"
         raise RuntimeError(
             "Detected Soperator migration requires storage mode "
-            f"'{required_storage_mode}' because aligned SFS data migration is selected. "
+            f"'{required_storage_mode}' because {storage_reason}. "
             "Use create-aligned-sfs or rerun onboarding after manual review."
         )
     return normalized_storage_mode
@@ -8244,6 +8290,7 @@ def _soperator_onboarding_target_row_from_options(
     kube_context: str | None,
     storage_mode: str | None,
 ) -> dict[str, Any]:
+    explicit_storage_mode = storage_mode is not None
     context = _non_empty_text(kube_context) or _current_kube_context_name()
     if not context:
         raise RuntimeError(
@@ -8278,6 +8325,14 @@ def _soperator_onboarding_target_row_from_options(
             pinned_app_version=app_version,
         )
     _print_soperator_onboarding_report_summary(report)
+    required_storage_mode = _soperator_onboarding_required_storage_mode_for_report(report)
+    if required_storage_mode and not explicit_storage_mode:
+        normalized_storage_mode = required_storage_mode
+    normalized_storage_mode = _validate_soperator_onboarding_storage_mode_for_report(
+        storage_mode=normalized_storage_mode,
+        report=report,
+    )
+    target_row["soperator_onboarding"]["storage_mode"] = normalized_storage_mode
     return target_row
 
 
@@ -30611,6 +30666,12 @@ def _resolve_soperator_onboard_config_target(
                 f"'{resolved_tenant_id}'/'{resolved_project_id}'. "
                 "Pass the existing config.yaml directly or choose a different Nebius scope."
             )
+        if interactive:
+            if not _confirm_soperator_onboard_existing_config(config_path=config_path):
+                console.print("No changes applied.")
+                raise typer.Exit(code=0)
+        else:
+            _warn_soperator_onboard_existing_config(config_path=config_path)
         gitignore_result = _ensure_deployments_gitignore(deployments_root=deployments_root)
         return SoperatorOnboardConfigTarget(
             config_path=config_path.resolve(),
@@ -32759,14 +32820,14 @@ def soperator_onboard_command(
         ),
     ] = None,
     storage_mode_opt: Annotated[
-        str,
+        str | None,
         typer.Option(
             "--storage-mode",
             help=(
                 "Soperator onboarding storage mode: keep-existing-storage or create-aligned-sfs."
             ),
         ),
-    ] = "keep-existing-storage",
+    ] = None,
     validate_sources: Annotated[
         bool,
         typer.Option(
@@ -32814,13 +32875,7 @@ def soperator_onboard_command(
                 _identity_values_from_payload(payload)
             )
             provider_lookup = ProviderOptionLookup()
-            storage_mode_override = (
-                storage_mode_opt
-                if normalize_component_token(storage_mode_opt)
-                != _SOPERATOR_ONBOARDING_DEFAULT_STORAGE_MODE
-                else None
-            )
-            if storage_mode_override is None:
+            if storage_mode_opt is None:
                 target_row = _prompt_soperator_onboarding_target_row(
                     payload=payload,
                     project_id=resolved_project_id,
@@ -32831,7 +32886,7 @@ def soperator_onboard_command(
                     payload=payload,
                     project_id=resolved_project_id,
                     provider_lookup=provider_lookup,
-                    storage_mode=storage_mode_override
+                    storage_mode=storage_mode_opt,
                 )
         else:
             target_row = _soperator_onboarding_target_row_from_options(

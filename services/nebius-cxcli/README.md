@@ -1283,6 +1283,10 @@ Wizard field behavior:
   config keeps only stable onboarding decisions such as state, actions, target
   version, source version, migration profile, storage mode, and fingerprint.
   Onboarding storage choices are `keep-existing-storage` or
+  `create-aligned-sfs`. Keeping existing storage is allowed only when discovery
+  finds a target-compatible jail, controller-spool, and accounting layout; if
+  storage is missing, partial, or incompatible with the Soperator version pinned
+  in `component_sources.yaml`, onboarding fails fast unless the operator chooses
   `create-aligned-sfs`. The aligned-SFS path is planned as a dual-storage
   migration: create and attach new SFS filesystems, keep old storage active,
   run an online bulk sync, then perform the final delta sync and storage
@@ -1313,7 +1317,12 @@ Wizard field behavior:
   timeout-guarded phases so interrupted migrations can resume without retiring
   old storage or compute early.
   Pass an existing project `config.yaml` when the project already exists; pass
-  a deployments root when onboarding should create the first project config.
+  a deployments root when onboarding should resolve the tenant/project folder
+  from identity inputs or create the first project config. If that resolved
+  deployments-root target already has `config.yaml`, interactive onboarding
+  warns after tenant/project selection and asks before overwriting that config
+  in place with Soperator onboarding changes; non-interactive runs with
+  `--tenant-id` and `--project-id` print the same warning and continue.
   After the plan is accepted, run `validate`, `render`, and `deploy` for the
   rendered Soperator app changes. The accepted fingerprint is
   checked against the same deterministic Soperator defaults that runtime
@@ -1584,11 +1593,11 @@ Wizard field behavior:
   `inputs.node_groups.*.autoscaling` block and omits `node_count`; otherwise it
   writes the fixed count. Raw profile-owned `inputs.node_groups.*` prompts stay
   hidden.
-  When onboarding uses the chart-local storage mode, cxcli pins generated
-  Slurm pods to one discovered node and disables accounting, Slurm REST, and
-  chart-managed MariaDB because Kubernetes local PVs are node-local rather than
-  a shared RWX filesystem. SConfigController stays enabled so Slurm config is
-  projected into the local jail.
+  When onboarding keeps existing storage, cxcli requires discovery evidence for
+  a target-compatible jail, controller-spool, and accounting layout. Partial
+  PVC/PV evidence is treated as an incompatible layout for the pinned Soperator
+  target, so `keep-existing-storage` is rejected until compatible mappings are
+  supplied and discovery is rerun.
   Non-interactive `component add apps:soperator@<target>` also selects
   onboarding automatically when `<target>` is an existing external MK8s target;
   it remains a target-scoped compatibility path and does not create

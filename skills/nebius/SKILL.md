@@ -1,6 +1,6 @@
 ---
 name: nebius
-description: Implement Nebius cloud automation in Python using the Nebius SDK, including IAM/Object Storage workflows, VPC networking inspection/design, live quota management, MK8s compatibility/readiness checks, and Nebius observability architecture/onboarding. Use when building or reviewing Nebius auth bootstrap, observability endpoint/auth wiring, service accounts, access keys, Terraform state buckets, VPC pools, subnet inheritance, route tables, quota-aware Nebius provisioning checks, or live MK8s GPU platform/preset/fabric and operator compatibility.
+description: "Use for Nebius SDK/cloud automation in Python: IAM/Object Storage, service accounts/access keys, VPC pools/subnets/routes, quota checks, MK8s compatibility/readiness, GPU platform/preset/fabric/operator decisions, and observability endpoint/auth wiring. Do not use for Terraform scaffolding, Helm charts, or nebius-cxcli module onboarding."
 ---
 
 # Nebius
