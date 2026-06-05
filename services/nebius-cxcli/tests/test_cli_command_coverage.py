@@ -15775,6 +15775,19 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     destroy_result = runner.invoke(cli.app, ["destroy", "--help"])
     tf_destroy_result = runner.invoke(cli.app, ["terraform", "destroy", "--help"])
     flux_destroy_result = runner.invoke(cli.app, ["flux", "destroy", "--help"])
+    soperator_result = runner.invoke(cli.app, ["soperator", "--help"])
+    soperator_onboard_result = runner.invoke(
+        cli.app,
+        ["soperator", "onboard", "--help"],
+        env={"COLUMNS": "240"},
+        terminal_width=240,
+    )
+    soperator_migrate_result = runner.invoke(
+        cli.app,
+        ["soperator", "migrate", "--help"],
+        env={"COLUMNS": "240"},
+        terminal_width=240,
+    )
     email_result = runner.invoke(cli.app, ["email", "--help"])
 
     assert create_result.exit_code == 0, create_result.output
@@ -15795,6 +15808,9 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert destroy_result.exit_code == 0, destroy_result.output
     assert tf_destroy_result.exit_code == 0, tf_destroy_result.output
     assert flux_destroy_result.exit_code == 0, flux_destroy_result.output
+    assert soperator_result.exit_code == 0, soperator_result.output
+    assert soperator_onboard_result.exit_code == 0, soperator_onboard_result.output
+    assert soperator_migrate_result.exit_code == 0, soperator_migrate_result.output
     assert email_result.exit_code == 0, email_result.output
 
     create_help = _plain_output(create_result.output)
@@ -15815,11 +15831,17 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     destroy_help = _plain_output(destroy_result.output)
     tf_destroy_help = _plain_output(tf_destroy_result.output)
     flux_destroy_help = _plain_output(flux_destroy_result.output)
+    soperator_help = _plain_output(soperator_result.output)
+    soperator_onboard_help = _plain_output(soperator_onboard_result.output)
+    soperator_migrate_help = _plain_output(soperator_migrate_result.output)
     email_help = _plain_output(email_result.output)
     normalized_email_help = " ".join(email_help.split())
     normalized_component_list_help = " ".join(component_list_help.split())
     normalized_component_add_help = " ".join(component_add_help.split())
     normalized_component_remove_help = " ".join(component_remove_help.split())
+    normalized_soperator_help = " ".join(soperator_help.split())
+    normalized_soperator_onboard_help = " ".join(soperator_onboard_help.split())
+    normalized_soperator_migrate_help = " ".join(soperator_migrate_help.split())
     normalized_wireguard_help = " ".join(wireguard_help.split())
     normalized_ssh_jumphost_help = " ".join(ssh_jumphost_help.split())
 
@@ -15897,7 +15919,7 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     ) in normalized_component_add_help
     assert (
         "nebius-cxcli component add apps:external-secrets@target-mk8s-prod "
-        "--config ./deployments/acme/config.yaml --no-interactive"
+        "--config ./deployments/tenant/project/config.yaml --no-interactive"
     ) in normalized_component_add_help
     assert "apps:nccl-test" not in normalized_component_add_help
     assert "config.yaml is not a positional argument" in normalized_component_add_help
@@ -15939,9 +15961,13 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "MK8s target" in normalized_component_add_help
     assert "apps:soperator" in normalized_component_add_help
     assert "apps:soperator@target-mk8s-prod" in normalized_component_add_help
-    assert "install mode" in normalized_component_add_help
-    assert "onboarding registers an external Nebius MK8s target" in normalized_component_add_help
-    assert "production cluster creates" in normalized_component_add_help
+    assert "production worker profile" in normalized_component_add_help
+    assert (
+        "nebius-cxcli soperator onboard <config.yaml-or-deployments-root>"
+        in normalized_component_add_help
+    )
+    assert "register an existing Nebius MK8s target" in normalized_component_add_help
+    assert "prompts for install mode" not in normalized_component_add_help
     assert (
         "nebius-cxcli component add apps:soperator@training-cluster --config <config.yaml>"
         in normalized_component_add_help
@@ -15950,11 +15976,55 @@ def test_command_help_usage_labels_positional_target_types() -> None:
         "nebius-cxcli component add apps:gateway-helm@serving-cluster "
         "--config <config.yaml> --no-interactive"
     ) in normalized_component_add_help
-    assert "requires a managed" in normalized_create_help
-    assert "managed or onboarded MK8s target" in normalized_create_help
-    assert "selecting soperator prompts" in normalized_create_help
-    assert "onboard-existing-cluster role-mapping install" in normalized_create_help
+    assert "requires a managed MK8s target" in normalized_create_help
+    assert "selecting soperator creates a complete production MK8s+SFS+Soperator cluster" in (
+        normalized_create_help
+    )
+    assert "use `soperator onboard` for existing Nebius MK8s targets" in normalized_create_help
+    assert "onboard-existing-cluster role-mapping install" not in normalized_create_help
     assert "complete production MK8s+SFS+Soperator cluster" in normalized_create_help
+    assert "soperator [OPTIONS] COMMAND [ARGS]" in soperator_help
+    assert "Manage Soperator-specific day-2 workflows" in normalized_soperator_help
+    assert "use migrate to plan approved Soperator compute/storage migration" in (
+        normalized_soperator_help
+    )
+    assert "onboard [OPTIONS] CONFIG_OR_DEPLOYMENTS_ROOT" in soperator_onboard_help
+    assert "migrate [OPTIONS] CONFIG_YAML" in soperator_migrate_help
+    assert "Register an existing Nebius MK8s target for Soperator" in (
+        normalized_soperator_onboard_help
+    )
+    assert "Existing project config.yaml, project directory containing config.yaml" in (
+        normalized_soperator_onboard_help
+    )
+    assert "--client-name" in normalized_soperator_onboard_help
+    assert "--tenant-id" in normalized_soperator_onboard_help
+    assert "--project-id" in normalized_soperator_onboard_help
+    assert "--region-id" in normalized_soperator_onboard_help
+    assert "--target" in normalized_soperator_onboard_help
+    assert "--kube-context" in normalized_soperator_onboard_help
+    assert "choose one existing Nebius MK8s cluster from the project" in (
+        normalized_soperator_onboard_help
+    )
+    assert "Interactive onboarding lists project MK8s clusters" in (
+        normalized_soperator_onboard_help
+    )
+    assert "Interactive onboarding derives access from the selected Nebius MK8s cluster ID" in (
+        normalized_soperator_onboard_help
+    )
+    assert "--storage-mode" in normalized_soperator_onboard_help
+    assert "--validate-sources --no-validate-sources" in normalized_soperator_onboard_help
+    assert "Plan Soperator compute/storage migration from onboarding discovery" in (
+        normalized_soperator_migrate_help
+    )
+    assert "--target" in normalized_soperator_migrate_help
+    assert "--dry-run --execute" in normalized_soperator_migrate_help
+    assert "source-soperator-cluster-discovery-report.json" in (
+        normalized_soperator_migrate_help
+    )
+    assert "validates the accepted onboarding analysis" in normalized_soperator_migrate_help
+    assert "show phase progress" in normalized_soperator_migrate_help
+    assert "watch failures" in normalized_soperator_migrate_help
+    assert "timeout-guarded resume checkpoints" in normalized_soperator_migrate_help
     assert "remove [OPTIONS] [COMPONENT_SELECTOR]..." in component_remove_help
     assert "--config CONFIG_YAML" in normalized_component_remove_help
     assert (
@@ -19175,7 +19245,7 @@ def test_soperator_onboarding_maps_external_mk8s_node_groups_without_creating_ro
                     "soperator_onboarding": {
                         "accepted": True,
                         "analysis_fingerprint": "",
-                        "state": "vanilla-mk8s",
+                        "state": "no-soperator-detected",
                         "actions": ["install-soperator"],
                     },
                 }
@@ -19275,9 +19345,7 @@ def test_soperator_onboarding_maps_external_mk8s_node_groups_without_creating_ro
     ]
 
 
-def test_soperator_onboarding_existing_storage_mode_uses_local_storage_and_allocatable_fit() -> (
-    None
-):
+def test_soperator_onboarding_rejects_removed_chart_local_storage_mode() -> None:
     payload = {
         "deploy": {
             "targets": [
@@ -19302,15 +19370,15 @@ def test_soperator_onboarding_existing_storage_mode_uses_local_storage_and_alloc
                             }
                         }
                     },
-                    "soperator_onboarding": {
-                        "accepted": True,
-                        "analysis_fingerprint": "",
-                        "state": "vanilla-mk8s",
-                        "storage_mode": "use-existing-pvc-or-storageclass",
-                        "actions": ["configure-soperator-storage", "install-soperator"],
-                    },
-                }
-            ]
+                        "soperator_onboarding": {
+                            "accepted": True,
+                            "analysis_fingerprint": "",
+                            "state": "no-soperator-detected",
+                            "storage_mode": "use-existing-pvc-or-storageclass",
+                            "actions": ["configure-soperator-storage", "install-soperator"],
+                        },
+                    }
+                ]
         },
         "infra": {"components": []},
         "apps": {
@@ -19349,64 +19417,9 @@ def test_soperator_onboarding_existing_storage_mode_uses_local_storage_and_alloc
             ]
         },
     }
-    cli._refresh_soperator_onboarding_fingerprints(payload)
 
-    assert cli._materialize_soperator_component_defaults(payload) is True
-
-    values = payload["apps"]["charts"][0]["values"]
-    assert values["volume"]["jail"]["type"] == "local"
-    assert values["volume"]["controllerSpool"]["type"] == "local"
-    assert values["volume"]["accounting"]["type"] == "local"
-    assert values["volume"]["accounting"]["enabled"] is False
-    assert values["populateJail"]["overwrite"] is True
-    assert values["customSlurmConfig"] == "PlugStackConfig=/dev/null"
-    assert values["slurmNodes"]["accounting"]["enabled"] is False
-    assert values["slurmNodes"]["accounting"]["mariadbOperator"]["enabled"] is False
-    assert values["slurmNodes"]["rest"]["enabled"] is False
-    assert values["mariadb-operator"]["installOperator"] is False
-    assert values["controllerManager"]["manager"]["env"]["isMariadbCrdInstalled"] == "false"
-    worker = next(node for node in values["nodesets"] if node["name"] == "worker-cpu")
-    assert worker["replicas"] == 1
-    assert worker["nodeSelector"] == {"kubernetes.io/hostname": "computeinstance-a"}
-    assert (
-        worker["nodeConfig"]["static"]
-        == "Boards=1 SocketsPerBoard=1 CoresPerSocket=2 ThreadsPerCore=2"
-    )
-    assert worker["slurmd"]["resources"]["cpu"] == "500m"
-    assert worker["slurmd"]["resources"]["memory"] == "1024Mi"
-    system_filter = next(item for item in values["k8sNodeFilters"] if item["name"] == "system")
-    assert system_filter["affinity"]["nodeAffinity"][
-        "requiredDuringSchedulingIgnoredDuringExecution"
-    ]["nodeSelectorTerms"] == [
-        {
-            "matchExpressions": [
-                {
-                    "key": "kubernetes.io/hostname",
-                    "operator": "In",
-                    "values": ["computeinstance-a"],
-                }
-            ]
-        }
-    ]
-    assert values["kruise"]["manager"]["resources"]["requests"] == {
-        "cpu": "100m",
-        "memory": "128Mi",
-    }
-    assert values["slurmNodes"]["accounting"]["slurmdbd"]["resources"] == {
-        "cpu": "250m",
-        "memory": "512Mi",
-        "ephemeralStorage": "2Gi",
-    }
-    assert values["slurmNodes"]["accounting"]["mariadbOperator"]["resources"] == {
-        "cpu": "250m",
-        "memory": "1Gi",
-        "ephemeralStorage": "2Gi",
-    }
-    assert values["slurmNodes"]["controller"]["slurmctld"]["resources"] == {
-        "cpu": "250m",
-        "memory": "512Mi",
-        "ephemeralStorage": "2Gi",
-    }
+    with pytest.raises(ValueError, match="use-existing-pvc-or-storageclass"):
+        cli._materialize_soperator_component_defaults(payload)
 
 
 def test_soperator_onboarding_uses_discovered_selector_labels_for_external_groups() -> None:
@@ -19437,7 +19450,7 @@ def test_soperator_onboarding_uses_discovered_selector_labels_for_external_group
                     "soperator_onboarding": {
                         "accepted": True,
                         "analysis_fingerprint": "",
-                        "state": "vanilla-mk8s",
+                        "state": "no-soperator-detected",
                         "actions": ["install-soperator"],
                     },
                 }
@@ -19489,7 +19502,7 @@ def test_soperator_onboarding_uses_fallback_live_labels_when_selector_is_absent(
                     "soperator_onboarding": {
                         "accepted": True,
                         "analysis_fingerprint": "",
-                        "state": "vanilla-mk8s",
+                        "state": "no-soperator-detected",
                         "actions": ["install-soperator"],
                     },
                 }
@@ -19543,7 +19556,7 @@ def test_soperator_onboarding_uses_live_resource_labels_for_external_groups() ->
                     "soperator_onboarding": {
                         "accepted": True,
                         "analysis_fingerprint": "",
-                        "state": "vanilla-mk8s",
+                        "state": "no-soperator-detected",
                         "actions": ["install-soperator"],
                     },
                 }
@@ -20078,7 +20091,7 @@ def test_soperator_onboarding_target_defaults_do_not_accept_partial_analysis() -
         pinned_app_version="0.25.0",
     )
 
-    assert target["soperator_onboarding"]["state"] == "partial-soperator"
+    assert target["soperator_onboarding"]["state"] == "existing-soperator-unknown"
     assert target["soperator_onboarding"]["accepted"] is False
 
 

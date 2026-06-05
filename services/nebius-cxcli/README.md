@@ -480,9 +480,10 @@ Built-in wizard profiles:
 - `ssh-jumphost`: live VPC network selection, network-filtered subnet lookup, live compute platform/preset, and public image-family chaining for the SSH jump-host module, which wraps the shared platform-infra `vm` module for VM resources and owns SSH bastion cloud-init policy.
 - `nfs`: live VPC network selection, network-filtered subnet lookup, live compute platform/preset, and public image-family chaining for the VM-based NFS module, which wraps the shared platform-infra `vm` module for VM resources and owns NFS cloud-init/export policy. The wizard asks the same guided boot-disk fields as other VM-style components and also asks the first-class secondary data-disk enabled/type/size fields.
 - `object-storage`: static choices for `versioning_policy` and `object_audit_logging`.
-- `soperator`: guided `install_mode`, NodeSet profile, partition profile,
+- `soperator`: guided production mode, NodeSet profile, partition profile,
   topology profile, role-to-node-group mapping, and top-level optional
-  child-chart/service gates.
+  child-chart/service gates. Existing-cluster onboarding is handled by
+  `nebius-cxcli soperator onboard <config.yaml-or-deployments-root>`.
 - `mysterybox`: prompts the required Terraform-native `inputs.secrets` list as a guided loop for Secret names, ESO version policy, and payload keys/types, and suppresses the runtime-only `inputs.payload_values` helper from the interactive wizard.
 
 Bundled infra component alignment:
@@ -1178,7 +1179,7 @@ Wizard field behavior:
 
 - Infra input field names are discovered dynamically from Terraform module variables (required and optional).
 - Interactive `create` and `component add` offer all discoverable required and optional component fields for newly selected components.
-- When no `--app` values are provided, interactive `create` opens app chart selection only after an MK8s target is selected. Explicit app selections still run normal target validation, so non-Soperator Helm charts cannot be added without a managed or onboarded MK8s target.
+- When no `--app` values are provided, interactive `create` opens app chart selection only after an MK8s target is selected. Explicit app selections still run normal target validation, so Helm charts cannot be added by `create` without a managed MK8s target. Existing external Nebius MK8s targets are registered later with `nebius-cxcli soperator onboard <config.yaml-or-deployments-root>`.
 - Infra component field phases default to `y`; app chart field phases default to `n`, because chart overrides are usually optional and Helm/chart defaults still apply unless you choose to edit them.
 - Optional-wizard controls are consistent across component selection, component phase prompts, and field prompts: `q` backs up to the previous step so you can revise an earlier answer, while `qq` stops the wizard immediately and saves the current config state. Interactive TTY list and checkbox prompts bind those controls directly to the keys instead of showing Back/Quit as selectable rows. When a field has a constrained choice list, the TTY wizard shows only selectable values, plus an explicit skip row for optional unset fields; the non-TTY fallback accepts only a listed index or exact value. Manual free text is reserved for fields without resolved choices, except required VPC network/subnet fields which fail fast when live lookup is unavailable.
 - Interactive component selection prints one resolved infra/apps summary after dependency resolution finishes. During field input, the wizard context is a one-line Rich-colored `Wizard context: Current: <scope> / <component-or-target-feature>` marker, so long app lists are not repeated before every prompt. Fields under `deploy.targets[]`, such as native MysteryBox ESO sync, are labeled as deploy-target context rather than ordinary MK8s Terraform inputs.
@@ -1257,43 +1258,67 @@ Wizard field behavior:
   sibling `mk8s` and `sfs` infra components, the `cert-manager` app dependency,
   Soperator-oriented MK8s node-group labels, and SFS filesystem maps. `create`
   and `component add` print explicit adjusted-selection reasons for those
-  Soperator-owned additions. The Soperator wizard starts with an explicit
-  install mode: `production-cluster` creates the complete MK8s+SFS+Soperator
-  five-role bundle, while `onboard-existing-cluster` registers an external
-  Nebius MK8s target in `deploy.targets[]`, records discovered node-group
-  inventory under `deploy.targets[].inventory.node_groups`, and materializes
-  editable `values.nodeGroupMapping` role mappings without Terraform-managing
-  the existing cluster or node groups. If onboarding mode is chosen in the same
-  wizard transaction as `mk8s` or `sfs`, cxcli skips those newly selected
-  Terraform infra rows and keeps only pre-existing infra rows. By default,
+  Soperator-owned additions. The Soperator create/component wizard uses
+  `production-cluster` and creates the complete MK8s+SFS+Soperator five-role
+  bundle. Existing Nebius MK8s clusters are onboarded with
+  `nebius-cxcli soperator onboard <config.yaml-or-deployments-root>`, which
+  updates an existing config or creates the canonical tenant/project
+  `config.yaml` when a deployments root is passed. Interactive onboarding
+  lists existing Nebius MK8s clusters in the selected project, onboards one
+  cluster per run, records its Nebius `cluster_id` as the durable access
+  handle, registers an external target in `deploy.targets[]`, records
+  discovered node-group inventory under
+  `deploy.targets[].inventory.node_groups`, and materializes
+  `values.nodeGroupMapping` role mappings from discovered inventory and the
+  selected Soperator profile without Terraform-managing the
+  existing cluster or node groups. It does not accept arbitrary vanilla
+  Kubernetes clusters in the interactive flow; local kube contexts are only
+  access details for the selected Nebius MK8s cluster. By default,
   `worker` maps to GPU groups, while `system`, `controller`, `login`, and
   `accounting` map to CPU groups. For generated onboarding NodeSets,
   discovered node counts, selectors, taints, and GPU allocatable data override
   catalog template defaults so Soperator schedules onto the live node groups
-  it analyzed. Onboarding storage
-  selectors stay scoped to those discovered groups, and onboarding applies
-  compact control-plane, OpenKruise, MariaDB, and worker pod requests so a
-  modest external CPU cluster can schedule the Soperator stack before operators
-  tune production reservations. Generated
-  production-cluster profiles can still keep their profile jail aliases for
-  day-2 profile switches. When onboarding chooses
-  `use-existing-pvc-or-storageclass`, cxcli materializes the chart's documented
-  one-node local storage profile: jail/controller-spool use chart-local PVs,
-  accounting and Slurm REST are disabled, SConfigController remains enabled to
-  project Slurm config into the jail, and generated Slurm pods that mount the
-  local jail are pinned to one discovered node when inventory includes node
-  names. This avoids Nebius SFS Filestore mount commands on a plain external
-  MK8s cluster without treating node-local PVs as shared multi-node storage,
-  derives CPU worker topology from the discovered node group's allocatable CPU
-  count, and defaults `populateJail.overwrite: true` for a
-  deterministic local-storage bootstrap unless the operator explicitly
-  overrides those storage or populate-jail values. The onboarding
-  workflow is: add the external target and accepted Soperator analysis to
-  `config.yaml`, review the proposed app/remediation plan and role mapping,
-  then run `validate`, `render`, and `deploy`. The accepted fingerprint is
+  it analyzed. The full source-cluster discovery snapshot is written beside
+  the project config as `source-soperator-cluster-discovery-report.json`; the
+  config keeps only stable onboarding decisions such as state, actions, target
+  version, source version, migration profile, storage mode, and fingerprint.
+  Onboarding storage choices are `keep-existing-storage` or
+  `create-aligned-sfs`. The aligned-SFS path is planned as a dual-storage
+  migration: create and attach new SFS filesystems, keep old storage active,
+  run an online bulk sync, then perform the final delta sync and storage
+  cutover during a controlled Slurm quiet window. Compute migration is planned
+  as a rolling drain/validate process so running jobs are not force-killed.
+  Migration profile compatibility is release- and component-scoped: cxcli must
+  compare discovered source SlurmCluster, NodeSet, NodeConfigurator, storage,
+  accounting, REST, MariaDB, Kruise, SConfigController, and ActiveChecks
+  contracts against the target Soperator profile before deciding whether to
+  adopt, upgrade in place, or replace and migrate compute/storage layout. The
+  committed profile generator currently records explicit release metadata and
+  compatibility axes; full chart tarball, CRD, template, image, and Slurm
+  contract fingerprinting remains the next generator hardening step.
+  The onboarding workflow is: run
+  `nebius-cxcli soperator onboard <config.yaml-or-deployments-root>` to add the
+  external Nebius MK8s target and accepted Soperator analysis to `config.yaml`,
+  review the source discovery report, proposed migration/remediation plan, and
+  role mapping, then run
+  `nebius-cxcli soperator migrate <config.yaml> --target <target> --dry-run`
+  to review the explicit compute/storage migration phases before any live
+  migration executor is used. `soperator onboard` is read-only against the
+  existing cluster; it does not create or attach SFS filesystems, drain nodes,
+  run copy jobs, or mutate Soperator CRs.
+  The future `soperator migrate --execute` executor is the live migration lane:
+  it must consume that accepted plan, run storage, compute, and cutover phases
+  with progress bars or spinners, watch Nebius/Kubernetes/Soperator/Slurm
+  failure signals, apply bounded safe retry or remedy steps, and checkpoint
+  timeout-guarded phases so interrupted migrations can resume without retiring
+  old storage or compute early.
+  Pass an existing project `config.yaml` when the project already exists; pass
+  a deployments root when onboarding should create the first project config.
+  After the plan is accepted, run `validate`, `render`, and `deploy` for the
+  rendered Soperator app changes. The accepted fingerprint is
   checked against the same deterministic Soperator defaults that runtime
-  normalization will materialize, so a reviewed onboarding plan stays valid
-  when `component add` later updates unrelated app rows. This makes
+  normalization will materialize, so a reviewed onboarding plan stays valid for
+  day-2 Soperator Helm chart version edits and unrelated app-row updates. This makes
   cxcli aware of the cluster for future Soperator installs and upgrades, but it
   does not take ownership of the cluster lifecycle. In multi-target configs,
   each `apps:soperator` onboarding row must map to the matching
@@ -1523,13 +1548,17 @@ Wizard field behavior:
   exporter when no GPU node groups exist. The app row carries an explicit
   `install_mode`: `production-cluster` materializes the complete production
   path with five logical host groups `system`, `controller`, `login`,
-  `accounting`, and `worker`, plus SFS jail/controller-spool/accounting filesystems;
-  `onboard-existing-cluster` registers an external Nebius MK8s target and
-  drives `values.nodeGroupMapping` from
-  `deploy.targets[].inventory.node_groups` instead. Onboarding is deliberately
-  not a Terraform import or takeover: the MK8s cluster and node groups remain
-  external, while cxcli manages only selected apps and accepted remediation
-  actions on that target. In onboarding mode, `worker` defaults to GPU groups,
+  `accounting`, and `worker`, plus SFS jail/controller-spool/accounting
+  filesystems. `nebius-cxcli soperator onboard <config.yaml-or-deployments-root>`
+  writes `onboard-existing-cluster` for an external Nebius MK8s target and
+  drives `values.nodeGroupMapping` from `deploy.targets[].inventory.node_groups`
+  instead. Interactive onboarding discovers the Nebius MK8s clusters in the
+  config's project, asks which single cluster to register for that run, and
+  stores the selected cluster ID instead of deriving target identity from the
+  operator's local kube context. Onboarding is deliberately not a Terraform
+  import or takeover: the MK8s cluster and node groups remain external, while
+  cxcli manages only selected apps and accepted remediation actions on that
+  target. In onboarding mode, `worker` defaults to GPU groups,
   and `system`, `controller`, `login`, and `accounting` default to CPU groups.
   Accepted onboarding actions that modify existing node-group templates, such
   as adding SFS filesystem attachments, are disruptive. Managed Kubernetes
@@ -1560,16 +1589,20 @@ Wizard field behavior:
   chart-managed MariaDB because Kubernetes local PVs are node-local rather than
   a shared RWX filesystem. SConfigController stays enabled so Slurm config is
   projected into the local jail.
-  Non-interactive `component add apps:soperator@<target>` also selects onboarding
-  automatically when `<target>` is an existing external MK8s target; it does
-  not create Terraform-managed MK8s/SFS rows and it ensures the required
-  target-scoped Soperator app dependencies exist on that same target.
+  Non-interactive `component add apps:soperator@<target>` also selects
+  onboarding automatically when `<target>` is an existing external MK8s target;
+  it remains a target-scoped compatibility path and does not create
+  Terraform-managed MK8s/SFS rows. The canonical initial onboarding command is
+  `nebius-cxcli soperator onboard <config.yaml-or-deployments-root>`, which
+  also ensures the required target-scoped Soperator app dependencies exist on
+  that same target.
   The wizard lists the target's node groups for each role so the operator can
   override the proposed mapping, then cxcli renders role filters, worker
   NodeSets, storage selectors, partition refs, and NodeConfigurator rebooter
   tolerations from that one map; taints on the selected MK8s groups are
   converted into the required Soperator tolerations for those rendered
-  selectors. The day-2 workflow is `component add apps:soperator@<target>`,
+  selectors. The day-2 workflow is
+  `nebius-cxcli soperator onboard <config.yaml-or-deployments-root>`,
   review/accept the onboarding analysis and role mapping, `validate`, `render`,
   and `deploy`; later Soperator upgrades reuse the same external target binding
   and accepted ownership boundary. Onboarding also caps generated worker
@@ -1592,7 +1625,8 @@ Wizard field behavior:
   also includes a root account/association so live smoke tests can submit into
   those queues immediately; production configs should add the real
   project/user accounts and associations in `config.yaml`.
-  Slurm topology remains disabled by default for arbitrary Kubernetes clusters.
+  Slurm topology remains disabled by default for clusters without verified
+  topology labels.
   Selecting `nebius-tiered-tree-v1` explicitly enables `topology/tree` with
   `topology.nebius.com/tier-*` node-label discovery for production clusters
   that expose those labels; selecting `nebius-nvl-rack-v1` enables
@@ -1613,8 +1647,8 @@ Wizard field behavior:
   NFS stays a VM-based sibling infra component, not an MK8s node
   group.
 - The five-role Nebius Soperator production shape and Slurm topology are separate concerns. The five role groups provide workload isolation and placement for `system`, `controller`, `login`, `accounting`, and `worker`. Slurm topology is an additional worker-placement optimization for distributed jobs that care about physical or fabric locality, especially multi-node GPU/NCCL jobs.
-- For a fresh Nebius production MK8s plus Soperator deployment, use `values.topologyProfile: nebius-tiered-tree-v1` when the same provisioning flow prepares accurate `topology.nebius.com/tier-*` labels for worker nodes. Use `values.topologyProfile: nebius-nvl-rack-v1` only for GB300/NVL clusters whose nodes expose accurate `topology.nvidia.com/rack` labels. For arbitrary Kubernetes clusters and already-installed Nebius MK8s clusters, keep `values.topologyProfile: disabled` by default; operators can opt in after they have prepared and verified equivalent labels.
-- Topology labels must describe real locality. Manually pre-labeling an arbitrary cluster before installing the Soperator chart is valid only when the labels are complete, stable, and reflect the actual fabric hierarchy for all worker nodes. Misleading or stale labels can make Slurm wait for a topology that does not exist, place jobs poorly, or make multi-node jobs fail when selected nodes cannot communicate as modeled. Nebius MK8s node-group metadata labels also do not update already-created Kubernetes Nodes, so existing clusters may need explicit node relabeling or node replacement before topology is safe.
+- For a fresh Nebius production MK8s plus Soperator deployment, use `values.topologyProfile: nebius-tiered-tree-v1` when the same provisioning flow prepares accurate `topology.nebius.com/tier-*` labels for worker nodes. Use `values.topologyProfile: nebius-nvl-rack-v1` only for GB300/NVL clusters whose nodes expose accurate `topology.nvidia.com/rack` labels. For already-installed Nebius MK8s clusters onboarded by cxcli, keep `values.topologyProfile: disabled` by default; operators can opt in after they have prepared and verified equivalent labels.
+- Topology labels must describe real locality. Manually pre-labeling external clusters outside cxcli ownership before installing the Soperator chart is valid only when the labels are complete, stable, and reflect the actual fabric hierarchy for all worker nodes. Misleading or stale labels can make Slurm wait for a topology that does not exist, place jobs poorly, or make multi-node jobs fail when selected nodes cannot communicate as modeled. Nebius MK8s node-group metadata labels also do not update already-created Kubernetes Nodes, so existing clusters may need explicit node relabeling or node replacement before topology is safe.
 - Topology can help NCCL performance indirectly by giving Slurm enough locality data to schedule distributed GPU jobs on topologically close workers. Nebius documents topology-aware AllReduce tests showing up to 20% improvement depending on cluster size, but the gain is workload and placement dependent. Treat NCCL validation as the proof, not the presence of the topology profile alone.
 - Provider-backed option lists come only from explicit catalog wizard metadata, whether that metadata comes from a built-in `wizard_profile` or a raw `wizard` block, and are resolved live from Nebius APIs when available.
 - Prompt-time provider lookups and strict provider-value validation now share the same argument-normalization path, so relative `depends_on` targets such as `inputs.node_groups.system.platform` resolve against the active component instance consistently in both places.
@@ -2835,12 +2869,13 @@ nebius-cxcli auth --project-config /path/to/config.yaml --validate-profile
     unconfigured row; answering `n` for an app chart keeps the selected chart
     with its defaults.
   - That field wizard offers all discoverable required and optional fields for each new component, including editable literal catalog defaults. Required fields must be filled before advancing; optional blanks stay implicit when they still match module/chart defaults.
-  - For `apps:soperator`, the wizard first asks for `install_mode`.
-    For `production-cluster`, it then asks for the worker profile before
-    MK8s/SFS field materialization so CPU-only, GPU-only, or mixed layout is
-    known before shape/fabric helpers and target GPU validation prompts.
-    `onboard-existing-cluster` registers an external Nebius MK8s target,
-    writes the accepted Soperator onboarding plan under
+  - For `apps:soperator`, the create/component wizard uses
+    `production-cluster` and asks for the worker profile before MK8s/SFS field
+    materialization so CPU-only, GPU-only, or mixed layout is known before
+    shape/fabric helpers and target GPU validation prompts.
+    `nebius-cxcli soperator onboard <config.yaml-or-deployments-root>`
+    registers an external Nebius MK8s target, writes the accepted Soperator
+    onboarding plan under
     `deploy.targets[].soperator_onboarding`, uses
     `deploy.targets[].inventory.node_groups` to propose `worker` on GPU node
     groups and `system`, `controller`, `login`, and `accounting` on CPU node
@@ -2941,7 +2976,7 @@ nebius-cxcli auth --project-config /path/to/config.yaml --validate-profile
   - After writing the resulting `config.yaml`, `create` runs the internal warning-only post-create validation by default. Use `--no-validate-config` only when you intentionally want to skip that post-write validation; the separate warning-only live quota/capacity assessment still runs.
   - `create` also runs a best-effort live Nebius quota check for bundled infra components and warns when the selected shape already exceeds current quota. GPU quota dimensions come from the Capacity Dashboard for the selected platform/preset/fabric shape. It does not block render or config edits, does not reserve capacity, and is not a wizard-selectable deploy gate. Confirmed requestable quota shortages print the exact `quota-request <config.yaml>` follow-up command, while capacity-only GPU shortages point to choosing another available shape or region.
   - Non-blocking quota coverage-gap detail stays available through `quota-check` and the generated manifest rather than being repeated during normal `create` output.
-  - In profile-backed MK8s flows such as Soperator `production-cluster`, interactive `create` and `component add` ask for the Soperator worker profile immediately after `install_mode` so CPU-only, GPU-only, or mixed worker layout is known before MK8s shape fields and target GPU validation prompts. CPU-only profiles skip and prune the inactive GPU helper scope. `inputs.node_group_defaults.gpu.infiniband_fabric` is a wizard helper that is offered only after the selected GPU preset supports clustering; selecting it materializes `inputs.gpu_clusters` and references that cluster from GPU node groups. Plain MK8s-only create uses concrete `inputs.node_groups.*` entries instead and defaults the GPU-cluster toggle to enabled when live metadata confirms the selected GPU shape supports clustering. If the chosen preset's live SDK metadata does not allow GPU clustering, the fabric prompt is skipped and stale fabric values fail fast at render/validate instead of surfacing first at `terraform apply`. Single-GPU presets are labeled as Ethernet-only testing/dev shapes, while clusterable multi-GPU presets are labeled as the InfiniBand path. When tenant/project/region context is available, the preset and fabric prompts also query the live Nebius Capacity Dashboard `resource-advice` surface for the exact GPU shape, use those live rows as the source of truth for offered fabric names, annotate current availability for the exact selected platform/region/preset, and highlight the recommended default fabric only for cluster-capable shapes. If any matching fabric has reserved VM slots, that reserved-capacity fabric is recommended ahead of on-demand-only fabrics because the reservation is bound to the fabric. If live fabric rows are unavailable for a cluster-capable shape, the wizard falls back to manual input for that optional helper instead of relying on a baked-in fabric list.
+  - In profile-backed MK8s flows such as Soperator `production-cluster`, interactive `create` and `component add` ask for the Soperator worker profile before MK8s shape fields and target GPU validation prompts, so CPU-only, GPU-only, or mixed worker layout is known before those fields are offered. CPU-only profiles skip and prune the inactive GPU helper scope. `inputs.node_group_defaults.gpu.infiniband_fabric` is a wizard helper that is offered only after the selected GPU preset supports clustering; selecting it materializes `inputs.gpu_clusters` and references that cluster from GPU node groups. Plain MK8s-only create uses concrete `inputs.node_groups.*` entries instead and defaults the GPU-cluster toggle to enabled when live metadata confirms the selected GPU shape supports clustering. If the chosen preset's live SDK metadata does not allow GPU clustering, the fabric prompt is skipped and stale fabric values fail fast at render/validate instead of surfacing first at `terraform apply`. Single-GPU presets are labeled as Ethernet-only testing/dev shapes, while clusterable multi-GPU presets are labeled as the InfiniBand path. When tenant/project/region context is available, the preset and fabric prompts also query the live Nebius Capacity Dashboard `resource-advice` surface for the exact GPU shape, use those live rows as the source of truth for offered fabric names, annotate current availability for the exact selected platform/region/preset, and highlight the recommended default fabric only for cluster-capable shapes. If any matching fabric has reserved VM slots, that reserved-capacity fabric is recommended ahead of on-demand-only fabrics because the reservation is bound to the fabric. If live fabric rows are unavailable for a cluster-capable shape, the wizard falls back to manual input for that optional helper instead of relying on a baked-in fabric list.
   - In the bundled VM flow, preemptible VM prompts are shown only after a GPU platform is selected. When `inputs.preemptible_enabled=true`, cxcli writes `inputs.recovery_policy: FAIL`, matching the Compute Terraform contract that renders `preemptible.on_preemption = "STOP"` without the deprecated priority field.
   - In interactive mode, `q` backs up through optional wizard steps and `qq` stops the wizard immediately. In TTY list and checkbox prompts, those are key shortcuts rather than Back/Quit rows that must be selected. At the first wizard step, `q` asks whether to exit. After infra and app selection plus dependency resolution, the wizard prints one `Component selections:` summary with target-bound app labels such as `soperator on mk8s`; per-field context then stays focused on the current component or target feature. The wizard prints visible `Infra` and `Apps` section separators and echoes each answered field as `Selected <path> = <value>` with secret-like fields redacted, so operators can scan the terminal history before reviewing the saved `config.yaml`. If `qq` stops while any selected component still has unresolved required fields, `create` cancels before writing or overwriting `config.yaml` and `generated/`; existing project folders stay untouched. If only optional fields were skipped, the current config is written.
   - For selected components, the field wizard offers all discoverable required and optional fields, including editable literal catalog defaults. Required blanks are rejected immediately; optional blanks keep defaults implicit when possible.

@@ -44,6 +44,7 @@ SUPPORTED_PROVIDER_OPTION_SOURCES = frozenset(
         "project_subnets",
         "project_networks",
         "tenant_projects",
+        "project_mk8s_clusters",
         "mk8s_control_plane_versions",
         "soperator_node_groups",
         "soperator_nodesets_profiles",
@@ -584,6 +585,7 @@ class ProviderOptionLookup:
                 "project_networks": self._resolve_project_networks,
                 "operator_public_ip_cidr": self._resolve_operator_public_ip_cidr,
                 "tenant_projects": self._resolve_tenant_projects,
+                "project_mk8s_clusters": self._resolve_project_mk8s_clusters,
                 "mk8s_control_plane_versions": self._resolve_mk8s_control_plane_versions,
                 "soperator_node_groups": self._resolve_soperator_node_groups,
                 "soperator_nodesets_profiles": self._resolve_soperator_nodesets_profiles,
@@ -2547,6 +2549,63 @@ class ProviderOptionLookup:
             options.append(OptionChoice(value=project_id, label=label))
 
         options.sort(key=lambda item: item.value)
+        resolved = tuple(options)
+        self._cache[cache_key] = resolved
+        return resolved
+
+    def _resolve_project_mk8s_clusters(
+        self,
+        *,
+        args: dict[str, Any],
+        payload: dict[str, Any],
+        field_path: str,
+    ) -> tuple[OptionChoice, ...]:
+        project_id = self._resolve_project_id(payload, args)
+        if not project_id:
+            return ()
+        cache_key = ("project_mk8s_clusters", project_id)
+        if cache_key in self._cache:
+            return self._cache[cache_key]
+
+        sdk = self._sdk_or_none()
+        if sdk is None:
+            return ()
+        from nebius.api.nebius.mk8s.v1 import ClusterServiceClient, ListClustersRequest
+
+        client = ClusterServiceClient(sdk)
+        items = self._paged_list(
+            request_factory=lambda page_token: ListClustersRequest(
+                parent_id=project_id,
+                page_size=_NEBIUS_LIST_PAGE_SIZE,
+                page_token=page_token,
+            ),
+            request_call=client.list,
+        )
+
+        options: list[OptionChoice] = []
+        for item in items:
+            metadata = getattr(item, "metadata", None)
+            cluster_id = _as_str(getattr(metadata, "id", None))
+            if not cluster_id:
+                continue
+            name = _as_str(getattr(metadata, "name", None))
+            target_ref = self._normalize_component_token(name) or self._normalize_component_token(
+                cluster_id
+            )
+            label = f"{name or target_ref or cluster_id}  ({cluster_id})"
+            options.append(
+                OptionChoice(
+                    value=cluster_id,
+                    label=label,
+                    metadata={
+                        "cluster_id": cluster_id,
+                        "name": name or "",
+                        "target_ref": target_ref or "",
+                    },
+                )
+            )
+
+        options.sort(key=lambda item: (str(item.metadata.get("name") or item.value), item.value))
         resolved = tuple(options)
         self._cache[cache_key] = resolved
         return resolved

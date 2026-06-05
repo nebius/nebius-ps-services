@@ -398,11 +398,20 @@ from .soperator_child_charts import (
     soperator_child_chart_warnings,
 )
 from .soperator_onboarding import (
+    ONBOARDING_ACCEPTABLE_STATES,
+    ONBOARDING_ACTION_APPROVE_MIGRATION,
+    ONBOARDING_ACTION_CREATE_ALIGNED_SFS,
+    ONBOARDING_ACTION_PLAN_COMPUTE_MIGRATION,
+    ONBOARDING_ACTION_PLAN_DATA_MIGRATION,
+    SOURCE_SOPERATOR_DISCOVERY_REPORT_NAME,
     analyze_soperator_onboarding_snapshot,
     collect_kubectl_soperator_snapshot,
     soperator_onboarding_fingerprint,
-    soperator_onboarding_report_path,
+    soperator_onboarding_target,
+    soperator_onboarding_target_refs,
+    validate_soperator_onboarding_acceptance,
     write_soperator_onboarding_reports,
+    write_source_soperator_discovery_report,
 )
 from .ssh_jumphost import (
     SshJumphostAllowedCidrRequest,
@@ -1159,10 +1168,11 @@ _SOPERATOR_NODE_GROUP_AUTOSCALING_ROLES = (
     "worker",
 )
 _SOPERATOR_ONBOARDING_STORAGE_MODES = (
-    "adopt-existing-storage",
-    "use-existing-pvc-or-storageclass",
-    "create-sfs",
+    "keep-existing-storage",
+    "create-aligned-sfs",
 )
+_SOPERATOR_ONBOARDING_DEFAULT_STORAGE_MODE = _SOPERATOR_ONBOARDING_STORAGE_MODES[0]
+_SOPERATOR_DISCOVERY_REPORT_PRIVATE_KEY = "__soperator_source_discovery_report"
 _SOPERATOR_REQUIRED_INFRA_COMPONENT_IDS = ("mk8s", "sfs")
 _SOPERATOR_REQUIRED_APP_COMPONENT_IDS = ("cert-manager",)
 _BENIGN_KUBECTL_OUTPUT_MARKERS = (
@@ -1207,6 +1217,11 @@ _DEPLOYMENTS_ROOT_ARGUMENT_HELP = (
 _CONFIG_YAML_ARGUMENT_HELP = (
     "Path to project config.yaml under the deployments root "
     "(<tenant-folder>/<project-folder>/config.yaml)."
+)
+_SOPERATOR_ONBOARD_TARGET_ARGUMENT_HELP = (
+    "Existing project config.yaml, project directory containing config.yaml, "
+    "or deployments root directory. When a deployments root is passed, onboard "
+    "creates the canonical <tenant-folder>/<project-folder>/config.yaml first."
 )
 _COMPONENT_CONFIG_OPTION_HELP = (
     "Required project config.yaml to inspect or edit; pass it with --config, "
@@ -1323,6 +1338,7 @@ app = typer.Typer(
         "Grafana API or local JSON file and only edits component_sources.yaml with --attach; "
         "validate, validate-dashboards, quota-check, quota-request, render, deploy, "
         "upgrade, and bootstrap-ci use config.yaml; "
+        "soperator onboard registers existing Nebius MK8s targets in config.yaml; "
         "destroy uses config.yaml to tear down all rendered project resources from sibling generated/; "
         "email also uses config.yaml and resolves sibling generated/ automatically; "
         "wireguard uses config.yaml to generate client configs and manage VM-local "
@@ -1341,9 +1357,9 @@ app = typer.Typer(
     epilog=(
         "Quickstart: nebius-cxcli create ./deployments --client-name acme "
         "--tenant-id TENANT --project-id PROJECT  |  "
-        "nebius-cxcli component add apps:soperator --config ./deployments/acme/config.yaml  |  "
-        "nebius-cxcli render ./deployments/acme/config.yaml  |  "
-        "nebius-cxcli deploy ./deployments/acme/config.yaml. "
+        "nebius-cxcli component add apps:soperator --config ./deployments/tenant/project/config.yaml  |  "
+        "nebius-cxcli render ./deployments/tenant/project/config.yaml  |  "
+        "nebius-cxcli deploy ./deployments/tenant/project/config.yaml. "
         f"Upgrade example: nebius-cxcli upgrade k8s-version {_UPGRADE_EXAMPLE_CONFIG} "
         "infra:mk8s@mk8s --to-version 1.33 --dry-run. "
         "Run `nebius-cxcli upgrade --help` for disruption-policy and node-layer examples. "
@@ -1366,6 +1382,14 @@ terraform_app = typer.Typer(
 flux_app = typer.Typer(
     help="Apply, bootstrap, or destroy Flux resources using generated/ or generated/flux."
 )
+soperator_app = typer.Typer(
+    help=(
+        "Manage Soperator-specific day-2 workflows. Use onboard to register an "
+        "existing Nebius MK8s target for Soperator app management without "
+        "Terraform-owning that cluster, then use migrate to plan approved "
+        "Soperator compute/storage migration from the discovery report."
+    )
+)
 upgrade_app = typer.Typer(
     help=(
         "Run day-2 lifecycle upgrades from config.yaml. V1 implements MK8s "
@@ -1378,6 +1402,7 @@ upgrade_app = typer.Typer(
 app.add_typer(component_app, name="component")
 app.add_typer(terraform_app, name="terraform")
 app.add_typer(flux_app, name="flux")
+app.add_typer(soperator_app, name="soperator")
 app.add_typer(upgrade_app, name="upgrade")
 
 
@@ -7738,11 +7763,7 @@ def _soperator_install_mode_choices() -> list[OptionChoice]:
         OptionChoice(
             value=_SOPERATOR_INSTALL_MODE_PRODUCTION,
             label="Create complete production Soperator cluster (MK8s + SFS + Soperator)",
-        ),
-        OptionChoice(
-            value=_SOPERATOR_INSTALL_MODE_ONBOARD_EXISTING_CLUSTER,
-            label="Onboard existing Nebius MK8s cluster",
-        ),
+        )
     ]
 
 
@@ -7869,10 +7890,29 @@ def _soperator_catalog_pinned_versions() -> tuple[str, str]:
 
 
 def _print_soperator_onboarding_report_summary(report: Any) -> None:
-    console.print(f"[dim]Soperator onboarding state: {report.state}[/dim]")
+    labels = {
+        "no-soperator-detected": "No Soperator detected",
+        "existing-soperator-supported": "Existing Soperator supported for migration",
+        "existing-soperator-target": "Existing Soperator matches target",
+        "existing-soperator-unknown": "Existing Soperator requires manual review",
+        "existing-soperator-newer": "Existing Soperator is newer than cxcli target",
+        "analysis-blocked": "Analysis blocked",
+    }
+    console.print(f"[dim]Soperator onboarding state: {labels.get(report.state, report.state)}[/dim]")
+    source_version = _non_empty_text(getattr(report, "source_version", ""))
+    target_version = _non_empty_text(getattr(report, "target_version", ""))
+    migration_profile_id = _non_empty_text(getattr(report, "migration_profile_id", ""))
+    if target_version:
+        console.print(f"[dim]Target Soperator version: {target_version}[/dim]")
+    if source_version:
+        console.print(f"[dim]Detected Soperator version: {source_version}[/dim]")
+    if migration_profile_id:
+        console.print(f"[dim]Migration profile: {migration_profile_id}[/dim]")
     for finding in report.findings:
         if finding.severity in {"required", "blocked", "recommended"}:
             console.print(f"[dim]- {finding.layer}: {finding.status} - {finding.message}[/dim]")
+    if getattr(report, "migration_plan", ()):
+        console.print("[dim]Migration phases: " + ", ".join(phase.id for phase in report.migration_plan) + "[/dim]")
     selected_actions = [action.id for action in report.actions if action.selected]
     if selected_actions:
         console.print("[dim]Selected onboarding actions: " + ", ".join(selected_actions) + "[/dim]")
@@ -7880,9 +7920,8 @@ def _print_soperator_onboarding_report_summary(report: Any) -> None:
 
 def _soperator_onboarding_storage_mode_choices(default: str) -> list[OptionChoice]:
     labels = {
-        "adopt-existing-storage": "Adopt existing Soperator storage",
-        "use-existing-pvc-or-storageclass": "Use chart-local one-node storage",
-        "create-sfs": "Create Nebius SFS filesystems",
+        "keep-existing-storage": "Keep existing Soperator storage",
+        "create-aligned-sfs": "Create aligned target Soperator SFS filesystems",
     }
     return [
         OptionChoice(value=value, label=labels[value], recommended=value == default)
@@ -7890,11 +7929,39 @@ def _soperator_onboarding_storage_mode_choices(default: str) -> list[OptionChoic
     ]
 
 
+def _soperator_onboarding_required_storage_mode_for_report(report: Any) -> str:
+    selected_actions = {
+        str(getattr(action, "id", "") or "").strip()
+        for action in getattr(report, "actions", ()) or ()
+        if bool(getattr(action, "selected", False))
+    }
+    if ONBOARDING_ACTION_CREATE_ALIGNED_SFS in selected_actions:
+        return "create-aligned-sfs"
+    return ""
+
+
+def _validate_soperator_onboarding_storage_mode_for_report(
+    *,
+    storage_mode: str,
+    report: Any,
+) -> str:
+    normalized_storage_mode = _normalize_soperator_onboarding_storage_mode(storage_mode)
+    required_storage_mode = _soperator_onboarding_required_storage_mode_for_report(report)
+    if required_storage_mode and normalized_storage_mode != required_storage_mode:
+        raise RuntimeError(
+            "Detected Soperator migration requires storage mode "
+            f"'{required_storage_mode}' because aligned SFS data migration is selected. "
+            "Use create-aligned-sfs or rerun onboarding after manual review."
+        )
+    return normalized_storage_mode
+
+
 def _soperator_onboarding_target_defaults(
     target_ref: str,
     *,
     kube_context: str,
-    storage_mode: str = "adopt-existing-storage",
+    cluster_id: str = "",
+    storage_mode: str = "keep-existing-storage",
     snapshot: Mapping[str, Any] | None = None,
     pinned_chart_version: str = "",
     pinned_app_version: str = "",
@@ -7914,97 +7981,426 @@ def _soperator_onboarding_target_defaults(
         pinned_chart_version=pinned_chart_version,
         pinned_app_version=pinned_app_version,
     )
-    return {
+    required_storage_mode = _soperator_onboarding_required_storage_mode_for_report(report)
+    effective_storage_mode = required_storage_mode or storage_mode
+    target_row: dict[str, Any] = {
         "instance_id": normalized_target,
         DEPLOY_TARGET_KIND_FIELD: EXTERNAL_MK8S_TARGET_KIND,
         DEPLOY_TARGET_OWNERSHIP_FIELD: EXTERNAL_TARGET_OWNERSHIP,
         "access": "external",
-        "kube_context": kube_context,
         "inventory": {"node_groups": snapshot.get("node_groups", {})},
         "soperator_onboarding": {
-            "accepted": report.state in {"vanilla-mk8s", "existing-soperator"},
+            "accepted": report.state in ONBOARDING_ACCEPTABLE_STATES,
             "analysis_fingerprint": "",
-            "analysis_report": soperator_onboarding_report_path(normalized_target),
             "state": report.state,
-            "storage_mode": storage_mode,
+            "storage_mode": effective_storage_mode,
             "actions": [action.id for action in report.actions if action.selected],
-            "helm_releases": snapshot.get("helm_releases", []),
-            "crds": snapshot.get("crds", []),
-            "namespaces": snapshot.get("namespaces", []),
+            "target_version": report.target_version,
+            "source_version": report.source_version,
+            "migration_profile_id": report.migration_profile_id,
             "collection_errors": snapshot.get("collection_errors", []),
         },
+        _SOPERATOR_DISCOVERY_REPORT_PRIVATE_KEY: {
+            "snapshot": copy.deepcopy(to_plain_data(snapshot)),
+            "report": report.to_dict(),
+        },
     }
-
-
-def _prompt_soperator_onboarding_target_row() -> dict[str, Any]:
-    default_context = _current_kube_context_name()
-    default_target = "mk8s"
-    if default_context:
-        match = re.match(r"^nebius-(?P<target>.+)-mk8scluster-[^-]+(?:-.+)?$", default_context)
-        if match is not None:
-            default_target = normalize_component_token(match.group("target")) or "mk8s"
-    target_ref, should_stop = _prompt_scalar_override(
-        "deploy.targets[].instance_id",
-        default_target,
-        type_hint="string",
-        required=True,
-    )
-    if should_stop:
-        raise _WizardQuitRequested
-    if _wizard_backtrack_requested(target_ref):
-        target_ref = default_target
-    kube_context, should_stop = _prompt_scalar_override(
-        "deploy.targets[].kube_context",
-        default_context,
-        choices=[
-            OptionChoice(value=name, label=name, recommended=name == default_context)
-            for name in _known_kube_context_names()
-        ]
-        or None,
-        type_hint="string",
-        required=True,
-    )
-    if should_stop:
-        raise _WizardQuitRequested
-    if _wizard_backtrack_requested(kube_context):
-        kube_context = default_context
-    normalized_target = normalize_component_token(target_ref) or "mk8s"
     context = _non_empty_text(kube_context)
-    snapshot = (
-        collect_kubectl_soperator_snapshot(kube_context=context)
-        if context
-        else {"node_groups": {}, "helm_releases": [], "crds": [], "collection_errors": []}
-    )
-    chart_version, app_version = _soperator_catalog_pinned_versions()
-    target_row = _soperator_onboarding_target_defaults(
-        normalized_target,
-        kube_context=context,
+    if context:
+        target_row["kube_context"] = context
+    normalized_cluster_id = _non_empty_text(cluster_id)
+    if normalized_cluster_id:
+        target_row["cluster_id"] = normalized_cluster_id
+    return target_row
+
+
+def _soperator_onboarding_empty_snapshot() -> dict[str, Any]:
+    return {"node_groups": {}, "helm_releases": [], "crds": [], "collection_errors": []}
+
+
+def _write_soperator_source_discovery_report_from_target_row(
+    *,
+    config_path: Path,
+    target_row: Mapping[str, Any],
+) -> Path | None:
+    report_material = target_row.get(_SOPERATOR_DISCOVERY_REPORT_PRIVATE_KEY)
+    if not isinstance(report_material, Mapping):
+        return None
+    snapshot = report_material.get("snapshot")
+    report = report_material.get("report")
+    if not isinstance(snapshot, Mapping) or not isinstance(report, Mapping):
+        return None
+    onboarding = target_row.get("soperator_onboarding")
+    cluster_id = _non_empty_text(target_row.get("cluster_id"))
+    cluster_name = component_instance_id(target_row)
+    if isinstance(onboarding, Mapping):
+        cluster_name = cluster_name or _non_empty_text(onboarding.get("target_ref"))
+    return write_source_soperator_discovery_report(
+        config_path.parent,
+        target_ref=component_instance_id(target_row) or "mk8s",
         snapshot=snapshot,
-        pinned_chart_version=chart_version,
-        pinned_app_version=app_version,
+        report=report,
+        cluster_id=cluster_id,
+        cluster_name=cluster_name,
     )
-    report = analyze_soperator_onboarding_snapshot(
-        snapshot,
-        target_ref=normalized_target,
-        pinned_chart_version=chart_version,
-        pinned_app_version=app_version,
+
+
+@contextmanager
+def _soperator_onboarding_status(message: str) -> Iterator[None]:
+    if console.is_terminal:
+        with console.status(message, spinner="dots"):
+            yield
+        return
+    console.print(f"[dim]{message}[/dim]")
+    yield
+
+
+def _project_mk8s_cluster_choices(
+    *,
+    project_id: str,
+    provider_lookup: ProviderOptionLookup,
+) -> list[OptionChoice]:
+    choices = provider_lookup.resolve(
+        provider="project_mk8s_clusters",
+        args={"project_id": project_id},
+        payload={"client_info": {"nebius": {"project_id": project_id}}},
+        field_path="deploy.targets[].cluster_id",
     )
-    _print_soperator_onboarding_report_summary(report)
-    storage_mode, should_stop = _prompt_scalar_override(
-        "deploy.targets[].soperator_onboarding.storage_mode",
-        "adopt-existing-storage",
-        choices=_soperator_onboarding_storage_mode_choices("adopt-existing-storage"),
+    if choices:
+        return choices
+    provider_error = provider_lookup.last_error()
+    if provider_error:
+        raise RuntimeError(
+            "Could not list existing Nebius MK8s clusters for project "
+            f"'{project_id}': {provider_error}"
+        )
+    raise RuntimeError(
+        f"No Nebius MK8s clusters were found in project '{project_id}'. "
+        "Create an MK8s cluster in that Nebius project first, or choose a different project."
+    )
+
+
+def _prompt_project_mk8s_cluster_choice(
+    *,
+    project_id: str,
+    provider_lookup: ProviderOptionLookup,
+) -> OptionChoice:
+    choices = _project_mk8s_cluster_choices(
+        project_id=project_id,
+        provider_lookup=provider_lookup,
+    )
+    default = choices[0].value
+    selected_cluster_id, should_stop = _prompt_scalar_override(
+        "Nebius MK8s cluster",
+        default,
+        choices=choices,
         type_hint="string",
         required=True,
     )
     if should_stop:
         raise _WizardQuitRequested
-    if _wizard_backtrack_requested(storage_mode):
-        storage_mode = "adopt-existing-storage"
-    if normalize_component_token(storage_mode) not in _SOPERATOR_ONBOARDING_STORAGE_MODES:
-        storage_mode = "adopt-existing-storage"
-    target_row["soperator_onboarding"]["storage_mode"] = normalize_component_token(storage_mode)
+    if _wizard_backtrack_requested(selected_cluster_id):
+        selected_cluster_id = default
+    normalized_selected = _non_empty_text(selected_cluster_id) or default
+    for choice in choices:
+        if choice.value == normalized_selected:
+            return choice
+    raise RuntimeError(f"Selected Nebius MK8s cluster '{normalized_selected}' was not listed.")
+
+
+def _collect_soperator_snapshot_for_nebius_mk8s_cluster(
+    payload: Mapping[str, Any],
+    *,
+    cluster_id: str,
+    access: str = "external",
+) -> tuple[dict[str, Any], str]:
+    client_name, _tenant_id, project_id, _region_id, _email = _identity_values_from_payload(payload)
+    if not cluster_id:
+        return _soperator_onboarding_empty_snapshot(), ""
+    if not _runtime_auth_env_available():
+        _runtime_auth_cache_load(project_id=project_id, client_name=client_name)
+    spec = _mk8s_cluster_handoff_spec_for_identity(
+        project_id=project_id,
+        client_name=client_name,
+        cluster_id=cluster_id,
+        access=access,
+    )
+    with ExitStack() as stack:
+        kube_root = Path(
+            stack.enter_context(tempfile.TemporaryDirectory(prefix="nebius-cxcli-kube-"))
+        )
+        kubeconfig_path = kube_root / "config"
+        _write_kubeconfig_file(kubeconfig_path, spec)
+        snapshot = collect_kubectl_soperator_snapshot(
+            kube_context=spec.context_name,
+            extra_env={"KUBECONFIG": str(kubeconfig_path)},
+        )
+    return snapshot, spec.context_name
+
+
+def _prompt_soperator_onboarding_target_row(
+    *,
+    payload: Mapping[str, Any] | None = None,
+    project_id: str | None = None,
+    provider_lookup: ProviderOptionLookup | None = None,
+    storage_mode: str | None = None,
+) -> dict[str, Any]:
+    explicit_storage_mode = storage_mode is not None
+    normalized_storage_mode = _normalize_soperator_onboarding_storage_mode(storage_mode)
+    resolved_project_id = _non_empty_text(project_id)
+    if not resolved_project_id and payload is not None:
+        _client_name, _tenant_id, resolved_project_id, _region_id, _email = (
+            _identity_values_from_payload(payload)
+        )
+    if not resolved_project_id:
+        raise RuntimeError("Soperator onboarding requires client_info.nebius.project_id.")
+    resolved_provider_lookup = provider_lookup or ProviderOptionLookup()
+    cluster_choice = _prompt_project_mk8s_cluster_choice(
+        project_id=resolved_project_id,
+        provider_lookup=resolved_provider_lookup,
+    )
+    cluster_id = _non_empty_text(cluster_choice.metadata.get("cluster_id")) or cluster_choice.value
+    target_ref = (
+        normalize_component_token(cluster_choice.metadata.get("target_ref"))
+        or normalize_component_token(cluster_choice.metadata.get("name"))
+        or normalize_component_token(cluster_id)
+        or "mk8s"
+    )
+    snapshot: dict[str, Any]
+    if payload is None:
+        snapshot = _soperator_onboarding_empty_snapshot()
+    else:
+        with _soperator_onboarding_status(
+            f"Discovering Soperator components on {target_ref} ({cluster_id})..."
+        ):
+            snapshot, _generated_context = _collect_soperator_snapshot_for_nebius_mk8s_cluster(
+                payload,
+                cluster_id=cluster_id,
+                access="external",
+            )
+    chart_version, app_version = _soperator_catalog_pinned_versions()
+    with _soperator_onboarding_status("Building migration profile diff..."):
+        target_row = _soperator_onboarding_target_defaults(
+            target_ref,
+            kube_context="",
+            cluster_id=cluster_id,
+            storage_mode=normalized_storage_mode,
+            snapshot=snapshot,
+            pinned_chart_version=chart_version,
+            pinned_app_version=app_version,
+        )
+        report = analyze_soperator_onboarding_snapshot(
+            snapshot,
+            target_ref=target_ref,
+            pinned_chart_version=chart_version,
+            pinned_app_version=app_version,
+        )
+    _print_soperator_onboarding_report_summary(report)
+    required_storage_mode = _soperator_onboarding_required_storage_mode_for_report(report)
+    if not explicit_storage_mode:
+        storage_mode, should_stop = _prompt_scalar_override(
+            "deploy.targets[].soperator_onboarding.storage_mode",
+            required_storage_mode or _SOPERATOR_ONBOARDING_DEFAULT_STORAGE_MODE,
+            choices=_soperator_onboarding_storage_mode_choices(
+                required_storage_mode or _SOPERATOR_ONBOARDING_DEFAULT_STORAGE_MODE
+            ),
+            type_hint="string",
+            required=True,
+        )
+        if should_stop:
+            raise _WizardQuitRequested
+        if _wizard_backtrack_requested(storage_mode):
+            storage_mode = required_storage_mode or _SOPERATOR_ONBOARDING_DEFAULT_STORAGE_MODE
+        normalized_storage_mode = _normalize_soperator_onboarding_storage_mode(storage_mode)
+    normalized_storage_mode = _validate_soperator_onboarding_storage_mode_for_report(
+        storage_mode=normalized_storage_mode,
+        report=report,
+    )
+    target_row["soperator_onboarding"]["storage_mode"] = normalized_storage_mode
     return target_row
+
+
+def _soperator_onboarding_target_ref_from_context(kube_context: str) -> str:
+    match = re.match(r"^nebius-(?P<target>.+)-mk8scluster-[^-]+(?:-.+)?$", kube_context)
+    if match is None:
+        return ""
+    return normalize_component_token(match.group("target"))
+
+
+def _normalize_soperator_onboarding_storage_mode(raw_value: str | None) -> str:
+    storage_mode = normalize_component_token(raw_value) or _SOPERATOR_ONBOARDING_DEFAULT_STORAGE_MODE
+    if storage_mode not in _SOPERATOR_ONBOARDING_STORAGE_MODES:
+        available = ", ".join(_SOPERATOR_ONBOARDING_STORAGE_MODES)
+        raise RuntimeError(
+            "Invalid Soperator onboarding storage mode "
+            f"'{raw_value}'. Choose one of: {available}."
+        )
+    return storage_mode
+
+
+def _soperator_onboarding_target_row_from_options(
+    *,
+    target_ref: str | None,
+    kube_context: str | None,
+    storage_mode: str | None,
+) -> dict[str, Any]:
+    context = _non_empty_text(kube_context) or _current_kube_context_name()
+    if not context:
+        raise RuntimeError(
+            "Manual Soperator onboarding options require a kubectl context for the "
+            "existing Nebius MK8s cluster. Pass --kube-context, or omit manual target "
+            "options in interactive mode so cxcli lists project MK8s clusters."
+        )
+    normalized_target = (
+        normalize_component_token(target_ref)
+        or _soperator_onboarding_target_ref_from_context(context)
+        or "mk8s"
+    )
+    normalized_storage_mode = _normalize_soperator_onboarding_storage_mode(storage_mode)
+    with _soperator_onboarding_status(
+        f"Discovering Soperator components on {normalized_target} ({context})..."
+    ):
+        snapshot = collect_kubectl_soperator_snapshot(kube_context=context)
+    chart_version, app_version = _soperator_catalog_pinned_versions()
+    with _soperator_onboarding_status("Building migration profile diff..."):
+        target_row = _soperator_onboarding_target_defaults(
+            normalized_target,
+            kube_context=context,
+            storage_mode=normalized_storage_mode,
+            snapshot=snapshot,
+            pinned_chart_version=chart_version,
+            pinned_app_version=app_version,
+        )
+        report = analyze_soperator_onboarding_snapshot(
+            snapshot,
+            target_ref=normalized_target,
+            pinned_chart_version=chart_version,
+            pinned_app_version=app_version,
+        )
+    _print_soperator_onboarding_report_summary(report)
+    return target_row
+
+
+def _upsert_soperator_onboarding_target(
+    payload: dict[str, Any],
+    *,
+    target_row: dict[str, Any],
+) -> bool:
+    target_ref = component_instance_id(target_row)
+    if not target_ref:
+        raise RuntimeError("Soperator onboarding target requires a non-empty instance_id.")
+
+    infra_rows = _scope_rows(payload, scope="infra")
+    for row in infra_rows:
+        if (
+            isinstance(row, Mapping)
+            and bool(row.get("enabled", False))
+            and component_type_id(row) == "mk8s"
+            and component_instance_id(row) == target_ref
+        ):
+            raise RuntimeError(
+                f"Soperator onboarding target '{target_ref}' already exists as a "
+                "Terraform-managed infra:mk8s row. Use create/component add for managed "
+                "production clusters, or choose a different external target id."
+            )
+
+    deploy = payload.setdefault("deploy", {})
+    if not isinstance(deploy, dict):
+        raise RuntimeError("config payload deploy section must be a mapping")
+    targets = deploy.setdefault("targets", [])
+    if not isinstance(targets, list):
+        raise RuntimeError("config payload deploy.targets must be a list")
+
+    for row in targets:
+        if not isinstance(row, dict):
+            continue
+        if component_instance_id(row) != target_ref:
+            continue
+        if not deploy_target_is_external_mk8s(row):
+            raise RuntimeError(
+                f"deploy target '{target_ref}' already exists and is not an external MK8s target."
+            )
+        row.update(copy.deepcopy(target_row))
+        return False
+
+    targets.append(copy.deepcopy(target_row))
+    return True
+
+
+def _ensure_soperator_onboarding_app_row(
+    payload: dict[str, Any],
+    *,
+    target_ref: str,
+    app_entries: tuple[ComponentEntry, ...],
+) -> bool:
+    entry_by_id = {entry.id: entry for entry in app_entries}
+    soperator_entry = entry_by_id.get(_SOPERATOR_APP_ID)
+    if soperator_entry is None:
+        raise RuntimeError("Soperator app entry is not available in the active catalog.")
+
+    charts = _scope_rows(payload, scope="apps")
+    for row in charts:
+        if (
+            isinstance(row, dict)
+            and component_type_id(row) == _SOPERATOR_APP_ID
+            and component_instance_id(row) == target_ref
+        ):
+            row["enabled"] = True
+            row[_SOPERATOR_INSTALL_MODE_FIELD] = _SOPERATOR_INSTALL_MODE_ONBOARD_EXISTING_CLUSTER
+            row.setdefault("values", {})
+            return False
+
+    row = _append_component_instance_row(
+        payload=payload,
+        entry=soperator_entry,
+        requested_instance_id=target_ref,
+        allow_unassigned_app_target=True,
+    )
+    row[_SOPERATOR_INSTALL_MODE_FIELD] = _SOPERATOR_INSTALL_MODE_ONBOARD_EXISTING_CLUSTER
+    row.setdefault("values", {})
+    return True
+
+
+def _apply_soperator_onboarding_to_payload(
+    payload: dict[str, Any],
+    *,
+    target_row: dict[str, Any],
+    app_entries: tuple[ComponentEntry, ...],
+) -> tuple[str, bool, bool, tuple[str, ...]]:
+    target_row = copy.deepcopy(target_row)
+    target_row.pop(_SOPERATOR_DISCOVERY_REPORT_PRIVATE_KEY, None)
+    target_ref = component_instance_id(target_row)
+    target_added = _upsert_soperator_onboarding_target(payload, target_row=target_row)
+    app_added = _ensure_soperator_onboarding_app_row(
+        payload,
+        target_ref=target_ref,
+        app_entries=app_entries,
+    )
+    dependency_rows = _ensure_soperator_onboarding_required_app_rows(
+        payload,
+        app_entries=app_entries,
+    )
+    _materialize_single_target_app_bindings(payload)
+    _ensure_soperator_onboarding_target(payload, interactive=False)
+    _materialize_soperator_component_defaults(payload)
+    selected_apps = _enabled_ids_from_runtime_payload(payload=payload, entries=app_entries)
+    _materialize_soperator_child_chart_secret_dependencies(
+        payload,
+        selected_apps=selected_apps,
+        app_entries=app_entries,
+    )
+    _refresh_soperator_onboarding_fingerprints(payload)
+    selection_issues = _selection_change_issues(payload)
+    if selection_issues:
+        raise RuntimeError(
+            "Soperator onboarding would leave config.yaml with unresolved dependencies:\n  - "
+            + "\n  - ".join(selection_issues)
+        )
+    dependency_labels = tuple(
+        component_instance_label(component_type_id(row), component_instance_id(row))
+        for row in dependency_rows
+    )
+    return target_ref, target_added, app_added, dependency_labels
 
 
 def _ensure_soperator_onboarding_target(
@@ -8060,7 +8456,7 @@ def _ensure_soperator_onboarding_target(
         elif len(existing_targets) == 1:
             target_row = cast(dict[str, Any], next(iter(existing_targets.values())))
         if target_row is None and interactive:
-            target_row = _prompt_soperator_onboarding_target_row()
+            target_row = _prompt_soperator_onboarding_target_row(payload=payload)
             targets.append(target_row)
             existing_targets[component_instance_id(target_row)] = target_row
         if target_row is None:
@@ -8298,7 +8694,6 @@ def _refresh_soperator_onboarding_fingerprints(payload: dict[str, Any]) -> None:
             fingerprint_payload,
             target_ref=target_ref,
         )
-        onboarding.setdefault("analysis_report", soperator_onboarding_report_path(target_ref))
 
 
 def _merge_missing_mapping(target: dict[str, Any], defaults: Mapping[str, Any]) -> None:
@@ -8567,6 +8962,12 @@ def _soperator_onboarding_storage_mode_by_target(payload: Mapping[str, Any]) -> 
             if isinstance(onboarding, Mapping)
             else ""
         )
+        if storage_mode and storage_mode not in _SOPERATOR_ONBOARDING_STORAGE_MODES:
+            available = ", ".join(_SOPERATOR_ONBOARDING_STORAGE_MODES)
+            raise ValueError(
+                "Invalid deploy.targets[].soperator_onboarding.storage_mode "
+                f"'{storage_mode}' for target '{target_ref}'. Choose one of: {available}."
+            )
         if storage_mode in _SOPERATOR_ONBOARDING_STORAGE_MODES:
             result[target_ref] = storage_mode
     return result
@@ -10840,58 +11241,10 @@ def _materialize_soperator_onboarding_storage_mode(
     install_mode: str,
     storage_mode: str,
 ) -> None:
+    _ = values, inputs, storage_mode
     if install_mode != _SOPERATOR_INSTALL_MODE_ONBOARD_EXISTING_CLUSTER:
         return
-    if storage_mode != "use-existing-pvc-or-storageclass":
-        return
-
-    _materialize_soperator_onboarding_local_inputs(inputs)
-
-    volume_values = values.setdefault("volume", {})
-    if not isinstance(volume_values, dict):
-        volume_values = {}
-        values["volume"] = volume_values
-    for storage_key in ("jail", "controllerSpool"):
-        section = volume_values.setdefault(storage_key, {})
-        if isinstance(section, dict):
-            section.setdefault("type", "local")
-    accounting_volume = volume_values.setdefault("accounting", {})
-    if isinstance(accounting_volume, dict):
-        accounting_volume["enabled"] = False
-        accounting_volume.setdefault("type", "local")
-    populate_jail = values.setdefault("populateJail", {})
-    if isinstance(populate_jail, dict):
-        populate_jail.setdefault("overwrite", True)
-        populate_jail.setdefault("k8sNodeFilterName", "system")
-
-    values.setdefault("customSlurmConfig", "PlugStackConfig=/dev/null")
-
-    controller_manager = values.setdefault("controllerManager", {})
-    if isinstance(controller_manager, dict):
-        manager = controller_manager.setdefault("manager", {})
-        if isinstance(manager, dict):
-            env = manager.setdefault("env", {})
-            if isinstance(env, dict):
-                env["isMariadbCrdInstalled"] = "false"
-
-    mariadb_operator = values.setdefault("mariadb-operator", {})
-    if isinstance(mariadb_operator, dict):
-        mariadb_operator["installOperator"] = False
-
-    slurm_nodes = values.setdefault("slurmNodes", {})
-    if isinstance(slurm_nodes, dict):
-        accounting = slurm_nodes.setdefault("accounting", {})
-        if isinstance(accounting, dict):
-            accounting["enabled"] = False
-            mariadb = accounting.setdefault("mariadbOperator", {})
-            if isinstance(mariadb, dict):
-                mariadb["enabled"] = False
-        rest = slurm_nodes.setdefault("rest", {})
-        if isinstance(rest, dict):
-            rest["enabled"] = False
-        exporter = slurm_nodes.setdefault("exporter", {})
-        if isinstance(exporter, dict):
-            exporter["enabled"] = False
+    return
 
 
 def _soperator_onboarding_local_storage_node(inputs: Mapping[str, Any]) -> str:
@@ -26330,9 +26683,10 @@ def _upsert_named_kubeconfig_entry(
     return kept
 
 
-def _mk8s_cluster_handoff_spec(
-    config: Any,
+def _mk8s_cluster_handoff_spec_for_identity(
     *,
+    project_id: str,
+    client_name: str,
     cluster_id: str,
     access: str,
 ) -> _Mk8sKubeconfigSpec:
@@ -26343,11 +26697,11 @@ def _mk8s_cluster_handoff_spec(
             "Nebius mk8s SDK bindings are required for cluster handoff kubeconfig generation."
         ) from exc
 
-    project_id = str(config.client_info.nebius.project_id).strip()
-    client_name = str(config.client_info.client_name).strip()
+    normalized_project_id = str(project_id or "").strip()
+    normalized_client_name = str(client_name or "").strip()
     endpoint_override = _non_empty_text(os.environ.get("NEBIUS_ENDPOINT")) or None
     sdk = init_nebius_sdk(
-        parent_id=project_id or None,
+        parent_id=normalized_project_id or None,
         endpoint=endpoint_override,
         context="MK8s cluster handoff",
     )
@@ -26384,8 +26738,8 @@ def _mk8s_cluster_handoff_spec(
     access_token = _runtime_auth_cache_segment(access, fallback="access")
     entry_base = f"nebius-{cluster_name_token}-{cluster_id_token}-{access_token}"
     exec_command, exec_args = _mk8s_token_exec_command(
-        project_id=project_id,
-        client_name=client_name,
+        project_id=normalized_project_id,
+        client_name=normalized_client_name,
         endpoint=endpoint_override,
     )
     return _Mk8sKubeconfigSpec(
@@ -26396,6 +26750,20 @@ def _mk8s_cluster_handoff_spec(
         ca_pem=ca_pem,
         exec_command=exec_command,
         exec_args=exec_args,
+    )
+
+
+def _mk8s_cluster_handoff_spec(
+    config: Any,
+    *,
+    cluster_id: str,
+    access: str,
+) -> _Mk8sKubeconfigSpec:
+    return _mk8s_cluster_handoff_spec_for_identity(
+        project_id=str(config.client_info.nebius.project_id).strip(),
+        client_name=str(config.client_info.client_name).strip(),
+        cluster_id=cluster_id,
+        access=access,
     )
 
 
@@ -29368,6 +29736,13 @@ class BootstrapResult:
 
 
 @dataclass(frozen=True)
+class SoperatorOnboardConfigTarget:
+    config_path: Path
+    bootstrap_result: BootstrapResult | None = None
+    gitignore_result: DeploymentsGitignoreResult | None = None
+
+
+@dataclass(frozen=True)
 class DeploymentsGitignoreResult:
     path: Path | None
     wrote: bool
@@ -30149,6 +30524,127 @@ def _scaffold_instance(
     )
 
 
+def _path_looks_like_config_yaml(path: Path) -> bool:
+    return path.name == "config.yaml" or path.suffix.lower() in {".yaml", ".yml"}
+
+
+def _resolve_soperator_onboard_config_target(
+    target_path: Path,
+    *,
+    interactive: bool,
+    client_name: str | None,
+    tenant_id: str | None,
+    project_id: str | None,
+    region_id: str | None,
+    email: str | None,
+    infra_entries: tuple[ComponentEntry, ...],
+    app_entries: tuple[ComponentEntry, ...],
+) -> SoperatorOnboardConfigTarget:
+    resolved_path = target_path.resolve()
+    if resolved_path.exists() and not resolved_path.is_dir():
+        return SoperatorOnboardConfigTarget(config_path=resolved_path)
+    if resolved_path.is_dir():
+        if _path_looks_like_config_yaml(resolved_path):
+            raise RuntimeError(f"Config path must be a file, not a directory: {resolved_path}")
+        direct_config_path = resolved_path / "config.yaml"
+        if direct_config_path.exists():
+            if direct_config_path.is_dir():
+                raise RuntimeError(
+                    f"Config path must be a file, not a directory: {direct_config_path}"
+                )
+            return SoperatorOnboardConfigTarget(config_path=direct_config_path.resolve())
+    if _path_looks_like_config_yaml(resolved_path):
+        return SoperatorOnboardConfigTarget(config_path=resolved_path)
+
+    _validate_deployments_root_target(resolved_path, allow_missing=True)
+    deployments_root = _resolve_deployments_root(resolved_path)
+    _assert_not_nested_deployments_root(deployments_root)
+    resolved_tenant_id = _value_or_prompt(
+        tenant_id,
+        option_name="--tenant-id",
+        prompt_text="Tenant ID",
+        interactive=interactive,
+    )
+    resolved_project_id = _value_or_prompt(
+        project_id,
+        option_name="--project-id",
+        prompt_text="Project ID",
+        interactive=interactive,
+    )
+    provider_lookup = ProviderOptionLookup()
+    resolved_tenant_id, resolved_project_id = _validate_tenant_project_ids_or_prompt(
+        tenant_id=resolved_tenant_id,
+        project_id=resolved_project_id,
+        interactive=interactive,
+        provider_lookup=provider_lookup,
+    )
+    resolved_tenant_folder, resolved_project_folder = _resolve_create_target_folders(
+        provider_lookup=provider_lookup,
+        tenant_id=resolved_tenant_id,
+        project_id=resolved_project_id,
+    )
+    config_path = _project_config_path(
+        deployments_root=deployments_root,
+        tenant_folder=resolved_tenant_folder,
+        project_folder=resolved_project_folder,
+    )
+    if config_path.exists():
+        with config_path.open("r", encoding="utf-8") as handle:
+            loaded_payload = yaml.safe_load(handle) or {}
+        if not isinstance(loaded_payload, dict):
+            raise RuntimeError("Existing config.yaml payload must be a mapping")
+        (
+            _existing_client_name,
+            existing_tenant_id,
+            existing_project_id,
+            _existing_region_id,
+            _existing_email,
+        ) = _identity_values_from_payload(loaded_payload)
+        if (
+            existing_tenant_id != resolved_tenant_id
+            or existing_project_id != resolved_project_id
+        ):
+            raise RuntimeError(
+                "Resolved name-based project path collision: "
+                f"{config_path.parent} already belongs to tenant_id/project_id "
+                f"'{existing_tenant_id}'/'{existing_project_id}', not "
+                f"'{resolved_tenant_id}'/'{resolved_project_id}'. "
+                "Pass the existing config.yaml directly or choose a different Nebius scope."
+            )
+        gitignore_result = _ensure_deployments_gitignore(deployments_root=deployments_root)
+        return SoperatorOnboardConfigTarget(
+            config_path=config_path.resolve(),
+            gitignore_result=gitignore_result,
+        )
+
+    resolved_client_name = _client_name_or_prompt(client_name, interactive=interactive)
+    resolved_region_id = _region_or_prompt(region_id or None, interactive=interactive)
+    resolved_email = _optional_email_or_prompt(email, interactive=interactive)
+    bootstrap_result = _scaffold_instance(
+        base_path=deployments_root,
+        client_name=resolved_client_name,
+        tenant_folder=resolved_tenant_folder,
+        project_folder=resolved_project_folder,
+        tenant_id=resolved_tenant_id,
+        project_id=resolved_project_id,
+        region_id=resolved_region_id,
+        email=resolved_email,
+        selected_infra=set(),
+        selected_apps=set(),
+        infra_entries=infra_entries,
+        app_entries=app_entries,
+        force=False,
+    )
+    gitignore_result = _ensure_deployments_gitignore(
+        deployments_root=bootstrap_result.deployments_root,
+    )
+    return SoperatorOnboardConfigTarget(
+        config_path=bootstrap_result.config_path.resolve(),
+        bootstrap_result=bootstrap_result,
+        gitignore_result=gitignore_result,
+    )
+
+
 @app.command(
     "create",
     short_help="Use DEPLOYMENTS_ROOT to bootstrap one name-based tenant/project folder with config.yaml plus generated/ skeleton.",
@@ -30170,7 +30666,9 @@ def _scaffold_instance(
         "nebius-cxcli create ./deployments --client-name acme --infra mk8s,sfs --app soperator --no-interactive "
         "(non-interactive Soperator production cluster with default GPU nodesets profile); "
         "nebius-cxcli create ./deployments --client-name acme --infra mk8s --app soperator "
-        "(onboarded mode prompts for existing MK8s target). "
+        "(guided Soperator production cluster). "
+        "nebius-cxcli soperator onboard ./deployments/tenant/project/config.yaml "
+        "(register an existing Nebius MK8s target for Soperator). "
         "Soperator wizard picks soperator_nodesets_profile (nebius-cpu/gpu/mixed-v1), "
         "partition_profile (shape-default | with-debug-long | with-qos-preemption | with-h100-infiniband-debug-long), "
         "and topology_profile (disabled | nebius-tiered-tree-v1 | nebius-nvl-rack-v1 for GB300/NVL)."
@@ -30225,10 +30723,10 @@ def create_command(
             help=(
                 "Apps component id(s) to enable (repeat option or pass comma-separated ids; "
                 "supports ids or numeric indexes in interactive mode; "
-                "requires a managed or onboarded MK8s target in the same project; "
+                "requires a managed MK8s target in the same project; "
                 "app chart dependencies are auto-resolved when chart metadata is available; "
-                "selecting soperator prompts for either an onboard-existing-cluster "
-                "role-mapping install or a complete production MK8s+SFS+Soperator cluster)"
+                "selecting soperator creates a complete production MK8s+SFS+Soperator "
+                "cluster; use `soperator onboard` for existing Nebius MK8s targets)"
             ),
         ),
     ] = None,
@@ -30579,30 +31077,23 @@ def create_command(
         soperator_install_mode: str | None = None
         soperator_profile: str | None = None
         if interactive_mode and optional_wizard_mode and _SOPERATOR_APP_ID in selected_apps_raw:
+            soperator_install_mode = _SOPERATOR_INSTALL_MODE_PRODUCTION
             console.print(
-                "[dim]Soperator install mode controls whether cxcli creates the full "
-                "production MK8s+SFS bundle or onboards an external Nebius MK8s "
-                "target for role mapping.[/dim]"
+                "[dim]Soperator create materializes the full production MK8s+SFS "
+                "bundle. Use `nebius-cxcli soperator onboard "
+                "<config.yaml-or-deployments-root>` for existing Nebius MK8s "
+                "clusters.[/dim]"
+            )
+            console.print(
+                "[dim]Soperator worker profile controls whether the fresh "
+                "production bundle uses CPU-only, GPU-only, or mixed worker "
+                "NodeSets before MK8s fields and validations are prompted.[/dim]"
             )
             try:
-                soperator_install_mode = _prompt_soperator_install_mode()
+                soperator_profile = _prompt_soperator_profile()
             except _WizardQuitRequested:
                 optional_wizard_mode = False
-                soperator_install_mode = _default_soperator_install_mode()
-            if (
-                optional_wizard_mode
-                and soperator_install_mode == _SOPERATOR_INSTALL_MODE_PRODUCTION
-            ):
-                console.print(
-                    "[dim]Soperator worker profile controls whether the fresh "
-                    "production bundle uses CPU-only, GPU-only, or mixed worker "
-                    "NodeSets before MK8s fields and validations are prompted.[/dim]"
-                )
-                try:
-                    soperator_profile = _prompt_soperator_profile()
-                except _WizardQuitRequested:
-                    optional_wizard_mode = False
-                    soperator_profile = _default_soperator_profile_name()
+                soperator_profile = _default_soperator_profile_name()
         selected_infra_before_soperator_expansion = set(selected_infra_raw)
         selected_apps_before_soperator_expansion = set(selected_apps_raw)
         selected_infra_raw, skipped_onboarding_infra = _prune_soperator_onboarding_infra_selection(
@@ -31061,7 +31552,7 @@ def create_command(
     short_help="Use --config CONFIG_YAML to inspect enabled instances and available catalog components.",
     epilog=(
         "Examples: "
-        "nebius-cxcli component list --config ./deployments/acme/config.yaml "
+        "nebius-cxcli component list --config ./deployments/tenant/project/config.yaml "
         "(shows enabled mk8s/sfs/soperator instances and their target_ref bindings); "
         "from the project folder: nebius-cxcli component list (auto-resolves ./config.yaml)."
     ),
@@ -31156,19 +31647,21 @@ def component_list_command(
     short_help="Add component selectors to required --config CONFIG_YAML.",
     epilog=(
         "Examples: "
-        "nebius-cxcli component add apps:soperator --config ./deployments/acme/config.yaml "
-        "(adds Soperator and prompts for install mode + nodesets/partition/topology profiles); "
+        "nebius-cxcli component add apps:soperator --config ./deployments/tenant/project/config.yaml "
+        "(adds the production Soperator bundle and prompts for nodesets/partition/topology "
+        "profiles; use nebius-cxcli soperator onboard "
+        "<config.yaml-or-deployments-root> for existing MK8s targets); "
         "nebius-cxcli component add apps:external-secrets@target-mk8s-prod "
-        "--config ./deployments/acme/config.yaml --no-interactive "
+        "--config ./deployments/tenant/project/config.yaml --no-interactive "
         "(adds External Secrets to a specific MK8s target_ref); "
         "nebius-cxcli component add apps:soperator@target-mk8s-prod "
-        "--config ./deployments/acme/config.yaml "
+        "--config ./deployments/tenant/project/config.yaml "
         "(binds Soperator to a specific MK8s target_ref); "
         "nebius-cxcli component add managed-postgresql object-storage@logs-bucket "
-        "--config ./deployments/acme/config.yaml --no-interactive "
+        "--config ./deployments/tenant/project/config.yaml --no-interactive "
         "(adds multiple components in one call); "
         "nebius-cxcli component add apps:soperator "
-        "--config ./deployments/acme/config.yaml --no-interactive "
+        "--config ./deployments/tenant/project/config.yaml --no-interactive "
         "(uses catalog defaults: nebius-gpu-v1 / shape-default / topology disabled)."
     ),
 )
@@ -31195,9 +31688,10 @@ def component_add_command(
                 "choose the resource name or create another named infra row. "
                 "Apps are Helm charts and require an enabled MK8s target in the "
                 "same project. For apps:soperator, the wizard first asks "
-                "for an install mode: onboarding registers an external Nebius MK8s target "
-                "and maps roles onto discovered node groups, while production cluster "
-                "creates the MK8s+SFS+Soperator bundle."
+                "for the production worker profile and creates the MK8s+SFS+Soperator "
+                "bundle. Use `nebius-cxcli soperator onboard "
+                "<config.yaml-or-deployments-root>` to register an existing Nebius "
+                "MK8s target and map roles onto discovered node groups."
             ),
         ),
     ] = None,
@@ -31434,29 +31928,7 @@ def component_add_command(
         selected_apps_raw = set(enabled_apps) | requested_apps_types
         soperator_install_mode: str | None = None
         soperator_profile: str | None = None
-        if interactive_mode and _SOPERATOR_APP_ID in requested_apps_types:
-            console.print(
-                "[dim]Soperator install mode controls whether cxcli creates the full "
-                "production MK8s+SFS bundle or onboards an external Nebius MK8s "
-                "target for role mapping.[/dim]"
-            )
-            try:
-                soperator_install_mode = _prompt_soperator_install_mode()
-            except _WizardQuitRequested:
-                console.print("No component changes applied.")
-                return
-            if soperator_install_mode == _SOPERATOR_INSTALL_MODE_PRODUCTION:
-                console.print(
-                    "[dim]Soperator worker profile controls whether the production "
-                    "bundle uses CPU-only, GPU-only, or mixed worker NodeSets before "
-                    "MK8s fields and validations are prompted.[/dim]"
-                )
-                try:
-                    soperator_profile = _prompt_soperator_profile()
-                except _WizardQuitRequested:
-                    console.print("No component changes applied.")
-                    return
-        if soperator_install_mode is None and _SOPERATOR_APP_ID in requested_apps_types:
+        if _SOPERATOR_APP_ID in requested_apps_types:
             inferred_install_mode = _infer_soperator_component_add_install_mode(
                 payload=payload,
                 add_targets=add_targets,
@@ -31468,6 +31940,29 @@ def component_add_command(
                     "'apps:soperator' install_mode=onboard-existing-cluster because "
                     "the requested Soperator target is an existing external MK8s target."
                 )
+            else:
+                soperator_install_mode = _SOPERATOR_INSTALL_MODE_PRODUCTION
+            if (
+                interactive_mode
+                and soperator_install_mode == _SOPERATOR_INSTALL_MODE_PRODUCTION
+            ):
+                console.print(
+                    "[dim]Soperator component add materializes the production "
+                    "MK8s+SFS+Soperator bundle. Use "
+                    "`nebius-cxcli soperator onboard "
+                    "<config.yaml-or-deployments-root>` for existing Nebius MK8s "
+                    "clusters.[/dim]"
+                )
+                console.print(
+                    "[dim]Soperator worker profile controls whether the production "
+                    "bundle uses CPU-only, GPU-only, or mixed worker NodeSets before "
+                    "MK8s fields and validations are prompted.[/dim]"
+                )
+                try:
+                    soperator_profile = _prompt_soperator_profile()
+                except _WizardQuitRequested:
+                    console.print("No component changes applied.")
+                    return
         selected_infra_raw, skipped_onboarding_infra = _prune_soperator_onboarding_infra_selection(
             selected_infra=selected_infra_raw,
             selected_apps=selected_apps_raw,
@@ -32174,12 +32669,477 @@ def component_add_command(
         _exit_with_error(exc)
 
 
+@soperator_app.command(
+    "onboard",
+    short_help="Register an existing Nebius MK8s target for Soperator.",
+    epilog=(
+        "Examples: "
+        "nebius-cxcli soperator onboard ./deployments/tenant/project/config.yaml "
+        "(update an existing project config); "
+        "nebius-cxcli soperator onboard ./deployments --client-name acme "
+        "--tenant-id TENANT --project-id PROJECT --region-id eu-north1 "
+        "(create a project config under the deployments root, then choose one existing "
+        "Nebius MK8s cluster from the project); "
+        "nebius-cxcli soperator onboard ./deployments/tenant/project/config.yaml "
+        "--target external-cluster --kube-context nebius-external-cluster-mk8scluster-... "
+        "--storage-mode keep-existing-storage --no-interactive. "
+        f"The command updates config.yaml and writes {SOURCE_SOPERATOR_DISCOVERY_REPORT_NAME}; "
+        "run validate, render, and deploy afterwards."
+    ),
+)
+def soperator_onboard_command(
+    target_path: Annotated[
+        Path,
+        typer.Argument(
+            metavar="CONFIG_OR_DEPLOYMENTS_ROOT",
+            help=_SOPERATOR_ONBOARD_TARGET_ARGUMENT_HELP,
+        ),
+    ],
+    client_name: Annotated[
+        str | None,
+        typer.Option(
+            "--client-name",
+            help=(
+                "Client slug for new config creation from a deployments root "
+                "(lowercase letters/digits/hyphens)."
+            ),
+        ),
+    ] = None,
+    tenant_id: Annotated[
+        str | None,
+        typer.Option(
+            "--tenant-id",
+            help="Nebius tenant identifier for new config creation from a deployments root.",
+        ),
+    ] = None,
+    project_id: Annotated[
+        str | None,
+        typer.Option(
+            "--project-id",
+            help="Nebius project identifier for new config creation from a deployments root.",
+        ),
+    ] = None,
+    region_id: Annotated[
+        str | None,
+        typer.Option(
+            "--region-id",
+            help=(
+                "Nebius region identifier for new config creation from a deployments root, "
+                "for example eu-north1."
+            ),
+        ),
+    ] = None,
+    email: Annotated[
+        str | None,
+        typer.Option(
+            "--email",
+            help="Optional notifications email for new config creation from a deployments root.",
+        ),
+    ] = None,
+    target_ref_opt: Annotated[
+        str | None,
+        typer.Option(
+            "--target",
+            "--target-ref",
+            help=(
+                "Non-interactive external Nebius MK8s target id to write under "
+                "deploy.targets[].instance_id. Interactive onboarding lists project MK8s "
+                "clusters instead of prompting for this value."
+            ),
+        ),
+    ] = None,
+    kube_context_opt: Annotated[
+        str | None,
+        typer.Option(
+            "--kube-context",
+            help=(
+                "Non-interactive kubectl context for the existing Nebius MK8s cluster. "
+                "Interactive onboarding derives access from the selected Nebius MK8s cluster ID."
+            ),
+        ),
+    ] = None,
+    storage_mode_opt: Annotated[
+        str,
+        typer.Option(
+            "--storage-mode",
+            help=(
+                "Soperator onboarding storage mode: keep-existing-storage or create-aligned-sfs."
+            ),
+        ),
+    ] = "keep-existing-storage",
+    validate_sources: Annotated[
+        bool,
+        typer.Option(
+            "--validate-sources/--no-validate-sources",
+            help=(
+                "Validate selected Soperator app chart sources before writing config.yaml "
+                "(enabled by default)."
+            ),
+        ),
+    ] = True,
+    no_interactive: Annotated[
+        bool,
+        typer.Option(
+            "--no-interactive",
+            help="Disable project cluster selection; use explicit --target/--kube-context options.",
+        ),
+    ] = False,
+) -> None:
+    """Register an existing Nebius MK8s target for Soperator."""
+    try:
+        interactive_mode = not no_interactive
+        infra_entries = _with_infra_provider_groups(component_entries("infra"))
+        app_entries = component_entries("apps")
+        if validate_sources:
+            _validate_component_sources_or_raise(
+                selected_app_ids={_SOPERATOR_APP_ID, *_SOPERATOR_REQUIRED_APP_COMPONENT_IDS},
+                include_infra=False,
+            )
+        resolved_target = _resolve_soperator_onboard_config_target(
+            target_path,
+            interactive=interactive_mode,
+            client_name=client_name,
+            tenant_id=tenant_id,
+            project_id=project_id,
+            region_id=region_id,
+            email=email,
+            infra_entries=infra_entries,
+            app_entries=app_entries,
+        )
+        config_path = resolved_target.config_path
+        payload = _load_config_payload(config_path)
+
+        if interactive_mode and not target_ref_opt and not kube_context_opt:
+            _client_name, _tenant_id, resolved_project_id, _region_id, _email = (
+                _identity_values_from_payload(payload)
+            )
+            provider_lookup = ProviderOptionLookup()
+            storage_mode_override = (
+                storage_mode_opt
+                if normalize_component_token(storage_mode_opt)
+                != _SOPERATOR_ONBOARDING_DEFAULT_STORAGE_MODE
+                else None
+            )
+            if storage_mode_override is None:
+                target_row = _prompt_soperator_onboarding_target_row(
+                    payload=payload,
+                    project_id=resolved_project_id,
+                    provider_lookup=provider_lookup,
+                )
+            else:
+                target_row = _prompt_soperator_onboarding_target_row(
+                    payload=payload,
+                    project_id=resolved_project_id,
+                    provider_lookup=provider_lookup,
+                    storage_mode=storage_mode_override
+                )
+        else:
+            target_row = _soperator_onboarding_target_row_from_options(
+                target_ref=target_ref_opt,
+                kube_context=kube_context_opt,
+                storage_mode=storage_mode_opt,
+            )
+
+        source_report_path = _write_soperator_source_discovery_report_from_target_row(
+            config_path=config_path,
+            target_row=target_row,
+        )
+
+        next_payload = copy.deepcopy(payload)
+        target_ref, target_added, app_added, dependency_labels = (
+            _apply_soperator_onboarding_to_payload(
+                next_payload,
+                target_row=target_row,
+                app_entries=app_entries,
+            )
+        )
+        _prune_redundant_app_chart_default_values(
+            payload=next_payload,
+            app_entries=app_entries,
+        )
+        _refresh_soperator_onboarding_fingerprints(next_payload)
+
+        wrote_config = _write_runtime_payload_config(config_path, next_payload)
+        gitignore_result = resolved_target.gitignore_result
+        if resolved_target.bootstrap_result is not None:
+            console.print(f"Deployments root: {resolved_target.bootstrap_result.deployments_root}")
+            console.print(f"Created project: {resolved_target.bootstrap_result.project_path}")
+        if gitignore_result is not None and gitignore_result.path is not None:
+            if gitignore_result.wrote:
+                console.print(f"Ensured deployments .gitignore: {gitignore_result.path}")
+            else:
+                console.print(f"Deployments .gitignore up-to-date: {gitignore_result.path}")
+        if wrote_config:
+            console.print(f"Updated: {config_path}")
+        else:
+            console.print(f"Config up-to-date: {config_path}")
+        if source_report_path is not None:
+            console.print(f"Wrote Soperator source discovery report: {source_report_path}")
+        target_action = "Registered" if target_added else "Refreshed"
+        console.print(f"{target_action} external MK8s target: {target_ref}")
+        if app_added:
+            console.print(f"Added apps component: apps:soperator@{target_ref}")
+        if dependency_labels:
+            console.print(
+                "Added Soperator dependency apps: "
+                + ", ".join(_target_aware_added_app_labels(next_payload, dependency_labels))
+            )
+        _print_component_edit_config_only_note()
+        _print_component_edit_next_steps(config_path)
+    except typer.Exit:
+        raise
+    except (KeyboardInterrupt, EOFError, typer.Abort):
+        console.print("[yellow]Cancelled by user[/yellow].")
+        raise typer.Exit(code=130) from None
+    except Exception as exc:  # pragma: no cover - CLI surface
+        _exit_with_error(exc)
+
+
+_SOPERATOR_MIGRATION_ACTIONS = frozenset(
+    {
+        ONBOARDING_ACTION_APPROVE_MIGRATION,
+        ONBOARDING_ACTION_CREATE_ALIGNED_SFS,
+        ONBOARDING_ACTION_PLAN_DATA_MIGRATION,
+        ONBOARDING_ACTION_PLAN_COMPUTE_MIGRATION,
+    }
+)
+_SOPERATOR_MIGRATION_EXECUTOR_CONTRACT_LINES = (
+    "Live executor contract: when --execute is implemented, cxcli will run the "
+    "accepted migration phases with progress bars or spinners for storage, "
+    "compute, and cutover work.",
+    "Failure handling contract: each mutating phase must watch Nebius, "
+    "Kubernetes, Soperator, and Slurm signals; apply bounded retry/remedy "
+    "steps where safe; and stop at manual-review or customer-approval gates.",
+    "Resume contract: long-running phases must use timeout-guarded checkpoints "
+    "so interrupted migrations can be resumed without redoing completed safe "
+    "work or retiring old resources early.",
+)
+
+
+def _resolve_soperator_migration_target_ref(
+    payload: Mapping[str, Any],
+    *,
+    target_ref: str | None,
+) -> str:
+    refs = soperator_onboarding_target_refs(payload)
+    requested = normalize_component_token(target_ref)
+    if requested:
+        if requested not in refs:
+            available = ", ".join(refs) if refs else "none"
+            raise RuntimeError(
+                f"Soperator target '{requested}' is not an onboarded external MK8s target "
+                f"in config.yaml. Available onboarded targets: {available}."
+            )
+        return requested
+    if len(refs) == 1:
+        return refs[0]
+    if not refs:
+        raise RuntimeError(
+            "No onboarded Soperator target was found. Run "
+            "`nebius-cxcli soperator onboard <config.yaml-or-deployments-root>` first."
+        )
+    raise RuntimeError(
+        "Multiple onboarded Soperator targets were found. Pass --target with one of: "
+        + ", ".join(refs)
+    )
+
+
+def _load_soperator_source_discovery_report(
+    *,
+    config_path: Path,
+    target_ref: str,
+) -> dict[str, Any]:
+    report_path = config_path.parent / SOURCE_SOPERATOR_DISCOVERY_REPORT_NAME
+    if not report_path.exists():
+        raise RuntimeError(
+            f"Soperator source discovery report not found: {report_path}. Rerun "
+            "`nebius-cxcli soperator onboard <config.yaml-or-deployments-root>` for this "
+            "target before planning migration."
+        )
+    try:
+        payload = json.loads(report_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"Soperator source discovery report is invalid JSON: {report_path}") from exc
+    if not isinstance(payload, dict):
+        raise RuntimeError(f"Soperator source discovery report must be a JSON object: {report_path}")
+    report_target_ref = normalize_component_token(payload.get("target_ref"))
+    if report_target_ref != target_ref:
+        raise RuntimeError(
+            f"Soperator source discovery report belongs to target '{report_target_ref or '<missing>'}', "
+            f"not '{target_ref}'. Rerun `nebius-cxcli soperator onboard` for the selected "
+            "target so migration uses matching source-cluster evidence."
+        )
+    report = payload.get("report")
+    if not isinstance(report, Mapping):
+        raise RuntimeError(
+            f"Soperator source discovery report is missing report details: {report_path}"
+        )
+    return payload
+
+
+def _soperator_migration_action_flags(onboarding: Mapping[str, Any]) -> dict[str, bool]:
+    actions = {
+        str(action or "").strip()
+        for action in onboarding.get("actions", []) or []
+        if str(action or "").strip()
+    }
+    return {
+        "migration_required": bool(actions & _SOPERATOR_MIGRATION_ACTIONS),
+        "storage_migration_required": bool(
+            actions
+            & {
+                ONBOARDING_ACTION_CREATE_ALIGNED_SFS,
+                ONBOARDING_ACTION_PLAN_DATA_MIGRATION,
+            }
+        ),
+        "compute_migration_required": ONBOARDING_ACTION_PLAN_COMPUTE_MIGRATION in actions,
+    }
+
+
+def _format_soperator_migration_plan_lines(
+    *,
+    config_path: Path,
+    target_ref: str,
+    payload: Mapping[str, Any],
+    source_report: Mapping[str, Any],
+    dry_run: bool,
+) -> list[str]:
+    target = soperator_onboarding_target(payload, target_ref=target_ref)
+    onboarding = target.get("soperator_onboarding") if isinstance(target, Mapping) else {}
+    if not isinstance(onboarding, Mapping):
+        onboarding = {}
+    report = source_report.get("report")
+    if not isinstance(report, Mapping):
+        report = {}
+    flags = _soperator_migration_action_flags(onboarding)
+    phases = report.get("migration_plan")
+    if not isinstance(phases, list):
+        phases = []
+    report_path = config_path.parent / SOURCE_SOPERATOR_DISCOVERY_REPORT_NAME
+    lines = [
+        f"Soperator migration target: {target_ref}",
+        f"Config: {config_path}",
+        f"Source discovery report: {report_path}",
+        f"Onboarding state: {str(onboarding.get('state', '') or report.get('state', '') or 'unknown')}",
+        f"Source version: {str(onboarding.get('source_version', '') or report.get('source_version', '') or 'not detected')}",
+        f"Target version: {str(onboarding.get('target_version', '') or report.get('target_version', '') or 'unknown')}",
+        "Migration required: " + ("yes" if flags["migration_required"] else "no"),
+        "Storage migration required: "
+        + ("yes" if flags["storage_migration_required"] else "no"),
+        "Compute migration required: "
+        + ("yes" if flags["compute_migration_required"] else "no"),
+    ]
+    if phases:
+        lines.append("Migration phases:")
+        for raw_phase in phases:
+            if not isinstance(raw_phase, Mapping):
+                continue
+            phase_id = str(raw_phase.get("id", "") or "phase").strip()
+            title = str(raw_phase.get("title", "") or "").strip()
+            status = str(raw_phase.get("status", "") or "planned").strip()
+            detail = f"- {phase_id}: {status}"
+            if title:
+                detail += f" - {title}"
+            if raw_phase.get("quiet_window") is True:
+                detail += " (quiet window)"
+            if raw_phase.get("requires_customer_approval") is True:
+                detail += " (approval required)"
+            lines.append(detail)
+    else:
+        lines.append(
+            "Migration phases: none in the source report; use render/deploy for install or "
+            "adopt-only reconciliation."
+        )
+    lines.extend(_SOPERATOR_MIGRATION_EXECUTOR_CONTRACT_LINES)
+    mode = "dry-run; no cluster changes were made" if dry_run else "execute"
+    lines.append(f"Execution mode: {mode}.")
+    return lines
+
+
+@soperator_app.command(
+    "migrate",
+    short_help="Plan Soperator compute/storage migration from onboarding discovery.",
+    epilog=(
+        "Example: nebius-cxcli soperator migrate ./deployments/tenant/project/config.yaml "
+        "--target external-cluster --dry-run. The command reads "
+        f"{SOURCE_SOPERATOR_DISCOVERY_REPORT_NAME}, validates the accepted onboarding "
+        "analysis, and prints the compute/storage migration plan. Live execution will "
+        "require --execute after the dedicated migration executor is implemented; "
+        "that executor must show phase progress, watch failures, apply bounded "
+        "safe remedies, and support timeout-guarded resume checkpoints."
+    ),
+)
+def soperator_migrate_command(
+    config_path: Annotated[
+        Path,
+        typer.Argument(metavar="CONFIG_YAML", help=_CONFIG_YAML_ARGUMENT_HELP),
+    ],
+    target_ref_opt: Annotated[
+        str | None,
+        typer.Option(
+            "--target",
+            "--target-ref",
+            help=(
+                "Onboarded external Nebius MK8s target id. Omit only when config.yaml "
+                "contains exactly one onboarded Soperator target."
+            ),
+        ),
+    ] = None,
+    dry_run: Annotated[
+        bool,
+        typer.Option(
+            "--dry-run/--execute",
+            help=(
+                "Print the migration plan without live changes, or request live execution. "
+                "Live execution is intentionally blocked until the timeout-guarded "
+                "migration executor with progress, failure watching, and safe remedies lands."
+            ),
+        ),
+    ] = True,
+) -> None:
+    """Plan Soperator compute/storage migration from onboarding discovery."""
+    try:
+        payload = _load_source_payload(config_path)
+        target_ref = _resolve_soperator_migration_target_ref(
+            payload,
+            target_ref=target_ref_opt,
+        )
+        validate_soperator_onboarding_acceptance(payload, target_ref=target_ref)
+        source_report = _load_soperator_source_discovery_report(
+            config_path=config_path,
+            target_ref=target_ref,
+        )
+        for line in _format_soperator_migration_plan_lines(
+            config_path=config_path,
+            target_ref=target_ref,
+            payload=payload,
+            source_report=source_report,
+            dry_run=dry_run,
+        ):
+            console.print(line, soft_wrap=True)
+        if not dry_run:
+            raise RuntimeError(
+                "Live Soperator migration execution is not implemented yet. This command "
+                "currently provides the explicit migration surface and dry-run plan gate; "
+                "the live executor must add timeout-guarded phase progress, failure "
+                "watching, safe retry/remedy steps, and resumable checkpoints before "
+                "mutating customer clusters."
+            )
+    except typer.Exit:
+        raise
+    except (KeyboardInterrupt, EOFError, typer.Abort):
+        console.print("[yellow]Cancelled by user[/yellow].")
+        raise typer.Exit(code=130) from None
+    except Exception as exc:  # pragma: no cover - CLI surface
+        _exit_with_error(exc)
+
+
 @component_app.command(
     "remove",
     short_help="Remove component selectors from --config CONFIG_YAML.",
     epilog=(
         "Examples: "
-        "nebius-cxcli component remove apps:soperator --config ./deployments/acme/config.yaml "
+        "nebius-cxcli component remove apps:soperator --config ./deployments/tenant/project/config.yaml "
         "(removes a Soperator app; cascades target_ref cleanup on MK8s deploy.targets[]); "
         "nebius-cxcli component remove 'apps:soperator@target-mk8s-prod' "
         "(removes only the binding for a specific MK8s target_ref, keeps other Soperator instances); "
@@ -32386,9 +33346,9 @@ def component_remove_command(
     short_help="Use CONFIG_YAML to reconcile the customer GitHub workflow, email settings, and optional CI auth.",
     epilog=(
         "Examples: "
-        "nebius-cxcli bootstrap-ci ./deployments/acme/config.yaml "
+        "nebius-cxcli bootstrap-ci ./deployments/tenant/project/config.yaml "
         "(reconciles .github/workflows + email config); "
-        "nebius-cxcli bootstrap-ci ./deployments/acme/config.yaml --auth-bootstrap "
+        "nebius-cxcli bootstrap-ci ./deployments/tenant/project/config.yaml --auth-bootstrap "
         "(also provisions a CI service account, auth key, and OS access key); "
         "nebius-cxcli bootstrap-ci ./config.yaml --github-repo acme/cluster-config --cli-ref main "
         "(customizes the CI workflow's repo and cxcli branch ref)."
@@ -32546,7 +33506,7 @@ def bootstrap_ci_command(
     short_help="Use CONFIG_YAML to validate source config, deployment readiness, and live quota/capacity.",
     epilog=(
         "Examples: "
-        "nebius-cxcli validate ./deployments/acme/config.yaml "
+        "nebius-cxcli validate ./deployments/tenant/project/config.yaml "
         "(runs the full validator suite: config model, component sources, MK8s readiness, quota, Soperator onboarding gates). "
         "Validation runs the helm chart's schema check on Soperator values; "
         "typed-vs-raw overlap in schedulingConfig or partition policy is flagged here before render."
@@ -32577,9 +33537,9 @@ def validate_command(
     short_help="Use CONFIG_YAML to run a live Nebius quota/capacity assessment for enabled infra components.",
     epilog=(
         "Examples: "
-        "nebius-cxcli quota-check ./deployments/acme/config.yaml "
+        "nebius-cxcli quota-check ./deployments/tenant/project/config.yaml "
         "(checks quotas in the project's region only); "
-        "nebius-cxcli quota-check ./deployments/acme/config.yaml --all-regions "
+        "nebius-cxcli quota-check ./deployments/tenant/project/config.yaml --all-regions "
         "(aggregates quotas across every Nebius region for cross-region planning)."
     ),
 )
@@ -32642,7 +33602,7 @@ def quota_check_command(
     short_help="Use CONFIG_YAML to plan and submit quota requests for confirmed insufficient Nebius quotas.",
     epilog=(
         "Examples: "
-        "nebius-cxcli quota-request ./deployments/acme/config.yaml "
+        "nebius-cxcli quota-request ./deployments/tenant/project/config.yaml "
         "(reads the latest quota-check result, prompts for each gap, and submits Nebius quota requests). "
         "Run quota-check first; quota-request only acts on confirmed insufficient quotas."
     ),
@@ -34301,9 +35261,9 @@ def grafana_command(
     short_help="Use CONFIG_YAML to validate Grafana dashboard datasource/read-endpoint fit.",
     epilog=(
         "Examples: "
-        "nebius-cxcli validate-dashboards ./deployments/acme/config.yaml "
+        "nebius-cxcli validate-dashboards ./deployments/tenant/project/config.yaml "
         "(checks every dashboard's datasource refs against live Nebius observability endpoints for all enabled targets); "
-        "nebius-cxcli validate-dashboards ./deployments/acme/config.yaml --target mk8s-prod "
+        "nebius-cxcli validate-dashboards ./deployments/tenant/project/config.yaml --target mk8s-prod "
         "(restricts the check to one deploy.targets[] row)."
     ),
 )
@@ -34515,7 +35475,7 @@ def validate_sources_command(
         "Examples: "
         "nebius-cxcli auth --validate-profile "
         "(checks the active Nebius SDK profile against $NEBIUS_SDK_PROFILE / nb config); "
-        "nebius-cxcli auth --project-config ./deployments/acme/config.yaml --create "
+        "nebius-cxcli auth --project-config ./deployments/tenant/project/config.yaml --create "
         "(provisions a per-project Terraform runtime service account, auth key, and OS access key, then writes back to config.yaml); "
         "nebius-cxcli auth --project-id project-xxxx --recreate "
         "(rotates the per-project runtime credentials); "
@@ -34785,11 +35745,11 @@ def auth_command(
     short_help="Use CONFIG_YAML to render and transactionally replace generated/ artifacts.",
     epilog=(
         "Examples: "
-        "nebius-cxcli render ./deployments/acme/config.yaml "
+        "nebius-cxcli render ./deployments/tenant/project/config.yaml "
         "(re-renders generated/infra and generated/flux; transactional swap, prompts on existing artifacts); "
-        "nebius-cxcli render ./deployments/acme/config.yaml --force "
+        "nebius-cxcli render ./deployments/tenant/project/config.yaml --force "
         "(overwrites without prompting); "
-        "nebius-cxcli --source-profile local render ./deployments/acme/config.yaml "
+        "nebius-cxcli --source-profile local render ./deployments/tenant/project/config.yaml "
         "(uses source.local Terraform/Helm paths from component_sources.yaml during development). "
         "Soperator render materializes catalog defaults: schedulingConfig + partitionConfiguration.partitions[].policy, "
         "qosConfiguration (off by default), nodesets[].topologyLabels from the selected topology profile, "
@@ -34967,13 +35927,13 @@ def mk8s_token_command(
     short_help="Use CONFIG_YAML to deploy locally from the sibling rendered bundle.",
     epilog=(
         "Examples: "
-        "nebius-cxcli deploy ./deployments/acme/config.yaml "
+        "nebius-cxcli deploy ./deployments/tenant/project/config.yaml "
         "(runs terraform apply for infra then Flux bootstrap+apply for apps on every deploy target); "
-        "nebius-cxcli deploy ./deployments/acme/config.yaml --target mk8s-prod "
+        "nebius-cxcli deploy ./deployments/tenant/project/config.yaml --target mk8s-prod "
         "(restricts the run to a single deploy.targets[] row by id); "
-        "nebius-cxcli deploy ./deployments/acme/config.yaml --skip-validation operator-readiness "
+        "nebius-cxcli deploy ./deployments/tenant/project/config.yaml --skip-validation operator-readiness "
         "(skips a single MK8s GPU validation kind; repeatable; --skip-validations skips all); "
-        "nebius-cxcli deploy ./deployments/acme/config.yaml --no-auto-auth-bootstrap "
+        "nebius-cxcli deploy ./deployments/tenant/project/config.yaml --no-auto-auth-bootstrap "
         "(fails on missing service-account credentials instead of refreshing them). "
         "When qosConfiguration.enabled=true the Soperator chart runs a post-install Helm hook Job "
         "(kubectl exec into the accounting pod) that reconciles sacctmgr "
@@ -35105,9 +36065,9 @@ def deploy_command(
     short_help="Use CONFIG_YAML to destroy all rendered project resources.",
     epilog=(
         "Examples: "
-        "nebius-cxcli destroy ./deployments/acme/config.yaml "
+        "nebius-cxcli destroy ./deployments/tenant/project/config.yaml "
         "(prompts for confirmation, then removes rendered app resources followed by Terraform destroy across all deploy targets); "
-        "nebius-cxcli destroy ./deployments/acme/config.yaml --yes "
+        "nebius-cxcli destroy ./deployments/tenant/project/config.yaml --yes "
         "(skips the confirmation prompt; use only in scripted teardowns). "
         "Soperator: the chart's pre-delete hook removes SlurmCluster + NodeSet CRs before OpenKruise's finalizer "
         "so Advanced StatefulSets terminate cleanly."
@@ -35913,7 +36873,7 @@ def _interactive_email_settings_setup(*, config_path: Path | None) -> tuple[Emai
     short_help="Use CONFIG_YAML to send the deploy report email, or omit it with --setup.",
     epilog=(
         "Examples: "
-        "nebius-cxcli email ./deployments/acme/config.yaml "
+        "nebius-cxcli email ./deployments/tenant/project/config.yaml "
         "(sends the post-deploy report email to the notifications address declared in config.yaml); "
         "nebius-cxcli email --setup "
         "(interactive setup of SMTP credentials in the user-global cxcli profile; runs before the first email send)."

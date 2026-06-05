@@ -486,11 +486,85 @@ def _external_mk8s_target_row(instance_id: str = "external-cluster") -> dict[str
         "soperator_onboarding": {
             "accepted": True,
             "analysis_fingerprint": "",
-            "state": "vanilla-mk8s",
+            "state": "no-soperator-detected",
             "actions": ["install-soperator"],
-            "storage_mode": "adopt-existing-storage",
+            "storage_mode": "keep-existing-storage",
+            "target_version": "4.0.1-ps.1",
+            "source_version": "",
+            "migration_profile_id": "",
         },
     }
+
+
+def _old_soperator_snapshot() -> dict[str, object]:
+    return {
+        "node_groups": {
+            "gpu-pool": {
+                "gpu": True,
+                "node_count": 2,
+                "labels": {"nebius.com/node-group": "gpu-pool"},
+                "allocatable": {"nvidia.com/gpu": "8"},
+            }
+        },
+        "helm_releases": [
+            {
+                "name": "soperator",
+                "namespace": "soperator",
+                "chart": "soperator-3.0.5",
+                "app_version": "3.0.5",
+            }
+        ],
+        "crds": [],
+        "namespaces": ["soperator"],
+        "pvs": [],
+        "pvcs": [],
+        "collection_errors": [],
+    }
+
+
+def _write_old_soperator_migration_config(tmp_path: Path) -> Path:
+    config_path = tmp_path / "config.yaml"
+    snapshot = _old_soperator_snapshot()
+    target = cli_module._soperator_onboarding_target_defaults(
+        "external-cluster",
+        kube_context="external-context",
+        storage_mode="keep-existing-storage",
+        pinned_chart_version="4.0.1-ps.1",
+        pinned_app_version="4.0.1",
+        snapshot=snapshot,
+    )
+    cli_module._write_soperator_source_discovery_report_from_target_row(
+        config_path=config_path,
+        target_row=target,
+    )
+    target.pop(cli_module._SOPERATOR_DISCOVERY_REPORT_PRIVATE_KEY, None)
+    payload = {
+        "client_info": {
+            "client_name": "client-a",
+            "nebius": {
+                "tenant_id": "tenant-123",
+                "project_id": "project-456",
+                "region_id": "eu-north1",
+            },
+        },
+        "infra": {"components": []},
+        "apps": {
+            "charts": [
+                {
+                    "id": "soperator",
+                    "instance_id": "external-cluster",
+                    "enabled": True,
+                    "install_mode": "onboard-existing-cluster",
+                    "version": "4.0.1-ps.1",
+                    "values": {},
+                }
+            ]
+        },
+        "deploy": {"targets": [target]},
+    }
+    cli_module._refresh_soperator_onboarding_fingerprints(payload)
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+    return config_path
 
 
 def _component_remove(config_path: Path, *extra: str, input_text: str | None = None):
@@ -2647,10 +2721,6 @@ def test_create_prompts_soperator_profile_before_field_wizard(
     monkeypatch.setattr(cli_module, "_wizard_continue_phase", lambda *_args, **_kwargs: True)
     monkeypatch.setattr(cli_module, "_optional_email_or_prompt", lambda *_args, **_kwargs: None)
 
-    def _capture_install_mode() -> str:
-        events.append("install_mode")
-        return "production-cluster"
-
     def _capture_profile() -> str:
         events.append("profile")
         return "nebius-cpu-v1"
@@ -2667,7 +2737,13 @@ def test_create_prompts_soperator_profile_before_field_wizard(
         assert soperator["profile"] == "nebius-cpu-v1"
         return kwargs["config_yaml"], True
 
-    monkeypatch.setattr(cli_module, "_prompt_soperator_install_mode", _capture_install_mode)
+    monkeypatch.setattr(
+        cli_module,
+        "_prompt_soperator_install_mode",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("Create should not prompt for Soperator install mode")
+        ),
+    )
     monkeypatch.setattr(cli_module, "_prompt_soperator_profile", _capture_profile)
     monkeypatch.setattr(cli_module, "_run_component_field_wizard", _capture_field_wizard)
 
@@ -2694,7 +2770,7 @@ def test_create_prompts_soperator_profile_before_field_wizard(
     )
 
     assert result.exit_code == 0, result.output
-    assert events == ["install_mode", "profile", "field_wizard"]
+    assert events == ["profile", "field_wizard"]
     payload = yaml.safe_load(_project_config_path(deployments_root).read_text(encoding="utf-8"))
     infra_rows = payload["infra"]["components"]
     app_rows = payload["apps"]["charts"]
@@ -2722,7 +2798,13 @@ def test_create_soperator_cpu_worker_count_prompt_updates_persisted_node_groups(
 
     monkeypatch.setattr(cli_module, "_wizard_continue_phase", lambda *_args, **_kwargs: True)
     monkeypatch.setattr(cli_module, "_optional_email_or_prompt", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(cli_module, "_prompt_soperator_install_mode", lambda: "production-cluster")
+    monkeypatch.setattr(
+        cli_module,
+        "_prompt_soperator_install_mode",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("Create should not prompt for Soperator install mode")
+        ),
+    )
     monkeypatch.setattr(cli_module, "_prompt_soperator_profile", lambda: "nebius-cpu-v1")
 
     def _set_worker_count_fields(**kwargs):  # type: ignore[no-untyped-def]
@@ -2888,10 +2970,6 @@ def test_component_add_soperator_from_empty_config_prompts_profile_before_field_
         lambda *, payload, add_targets, infra_entries: add_targets,
     )
 
-    def _capture_install_mode() -> str:
-        events.append("install_mode")
-        return "production-cluster"
-
     def _capture_profile() -> str:
         events.append("profile")
         return "nebius-cpu-v1"
@@ -2917,14 +2995,20 @@ def test_component_add_soperator_from_empty_config_prompts_profile_before_field_
         assert "gpu_clusters" not in mk8s_inputs
         return kwargs["config_yaml"], True
 
-    monkeypatch.setattr(cli_module, "_prompt_soperator_install_mode", _capture_install_mode)
+    monkeypatch.setattr(
+        cli_module,
+        "_prompt_soperator_install_mode",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("Component add should not prompt for Soperator install mode")
+        ),
+    )
     monkeypatch.setattr(cli_module, "_prompt_soperator_profile", _capture_profile)
     monkeypatch.setattr(cli_module, "_run_component_field_wizard", _capture_field_wizard)
 
     result = _component_add(config_path, "soperator")
 
     assert result.exit_code == 0, result.output
-    assert events == ["install_mode", "profile", "field_wizard"]
+    assert events == ["profile", "field_wizard"]
     payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     infra_rows = payload["infra"]["components"]
     app_rows = payload["apps"]["charts"]
@@ -2937,97 +3021,6 @@ def test_component_add_soperator_from_empty_config_prompts_profile_before_field_
         ("cert-manager", "mk8s"),
     ]
     assert app_rows[0]["profile"] == "nebius-cpu-v1"
-
-
-def test_component_add_soperator_onboarding_adds_external_target_without_mk8s_infra(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    deployments_root = tmp_path / "deployments"
-    deployments_root.mkdir(parents=True, exist_ok=True)
-    created = _create_non_interactive(
-        deployments_root,
-        "--infra",
-        "none",
-        "--app",
-        "none",
-        "--no-validate-config",
-    )
-    assert created.exit_code == 0, created.output
-
-    events: list[str] = []
-    config_path = _project_config_path(deployments_root)
-
-    monkeypatch.setattr(cli_module, "_wizard_continue_phase", lambda *_args, **_kwargs: True)
-    monkeypatch.setattr(
-        cli_module,
-        "_prompt_soperator_profile",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            AssertionError("Soperator production profile should not be prompted")
-        ),
-    )
-
-    def _capture_install_mode() -> str:
-        events.append("install_mode")
-        return "onboard-existing-cluster"
-
-    def _external_target_row() -> dict[str, object]:
-        events.append("external_target")
-        return {
-            "instance_id": "external-cluster",
-            "kind": "external-mk8s",
-            "ownership": "external",
-            "access": "external",
-            "kube_context": "external-context",
-            "inventory": {
-                "node_groups": {
-                    "cpu-pool": {"gpu": False, "node_count": 2},
-                    "gpu-pool": {"gpu": True, "node_count": 1},
-                }
-            },
-            "soperator_onboarding": {
-                "accepted": True,
-                "analysis_fingerprint": "",
-                "state": "vanilla-mk8s",
-                "actions": ["install-soperator"],
-                "storage_mode": "adopt-existing-storage",
-            },
-        }
-
-    def _capture_field_wizard(**kwargs):  # type: ignore[no-untyped-def]
-        events.append("field_wizard")
-        assert kwargs["selected_infra"] == set()
-        assert kwargs["selected_apps"] == {"soperator", "cert-manager"}
-        assert "skip_soperator_profile_prompt" not in kwargs
-        payload = yaml.safe_load(kwargs["config_yaml"]) or {}
-        assert payload["infra"]["components"] == []
-        targets = payload.get("deploy", {}).get("targets", [])
-        assert [(row.get("instance_id"), row.get("kind")) for row in targets] == [
-            ("external-cluster", "external-mk8s")
-        ]
-        app_rows = payload.get("apps", {}).get("charts", [])
-        assert {(row.get("id"), row.get("instance_id")) for row in app_rows} == {
-            ("soperator", "external-cluster"),
-            ("cert-manager", "external-cluster"),
-        }
-        return kwargs["config_yaml"], True
-
-    monkeypatch.setattr(cli_module, "_prompt_soperator_install_mode", _capture_install_mode)
-    monkeypatch.setattr(cli_module, "_prompt_soperator_onboarding_target_row", _external_target_row)
-    monkeypatch.setattr(cli_module, "_run_component_field_wizard", _capture_field_wizard)
-
-    result = _component_add(config_path, "mk8s", "soperator")
-
-    assert result.exit_code == 0, result.output
-    assert "install_mode=onboard-existing-cluster uses an external MK8s" in result.output
-    assert events == ["install_mode", "external_target", "field_wizard"]
-    payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-    assert payload["infra"]["components"] == []
-    assert [(row["id"], row["instance_id"]) for row in payload["apps"]["charts"]] == [
-        ("soperator", "external-cluster"),
-        ("cert-manager", "external-cluster"),
-    ]
-    assert payload["deploy"]["targets"][0]["kind"] == "external-mk8s"
 
 
 def test_component_add_soperator_onboarding_reuses_existing_external_target(
@@ -3065,9 +3058,9 @@ def test_component_add_soperator_onboarding_reuses_existing_external_target(
                 "soperator_onboarding": {
                     "accepted": True,
                     "analysis_fingerprint": "",
-                    "state": "vanilla-mk8s",
+                    "state": "no-soperator-detected",
                     "actions": ["install-soperator"],
-                    "storage_mode": "adopt-existing-storage",
+                    "storage_mode": "keep-existing-storage",
                 },
             }
         ]
@@ -3084,10 +3077,6 @@ def test_component_add_soperator_onboarding_reuses_existing_external_target(
         ),
     )
 
-    def _capture_install_mode() -> str:
-        events.append("install_mode")
-        return "onboard-existing-cluster"
-
     def _capture_field_wizard(**kwargs):  # type: ignore[no-untyped-def]
         events.append("field_wizard")
         payload = yaml.safe_load(kwargs["config_yaml"]) or {}
@@ -3103,13 +3092,19 @@ def test_component_add_soperator_onboarding_reuses_existing_external_target(
         }
         return kwargs["config_yaml"], True
 
-    monkeypatch.setattr(cli_module, "_prompt_soperator_install_mode", _capture_install_mode)
+    monkeypatch.setattr(
+        cli_module,
+        "_prompt_soperator_install_mode",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("Explicit external-target add should infer onboarding")
+        ),
+    )
     monkeypatch.setattr(cli_module, "_run_component_field_wizard", _capture_field_wizard)
 
-    result = _component_add(config_path, "soperator")
+    result = _component_add(config_path, "soperator@external-cluster")
 
     assert result.exit_code == 0, result.output
-    assert events == ["install_mode", "field_wizard"]
+    assert events == ["field_wizard"]
     payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     assert len(payload["deploy"]["targets"]) == 1
     assert [(row["id"], row["instance_id"]) for row in payload["apps"]["charts"]] == [
@@ -3404,9 +3399,9 @@ def test_component_add_soperator_onboarding_adds_dependency_for_external_target(
             "soperator_onboarding": {
                 "accepted": True,
                 "analysis_fingerprint": "",
-                "state": "vanilla-mk8s",
+                "state": "no-soperator-detected",
                 "actions": ["install-soperator"],
-                "storage_mode": "adopt-existing-storage",
+                "storage_mode": "keep-existing-storage",
             },
         }
     )
@@ -3422,10 +3417,6 @@ def test_component_add_soperator_onboarding_adds_dependency_for_external_target(
         ),
     )
 
-    def _capture_install_mode() -> str:
-        events.append("install_mode")
-        return "onboard-existing-cluster"
-
     def _capture_field_wizard(**kwargs):  # type: ignore[no-untyped-def]
         events.append("field_wizard")
         payload = yaml.safe_load(kwargs["config_yaml"]) or {}
@@ -3437,13 +3428,19 @@ def test_component_add_soperator_onboarding_adds_dependency_for_external_target(
         }
         return kwargs["config_yaml"], True
 
-    monkeypatch.setattr(cli_module, "_prompt_soperator_install_mode", _capture_install_mode)
+    monkeypatch.setattr(
+        cli_module,
+        "_prompt_soperator_install_mode",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("Explicit external-target add should infer onboarding")
+        ),
+    )
     monkeypatch.setattr(cli_module, "_run_component_field_wizard", _capture_field_wizard)
 
-    result = _component_add(config_path, "soperator")
+    result = _component_add(config_path, "soperator@external-cluster")
 
     assert result.exit_code == 0, result.output
-    assert events == ["install_mode", "field_wizard"]
+    assert events == ["field_wizard"]
     payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     assert [(row["id"], row["instance_id"]) for row in payload["apps"]["charts"]] == [
         ("cert-manager", "mk8s"),
@@ -3481,9 +3478,9 @@ def test_component_add_soperator_onboarding_does_not_duplicate_existing_external
             "soperator_onboarding": {
                 "accepted": True,
                 "analysis_fingerprint": "",
-                "state": "vanilla-mk8s",
+                "state": "no-soperator-detected",
                 "actions": ["install-soperator"],
-                "storage_mode": "adopt-existing-storage",
+                "storage_mode": "keep-existing-storage",
             },
         }
     )
@@ -3508,10 +3505,6 @@ def test_component_add_soperator_onboarding_does_not_duplicate_existing_external
         ),
     )
 
-    def _capture_install_mode() -> str:
-        events.append("install_mode")
-        return "onboard-existing-cluster"
-
     def _capture_field_wizard(**kwargs):  # type: ignore[no-untyped-def]
         events.append("field_wizard")
         payload = yaml.safe_load(kwargs["config_yaml"]) or {}
@@ -3527,13 +3520,23 @@ def test_component_add_soperator_onboarding_does_not_duplicate_existing_external
         }
         return kwargs["config_yaml"], True
 
-    monkeypatch.setattr(cli_module, "_prompt_soperator_install_mode", _capture_install_mode)
+    monkeypatch.setattr(
+        cli_module,
+        "_prompt_soperator_install_mode",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("Explicit external-target add should infer onboarding")
+        ),
+    )
     monkeypatch.setattr(cli_module, "_run_component_field_wizard", _capture_field_wizard)
 
-    result = _component_add(config_path, "cert-manager", "soperator")
+    result = _component_add(
+        config_path,
+        "cert-manager@external-cluster",
+        "soperator@external-cluster",
+    )
 
     assert result.exit_code == 0, result.output
-    assert events == ["install_mode", "field_wizard"]
+    assert events == ["field_wizard"]
     payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     app_pairs = [(row["id"], row["instance_id"]) for row in payload["apps"]["charts"]]
     assert app_pairs.count(("cert-manager", "external-cluster")) == 1
@@ -3544,7 +3547,7 @@ def test_component_add_soperator_onboarding_does_not_duplicate_existing_external
     }
 
 
-def test_component_add_soperator_onboarding_preserves_existing_infra_rows(
+def test_soperator_onboard_preserves_existing_infra_rows(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -3563,60 +3566,32 @@ def test_component_add_soperator_onboarding_preserves_existing_infra_rows(
     events: list[str] = []
     config_path = _project_config_path(deployments_root)
 
-    monkeypatch.setattr(cli_module, "_wizard_continue_phase", lambda *_args, **_kwargs: True)
-
-    def _capture_install_mode() -> str:
-        events.append("install_mode")
-        return "onboard-existing-cluster"
-
-    def _external_target_row() -> dict[str, object]:
+    def _external_target_row(**_kwargs: object) -> dict[str, object]:
         events.append("external_target")
-        return {
-            "instance_id": "external-cluster",
-            "kind": "external-mk8s",
-            "ownership": "external",
-            "access": "external",
-            "kube_context": "external-context",
-            "inventory": {
-                "node_groups": {
-                    "cpu-pool": {"gpu": False, "node_count": 2},
-                    "gpu-pool": {"gpu": True, "node_count": 1},
-                }
-            },
-            "soperator_onboarding": {
-                "accepted": True,
-                "analysis_fingerprint": "",
-                "state": "vanilla-mk8s",
-                "actions": ["install-soperator"],
-                "storage_mode": "adopt-existing-storage",
-            },
-        }
+        return _external_mk8s_target_row()
 
-    def _capture_field_wizard(**kwargs):  # type: ignore[no-untyped-def]
-        events.append("field_wizard")
-        payload = yaml.safe_load(kwargs["config_yaml"]) or {}
-        assert [
-            (row.get("id"), row.get("instance_id")) for row in payload["infra"]["components"]
-        ] == [
-            ("mk8s", "mk8s"),
-            ("sfs", "sfs"),
-        ]
-        app_rows = payload.get("apps", {}).get("charts", [])
-        assert {(row.get("id"), row.get("instance_id")) for row in app_rows} == {
-            ("soperator", "external-cluster"),
-            ("cert-manager", "external-cluster"),
-        }
-        return kwargs["config_yaml"], True
-
-    monkeypatch.setattr(cli_module, "_prompt_soperator_install_mode", _capture_install_mode)
+    monkeypatch.setattr(
+        cli_module,
+        "_prompt_soperator_install_mode",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("Soperator install mode should not be prompted for onboard")
+        ),
+    )
     monkeypatch.setattr(cli_module, "_prompt_soperator_onboarding_target_row", _external_target_row)
-    monkeypatch.setattr(cli_module, "_run_component_field_wizard", _capture_field_wizard)
 
-    result = _component_add(config_path, "mk8s", "sfs", "soperator")
+    result = runner.invoke(
+        app,
+        [
+            "soperator",
+            "onboard",
+            str(config_path),
+            "--no-validate-sources",
+        ],
+    )
 
     assert result.exit_code == 0, result.output
-    assert "install_mode=onboard-existing-cluster uses an external MK8s" in result.output
-    assert events == ["install_mode", "external_target", "field_wizard"]
+    assert "Registered external MK8s target: external-cluster" in result.output
+    assert events == ["external_target"]
     payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     assert [(row["id"], row["instance_id"]) for row in payload["infra"]["components"]] == [
         ("mk8s", "mk8s"),
@@ -3689,76 +3664,213 @@ def test_component_add_interactive_mk8s_only_keeps_existing_apps_on_original_tar
     assert ("cert-manager", "cluster2") not in app_pairs
 
 
-def test_create_interactive_soperator_onboarding_adds_external_target_without_mk8s_infra(
+def test_soperator_onboard_adds_external_target_without_mk8s_infra(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     deployments_root = tmp_path / "deployments"
     deployments_root.mkdir(parents=True, exist_ok=True)
-    events: list[str] = []
+    created = _create_non_interactive(
+        deployments_root,
+        "--infra",
+        "none",
+        "--app",
+        "none",
+        "--no-validate-config",
+    )
+    assert created.exit_code == 0, created.output
 
-    monkeypatch.setattr(cli_module, "_wizard_continue_phase", lambda *_args, **_kwargs: True)
-    monkeypatch.setattr(cli_module, "_optional_email_or_prompt", lambda *_args, **_kwargs: None)
+    events: list[str] = []
+    config_path = _project_config_path(deployments_root)
+
     monkeypatch.setattr(
         cli_module,
         "_prompt_soperator_profile",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            AssertionError("Soperator production profile should not be prompted")
+            AssertionError("Soperator production profile should not be prompted for onboard")
+        ),
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "_prompt_soperator_install_mode",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("Soperator install mode should not be prompted for onboard")
         ),
     )
 
-    def _capture_install_mode() -> str:
-        events.append("install_mode")
-        return "onboard-existing-cluster"
-
-    def _external_target_row() -> dict[str, object]:
+    def _external_target_row(**_kwargs: object) -> dict[str, object]:
         events.append("external_target")
-        return {
-            "instance_id": "external-cluster",
-            "kind": "external-mk8s",
-            "ownership": "external",
-            "access": "external",
-            "kube_context": "external-context",
-            "inventory": {
-                "node_groups": {
-                    "cpu-pool": {"gpu": False, "node_count": 2},
-                    "gpu-pool": {"gpu": True, "node_count": 1},
-                }
-            },
-            "soperator_onboarding": {
-                "accepted": True,
-                "analysis_fingerprint": "",
-                "state": "vanilla-mk8s",
-                "actions": ["install-soperator"],
-                "storage_mode": "adopt-existing-storage",
-            },
-        }
+        return _external_mk8s_target_row()
 
-    def _capture_field_wizard(**kwargs):  # type: ignore[no-untyped-def]
-        events.append("field_wizard")
-        assert kwargs["selected_infra"] == set()
-        assert kwargs["selected_apps"] == {"soperator", "cert-manager"}
-        payload = yaml.safe_load(kwargs["config_yaml"]) or {}
-        assert payload["infra"]["components"] == []
-        targets = payload.get("deploy", {}).get("targets", [])
-        assert [(row.get("instance_id"), row.get("kind")) for row in targets] == [
-            ("external-cluster", "external-mk8s")
-        ]
-        app_rows = payload.get("apps", {}).get("charts", [])
-        assert {(row.get("id"), row.get("instance_id")) for row in app_rows} == {
-            ("soperator", "external-cluster"),
-            ("cert-manager", "external-cluster"),
-        }
-        return kwargs["config_yaml"], True
-
-    monkeypatch.setattr(cli_module, "_prompt_soperator_install_mode", _capture_install_mode)
     monkeypatch.setattr(cli_module, "_prompt_soperator_onboarding_target_row", _external_target_row)
-    monkeypatch.setattr(cli_module, "_run_component_field_wizard", _capture_field_wizard)
 
     result = runner.invoke(
         app,
         [
-            "create",
+            "soperator",
+            "onboard",
+            str(config_path),
+            "--no-validate-sources",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Registered external MK8s target: external-cluster" in result.output
+    assert events == ["external_target"]
+    payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    assert payload["infra"]["components"] == []
+    assert [(row["id"], row["instance_id"]) for row in payload["apps"]["charts"]] == [
+        ("soperator", "external-cluster"),
+        ("cert-manager", "external-cluster"),
+    ]
+    assert payload["apps"]["charts"][0]["install_mode"] == "onboard-existing-cluster"
+    onboarding = payload["deploy"]["targets"][0]["soperator_onboarding"]
+    assert payload["deploy"]["targets"][0]["kind"] == "external-mk8s"
+    assert onboarding["analysis_fingerprint"]
+
+
+def test_soperator_onboard_interactive_lists_project_mk8s_clusters(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    deployments_root = tmp_path / "deployments"
+    deployments_root.mkdir(parents=True, exist_ok=True)
+    created = _create_non_interactive(
+        deployments_root,
+        "--infra",
+        "none",
+        "--app",
+        "none",
+        "--no-validate-config",
+    )
+    assert created.exit_code == 0, created.output
+
+    config_path = _project_config_path(deployments_root)
+    listed_projects: list[str] = []
+    snapshot_clusters: list[str] = []
+    prompt_labels: list[str] = []
+
+    def _cluster_choices(
+        *,
+        project_id: str,
+        provider_lookup: object,
+    ) -> list[cli_module.OptionChoice]:
+        _ = provider_lookup
+        listed_projects.append(project_id)
+        return [
+            cli_module.OptionChoice(
+                value="mk8scluster-e00alpha",
+                label="alpha-cluster  (mk8scluster-e00alpha)",
+                metadata={
+                    "cluster_id": "mk8scluster-e00alpha",
+                    "name": "alpha-cluster",
+                    "target_ref": "alpha-cluster",
+                },
+            ),
+            cli_module.OptionChoice(
+                value="mk8scluster-e00beta",
+                label="selected-cluster  (mk8scluster-e00beta)",
+                metadata={
+                    "cluster_id": "mk8scluster-e00beta",
+                    "name": "selected-cluster",
+                    "target_ref": "selected-cluster",
+                },
+            ),
+        ]
+
+    def _prompt_scalar(
+        field_label: str,
+        default: object,
+        **kwargs: object,
+    ) -> tuple[str, bool]:
+        _ = default, kwargs
+        prompt_labels.append(field_label)
+        return "mk8scluster-e00beta", False
+
+    def _snapshot_for_cluster(
+        payload: object,
+        *,
+        cluster_id: str,
+        access: str = "external",
+    ) -> tuple[dict[str, object], str]:
+        _ = payload, access
+        snapshot_clusters.append(cluster_id)
+        return (
+            {
+                "node_groups": {"gpu-pool": {"gpu": True, "node_count": 1}},
+                "helm_releases": [],
+                "crds": [],
+                "namespaces": [],
+                "collection_errors": [],
+            },
+            "nebius-selected-cluster-mk8scluster-e00beta-external",
+        )
+
+    monkeypatch.setattr(cli_module, "_project_mk8s_cluster_choices", _cluster_choices)
+    monkeypatch.setattr(cli_module, "_prompt_scalar_override", _prompt_scalar)
+    monkeypatch.setattr(
+        cli_module,
+        "_collect_soperator_snapshot_for_nebius_mk8s_cluster",
+        _snapshot_for_cluster,
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "soperator",
+            "onboard",
+            str(config_path),
+            "--storage-mode",
+            "create-aligned-sfs",
+            "--no-validate-sources",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert listed_projects == ["project-456"]
+    assert prompt_labels == ["Nebius MK8s cluster"]
+    assert snapshot_clusters == ["mk8scluster-e00beta"]
+    assert "Registered external MK8s target: selected-cluster" in result.output
+    payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    target = payload["deploy"]["targets"][0]
+    assert target["instance_id"] == "selected-cluster"
+    assert target["cluster_id"] == "mk8scluster-e00beta"
+    assert "kube_context" not in target
+    assert "analysis_report" not in target["soperator_onboarding"]
+    source_report = config_path.parent / "source-soperator-cluster-discovery-report.json"
+    assert source_report.exists()
+    assert "Wrote Soperator source discovery report:" in result.output
+    assert [(row["id"], row["instance_id"]) for row in payload["apps"]["charts"]] == [
+        ("soperator", "selected-cluster"),
+        ("cert-manager", "selected-cluster"),
+    ]
+
+
+def test_soperator_onboard_deployments_root_creates_project_config(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    deployments_root = tmp_path / "deployments"
+    deployments_root.mkdir(parents=True, exist_ok=True)
+    snapshot_contexts: list[str] = []
+
+    def _snapshot(*, kube_context: str) -> dict[str, object]:
+        snapshot_contexts.append(kube_context)
+        return {
+            "node_groups": {"gpu-pool": {"gpu": True, "node_count": 1}},
+            "helm_releases": [],
+            "crds": [],
+            "namespaces": [],
+            "collection_errors": [],
+        }
+
+    monkeypatch.setattr(cli_module, "collect_kubectl_soperator_snapshot", _snapshot)
+
+    result = runner.invoke(
+        app,
+        [
+            "soperator",
+            "onboard",
             str(deployments_root),
             "--client-name",
             "client-a",
@@ -3768,25 +3880,514 @@ def test_create_interactive_soperator_onboarding_adds_external_target_without_mk
             "project-456",
             "--region-id",
             "eu-north1",
+            "--target",
+            "training-cluster",
+            "--kube-context",
+            "training-context",
+            "--no-interactive",
             "--no-validate-sources",
-            "--no-validate-config",
-            "--infra",
-            "mk8s",
-            "--app",
-            "soperator",
         ],
     )
 
     assert result.exit_code == 0, result.output
-    assert "install_mode=onboard-existing-cluster uses an external MK8s" in result.output
-    assert events == ["install_mode", "external_target", "field_wizard"]
-    payload = yaml.safe_load(_project_config_path(deployments_root).read_text(encoding="utf-8"))
+    assert snapshot_contexts == ["training-context"]
+    config_path = _project_config_path(deployments_root)
+    assert config_path.exists()
+    assert (config_path.parent / "generated" / "infra").is_dir()
+    assert "Created project:" in result.output
+    assert "Updated:" in result.output
+    payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    assert payload["client_info"]["client_name"] == "client-a"
+    assert payload["client_info"]["nebius"]["tenant_id"] == "tenant-123"
+    assert payload["client_info"]["nebius"]["project_id"] == "project-456"
     assert payload["infra"]["components"] == []
+    assert [(row["id"], row["instance_id"]) for row in payload["apps"]["charts"]] == [
+        ("soperator", "training-cluster"),
+        ("cert-manager", "training-cluster"),
+    ]
+
+
+def test_soperator_onboard_project_directory_updates_existing_config(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    deployments_root = tmp_path / "deployments"
+    deployments_root.mkdir(parents=True, exist_ok=True)
+    created = _create_non_interactive(
+        deployments_root,
+        "--infra",
+        "none",
+        "--app",
+        "none",
+        "--no-validate-config",
+    )
+    assert created.exit_code == 0, created.output
+    project_dir = _project_dir(deployments_root)
+    config_path = _project_config_path(deployments_root)
+    snapshot_contexts: list[str] = []
+
+    def _snapshot(*, kube_context: str) -> dict[str, object]:
+        snapshot_contexts.append(kube_context)
+        return {
+            "node_groups": {"cpu-pool": {"gpu": False, "node_count": 2}},
+            "helm_releases": [],
+            "crds": [],
+            "namespaces": [],
+            "collection_errors": [],
+        }
+
+    monkeypatch.setattr(cli_module, "collect_kubectl_soperator_snapshot", _snapshot)
+
+    result = runner.invoke(
+        app,
+        [
+            "soperator",
+            "onboard",
+            str(project_dir),
+            "--target",
+            "external-cluster",
+            "--kube-context",
+            "external-context",
+            "--no-interactive",
+            "--no-validate-sources",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert snapshot_contexts == ["external-context"]
+    assert "Created project:" not in result.output
+    assert "Updated:" in result.output
+    payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    assert payload["deploy"]["targets"][0]["instance_id"] == "external-cluster"
     assert [(row["id"], row["instance_id"]) for row in payload["apps"]["charts"]] == [
         ("soperator", "external-cluster"),
         ("cert-manager", "external-cluster"),
     ]
-    assert payload["deploy"]["targets"][0]["kind"] == "external-mk8s"
+
+
+def test_soperator_onboard_deployments_root_existing_config_restores_gitignore(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    _git_init(repo_root)
+    deployments_root = repo_root / "deployments"
+    created = _create_non_interactive(
+        deployments_root,
+        "--infra",
+        "none",
+        "--app",
+        "none",
+        "--no-validate-config",
+    )
+    assert created.exit_code == 0, created.output
+    gitignore_path = deployments_root / ".gitignore"
+    gitignore_path.unlink()
+
+    def _snapshot(*, kube_context: str) -> dict[str, object]:
+        assert kube_context == "external-context"
+        return {
+            "node_groups": {"cpu-pool": {"gpu": False, "node_count": 2}},
+            "helm_releases": [],
+            "crds": [],
+            "namespaces": [],
+            "collection_errors": [],
+        }
+
+    monkeypatch.setattr(cli_module, "collect_kubectl_soperator_snapshot", _snapshot)
+
+    result = runner.invoke(
+        app,
+        [
+            "soperator",
+            "onboard",
+            str(deployments_root),
+            "--tenant-id",
+            "tenant-123",
+            "--project-id",
+            "project-456",
+            "--target",
+            "external-cluster",
+            "--kube-context",
+            "external-context",
+            "--no-interactive",
+            "--no-validate-sources",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Created project:" not in result.output
+    assert "Ensured deployments .gitignore:" in result.output
+    assert cli_module._DEPLOYMENTS_GITIGNORE_BEGIN in gitignore_path.read_text(encoding="utf-8")
+
+
+def test_soperator_onboard_interactive_honors_storage_mode_option(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    deployments_root = tmp_path / "deployments"
+    deployments_root.mkdir(parents=True, exist_ok=True)
+    created = _create_non_interactive(
+        deployments_root,
+        "--infra",
+        "none",
+        "--app",
+        "none",
+        "--no-validate-config",
+    )
+    assert created.exit_code == 0, created.output
+
+    config_path = _project_config_path(deployments_root)
+    storage_modes: list[str | None] = []
+
+    def _external_target_row(
+        *,
+        storage_mode: str | None = None,
+        **_kwargs: object,
+    ) -> dict[str, object]:
+        storage_modes.append(storage_mode)
+        row = _external_mk8s_target_row()
+        row["soperator_onboarding"]["storage_mode"] = storage_mode or "keep-existing-storage"  # type: ignore[index]
+        return row
+
+    monkeypatch.setattr(cli_module, "_prompt_soperator_onboarding_target_row", _external_target_row)
+
+    result = runner.invoke(
+        app,
+        [
+            "soperator",
+            "onboard",
+            str(config_path),
+            "--storage-mode",
+            "create-aligned-sfs",
+            "--no-validate-sources",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert storage_modes == ["create-aligned-sfs"]
+    payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    onboarding = payload["deploy"]["targets"][0]["soperator_onboarding"]
+    assert onboarding["storage_mode"] == "create-aligned-sfs"
+
+
+def test_soperator_onboarding_defaults_require_aligned_sfs_for_old_layout() -> None:
+    target = cli_module._soperator_onboarding_target_defaults(
+        "external-cluster",
+        kube_context="",
+        storage_mode="keep-existing-storage",
+        pinned_chart_version="4.0.1-ps.1",
+        pinned_app_version="4.0.1",
+        snapshot={
+            "node_groups": {
+                "gpu-pool": {
+                    "gpu": True,
+                    "node_count": 2,
+                    "labels": {"nebius.com/node-group": "gpu-pool"},
+                    "allocatable": {"nvidia.com/gpu": "8"},
+                }
+            },
+            "helm_releases": [
+                {
+                    "name": "soperator",
+                    "namespace": "soperator",
+                    "chart": "soperator-3.0.5",
+                    "app_version": "3.0.5",
+                }
+            ],
+            "crds": [],
+            "namespaces": ["soperator"],
+            "pvs": [],
+            "pvcs": [],
+            "collection_errors": [],
+        },
+    )
+
+    onboarding = target["soperator_onboarding"]
+    assert onboarding["state"] == "existing-soperator-supported"
+    assert onboarding["storage_mode"] == "create-aligned-sfs"
+    assert "create-aligned-sfs" in onboarding["actions"]
+    assert "plan-soperator-data-migration" in onboarding["actions"]
+
+
+def test_soperator_migrate_dry_run_prints_onboarding_migration_plan(tmp_path: Path) -> None:
+    config_path = _write_old_soperator_migration_config(tmp_path)
+
+    result = runner.invoke(
+        app,
+        [
+            "soperator",
+            "migrate",
+            str(config_path),
+            "--dry-run",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Soperator migration target: external-cluster" in result.output
+    assert "Source discovery report:" in result.output
+    assert "source-soperator-cluster-discovery-report.json" in result.output
+    assert "Onboarding state: existing-soperator-supported" in result.output
+    assert "Source version: 3.0.5" in result.output
+    assert "Target version: 4.0.1-ps.1" in result.output
+    assert "Migration required: yes" in result.output
+    assert "Storage migration required: yes" in result.output
+    assert "Compute migration required: yes" in result.output
+    assert "create-aligned-sfs" in result.output
+    assert "online-bulk-data-sync" in result.output
+    assert "rolling-compute-migration" in result.output
+    assert "final-control-plane-cutover" in result.output
+    assert "Live executor contract:" in result.output
+    assert "Failure handling contract:" in result.output
+    assert "Resume contract:" in result.output
+    assert "Execution mode: dry-run; no cluster changes were made." in result.output
+
+
+def test_soperator_migrate_execute_is_blocked_until_executor_exists(tmp_path: Path) -> None:
+    config_path = _write_old_soperator_migration_config(tmp_path)
+
+    result = runner.invoke(
+        app,
+        [
+            "soperator",
+            "migrate",
+            str(config_path),
+            "--target",
+            "external-cluster",
+            "--execute",
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "Soperator migration target: external-cluster" in result.output
+    assert "Live Soperator migration execution is not implemented yet" in result.output
+    assert "timeout-guarded phase progress" in result.output
+
+
+def test_soperator_migrate_requires_matching_source_discovery_report(tmp_path: Path) -> None:
+    config_path = _write_old_soperator_migration_config(tmp_path)
+    report_path = config_path.parent / "source-soperator-cluster-discovery-report.json"
+    report_payload = json.loads(report_path.read_text(encoding="utf-8"))
+    report_payload["target_ref"] = "different-cluster"
+    report_path.write_text(json.dumps(report_payload), encoding="utf-8")
+
+    result = runner.invoke(
+        app,
+        [
+            "soperator",
+            "migrate",
+            str(config_path),
+            "--target",
+            "external-cluster",
+            "--dry-run",
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "belongs to target 'different-cluster'" in result.output
+    assert "not 'external-cluster'" in result.output
+
+
+def test_soperator_onboard_noninteractive_options_add_external_target(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    deployments_root = tmp_path / "deployments"
+    deployments_root.mkdir(parents=True, exist_ok=True)
+    created = _create_non_interactive(
+        deployments_root,
+        "--infra",
+        "none",
+        "--app",
+        "none",
+        "--no-validate-config",
+    )
+    assert created.exit_code == 0, created.output
+
+    config_path = _project_config_path(deployments_root)
+    snapshot_contexts: list[str] = []
+
+    def _snapshot(*, kube_context: str) -> dict[str, object]:
+        snapshot_contexts.append(kube_context)
+        return {
+            "node_groups": {
+                "cpu-pool": {"gpu": False, "node_count": 2},
+                "gpu-pool": {"gpu": True, "node_count": 1},
+            },
+            "helm_releases": [],
+            "crds": [],
+            "namespaces": [],
+            "collection_errors": [],
+        }
+
+    monkeypatch.setattr(cli_module, "collect_kubectl_soperator_snapshot", _snapshot)
+    monkeypatch.setattr(
+        cli_module,
+        "_prompt_soperator_onboarding_target_row",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("Non-interactive option path should not prompt for target")
+        ),
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "soperator",
+            "onboard",
+            str(config_path),
+            "--target",
+            "training-cluster",
+            "--kube-context",
+            "training-context",
+            "--storage-mode",
+            "create-aligned-sfs",
+            "--no-interactive",
+            "--no-validate-sources",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert snapshot_contexts == ["training-context"]
+    assert "Registered external MK8s target: training-cluster" in result.output
+    payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    target = payload["deploy"]["targets"][0]
+    assert target["instance_id"] == "training-cluster"
+    assert target["kube_context"] == "training-context"
+    assert target["soperator_onboarding"]["storage_mode"] == "create-aligned-sfs"
+    assert [(row["id"], row["instance_id"]) for row in payload["apps"]["charts"]] == [
+        ("soperator", "training-cluster"),
+        ("cert-manager", "training-cluster"),
+    ]
+
+
+def test_soperator_onboard_rejects_managed_mk8s_target_ref(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    deployments_root = tmp_path / "deployments"
+    deployments_root.mkdir(parents=True, exist_ok=True)
+    created = _create_non_interactive(
+        deployments_root,
+        "--infra",
+        "mk8s",
+        "--app",
+        "none",
+        "--no-validate-config",
+    )
+    assert created.exit_code == 0, created.output
+
+    def _snapshot(*, kube_context: str) -> dict[str, object]:
+        assert kube_context == "managed-context"
+        return {
+            "node_groups": {},
+            "helm_releases": [],
+            "crds": [],
+            "namespaces": [],
+            "collection_errors": [],
+        }
+
+    monkeypatch.setattr(cli_module, "collect_kubectl_soperator_snapshot", _snapshot)
+
+    result = runner.invoke(
+        app,
+        [
+            "soperator",
+            "onboard",
+            str(_project_config_path(deployments_root)),
+            "--target",
+            "mk8s",
+            "--kube-context",
+            "managed-context",
+            "--no-interactive",
+            "--no-validate-sources",
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "Terraform-managed" in result.output
+    assert "choose a different external target id" in result.output
+
+
+def test_soperator_onboard_refreshes_stale_onboarding_fingerprint(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    deployments_root = tmp_path / "deployments"
+    deployments_root.mkdir(parents=True, exist_ok=True)
+    created = _create_non_interactive(
+        deployments_root,
+        "--infra",
+        "none",
+        "--app",
+        "none",
+        "--no-validate-config",
+    )
+    assert created.exit_code == 0, created.output
+
+    config_path = _project_config_path(deployments_root)
+    payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    payload.setdefault("apps", {})["charts"] = [
+        {
+            "id": "soperator",
+            "instance_id": "external-cluster",
+            "enabled": True,
+            "install_mode": "onboard-existing-cluster",
+            "values": {},
+        }
+    ]
+    payload.setdefault("deploy", {})["targets"] = [
+        {
+            "instance_id": "external-cluster",
+            "kind": "external-mk8s",
+            "ownership": "external",
+            "access": "external",
+            "kube_context": "external-context",
+            "inventory": {"node_groups": {"cpu-pool": {"gpu": False, "node_count": 2}}},
+            "soperator_onboarding": {
+                "accepted": True,
+                "analysis_fingerprint": "stale",
+                "state": "no-soperator-detected",
+                "storage_mode": "keep-existing-storage",
+                "actions": ["install-soperator"],
+            },
+        }
+    ]
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    def _snapshot(*, kube_context: str) -> dict[str, object]:
+        assert kube_context == "external-context"
+        return {
+            "node_groups": {"cpu-pool": {"gpu": False, "node_count": 2}},
+            "helm_releases": [],
+            "crds": [],
+            "namespaces": [],
+            "collection_errors": [],
+        }
+
+    monkeypatch.setattr(cli_module, "collect_kubectl_soperator_snapshot", _snapshot)
+
+    result = runner.invoke(
+        app,
+        [
+            "soperator",
+            "onboard",
+            str(config_path),
+            "--target",
+            "external-cluster",
+            "--kube-context",
+            "external-context",
+            "--no-interactive",
+            "--no-validate-sources",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Refreshed external MK8s target: external-cluster" in result.output
+    updated = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    onboarding = updated["deploy"]["targets"][0]["soperator_onboarding"]
+    assert onboarding["analysis_fingerprint"]
+    assert onboarding["analysis_fingerprint"] != "stale"
 
 
 def test_create_validates_late_auto_enabled_nfs_csi_driver_sources(
@@ -6798,10 +7399,6 @@ def test_component_add_prompts_soperator_profile_before_field_wizard(
     events: list[str] = []
     monkeypatch.setattr(cli_module, "_wizard_continue_phase", lambda *_args, **_kwargs: True)
 
-    def _capture_install_mode() -> str:
-        events.append("install_mode")
-        return "production-cluster"
-
     def _capture_profile() -> str:
         events.append("profile")
         return "nebius-cpu-v1"
@@ -6818,7 +7415,13 @@ def test_component_add_prompts_soperator_profile_before_field_wizard(
         assert soperator["profile"] == "nebius-cpu-v1"
         return kwargs["config_yaml"], True
 
-    monkeypatch.setattr(cli_module, "_prompt_soperator_install_mode", _capture_install_mode)
+    monkeypatch.setattr(
+        cli_module,
+        "_prompt_soperator_install_mode",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("Component add should not prompt for Soperator install mode")
+        ),
+    )
     monkeypatch.setattr(cli_module, "_prompt_soperator_profile", _capture_profile)
     monkeypatch.setattr(cli_module, "_run_component_field_wizard", _capture_field_wizard)
 
@@ -6826,7 +7429,7 @@ def test_component_add_prompts_soperator_profile_before_field_wizard(
     result = _component_add(config_path, "soperator")
 
     assert result.exit_code == 0, result.output
-    assert events == ["install_mode", "profile", "field_wizard"]
+    assert events == ["profile", "field_wizard"]
 
 
 def test_component_add_does_not_expand_existing_soperator_onboarding_selection(
@@ -6878,9 +7481,9 @@ def test_component_add_does_not_expand_existing_soperator_onboarding_selection(
                     "soperator_onboarding": {
                         "accepted": True,
                         "analysis_fingerprint": "",
-                        "state": "vanilla-mk8s",
+                        "state": "no-soperator-detected",
                         "actions": ["install-soperator"],
-                        "storage_mode": "adopt-existing-storage",
+                        "storage_mode": "keep-existing-storage",
                     },
                 }
             ]

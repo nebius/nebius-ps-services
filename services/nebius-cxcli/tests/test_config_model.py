@@ -356,7 +356,7 @@ def test_starter_payload_local_profile_uses_local_chart_and_portable_fallback() 
 
     assert soperator["enabled"] is True
     assert soperator["repo"] == ""
-    assert soperator["version"] == "3.0.5-ps.1"
+    assert soperator["version"] == "4.0.1-ps.1"
     assert cert_manager["enabled"] is True
     assert cert_manager["repo"] == "oci://quay.io/jetstack/charts/cert-manager"
     assert cert_manager["version"] == "v1.19.2"

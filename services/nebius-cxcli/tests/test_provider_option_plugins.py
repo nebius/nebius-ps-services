@@ -50,6 +50,7 @@ def _install_fake_mk8s_module(
     compatible_platforms: list[str] | None = None,
     compatibility_items: list[dict[str, object]] | None = None,
     compatibility_items_at_top_level: bool = False,
+    clusters: list[dict[str, object]] | None = None,
 ) -> None:
     mk8s_module = ModuleType("nebius.api.nebius.mk8s.v1")
 
@@ -89,8 +90,37 @@ def _install_fake_mk8s_module(
             )
             return SimpleNamespace(wait=lambda: response)
 
+    class ListClustersRequest:
+        def __init__(self, *, parent_id: str, page_size: int, page_token: str) -> None:
+            self.parent_id = parent_id
+            self.page_size = page_size
+            self.page_token = page_token
+
+    class ClusterServiceClient:
+        def __init__(self, sdk: object) -> None:
+            self.sdk = sdk
+
+        def list(self, request: object, **_kwargs: object) -> SimpleNamespace:
+            assert request.parent_id == "project-123"
+            assert 1 <= request.page_size <= 999
+            response = SimpleNamespace(
+                items=[
+                    SimpleNamespace(
+                        metadata=SimpleNamespace(
+                            id=item.get("id"),
+                            name=item.get("name"),
+                        )
+                    )
+                    for item in (clusters or [])
+                ],
+                next_page_token="",
+            )
+            return SimpleNamespace(wait=lambda: response)
+
     mk8s_module.GetNodeGroupCompatibilityMatrixRequest = GetNodeGroupCompatibilityMatrixRequest
     mk8s_module.NodeGroupServiceClient = NodeGroupServiceClient
+    mk8s_module.ListClustersRequest = ListClustersRequest
+    mk8s_module.ClusterServiceClient = ClusterServiceClient
     _install_module(monkeypatch, "nebius.api.nebius.mk8s.v1", mk8s_module)
 
 
@@ -1196,6 +1226,38 @@ def test_project_filesystems_lists_live_project_filesystems(monkeypatch) -> None
         ("filesystem-a", "scratch"),
         ("filesystem-b", "jail"),
     ]
+
+
+def test_project_mk8s_clusters_lists_live_project_clusters(monkeypatch) -> None:
+    _install_fake_mk8s_module(
+        monkeypatch,
+        clusters=[
+            {
+                "id": "mk8scluster-e00alpha",
+                "name": "training-cluster",
+            },
+            {
+                "id": "mk8scluster-e00beta",
+                "name": "soperator-prod",
+            },
+        ],
+    )
+
+    lookup = ProviderOptionLookup()
+    monkeypatch.setattr(lookup, "_sdk_or_none", lambda: object())
+
+    resolved = lookup.resolve(
+        provider="project_mk8s_clusters",
+        args={},
+        payload={"client_info": {"nebius": {"project_id": "project-123"}}},
+        field_path="deploy.targets[].cluster_id",
+    )
+
+    assert [(choice.value, choice.label) for choice in resolved] == [
+        ("mk8scluster-e00beta", "soperator-prod  (mk8scluster-e00beta)"),
+        ("mk8scluster-e00alpha", "training-cluster  (mk8scluster-e00alpha)"),
+    ]
+    assert resolved[0].metadata["target_ref"] == "soperator-prod"
 
 
 def test_compute_public_image_families_follow_live_platform_recommendations(

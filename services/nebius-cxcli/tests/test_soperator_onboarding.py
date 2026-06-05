@@ -8,13 +8,18 @@ import pytest
 from nebius_cxcli.runtime_validation import validate_runtime_payload
 from nebius_cxcli.soperator_onboarding import (
     ONBOARDING_ACTION_INSTALL_SOPERATOR,
+    ONBOARDING_ACTION_PLAN_COMPUTE_MIGRATION,
     ONBOARDING_ACTION_UPGRADE_SOPERATOR,
+    SOURCE_SOPERATOR_DISCOVERY_REPORT_NAME,
     analyze_soperator_onboarding_snapshot,
     collect_kubectl_soperator_snapshot,
+    soperator_migration_profile_for_version,
+    soperator_migration_profile_versions,
     soperator_onboarding_fingerprint,
     soperator_onboarding_is_accepted,
     validate_soperator_onboarding_acceptance,
     write_soperator_onboarding_reports,
+    write_source_soperator_discovery_report,
 )
 
 
@@ -52,7 +57,8 @@ def test_soperator_onboarding_analyzer_detects_vanilla_cluster_actions() -> None
         pinned_app_version="0.25.0",
     )
 
-    assert report.state == "vanilla-mk8s"
+    assert report.state == "no-soperator-detected"
+    assert report.target_version == "0.25.0"
     assert ONBOARDING_ACTION_INSTALL_SOPERATOR in {action.id for action in report.actions}
     assert any(finding.layer == "storage-sfs" for finding in report.findings)
     assert any(finding.layer == "topology" and finding.status == "available" for finding in report.findings)
@@ -69,7 +75,7 @@ def test_soperator_onboarding_analyzer_ignores_noncanonical_slurm_nebius_crds() 
         pinned_app_version="0.25.0",
     )
 
-    assert report.state == "vanilla-mk8s"
+    assert report.state == "no-soperator-detected"
     assert ONBOARDING_ACTION_INSTALL_SOPERATOR in {action.id for action in report.actions}
 
 
@@ -94,18 +100,81 @@ def test_soperator_onboarding_analyzer_offers_upgrade_for_older_release() -> Non
             release={
                 "name": "soperator",
                 "namespace": "soperator",
-                "chart": "soperator-0.24.0",
-                "app_version": "0.24.0",
+                "chart": "soperator-3.0.5",
+                "app_version": "3.0.5",
             }
         ),
         target_ref="cluster1",
-        pinned_chart_version="0.25.0",
-        pinned_app_version="0.25.0",
+        pinned_chart_version="4.0.1-ps.1",
+        pinned_app_version="4.0.1",
     )
 
-    assert report.state == "existing-soperator"
+    assert report.state == "existing-soperator-supported"
+    assert report.source_version == "3.0.5"
+    assert report.migration_profile_id == "v3-to-target"
     assert ONBOARDING_ACTION_UPGRADE_SOPERATOR in {action.id for action in report.actions}
+    assert ONBOARDING_ACTION_PLAN_COMPUTE_MIGRATION in {action.id for action in report.actions}
+    assert any(item.classification == "data-sensitive" for item in report.remediation)
+    assert [phase.id for phase in report.migration_plan] == [
+        "discovery-and-plan",
+        "customer-approval",
+        "create-aligned-sfs",
+        "online-bulk-data-sync",
+        "rolling-compute-migration",
+        "final-control-plane-cutover",
+        "validation-and-rollback-hold",
+        "retire-old-resources",
+    ]
     assert any(finding.status == "upgrade-available" for finding in report.findings)
+
+
+def test_soperator_onboarding_analyzer_accepts_exact_target_release() -> None:
+    report = analyze_soperator_onboarding_snapshot(
+        _snapshot(
+            release={
+                "name": "soperator",
+                "namespace": "soperator",
+                "chart": "soperator-4.0.1-ps.1",
+                "app_version": "4.0.1",
+            }
+        ),
+        target_ref="cluster1",
+        pinned_chart_version="4.0.1-ps.1",
+        pinned_app_version="4.0.1",
+    )
+
+    assert report.state == "existing-soperator-target"
+    assert report.source_version == "4.0.1"
+    assert report.migration_profile_id == "v4-to-target"
+    assert not report.migration_plan
+    assert any(finding.status == "target-version" for finding in report.findings)
+
+
+@pytest.mark.parametrize("live_chart", ["soperator-4.0.1", "soperator-4.0.1-ps.0"])
+def test_soperator_onboarding_analyzer_treats_lower_ps_package_as_upgrade(
+    live_chart: str,
+) -> None:
+    snapshot = _snapshot(
+        release={
+            "name": "soperator",
+            "namespace": "soperator",
+            "chart": live_chart,
+            "app_version": "4.0.1",
+        }
+    )
+    snapshot["storage"] = {"jail": {}, "controller-spool": {}, "accounting": {}}
+
+    report = analyze_soperator_onboarding_snapshot(
+        snapshot,
+        target_ref="cluster1",
+        pinned_chart_version="4.0.1-ps.1",
+        pinned_app_version="4.0.1",
+    )
+
+    assert report.state == "existing-soperator-supported"
+    assert report.migration_profile_id == "v4-to-target"
+    assert ONBOARDING_ACTION_UPGRADE_SOPERATOR in {action.id for action in report.actions}
+    assert not any(item.classification == "data-sensitive" for item in report.remediation)
 
 
 def test_soperator_onboarding_analyzer_does_not_downgrade_newer_release() -> None:
@@ -125,6 +194,7 @@ def test_soperator_onboarding_analyzer_does_not_downgrade_newer_release() -> Non
 
     action_ids = {action.id for action in report.actions}
     assert ONBOARDING_ACTION_UPGRADE_SOPERATOR not in action_ids
+    assert report.state == "existing-soperator-newer"
     assert any(finding.status == "newer-than-cxcli" for finding in report.findings)
 
 
@@ -143,7 +213,7 @@ def test_soperator_onboarding_analyzer_blocks_incompatible_release_identity() ->
         pinned_app_version="0.25.0",
     )
 
-    assert report.state == "partial-soperator"
+    assert report.state == "existing-soperator-unknown"
     assert any(finding.status == "blocked" for finding in report.findings)
 
 
@@ -162,8 +232,31 @@ def test_soperator_onboarding_analyzer_ignores_soperator_sibling_charts() -> Non
         pinned_app_version="0.25.0",
     )
 
-    assert report.state == "vanilla-mk8s"
+    assert report.state == "no-soperator-detected"
     assert not any(finding.status == "blocked" for finding in report.findings)
+
+
+def test_soperator_migration_profile_history_covers_known_release_window() -> None:
+    versions = set(soperator_migration_profile_versions())
+
+    assert "1.14.1" in versions
+    assert "3.0.5" in versions
+    assert "4.0.1" in versions
+    assert len(versions) >= 61
+
+
+def test_soperator_migration_profile_exposes_component_compatibility_axes() -> None:
+    profile = soperator_migration_profile_for_version("3.0.5")
+
+    assert profile is not None
+    assert profile["profile_id"] == "v3-to-target"
+    assert profile["requires_aligned_sfs"] is True
+    axes = profile["compatibility_axes"]
+    assert axes["compute_layout"] == "replace-and-roll"
+    assert axes["storage_layout"] == "create-aligned-sfs-and-migrate"
+    assert "SlurmCluster" in axes["slurm_components"]
+    assert "NodeSet" in axes["slurm_components"]
+    assert "NodeConfigurator" in axes["slurm_components"]
 
 
 def test_soperator_onboarding_analyzer_blocks_collection_errors() -> None:
@@ -343,8 +436,11 @@ def _onboarding_payload() -> dict[str, object]:
                     "soperator_onboarding": {
                         "accepted": True,
                         "analysis_fingerprint": "",
-                        "state": "vanilla-mk8s",
-                        "storage_mode": "adopt-existing-storage",
+                        "state": "no-soperator-detected",
+                        "storage_mode": "keep-existing-storage",
+                        "target_version": "4.0.1-ps.1",
+                        "source_version": "",
+                        "migration_profile_id": "",
                         "actions": [ONBOARDING_ACTION_INSTALL_SOPERATOR],
                     },
                 }
@@ -360,7 +456,7 @@ def _onboarding_payload() -> dict[str, object]:
                     "enabled": True,
                     "install_mode": "onboard-existing-cluster",
                     "repo": "oci://example.invalid/charts",
-                    "version": "0.25.0",
+                    "version": "4.0.1-ps.1",
                     "namespace": "soperator",
                     "release-name": "soperator",
                     "values": {},
@@ -409,12 +505,12 @@ def test_onboarding_acceptance_refuses_blocked_analysis_even_with_current_finger
         validate_soperator_onboarding_acceptance(payload, target_ref="cluster1")
 
 
-def test_onboarding_acceptance_refuses_partial_analysis_even_with_current_fingerprint() -> None:
+def test_onboarding_acceptance_refuses_unknown_analysis_even_with_current_fingerprint() -> None:
     payload = _onboarding_payload()
     target = payload["deploy"]["targets"][0]  # type: ignore[index]
     onboarding = target["soperator_onboarding"]  # type: ignore[index]
     onboarding["accepted"] = True
-    onboarding["state"] = "partial-soperator"
+    onboarding["state"] = "existing-soperator-unknown"
     onboarding["analysis_fingerprint"] = soperator_onboarding_fingerprint(
         payload,
         target_ref="cluster1",
@@ -425,13 +521,15 @@ def test_onboarding_acceptance_refuses_partial_analysis_even_with_current_finger
         validate_soperator_onboarding_acceptance(payload, target_ref="cluster1")
 
 
-def test_onboarding_fingerprint_tracks_soperator_chart_pin() -> None:
+def test_onboarding_fingerprint_allows_day2_soperator_chart_pin_changes() -> None:
     payload = _onboarding_payload()
     original = soperator_onboarding_fingerprint(payload, target_ref="cluster1")
     chart = payload["apps"]["charts"][0]  # type: ignore[index]
     chart["version"] = "0.26.0"
 
-    assert soperator_onboarding_fingerprint(payload, target_ref="cluster1") != original
+    assert soperator_onboarding_fingerprint(payload, target_ref="cluster1") == original
+    validate_soperator_onboarding_acceptance(payload, target_ref="cluster1")
+    validate_runtime_payload(payload)
 
 
 def test_onboarding_fingerprint_ignores_ephemeral_helm_release_metadata() -> None:
@@ -470,6 +568,31 @@ def test_onboarding_report_writer_persists_target_report(tmp_path) -> None:
     report = report_path.read_text(encoding="utf-8")
     assert '"target_ref": "cluster1"' in report
     assert soperator_onboarding_fingerprint(payload, target_ref="cluster1") in report
+
+
+def test_source_discovery_report_writer_persists_full_snapshot(tmp_path) -> None:
+    snapshot = _snapshot()
+    report = analyze_soperator_onboarding_snapshot(
+        snapshot,
+        target_ref="cluster1",
+        pinned_chart_version="4.0.1-ps.1",
+        pinned_app_version="4.0.1",
+    )
+
+    path = write_source_soperator_discovery_report(
+        tmp_path,
+        target_ref="cluster1",
+        snapshot=snapshot,
+        report=report,
+        cluster_id="mk8scluster-123",
+        cluster_name="cluster1",
+    )
+
+    assert path == tmp_path / SOURCE_SOPERATOR_DISCOVERY_REPORT_NAME
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload["cluster_id"] == "mk8scluster-123"
+    assert payload["report"]["state"] == "no-soperator-detected"
+    assert payload["snapshot"]["node_groups"]["h100"]["gpu"] is True
 
 
 def test_onboarding_report_writer_preserves_collection_errors(tmp_path) -> None:

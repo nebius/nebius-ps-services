@@ -214,7 +214,7 @@ components:
         portable:
           repo: https://github.com/nebius/nebius-ps-services/tree/main/helm-charts/soperator
           chart: soperator
-          version: 3.0.5-ps.1
+          version: 4.0.1-ps.1
         local:
           path: ../../helm-charts/soperator
       ui:

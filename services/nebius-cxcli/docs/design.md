@@ -722,10 +722,10 @@ During `create` and `component add`, cxcli reports those Soperator-owned
 selection adjustments explicitly: production mode explains auto-added `mk8s` /
 `sfs`, while the Soperator chart requirement explains auto-added
 `cert-manager`.
-During interactive `create` and `component add`, production mode also asks for
-the Soperator nodesets profile immediately after `install_mode`, before the
-MK8s infra field phase, so CPU-only, GPU-only, or mixed worker layout is known
-before MK8s shape/fabric helpers and target GPU validation prompts are offered.
+During interactive `create` and `component add`, Soperator production flows ask
+for the Soperator nodesets profile before the MK8s infra field phase, so
+CPU-only, GPU-only, or mixed worker layout is known before MK8s shape/fabric
+helpers and target GPU validation prompts are offered.
 When the selected profile is CPU-only, cxcli skips and prunes the inactive
 `inputs.node_group_defaults.gpu.*` helper scope before the MK8s field phase and
 during runtime config normalization, so GPU fabric and stack fields are not
@@ -749,48 +749,83 @@ Before rendering the Soperator Helm chart, cxcli prunes generated YAML `null`
 booleans only from the Soperator cert-manager and MariaDB webhook paths where
 unset optional wizard fields must inherit chart defaults. Explicit `false`
 values and intentional `null` overrides on other Helm values are preserved.
-`onboard-existing-cluster` registers an external Nebius MK8s target in
-`deploy.targets[]`, records discovered live groups under
+`nebius-cxcli soperator onboard <config.yaml-or-deployments-root>` writes
+`onboard-existing-cluster` for an external Nebius MK8s target in
+`deploy.targets[]`, updating an existing project config or creating the
+canonical tenant/project `config.yaml` first when the operator passes a
+deployments root. Interactive onboarding lists existing Nebius MK8s clusters
+in the selected project, asks the operator to choose one cluster for that run,
+and stores the selected Nebius `cluster_id` as the durable target access
+handle instead of deriving target identity from an ambient local kube context.
+It records discovered live groups under
 `deploy.targets[].inventory.node_groups`, stores an accepted
 `deploy.targets[].soperator_onboarding` action plan, and derives
-`values.nodeGroupMapping` from the selected profile instead of Terraform-owning
-the existing cluster or adding role-named host pools. Generated onboarding
-NodeSets use live inventory-derived node counts, selectors, taints, and GPU
-allocatable data as authoritative scheduling/resource inputs over catalog
-template defaults. Onboarding storage selectors stay scoped to those discovered
-groups, while generated production-cluster profiles can still keep profile jail
-aliases for day-2 profile switches. If the accepted storage mode is
-`use-existing-pvc-or-storageclass`, cxcli materializes the chart's documented
-one-node local storage profile: jail/controller-spool use chart-local PVs,
-accounting and Slurm REST are disabled, SConfigController remains enabled to
-project Slurm config into the jail, and generated Slurm pods that mount the
-local jail are pinned to one discovered node when the live inventory includes
-node names. That avoids rendering Nebius Filestore mount commands for a plain
-external cluster without treating node-local PVs as shared multi-node storage.
-The compact CPU worker NodeSet also derives Slurm topology from the discovered
-node group's allocatable CPU count so Slurm registration matches the external
-node shape. The same local-storage path defaults `populateJail.overwrite: true`
-unless explicitly set, because host-path style local storage can retain stale
-sentinel files after a failed app install even when Kubernetes PV/PVC objects
-are deleted.
+`values.nodeGroupMapping` from discovered inventory and the selected profile
+instead of Terraform-owning the existing cluster or adding role-named host
+pools. Operators can still edit the materialized mapping in `config.yaml`
+before render; the onboarding command itself asks only for the target cluster
+and storage intent. Generated onboarding NodeSets use live inventory-derived
+node counts, selectors, taints, and GPU allocatable data as authoritative
+scheduling/resource inputs over catalog template defaults. The full
+source-cluster discovery snapshot is written beside
+the project config as `source-soperator-cluster-discovery-report.json`; the
+config keeps only stable onboarding decisions and fingerprints. Onboarding
+storage choices are `keep-existing-storage` or `create-aligned-sfs`. The
+aligned-SFS path is a migration plan: create and attach new SFS filesystems,
+keep old storage active, run online bulk data sync, then perform final delta
+sync and storage-reference cutover during a controlled Slurm quiet window.
+Compute changes are planned as a rolling drain/validate migration so cxcli does
+not force-kill running jobs.
 Onboarding also applies compact OpenKruise, MariaDB, Slurm control-plane, and
 worker pod requests so generic external CPU clusters can schedule the Soperator
 stack before the operator tunes production reservations. The onboarding
-workflow is explicit: register the external
-target in `config.yaml`, run the read-only analysis, review and accept the
-Soperator app/remediation plan plus role mapping, then `validate`, `render`,
-and `deploy`. Fingerprint validation compares the accepted plan with the same
+workflow is explicit: run
+`nebius-cxcli soperator onboard <config.yaml-or-deployments-root>` to register
+the external Nebius MK8s target in `config.yaml`, run the read-only analysis,
+review the discovery report and Soperator app/remediation/migration plan plus
+role mapping, then run
+`nebius-cxcli soperator migrate <config.yaml> --target <target> --dry-run` to
+review the explicit compute/storage migration phases. The migration command is
+the separate execution surface for future live orchestration; today it
+validates the accepted onboarding analysis, reads
+`source-soperator-cluster-discovery-report.json`, prints the plan, and refuses
+`--execute` until the Nebius API, Kubernetes drain, data-copy, Slurm cutover,
+and Soperator reconciliation executor is implemented. `soperator onboard` is
+therefore discovery-only and does not create SFS filesystems, attach storage,
+drain nodes, run data sync jobs, or mutate Helm/Soperator resources. The
+future `soperator migrate --execute` executor owns live orchestration: it must
+consume the accepted migration plan, run storage, compute, and cutover phases
+with progress bars or spinners, watch Nebius API, Kubernetes, Soperator, and
+Slurm failure signals, apply bounded safe retry/remedy steps where the phase
+contract allows it, and persist timeout-guarded checkpoints so interrupted
+migrations can resume without redoing completed safe work or retiring old
+storage and compute early. Existing projects should pass `config.yaml` or the
+project directory containing it;
+first-time onboarding can pass the deployments root plus identity options so
+cxcli creates the project config before writing the target. The interactive
+flow does not accept
+arbitrary vanilla Kubernetes clusters; it selects from the live Nebius MK8s
+clusters in the resolved project and onboards one target per cxcli run.
+Fingerprint validation compares the
+accepted plan with the same
 deterministic Soperator defaults produced by runtime normalization, so unrelated
-day-2 app edits do not invalidate a reviewed onboarding plan. This is primarily a day-2
-Soperator management and upgrade path for clusters that already exist; it does
+day-2 app edits and Soperator Helm chart version edits do not invalidate a
+reviewed onboarding plan. The fingerprint still tracks target identity,
+inventory, selected actions, source/target release analysis, storage mode, and
+collection errors, so changing the cluster or migration decision requires a
+fresh onboarding analysis. This is primarily a day-2 Soperator management and
+upgrade path for clusters that already exist; it does
 not make Terraform responsible for that cluster lifecycle. Multi-target
 onboarding keeps each `apps:soperator` row bound to its matching
 `kind: external-mk8s` target row instead of reusing the first external target;
 multiple unbound onboarding rows are rejected. Non-interactive
 `component add apps:soperator@<target>` infers `onboard-existing-cluster` when
 `<target>` is an existing external MK8s target, skips Terraform MK8s/SFS row
-creation, and repairs missing target-scoped Soperator-required app rows on that
-same target. The analyzer treats only exact
+creation, and remains a target-scoped compatibility path. The canonical initial
+onboarding command is
+`nebius-cxcli soperator onboard <config.yaml-or-deployments-root>`, which
+repairs missing target-scoped Soperator-required app rows on that same target.
+The analyzer treats only exact
 `soperator` Helm release/chart identity and canonical Soperator CRDs as
 managed Soperator state, ignores sibling helper charts, and reports
 `kubectl`/`helm` collection failures as blocked analyses rather than
@@ -812,6 +847,53 @@ attachments, NodeConfigurator rebooter tolerations, and partition references.
 Onboarding mode can also carry profile-owned service sizing overlays, such as
 smaller login, accounting, controller, MariaDB, OpenKruise, and worker pod
 requests for already-created clusters with modest CPU pools.
+
+Soperator migration profiles are the compatibility source of truth for
+existing Soperator upgrades. A profile record must exist for every upstream
+release that cxcli can recognize, and runtime onboarding must use the committed
+profile data rather than live GitHub access. The committed generator currently
+captures explicit release records and generation-level compatibility axes from
+GitHub release metadata; it records that scope in
+`generator_scope: release-metadata-and-compatibility-axes` and keeps the
+tarball-level work visible as `future_generator_scope`. It does not yet
+download chart tarballs or fingerprint CRDs, rendered templates, image sets, or
+Slurm component schemas. That deeper extraction must be added before cxcli
+claims tarball-level compatibility fingerprints. The target profile schema is
+release-scoped and component-scoped:
+
+- release identity: upstream tag, chart version, app version, image tags, and
+  dependency chart versions
+- CRD contract: `SlurmCluster`, `NodeSet`, `NodeConfigurator`,
+  `NodeSetPowerState`, `ActiveCheck`, `JailedConfig`, and any generated schema
+  hashes
+- role layout: system, controller, login, accounting, REST, MariaDB, Kruise,
+  SConfigController, worker, CPU/GPU partition, and generated service role
+  placement fields
+- storage layout: jail, controller spool, accounting, REST/config outputs,
+  PVC/PV names, StorageClass requirements, SFS filesystem attachment shape,
+  mount paths, and data-preserving copy requirements
+- compute layout: NodeSet names, selectors, tolerations, topology labels,
+  GPU/GRES/RDMA attributes, node counts, drain policy, replacement policy, and
+  validation checks before accepting jobs
+- checks/layout extras: ActiveChecks, slurmrestd, SConfigController,
+  MariaDB/accounting, OpenKruise, health checks, and chart-owned scripts that
+  affect Slurm lifecycle
+
+Migration analysis compares the discovered source release profile with the
+target chart version selected in `component_sources.yaml` or the target-scoped
+`apps:soperator` row. Compatible axes can be adopted in place. Incompatible
+compute axes require a rolling compute migration plan: create target NodeSets,
+validate target workers, drain old workers in batches without killing running
+jobs, and move capacity only after Slurm sees the new workers healthy.
+Incompatible storage axes require an aligned-SFS plan: create and dual-attach
+target SFS filesystems, keep old storage active, run online bulk sync, run a
+final delta during a controlled Slurm quiet window, then cut storage references
+over. cxcli should own this migration orchestration through Nebius APIs,
+Kubernetes APIs, Helm, and Slurm/kubectl checks, because the workflow spans
+cloud attachments, Kubernetes node replacement, Soperator CRs, and data copy
+jobs. It must remain phase-gated: discovery, customer approval, SFS creation,
+bulk data sync, rolling compute migration, quiet control-plane/accounting
+cutover, validation/rollback hold, and explicit old-resource retirement.
 Those overlays are data in `component_cli_settings.yaml`, are merged only for
 `onboard-existing-cluster`, and do not change the production-cluster defaults.
 The mapped `system` filter also feeds chart-owned helper deployments such as
@@ -988,8 +1070,8 @@ surface vendor-neutral.
 
 The wizard also exposes catalog-derived `values.topologyProfile` choices scoped
 to the selected nodesets profile. The default `disabled` profile leaves
-`slurmConfig.topologyPlugin` empty so arbitrary Kubernetes clusters do not hang
-worker init waiting for missing Soperator tier labels. The
+`slurmConfig.topologyPlugin` empty so clusters without verified topology labels
+do not hang worker init waiting for missing Soperator tier labels. The
 `nebius-tiered-tree-v1` profile is the explicit production topology opt-in: it
 sets `topology/tree`, `SwitchAsNodeRank`, and
 `controllerManager.manager.env.topologyLabelPrefix=topology.nebius.com`. Use it
@@ -2191,12 +2273,15 @@ Use this sequence when onboarding observability for any bundled or new service:
 ## Soperator
 
 Soperator is modeled as one Helm app row, but the production install can also
-shape the underlying MK8s and SFS infra. `apps:soperator` starts with
-`install_mode`: `production-cluster` creates the full MK8s+SFS+Soperator bundle,
-while `onboard-existing-cluster` maps Soperator roles onto an existing Nebius
-MK8s target without taking Terraform ownership of that cluster. If onboarding
-is chosen after `mk8s` or `sfs` was selected in the same wizard transaction,
-cxcli drops those newly selected Terraform infra rows and keeps only
+shape the underlying MK8s and SFS infra. Interactive `create` and managed
+`component add` use `production-cluster`, which creates the full
+MK8s+SFS+Soperator bundle. Existing Nebius MK8s targets are registered with
+`nebius-cxcli soperator onboard <config.yaml-or-deployments-root>`, which
+writes `onboard-existing-cluster` so Soperator roles map onto that target
+without taking Terraform ownership of the cluster. The non-interactive compatibility
+path `component add apps:soperator@<target>` can still infer onboarding for an
+existing external target; if that same request also includes new `mk8s` or `sfs`
+infra rows, cxcli drops those newly selected Terraform infra rows and keeps only
 pre-existing infra rows.
 
 The catalog split is intentional. `component_sources.yaml` keeps the app source,
@@ -2376,24 +2461,35 @@ The command boundary is intentional:
   that pending infra add instead of persisting an unconfigured row. App chart
   phases keep the existing default behavior: answering `n` keeps the selected
   chart with catalog/default values.
-- For `apps:soperator`, the wizard starts with an explicit `install_mode`.
-  `production-cluster` then asks for the worker profile before MK8s/SFS
-  materialization, materializes the complete MK8s+SFS+Soperator five-role bundle
-  with one node in each generated role group by default, and skips role-mapping
-  prompts. `onboard-existing-cluster` resolves
-  the selected external target's `deploy.targets[].inventory.node_groups`
-  inventory and presents target-scoped `values.nodeGroupMapping.*` choices. The
-  default mapping places `worker` on GPU node groups and `system`,
+- For `apps:soperator`, the create/component wizard uses
+  `production-cluster`, asks for the worker profile before MK8s/SFS
+  materialization, materializes the complete MK8s+SFS+Soperator five-role
+  bundle with one node in each generated role group by default, and skips
+  role-mapping prompts.
+  `nebius-cxcli soperator onboard <config.yaml-or-deployments-root>` resolves
+  the selected project, lists existing Nebius MK8s clusters, registers one
+  chosen cluster as an external target with its `cluster_id`, reads that
+  target's `deploy.targets[].inventory.node_groups` inventory, and presents
+  target-scoped `values.nodeGroupMapping.*` choices. The default mapping places
+  `worker` on GPU node groups and `system`,
   `controller`, `login`, and `accounting` on CPU node groups, while keeping
   every role editable. Render/deploy refuse onboarding mode until the target has
   a current accepted `deploy.targets[].soperator_onboarding` analysis
   fingerprint. Actions that only install or adopt apps are the safe path.
   Actions that update existing node-group templates, such as adding SFS
   attachments, require maintenance planning because the MK8s rolling update
-  cordons, drains, and replaces nodes. The saved external target is not a
-  Terraform-managed MK8s row; it is the stable app/remediation target used by
-  render, deploy, destroy, and future Soperator upgrades. Non-interactive
-  `component add apps:soperator@<target>` uses this same onboarding path when
+  cordons, drains, and replaces nodes. The follow-up
+  `nebius-cxcli soperator migrate <config.yaml> --target <target> --dry-run`
+  command reads the source discovery report and prints the compute/storage
+  migration plan from the accepted onboarding analysis; live `--execute`
+  remains blocked until the explicit migration executor is implemented. That
+  executor is the live migration lane and must show phase progress, watch
+  failures, apply bounded safe remedies or stop at manual gates, and resume
+  timeout-guarded phases from checkpoints. The
+  saved external target is not a Terraform-managed MK8s row; it is the stable
+  app/remediation target used by render, deploy, destroy, and future Soperator
+  upgrades. Non-interactive
+  `component add apps:soperator@<target>` remains a compatibility path when
   `<target>` is an existing external MK8s target.
 - Accepts simple string-list Terraform inputs as comma-separated prompt values and other complex inputs such as maps/objects/object-lists as single-line YAML/JSON prompt values so reusable modules do not need CLI-specific scalar shims.
 - Validates active infra source/settings entries by default before editing `config.yaml`, matching `create`. If the add request includes app charts, it validates only those selected app chart sources plus auto-enabled app dependencies.

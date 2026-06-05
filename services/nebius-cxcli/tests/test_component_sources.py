@@ -398,9 +398,9 @@ def test_bundled_catalog_exposes_soperator_and_nfs_local_sources() -> None:
     soperator = next(chart for chart in sources.helm_charts if chart.name == "soperator")
     assert soperator.source.path is not None
     assert soperator.source.path.endswith("helm-charts/soperator")
-    assert soperator.version == "3.0.5-ps.1"
-    assert soperator.local_source.version == "3.0.5-ps.1"
-    assert soperator.portable_source.version == "3.0.5-ps.1"
+    assert soperator.version == "4.0.1-ps.1"
+    assert soperator.local_source.version == "4.0.1-ps.1"
+    assert soperator.portable_source.version == "4.0.1-ps.1"
     assert soperator.namespace == "soperator"
     assert soperator.release_name == "soperator"
     assert soperator.release_timeout == "90m"
@@ -422,11 +422,7 @@ def test_bundled_catalog_exposes_soperator_and_nfs_local_sources() -> None:
                         "label": (
                             "Create complete production Soperator cluster (MK8s + SFS + Soperator)"
                         ),
-                    },
-                    {
-                        "value": "onboard-existing-cluster",
-                        "label": "Onboard existing Nebius MK8s cluster",
-                    },
+                    }
                 ],
             }
         ],

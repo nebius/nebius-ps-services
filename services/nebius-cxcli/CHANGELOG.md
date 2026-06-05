@@ -6,6 +6,34 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Split Soperator existing-cluster onboarding out of the `create` wizard:
+  selecting Soperator in `create` now stays on the production MK8s+SFS path,
+  while the new `nebius-cxcli soperator onboard <config.yaml-or-deployments-root>`
+  command registers an external Nebius MK8s target, can scaffold a new
+  tenant/project `config.yaml` from a deployments root, lists existing MK8s
+  clusters in the resolved Nebius project for interactive onboarding,
+  registers one selected cluster per run by storing its `cluster_id`, repairs
+  target-scoped Soperator dependencies, and refreshes the accepted onboarding
+  fingerprint.
+- Tightened Soperator onboarding acceptance so day-2 Soperator Helm chart
+  version edits do not invalidate an already accepted target, exact pinned
+  Soperator releases classify as `existing-soperator-target`, lower `-ps.N`
+  package variants plan an upgrade to the cxcli target, and old-layout
+  migration plans persist `create-aligned-sfs` whenever aligned SFS data
+  migration is required.
+- Added `nebius-cxcli soperator migrate <config.yaml>` as the explicit
+  Soperator migration command surface. It validates the accepted onboarding
+  analysis, reads `source-soperator-cluster-discovery-report.json`, prints the
+  compute/storage migration plan in dry-run mode, and refuses live `--execute`
+  until the dedicated migration executor is implemented. The documented
+  executor contract now requires phase progress, failure watching, bounded
+  safe remedies, and timeout-guarded resume checkpoints before live customer
+  cluster mutation is enabled.
+- Hardened the Soperator migration profile generator with paginated GitHub
+  release fetching, explicit committed `generator_scope` metadata, and tests
+  that lock the current release-metadata/compatibility-axes scope while keeping
+  chart tarball, CRD, template, image, and Slurm contract fingerprinting as
+  future generator work.
 - Added a final `Next step: nebius-cxcli deploy <config.yaml>` helper line to
   successful `render` command output, while suppressing that hint for internal
   rerenders used by upgrade flows.
@@ -401,14 +429,12 @@ All notable changes to this project are tracked here. This changelog follows
   `component add soperator@<external-target>` now infers onboarding for
   existing external MK8s targets and repairs missing target-scoped
   Soperator-required app rows without adding Terraform MK8s/SFS rows. External
-  onboarding now also materializes `use-existing-pvc-or-storageclass` storage
-  as the chart's one-node local storage profile, pins generated local-storage
-  Slurm pods to one discovered node, disables accounting/REST/chart-managed
-  MariaDB for that profile while keeping SConfigController enabled, and applies
-  compact OpenKruise, MariaDB, Slurm control-plane, worker pod requests, and
-  CPU worker topology derived from the discovered node group's allocatable CPU
-  count so modest external CPU clusters can schedule and register the
-  onboarded stack before operators tune production sizing. The
+  onboarding now writes a source-cluster discovery report next to the project
+  config, records stable `no-soperator-detected` or existing-Soperator
+  migration states, matches installed releases against committed migration
+  profile history, and plans `keep-existing-storage` or `create-aligned-sfs`
+  remediation without embedding the full discovery snapshot in `config.yaml`.
+  The
   local-storage onboarding path also defaults `populateJail.overwrite: true` so
   failed partial installs do not leave stale jail sentinel files that skip
   required jail population on the next deploy.

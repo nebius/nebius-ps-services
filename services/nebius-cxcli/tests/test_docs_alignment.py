@@ -589,23 +589,52 @@ def test_docs_define_component_selector_contract() -> None:
     assert "`usage.config.ref`" in design
     assert "`apps:soperator`" in readme
     assert "`install_mode`" in readme
-    assert "`production-cluster` creates the complete MK8s+SFS+Soperator" in readme
-    assert "`onboard-existing-cluster` registers an external Nebius MK8s target" in readme
+    assert "`production-cluster` creates the complete MK8s+SFS+Soperator" in readme_flat
+    assert "`nebius-cxcli soperator onboard <config.yaml-or-deployments-root>`" in readme
+    assert "pass a deployments root when onboarding should create" in readme_flat
+    assert "writes `onboard-existing-cluster` for an external Nebius MK8s target" in readme_flat
+    assert "lists existing Nebius MK8s clusters in the selected project" in readme_flat
+    assert "onboards one cluster per run" in readme_flat
+    assert "records its Nebius `cluster_id` as the durable access handle" in readme_flat
+    assert "does not accept arbitrary vanilla Kubernetes clusters in the interactive flow" in readme_flat
     assert "Onboarding is deliberately not a Terraform import or takeover" in readme_flat
     assert "mainly for Soperator install and future upgrade workflows" in readme_flat
+    assert "`nebius-cxcli soperator migrate <config.yaml> --target <target> --dry-run`" in readme
+    assert "`soperator onboard` is read-only against the existing cluster" in readme_flat
+    assert "The future `soperator migrate --execute` executor is the live migration lane" in readme_flat
+    assert "progress bars or spinners" in readme_flat
+    assert "bounded safe retry or remedy steps" in readme_flat
     assert "Non-interactive `component add apps:soperator@<target>`" in readme
-    assert "it does not create Terraform-managed MK8s/SFS rows" in readme_flat
+    assert "canonical initial onboarding command" in readme_flat
+    assert "does not create Terraform-managed MK8s/SFS rows" in readme_flat
     assert "`values.nodeGroupMapping.*`" in readme
     assert "worker` on GPU node groups" in readme_flat
-    assert "`onboard-existing-cluster` registers an external Nebius MK8s target" in design
+    assert "`nebius-cxcli soperator onboard <config.yaml-or-deployments-root>`" in design
+    assert "first-time onboarding can pass the deployments root" in design_flat
+    assert "`onboard-existing-cluster` for an external Nebius MK8s target" in design_flat
+    assert "lists existing Nebius MK8s clusters in the selected project" in design_flat
+    assert "choose one cluster for that run" in design_flat
+    assert "stores the selected Nebius `cluster_id` as the durable target access handle" in design_flat
+    assert "does not accept arbitrary vanilla Kubernetes clusters" in design_flat
     assert "`deploy.targets[].inventory.node_groups`" in design
     assert "This is primarily a day-2 Soperator management and upgrade path" in design_flat
     assert "not a Terraform-managed MK8s row" in design_flat
+    assert "`nebius-cxcli soperator migrate <config.yaml> --target <target> --dry-run`" in design
+    assert "refuses `--execute` until the Nebius API" in design_flat
+    assert "future `soperator migrate --execute` executor owns live orchestration" in design_flat
+    assert "timeout-guarded checkpoints" in design_flat
     assert "component add apps:soperator@<target>" in design_flat
-    assert "skips Terraform MK8s/SFS row creation" in design_flat
+    assert "compatibility path" in design_flat
     assert "`production-cluster` materializes the complete MK8s+SFS+Soperator" in design
-    assert "`onboard-existing-cluster` resolves the selected" in design_flat
-    assert "`values.nodeGroupMapping.*` choices" in design
+    assert "soperator onboard <config.yaml-or-deployments-root>` resolves the selected" in design_flat
+    assert "`values.nodeGroupMapping` from discovered inventory and the selected profile" in design
+    assert "day-2 app edits and Soperator Helm chart version edits do not invalidate" in design_flat
+    assert "Soperator migration profiles are the compatibility source of truth" in design
+    assert "release-scoped and component-scoped" in design_flat
+    assert "generator_scope: release-metadata-and-compatibility-axes" in design
+    assert "does not yet download chart tarballs or fingerprint CRDs" in design_flat
+    assert "full chart tarball, CRD, template, image, and Slurm contract fingerprinting" in readme_flat
+    assert "SlurmCluster`, `NodeSet`, `NodeConfigurator`" in design
     assert "In GPU profile-backed MK8s flows" in design
     assert "CPU-only Soperator profiles skip and prune the inactive GPU helper scope" in design
     assert "during runtime config normalization" in design_flat
