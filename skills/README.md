@@ -18,6 +18,7 @@ For skill-specific release notes, see [CHANGELOG.md](CHANGELOG.md).
 - Disposable Ubuntu project container setup: `attach-ubuntu`
 - Commit and push the current feature branch: `commit-push`
 - Branch-safe GitHub pull request creation with safe check repair: `create-pr`
+- Read-only copy/paste-friendly local or GitHub repo code metrics: `code-info`
 - Public-safe local Codex runtime configuration: `config-codex`
 - GitHub Actions authoring and review: `github-workflows`
 - Global context management for long Codex tasks: `global-context-management`
@@ -56,6 +57,8 @@ $review-pr Review PR #110 against the base branch, fix safe issues on the branch
 $review-pr Review https://github.com/example-org/example-repo/pull/42, resolve straightforward conflicts against main if the branch is writable, and report remaining blockers.
 
 $align-skill Review and standardize skills/foo against the canonical skill structure and official vendor docs.
+
+$code-info Gather read-only project info from this folder or a GitHub repo with LOC by language and component, repo size, test files, CLI commands, modules, artifacts, and coverage.
 ```
 
 You can also be more specific when needed:
@@ -131,6 +134,17 @@ preserve one PR per branch, stage complete monorepo local work with
 `git add -A` when committing current dirty changes, validate the staged diff,
 reuse the current non-default branch without creating another branch, and
 report readiness plus manual merge order.
+
+### `code-info`
+
+`code-info` summarizes a local project folder or a GitHub repository with
+read-only, copy/paste-friendly Markdown metrics, including LOC per language,
+LOC per top-level component, tracked repo size, repo link, test file counts,
+CLI command definitions, package/module counts, build artifact sizes, and
+already-available coverage artifacts. For not-yet-cloned GitHub repositories,
+it reads a temporary archive using `GH_TOKEN`, `GITHUB_TOKEN`, or
+`gh auth token` when needed. It does not edit, format, build, test, install,
+generate coverage, or stage files.
 
 ### `config-codex`
 

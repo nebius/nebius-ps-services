@@ -21,11 +21,12 @@ All notable changes to this project are tracked here. This changelog follows
   package variants plan an upgrade to the cxcli target, and old-layout
   migration plans persist `create-aligned-sfs` whenever aligned SFS data
   migration is required.
-- Tightened Soperator onboarding storage selection: the prompt now labels
-  `keep-existing-storage` as keeping storage unchanged, and cxcli rejects that
-  mode when discovery finds missing, partial, or incompatible storage for the
-  target Soperator version. Such targets must choose `create-aligned-sfs` or
-  rerun onboarding with compatible storage mappings.
+- Aligned Soperator external-cluster onboarding around two explicit layer
+  choices: storage mode (`keep-existing-storage` or `create-aligned-sfs`) and
+  compute mode (`keep-existing-compute` or `create-aligned-node-groups`).
+  Discovery still recommends aligned SFS for missing or incompatible storage,
+  and old profiled releases still default to full storage+compute migration,
+  but explicit keep-existing choices now narrow the saved migration plan.
 - Matched Soperator onboarding deployments-root behavior to the `create`
   identity flow: after resolving tenant/project, interactive runs warn and ask
   before updating an existing resolved `config.yaml`, while non-interactive
@@ -33,16 +34,24 @@ All notable changes to this project are tracked here. This changelog follows
 - Added `nebius-cxcli soperator migrate <config.yaml>` as the explicit
   Soperator migration command surface. It validates the accepted onboarding
   analysis, reads `source-soperator-cluster-discovery-report.json`, prints the
-  compute/storage migration plan in dry-run mode, and refuses live `--execute`
-  until the dedicated migration executor is implemented. The documented
-  executor contract now requires phase progress, failure watching, bounded
-  safe remedies, and timeout-guarded resume checkpoints before live customer
-  cluster mutation is enabled.
+  compute/storage migration plan in dry-run mode, and runs checkpointed live
+  phases in `--execute` mode. The executor rechecks the live source release and
+  discovery fingerprint before the first mutation, records customer approval
+  and explicit worker node groups when `--approve --worker-node-groups ...` is
+  passed, creates or reuses aligned SFS filesystems, attaches them to
+  discovered Nebius node groups, runs data-copy Jobs when PVC pairs exist, and
+  executes the guarded compute path by creating or reusing aligned five-role
+  MK8s node groups, verifying an empty Slurm queue from a login pod, applying
+  the pinned target Soperator chart values, normalizing target Slurm runtime
+  plugin settings, recreating target worker Kruise StatefulSets when immutable
+  source-era specs cannot be updated in place, cordoning/draining old workers,
+  validating cutover resources, and retiring old compute node groups while
+  holding old storage retirement for operator review.
 - Hardened the Soperator migration profile generator with paginated GitHub
-  release fetching, explicit committed `generator_scope` metadata, and tests
-  that lock the current release-metadata/compatibility-axes scope while keeping
-  chart tarball, CRD, template, image, and Slurm contract fingerprinting as
-  future generator work.
+  release fetching, release tarball extraction, official chart identity
+  detection, per-component chart archive, CRD, template, values, image, and
+  Slurm contract fingerprints, and tests that lock the expanded generator
+  scope.
 - Added a final `Next step: nebius-cxcli deploy <config.yaml>` helper line to
   successful `render` command output, while suppressing that hint for internal
   rerenders used by upgrade flows.

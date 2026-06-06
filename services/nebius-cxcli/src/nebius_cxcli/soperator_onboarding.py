@@ -10,7 +10,7 @@ import subprocess
 import tempfile
 from collections.abc import Mapping, Sequence
 from contextlib import suppress
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -39,6 +39,19 @@ ONBOARDING_ACTION_PLAN_DATA_MIGRATION = "plan-soperator-data-migration"
 ONBOARDING_ACTION_PLAN_COMPUTE_MIGRATION = "plan-soperator-compute-migration"
 ONBOARDING_ACTION_ENABLE_TOPOLOGY = "enable-slurm-topology"
 ONBOARDING_ACTION_REVIEW_GPU_RDMA = "review-gpu-rdma"
+ONBOARDING_STORAGE_MODE_KEEP_EXISTING = "keep-existing-storage"
+ONBOARDING_STORAGE_MODE_CREATE_ALIGNED_SFS = "create-aligned-sfs"
+ONBOARDING_COMPUTE_MODE_KEEP_EXISTING = "keep-existing-compute"
+ONBOARDING_COMPUTE_MODE_CREATE_ALIGNED_NODE_GROUPS = "create-aligned-node-groups"
+ONBOARDING_STORAGE_MODES = frozenset(
+    {ONBOARDING_STORAGE_MODE_KEEP_EXISTING, ONBOARDING_STORAGE_MODE_CREATE_ALIGNED_SFS}
+)
+ONBOARDING_COMPUTE_MODES = frozenset(
+    {
+        ONBOARDING_COMPUTE_MODE_KEEP_EXISTING,
+        ONBOARDING_COMPUTE_MODE_CREATE_ALIGNED_NODE_GROUPS,
+    }
+)
 ONBOARDING_REQUIRED_STORAGE_KEYS = ("jail", "controller-spool", "accounting")
 ONBOARDING_ACCEPTABLE_STATES = frozenset(
     {
@@ -58,6 +71,10 @@ SOPERATOR_CRD_RESOURCE_KINDS = (
 SOPERATOR_CRD_NAMES = frozenset(name for name, _resource_kind in SOPERATOR_CRD_RESOURCE_KINDS)
 SOPERATOR_MIGRATION_PROFILE_DATA_FILE = Path(__file__).with_name(
     "soperator_migration_profiles.yaml"
+)
+SOPERATOR_COMPATIBLE_RELEASE_NAMES = frozenset({"soperator", "slurm-operator"})
+SOPERATOR_COMPATIBLE_CHART_IDENTITIES = frozenset(
+    {"soperator", "helm-soperator", "slurm-operator"}
 )
 _EPHEMERAL_HELM_RELEASE_KEYS = frozenset(
     {"description", "last_deployed", "revision", "status", "updated"}
@@ -191,6 +208,7 @@ def soperator_onboarding_fingerprint(
                 "actions": list(onboarding.get("actions", []) or []),
                 "state": str(onboarding.get("state", "") or "").strip(),
                 "storage_mode": str(onboarding.get("storage_mode", "") or "").strip(),
+                "compute_mode": str(onboarding.get("compute_mode", "") or "").strip(),
                 "target_version": str(onboarding.get("target_version", "") or "").strip(),
                 "source_version": str(onboarding.get("source_version", "") or "").strip(),
                 "migration_profile_id": str(
@@ -268,9 +286,9 @@ def soperator_onboarding_is_accepted(
     collection_errors = onboarding.get("collection_errors")
     if isinstance(collection_errors, list) and collection_errors:
         return False
-    if _required_storage_mode_from_onboarding(onboarding) and not _onboarding_storage_mode_is_valid(
-        onboarding
-    ):
+    if not _onboarding_storage_mode_is_valid(onboarding):
+        return False
+    if not _onboarding_compute_mode_is_valid(onboarding):
         return False
     recorded = str(onboarding.get("analysis_fingerprint", "") or "").strip()
     if not recorded:
@@ -316,6 +334,17 @@ def validate_soperator_onboarding_acceptance(
                 "aligned SFS storage migration. Rerun Soperator onboarding or choose "
                 "create-aligned-sfs."
             )
+    if isinstance(onboarding, Mapping):
+        required_compute_mode = _required_compute_mode_from_onboarding(onboarding)
+        configured_compute_mode = str(onboarding.get("compute_mode", "") or "").strip()
+        if required_compute_mode and configured_compute_mode != required_compute_mode:
+            raise ValueError(
+                f"apps:soperator target '{target}' requires "
+                f"deploy.targets[].soperator_onboarding.compute_mode "
+                f"'{required_compute_mode}' because the accepted onboarding actions require "
+                "Soperator-aligned compute migration. Rerun Soperator onboarding or choose "
+                "create-aligned-node-groups."
+            )
     raise ValueError(
         f"apps:soperator target '{target}' uses onboard-existing-cluster but does not have "
         "a current accepted deploy.targets[].soperator_onboarding analysis. Rerun the "
@@ -330,15 +359,39 @@ def _required_storage_mode_from_onboarding(onboarding: Mapping[str, Any]) -> str
         if str(action or "").strip()
     }
     if ONBOARDING_ACTION_CREATE_ALIGNED_SFS in actions or ONBOARDING_ACTION_PLAN_DATA_MIGRATION in actions:
-        return "create-aligned-sfs"
+        return ONBOARDING_STORAGE_MODE_CREATE_ALIGNED_SFS
     return ""
 
 
 def _onboarding_storage_mode_is_valid(onboarding: Mapping[str, Any]) -> bool:
+    configured_storage_mode = str(onboarding.get("storage_mode", "") or "").strip()
+    if configured_storage_mode and configured_storage_mode not in ONBOARDING_STORAGE_MODES:
+        return False
     required_storage_mode = _required_storage_mode_from_onboarding(onboarding)
     if not required_storage_mode:
         return True
-    return str(onboarding.get("storage_mode", "") or "").strip() == required_storage_mode
+    return configured_storage_mode == required_storage_mode
+
+
+def _required_compute_mode_from_onboarding(onboarding: Mapping[str, Any]) -> str:
+    actions = {
+        str(action or "").strip()
+        for action in onboarding.get("actions", []) or []
+        if str(action or "").strip()
+    }
+    if ONBOARDING_ACTION_PLAN_COMPUTE_MIGRATION in actions:
+        return ONBOARDING_COMPUTE_MODE_CREATE_ALIGNED_NODE_GROUPS
+    return ""
+
+
+def _onboarding_compute_mode_is_valid(onboarding: Mapping[str, Any]) -> bool:
+    configured_compute_mode = str(onboarding.get("compute_mode", "") or "").strip()
+    if configured_compute_mode and configured_compute_mode not in ONBOARDING_COMPUTE_MODES:
+        return False
+    required_compute_mode = _required_compute_mode_from_onboarding(onboarding)
+    if not required_compute_mode:
+        return True
+    return configured_compute_mode == required_compute_mode
 
 
 def _node_group_inventory_from_target(target: Mapping[str, Any] | None) -> Mapping[str, Any]:
@@ -538,6 +591,32 @@ def soperator_migration_profile_versions() -> tuple[str, ...]:
     return tuple(versions)
 
 
+def _soperator_migration_profile_version_candidates(row: Mapping[str, Any]) -> set[str]:
+    candidates = {
+        str(row.get("version", "") or ""),
+        str(row.get("upstream_tag", "") or ""),
+        str(row.get("chart_version", "") or ""),
+        str(row.get("app_version", "") or ""),
+    }
+    aliases = row.get("version_aliases")
+    if isinstance(aliases, Sequence) and not isinstance(aliases, (str, bytes, bytearray)):
+        candidates.update(str(alias or "") for alias in aliases)
+    main_chart = row.get("main_chart")
+    if isinstance(main_chart, Mapping):
+        candidates.update(
+            {
+                str(main_chart.get("chart_version", "") or ""),
+                str(main_chart.get("app_version", "") or ""),
+            }
+        )
+    normalized = {
+        normalize_soperator_release_version(candidate)
+        for candidate in candidates
+        if str(candidate or "").strip()
+    }
+    return {candidate for candidate in normalized if candidate}
+
+
 def soperator_migration_profile_for_version(version: str) -> Mapping[str, Any] | None:
     normalized = normalize_soperator_release_version(version)
     if not normalized:
@@ -552,7 +631,7 @@ def soperator_migration_profile_for_version(version: str) -> Mapping[str, Any] |
     for row in releases:
         if not isinstance(row, Mapping):
             continue
-        if normalize_soperator_release_version(str(row.get("version", "") or "")) == normalized:
+        if normalized in _soperator_migration_profile_version_candidates(row):
             result = dict(row)
             profile_id = str(row.get("profile_id", "") or "").strip()
             profile_group = profile_groups.get(profile_id)
@@ -589,6 +668,7 @@ def _migration_phase(
 def _default_soperator_migration_plan(
     *,
     include_data_migration: bool,
+    include_compute_migration: bool = True,
 ) -> tuple[SoperatorMigrationPhase, ...]:
     phases = [
         _migration_phase(
@@ -627,8 +707,8 @@ def _default_soperator_migration_plan(
                 ),
             ]
         )
-    phases.extend(
-        [
+    if include_compute_migration:
+        phases.append(
             _migration_phase(
                 "rolling-compute-migration",
                 "Rolling compute migration by draining and validating nodes in batches",
@@ -640,31 +720,80 @@ def _default_soperator_migration_plan(
                     "Do not terminate running jobs; drain old nodes and admit target nodes in batches.",
                     "Validate target NodeSets before accepting production jobs.",
                 ),
-            ),
-            _migration_phase(
-                "final-control-plane-cutover",
-                "Final Slurm controller, accounting, login, and storage-reference cutover",
-                progress_label="Data Migration: final delta and control-plane cutover",
-                requires_customer_approval=True,
-                quiet_window=True,
-                notes=(
-                    "Pause new scheduling or drain partitions according to customer policy.",
-                    "Run a final delta sync before updating Soperator values or CRs.",
+            )
+        )
+    if include_data_migration or include_compute_migration:
+        phases.extend(
+            [
+                _migration_phase(
+                    "final-control-plane-cutover",
+                    "Final Slurm controller, accounting, login, and storage-reference cutover",
+                    progress_label="Data Migration: final delta and control-plane cutover",
+                    requires_customer_approval=True,
+                    quiet_window=True,
+                    notes=(
+                        "Pause new scheduling or drain partitions according to customer policy.",
+                        "Run a final delta sync before updating Soperator values or CRs.",
+                    ),
                 ),
-            ),
-            _migration_phase(
-                "validation-and-rollback-hold",
-                "Validation and rollback hold",
-                notes=("Keep old storage and old compute resources available until validation passes.",),
-            ),
-            _migration_phase(
-                "retire-old-resources",
-                "Retire old storage and old resources only after explicit approval",
-                requires_customer_approval=True,
-            ),
-        ]
-    )
+                _migration_phase(
+                    "validation-and-rollback-hold",
+                    "Validation and rollback hold",
+                    notes=(
+                        "Keep old storage and old compute resources available until validation passes.",
+                    ),
+                ),
+                _migration_phase(
+                    "retire-old-resources",
+                    "Retire old storage and old resources only after explicit approval",
+                    requires_customer_approval=True,
+                ),
+            ]
+        )
     return tuple(phases)
+
+
+def soperator_onboarding_report_for_modes(
+    report: SoperatorOnboardingReport,
+    *,
+    storage_mode: str,
+    compute_mode: str,
+) -> SoperatorOnboardingReport:
+    """Return a report whose selected actions and phases match operator choices."""
+
+    include_data_migration = storage_mode == ONBOARDING_STORAGE_MODE_CREATE_ALIGNED_SFS
+    include_compute_migration = (
+        compute_mode == ONBOARDING_COMPUTE_MODE_CREATE_ALIGNED_NODE_GROUPS
+    )
+    filtered_actions: list[SoperatorOnboardingAction] = []
+    for action in report.actions:
+        if action.id in {
+            ONBOARDING_ACTION_CREATE_ALIGNED_SFS,
+            ONBOARDING_ACTION_PLAN_DATA_MIGRATION,
+        } and not include_data_migration:
+            continue
+        if action.id == ONBOARDING_ACTION_PLAN_COMPUTE_MIGRATION and not include_compute_migration:
+            continue
+        filtered_actions.append(action)
+    migration_plan: tuple[SoperatorMigrationPhase, ...] = ()
+    if report.migration_plan:
+        selected_ids = {action.id for action in filtered_actions if action.selected}
+        migration_plan = _default_soperator_migration_plan(
+            include_data_migration=bool(
+                selected_ids
+                & {
+                    ONBOARDING_ACTION_CREATE_ALIGNED_SFS,
+                    ONBOARDING_ACTION_PLAN_DATA_MIGRATION,
+                }
+            ),
+            include_compute_migration=ONBOARDING_ACTION_PLAN_COMPUTE_MIGRATION
+            in selected_ids,
+        )
+    return replace(
+        report,
+        actions=_dedupe_soperator_actions(filtered_actions),
+        migration_plan=migration_plan,
+    )
 
 
 def _remediation_items_for_profile(
@@ -710,6 +839,21 @@ def _remediation_items_for_profile(
     return tuple(items)
 
 
+def _dedupe_soperator_actions(
+    actions: Sequence[SoperatorOnboardingAction],
+) -> tuple[SoperatorOnboardingAction, ...]:
+    deduped: list[SoperatorOnboardingAction] = []
+    seen: set[str] = set()
+    for action in actions:
+        action_id = str(action.id or "").strip()
+        if action_id and action_id in seen:
+            continue
+        if action_id:
+            seen.add(action_id)
+        deduped.append(action)
+    return tuple(deduped)
+
+
 def _release_chart_identity(release: Mapping[str, Any]) -> str:
     explicit = str(release.get("chart_name", "") or "").strip()
     if explicit:
@@ -750,16 +894,19 @@ def _release_name(release: Mapping[str, Any]) -> str:
 
 
 def _is_soperator_release_candidate(release: Mapping[str, Any]) -> bool:
-    return _release_name(release) == "soperator" or _release_chart_identity(release) == "soperator"
+    return (
+        _release_name(release) in SOPERATOR_COMPATIBLE_RELEASE_NAMES
+        or _release_chart_identity(release) in SOPERATOR_COMPATIBLE_CHART_IDENTITIES
+    )
 
 
 def _is_compatible_soperator_release(release: Mapping[str, Any]) -> bool:
     namespace = _release_namespace(release).lower()
     chart_identity = _release_chart_identity(release)
     return (
-        _release_name(release) == "soperator"
+        _release_name(release) in SOPERATOR_COMPATIBLE_RELEASE_NAMES
         and namespace in {"", "soperator"}
-        and chart_identity in {"", "soperator"}
+        and chart_identity in {"", *SOPERATOR_COMPATIBLE_CHART_IDENTITIES}
     )
 
 
@@ -983,9 +1130,9 @@ def analyze_soperator_onboarding_snapshot(
                 message=(
                     "Existing storage primitives were detected, but the target Soperator "
                     "storage layout is incomplete. Missing required storage keys: "
-                    f"{', '.join(missing_storage_keys)}. Select create-aligned-sfs; "
-                    "keep-existing-storage will be rejected unless compatible storage "
-                    "mappings are supplied and discovery is rerun."
+                    f"{', '.join(missing_storage_keys)}. Select create-aligned-sfs to "
+                    "plan aligned Nebius SFS creation, or keep-existing-storage to "
+                    "preserve the discovered storage contract without an SFS migration plan."
                 ),
                 action_id=ONBOARDING_ACTION_CONFIGURE_STORAGE,
                 evidence={
@@ -1310,7 +1457,7 @@ def analyze_soperator_onboarding_snapshot(
         state=state,
         fingerprint=_analysis_fingerprint(snapshot),
         findings=tuple(findings),
-        actions=tuple(actions),
+        actions=_dedupe_soperator_actions(actions),
         source_version=source_version,
         target_version=pinned_chart_version or target_version,
         migration_profile_id=migration_profile_id,

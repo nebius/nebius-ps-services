@@ -68,7 +68,6 @@ spec:
   maintenance: {{ default "none" .Values.maintenance | quote  }}
   crVersion: {{ .Chart.Version }}
   useDefaultAppArmorProfile: {{ .Values.useDefaultAppArmorProfile }}
-  clusterType: {{ .Values.clusterType }}
   partitionConfiguration:
     configType: {{ (default "structured" .Values.partitionConfiguration.configType) }}
     {{- if and .Values.partitionConfiguration.rawConfig (eq .Values.partitionConfiguration.configType "custom") }}
@@ -507,16 +506,6 @@ spec:
       {{- end }}
       {{- if .Values.slurmNodes.exporter.collectionInterval }}
       collectionInterval: {{ .Values.slurmNodes.exporter.collectionInterval | quote }}
-      {{- end }}
-      {{- if .Values.slurmNodes.exporter.jobSource }}
-      jobSource: {{ .Values.slurmNodes.exporter.jobSource | quote }}
-      {{- end }}
-      {{- with .Values.slurmNodes.exporter.accountingJobStates }}
-      accountingJobStates:
-        {{- toYaml . | nindent 8 }}
-      {{- end }}
-      {{- if .Values.slurmNodes.exporter.accountingJobsLookback }}
-      accountingJobsLookback: {{ .Values.slurmNodes.exporter.accountingJobsLookback | quote }}
       {{- end }}
       {{- if .Values.slurmNodes.exporter.podMonitorConfig }}
       podMonitorConfig:

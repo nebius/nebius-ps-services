@@ -11,6 +11,8 @@ from nebius_cxcli.soperator_onboarding import (
     ONBOARDING_ACTION_INSTALL_SOPERATOR,
     ONBOARDING_ACTION_PLAN_COMPUTE_MIGRATION,
     ONBOARDING_ACTION_UPGRADE_SOPERATOR,
+    ONBOARDING_COMPUTE_MODE_CREATE_ALIGNED_NODE_GROUPS,
+    ONBOARDING_COMPUTE_MODE_KEEP_EXISTING,
     SOURCE_SOPERATOR_DISCOVERY_REPORT_NAME,
     analyze_soperator_onboarding_snapshot,
     collect_kubectl_soperator_snapshot,
@@ -181,6 +183,7 @@ def test_soperator_onboarding_analyzer_offers_upgrade_for_older_release() -> Non
     assert report.migration_profile_id == "v3-to-target"
     assert ONBOARDING_ACTION_UPGRADE_SOPERATOR in {action.id for action in report.actions}
     assert ONBOARDING_ACTION_PLAN_COMPUTE_MIGRATION in {action.id for action in report.actions}
+    assert len([action.id for action in report.actions]) == len({action.id for action in report.actions})
     assert any(item.classification == "data-sensitive" for item in report.remediation)
     assert [phase.id for phase in report.migration_plan] == [
         "discovery-and-plan",
@@ -193,6 +196,48 @@ def test_soperator_onboarding_analyzer_offers_upgrade_for_older_release() -> Non
         "retire-old-resources",
     ]
     assert any(finding.status == "upgrade-available" for finding in report.findings)
+
+
+def test_soperator_onboarding_analyzer_accepts_official_helm_soperator_chart_identity() -> None:
+    report = analyze_soperator_onboarding_snapshot(
+        _snapshot(
+            release={
+                "name": "soperator",
+                "namespace": "soperator",
+                "chart": "helm-soperator-3.0.5",
+                "app_version": "3.0.5",
+            }
+        ),
+        target_ref="cluster1",
+        pinned_chart_version="4.0.1-ps.1",
+        pinned_app_version="4.0.1",
+    )
+
+    assert report.state == "existing-soperator-supported"
+    assert report.source_version == "3.0.5"
+    assert report.migration_profile_id == "v3-to-target"
+    assert ONBOARDING_ACTION_UPGRADE_SOPERATOR in {action.id for action in report.actions}
+
+
+def test_soperator_onboarding_analyzer_accepts_legacy_slurm_operator_chart_identity() -> None:
+    report = analyze_soperator_onboarding_snapshot(
+        _snapshot(
+            release={
+                "name": "slurm-operator",
+                "namespace": "soperator",
+                "chart": "slurm-operator-1.14.1",
+                "app_version": "1.14.1",
+            }
+        ),
+        target_ref="cluster1",
+        pinned_chart_version="4.0.1-ps.1",
+        pinned_app_version="4.0.1",
+    )
+
+    assert report.state == "existing-soperator-supported"
+    assert report.source_version == "1.14.1"
+    assert report.migration_profile_id == "legacy-v1-to-target"
+    assert ONBOARDING_ACTION_UPGRADE_SOPERATOR in {action.id for action in report.actions}
 
 
 def test_soperator_onboarding_analyzer_accepts_exact_target_release() -> None:
@@ -324,6 +369,14 @@ def test_soperator_migration_profile_exposes_component_compatibility_axes() -> N
     assert "SlurmCluster" in axes["slurm_components"]
     assert "NodeSet" in axes["slurm_components"]
     assert "NodeConfigurator" in axes["slurm_components"]
+
+
+def test_soperator_migration_profile_matches_chart_version_aliases() -> None:
+    profile = soperator_migration_profile_for_version("1.14.5")
+
+    assert profile is not None
+    assert profile["profile_id"] == "legacy-v1-to-target"
+    assert "1.14.5" in profile.get("version_aliases", ())
 
 
 def test_soperator_onboarding_analyzer_blocks_collection_errors() -> None:
@@ -505,6 +558,7 @@ def _onboarding_payload() -> dict[str, object]:
                         "analysis_fingerprint": "",
                         "state": "no-soperator-detected",
                         "storage_mode": "create-aligned-sfs",
+                        "compute_mode": "keep-existing-compute",
                         "target_version": "4.0.1-ps.1",
                         "source_version": "",
                         "migration_profile_id": "",
@@ -614,6 +668,25 @@ def test_onboarding_acceptance_rejects_keep_existing_when_aligned_sfs_required()
 
     assert not soperator_onboarding_is_accepted(payload, target_ref="cluster1")
     with pytest.raises(ValueError, match="requires .*storage_mode 'create-aligned-sfs'"):
+        validate_soperator_onboarding_acceptance(payload, target_ref="cluster1")
+
+
+def test_onboarding_acceptance_rejects_keep_existing_when_aligned_compute_required() -> None:
+    payload = _onboarding_payload()
+    target = payload["deploy"]["targets"][0]  # type: ignore[index]
+    onboarding = target["soperator_onboarding"]  # type: ignore[index]
+    onboarding["compute_mode"] = ONBOARDING_COMPUTE_MODE_KEEP_EXISTING
+    onboarding["actions"].append(ONBOARDING_ACTION_PLAN_COMPUTE_MIGRATION)
+    onboarding["analysis_fingerprint"] = soperator_onboarding_fingerprint(
+        payload,
+        target_ref="cluster1",
+    )
+
+    assert not soperator_onboarding_is_accepted(payload, target_ref="cluster1")
+    with pytest.raises(
+        ValueError,
+        match=f"requires .*compute_mode '{ONBOARDING_COMPUTE_MODE_CREATE_ALIGNED_NODE_GROUPS}'",
+    ):
         validate_soperator_onboarding_acceptance(payload, target_ref="cluster1")
 
 

@@ -26,6 +26,12 @@ All notable changes to the reusable Codex skills are tracked here.
 - Added the `commit-push` Codex skill for committing all current feature-branch
   changes with `git add -A`, pushing the branch to `origin`, and reporting
   final worktree cleanliness without opening a pull request.
+- Added the `code-info` Codex skill for copy/paste-friendly project code
+  metrics, including LOC by language and component, repo size and link,
+  test-file counts, CLI command detection, module/package counts, artifact
+  sizes, and available coverage artifacts. It supports local folders and
+  remote GitHub repositories that are not cloned locally by reading a temporary
+  repository archive with local GitHub token discovery when needed.
 - Added the `create-pr` Codex skill for branch-safe GitHub PR creation.
 - Added the `config-codex` Codex skill for bootstrapping public-safe local
   Codex runtime setup, including global `AGENTS.md`, `config.toml` features
@@ -51,6 +57,10 @@ All notable changes to the reusable Codex skills are tracked here.
 
 ### Changed
 
+- Tightened the `code-info` skill contract so invoking it is explicitly
+  read-only information gathering: it reports from existing files only and does
+  not edit, format, build, test, install, generate coverage, or stage files.
+  Its helper also disables Git optional locks for Git inspection commands.
 - Minimized the global AGENTS template to durable always-on policy, moved
   detailed workflow guidance back to skills, preserved the explicit `$align`
   post-edit rule, and shortened high-impact skill descriptions so implicit

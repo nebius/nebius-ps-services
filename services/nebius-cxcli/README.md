@@ -1281,44 +1281,64 @@ Wizard field behavior:
   it analyzed. The full source-cluster discovery snapshot is written beside
   the project config as `source-soperator-cluster-discovery-report.json`; the
   config keeps only stable onboarding decisions such as state, actions, target
-  version, source version, migration profile, storage mode, and fingerprint.
-  Onboarding storage choices are `keep-existing-storage` or
-  `create-aligned-sfs`. Keeping existing storage is allowed only when discovery
-  finds a target-compatible jail, controller-spool, and accounting layout; if
-  storage is missing, partial, or incompatible with the Soperator version pinned
-  in `component_sources.yaml`, onboarding fails fast unless the operator chooses
-  `create-aligned-sfs`. The aligned-SFS path is planned as a dual-storage
-  migration: create and attach new SFS filesystems, keep old storage active,
-  run an online bulk sync, then perform the final delta sync and storage
-  cutover during a controlled Slurm quiet window. Compute migration is planned
-  as a rolling drain/validate process so running jobs are not force-killed.
+  version, source version, migration profile, storage mode, compute mode, and
+  fingerprint. Onboarding asks for two independent layers. Storage mode is
+  `keep-existing-storage` or `create-aligned-sfs`; compute mode is
+  `keep-existing-compute` or `create-aligned-node-groups`. Discovery still
+  recommends aligned SFS when jail, controller-spool, and accounting storage are
+  missing, partial, or incompatible, but an explicit keep-existing choice means
+  cxcli will not plan aligned SFS creation. The aligned-SFS path is planned as a
+  dual-storage migration: create and attach new SFS filesystems, keep old
+  storage active, run an online bulk sync, then perform the final delta sync and
+  storage cutover during a controlled Slurm quiet window. The aligned-compute
+  path means profile-aligned service-role node groups plus profile worker
+  NodeSets; compute migration is planned as a rolling drain/validate process so
+  running jobs are not force-killed. Keeping existing compute preserves the
+  discovered node groups and only maps Soperator roles onto them.
   Migration profile compatibility is release- and component-scoped: cxcli must
   compare discovered source SlurmCluster, NodeSet, NodeConfigurator, storage,
   accounting, REST, MariaDB, Kruise, SConfigController, and ActiveChecks
   contracts against the target Soperator profile before deciding whether to
   adopt, upgrade in place, or replace and migrate compute/storage layout. The
-  committed profile generator currently records explicit release metadata and
-  compatibility axes; full chart tarball, CRD, template, image, and Slurm
-  contract fingerprinting remains the next generator hardening step.
+  committed profile generator records explicit release metadata, compatibility
+  axes, the official release chart identity, and per-component chart tarball,
+  CRD, template, image, values, and Slurm contract fingerprints.
   The onboarding workflow is: run
   `nebius-cxcli soperator onboard <config.yaml-or-deployments-root>` to add the
   external Nebius MK8s target and accepted Soperator analysis to `config.yaml`,
   review the source discovery report, proposed migration/remediation plan, and
   role mapping, then run
   `nebius-cxcli soperator migrate <config.yaml> --target <target> --dry-run`
-  to review the explicit compute/storage migration phases before any live
-  migration executor is used. `soperator onboard` is read-only against the
+  to review the explicit compute/storage migration phases. `--execute`
+  rechecks the source release and full discovery fingerprint before the first
+  mutation, writes a local `.nebius-cxcli/soperator-migrations/`
+  timeout-guarded checkpoint, and runs the supported phases in order. Passing
+  `--approve --worker-node-groups <group>[,<group>...]` records customer
+  approval and the existing source node groups that should remain worker
+  NodeSets. The executor creates or reuses aligned jail, controller-spool, and
+  accounting SFS filesystems, attaches them to discovered Nebius node groups,
+  runs Kubernetes data-copy Jobs when old and target PVC pairs exist, creates or
+  reuses the aligned five-role MK8s node groups, verifies a Slurm quiet window
+  from a login pod, applies the pinned target Soperator chart values, cordons
+  and drains old worker nodes after target rollout, normalizes the target Slurm
+  plugin runtime settings, recreates target worker Kruise StatefulSets when
+  source-era specs cannot be mutated in place, validates Soperator
+  reconciliation, and retires the old compute node groups after validation.
+  Old storage retirement remains held for operator review when source storage
+  was detected. After a mutating phase starts, resume relies on phase
+  checkpoints because the original full discovery fingerprint is expected to
+  change as new storage, attachments, and target node groups appear. That
+  checkpoint is local operational state and is ignored by cxcli-managed
+  deployments `.gitignore` files. `soperator onboard` is read-only against the
   existing cluster; it does not create or attach SFS filesystems, drain nodes,
   run copy jobs, or mutate Soperator CRs.
-  The future `soperator migrate --execute` executor is the live migration lane:
-  it must consume that accepted plan, run storage, compute, and cutover phases
-  with progress bars or spinners, watch Nebius/Kubernetes/Soperator/Slurm
-  failure signals, apply bounded safe retry or remedy steps, and checkpoint
-  timeout-guarded phases so interrupted migrations can resume without retiring
-  old storage or compute early.
-  Pass an existing project `config.yaml` when the project already exists; pass
-  a deployments root when onboarding should resolve the tenant/project folder
-  from identity inputs or create the first project config. If that resolved
+  The mutating `soperator migrate --execute` lane is deliberately guarded:
+  phases complete only when their live prerequisites are absent or satisfied;
+  otherwise cxcli writes the blocked phase and reason to the checkpoint for
+  operator review.
+  Use an existing project `config.yaml` when the project already exists; pass
+  a deployments root when onboarding should create or resolve the
+  tenant/project folder from identity inputs. If that resolved
   deployments-root target already has `config.yaml`, interactive onboarding
   warns after tenant/project selection and asks before overwriting that config
   in place with Soperator onboarding changes; non-interactive runs with
@@ -1593,11 +1613,11 @@ Wizard field behavior:
   `inputs.node_groups.*.autoscaling` block and omits `node_count`; otherwise it
   writes the fixed count. Raw profile-owned `inputs.node_groups.*` prompts stay
   hidden.
-  When onboarding keeps existing storage, cxcli requires discovery evidence for
-  a target-compatible jail, controller-spool, and accounting layout. Partial
-  PVC/PV evidence is treated as an incompatible layout for the pinned Soperator
-  target, so `keep-existing-storage` is rejected until compatible mappings are
-  supplied and discovery is rerun.
+  When onboarding keeps existing storage, cxcli preserves the discovered
+  storage contract and does not plan aligned SFS creation. Discovery still
+  records whether jail, controller-spool, and accounting storage look
+  target-compatible so the operator can choose between an explicit keep-existing
+  path and the aligned-SFS migration path before running `soperator migrate`.
   Non-interactive `component add apps:soperator@<target>` also selects
   onboarding automatically when `<target>` is an existing external MK8s target;
   it remains a target-scoped compatibility path and does not create

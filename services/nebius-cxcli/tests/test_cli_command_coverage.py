@@ -16012,19 +16012,24 @@ def test_command_help_usage_labels_positional_target_types() -> None:
         normalized_soperator_onboard_help
     )
     assert "--storage-mode" in normalized_soperator_onboard_help
+    assert "--compute-mode" in normalized_soperator_onboard_help
     assert "--validate-sources --no-validate-sources" in normalized_soperator_onboard_help
     assert "Plan Soperator compute/storage migration from onboarding discovery" in (
         normalized_soperator_migrate_help
     )
     assert "--target" in normalized_soperator_migrate_help
     assert "--dry-run --execute" in normalized_soperator_migrate_help
+    assert "--approve --no-approve" in normalized_soperator_migrate_help
+    assert "--worker-node-groups" in normalized_soperator_migrate_help
     assert "source-soperator-cluster-discovery-report.json" in (
         normalized_soperator_migrate_help
     )
     assert "validates the accepted onboarding analysis" in normalized_soperator_migrate_help
-    assert "show phase progress" in normalized_soperator_migrate_help
-    assert "watch failures" in normalized_soperator_migrate_help
-    assert "timeout-guarded resume checkpoints" in normalized_soperator_migrate_help
+    assert "advances supported storage, copy, compute, cutover, validation" in (
+        normalized_soperator_migrate_help
+    )
+    assert "creates or reuses aligned SFS filesystems" in normalized_soperator_migrate_help
+    assert "checkpoints manual gates" in normalized_soperator_migrate_help
     assert "remove [OPTIONS] [COMPONENT_SELECTOR]..." in component_remove_help
     assert "--config CONFIG_YAML" in normalized_component_remove_help
     assert (

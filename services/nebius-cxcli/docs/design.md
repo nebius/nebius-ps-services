@@ -763,23 +763,26 @@ It records discovered live groups under
 `values.nodeGroupMapping` from discovered inventory and the selected profile
 instead of Terraform-owning the existing cluster or adding role-named host
 pools. Operators can still edit the materialized mapping in `config.yaml`
-before render; the onboarding command itself asks only for the target cluster
-and storage intent. Generated onboarding NodeSets use live inventory-derived
+before render; the onboarding command asks for the target cluster plus storage
+and compute intent. Generated onboarding NodeSets use live inventory-derived
 node counts, selectors, taints, and GPU allocatable data as authoritative
 scheduling/resource inputs over catalog template defaults. The full
 source-cluster discovery snapshot is written beside
 the project config as `source-soperator-cluster-discovery-report.json`; the
-config keeps only stable onboarding decisions and fingerprints. Onboarding
-storage choices are `keep-existing-storage` or `create-aligned-sfs`. The
-keep-existing path is valid only when discovery finds a target-compatible jail,
-controller-spool, and accounting layout. Missing, partial, or incompatible
-storage fails fast unless the operator chooses `create-aligned-sfs` for the
-Soperator version pinned in `component_sources.yaml`. The aligned-SFS path is a
-migration plan: create and attach new SFS filesystems, keep old storage active,
-run online bulk data sync, then perform final delta sync and storage-reference
-cutover during a controlled Slurm quiet window.
-Compute changes are planned as a rolling drain/validate migration so cxcli does
-not force-kill running jobs.
+config keeps only stable onboarding decisions and fingerprints. Onboarding has
+two independent layer choices: storage mode is `keep-existing-storage` or
+`create-aligned-sfs`, and compute mode is `keep-existing-compute` or
+`create-aligned-node-groups`. Discovery recommends aligned SFS when jail,
+controller-spool, and accounting storage are missing, partial, or incompatible,
+but explicit keep-existing storage means cxcli does not plan SFS creation. The
+aligned-SFS path is a migration plan: create and attach new SFS filesystems,
+keep old storage active, run online bulk data sync, then perform final delta
+sync and storage-reference cutover during a controlled Slurm quiet window. The
+aligned-compute path means profile-aligned service-role node groups plus
+profile worker NodeSets; compute changes are planned as a rolling
+drain/validate migration so cxcli does not force-kill running jobs. Keeping
+existing compute preserves discovered node groups and only maps Soperator roles
+onto them.
 Onboarding also applies compact OpenKruise, MariaDB, Slurm control-plane, and
 worker pod requests so generic external CPU clusters can schedule the Soperator
 stack before the operator tunes production reservations. The onboarding
@@ -790,28 +793,38 @@ review the discovery report and Soperator app/remediation/migration plan plus
 role mapping, then run
 `nebius-cxcli soperator migrate <config.yaml> --target <target> --dry-run` to
 review the explicit compute/storage migration phases. The migration command is
-the separate execution surface for future live orchestration; today it
-validates the accepted onboarding analysis, reads
-`source-soperator-cluster-discovery-report.json`, prints the plan, and refuses
-`--execute` until the Nebius API, Kubernetes drain, data-copy, Slurm cutover,
-and Soperator reconciliation executor is implemented. `soperator onboard` is
-therefore discovery-only and does not create SFS filesystems, attach storage,
-drain nodes, run data sync jobs, or mutate Helm/Soperator resources. The
-future `soperator migrate --execute` executor owns live orchestration: it must
-consume the accepted migration plan, run storage, compute, and cutover phases
-with progress bars or spinners, watch Nebius API, Kubernetes, Soperator, and
-Slurm failure signals, apply bounded safe retry/remedy steps where the phase
-contract allows it, and persist timeout-guarded checkpoints so interrupted
+the separate execution surface for live orchestration. `--execute` validates
+the accepted onboarding analysis, reads
+`source-soperator-cluster-discovery-report.json`, rechecks the live source
+release and full discovery fingerprint before the first mutation, writes a
+local `.nebius-cxcli/soperator-migrations/` timeout-guarded checkpoint, and
+advances supported phases in order. Passing
+`--approve --worker-node-groups <group>[,<group>...]` records customer approval
+and the existing source node groups that should remain worker NodeSets. The
+executor creates or reuses aligned jail, controller-spool, and accounting SFS
+filesystems, attaches them to discovered Nebius node groups, runs Kubernetes
+data-copy Jobs when old and target PVC pairs exist, normalizes target Slurm
+plugin runtime settings, recreates target worker Kruise StatefulSets when
+source-era specs cannot be updated in place, validates Soperator
+reconciliation, and checkpoints manual-review gates instead of retiring old
+resources early. That checkpoint is local operational state and is ignored by
+cxcli-managed deployments `.gitignore` files. `soperator onboard` is therefore
+discovery-only and does not create SFS filesystems, attach storage, drain
+nodes, run data sync jobs, or mutate Helm/Soperator resources. After a
+mutating phase starts, resume relies on phase checkpoints because the original
+full discovery fingerprint is expected to change as new storage and attachments
+appear. Every mutating phase must watch Nebius API, Kubernetes, Soperator, and
+Slurm failure signals and persist timeout-guarded checkpoints so interrupted
 migrations can resume without redoing completed safe work or retiring old
-storage and compute early. Existing projects can pass `config.yaml` or the
-project directory containing it. Deployments-root onboarding resolves the
-tenant/project folder from identity inputs; if that resolved project already
-has `config.yaml`, the interactive flow warns after tenant/project selection
+storage and compute early. Existing projects can pass `config.yaml`
+or the project directory containing it. Deployments-root onboarding resolves
+the tenant/project folder from identity inputs; if that resolved project
+already has `config.yaml`, the interactive flow warns after tenant/project selection
 and asks before overwriting the config in place with Soperator onboarding
 changes. Non-interactive deployments-root onboarding with `--tenant-id` and
-`--project-id` prints the same warning and continues. First-time onboarding can
-also pass the deployments root plus identity options so cxcli creates the
-project config before writing the target. The interactive flow does not accept
+`--project-id` prints the same warning and continues. For this flow, first-time
+onboarding can pass the deployments root plus identity options so cxcli creates
+the project config before writing the target. The interactive flow does not accept
 arbitrary vanilla Kubernetes clusters; it selects from the live Nebius MK8s
 clusters in the resolved project and onboards one target per cxcli run.
 Fingerprint validation compares the
@@ -859,15 +872,13 @@ requests for already-created clusters with modest CPU pools.
 Soperator migration profiles are the compatibility source of truth for
 existing Soperator upgrades. A profile record must exist for every upstream
 release that cxcli can recognize, and runtime onboarding must use the committed
-profile data rather than live GitHub access. The committed generator currently
-captures explicit release records and generation-level compatibility axes from
-GitHub release metadata; it records that scope in
-`generator_scope: release-metadata-and-compatibility-axes` and keeps the
-tarball-level work visible as `future_generator_scope`. It does not yet
-download chart tarballs or fingerprint CRDs, rendered templates, image sets, or
-Slurm component schemas. That deeper extraction must be added before cxcli
-claims tarball-level compatibility fingerprints. The target profile schema is
-release-scoped and component-scoped:
+profile data rather than live GitHub access. The committed generator captures
+explicit release records and generation-level compatibility axes from GitHub
+release metadata, then downloads each release tarball and records the official
+chart identity plus per-component chart archive, CRD, rendered-template source,
+values, image, and Slurm contract fingerprints. It records that scope in
+`generator_scope: chart-tarball-crd-template-image-and-slurm-contract-fingerprints`.
+The target profile schema is release-scoped and component-scoped:
 
 - release identity: upstream tag, chart version, app version, image tags, and
   dependency chart versions
@@ -2477,23 +2488,29 @@ The command boundary is intentional:
   `nebius-cxcli soperator onboard <config.yaml-or-deployments-root>` resolves
   the selected project, lists existing Nebius MK8s clusters, registers one
   chosen cluster as an external target with its `cluster_id`, reads that
-  target's `deploy.targets[].inventory.node_groups` inventory, and presents
-  target-scoped `values.nodeGroupMapping.*` choices. The default mapping places
-  `worker` on GPU node groups and `system`,
-  `controller`, `login`, and `accounting` on CPU node groups, while keeping
-  every role editable. Render/deploy refuse onboarding mode until the target has
-  a current accepted `deploy.targets[].soperator_onboarding` analysis
-  fingerprint. Actions that only install or adopt apps are the safe path.
+  target's `deploy.targets[].inventory.node_groups` inventory, and records
+  independent storage and compute mode choices. `keep-existing-compute`
+  preserves the discovered node groups and target-scoped
+  `values.nodeGroupMapping.*` choices. `create-aligned-node-groups` plans
+  profile-aligned service-role node groups plus profile worker NodeSets for the
+  migration executor. The default mapping places `worker` on GPU node groups
+  and `system`, `controller`, `login`, and `accounting` on CPU node groups,
+  while keeping every role editable. Render/deploy refuse onboarding mode until
+  the target has a current accepted `deploy.targets[].soperator_onboarding`
+  analysis fingerprint. Actions that only install or adopt apps are the safe path.
   Actions that update existing node-group templates, such as adding SFS
   attachments, require maintenance planning because the MK8s rolling update
   cordons, drains, and replaces nodes. The follow-up
   `nebius-cxcli soperator migrate <config.yaml> --target <target> --dry-run`
   command reads the source discovery report and prints the compute/storage
-  migration plan from the accepted onboarding analysis; live `--execute`
-  remains blocked until the explicit migration executor is implemented. That
-  executor is the live migration lane and must show phase progress, watch
-  failures, apply bounded safe remedies or stop at manual gates, and resume
-  timeout-guarded phases from checkpoints. The
+  migration plan from the accepted onboarding analysis. Live `--execute`
+  validates the accepted onboarding analysis, rechecks that the live source
+  discovery fingerprint still matches the saved report before the first
+  mutation, writes a local `.nebius-cxcli/soperator-migrations/` checkpoint,
+  records approval with `--approve`, and advances supported storage, copy,
+  compute, cutover, validation, and retirement phases in order. Mutating phases
+  show phase progress, watch failures, apply bounded safe remedies or stop at
+  manual gates, and resume timeout-guarded phases from checkpoints. The
   saved external target is not a Terraform-managed MK8s row; it is the stable
   app/remediation target used by render, deploy, destroy, and future Soperator
   upgrades. Non-interactive

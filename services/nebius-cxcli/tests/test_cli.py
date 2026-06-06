@@ -29,6 +29,7 @@ from nebius_cxcli.email_settings import EmailSettings
 from nebius_cxcli.quota_checks import QuotaCheck, QuotaReport
 from nebius_cxcli.runtime_config import to_plain_data
 from nebius_cxcli.runtime_validation import validate_dynamic_payload_structure
+from nebius_cxcli.soperator_migration import SoperatorMigrationCommandResult
 from nebius_cxcli.wizard_profiles import BUILTIN_WIZARD_PROFILES
 
 runner = CliRunner()
@@ -489,6 +490,7 @@ def _external_mk8s_target_row(instance_id: str = "external-cluster") -> dict[str
             "state": "no-soperator-detected",
             "actions": ["install-soperator"],
             "storage_mode": "keep-existing-storage",
+            "compute_mode": "keep-existing-compute",
             "target_version": "4.0.1-ps.1",
             "source_version": "",
             "migration_profile_id": "",
@@ -502,8 +504,12 @@ def _old_soperator_snapshot() -> dict[str, object]:
             "gpu-pool": {
                 "gpu": True,
                 "node_count": 2,
-                "labels": {"nebius.com/node-group": "gpu-pool"},
+                "labels": {
+                    "nebius.com/node-group": "gpu-pool",
+                    "nebius.com/node-group-id": "nodegroup-gpu-pool",
+                },
                 "allocatable": {"nvidia.com/gpu": "8"},
+                "nodes": ["node-a", "node-b"],
             }
         },
         "helm_releases": [
@@ -522,13 +528,19 @@ def _old_soperator_snapshot() -> dict[str, object]:
     }
 
 
-def _write_old_soperator_migration_config(tmp_path: Path) -> Path:
+def _write_old_soperator_migration_config(
+    tmp_path: Path,
+    *,
+    storage_mode: str | None = None,
+    compute_mode: str | None = None,
+) -> Path:
     config_path = tmp_path / "config.yaml"
     snapshot = _old_soperator_snapshot()
     target = cli_module._soperator_onboarding_target_defaults(
         "external-cluster",
         kube_context="external-context",
-        storage_mode="keep-existing-storage",
+        storage_mode=storage_mode,
+        compute_mode=compute_mode,
         pinned_chart_version="4.0.1-ps.1",
         pinned_app_version="4.0.1",
         snapshot=snapshot,
@@ -565,6 +577,37 @@ def _write_old_soperator_migration_config(tmp_path: Path) -> Path:
     cli_module._refresh_soperator_onboarding_fingerprints(payload)
     config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
     return config_path
+
+
+class _FakeSoperatorMigrationCommandRunner:
+    def __call__(
+        self,
+        args,
+        *,
+        input_text: str | None = None,
+        timeout_seconds: int = 300,
+        check: bool = True,
+    ) -> SoperatorMigrationCommandResult:
+        del input_text, timeout_seconds, check
+        command = tuple(str(item) for item in args)
+        if command[:4] == ("nebius", "compute", "filesystem", "get-by-name"):
+            return SoperatorMigrationCommandResult(command, 1, "", "not found")
+        if command[:4] == ("nebius", "compute", "filesystem", "create"):
+            name = command[command.index("--name") + 1]
+            return SoperatorMigrationCommandResult(
+                command,
+                0,
+                json.dumps({"metadata": {"id": f"filesystem-{name}"}}),
+                "",
+            )
+        if command[:4] == ("nebius", "mk8s", "node-group", "get"):
+            return SoperatorMigrationCommandResult(
+                command,
+                0,
+                json.dumps({"spec": {"template": {"filesystems": []}}}),
+                "",
+            )
+        return SoperatorMigrationCommandResult(command, 0, "{}", "")
 
 
 def _component_remove(config_path: Path, *extra: str, input_text: str | None = None):
@@ -1935,6 +1978,8 @@ def test_create_writes_deployments_gitignore_when_target_is_in_git_repo(tmp_path
     assert "Managed by `nebius-cxcli`" in content
     assert "Keep config.yaml and generated/nebius-cxcli-manifest.json versioned" in content
     assert "tfvars duplicates recreated from the generated manifest" in content
+    assert "local cxcli operational checkpoints" in content
+    assert "*/*/.nebius-cxcli/" in content
     assert "*/*/wireguard-clients/" in content
     assert "*/*/generated/infra/.terraform/" in content
     assert "*/*/generated/infra/crash.*.log" in content
@@ -2038,6 +2083,8 @@ def test_render_recreates_deployments_gitignore_in_git_repo(tmp_path: Path) -> N
     assert "Managed by `nebius-cxcli`" in content
     assert "Keep config.yaml and generated/nebius-cxcli-manifest.json versioned" in content
     assert "tfvars duplicates recreated from the generated manifest" in content
+    assert "local cxcli operational checkpoints" in content
+    assert "*/*/.nebius-cxcli/" in content
     assert "*/*/wireguard-clients/" in content
     assert "*/*/generated/infra/.terraform/" in content
     assert "*/*/generated/infra/crash.*.log" in content
@@ -3783,8 +3830,10 @@ def test_soperator_onboard_interactive_lists_project_mk8s_clusters(
         default: object,
         **kwargs: object,
     ) -> tuple[str, bool]:
-        _ = default, kwargs
+        _ = kwargs
         prompt_labels.append(field_label)
+        if field_label != "Nebius MK8s cluster":
+            return str(default), False
         return "mk8scluster-e00beta", False
 
     def _snapshot_for_cluster(
@@ -3828,13 +3877,17 @@ def test_soperator_onboard_interactive_lists_project_mk8s_clusters(
 
     assert result.exit_code == 0, result.output
     assert listed_projects == ["project-456"]
-    assert prompt_labels == ["Nebius MK8s cluster"]
+    assert prompt_labels == [
+        "Nebius MK8s cluster",
+        "deploy.targets[].soperator_onboarding.compute_mode",
+    ]
     assert snapshot_clusters == ["mk8scluster-e00beta"]
     assert "Registered external MK8s target: selected-cluster" in result.output
     payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     target = payload["deploy"]["targets"][0]
     assert target["instance_id"] == "selected-cluster"
     assert target["cluster_id"] == "mk8scluster-e00beta"
+    assert target["soperator_onboarding"]["compute_mode"] == "keep-existing-compute"
     assert "kube_context" not in target
     assert "analysis_report" not in target["soperator_onboarding"]
     source_report = config_path.parent / "source-soperator-cluster-discovery-report.json"
@@ -4120,11 +4173,60 @@ def test_soperator_onboard_interactive_honors_storage_mode_option(
     assert onboarding["storage_mode"] == "create-aligned-sfs"
 
 
+def test_soperator_onboard_interactive_honors_compute_mode_option(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    deployments_root = tmp_path / "deployments"
+    deployments_root.mkdir(parents=True, exist_ok=True)
+    created = _create_non_interactive(
+        deployments_root,
+        "--infra",
+        "none",
+        "--app",
+        "none",
+        "--no-validate-config",
+    )
+    assert created.exit_code == 0, created.output
+
+    config_path = _project_config_path(deployments_root)
+    compute_modes: list[str | None] = []
+
+    def _external_target_row(
+        *,
+        compute_mode: str | None = None,
+        **_kwargs: object,
+    ) -> dict[str, object]:
+        compute_modes.append(compute_mode)
+        row = _external_mk8s_target_row()
+        row["soperator_onboarding"]["compute_mode"] = compute_mode or "keep-existing-compute"  # type: ignore[index]
+        return row
+
+    monkeypatch.setattr(cli_module, "_prompt_soperator_onboarding_target_row", _external_target_row)
+
+    result = runner.invoke(
+        app,
+        [
+            "soperator",
+            "onboard",
+            str(config_path),
+            "--compute-mode",
+            "create-aligned-node-groups",
+            "--no-validate-sources",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert compute_modes == ["create-aligned-node-groups"]
+    payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    onboarding = payload["deploy"]["targets"][0]["soperator_onboarding"]
+    assert onboarding["compute_mode"] == "create-aligned-node-groups"
+
+
 def test_soperator_onboarding_defaults_require_aligned_sfs_for_old_layout() -> None:
     target = cli_module._soperator_onboarding_target_defaults(
         "external-cluster",
         kube_context="",
-        storage_mode="keep-existing-storage",
         pinned_chart_version="4.0.1-ps.1",
         pinned_app_version="4.0.1",
         snapshot={
@@ -4155,8 +4257,10 @@ def test_soperator_onboarding_defaults_require_aligned_sfs_for_old_layout() -> N
     onboarding = target["soperator_onboarding"]
     assert onboarding["state"] == "existing-soperator-supported"
     assert onboarding["storage_mode"] == "create-aligned-sfs"
+    assert onboarding["compute_mode"] == "create-aligned-node-groups"
     assert "create-aligned-sfs" in onboarding["actions"]
     assert "plan-soperator-data-migration" in onboarding["actions"]
+    assert "plan-soperator-compute-migration" in onboarding["actions"]
 
 
 def test_soperator_onboarding_storage_mode_label_uses_no_change_wording() -> None:
@@ -4166,7 +4270,24 @@ def test_soperator_onboarding_storage_mode_label_uses_no_change_wording() -> Non
     assert choices[0].label == "Keep existing storage with no changes"
 
 
-def test_soperator_onboard_option_path_rejects_keep_existing_when_storage_missing(
+def test_soperator_onboarding_compute_mode_label_uses_no_change_wording() -> None:
+    choices = cli_module._soperator_onboarding_compute_mode_choices("keep-existing-compute")
+
+    assert choices[0].value == "keep-existing-compute"
+    assert choices[0].label == "Keep existing compute node groups"
+
+
+def test_soperator_onboard_option_path_rejects_invalid_compute_mode() -> None:
+    with pytest.raises(RuntimeError, match="Invalid Soperator onboarding compute mode"):
+        cli_module._soperator_onboarding_target_row_from_options(
+            target_ref="training-cluster",
+            kube_context="training-context",
+            storage_mode=None,
+            compute_mode="legacy-compute",
+        )
+
+
+def test_soperator_onboard_option_path_allows_explicit_keep_existing_storage(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     def _snapshot(*, kube_context: str) -> dict[str, object]:
@@ -4183,12 +4304,15 @@ def test_soperator_onboard_option_path_rejects_keep_existing_when_storage_missin
 
     monkeypatch.setattr(cli_module, "collect_kubectl_soperator_snapshot", _snapshot)
 
-    with pytest.raises(RuntimeError, match="no target-compatible Soperator storage layout"):
-        cli_module._soperator_onboarding_target_row_from_options(
-            target_ref="training-cluster",
-            kube_context="training-context",
-            storage_mode="keep-existing-storage",
-        )
+    target = cli_module._soperator_onboarding_target_row_from_options(
+        target_ref="training-cluster",
+        kube_context="training-context",
+        storage_mode="keep-existing-storage",
+    )
+
+    onboarding = target["soperator_onboarding"]
+    assert onboarding["storage_mode"] == "keep-existing-storage"
+    assert "create-aligned-sfs" not in onboarding["actions"]
 
 
 def test_soperator_onboard_option_path_defaults_to_aligned_sfs_when_storage_missing(
@@ -4239,6 +4363,8 @@ def test_soperator_migrate_dry_run_prints_onboarding_migration_plan(tmp_path: Pa
     assert "Onboarding state: existing-soperator-supported" in result.output
     assert "Source version: 3.0.5" in result.output
     assert "Target version: 4.0.1-ps.1" in result.output
+    assert "Storage mode: create-aligned-sfs" in result.output
+    assert "Compute mode: create-aligned-node-groups" in result.output
     assert "Migration required: yes" in result.output
     assert "Storage migration required: yes" in result.output
     assert "Compute migration required: yes" in result.output
@@ -4252,8 +4378,75 @@ def test_soperator_migrate_dry_run_prints_onboarding_migration_plan(tmp_path: Pa
     assert "Execution mode: dry-run; no cluster changes were made." in result.output
 
 
-def test_soperator_migrate_execute_is_blocked_until_executor_exists(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("storage_mode", "compute_mode", "present", "absent"),
+    [
+        (
+            "keep-existing-storage",
+            "keep-existing-compute",
+            (),
+            (
+                "create-aligned-sfs",
+                "online-bulk-data-sync",
+                "rolling-compute-migration",
+                "final-control-plane-cutover",
+            ),
+        ),
+        (
+            "create-aligned-sfs",
+            "keep-existing-compute",
+            ("create-aligned-sfs", "online-bulk-data-sync", "final-control-plane-cutover"),
+            ("rolling-compute-migration",),
+        ),
+        (
+            "keep-existing-storage",
+            "create-aligned-node-groups",
+            ("rolling-compute-migration", "final-control-plane-cutover"),
+            ("create-aligned-sfs", "online-bulk-data-sync"),
+        ),
+        (
+            "create-aligned-sfs",
+            "create-aligned-node-groups",
+            (
+                "create-aligned-sfs",
+                "online-bulk-data-sync",
+                "rolling-compute-migration",
+                "final-control-plane-cutover",
+            ),
+            (),
+        ),
+    ],
+)
+def test_soperator_migrate_dry_run_respects_storage_compute_mode_matrix(
+    tmp_path: Path,
+    storage_mode: str,
+    compute_mode: str,
+    present: tuple[str, ...],
+    absent: tuple[str, ...],
+) -> None:
+    config_path = _write_old_soperator_migration_config(
+        tmp_path,
+        storage_mode=storage_mode,
+        compute_mode=compute_mode,
+    )
+
+    result = runner.invoke(app, ["soperator", "migrate", str(config_path), "--dry-run"])
+
+    assert result.exit_code == 0, result.output
+    assert f"Storage mode: {storage_mode}" in result.output
+    assert f"Compute mode: {compute_mode}" in result.output
+    for phase_id in present:
+        assert phase_id in result.output
+    for phase_id in absent:
+        assert phase_id not in result.output
+
+
+def test_soperator_migrate_execute_runs_checkpointed_preflight(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     config_path = _write_old_soperator_migration_config(tmp_path)
+    monkeypatch.setattr(cli_module, "collect_kubectl_soperator_snapshot", lambda *, kube_context: _old_soperator_snapshot())
 
     result = runner.invoke(
         app,
@@ -4267,10 +4460,105 @@ def test_soperator_migrate_execute_is_blocked_until_executor_exists(tmp_path: Pa
         ],
     )
 
-    assert result.exit_code == 1
+    assert result.exit_code == 0, result.output
     assert "Soperator migration target: external-cluster" in result.output
-    assert "Live Soperator migration execution is not implemented yet" in result.output
-    assert "timeout-guarded phase progress" in result.output
+    assert "Execution mode: execute." in result.output
+    assert "Execute preflight checkpoint:" in result.output
+    assert "Live source version verified: 3.0.5" in result.output
+    assert "Blocked phase: customer-approval" in result.output
+    assert "Mutation performed: no." in result.output
+    checkpoint_path = (
+        config_path.parent
+        / ".nebius-cxcli"
+        / "soperator-migrations"
+        / "external-cluster"
+        / "checkpoint.json"
+    )
+    checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+    assert checkpoint["completed_phases"] == ["discovery-and-plan"]
+    assert checkpoint["blocked_phase"] == "customer-approval"
+
+
+def test_soperator_migrate_execute_records_approval_and_worker_groups(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_path = _write_old_soperator_migration_config(tmp_path)
+    monkeypatch.setattr(
+        cli_module,
+        "collect_kubectl_soperator_snapshot",
+        lambda *, kube_context: _old_soperator_snapshot(),
+    )
+    real_execute = cli_module.execute_soperator_migration
+
+    def _execute_with_fake_commands(**kwargs):
+        kwargs["command_runner"] = _FakeSoperatorMigrationCommandRunner()
+        return real_execute(**kwargs)
+
+    monkeypatch.setattr(cli_module, "execute_soperator_migration", _execute_with_fake_commands)
+
+    result = runner.invoke(
+        app,
+        [
+            "soperator",
+            "migrate",
+            str(config_path),
+            "--target",
+            "external-cluster",
+            "--execute",
+            "--approve",
+            "--worker-node-groups",
+            "gpu-pool",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Approved worker node groups: gpu-pool" in result.output
+    assert (
+        "Completed execute phases: discovery-and-plan, customer-approval, "
+        "create-aligned-sfs, online-bulk-data-sync, rolling-compute-migration, "
+        "final-control-plane-cutover, validation-and-rollback-hold, retire-old-resources"
+    ) in result.output
+    assert "Blocked phase: none" in result.output
+    assert "Mutation performed: yes." in result.output
+    checkpoint_path = (
+        config_path.parent
+        / ".nebius-cxcli"
+        / "soperator-migrations"
+        / "external-cluster"
+        / "checkpoint.json"
+    )
+    checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+    assert checkpoint["worker_node_groups"] == ["gpu-pool"]
+    assert checkpoint["blocked_phase"] == "none"
+
+
+def test_soperator_migrate_execute_requires_worker_groups_for_approval(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_path = _write_old_soperator_migration_config(tmp_path)
+    monkeypatch.setattr(
+        cli_module,
+        "collect_kubectl_soperator_snapshot",
+        lambda *, kube_context: _old_soperator_snapshot(),
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "soperator",
+            "migrate",
+            str(config_path),
+            "--target",
+            "external-cluster",
+            "--execute",
+            "--approve",
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "requires --worker-node-groups" in result.output
 
 
 def test_soperator_migrate_requires_matching_source_discovery_report(tmp_path: Path) -> None:

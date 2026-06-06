@@ -2145,7 +2145,11 @@ def test_render_local_soperator_cpu_profile_writes_single_cpu_nodeset(tmp_path: 
     )
 
     slurm_cluster = next(doc for doc in rendered_docs if doc.get("kind") == "SlurmCluster")
-    assert slurm_cluster["spec"]["clusterType"] == "cpu"
+    assert "clusterType" not in slurm_cluster["spec"]
+    exporter = slurm_cluster["spec"]["slurmNodes"]["exporter"]
+    assert "jobSource" not in exporter
+    assert "accountingJobStates" not in exporter
+    assert "accountingJobsLookback" not in exporter
     assert slurm_cluster["spec"]["partitionConfiguration"]["partitions"] == [
         {
             "name": "cpu",

@@ -601,9 +601,18 @@ def test_docs_define_component_selector_contract() -> None:
     assert "mainly for Soperator install and future upgrade workflows" in readme_flat
     assert "`nebius-cxcli soperator migrate <config.yaml> --target <target> --dry-run`" in readme
     assert "`soperator onboard` is read-only against the existing cluster" in readme_flat
-    assert "The future `soperator migrate --execute` executor is the live migration lane" in readme_flat
-    assert "progress bars or spinners" in readme_flat
-    assert "bounded safe retry or remedy steps" in readme_flat
+    assert "runs the supported phases in order" in readme_flat
+    assert "Onboarding asks for two independent layers" in readme_flat
+    assert "compute mode is `keep-existing-compute` or `create-aligned-node-groups`" in readme_flat
+    assert "Keeping existing compute preserves the discovered node groups" in readme_flat
+    assert "source release and full discovery fingerprint" in readme_flat
+    assert "local `.nebius-cxcli/soperator-migrations/` timeout-guarded checkpoint" in readme_flat
+    assert "`--approve --worker-node-groups <group>[,<group>...]`" in readme
+    assert "records customer approval and the existing source node groups" in readme_flat
+    assert "ignored by cxcli-managed deployments `.gitignore` files" in readme_flat
+    assert "creates or reuses aligned jail, controller-spool, and accounting SFS" in readme_flat
+    assert "runs Kubernetes data-copy Jobs when old and target PVC pairs exist" in readme_flat
+    assert "phases complete only when their live prerequisites are absent or satisfied" in readme_flat
     assert "Non-interactive `component add apps:soperator@<target>`" in readme
     assert "canonical initial onboarding command" in readme_flat
     assert "does not create Terraform-managed MK8s/SFS rows" in readme_flat
@@ -617,12 +626,23 @@ def test_docs_define_component_selector_contract() -> None:
     assert "stores the selected Nebius `cluster_id` as the durable target access handle" in design_flat
     assert "does not accept arbitrary vanilla Kubernetes clusters" in design_flat
     assert "`deploy.targets[].inventory.node_groups`" in design
+    assert "two independent layer choices" in design_flat
+    assert "`keep-existing-compute` or `create-aligned-node-groups`" in design_flat
+    assert "Keeping existing compute preserves discovered node groups" in design_flat
     assert "This is primarily a day-2 Soperator management and upgrade path" in design_flat
     assert "not a Terraform-managed MK8s row" in design_flat
     assert "`nebius-cxcli soperator migrate <config.yaml> --target <target> --dry-run`" in design
-    assert "refuses `--execute` until the Nebius API" in design_flat
-    assert "future `soperator migrate --execute` executor owns live orchestration" in design_flat
+    assert "`--execute` validates the accepted onboarding analysis" in design_flat
+    assert "rechecks the live source release and full discovery fingerprint before the first mutation" in design_flat
+    assert "local `.nebius-cxcli/soperator-migrations/` timeout-guarded checkpoint" in design_flat
+    assert "`--approve --worker-node-groups <group>[,<group>...]`" in design
+    assert "records customer approval and the existing source node groups" in design_flat
+    assert "ignored by cxcli-managed deployments `.gitignore` files" in design_flat
+    assert "creates or reuses aligned jail, controller-spool, and accounting SFS" in design_flat
+    assert "runs Kubernetes data-copy Jobs when old and target PVC pairs exist" in design_flat
+    assert "resume relies on phase checkpoints" in design_flat
     assert "timeout-guarded checkpoints" in design_flat
+    assert "remains blocked until the explicit migration executor is implemented" not in design_flat
     assert "component add apps:soperator@<target>" in design_flat
     assert "compatibility path" in design_flat
     assert "`production-cluster` materializes the complete MK8s+SFS+Soperator" in design
@@ -631,9 +651,12 @@ def test_docs_define_component_selector_contract() -> None:
     assert "day-2 app edits and Soperator Helm chart version edits do not invalidate" in design_flat
     assert "Soperator migration profiles are the compatibility source of truth" in design
     assert "release-scoped and component-scoped" in design_flat
-    assert "generator_scope: release-metadata-and-compatibility-axes" in design
-    assert "does not yet download chart tarballs or fingerprint CRDs" in design_flat
-    assert "full chart tarball, CRD, template, image, and Slurm contract fingerprinting" in readme_flat
+    assert (
+        "generator_scope: chart-tarball-crd-template-image-and-slurm-contract-fingerprints"
+        in design
+    )
+    assert "per-component chart archive, CRD, rendered-template source" in design_flat
+    assert "per-component chart tarball, CRD, template, image" in readme_flat
     assert "SlurmCluster`, `NodeSet`, `NodeConfigurator`" in design
     assert "In GPU profile-backed MK8s flows" in design
     assert "CPU-only Soperator profiles skip and prune the inactive GPU helper scope" in design

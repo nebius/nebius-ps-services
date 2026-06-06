@@ -397,16 +397,22 @@ from .soperator_child_charts import (
     materialize_soperator_child_chart_values,
     soperator_child_chart_warnings,
 )
+from .soperator_migration import execute_soperator_migration
 from .soperator_onboarding import (
     ONBOARDING_ACCEPTABLE_STATES,
     ONBOARDING_ACTION_APPROVE_MIGRATION,
     ONBOARDING_ACTION_CREATE_ALIGNED_SFS,
     ONBOARDING_ACTION_PLAN_COMPUTE_MIGRATION,
     ONBOARDING_ACTION_PLAN_DATA_MIGRATION,
+    ONBOARDING_COMPUTE_MODE_CREATE_ALIGNED_NODE_GROUPS,
+    ONBOARDING_COMPUTE_MODE_KEEP_EXISTING,
+    ONBOARDING_STORAGE_MODE_CREATE_ALIGNED_SFS,
+    ONBOARDING_STORAGE_MODE_KEEP_EXISTING,
     SOURCE_SOPERATOR_DISCOVERY_REPORT_NAME,
     analyze_soperator_onboarding_snapshot,
     collect_kubectl_soperator_snapshot,
     soperator_onboarding_fingerprint,
+    soperator_onboarding_report_for_modes,
     soperator_onboarding_target,
     soperator_onboarding_target_refs,
     validate_soperator_onboarding_acceptance,
@@ -1168,10 +1174,15 @@ _SOPERATOR_NODE_GROUP_AUTOSCALING_ROLES = (
     "worker",
 )
 _SOPERATOR_ONBOARDING_STORAGE_MODES = (
-    "keep-existing-storage",
-    "create-aligned-sfs",
+    ONBOARDING_STORAGE_MODE_KEEP_EXISTING,
+    ONBOARDING_STORAGE_MODE_CREATE_ALIGNED_SFS,
 )
 _SOPERATOR_ONBOARDING_DEFAULT_STORAGE_MODE = _SOPERATOR_ONBOARDING_STORAGE_MODES[0]
+_SOPERATOR_ONBOARDING_COMPUTE_MODES = (
+    ONBOARDING_COMPUTE_MODE_KEEP_EXISTING,
+    ONBOARDING_COMPUTE_MODE_CREATE_ALIGNED_NODE_GROUPS,
+)
+_SOPERATOR_ONBOARDING_DEFAULT_COMPUTE_MODE = _SOPERATOR_ONBOARDING_COMPUTE_MODES[0]
 _SOPERATOR_DISCOVERY_REPORT_PRIVATE_KEY = "__soperator_source_discovery_report"
 _SOPERATOR_REQUIRED_INFRA_COMPONENT_IDS = ("mk8s", "sfs")
 _SOPERATOR_REQUIRED_APP_COMPONENT_IDS = ("cert-manager",)
@@ -7941,12 +7952,27 @@ def _print_soperator_onboarding_report_summary(report: Any) -> None:
 
 def _soperator_onboarding_storage_mode_choices(default: str) -> list[OptionChoice]:
     labels = {
-        "keep-existing-storage": "Keep existing storage with no changes",
-        "create-aligned-sfs": "Create aligned target Soperator SFS filesystems",
+        ONBOARDING_STORAGE_MODE_KEEP_EXISTING: "Keep existing storage with no changes",
+        ONBOARDING_STORAGE_MODE_CREATE_ALIGNED_SFS: (
+            "Create aligned target Soperator SFS filesystems"
+        ),
     }
     return [
         OptionChoice(value=value, label=labels[value], recommended=value == default)
         for value in _SOPERATOR_ONBOARDING_STORAGE_MODES
+    ]
+
+
+def _soperator_onboarding_compute_mode_choices(default: str) -> list[OptionChoice]:
+    labels = {
+        ONBOARDING_COMPUTE_MODE_KEEP_EXISTING: "Keep existing compute node groups",
+        ONBOARDING_COMPUTE_MODE_CREATE_ALIGNED_NODE_GROUPS: (
+            "Create profile-aligned Soperator node groups"
+        ),
+    }
+    return [
+        OptionChoice(value=value, label=labels[value], recommended=value == default)
+        for value in _SOPERATOR_ONBOARDING_COMPUTE_MODES
     ]
 
 
@@ -7957,13 +7983,24 @@ def _soperator_onboarding_required_storage_mode_for_report(report: Any) -> str:
         if bool(getattr(action, "selected", False))
     }
     if ONBOARDING_ACTION_CREATE_ALIGNED_SFS in selected_actions:
-        return "create-aligned-sfs"
+        return ONBOARDING_STORAGE_MODE_CREATE_ALIGNED_SFS
     for finding in getattr(report, "findings", ()) or ():
         if str(getattr(finding, "layer", "") or "").strip() != "storage-sfs":
             continue
         if str(getattr(finding, "status", "") or "").strip() in {"missing", "incompatible"}:
-            return "create-aligned-sfs"
+            return ONBOARDING_STORAGE_MODE_CREATE_ALIGNED_SFS
     return ""
+
+
+def _soperator_onboarding_default_compute_mode_for_report(report: Any) -> str:
+    selected_actions = {
+        str(getattr(action, "id", "") or "").strip()
+        for action in getattr(report, "actions", ()) or ()
+        if bool(getattr(action, "selected", False))
+    }
+    if ONBOARDING_ACTION_PLAN_COMPUTE_MIGRATION in selected_actions:
+        return ONBOARDING_COMPUTE_MODE_CREATE_ALIGNED_NODE_GROUPS
+    return _SOPERATOR_ONBOARDING_DEFAULT_COMPUTE_MODE
 
 
 def _validate_soperator_onboarding_storage_mode_for_report(
@@ -7971,34 +8008,8 @@ def _validate_soperator_onboarding_storage_mode_for_report(
     storage_mode: str,
     report: Any,
 ) -> str:
+    _ = report
     normalized_storage_mode = _normalize_soperator_onboarding_storage_mode(storage_mode)
-    required_storage_mode = _soperator_onboarding_required_storage_mode_for_report(report)
-    if required_storage_mode and normalized_storage_mode != required_storage_mode:
-        storage_reason = ""
-        target_version = _non_empty_text(getattr(report, "target_version", ""))
-        for finding in getattr(report, "findings", ()) or ():
-            if str(getattr(finding, "layer", "") or "").strip() != "storage-sfs":
-                continue
-            status = str(getattr(finding, "status", "") or "").strip()
-            if status == "missing":
-                storage_reason = (
-                    "no target-compatible Soperator storage layout was discovered"
-                )
-                break
-            if status == "incompatible":
-                version_suffix = f" {target_version}" if target_version else ""
-                storage_reason = (
-                    f"the discovered storage layout is not compatible with target "
-                    f"Soperator{version_suffix}"
-                )
-                break
-        if not storage_reason:
-            storage_reason = "aligned SFS data migration is selected"
-        raise RuntimeError(
-            "Detected Soperator migration requires storage mode "
-            f"'{required_storage_mode}' because {storage_reason}. "
-            "Use create-aligned-sfs or rerun onboarding after manual review."
-        )
     return normalized_storage_mode
 
 
@@ -8007,7 +8018,8 @@ def _soperator_onboarding_target_defaults(
     *,
     kube_context: str,
     cluster_id: str = "",
-    storage_mode: str = "keep-existing-storage",
+    storage_mode: str | None = None,
+    compute_mode: str | None = None,
     snapshot: Mapping[str, Any] | None = None,
     pinned_chart_version: str = "",
     pinned_app_version: str = "",
@@ -8028,7 +8040,13 @@ def _soperator_onboarding_target_defaults(
         pinned_app_version=pinned_app_version,
     )
     required_storage_mode = _soperator_onboarding_required_storage_mode_for_report(report)
-    effective_storage_mode = required_storage_mode or storage_mode
+    effective_storage_mode = storage_mode or required_storage_mode or _SOPERATOR_ONBOARDING_DEFAULT_STORAGE_MODE
+    effective_compute_mode = compute_mode or _soperator_onboarding_default_compute_mode_for_report(report)
+    adjusted_report = soperator_onboarding_report_for_modes(
+        report,
+        storage_mode=effective_storage_mode,
+        compute_mode=effective_compute_mode,
+    )
     target_row: dict[str, Any] = {
         "instance_id": normalized_target,
         DEPLOY_TARGET_KIND_FIELD: EXTERNAL_MK8S_TARGET_KIND,
@@ -8036,19 +8054,20 @@ def _soperator_onboarding_target_defaults(
         "access": "external",
         "inventory": {"node_groups": snapshot.get("node_groups", {})},
         "soperator_onboarding": {
-            "accepted": report.state in ONBOARDING_ACCEPTABLE_STATES,
+            "accepted": adjusted_report.state in ONBOARDING_ACCEPTABLE_STATES,
             "analysis_fingerprint": "",
-            "state": report.state,
+            "state": adjusted_report.state,
             "storage_mode": effective_storage_mode,
-            "actions": [action.id for action in report.actions if action.selected],
-            "target_version": report.target_version,
-            "source_version": report.source_version,
-            "migration_profile_id": report.migration_profile_id,
+            "compute_mode": effective_compute_mode,
+            "actions": [action.id for action in adjusted_report.actions if action.selected],
+            "target_version": adjusted_report.target_version,
+            "source_version": adjusted_report.source_version,
+            "migration_profile_id": adjusted_report.migration_profile_id,
             "collection_errors": snapshot.get("collection_errors", []),
         },
         _SOPERATOR_DISCOVERY_REPORT_PRIVATE_KEY: {
             "snapshot": copy.deepcopy(to_plain_data(snapshot)),
-            "report": report.to_dict(),
+            "report": adjusted_report.to_dict(),
         },
     }
     context = _non_empty_text(kube_context)
@@ -8190,9 +8209,12 @@ def _prompt_soperator_onboarding_target_row(
     project_id: str | None = None,
     provider_lookup: ProviderOptionLookup | None = None,
     storage_mode: str | None = None,
+    compute_mode: str | None = None,
 ) -> dict[str, Any]:
     explicit_storage_mode = storage_mode is not None
+    explicit_compute_mode = compute_mode is not None
     normalized_storage_mode = _normalize_soperator_onboarding_storage_mode(storage_mode)
+    normalized_compute_mode = _normalize_soperator_onboarding_compute_mode(compute_mode)
     resolved_project_id = _non_empty_text(project_id)
     if not resolved_project_id and payload is not None:
         _client_name, _tenant_id, resolved_project_id, _region_id, _email = (
@@ -8226,15 +8248,6 @@ def _prompt_soperator_onboarding_target_row(
             )
     chart_version, app_version = _soperator_catalog_pinned_versions()
     with _soperator_onboarding_status("Building migration profile diff..."):
-        target_row = _soperator_onboarding_target_defaults(
-            target_ref,
-            kube_context="",
-            cluster_id=cluster_id,
-            storage_mode=normalized_storage_mode,
-            snapshot=snapshot,
-            pinned_chart_version=chart_version,
-            pinned_app_version=app_version,
-        )
         report = analyze_soperator_onboarding_snapshot(
             snapshot,
             target_ref=target_ref,
@@ -8262,7 +8275,30 @@ def _prompt_soperator_onboarding_target_row(
         storage_mode=normalized_storage_mode,
         report=report,
     )
-    target_row["soperator_onboarding"]["storage_mode"] = normalized_storage_mode
+    if not explicit_compute_mode:
+        default_compute_mode = _soperator_onboarding_default_compute_mode_for_report(report)
+        compute_mode, should_stop = _prompt_scalar_override(
+            "deploy.targets[].soperator_onboarding.compute_mode",
+            default_compute_mode,
+            choices=_soperator_onboarding_compute_mode_choices(default_compute_mode),
+            type_hint="string",
+            required=True,
+        )
+        if should_stop:
+            raise _WizardQuitRequested
+        if _wizard_backtrack_requested(compute_mode):
+            compute_mode = default_compute_mode
+        normalized_compute_mode = _normalize_soperator_onboarding_compute_mode(compute_mode)
+    target_row = _soperator_onboarding_target_defaults(
+        target_ref,
+        kube_context="",
+        cluster_id=cluster_id,
+        storage_mode=normalized_storage_mode,
+        compute_mode=normalized_compute_mode,
+        snapshot=snapshot,
+        pinned_chart_version=chart_version,
+        pinned_app_version=app_version,
+    )
     return target_row
 
 
@@ -8284,13 +8320,26 @@ def _normalize_soperator_onboarding_storage_mode(raw_value: str | None) -> str:
     return storage_mode
 
 
+def _normalize_soperator_onboarding_compute_mode(raw_value: str | None) -> str:
+    compute_mode = normalize_component_token(raw_value) or _SOPERATOR_ONBOARDING_DEFAULT_COMPUTE_MODE
+    if compute_mode not in _SOPERATOR_ONBOARDING_COMPUTE_MODES:
+        available = ", ".join(_SOPERATOR_ONBOARDING_COMPUTE_MODES)
+        raise RuntimeError(
+            "Invalid Soperator onboarding compute mode "
+            f"'{raw_value}'. Choose one of: {available}."
+        )
+    return compute_mode
+
+
 def _soperator_onboarding_target_row_from_options(
     *,
     target_ref: str | None,
     kube_context: str | None,
     storage_mode: str | None,
+    compute_mode: str | None = None,
 ) -> dict[str, Any]:
     explicit_storage_mode = storage_mode is not None
+    explicit_compute_mode = compute_mode is not None
     context = _non_empty_text(kube_context) or _current_kube_context_name()
     if not context:
         raise RuntimeError(
@@ -8304,20 +8353,13 @@ def _soperator_onboarding_target_row_from_options(
         or "mk8s"
     )
     normalized_storage_mode = _normalize_soperator_onboarding_storage_mode(storage_mode)
+    normalized_compute_mode = _normalize_soperator_onboarding_compute_mode(compute_mode)
     with _soperator_onboarding_status(
         f"Discovering Soperator components on {normalized_target} ({context})..."
     ):
         snapshot = collect_kubectl_soperator_snapshot(kube_context=context)
     chart_version, app_version = _soperator_catalog_pinned_versions()
     with _soperator_onboarding_status("Building migration profile diff..."):
-        target_row = _soperator_onboarding_target_defaults(
-            normalized_target,
-            kube_context=context,
-            storage_mode=normalized_storage_mode,
-            snapshot=snapshot,
-            pinned_chart_version=chart_version,
-            pinned_app_version=app_version,
-        )
         report = analyze_soperator_onboarding_snapshot(
             snapshot,
             target_ref=normalized_target,
@@ -8332,7 +8374,17 @@ def _soperator_onboarding_target_row_from_options(
         storage_mode=normalized_storage_mode,
         report=report,
     )
-    target_row["soperator_onboarding"]["storage_mode"] = normalized_storage_mode
+    if not explicit_compute_mode:
+        normalized_compute_mode = _soperator_onboarding_default_compute_mode_for_report(report)
+    target_row = _soperator_onboarding_target_defaults(
+        normalized_target,
+        kube_context=context,
+        storage_mode=normalized_storage_mode,
+        compute_mode=normalized_compute_mode,
+        snapshot=snapshot,
+        pinned_chart_version=chart_version,
+        pinned_app_version=app_version,
+    )
     return target_row
 
 
@@ -29811,6 +29863,8 @@ _DEPLOYMENTS_GITIGNORE_LINES: tuple[str, ...] = (
     "# Keep config.yaml and generated/nebius-cxcli-manifest.json versioned in a private repo.",
     "# Ignore Terraform runtime files and tfvars duplicates recreated from the generated manifest.",
     "# Ignore downloaded WireGuard client configs because they contain private keys.",
+    "# Ignore local cxcli operational checkpoints.",
+    "*/*/.nebius-cxcli/",
     "*/*/wireguard-clients/",
     "*/*/generated/infra/.terraform/",
     "*/*/generated/infra/*.tfstate",
@@ -32743,7 +32797,8 @@ def component_add_command(
         "Nebius MK8s cluster from the project); "
         "nebius-cxcli soperator onboard ./deployments/tenant/project/config.yaml "
         "--target external-cluster --kube-context nebius-external-cluster-mk8scluster-... "
-        "--storage-mode keep-existing-storage --no-interactive. "
+        "--storage-mode keep-existing-storage --compute-mode keep-existing-compute "
+        "--no-interactive. "
         f"The command updates config.yaml and writes {SOURCE_SOPERATOR_DISCOVERY_REPORT_NAME}; "
         "run validate, render, and deploy afterwards."
     ),
@@ -32828,6 +32883,16 @@ def soperator_onboard_command(
             ),
         ),
     ] = None,
+    compute_mode_opt: Annotated[
+        str | None,
+        typer.Option(
+            "--compute-mode",
+            help=(
+                "Soperator onboarding compute mode: keep-existing-compute or "
+                "create-aligned-node-groups."
+            ),
+        ),
+    ] = None,
     validate_sources: Annotated[
         bool,
         typer.Option(
@@ -32880,6 +32945,7 @@ def soperator_onboard_command(
                     payload=payload,
                     project_id=resolved_project_id,
                     provider_lookup=provider_lookup,
+                    compute_mode=compute_mode_opt,
                 )
             else:
                 target_row = _prompt_soperator_onboarding_target_row(
@@ -32887,12 +32953,14 @@ def soperator_onboard_command(
                     project_id=resolved_project_id,
                     provider_lookup=provider_lookup,
                     storage_mode=storage_mode_opt,
+                    compute_mode=compute_mode_opt,
                 )
         else:
             target_row = _soperator_onboarding_target_row_from_options(
                 target_ref=target_ref_opt,
                 kube_context=kube_context_opt,
                 storage_mode=storage_mode_opt,
+                compute_mode=compute_mode_opt,
             )
 
         source_report_path = _write_soperator_source_discovery_report_from_target_row(
@@ -32959,15 +33027,14 @@ _SOPERATOR_MIGRATION_ACTIONS = frozenset(
     }
 )
 _SOPERATOR_MIGRATION_EXECUTOR_CONTRACT_LINES = (
-    "Live executor contract: when --execute is implemented, cxcli will run the "
-    "accepted migration phases with progress bars or spinners for storage, "
-    "compute, and cutover work.",
-    "Failure handling contract: each mutating phase must watch Nebius, "
-    "Kubernetes, Soperator, and Slurm signals; apply bounded retry/remedy "
-    "steps where safe; and stop at manual-review or customer-approval gates.",
-    "Resume contract: long-running phases must use timeout-guarded checkpoints "
-    "so interrupted migrations can be resumed without redoing completed safe "
-    "work or retiring old resources early.",
+    "Live executor contract: --execute rechecks the pre-mutation source "
+    "release and discovery fingerprint, then runs checkpointed SFS, copy, "
+    "compute, cutover, validation, and retirement phases in order.",
+    "Failure handling contract: mutating phases watch Nebius, Kubernetes, "
+    "Soperator, and Slurm signals; complete only when prerequisites are absent "
+    "or satisfied; and checkpoint before manual-review gates.",
+    "Resume contract: timeout-guarded checkpoints let interrupted migrations "
+    "resume without rerunning completed phases or retiring old resources early.",
 )
 
 
@@ -33078,6 +33145,10 @@ def _format_soperator_migration_plan_lines(
         f"Onboarding state: {str(onboarding.get('state', '') or report.get('state', '') or 'unknown')}",
         f"Source version: {str(onboarding.get('source_version', '') or report.get('source_version', '') or 'not detected')}",
         f"Target version: {str(onboarding.get('target_version', '') or report.get('target_version', '') or 'unknown')}",
+        "Storage mode: "
+        + str(onboarding.get("storage_mode", "") or _SOPERATOR_ONBOARDING_DEFAULT_STORAGE_MODE),
+        "Compute mode: "
+        + str(onboarding.get("compute_mode", "") or _SOPERATOR_ONBOARDING_DEFAULT_COMPUTE_MODE),
         "Migration required: " + ("yes" if flags["migration_required"] else "no"),
         "Storage migration required: "
         + ("yes" if flags["storage_migration_required"] else "no"),
@@ -33116,12 +33187,16 @@ def _format_soperator_migration_plan_lines(
     short_help="Plan Soperator compute/storage migration from onboarding discovery.",
     epilog=(
         "Example: nebius-cxcli soperator migrate ./deployments/tenant/project/config.yaml "
-        "--target external-cluster --dry-run. The command reads "
+        "--target external-cluster --dry-run. For approved live migration, use "
+        "--execute --approve --worker-node-groups gpu-worker-0,gpu-worker-1. The command reads "
         f"{SOURCE_SOPERATOR_DISCOVERY_REPORT_NAME}, validates the accepted onboarding "
-        "analysis, and prints the compute/storage migration plan. Live execution will "
-        "require --execute after the dedicated migration executor is implemented; "
-        "that executor must show phase progress, watch failures, apply bounded "
-        "safe remedies, and support timeout-guarded resume checkpoints."
+        "analysis, and prints the compute/storage migration plan. --execute verifies "
+        "the source release and discovery fingerprint before mutation, checkpoints the live run, "
+        "records explicit approval when --approve is passed, validates worker node "
+        "group input for compute migration, creates or reuses aligned SFS filesystems, "
+        "attaches them to discovered Nebius node groups, runs data-copy jobs when "
+        "old and target PVC pairs exist, validates Soperator reconciliation, and "
+        "checkpoints manual gates instead of retiring old resources early."
     ),
 )
 def soperator_migrate_command(
@@ -33146,11 +33221,34 @@ def soperator_migrate_command(
             "--dry-run/--execute",
             help=(
                 "Print the migration plan without live changes, or request live execution. "
-                "Live execution is intentionally blocked until the timeout-guarded "
-                "migration executor with progress, failure watching, and safe remedies lands."
+                "--execute performs the checkpointed live preflight, records approval "
+                "when --approve is passed, and advances supported storage, copy, "
+                "compute, cutover, validation, and retirement phases with guarded "
+                "resume checkpoints."
             ),
         ),
     ] = True,
+    approve: Annotated[
+        bool,
+        typer.Option(
+            "--approve/--no-approve",
+            help=(
+                "Record customer approval for the accepted migration plan during --execute. "
+                "Required before checkpointed mutating phases can run."
+            ),
+        ),
+    ] = False,
+    worker_node_groups: Annotated[
+        str | None,
+        typer.Option(
+            "--worker-node-groups",
+            help=(
+                "Comma-separated existing source node-group names that should remain worker "
+                "NodeSets during approved compute migration, for example "
+                "gpu-worker-0,gpu-worker-1."
+            ),
+        ),
+    ] = None,
 ) -> None:
     """Plan Soperator compute/storage migration from onboarding discovery."""
     try:
@@ -33173,13 +33271,17 @@ def soperator_migrate_command(
         ):
             console.print(line, soft_wrap=True)
         if not dry_run:
-            raise RuntimeError(
-                "Live Soperator migration execution is not implemented yet. This command "
-                "currently provides the explicit migration surface and dry-run plan gate; "
-                "the live executor must add timeout-guarded phase progress, failure "
-                "watching, safe retry/remedy steps, and resumable checkpoints before "
-                "mutating customer clusters."
+            execution_result = execute_soperator_migration(
+                config_path=config_path,
+                target_ref=target_ref,
+                payload=payload,
+                source_report=source_report,
+                snapshot_collector=collect_kubectl_soperator_snapshot,
+                approved=approve,
+                worker_node_groups=(worker_node_groups,) if worker_node_groups else (),
             )
+            for line in execution_result.lines:
+                console.print(line, soft_wrap=True)
     except typer.Exit:
         raise
     except (KeyboardInterrupt, EOFError, typer.Abort):
