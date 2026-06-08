@@ -33,7 +33,7 @@ def _project_paths(tmp_path: Path) -> ProjectPaths:
         generated_dir=project_dir / "generated",
         infra_dir=project_dir / "generated" / "infra",
         flux_dir=project_dir / "generated" / "flux",
-        inventory_dir=project_dir / "generated" / "inventory",
+        reports_dir=project_dir / "generated" / "reports",
         path_tenant_folder="tenant",
         path_project_folder="project",
     )

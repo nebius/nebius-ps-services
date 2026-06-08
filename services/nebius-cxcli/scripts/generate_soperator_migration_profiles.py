@@ -396,6 +396,24 @@ def _release_contract_for_row(
     )
 
 
+def _node_label_layout(*, source_role_label_keys: Sequence[str], action: str) -> dict[str, Any]:
+    return {
+        "source_role_label_keys": list(source_role_label_keys),
+        "target_role_label_key": "slurm.nebius.ai/nodeset-name",
+        "target_role_label_values": [
+            "system",
+            "controller",
+            "login",
+            "accounting",
+            "worker",
+        ],
+        "worker_prefix": "worker",
+        "source_workload_label_key": "slurm.nebius.ai/workload",
+        "jail_label_key": "slurm.nebius.ai/jail",
+        "action": action,
+    }
+
+
 def _profile_payload(
     releases: list[dict[str, Any]],
     *,
@@ -454,6 +472,13 @@ def _profile_payload(
                 "compatibility_axes": {
                     "compute_layout": "replace-and-roll",
                     "storage_layout": "create-aligned-sfs-and-migrate",
+                    "node_label_layout": _node_label_layout(
+                        source_role_label_keys=(
+                            "slurm.nebius.ai/nodeset",
+                            "slurm.nebius.ai/nodeset-name",
+                        ),
+                        action="normalize-target-node-labels",
+                    ),
                     "slurm_components": [
                         "SlurmCluster",
                         "NodeSet",
@@ -473,6 +498,13 @@ def _profile_payload(
                 "compatibility_axes": {
                     "compute_layout": "replace-and-roll",
                     "storage_layout": "create-aligned-sfs-and-migrate",
+                    "node_label_layout": _node_label_layout(
+                        source_role_label_keys=(
+                            "slurm.nebius.ai/nodeset",
+                            "slurm.nebius.ai/nodeset-name",
+                        ),
+                        action="normalize-target-node-labels",
+                    ),
                     "slurm_components": [
                         "SlurmCluster",
                         "NodeSet",
@@ -492,6 +524,13 @@ def _profile_payload(
                 "compatibility_axes": {
                     "compute_layout": "replace-and-roll",
                     "storage_layout": "create-aligned-sfs-and-migrate",
+                    "node_label_layout": _node_label_layout(
+                        source_role_label_keys=(
+                            "slurm.nebius.ai/nodeset",
+                            "slurm.nebius.ai/nodeset-name",
+                        ),
+                        action="normalize-target-node-labels",
+                    ),
                     "slurm_components": [
                         "SlurmCluster",
                         "NodeSet",
@@ -511,6 +550,10 @@ def _profile_payload(
                 "compatibility_axes": {
                     "compute_layout": "adopt-or-reconcile",
                     "storage_layout": "adopt-existing-or-create-if-missing",
+                    "node_label_layout": _node_label_layout(
+                        source_role_label_keys=("slurm.nebius.ai/nodeset-name",),
+                        action="adopt-or-reconcile-target-node-labels",
+                    ),
                     "slurm_components": [
                         "SlurmCluster",
                         "NodeSet",

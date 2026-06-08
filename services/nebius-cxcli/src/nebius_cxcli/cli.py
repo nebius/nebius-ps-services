@@ -235,6 +235,7 @@ from .mk8s_gpu import (
     mk8s_gpu_disabled_target_validations,
     mk8s_gpu_validation_specs,
     mk8s_gpu_validation_warnings,
+    normalize_mk8s_gpu_project_validation_settings,
     prune_inactive_mk8s_gpu_app_rows,
     resolve_mk8s_gpu_app_selection,
     run_mk8s_gpu_validations,
@@ -404,13 +405,24 @@ from .soperator_onboarding import (
     ONBOARDING_ACTION_CREATE_ALIGNED_SFS,
     ONBOARDING_ACTION_PLAN_COMPUTE_MIGRATION,
     ONBOARDING_ACTION_PLAN_DATA_MIGRATION,
+    ONBOARDING_ACTION_REMEDIATE_TARGET_GPU_STACK,
+    ONBOARDING_ACTION_UPGRADE_EXTERNAL_NODE_TEMPLATE,
+    ONBOARDING_ACTION_UPGRADE_SOPERATOR,
     ONBOARDING_COMPUTE_MODE_CREATE_ALIGNED_NODE_GROUPS,
     ONBOARDING_COMPUTE_MODE_KEEP_EXISTING,
+    ONBOARDING_EXTERNAL_NODE_TEMPLATE_TARGET_GPU_STACK_PRESET,
+    ONBOARDING_EXTERNAL_NODE_TEMPLATE_TARGET_K8S_VERSION,
+    ONBOARDING_EXTERNAL_NODE_TEMPLATE_TARGET_OS,
     ONBOARDING_STORAGE_MODE_CREATE_ALIGNED_SFS,
     ONBOARDING_STORAGE_MODE_KEEP_EXISTING,
     SOURCE_SOPERATOR_DISCOVERY_REPORT_NAME,
     analyze_soperator_onboarding_snapshot,
     collect_kubectl_soperator_snapshot,
+    normalize_soperator_release_version,
+    soperator_migration_profile_for_version,
+    soperator_migration_profile_versions,
+    soperator_onboarding_effective_compute_mode,
+    soperator_onboarding_effective_storage_mode,
     soperator_onboarding_fingerprint,
     soperator_onboarding_report_for_modes,
     soperator_onboarding_target,
@@ -418,6 +430,11 @@ from .soperator_onboarding import (
     validate_soperator_onboarding_acceptance,
     write_soperator_onboarding_reports,
     write_source_soperator_discovery_report,
+)
+from .soperator_validation import (
+    SOPERATOR_CLUSTER_VALIDATION_KIND,
+    run_soperator_cluster_validations,
+    soperator_cluster_validation_specs,
 )
 from .ssh_jumphost import (
     SshJumphostAllowedCidrRequest,
@@ -1184,6 +1201,7 @@ _SOPERATOR_ONBOARDING_COMPUTE_MODES = (
 )
 _SOPERATOR_ONBOARDING_DEFAULT_COMPUTE_MODE = _SOPERATOR_ONBOARDING_COMPUTE_MODES[0]
 _SOPERATOR_DISCOVERY_REPORT_PRIVATE_KEY = "__soperator_source_discovery_report"
+_SOPERATOR_SOURCE_VERSION_MANUAL_CHOICE = "__manual_soperator_source_version__"
 _SOPERATOR_REQUIRED_INFRA_COMPONENT_IDS = ("mk8s", "sfs")
 _SOPERATOR_REQUIRED_APP_COMPONENT_IDS = ("cert-manager",)
 _BENIGN_KUBECTL_OUTPUT_MARKERS = (
@@ -1258,7 +1276,7 @@ _GENERATED_PATH_ARGUMENT_HELP = (
 )
 _GENERATED_INFRA_ARGUMENT_HELP = "Path to generated/ or generated/infra."
 _GENERATED_FLUX_ARGUMENT_HELP = "Path to generated/ or generated/flux."
-_GENERATED_INVENTORY_ARGUMENT_HELP = "Path to generated/ or generated/inventory."
+_GENERATED_REPORTS_ARGUMENT_HELP = "Path to generated/ or generated/reports."
 _COMPONENT_SOURCES_ARGUMENT_HELP = (
     "Optional explicit component_sources.yaml path. "
     "The sibling component_cli_settings.yaml is loaded when present. "
@@ -1350,7 +1368,7 @@ app = typer.Typer(
         "Grafana API or local JSON file and only edits component_sources.yaml with --attach; "
         "validate, validate-dashboards, quota-check, quota-request, render, deploy, "
         "upgrade, and bootstrap-ci use config.yaml; "
-        "soperator onboard registers existing Nebius MK8s targets in config.yaml; "
+        "ext-soperator onboard registers existing Nebius MK8s targets in config.yaml; "
         "destroy uses config.yaml to tear down all rendered project resources from sibling generated/; "
         "email also uses config.yaml and resolves sibling generated/ automatically; "
         "wireguard uses config.yaml to generate client configs and manage VM-local "
@@ -1394,13 +1412,25 @@ terraform_app = typer.Typer(
 flux_app = typer.Typer(
     help="Apply, bootstrap, or destroy Flux resources using generated/ or generated/flux."
 )
-soperator_app = typer.Typer(
+ext_soperator_app = typer.Typer(
     help=(
-        "Manage Soperator-specific day-2 workflows. Use onboard to register an "
+        "Manage external Soperator day-2 workflows. Use onboard to register an "
         "existing Nebius MK8s target for Soperator app management without "
         "Terraform-owning that cluster, then use migrate to plan approved "
-        "Soperator compute/storage migration from the discovery report."
-    )
+        "target remediation and compute/storage migration from the discovery "
+        "report."
+    ),
+    epilog=(
+        "Workflow: run ext-soperator onboard for an external Nebius MK8s cluster, "
+        "then validate and render the accepted config. If the accepted report "
+        "says no migration work is required, run deploy. If migration work is "
+        "required, do not deploy first; run ext-soperator migrate --dry-run, then "
+        "ext-soperator migrate --execute --approve. Managed chart-only Soperator "
+        "upgrades use upgrade helm-chart; external MK8s control-plane and "
+        "node-template upgrades selected by onboarding are owned by ext-soperator "
+        "migrate; Terraform-managed MK8s node-template upgrades use upgrade "
+        "node-template."
+    ),
 )
 upgrade_app = typer.Typer(
     help=(
@@ -1414,7 +1444,7 @@ upgrade_app = typer.Typer(
 app.add_typer(component_app, name="component")
 app.add_typer(terraform_app, name="terraform")
 app.add_typer(flux_app, name="flux")
-app.add_typer(soperator_app, name="soperator")
+app.add_typer(ext_soperator_app, name="ext-soperator")
 app.add_typer(upgrade_app, name="upgrade")
 
 
@@ -3394,7 +3424,7 @@ def upgrade_k8s_version_command(
             if validations:
                 _run_deploy_validations(
                     validations,
-                    inventory_dir=paths.inventory_dir,
+                    reports_dir=paths.reports_dir,
                     extra_env=kube_env,
                     emit=lambda message: console.print(message, highlight=False),
                 )
@@ -3933,7 +3963,7 @@ def upgrade_node_template_command(
             if validations:
                 _run_deploy_validations(
                     validations,
-                    inventory_dir=paths.inventory_dir,
+                    reports_dir=paths.reports_dir,
                     extra_env=kube_env,
                     emit=lambda message: console.print(message, highlight=False),
                 )
@@ -5896,7 +5926,7 @@ def _confirm_existing_project_overwrite(*, config_path: Path) -> bool:
 def _warn_soperator_onboard_existing_config(*, config_path: Path) -> None:
     console.print(
         f"{warning_markup('Existing project config detected.')} "
-        f"`soperator onboard` will update [bold]{config_path}[/bold] with Soperator "
+        f"`ext-soperator onboard` will update [bold]{config_path}[/bold] with Soperator "
         "onboarding target, app, fingerprint, and discovery-report decisions."
     )
     console.print(
@@ -6043,6 +6073,46 @@ def _config_cli_arg(config_path: Path) -> str:
 
 def _print_render_deploy_hint(config_path: Path) -> None:
     config_arg = _config_cli_arg(config_path)
+    try:
+        payload = _load_config_payload(config_path)
+    except Exception:
+        payload = {}
+    migration_targets: list[str] = []
+    if isinstance(payload, Mapping):
+        for target_ref in soperator_onboarding_target_refs(payload):
+            target = soperator_onboarding_target(payload, target_ref=target_ref)
+            onboarding = target.get("soperator_onboarding") if isinstance(target, Mapping) else {}
+            if not isinstance(onboarding, Mapping):
+                continue
+            if _soperator_migration_action_flags(onboarding)["migration_required"]:
+                migration_targets.append(target_ref)
+    if migration_targets:
+        if len(migration_targets) == 1:
+            target_arg = shlex.quote(migration_targets[0])
+            console.print(
+                "Next step: "
+                f"`nebius-cxcli ext-soperator migrate {config_arg} --target {target_arg} --dry-run`",
+                soft_wrap=True,
+            )
+            console.print(
+                "Then, after accepting the dry-run plan: "
+                f"`nebius-cxcli ext-soperator migrate {config_arg} --target {target_arg} "
+                "--execute --approve`",
+                soft_wrap=True,
+            )
+        else:
+            console.print(
+                "Next step: run `nebius-cxcli ext-soperator migrate "
+                f"{config_arg} --target <target> --dry-run` for each migration-required "
+                "Soperator target: "
+                + ", ".join(migration_targets),
+                soft_wrap=True,
+            )
+        console.print(
+            "Do not run `nebius-cxcli deploy` before `ext-soperator migrate` for migration-required Soperator targets.",
+            soft_wrap=True,
+        )
+        return
     console.print(f"Next step: `nebius-cxcli deploy {config_arg}`", soft_wrap=True)
 
 
@@ -6060,6 +6130,24 @@ def _run_internal_render_command(config_path: Path, *, force: bool) -> None:
         render_command(config_path, force=force)
 
 
+@contextmanager
+def _temporary_env(overrides: Mapping[str, str]) -> Iterator[None]:
+    saved = {key: os.environ.get(key) for key in overrides}
+    try:
+        for key, value in overrides.items():
+            if value:
+                os.environ[key] = value
+            else:
+                os.environ.pop(key, None)
+        yield
+    finally:
+        for key, value in saved.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+
 def _print_component_edit_next_steps(config_path: Path) -> None:
     config_arg = _config_cli_arg(config_path)
     console.print(
@@ -6068,6 +6156,46 @@ def _print_component_edit_next_steps(config_path: Path) -> None:
         f"`nebius-cxcli render {config_arg}`.",
         soft_wrap=True,
     )
+
+
+def _print_soperator_onboard_next_steps(
+    config_path: Path,
+    *,
+    target_ref: str,
+    migration_required: bool,
+) -> None:
+    config_arg = _config_cli_arg(config_path)
+    target_arg = shlex.quote(normalize_component_token(target_ref) or target_ref)
+    console.print("Next steps:")
+    commands: list[tuple[str, str]] = [
+        (f"nebius-cxcli validate {config_arg}", ""),
+        (f"nebius-cxcli render {config_arg}", ""),
+    ]
+    if migration_required:
+        commands.extend(
+            [
+                (
+                    f"nebius-cxcli ext-soperator migrate {config_arg} --target {target_arg} --dry-run",
+                    "",
+                ),
+                (
+                    "nebius-cxcli ext-soperator migrate "
+                    f"{config_arg} --target {target_arg} --execute --approve",
+                    " (after the dry run is accepted)",
+                ),
+            ]
+        )
+    else:
+        commands.append((f"nebius-cxcli deploy {config_arg}", ""))
+    for command, suffix in commands:
+        console.print(f"  `{command}`{suffix}", soft_wrap=True)
+    if migration_required:
+        console.print(
+            "Do not run `nebius-cxcli deploy` before `ext-soperator migrate` for this target; "
+            "deploy applies the rendered Soperator resources, while migrate must verify "
+            "the live source release first.",
+            soft_wrap=True,
+        )
 
 
 def _print_create_next_steps(config_path: Path) -> None:
@@ -6086,6 +6214,13 @@ def _print_component_edit_config_only_note() -> None:
     console.print(
         "Only config.yaml was updated. Existing generated/ artifacts and live resources are "
         "unchanged until you run render and then deploy/destroy as needed."
+    )
+
+
+def _print_soperator_onboard_config_only_note() -> None:
+    console.print(
+        "Only config.yaml was updated. Existing generated/ artifacts and live resources are "
+        "unchanged until you run render and then follow the Soperator next steps below."
     )
 
 
@@ -7921,14 +8056,198 @@ def _soperator_catalog_pinned_versions() -> tuple[str, str]:
     return chart_version, app_version
 
 
+def _soperator_source_version_sort_key(version: str) -> tuple[int, ...]:
+    match = re.search(r"([0-9]+(?:\.[0-9]+){0,3})", str(version or ""))
+    if match is None:
+        return ()
+    return tuple(int(part) for part in match.group(1).split("."))
+
+
+def _soperator_source_version_choices() -> list[OptionChoice]:
+    versions = sorted(
+        set(soperator_migration_profile_versions()),
+        key=_soperator_source_version_sort_key,
+        reverse=True,
+    )
+    choices: list[OptionChoice] = []
+    for version in versions:
+        profile = soperator_migration_profile_for_version(version)
+        profile_id = _non_empty_text(profile.get("profile_id")) if profile else ""
+        label = f"{version}  ({profile_id})" if profile_id else version
+        choices.append(OptionChoice(value=version, label=label))
+    return choices
+
+
+def _validate_soperator_source_version(value: object) -> str:
+    normalized = normalize_soperator_release_version(str(value or ""))
+    if not normalized:
+        raise ValueError("Enter a Soperator release version such as 3.0.5.")
+    if soperator_migration_profile_for_version(normalized) is None:
+        choices = [choice.value for choice in _soperator_source_version_choices()]
+        preview = ", ".join(choices[:8])
+        suffix = f" Known profile versions include: {preview}." if preview else ""
+        raise ValueError(
+            f"Soperator source version '{value}' does not match a committed migration profile."
+            f"{suffix}"
+        )
+    return normalized
+
+
+def _soperator_onboarding_report_needs_source_version(report: Any) -> bool:
+    if _non_empty_text(getattr(report, "source_version", "")):
+        return False
+    for finding in getattr(report, "findings", ()) or ():
+        if str(getattr(finding, "status", "") or "").strip() == "source-version-required":
+            return True
+    return False
+
+
+def _prompt_manual_soperator_source_version() -> str:
+    field = "deploy.targets[].soperator_onboarding.source_version"
+    while True:
+        raw, should_stop = _prompt_scalar_override(
+            field,
+            "",
+            type_hint="string",
+            required=True,
+        )
+        if should_stop:
+            raise _WizardQuitRequested
+        if _wizard_backtrack_requested(raw):
+            return ""
+        try:
+            return _validate_soperator_source_version(raw)
+        except ValueError as exc:
+            console.print(f"{error_markup('Invalid value')}. {exc}")
+
+
+def _prompt_soperator_onboarding_source_version(report: Any) -> str:
+    if not _soperator_onboarding_report_needs_source_version(report):
+        return ""
+    console.print(
+        "[dim]Soperator CRDs were detected, but cxcli could not detect a compatible "
+        "Helm release version. Select the source Soperator version so cxcli can match "
+        "a committed migration profile.[/dim]"
+    )
+    field = "deploy.targets[].soperator_onboarding.source_version"
+    with _soperator_onboarding_status("Loading Soperator migration profile versions..."):
+        choices = _soperator_source_version_choices()
+    choices.append(
+        OptionChoice(
+            value=_SOPERATOR_SOURCE_VERSION_MANUAL_CHOICE,
+            label="Enter another source version manually",
+        )
+    )
+    rendered_label = _prompt_label_with_type(field, type_hint="string", required=True)
+
+    if _is_tty_session():
+        try:
+            import questionary
+
+            selected = _ask_questionary_with_wizard_navigation(
+                questionary.select(
+                    rendered_label,
+                    choices=[
+                        questionary.Choice(title=choice.label, value=choice.value)
+                        for choice in choices
+                    ],
+                    instruction="Use arrows; q=back; qq=quit; Enter=select.",
+                    qmark="",
+                )
+            )
+            if selected is None or selected == _WIZARD_QUIT_CHOICE:
+                raise _WizardQuitRequested
+            if selected == _WIZARD_BACK_CHOICE:
+                return ""
+            if selected == _SOPERATOR_SOURCE_VERSION_MANUAL_CHOICE:
+                return _prompt_manual_soperator_source_version()
+            return _validate_soperator_source_version(selected)
+        except _WizardQuitRequested:
+            raise
+        except (KeyboardInterrupt, EOFError, typer.Abort):
+            raise _WizardQuitRequested from None
+        except ValueError as exc:
+            console.print(f"{error_markup('Invalid value')}. {exc}")
+        except Exception:
+            pass
+
+    console.print(f"[cyan]{field} options:[/cyan]")
+    for index, choice in enumerate(choices, start=1):
+        console.print(f"    [{index}] {choice.label}")
+    prompt_suffix = _wizard_field_prompt_suffix(rendered_label)
+    option_values = {str(choice.value).strip(): str(choice.value).strip() for choice in choices}
+    while True:
+        try:
+            raw = typer.prompt(
+                f"{prompt_suffix} (index, version, or manual)",
+                default="",
+            ).strip()
+        except (KeyboardInterrupt, EOFError, typer.Abort):
+            raise _WizardQuitRequested from None
+        if raw == WIZARD_ABORT_TOKEN:
+            raise _WizardQuitRequested
+        if raw == WIZARD_EXIT_TOKEN:
+            return ""
+        if not raw:
+            console.print(f"{error_markup('Invalid value')}. This field is required.")
+            continue
+        selected = raw
+        if raw.isdigit():
+            index = int(raw)
+            if 1 <= index <= len(choices):
+                selected = str(choices[index - 1].value)
+            else:
+                console.print(
+                    f"{error_markup('Invalid option index')}. "
+                    f"Use a value between 1 and {len(choices)}."
+                )
+                continue
+        elif raw.lower() in {"manual", "m"}:
+            selected = _SOPERATOR_SOURCE_VERSION_MANUAL_CHOICE
+        elif raw in option_values:
+            selected = option_values[raw]
+        if selected == _SOPERATOR_SOURCE_VERSION_MANUAL_CHOICE:
+            return _prompt_manual_soperator_source_version()
+        try:
+            return _validate_soperator_source_version(selected)
+        except ValueError as exc:
+            console.print(f"{error_markup('Invalid value')}. {exc}")
+
+
+def _soperator_onboarding_report_with_source_version(
+    report: Any,
+    *,
+    snapshot: Mapping[str, Any],
+    target_ref: str,
+    pinned_chart_version: str,
+    pinned_app_version: str,
+    source_version: str | None,
+    interactive: bool,
+) -> Any:
+    source_version_override = ""
+    if source_version:
+        source_version_override = _validate_soperator_source_version(source_version)
+    elif interactive:
+        source_version_override = _prompt_soperator_onboarding_source_version(report)
+    if not source_version_override:
+        return report
+    return analyze_soperator_onboarding_snapshot(
+        snapshot,
+        target_ref=target_ref,
+        pinned_chart_version=pinned_chart_version,
+        pinned_app_version=pinned_app_version,
+        source_version_override=source_version_override,
+    )
+
+
 def _print_soperator_onboarding_report_summary(report: Any) -> None:
     labels = {
         "no-soperator-detected": "No Soperator detected",
         "existing-soperator-supported": "Existing Soperator supported for migration",
         "existing-soperator-target": "Existing Soperator matches target",
-        "existing-soperator-unknown": "Existing Soperator requires manual review",
+        "existing-soperator-unknown": "Existing Soperator requires an explicit action",
         "existing-soperator-newer": "Existing Soperator is newer than cxcli target",
-        "analysis-blocked": "Analysis blocked",
+        "analysis-incomplete": "Analysis incomplete",
     }
     console.print(f"[dim]Soperator onboarding state: {labels.get(report.state, report.state)}[/dim]")
     source_version = _non_empty_text(getattr(report, "source_version", ""))
@@ -7941,7 +8260,7 @@ def _print_soperator_onboarding_report_summary(report: Any) -> None:
     if migration_profile_id:
         console.print(f"[dim]Migration profile: {migration_profile_id}[/dim]")
     for finding in report.findings:
-        if finding.severity in {"required", "blocked", "recommended"}:
+        if finding.severity in {"required", "recommended"}:
             console.print(f"[dim]- {finding.layer}: {finding.status} - {finding.message}[/dim]")
     if getattr(report, "migration_plan", ()):
         console.print("[dim]Migration phases: " + ", ".join(phase.id for phase in report.migration_plan) + "[/dim]")
@@ -8020,6 +8339,7 @@ def _soperator_onboarding_target_defaults(
     cluster_id: str = "",
     storage_mode: str | None = None,
     compute_mode: str | None = None,
+    source_version: str | None = None,
     snapshot: Mapping[str, Any] | None = None,
     pinned_chart_version: str = "",
     pinned_app_version: str = "",
@@ -8038,10 +8358,21 @@ def _soperator_onboarding_target_defaults(
         target_ref=normalized_target,
         pinned_chart_version=pinned_chart_version,
         pinned_app_version=pinned_app_version,
+        source_version_override=source_version or "",
     )
     required_storage_mode = _soperator_onboarding_required_storage_mode_for_report(report)
-    effective_storage_mode = storage_mode or required_storage_mode or _SOPERATOR_ONBOARDING_DEFAULT_STORAGE_MODE
-    effective_compute_mode = compute_mode or _soperator_onboarding_default_compute_mode_for_report(report)
+    requested_storage_mode = (
+        storage_mode or required_storage_mode or _SOPERATOR_ONBOARDING_DEFAULT_STORAGE_MODE
+    )
+    requested_compute_mode = compute_mode or _soperator_onboarding_default_compute_mode_for_report(report)
+    effective_storage_mode = soperator_onboarding_effective_storage_mode(
+        report,
+        requested_storage_mode,
+    )
+    effective_compute_mode = soperator_onboarding_effective_compute_mode(
+        report,
+        requested_compute_mode,
+    )
     adjusted_report = soperator_onboarding_report_for_modes(
         report,
         storage_mode=effective_storage_mode,
@@ -8070,6 +8401,15 @@ def _soperator_onboarding_target_defaults(
             "report": adjusted_report.to_dict(),
         },
     }
+    selected_action_ids = {
+        action.id for action in adjusted_report.actions if action.selected
+    }
+    if ONBOARDING_ACTION_UPGRADE_EXTERNAL_NODE_TEMPLATE in selected_action_ids:
+        target_row["soperator_onboarding"]["node_template_upgrade"] = {  # type: ignore[index]
+            "target_k8s_version": ONBOARDING_EXTERNAL_NODE_TEMPLATE_TARGET_K8S_VERSION,
+            "target_os": ONBOARDING_EXTERNAL_NODE_TEMPLATE_TARGET_OS,
+            "target_gpu_stack_preset": ONBOARDING_EXTERNAL_NODE_TEMPLATE_TARGET_GPU_STACK_PRESET,
+        }
     context = _non_empty_text(kube_context)
     if context:
         target_row["kube_context"] = context
@@ -8210,6 +8550,7 @@ def _prompt_soperator_onboarding_target_row(
     provider_lookup: ProviderOptionLookup | None = None,
     storage_mode: str | None = None,
     compute_mode: str | None = None,
+    source_version: str | None = None,
 ) -> dict[str, Any]:
     explicit_storage_mode = storage_mode is not None
     explicit_compute_mode = compute_mode is not None
@@ -8254,6 +8595,15 @@ def _prompt_soperator_onboarding_target_row(
             pinned_chart_version=chart_version,
             pinned_app_version=app_version,
         )
+    report = _soperator_onboarding_report_with_source_version(
+        report,
+        snapshot=snapshot,
+        target_ref=target_ref,
+        pinned_chart_version=chart_version,
+        pinned_app_version=app_version,
+        source_version=source_version,
+        interactive=True,
+    )
     _print_soperator_onboarding_report_summary(report)
     required_storage_mode = _soperator_onboarding_required_storage_mode_for_report(report)
     if not explicit_storage_mode:
@@ -8295,6 +8645,7 @@ def _prompt_soperator_onboarding_target_row(
         cluster_id=cluster_id,
         storage_mode=normalized_storage_mode,
         compute_mode=normalized_compute_mode,
+        source_version=getattr(report, "source_version", ""),
         snapshot=snapshot,
         pinned_chart_version=chart_version,
         pinned_app_version=app_version,
@@ -8337,6 +8688,7 @@ def _soperator_onboarding_target_row_from_options(
     kube_context: str | None,
     storage_mode: str | None,
     compute_mode: str | None = None,
+    source_version: str | None = None,
 ) -> dict[str, Any]:
     explicit_storage_mode = storage_mode is not None
     explicit_compute_mode = compute_mode is not None
@@ -8366,6 +8718,15 @@ def _soperator_onboarding_target_row_from_options(
             pinned_chart_version=chart_version,
             pinned_app_version=app_version,
         )
+    report = _soperator_onboarding_report_with_source_version(
+        report,
+        snapshot=snapshot,
+        target_ref=normalized_target,
+        pinned_chart_version=chart_version,
+        pinned_app_version=app_version,
+        source_version=source_version,
+        interactive=False,
+    )
     _print_soperator_onboarding_report_summary(report)
     required_storage_mode = _soperator_onboarding_required_storage_mode_for_report(report)
     if required_storage_mode and not explicit_storage_mode:
@@ -8381,6 +8742,7 @@ def _soperator_onboarding_target_row_from_options(
         kube_context=context,
         storage_mode=normalized_storage_mode,
         compute_mode=normalized_compute_mode,
+        source_version=getattr(report, "source_version", ""),
         snapshot=snapshot,
         pinned_chart_version=chart_version,
         pinned_app_version=app_version,
@@ -8496,6 +8858,25 @@ def _apply_soperator_onboarding_to_payload(
         selected_apps=selected_apps,
         app_entries=app_entries,
     )
+    before_gpu_labels = set(_enabled_app_instance_labels(payload))
+    normalize_mk8s_gpu_project_validation_settings(payload)
+    gpu_app_selection = resolve_mk8s_gpu_app_selection(
+        payload,
+        selected_app_ids=_enabled_ids_from_runtime_payload(payload=payload, entries=app_entries),
+        app_entries=app_entries,
+    )
+    if gpu_app_selection.issues:
+        raise RuntimeError(
+            "Soperator onboarding target GPU remediation is incomplete:\n  - "
+            + "\n  - ".join(gpu_app_selection.issues)
+        )
+    if ensure_mk8s_gpu_app_rows(payload, app_entries=app_entries):
+        normalize_mk8s_gpu_project_validation_settings(payload)
+    gpu_dependency_labels = _new_enabled_app_instance_labels(
+        payload,
+        before_labels=before_gpu_labels,
+        app_ids=gpu_app_selection.auto_enabled_app_ids,
+    )
     _refresh_soperator_onboarding_fingerprints(payload)
     selection_issues = _selection_change_issues(payload)
     if selection_issues:
@@ -8507,7 +8888,7 @@ def _apply_soperator_onboarding_to_payload(
         component_instance_label(component_type_id(row), component_instance_id(row))
         for row in dependency_rows
     )
-    return target_ref, target_added, app_added, dependency_labels
+    return target_ref, target_added, app_added, (*dependency_labels, *gpu_dependency_labels)
 
 
 def _ensure_soperator_onboarding_target(
@@ -25120,11 +25501,11 @@ printf "%s\n" "$out" | grep -Eq "HTTP/[0-9.]+ [0-9]"
     }
 
 
-def _mysterybox_eso_report_path(spec: Mapping[str, Any], *, inventory_dir: Path) -> Path:
+def _mysterybox_eso_report_path(spec: Mapping[str, Any], *, reports_dir: Path) -> Path:
     report_file = str(spec.get("report_file", "") or "").strip()
     if report_file:
-        return inventory_dir / report_file
-    return inventory_dir / "mysterybox-eso-connectivity-report.json"
+        return reports_dir / report_file
+    return reports_dir / "mysterybox-eso-connectivity-report.json"
 
 
 def _mysterybox_eso_write_report(path: Path, payload: Mapping[str, Any]) -> None:
@@ -25323,7 +25704,7 @@ def _mysterybox_eso_logs_check(
 def _run_mysterybox_eso_connectivity_validation(
     spec: Mapping[str, Any],
     *,
-    inventory_dir: Path,
+    reports_dir: Path,
     extra_env: dict[str, str] | None,
     emit: Callable[[str], None] | None = None,
 ) -> Path:
@@ -25408,7 +25789,7 @@ def _run_mysterybox_eso_connectivity_validation(
     )
 
     passed = all(bool(check.get("passed")) for check in checks)
-    report_path = _mysterybox_eso_report_path(spec, inventory_dir=inventory_dir)
+    report_path = _mysterybox_eso_report_path(spec, reports_dir=reports_dir)
     report = {
         "validation": validation_name,
         "kind": MYSTERYBOX_ESO_CONNECTIVITY_VALIDATION_KIND,
@@ -25434,7 +25815,7 @@ def _run_mysterybox_eso_connectivity_validation(
 def run_mysterybox_eso_validations(
     validations: list[dict[str, Any]],
     *,
-    inventory_dir: Path,
+    reports_dir: Path,
     extra_env: dict[str, str] | None,
     emit: Callable[[str], None] | None = None,
 ) -> list[Path]:
@@ -25449,7 +25830,7 @@ def run_mysterybox_eso_validations(
             written_reports.append(
                 _run_mysterybox_eso_connectivity_validation(
                     spec,
-                    inventory_dir=inventory_dir,
+                    reports_dir=reports_dir,
                     extra_env=extra_env,
                     emit=emit,
                 )
@@ -26200,13 +26581,17 @@ _MK8S_GPU_VALIDATION_KINDS = {
 _OBSERVABILITY_VALIDATION_KINDS = {OBSERVABILITY_INGESTION_VALIDATION_KIND}
 _MYSTERYBOX_ESO_VALIDATION_KINDS = {MYSTERYBOX_ESO_CONNECTIVITY_VALIDATION_KIND}
 _DEPLOY_VALIDATION_KINDS = (
-    _MK8S_GPU_VALIDATION_KINDS | _OBSERVABILITY_VALIDATION_KINDS | _MYSTERYBOX_ESO_VALIDATION_KINDS
+    _MK8S_GPU_VALIDATION_KINDS
+    | _OBSERVABILITY_VALIDATION_KINDS
+    | _MYSTERYBOX_ESO_VALIDATION_KINDS
+    | {SOPERATOR_CLUSTER_VALIDATION_KIND}
 )
 
 
 def _deploy_validation_specs(config: Any) -> list[dict[str, Any]]:
     return [
         *mk8s_gpu_validation_specs(config),
+        *soperator_cluster_validation_specs(config),
         *observability_validation_specs(config),
         *mysterybox_eso_validation_specs(config),
     ]
@@ -26215,7 +26600,7 @@ def _deploy_validation_specs(config: Any) -> list[dict[str, Any]]:
 def _run_deploy_validations(
     validations: list[dict[str, Any]],
     *,
-    inventory_dir: Path,
+    reports_dir: Path,
     extra_env: dict[str, str] | None,
     emit: Callable[[str], None] | None = None,
 ) -> list[Path]:
@@ -26230,7 +26615,7 @@ def _run_deploy_validations(
         raise RuntimeError(
             "Generated manifest contains unsupported deploy validation kind(s): "
             + ", ".join(unknown)
-            + f". Rerender with `nebius-cxcli render {inventory_dir.parent.parent / 'config.yaml'}`."
+            + f". Rerender with `nebius-cxcli render {reports_dir.parent.parent / 'config.yaml'}`."
         )
     written: list[Path] = []
     gpu_validations = [
@@ -26248,11 +26633,16 @@ def _run_deploy_validations(
         for item in validations
         if str(item.get("kind", "") or "").strip() in _MYSTERYBOX_ESO_VALIDATION_KINDS
     ]
+    soperator_validations = [
+        item
+        for item in validations
+        if str(item.get("kind", "") or "").strip() == SOPERATOR_CLUSTER_VALIDATION_KIND
+    ]
     if gpu_validations:
         written.extend(
             run_mk8s_gpu_validations(
                 gpu_validations,
-                inventory_dir=inventory_dir,
+                reports_dir=reports_dir,
                 extra_env=extra_env,
                 emit=emit,
             )
@@ -26261,7 +26651,7 @@ def _run_deploy_validations(
         written.extend(
             run_observability_validations(
                 observability_validations,
-                inventory_dir=inventory_dir,
+                reports_dir=reports_dir,
                 extra_env=extra_env,
                 emit=emit,
             )
@@ -26270,7 +26660,16 @@ def _run_deploy_validations(
         written.extend(
             run_mysterybox_eso_validations(
                 mysterybox_eso_validations,
-                inventory_dir=inventory_dir,
+                reports_dir=reports_dir,
+                extra_env=extra_env,
+                emit=emit,
+            )
+        )
+    if soperator_validations:
+        written.extend(
+            run_soperator_cluster_validations(
+                soperator_validations,
+                reports_dir=reports_dir,
                 extra_env=extra_env,
                 emit=emit,
             )
@@ -28383,7 +28782,7 @@ def _deploy_generated_artifacts(
         )
     clear_deploy_validation_artifacts(
         declared_validations,
-        inventory_dir=paths.inventory_dir,
+        reports_dir=paths.reports_dir,
     )
     gitops_bootstrap_commands: list[str] = []
     apply_kwargs: dict[str, Any] = {"initialize": False}
@@ -28538,7 +28937,7 @@ def _deploy_generated_artifacts(
                         try:
                             _run_deploy_validations(
                                 target_validations,
-                                inventory_dir=paths.inventory_dir,
+                                reports_dir=paths.reports_dir,
                                 extra_env=kube_env,
                                 emit=_emit_validation_phase,
                             )
@@ -28589,7 +28988,7 @@ def _deploy_generated_artifacts(
                 try:
                     _run_deploy_validations(
                         deploy_validations,
-                        inventory_dir=paths.inventory_dir,
+                        reports_dir=paths.reports_dir,
                         extra_env=None,
                         emit=_emit_validation_phase,
                     )
@@ -28613,7 +29012,7 @@ def _deploy_generated_artifacts(
     if report_validations and artifacts is not None:
         validation_report = build_deploy_validation_report(
             report_validations,
-            inventory_dir=paths.inventory_dir,
+            reports_dir=paths.reports_dir,
             markdown_path=artifacts.markdown,
         )
     if validation_error is not None:
@@ -28731,7 +29130,7 @@ def _deploy_footer_command_lines(
 def _deploy_footer_path_lines(paths: ProjectPaths, summary: DeployRunSummary) -> list[str]:
     return [
         f"  Generated bundle: {paths.generated_dir}",
-        f"  Deploy report: {paths.inventory_dir / DEPLOY_REPORT_FILENAME}",
+        f"  Deploy report: {paths.reports_dir / DEPLOY_REPORT_FILENAME}",
     ]
 
 
@@ -30585,7 +30984,7 @@ def _scaffold_instance(
 
     (instance_dir / "generated" / "infra").mkdir(parents=True, exist_ok=True)
     (instance_dir / "generated" / "flux").mkdir(parents=True, exist_ok=True)
-    (instance_dir / "generated" / "inventory").mkdir(parents=True, exist_ok=True)
+    (instance_dir / "generated" / "reports").mkdir(parents=True, exist_ok=True)
 
     wrote_config = False
     rendered_config = config_yaml
@@ -30782,7 +31181,7 @@ def _resolve_soperator_onboard_config_target(
         "(non-interactive Soperator production cluster with default GPU nodesets profile); "
         "nebius-cxcli create ./deployments --client-name acme --infra mk8s --app soperator "
         "(guided Soperator production cluster). "
-        "nebius-cxcli soperator onboard ./deployments/tenant/project/config.yaml "
+        "nebius-cxcli ext-soperator onboard ./deployments/tenant/project/config.yaml "
         "(register an existing Nebius MK8s target for Soperator). "
         "Soperator wizard picks soperator_nodesets_profile (nebius-cpu/gpu/mixed-v1), "
         "partition_profile (shape-default | with-debug-long | with-qos-preemption | with-h100-infiniband-debug-long), "
@@ -30841,7 +31240,7 @@ def create_command(
                 "requires a managed MK8s target in the same project; "
                 "app chart dependencies are auto-resolved when chart metadata is available; "
                 "selecting soperator creates a complete production MK8s+SFS+Soperator "
-                "cluster; use `soperator onboard` for existing Nebius MK8s targets)"
+                "cluster; use `ext-soperator onboard` for existing Nebius MK8s targets)"
             ),
         ),
     ] = None,
@@ -31195,7 +31594,7 @@ def create_command(
             soperator_install_mode = _SOPERATOR_INSTALL_MODE_PRODUCTION
             console.print(
                 "[dim]Soperator create materializes the full production MK8s+SFS "
-                "bundle. Use `nebius-cxcli soperator onboard "
+                "bundle. Use `nebius-cxcli ext-soperator onboard "
                 "<config.yaml-or-deployments-root>` for existing Nebius MK8s "
                 "clusters.[/dim]"
             )
@@ -31764,7 +32163,7 @@ def component_list_command(
         "Examples: "
         "nebius-cxcli component add apps:soperator --config ./deployments/tenant/project/config.yaml "
         "(adds the production Soperator bundle and prompts for nodesets/partition/topology "
-        "profiles; use nebius-cxcli soperator onboard "
+        "profiles; use nebius-cxcli ext-soperator onboard "
         "<config.yaml-or-deployments-root> for existing MK8s targets); "
         "nebius-cxcli component add apps:external-secrets@target-mk8s-prod "
         "--config ./deployments/tenant/project/config.yaml --no-interactive "
@@ -31804,7 +32203,7 @@ def component_add_command(
                 "Apps are Helm charts and require an enabled MK8s target in the "
                 "same project. For apps:soperator, the wizard first asks "
                 "for the production worker profile and creates the MK8s+SFS+Soperator "
-                "bundle. Use `nebius-cxcli soperator onboard "
+                "bundle. Use `nebius-cxcli ext-soperator onboard "
                 "<config.yaml-or-deployments-root>` to register an existing Nebius "
                 "MK8s target and map roles onto discovered node groups."
             ),
@@ -32064,7 +32463,7 @@ def component_add_command(
                 console.print(
                     "[dim]Soperator component add materializes the production "
                     "MK8s+SFS+Soperator bundle. Use "
-                    "`nebius-cxcli soperator onboard "
+                    "`nebius-cxcli ext-soperator onboard "
                     "<config.yaml-or-deployments-root>` for existing Nebius MK8s "
                     "clusters.[/dim]"
                 )
@@ -32784,23 +33183,29 @@ def component_add_command(
         _exit_with_error(exc)
 
 
-@soperator_app.command(
+@ext_soperator_app.command(
     "onboard",
     short_help="Register an existing Nebius MK8s target for Soperator.",
     epilog=(
         "Examples: "
-        "nebius-cxcli soperator onboard ./deployments/tenant/project/config.yaml "
+        "nebius-cxcli ext-soperator onboard ./deployments/tenant/project/config.yaml "
         "(update an existing project config); "
-        "nebius-cxcli soperator onboard ./deployments --client-name acme "
+        "nebius-cxcli ext-soperator onboard ./deployments --client-name acme "
         "--tenant-id TENANT --project-id PROJECT --region-id eu-north1 "
         "(create a project config under the deployments root, then choose one existing "
         "Nebius MK8s cluster from the project); "
-        "nebius-cxcli soperator onboard ./deployments/tenant/project/config.yaml "
+        "nebius-cxcli ext-soperator onboard ./deployments/tenant/project/config.yaml "
         "--target external-cluster --kube-context nebius-external-cluster-mk8scluster-... "
-        "--storage-mode keep-existing-storage --compute-mode keep-existing-compute "
+        "--source-version 1.23.3 --storage-mode create-aligned-sfs "
+        "--compute-mode create-aligned-node-groups "
         "--no-interactive. "
         f"The command updates config.yaml and writes {SOURCE_SOPERATOR_DISCOVERY_REPORT_NAME}; "
-        "run validate, render, and deploy afterwards."
+        "next run: nebius-cxcli validate <config.yaml>; nebius-cxcli render "
+        "<config.yaml>. For install/adopt-only targets, run nebius-cxcli deploy "
+        "<config.yaml>. For migration-required targets, do not deploy first; run "
+        "nebius-cxcli ext-soperator migrate <config.yaml> --target <target> --dry-run, "
+        "then nebius-cxcli ext-soperator migrate <config.yaml> --target <target> "
+        "--execute --approve."
     ),
 )
 def soperator_onboard_command(
@@ -32893,6 +33298,16 @@ def soperator_onboard_command(
             ),
         ),
     ] = None,
+    source_version_opt: Annotated[
+        str | None,
+        typer.Option(
+            "--source-version",
+            help=(
+                "Existing Soperator source version to use when discovery finds Soperator CRDs "
+                "but no compatible Helm release version."
+            ),
+        ),
+    ] = None,
     validate_sources: Annotated[
         bool,
         typer.Option(
@@ -32945,6 +33360,7 @@ def soperator_onboard_command(
                     payload=payload,
                     project_id=resolved_project_id,
                     provider_lookup=provider_lookup,
+                    source_version=source_version_opt,
                     compute_mode=compute_mode_opt,
                 )
             else:
@@ -32954,6 +33370,7 @@ def soperator_onboard_command(
                     provider_lookup=provider_lookup,
                     storage_mode=storage_mode_opt,
                     compute_mode=compute_mode_opt,
+                    source_version=source_version_opt,
                 )
         else:
             target_row = _soperator_onboarding_target_row_from_options(
@@ -32961,6 +33378,7 @@ def soperator_onboard_command(
                 kube_context=kube_context_opt,
                 storage_mode=storage_mode_opt,
                 compute_mode=compute_mode_opt,
+                source_version=source_version_opt,
             )
 
         source_report_path = _write_soperator_source_discovery_report_from_target_row(
@@ -32969,6 +33387,10 @@ def soperator_onboard_command(
         )
 
         next_payload = copy.deepcopy(payload)
+        before_enabled_app_ids = _enabled_ids_from_runtime_payload(
+            payload=next_payload,
+            entries=app_entries,
+        )
         target_ref, target_added, app_added, dependency_labels = (
             _apply_soperator_onboarding_to_payload(
                 next_payload,
@@ -32976,6 +33398,15 @@ def soperator_onboard_command(
                 app_entries=app_entries,
             )
         )
+        added_app_ids = (
+            _enabled_ids_from_runtime_payload(payload=next_payload, entries=app_entries)
+            - before_enabled_app_ids
+        )
+        if validate_sources and added_app_ids:
+            _validate_component_sources_or_raise(
+                selected_app_ids=added_app_ids,
+                include_infra=False,
+            )
         _prune_redundant_app_chart_default_values(
             payload=next_payload,
             app_entries=app_entries,
@@ -33007,8 +33438,16 @@ def soperator_onboard_command(
                 "Added Soperator dependency apps: "
                 + ", ".join(_target_aware_added_app_labels(next_payload, dependency_labels))
             )
-        _print_component_edit_config_only_note()
-        _print_component_edit_next_steps(config_path)
+        _print_soperator_onboard_config_only_note()
+        target = soperator_onboarding_target(next_payload, target_ref=target_ref)
+        onboarding = target.get("soperator_onboarding") if isinstance(target, Mapping) else {}
+        if not isinstance(onboarding, Mapping):
+            onboarding = {}
+        _print_soperator_onboard_next_steps(
+            config_path,
+            target_ref=target_ref,
+            migration_required=_soperator_migration_action_flags(onboarding)["migration_required"],
+        )
     except typer.Exit:
         raise
     except (KeyboardInterrupt, EOFError, typer.Abort):
@@ -33024,17 +33463,47 @@ _SOPERATOR_MIGRATION_ACTIONS = frozenset(
         ONBOARDING_ACTION_CREATE_ALIGNED_SFS,
         ONBOARDING_ACTION_PLAN_DATA_MIGRATION,
         ONBOARDING_ACTION_PLAN_COMPUTE_MIGRATION,
+        ONBOARDING_ACTION_REMEDIATE_TARGET_GPU_STACK,
+        ONBOARDING_ACTION_UPGRADE_EXTERNAL_NODE_TEMPLATE,
+        ONBOARDING_ACTION_UPGRADE_SOPERATOR,
     }
 )
+_SOPERATOR_EXTERNAL_NODE_TEMPLATE_PHASE_ID = "external-node-template-upgrade"
+_SOPERATOR_TARGET_GPU_STACK_PHASE_ID = "target-gpu-stack-remediation"
 _SOPERATOR_MIGRATION_EXECUTOR_CONTRACT_LINES = (
     "Live executor contract: --execute rechecks the pre-mutation source "
-    "release and discovery fingerprint, then runs checkpointed SFS, copy, "
-    "compute, cutover, validation, and retirement phases in order.",
+    "release and discovery fingerprint, checks net-new migration quota before "
+    "approved mutations, then runs checkpointed external MK8s control-plane "
+    "upgrade, node-template upgrade, target GPU stack, SFS, copy, compute, "
+    "cutover, validation, and retirement phases in order.",
+    "External node-template contract: onboarded external targets are not "
+    "Terraform-owned, so --execute uses direct Nebius updates for Kubernetes "
+    "version, node OS image, and Nebius GPU driver preset. Control plane is "
+    "upgraded first; node groups are then updated one group at a time with "
+    "temporary zero-surge strategy (max_surge=0, max_unavailable=1, "
+    "drain_timeout=30m) and original strategy restore.",
+    "Worker node-template quota contract: preserved worker node groups stay in "
+    "place and do not require extra worker quota; active group capacity may be "
+    "reduced by one node during rollout.",
+    "Status contract: approved --execute prints phase-aware Soperator "
+    "migration status; target remediation phases report MK8s health, storage "
+    "phases report SFS/PVC progress and continuity, while compute and cutover "
+    "phases report MK8s, Slurm, and Soperator health.",
+    "Validation contract: validation-and-rollback-hold runs the target-scoped "
+    "deploy.targets[].validations.mk8s_gpu.* checks from config.yaml, including "
+    "operator readiness, GPU Visibility, and NCCL when enabled; it also runs "
+    "the required Soperator/Slurm smoke validation, including SlurmCluster "
+    "availability, Slurm CLI access, and a one-task srun job. Validation JSON "
+    "details are written under generated/reports/, MK8s GPU checks refresh "
+    "deploy-report.md, and migrate writes migrate-report.md with phase, "
+    "validation, and event summaries.",
     "Failure handling contract: mutating phases watch Nebius, Kubernetes, "
     "Soperator, and Slurm signals; complete only when prerequisites are absent "
-    "or satisfied; and checkpoint before manual-review gates.",
+    "or satisfied; and checkpoint pending gates before approval or retirement.",
     "Resume contract: timeout-guarded checkpoints let interrupted migrations "
-    "resume without rerunning completed phases or retiring old resources early.",
+    "resume without rerunning completed data-copy or retirement phases, while "
+    "--execute still rechecks completed selected remediation/upgrade/cutover "
+    "actions against live state and retries them if they drift.",
 )
 
 
@@ -33058,7 +33527,7 @@ def _resolve_soperator_migration_target_ref(
     if not refs:
         raise RuntimeError(
             "No onboarded Soperator target was found. Run "
-            "`nebius-cxcli soperator onboard <config.yaml-or-deployments-root>` first."
+            "`nebius-cxcli ext-soperator onboard <config.yaml-or-deployments-root>` first."
         )
     raise RuntimeError(
         "Multiple onboarded Soperator targets were found. Pass --target with one of: "
@@ -33075,7 +33544,7 @@ def _load_soperator_source_discovery_report(
     if not report_path.exists():
         raise RuntimeError(
             f"Soperator source discovery report not found: {report_path}. Rerun "
-            "`nebius-cxcli soperator onboard <config.yaml-or-deployments-root>` for this "
+            "`nebius-cxcli ext-soperator onboard <config.yaml-or-deployments-root>` for this "
             "target before planning migration."
         )
     try:
@@ -33088,7 +33557,7 @@ def _load_soperator_source_discovery_report(
     if report_target_ref != target_ref:
         raise RuntimeError(
             f"Soperator source discovery report belongs to target '{report_target_ref or '<missing>'}', "
-            f"not '{target_ref}'. Rerun `nebius-cxcli soperator onboard` for the selected "
+            f"not '{target_ref}'. Rerun `nebius-cxcli ext-soperator onboard` for the selected "
             "target so migration uses matching source-cluster evidence."
         )
     report = payload.get("report")
@@ -33115,7 +33584,117 @@ def _soperator_migration_action_flags(onboarding: Mapping[str, Any]) -> dict[str
             }
         ),
         "compute_migration_required": ONBOARDING_ACTION_PLAN_COMPUTE_MIGRATION in actions,
+        "soperator_upgrade_required": ONBOARDING_ACTION_UPGRADE_SOPERATOR in actions,
+        "target_gpu_remediation_required": ONBOARDING_ACTION_REMEDIATE_TARGET_GPU_STACK in actions,
+        "external_node_template_upgrade_required": (
+            ONBOARDING_ACTION_UPGRADE_EXTERNAL_NODE_TEMPLATE in actions
+        ),
     }
+
+
+def _soperator_migration_output_phases(
+    *,
+    phases: Any,
+    onboarding: Mapping[str, Any],
+) -> list[Mapping[str, Any]]:
+    flags = _soperator_migration_action_flags(onboarding)
+    output_phases = (
+        [phase for phase in phases if isinstance(phase, Mapping)]
+        if isinstance(phases, list)
+        else []
+    )
+    if not output_phases and (
+        flags["external_node_template_upgrade_required"]
+        or flags["target_gpu_remediation_required"]
+        or flags["soperator_upgrade_required"]
+    ):
+        output_phases = [
+            {
+                "id": "discovery-and-plan",
+                "title": "Discovery and migration plan generation",
+                "status": "complete",
+            },
+            {
+                "id": "customer-approval",
+                "title": "Customer approval of migration-owned remediation",
+                "status": "planned",
+                "requires_customer_approval": True,
+            },
+        ]
+    if (
+        output_phases
+        and flags["external_node_template_upgrade_required"]
+        and not any(
+            str(phase.get("id", "") or "").strip() == _SOPERATOR_EXTERNAL_NODE_TEMPLATE_PHASE_ID
+            for phase in output_phases
+        )
+    ):
+        external_node_template_phase = {
+            "id": _SOPERATOR_EXTERNAL_NODE_TEMPLATE_PHASE_ID,
+            "title": "Upgrade external MK8s control plane and node templates",
+            "status": "planned",
+            "requires_customer_approval": True,
+        }
+        insert_at = 1
+        for index, phase in enumerate(output_phases):
+            if str(phase.get("id", "") or "").strip() == "customer-approval":
+                insert_at = index + 1
+                break
+        output_phases.insert(insert_at, external_node_template_phase)
+    if (
+        output_phases
+        and flags["target_gpu_remediation_required"]
+        and not any(
+            str(phase.get("id", "") or "").strip() == _SOPERATOR_TARGET_GPU_STACK_PHASE_ID
+            for phase in output_phases
+        )
+    ):
+        target_gpu_phase = {
+            "id": _SOPERATOR_TARGET_GPU_STACK_PHASE_ID,
+            "title": "Remediate target MK8s GPU operator stack",
+            "status": "planned",
+            "requires_customer_approval": True,
+        }
+        insert_at = 1
+        for index, phase in enumerate(output_phases):
+            if str(phase.get("id", "") or "").strip() == "customer-approval":
+                insert_at = index + 1
+                break
+        for index, phase in enumerate(output_phases):
+            if str(phase.get("id", "") or "").strip() == _SOPERATOR_EXTERNAL_NODE_TEMPLATE_PHASE_ID:
+                insert_at = max(insert_at, index + 1)
+                break
+        output_phases.insert(insert_at, target_gpu_phase)
+    if (
+        output_phases
+        and flags["soperator_upgrade_required"]
+        and not any(
+            str(phase.get("id", "") or "").strip() == "rolling-compute-migration"
+            for phase in output_phases
+        )
+    ):
+        soperator_upgrade_phase = {
+            "id": "rolling-compute-migration",
+            "title": "Soperator chart upgrade with existing compute layout",
+            "status": "planned",
+        }
+        insert_at = len(output_phases)
+        for predecessor in (
+            "online-bulk-data-sync",
+            "create-aligned-sfs",
+            _SOPERATOR_TARGET_GPU_STACK_PHASE_ID,
+            _SOPERATOR_EXTERNAL_NODE_TEMPLATE_PHASE_ID,
+            "customer-approval",
+        ):
+            for index, phase in enumerate(output_phases):
+                if str(phase.get("id", "") or "").strip() == predecessor:
+                    insert_at = index + 1
+                    break
+            else:
+                continue
+            break
+        output_phases.insert(insert_at, soperator_upgrade_phase)
+    return output_phases
 
 
 def _format_soperator_migration_plan_lines(
@@ -33134,9 +33713,10 @@ def _format_soperator_migration_plan_lines(
     if not isinstance(report, Mapping):
         report = {}
     flags = _soperator_migration_action_flags(onboarding)
-    phases = report.get("migration_plan")
-    if not isinstance(phases, list):
-        phases = []
+    phases = _soperator_migration_output_phases(
+        phases=report.get("migration_plan"),
+        onboarding=onboarding,
+    )
     report_path = config_path.parent / SOURCE_SOPERATOR_DISCOVERY_REPORT_NAME
     lines = [
         f"Soperator migration target: {target_ref}",
@@ -33154,6 +33734,12 @@ def _format_soperator_migration_plan_lines(
         + ("yes" if flags["storage_migration_required"] else "no"),
         "Compute migration required: "
         + ("yes" if flags["compute_migration_required"] else "no"),
+        "Soperator upgrade required: "
+        + ("yes" if flags["soperator_upgrade_required"] else "no"),
+        "External node-template upgrade required: "
+        + ("yes" if flags["external_node_template_upgrade_required"] else "no"),
+        "Target GPU stack remediation required: "
+        + ("yes" if flags["target_gpu_remediation_required"] else "no"),
     ]
     if phases:
         lines.append("Migration phases:")
@@ -33182,21 +33768,79 @@ def _format_soperator_migration_plan_lines(
     return lines
 
 
-@soperator_app.command(
+@contextmanager
+def _soperator_migration_execute_payload(
+    payload: Mapping[str, Any],
+    *,
+    target_ref: str,
+) -> Iterator[Mapping[str, Any]]:
+    target = soperator_onboarding_target(payload, target_ref=target_ref)
+    if not isinstance(target, Mapping):
+        yield payload
+        return
+    if _non_empty_text(target.get("kube_context")):
+        yield payload
+        return
+    cluster_id = _non_empty_text(target.get("cluster_id"))
+    if not cluster_id:
+        yield payload
+        return
+
+    client_name, _tenant_id, project_id, _region_id, _email = _identity_values_from_payload(payload)
+    if not _runtime_auth_env_available():
+        _runtime_auth_cache_load(project_id=project_id, client_name=client_name)
+    spec = _mk8s_cluster_handoff_spec_for_identity(
+        project_id=project_id,
+        client_name=client_name,
+        cluster_id=cluster_id,
+        access=_non_empty_text(target.get("access")) or "external",
+    )
+    with ExitStack() as stack:
+        kube_root = Path(stack.enter_context(tempfile.TemporaryDirectory(prefix="nebius-cxcli-kube-")))
+        kubeconfig_path = kube_root / "config"
+        _write_kubeconfig_file(kubeconfig_path, spec)
+        execution_payload = copy.deepcopy(payload)
+        deploy = execution_payload.get("deploy") if isinstance(execution_payload, Mapping) else None
+        targets = deploy.get("targets") if isinstance(deploy, Mapping) else None
+        if isinstance(targets, list):
+            normalized_target = normalize_component_token(target_ref)
+            for row in targets:
+                if not isinstance(row, dict):
+                    continue
+                if normalize_component_token(row.get("instance_id")) == normalized_target:
+                    row["kube_context"] = spec.context_name
+                    break
+        with _temporary_env({"KUBECONFIG": str(kubeconfig_path)}):
+            yield execution_payload
+
+
+@ext_soperator_app.command(
     "migrate",
-    short_help="Plan Soperator compute/storage migration from onboarding discovery.",
+    short_help="Plan Soperator target remediation and migration from onboarding discovery.",
     epilog=(
-        "Example: nebius-cxcli soperator migrate ./deployments/tenant/project/config.yaml "
-        "--target external-cluster --dry-run. For approved live migration, use "
-        "--execute --approve --worker-node-groups gpu-worker-0,gpu-worker-1. The command reads "
+        "Examples: nebius-cxcli ext-soperator migrate "
+        "./deployments/tenant/project/config.yaml --target external-cluster --dry-run; "
+        "nebius-cxcli ext-soperator migrate ./deployments/tenant/project/config.yaml "
+        "--target external-cluster --execute --approve. The command reads "
         f"{SOURCE_SOPERATOR_DISCOVERY_REPORT_NAME}, validates the accepted onboarding "
-        "analysis, and prints the compute/storage migration plan. --execute verifies "
-        "the source release and discovery fingerprint before mutation, checkpoints the live run, "
-        "records explicit approval when --approve is passed, validates worker node "
-        "group input for compute migration, creates or reuses aligned SFS filesystems, "
-        "attaches them to discovered Nebius node groups, runs data-copy jobs when "
-        "old and target PVC pairs exist, validates Soperator reconciliation, and "
-        "checkpoints manual gates instead of retiring old resources early."
+        "analysis, and prints the target remediation and compute/storage migration plan. "
+        "--execute verifies the source release and discovery fingerprint before mutation, "
+        "checkpoints the live run, "
+        "records explicit approval when --approve is passed, auto-detects source worker "
+        "node groups from live Nebius node-group names and Slurm worker labels, checks "
+        "net-new aligned SFS and net-new service-role node-group quota before approved "
+        "mutations, upgrades the external MK8s control plane first, then updates "
+        "source node groups one group at a time with zero-surge node-group "
+        "updates (max_surge=0, max_unavailable=1, drain_timeout=30m) and "
+        "restores the original strategy, applies target GPU stack app rows when "
+        "selected, creates or reuses aligned SFS filesystems, attaches them to "
+        "discovered Nebius node groups, runs data-copy jobs when old and target PVC "
+        "pairs exist, prints phase-aware Soperator migration status while approved "
+        "phases run, validates Soperator reconciliation, runs configured "
+        "deploy.targets[].validations.mk8s_gpu.* checks, runs the required "
+        "Soperator/Slurm smoke validation with a one-task srun job, refreshes "
+        "deploy-report.md for MK8s GPU checks, writes migrate-report.md, and "
+        "checkpoints pending gates instead of retiring old resources early."
     ),
 )
 def soperator_migrate_command(
@@ -33222,7 +33866,8 @@ def soperator_migrate_command(
             help=(
                 "Print the migration plan without live changes, or request live execution. "
                 "--execute performs the checkpointed live preflight, records approval "
-                "when --approve is passed, and advances supported storage, copy, "
+                "when --approve is passed, and advances supported external MK8s "
+                "control-plane/node-template, target GPU stack, storage, copy, "
                 "compute, cutover, validation, and retirement phases with guarded "
                 "resume checkpoints."
             ),
@@ -33238,19 +33883,8 @@ def soperator_migrate_command(
             ),
         ),
     ] = False,
-    worker_node_groups: Annotated[
-        str | None,
-        typer.Option(
-            "--worker-node-groups",
-            help=(
-                "Comma-separated existing source node-group names that should remain worker "
-                "NodeSets during approved compute migration, for example "
-                "gpu-worker-0,gpu-worker-1."
-            ),
-        ),
-    ] = None,
 ) -> None:
-    """Plan Soperator compute/storage migration from onboarding discovery."""
+    """Plan Soperator target remediation and migration from onboarding discovery."""
     try:
         payload = _load_source_payload(config_path)
         target_ref = _resolve_soperator_migration_target_ref(
@@ -33271,15 +33905,16 @@ def soperator_migrate_command(
         ):
             console.print(line, soft_wrap=True)
         if not dry_run:
-            execution_result = execute_soperator_migration(
-                config_path=config_path,
-                target_ref=target_ref,
-                payload=payload,
-                source_report=source_report,
-                snapshot_collector=collect_kubectl_soperator_snapshot,
-                approved=approve,
-                worker_node_groups=(worker_node_groups,) if worker_node_groups else (),
-            )
+            with _soperator_migration_execute_payload(payload, target_ref=target_ref) as execution_payload:
+                execution_result = execute_soperator_migration(
+                    config_path=config_path,
+                    target_ref=target_ref,
+                    payload=execution_payload,
+                    source_report=source_report,
+                    snapshot_collector=collect_kubectl_soperator_snapshot,
+                    approved=approve,
+                    status_callback=lambda message: console.print(escape(message), soft_wrap=True),
+                )
             for line in execution_result.lines:
                 console.print(line, soft_wrap=True)
     except typer.Exit:
@@ -34663,7 +35298,7 @@ _DEPLOY_REPORT_CLUSTER_CONTEXT_RE = re.compile(r"^  - Kube context: `(?P<context
 
 
 def _deploy_report_target_contexts(paths: ProjectPaths) -> dict[str, dict[str, str]]:
-    report_path = paths.inventory_dir / DEPLOY_REPORT_FILENAME
+    report_path = paths.reports_dir / DEPLOY_REPORT_FILENAME
     if not report_path.exists():
         return {}
     try:
@@ -35957,7 +36592,7 @@ def render_command(
         try:
             staged_paths.infra_dir.mkdir(parents=True, exist_ok=True)
             staged_paths.flux_dir.mkdir(parents=True, exist_ok=True)
-            staged_paths.inventory_dir.mkdir(parents=True, exist_ok=True)
+            staged_paths.reports_dir.mkdir(parents=True, exist_ok=True)
             written: list[Path] = []
             written.extend(
                 render_terraform_artifacts(
@@ -36190,12 +36825,13 @@ def deploy_command(
     you want a one-run override for optional checks without changing the
     persisted project config. Required platform validations, including native
     ESO MysteryBox connectivity when that sync path is configured, still run.
-    Deploy-time validations include configured MK8s GPU checks, the generated
+    Deploy-time validations include configured MK8s GPU checks, required
+    Soperator/Slurm smoke checks for enabled Soperator targets, the generated
     Observability Agent ingestion guardrail for observability-enabled MK8s
     targets, and required ESO MysteryBox connectivity checks for native
     MysteryBox sync targets. When deploy-time validations are configured, deploy
-    keeps the machine-readable JSON detail files under `generated/inventory/`
-    and refreshes the combined `generated/inventory/deploy-report.md`. The final
+    keeps the machine-readable JSON detail files under `generated/reports/`
+    and refreshes the combined `generated/reports/deploy-report.md`. The final
     terminal footer groups validation PASS/FAIL by target, copy-paste commands,
     and important generated paths limited to the generated bundle plus deploy report.
     """
@@ -36368,7 +37004,7 @@ def terraform_apply_command(
     try:
         config, paths, manifest = _load_generated_infra_context(generated_path)
         _ensure_terraform_backend_ready(config, auto_auth_bootstrap=auto_auth_bootstrap)
-        paths.inventory_dir.mkdir(parents=True, exist_ok=True)
+        paths.reports_dir.mkdir(parents=True, exist_ok=True)
         write_inventory(config, paths, validations=_manifest_deploy_validations(manifest))
         runtime_env = _terraform_runtime_env(config)
         mysterybox_payload_env = _collect_mysterybox_runtime_payload_values(
@@ -36669,7 +37305,7 @@ def flux_bootstrap_command(
                 need_terraform=False,
                 auto_bootstrap=auto_auth_bootstrap,
             )
-        paths.inventory_dir.mkdir(parents=True, exist_ok=True)
+        paths.reports_dir.mkdir(parents=True, exist_ok=True)
         write_inventory(config, paths, validations=_manifest_deploy_validations(manifest))
         manifest_targets = _manifest_deploy_targets(manifest)
         if manifest_targets:
@@ -36814,7 +37450,7 @@ def flux_apply_command(
             raise RuntimeError("No enabled apps charts are configured for this project.")
         if _manifest_requires_flux_terraform_state(manifest):
             _ensure_terraform_backend_ready(config, auto_auth_bootstrap=auto_auth_bootstrap)
-        paths.inventory_dir.mkdir(parents=True, exist_ok=True)
+        paths.reports_dir.mkdir(parents=True, exist_ok=True)
         write_inventory(config, paths, validations=_manifest_deploy_validations(manifest))
         manifest_targets = _manifest_deploy_targets(manifest)
         grafana_statuses: list[dict[str, Any]] = []

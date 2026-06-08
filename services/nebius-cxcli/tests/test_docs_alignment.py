@@ -201,12 +201,24 @@ def test_readme_upgrade_section_is_visible_and_consolidated() -> None:
     changelog = (REPO_ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
     toc = _section(readme, "## Table of Contents", "## Quick Start Guide")
     quick_start = _section(readme, "## Quick Start Guide", "## Core Concepts")
+    soperator = _section(readme, "## Soperator Commands", "## Upgrade")
+    soperator_flat = _squash(soperator)
     upgrade = _section(readme, "## Upgrade", "## Releases")
     upgrade_flat = _squash(upgrade)
     supporting = _section(readme, "### Supporting Commands", "## Auth Workflow")
     unreleased = changelog.split("## [Unreleased]", maxsplit=1)[1].split("\n## [", maxsplit=1)[0]
     unreleased_flat = _squash(unreleased)
 
+    assert "- [Soperator Commands](#soperator-commands)" in toc
+    assert "  - [Soperator Command Map](#soperator-command-map)" in toc
+    assert "  - [Managed Soperator Clusters](#managed-soperator-clusters)" in toc
+    assert "  - [External Soperator Onboarding](#external-soperator-onboarding)" in toc
+    assert "  - [External Soperator Migration](#external-soperator-migration)" in toc
+    assert (
+        "  - [Managed Upgrade vs External Onboard and Migrate](#managed-upgrade-vs-external-onboard-and-migrate)"
+        in toc
+    )
+    assert "  - [Soperator Rules and Safety Checks](#soperator-rules-and-safety-checks)" in toc
     assert "- [Upgrade](#upgrade)" in toc
     assert "  - [Upgrade Principles](#upgrade-principles)" in toc
     assert "  - [Kubernetes Version Upgrade](#kubernetes-version-upgrade)" in toc
@@ -215,6 +227,32 @@ def test_readme_upgrade_section_is_visible_and_consolidated() -> None:
     assert "  - [Disruption Policies](#disruption-policies)" in toc
     assert "  - [Upgrade Examples](#upgrade-examples)" in toc
     assert "  - [Node-Layer And Helm Upgrades](#node-layer-and-helm-upgrades)" in toc
+
+    assert "### Soperator Command Map" in soperator
+    assert "### Managed Soperator Clusters" in soperator
+    assert "### External Soperator Onboarding" in soperator
+    assert "### External Soperator Migration" in soperator
+    assert "### Managed Upgrade vs External Onboard and Migrate" in soperator
+    assert "### Soperator Rules and Safety Checks" in soperator
+    assert "`nebius-cxcli ext-soperator onboard <config.yaml-or-deployments-root>`" in soperator
+    assert "`nebius-cxcli ext-soperator migrate <config.yaml> --target <target> --dry-run`" in soperator
+    assert (
+        "`nebius-cxcli ext-soperator migrate <config.yaml> --target <target> --execute --approve`"
+        in soperator
+    )
+    assert (
+        "`nebius-cxcli upgrade helm-chart <config.yaml> apps:soperator@<target> --to-version <chart-version>`"
+        in soperator
+    )
+    assert "External onboarding is not a Terraform import." in soperator
+    assert "Use `upgrade helm-chart` when cxcli already manages the Soperator app row" in (
+        soperator
+    )
+    assert "Use `ext-soperator onboard` plus `ext-soperator migrate` when the source cluster is not" in (
+        soperator
+    )
+    assert "Onboarded external MK8s clusters are not Terraform-managed" in soperator
+    assert "best-effort high availability" in soperator_flat
 
     assert "### Upgrade Principles" in upgrade
     assert "### Kubernetes Version Upgrade" in upgrade
@@ -590,35 +628,71 @@ def test_docs_define_component_selector_contract() -> None:
     assert "`apps:soperator`" in readme
     assert "`install_mode`" in readme
     assert "`production-cluster` creates the complete MK8s+SFS+Soperator" in readme_flat
-    assert "`nebius-cxcli soperator onboard <config.yaml-or-deployments-root>`" in readme
-    assert "pass a deployments root when onboarding should create" in readme_flat
-    assert "writes `onboard-existing-cluster` for an external Nebius MK8s target" in readme_flat
+    assert "`nebius-cxcli ext-soperator onboard <config.yaml-or-deployments-root>`" in readme
+    assert (
+        "a deployments root. In that case pass or answer `--client-name`, `--tenant-id`, `--project-id`, and `--region-id`"
+        in readme_flat
+    )
+    assert (
+        "`onboard-existing-cluster` is written by `nebius-cxcli ext-soperator onboard <config.yaml-or-deployments-root>` for an external Nebius MK8s target"
+        in readme_flat
+    )
     assert "lists existing Nebius MK8s clusters in the selected project" in readme_flat
     assert "onboards one cluster per run" in readme_flat
-    assert "records its Nebius `cluster_id` as the durable access handle" in readme_flat
+    assert "records the selected Nebius `cluster_id` as the durable access handle" in readme_flat
     assert "does not accept arbitrary vanilla Kubernetes clusters in the interactive flow" in readme_flat
-    assert "Onboarding is deliberately not a Terraform import or takeover" in readme_flat
-    assert "mainly for Soperator install and future upgrade workflows" in readme_flat
-    assert "`nebius-cxcli soperator migrate <config.yaml> --target <target> --dry-run`" in readme
-    assert "`soperator onboard` is read-only against the existing cluster" in readme_flat
+    assert "External onboarding is not a Terraform import" in readme_flat
+    assert "remain outside Terraform ownership" in readme_flat
+    assert "If the accepted onboarding report says no migration work is required" in readme_flat
+    assert "the rendered install/adopt-only target" in readme_flat
+    assert "do not run `deploy` before migration" in readme_flat
+    assert "`ext-soperator migrate --execute` must first verify the live source release" in readme_flat
+    assert "remediate-target-gpu-stack" in readme_flat
+    assert "target GPU stack remediation" in readme_flat
+    assert "target-gpu-stack-remediation" in readme_flat
+    assert "`nebius-cxcli ext-soperator migrate <config.yaml> --target <target> --dry-run`" in readme
+    assert "`ext-soperator onboard` is read-only against the existing cluster" in readme_flat
     assert "runs the supported phases in order" in readme_flat
     assert "Onboarding asks for two independent layers" in readme_flat
     assert "compute mode is `keep-existing-compute` or `create-aligned-node-groups`" in readme_flat
     assert "Keeping existing compute preserves the discovered node groups" in readme_flat
     assert "source release and full discovery fingerprint" in readme_flat
+    assert "choose a source version from the committed migration profiles" in readme_flat
+    assert "--source-version <source-version>" in readme
     assert "local `.nebius-cxcli/soperator-migrations/` timeout-guarded checkpoint" in readme_flat
-    assert "`--approve --worker-node-groups <group>[,<group>...]`" in readme
-    assert "records customer approval and the existing source node groups" in readme_flat
+    assert "`--approve` records customer approval" in readme_flat
+    assert "auto-detects source worker node groups" in readme_flat
+    assert "`slurm.nebius.ai/nodeset` worker labels" in readme_flat
+    assert "net-new migration quota preflight before any SFS or node-group mutation" in readme_flat
+    assert "target service-role node groups that do not already exist" in readme_flat
+    assert "Existing worker node groups are preserved in place" in readme_flat
+    assert "not counted as a parallel or surge worker-capacity request" in readme_flat
+    assert "The selected `deploy.targets[].soperator_onboarding.actions` list is the desired migration contract" in readme_flat
+    assert "Reruns are action-idempotent rather than checkpoint-only" in readme_flat
+    assert "rechecks the corresponding live state" in readme_flat
+    assert "does not create parallel worker groups or require 2x worker quota" in readme_flat
+    assert "Soperator migration owns external Kubernetes minor, node OS image, and Nebius-image GPU-stack upgrades selected by onboarding" in readme_flat
+    assert "`mk8s cluster update` and `mk8s node-group update` calls" in readme_flat
+    assert "external node-template and target GPU stack remediation as their own required actions" in readme_flat
+    assert "without parallel or surge worker quota" in readme_flat
+    assert "cxcli fails fast rather than assuming a vanilla cluster is safe to adopt" in readme_flat
     assert "ignored by cxcli-managed deployments `.gitignore` files" in readme_flat
     assert "creates or reuses aligned jail, controller-spool, and accounting SFS" in readme_flat
+    assert "Quota must cover this spare target storage while source storage remains mounted" in readme_flat
     assert "runs Kubernetes data-copy Jobs when old and target PVC pairs exist" in readme_flat
-    assert "phases complete only when their live prerequisites are absent or satisfied" in readme_flat
+    assert "required Soperator/Slurm smoke validation" in readme_flat
+    assert "one short synchronous `srun` job" in readme_flat
+    assert "prefers an idle non-GPU partition when one exists" in readme_flat
+    assert "Slurm nodes reported as `inval` remain an unhealthy validation gate" in readme_flat
+    assert "same catalog-owned post-render patches that Flux would apply" in readme_flat
+    assert "`generated/reports/migrate-report.md`" in readme
+    assert "Phases complete only when their live prerequisites are absent or satisfied" in readme_flat
     assert "Non-interactive `component add apps:soperator@<target>`" in readme
     assert "canonical initial onboarding command" in readme_flat
     assert "does not create Terraform-managed MK8s/SFS rows" in readme_flat
     assert "`values.nodeGroupMapping.*`" in readme
     assert "worker` on GPU node groups" in readme_flat
-    assert "`nebius-cxcli soperator onboard <config.yaml-or-deployments-root>`" in design
+    assert "`nebius-cxcli ext-soperator onboard <config.yaml-or-deployments-root>`" in design
     assert "first-time onboarding can pass the deployments root" in design_flat
     assert "`onboard-existing-cluster` for an external Nebius MK8s target" in design_flat
     assert "lists existing Nebius MK8s clusters in the selected project" in design_flat
@@ -631,22 +705,51 @@ def test_docs_define_component_selector_contract() -> None:
     assert "Keeping existing compute preserves discovered node groups" in design_flat
     assert "This is primarily a day-2 Soperator management and upgrade path" in design_flat
     assert "not a Terraform-managed MK8s row" in design_flat
-    assert "`nebius-cxcli soperator migrate <config.yaml> --target <target> --dry-run`" in design
+    assert "If the accepted report says no migration work is required" in design_flat
+    assert "If the accepted onboarding report says migration work is required" in design_flat
+    assert "skip normal deploy and continue with" in design_flat
+    assert "`nebius-cxcli ext-soperator migrate <config.yaml> --target <target> --dry-run`" in design
     assert "`--execute` validates the accepted onboarding analysis" in design_flat
     assert "rechecks the live source release and full discovery fingerprint before the first mutation" in design_flat
+    assert "target GPU stack remediation phase" in design_flat
+    assert "advances supported external MK8s control-plane/node-template, target GPU stack remediation phase, storage, copy, compute" in design_flat
+    assert "no compatible Helm release version is detected" in design_flat
+    assert "`soperator_migration_profiles.yaml`" in design
     assert "local `.nebius-cxcli/soperator-migrations/` timeout-guarded checkpoint" in design_flat
-    assert "`--approve --worker-node-groups <group>[,<group>...]`" in design
-    assert "records customer approval and the existing source node groups" in design_flat
+    assert "`--approve` records customer approval" in design_flat
+    assert "auto-detects source worker node groups" in design_flat
+    assert "`slurm.nebius.ai/nodeset` worker labels" in design_flat
+    assert "runs a strict net-new quota preflight before the first mutation" in design_flat
+    assert "target service-role node groups that do not already exist" in design_flat
+    assert "Existing worker node groups are preserved in place" in design_flat
+    assert "Reruns are action-idempotent" in design_flat
+    assert "`deploy.targets[].soperator_onboarding.actions` list defines the desired work" in design_flat
+    assert "rechecks completed action phases against live state before skipping them" in design_flat
+    assert "migration-owned external node-group template changes, including Kubernetes version, node OS image, Nebius-image GPU stack, and aligned SFS filesystem attachments" in design_flat
+    assert "does not create parallel worker node groups" in design_flat
+    assert "direct Nebius node-group updates with a temporary zero-surge strategy" in design_flat
+    assert "does not create parallel or surge worker capacity" in design_flat
+    assert "the MK8s control plane first, then updates node groups one group at a time" in design_flat
+    assert "phase end, and pending gates" in design_flat
     assert "ignored by cxcli-managed deployments `.gitignore` files" in design_flat
     assert "creates or reuses aligned jail, controller-spool, and accounting SFS" in design_flat
     assert "runs Kubernetes data-copy Jobs when old and target PVC pairs exist" in design_flat
+    assert "required Soperator/Slurm smoke validation" in design_flat
+    assert "one-task `srun` job" in design_flat
+    assert "prefers an idle non-GPU partition when one exists" in design_flat
+    assert "Slurm nodes reported as `inval` remain an unhealthy validation gate" in design_flat
+    assert "same catalog-owned post-render patches that Flux would apply" in design_flat
+    assert "`generated/reports/migrate-report.md`" in design
     assert "resume relies on phase checkpoints" in design_flat
+    assert "phase-aware rather than a generic spinner" in design_flat
+    assert "Storage phases show aligned SFS/PVC copy progress" in readme_flat
+    assert "Compute and cutover phases show MK8s node readiness" in readme_flat
     assert "timeout-guarded checkpoints" in design_flat
     assert "remains blocked until the explicit migration executor is implemented" not in design_flat
     assert "component add apps:soperator@<target>" in design_flat
     assert "compatibility path" in design_flat
     assert "`production-cluster` materializes the complete MK8s+SFS+Soperator" in design
-    assert "soperator onboard <config.yaml-or-deployments-root>` resolves the selected" in design_flat
+    assert "ext-soperator onboard <config.yaml-or-deployments-root>` resolves the selected" in design_flat
     assert "`values.nodeGroupMapping` from discovered inventory and the selected profile" in design
     assert "day-2 app edits and Soperator Helm chart version edits do not invalidate" in design_flat
     assert "Soperator migration profiles are the compatibility source of truth" in design
@@ -657,6 +760,12 @@ def test_docs_define_component_selector_contract() -> None:
     )
     assert "per-component chart archive, CRD, rendered-template source" in design_flat
     assert "per-component chart tarball, CRD, template, image" in readme_flat
+    assert "Profile groups also declare the generation-level node label layout" in design_flat
+    assert "Profile groups also record the node-role label layout" in readme_flat
+    assert "creates or reuses service-role groups for `system`, `controller`" in readme_flat
+    assert "accepts either label key for source-era scheduling" in readme_flat
+    assert "normalizes current Nodes toward `slurm.nebius.ai/nodeset-name`" in readme_flat
+    assert "Worker roles continue to map to the preserved detected worker node groups" in design_flat
     assert "SlurmCluster`, `NodeSet`, `NodeConfigurator`" in design
     assert "In GPU profile-backed MK8s flows" in design
     assert "CPU-only Soperator profiles skip and prune the inactive GPU helper scope" in design

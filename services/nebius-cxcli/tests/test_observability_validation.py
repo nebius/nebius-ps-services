@@ -141,7 +141,7 @@ def test_run_observability_validation_writes_pass_report(
 
     reports = run_observability_validations(
         [spec],
-        inventory_dir=tmp_path,
+        reports_dir=tmp_path,
         extra_env={"KUBECONFIG": "/tmp/kubeconfig"},
     )
 
@@ -254,7 +254,7 @@ def test_run_observability_validation_treats_unknown_otlp_endpoint_readiness_as_
     )
 
     with pytest.raises(RuntimeError, match="No ready OTLP/gRPC endpoint found"):
-        run_observability_validations([spec], inventory_dir=tmp_path, extra_env={})
+        run_observability_validations([spec], reports_dir=tmp_path, extra_env={})
 
     reports = [tmp_path / "observability-ingestion-report-cluster1.json"]
     payload = json.loads(reports[0].read_text(encoding="utf-8"))

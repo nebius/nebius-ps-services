@@ -11,6 +11,21 @@ profile_groups:
     compatibility_axes:
       compute_layout: replace-and-roll
       storage_layout: create-aligned-sfs-and-migrate
+      node_label_layout:
+        source_role_label_keys:
+        - slurm.nebius.ai/nodeset
+        - slurm.nebius.ai/nodeset-name
+        target_role_label_key: slurm.nebius.ai/nodeset-name
+        target_role_label_values:
+        - system
+        - controller
+        - login
+        - accounting
+        - worker
+        worker_prefix: worker
+        source_workload_label_key: slurm.nebius.ai/workload
+        jail_label_key: slurm.nebius.ai/jail
+        action: normalize-target-node-labels
       slurm_components:
       - SlurmCluster
       - NodeSet
@@ -27,6 +42,21 @@ profile_groups:
     compatibility_axes:
       compute_layout: replace-and-roll
       storage_layout: create-aligned-sfs-and-migrate
+      node_label_layout:
+        source_role_label_keys:
+        - slurm.nebius.ai/nodeset
+        - slurm.nebius.ai/nodeset-name
+        target_role_label_key: slurm.nebius.ai/nodeset-name
+        target_role_label_values:
+        - system
+        - controller
+        - login
+        - accounting
+        - worker
+        worker_prefix: worker
+        source_workload_label_key: slurm.nebius.ai/workload
+        jail_label_key: slurm.nebius.ai/jail
+        action: normalize-target-node-labels
       slurm_components:
       - SlurmCluster
       - NodeSet
@@ -43,6 +73,21 @@ profile_groups:
     compatibility_axes:
       compute_layout: replace-and-roll
       storage_layout: create-aligned-sfs-and-migrate
+      node_label_layout:
+        source_role_label_keys:
+        - slurm.nebius.ai/nodeset
+        - slurm.nebius.ai/nodeset-name
+        target_role_label_key: slurm.nebius.ai/nodeset-name
+        target_role_label_values:
+        - system
+        - controller
+        - login
+        - accounting
+        - worker
+        worker_prefix: worker
+        source_workload_label_key: slurm.nebius.ai/workload
+        jail_label_key: slurm.nebius.ai/jail
+        action: normalize-target-node-labels
       slurm_components:
       - SlurmCluster
       - NodeSet
@@ -59,6 +104,20 @@ profile_groups:
     compatibility_axes:
       compute_layout: adopt-or-reconcile
       storage_layout: adopt-existing-or-create-if-missing
+      node_label_layout:
+        source_role_label_keys:
+        - slurm.nebius.ai/nodeset-name
+        target_role_label_key: slurm.nebius.ai/nodeset-name
+        target_role_label_values:
+        - system
+        - controller
+        - login
+        - accounting
+        - worker
+        worker_prefix: worker
+        source_workload_label_key: slurm.nebius.ai/workload
+        jail_label_key: slurm.nebius.ai/jail
+        action: adopt-or-reconcile-target-node-labels
       slurm_components:
       - SlurmCluster
       - NodeSet

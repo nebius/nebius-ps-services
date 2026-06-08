@@ -522,8 +522,8 @@ def test_write_inventory_includes_live_grafana_urls_when_status_exists(tmp_path:
     config = load_config(config_path)
     paths = resolve_project_paths(config_path)
     validate_path_alignment(config, paths)
-    paths.inventory_dir.mkdir(parents=True, exist_ok=True)
-    (paths.inventory_dir / "grafana-status.json").write_text(
+    paths.reports_dir.mkdir(parents=True, exist_ok=True)
+    (paths.reports_dir / "grafana-status.json").write_text(
         json.dumps(
             {
                 "grafana": [
@@ -738,7 +738,7 @@ def test_write_inventory_ignores_runtime_grafana_status_for_removed_target(
     config = load_config(config_path)
     paths = resolve_project_paths(config_path)
     validate_path_alignment(config, paths)
-    paths.inventory_dir.mkdir(parents=True, exist_ok=True)
+    paths.reports_dir.mkdir(parents=True, exist_ok=True)
     write_grafana_status(
         paths,
         (
@@ -762,7 +762,7 @@ def test_write_inventory_ignores_runtime_grafana_status_for_removed_target(
 
 def test_write_grafana_status_can_preserve_existing_target_statuses(tmp_path: Path) -> None:
     paths = resolve_project_paths(_project_config_path(tmp_path))
-    paths.inventory_dir.mkdir(parents=True, exist_ok=True)
+    paths.reports_dir.mkdir(parents=True, exist_ok=True)
 
     write_grafana_status(
         paths,
@@ -1167,8 +1167,8 @@ def test_write_inventory_merges_validation_status_into_deploy_report(tmp_path: P
     config = load_config(config_path)
     paths = resolve_project_paths(config_path)
     validate_path_alignment(config, paths)
-    paths.inventory_dir.mkdir(parents=True, exist_ok=True)
-    (paths.inventory_dir / "gpu-visibility-report.json").write_text(
+    paths.reports_dir.mkdir(parents=True, exist_ok=True)
+    (paths.reports_dir / "gpu-visibility-report.json").write_text(
         json.dumps(
             {
                 "passed": True,

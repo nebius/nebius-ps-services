@@ -154,7 +154,7 @@ def send_deploy_report_email(
             "`nebius-cxcli email --setup`."
         )
 
-    markdown_path = paths.inventory_dir / DEPLOY_REPORT_FILENAME
+    markdown_path = paths.reports_dir / DEPLOY_REPORT_FILENAME
     if not markdown_path.exists():
         raise RuntimeError(
             f"Deploy report markdown is missing: {markdown_path}. "

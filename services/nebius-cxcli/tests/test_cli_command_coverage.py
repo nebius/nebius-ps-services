@@ -145,7 +145,7 @@ def _fake_paths(tmp_path: Path) -> ProjectPaths:
         generated_dir=project_dir / "generated",
         infra_dir=project_dir / "generated" / "infra",
         flux_dir=project_dir / "generated" / "flux",
-        inventory_dir=project_dir / "generated" / "inventory",
+        reports_dir=project_dir / "generated" / "reports",
         path_tenant_folder="tenant-name-example",
         path_project_folder="project-name-example",
     )
@@ -159,7 +159,7 @@ def test_upgrade_readonly_context_does_not_materialize_terraform_tfvars(
     generated_dir = project_dir / "generated"
     (generated_dir / "infra").mkdir(parents=True)
     (generated_dir / "flux").mkdir()
-    (generated_dir / "inventory").mkdir()
+    (generated_dir / "reports").mkdir()
     config_path = project_dir / "config.yaml"
     config_path.write_text("client_info: {}\n", encoding="utf-8")
     (generated_dir / "nebius-cxcli-manifest.json").write_text(
@@ -259,7 +259,7 @@ def test_upgrade_k8s_version_runs_staged_terraform_plan_apply_not_sdk_updates(
     paths = _fake_paths(tmp_path)
     paths.infra_dir.mkdir(parents=True)
     paths.flux_dir.mkdir(parents=True)
-    paths.inventory_dir.mkdir(parents=True)
+    paths.reports_dir.mkdir(parents=True)
     paths.config_path.write_text(
         yaml.safe_dump(
             {
@@ -416,11 +416,11 @@ def test_upgrade_k8s_version_runs_staged_terraform_plan_apply_not_sdk_updates(
     def _record_validations(
         validations: list[dict[str, object]],
         *,
-        inventory_dir: Path,
+        reports_dir: Path,
         extra_env: dict[str, str] | None,
         emit: object,
     ) -> list[Path]:
-        assert inventory_dir == paths.inventory_dir
+        assert reports_dir == paths.reports_dir
         assert extra_env == {}
         assert emit is not None
         wait_calls.append(
@@ -504,7 +504,7 @@ def test_upgrade_node_template_stages_control_plane_then_combined_node_groups(
     paths = _fake_paths(tmp_path)
     paths.infra_dir.mkdir(parents=True)
     paths.flux_dir.mkdir(parents=True)
-    paths.inventory_dir.mkdir(parents=True)
+    paths.reports_dir.mkdir(parents=True)
     paths.config_path.write_text(
         yaml.safe_dump(
             {
@@ -768,7 +768,7 @@ def test_upgrade_node_template_node_group_stages_only_selected_group(
     paths = _fake_paths(tmp_path)
     paths.infra_dir.mkdir(parents=True)
     paths.flux_dir.mkdir(parents=True)
-    paths.inventory_dir.mkdir(parents=True)
+    paths.reports_dir.mkdir(parents=True)
     paths.config_path.write_text(
         yaml.safe_dump(
             {
@@ -1021,7 +1021,7 @@ def test_upgrade_k8s_version_syncs_stale_source_when_live_is_already_target(
     paths = _fake_paths(tmp_path)
     paths.infra_dir.mkdir(parents=True)
     paths.flux_dir.mkdir(parents=True)
-    paths.inventory_dir.mkdir(parents=True)
+    paths.reports_dir.mkdir(parents=True)
     paths.config_path.write_text(
         yaml.safe_dump(
             {
@@ -1505,7 +1505,7 @@ def test_upgrade_os_image_config_only_guided_mk8s_dry_run_prompts_shared_options
     paths = _fake_paths(tmp_path)
     paths.infra_dir.mkdir(parents=True)
     paths.flux_dir.mkdir(parents=True)
-    paths.inventory_dir.mkdir(parents=True)
+    paths.reports_dir.mkdir(parents=True)
     paths.config_path.write_text(
         yaml.safe_dump(
             {
@@ -1681,7 +1681,7 @@ def test_upgrade_cpu_preset_config_only_guided_dry_run_prompts_shared_options(
     paths = _fake_paths(tmp_path)
     paths.infra_dir.mkdir(parents=True)
     paths.flux_dir.mkdir(parents=True)
-    paths.inventory_dir.mkdir(parents=True)
+    paths.reports_dir.mkdir(parents=True)
     paths.config_path.write_text(
         yaml.safe_dump(
             {
@@ -1874,7 +1874,7 @@ def test_upgrade_gpu_stack_preset_config_only_guided_dry_run_prompts_gpu_stack_c
     paths = _fake_paths(tmp_path)
     paths.infra_dir.mkdir(parents=True)
     paths.flux_dir.mkdir(parents=True)
-    paths.inventory_dir.mkdir(parents=True)
+    paths.reports_dir.mkdir(parents=True)
     paths.config_path.write_text(
         yaml.safe_dump(
             {
@@ -2053,7 +2053,7 @@ def test_upgrade_platform_config_only_guided_dry_run_prompts_live_platform_choic
     paths = _fake_paths(tmp_path)
     paths.infra_dir.mkdir(parents=True)
     paths.flux_dir.mkdir(parents=True)
-    paths.inventory_dir.mkdir(parents=True)
+    paths.reports_dir.mkdir(parents=True)
     paths.config_path.write_text(
         yaml.safe_dump(
             {
@@ -2206,7 +2206,7 @@ def test_upgrade_cpu_preset_apply_updates_source_and_waits_for_node_layer_rollou
     paths = _fake_paths(tmp_path)
     paths.infra_dir.mkdir(parents=True)
     paths.flux_dir.mkdir(parents=True)
-    paths.inventory_dir.mkdir(parents=True)
+    paths.reports_dir.mkdir(parents=True)
     paths.config_path.write_text(
         yaml.safe_dump(
             {
@@ -2369,7 +2369,7 @@ def test_upgrade_helm_chart_config_only_guided_dry_run_prompts_target_and_versio
     paths = _fake_paths(tmp_path)
     paths.infra_dir.mkdir(parents=True)
     paths.flux_dir.mkdir(parents=True)
-    paths.inventory_dir.mkdir(parents=True)
+    paths.reports_dir.mkdir(parents=True)
     paths.config_path.write_text(
         yaml.safe_dump(
             {
@@ -2459,7 +2459,7 @@ def test_upgrade_helm_chart_apply_updates_source_and_runs_target_flux_apply(
     paths = _fake_paths(tmp_path)
     paths.infra_dir.mkdir(parents=True)
     paths.flux_dir.mkdir(parents=True)
-    paths.inventory_dir.mkdir(parents=True)
+    paths.reports_dir.mkdir(parents=True)
     paths.config_path.write_text(
         yaml.safe_dump(
             {
@@ -2538,7 +2538,7 @@ def test_upgrade_os_image_config_only_guided_vm_dry_run_prompts_target_and_image
     paths = _fake_paths(tmp_path)
     paths.infra_dir.mkdir(parents=True)
     paths.flux_dir.mkdir(parents=True)
-    paths.inventory_dir.mkdir(parents=True)
+    paths.reports_dir.mkdir(parents=True)
     paths.config_path.write_text(
         yaml.safe_dump(
             {
@@ -2642,7 +2642,7 @@ def test_upgrade_os_image_vm_apply_updates_source_and_uses_vm_status_watcher(
     paths = _fake_paths(tmp_path)
     paths.infra_dir.mkdir(parents=True)
     paths.flux_dir.mkdir(parents=True)
-    paths.inventory_dir.mkdir(parents=True)
+    paths.reports_dir.mkdir(parents=True)
     paths.config_path.write_text(
         yaml.safe_dump(
             {
@@ -2770,7 +2770,7 @@ def test_upgrade_os_image_vm_rejects_mk8s_only_options(
     paths = _fake_paths(tmp_path)
     paths.infra_dir.mkdir(parents=True)
     paths.flux_dir.mkdir(parents=True)
-    paths.inventory_dir.mkdir(parents=True)
+    paths.reports_dir.mkdir(parents=True)
     paths.config_path.write_text(
         yaml.safe_dump(
             {
@@ -2837,7 +2837,7 @@ def test_upgrade_os_image_dry_run_does_not_write_or_apply(
     paths = _fake_paths(tmp_path)
     paths.infra_dir.mkdir(parents=True)
     paths.flux_dir.mkdir(parents=True)
-    paths.inventory_dir.mkdir(parents=True)
+    paths.reports_dir.mkdir(parents=True)
     paths.config_path.write_text(
         yaml.safe_dump(
             {
@@ -2981,7 +2981,7 @@ def test_upgrade_os_image_runs_single_node_group_stage(
     paths = _fake_paths(tmp_path)
     paths.infra_dir.mkdir(parents=True)
     paths.flux_dir.mkdir(parents=True)
-    paths.inventory_dir.mkdir(parents=True)
+    paths.reports_dir.mkdir(parents=True)
     paths.config_path.write_text(
         yaml.safe_dump(
             {
@@ -3185,7 +3185,7 @@ def test_upgrade_os_image_runs_all_node_groups_in_order_and_restores_strategy(
     paths = _fake_paths(tmp_path)
     paths.infra_dir.mkdir(parents=True)
     paths.flux_dir.mkdir(parents=True)
-    paths.inventory_dir.mkdir(parents=True)
+    paths.reports_dir.mkdir(parents=True)
     paths.config_path.write_text(
         yaml.safe_dump(
             {
@@ -3343,7 +3343,7 @@ def test_upgrade_os_image_compatibility_failure_blocks_before_writes(
     paths = _fake_paths(tmp_path)
     paths.infra_dir.mkdir(parents=True)
     paths.flux_dir.mkdir(parents=True)
-    paths.inventory_dir.mkdir(parents=True)
+    paths.reports_dir.mkdir(parents=True)
     paths.config_path.write_text(
         yaml.safe_dump(
             {
@@ -3434,7 +3434,7 @@ def test_upgrade_os_image_preflight_blocker_stops_before_writes(
     paths = _fake_paths(tmp_path)
     paths.infra_dir.mkdir(parents=True)
     paths.flux_dir.mkdir(parents=True)
-    paths.inventory_dir.mkdir(parents=True)
+    paths.reports_dir.mkdir(parents=True)
     paths.config_path.write_text(
         yaml.safe_dump(
             {
@@ -3627,7 +3627,7 @@ def test_upgrade_k8s_version_config_only_guided_dry_run_prompts_required_and_opt
     paths = _fake_paths(tmp_path)
     paths.infra_dir.mkdir(parents=True)
     paths.flux_dir.mkdir(parents=True)
-    paths.inventory_dir.mkdir(parents=True)
+    paths.reports_dir.mkdir(parents=True)
     paths.config_path.write_text(
         yaml.safe_dump(
             {
@@ -3907,7 +3907,7 @@ def test_upgrade_k8s_version_restores_temporary_strategy_after_failed_stage(
     paths = _fake_paths(tmp_path)
     paths.infra_dir.mkdir(parents=True)
     paths.flux_dir.mkdir(parents=True)
-    paths.inventory_dir.mkdir(parents=True)
+    paths.reports_dir.mkdir(parents=True)
     paths.config_path.write_text(
         yaml.safe_dump(
             {
@@ -4159,13 +4159,13 @@ def test_render_overwrite_warning_never_mentions_flux_system(tmp_path: Path) -> 
     assert "generated/flux/flux-system" not in warning_with_bootstrap
 
 
-def test_render_overwrite_warning_treats_inventory_files_as_meaningful(
+def test_render_overwrite_warning_treats_report_files_as_meaningful(
     tmp_path: Path,
 ) -> None:
     fake_paths = _fake_paths(tmp_path)
-    fake_paths.inventory_dir.mkdir(parents=True, exist_ok=True)
-    (fake_paths.inventory_dir / "inventory.md").write_text(
-        "# Inventory\n\nGenerated by `nebius-cxcli inventory write`.\n",
+    fake_paths.reports_dir.mkdir(parents=True, exist_ok=True)
+    (fake_paths.reports_dir / cli.DEPLOY_REPORT_FILENAME).write_text(
+        "# Deploy Report\n\nGenerated by `nebius-cxcli deploy`.\n",
         encoding="utf-8",
     )
 
@@ -5498,6 +5498,89 @@ def test_render_command_invokes_renderer(tmp_path: Path, monkeypatch: pytest.Mon
     )
 
 
+@pytest.mark.parametrize(
+    "actions",
+    (["approve-soperator-migration"], ["remediate-target-gpu-stack"]),
+)
+def test_render_command_points_migration_required_soperator_to_migrate(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    actions: list[str],
+) -> None:
+    fake_paths = _fake_paths(tmp_path)
+    payload = {
+        "client_info": {
+            "client_name": "client-a",
+            "nebius": {
+                "tenant_id": "tenant-123",
+                "project_id": "project-456",
+                "region_id": "eu-north1",
+            },
+        },
+        "infra": {"components": []},
+        "apps": {
+            "charts": [
+                {
+                    "id": "soperator",
+                    "instance_id": "external-cluster",
+                    "enabled": True,
+                    "install_mode": "onboard-existing-cluster",
+                }
+            ]
+        },
+        "deploy": {
+            "targets": [
+                {
+                    "instance_id": "external-cluster",
+                    "kind": "external-mk8s",
+                    "soperator_onboarding": {
+                        "accepted": True,
+                        "actions": actions,
+                    },
+                }
+            ]
+        },
+    }
+    fake_paths.config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    monkeypatch.setattr(cli, "_load_runtime_context", lambda _path: ("cfg", fake_paths))
+    monkeypatch.setattr(cli, "_confirm_render_overwrite", lambda _paths, *, force: True)
+    monkeypatch.setattr(cli, "reset_generated_bundle", lambda _paths: None)
+    monkeypatch.setattr(
+        cli,
+        "_ensure_deployments_gitignore",
+        lambda deployments_root: SimpleNamespace(path=None, wrote=False),
+    )
+    monkeypatch.setattr(cli, "render_terraform_artifacts", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(cli, "_runtime_component_output_values", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(cli, "render_flux", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(cli, "_try_generate_terraform_lock_file", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(
+        cli,
+        "_write_generated_runtime_manifest",
+        lambda config, paths, *, source_profile, **kwargs: paths.generated_dir
+        / "nebius-cxcli-manifest.json",
+    )
+
+    result = runner.invoke(cli.app, ["render", str(fake_paths.config_path)])
+
+    assert result.exit_code == 0, result.output
+    normalized_output = " ".join(_plain_output(result.output).split())
+    config_arg = str(fake_paths.config_path.resolve())
+    assert (
+        f"Next step: `nebius-cxcli ext-soperator migrate {config_arg} "
+        "--target external-cluster --dry-run`"
+    ) in normalized_output
+    assert (
+        f"nebius-cxcli ext-soperator migrate {config_arg} "
+        "--target external-cluster --execute --approve"
+    ) in normalized_output
+    assert "Do not run `nebius-cxcli deploy` before `ext-soperator migrate`" in (
+        normalized_output
+    )
+    assert f"Next step: `nebius-cxcli deploy {config_arg}`" not in normalized_output
+
+
 def test_internal_render_command_suppresses_deploy_hint_context(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -6676,7 +6759,7 @@ def test_validate_dashboards_command_reports_live_fit(
                 SimpleNamespace(
                     config_path=path,
                     generated_dir=tmp_path / "generated",
-                    inventory_dir=tmp_path / "generated" / "inventory",
+                    reports_dir=tmp_path / "generated" / "reports",
                 ),
             ),
         )[1],
@@ -6750,9 +6833,9 @@ def test_validate_dashboards_command_reports_live_fit(
 
 
 def test_validate_dashboards_reads_target_contexts_from_deploy_report(tmp_path: Path) -> None:
-    inventory_dir = tmp_path / "inventory"
-    inventory_dir.mkdir()
-    (inventory_dir / cli.DEPLOY_REPORT_FILENAME).write_text(
+    reports_dir = tmp_path / "reports"
+    reports_dir.mkdir()
+    (reports_dir / cli.DEPLOY_REPORT_FILENAME).write_text(
         "\n".join(
             [
                 "### Target `cluster1`",
@@ -6778,7 +6861,7 @@ def test_validate_dashboards_reads_target_contexts_from_deploy_report(tmp_path: 
         encoding="utf-8",
     )
 
-    metadata = cli._deploy_report_target_contexts(SimpleNamespace(inventory_dir=inventory_dir))
+    metadata = cli._deploy_report_target_contexts(SimpleNamespace(reports_dir=reports_dir))
 
     assert metadata == {
         "cluster1": {
@@ -6931,7 +7014,7 @@ def test_validate_dashboards_refuses_current_context_fallback_for_targeted_grafa
     )
     paths = SimpleNamespace(
         generated_dir=tmp_path / "generated",
-        inventory_dir=tmp_path / "generated" / "inventory",
+        reports_dir=tmp_path / "generated" / "reports",
     )
 
     with ExitStack() as stack, pytest.raises(RuntimeError) as excinfo:
@@ -7150,7 +7233,7 @@ def test_deploy_command_passes_auto_auth_flag(
     assert "Copy/paste commands:" in output
     assert "Important paths:" in output
     assert "No deploy-time validations were configured for this run." in output
-    assert f"Deploy report: {fake_paths.inventory_dir / 'deploy-report.md'}" in output
+    assert f"Deploy report: {fake_paths.reports_dir / 'deploy-report.md'}" in output
     assert "Deploy completed" in output
     assert "Deploy completed from" not in output
     assert captured == {
@@ -7169,7 +7252,7 @@ def test_deploy_footer_groups_target_validations_and_keeps_paths_concise(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fake_paths = _fake_paths(tmp_path)
-    fake_paths.inventory_dir.mkdir(parents=True, exist_ok=True)
+    fake_paths.reports_dir.mkdir(parents=True, exist_ok=True)
     validations = [
         {
             "kind": "mk8s_gpu_operator_readiness",
@@ -7190,7 +7273,7 @@ def test_deploy_footer_groups_target_validations_and_keeps_paths_concise(
             "target_ref": "cluster2",
         },
     ]
-    (fake_paths.inventory_dir / "gpu-stack-readiness-report-cluster1.json").write_text(
+    (fake_paths.reports_dir / "gpu-stack-readiness-report-cluster1.json").write_text(
         json.dumps(
             {
                 "passed": True,
@@ -7202,7 +7285,7 @@ def test_deploy_footer_groups_target_validations_and_keeps_paths_concise(
         + "\n",
         encoding="utf-8",
     )
-    (fake_paths.inventory_dir / "nccl-test-report-cluster1.json").write_text(
+    (fake_paths.reports_dir / "nccl-test-report-cluster1.json").write_text(
         json.dumps(
             {
                 "passed": True,
@@ -7217,7 +7300,7 @@ def test_deploy_footer_groups_target_validations_and_keeps_paths_concise(
         + "\n",
         encoding="utf-8",
     )
-    (fake_paths.inventory_dir / "nccl-test-report-cluster2.json").write_text(
+    (fake_paths.reports_dir / "nccl-test-report-cluster2.json").write_text(
         json.dumps(
             {
                 "passed": True,
@@ -7239,7 +7322,7 @@ def test_deploy_footer_groups_target_validations_and_keeps_paths_concise(
     )
     report = cli.build_deploy_validation_report(
         validations,
-        inventory_dir=fake_paths.inventory_dir,
+        reports_dir=fake_paths.reports_dir,
     )
     printed: list[str] = []
 
@@ -7278,7 +7361,7 @@ def test_deploy_footer_groups_target_validations_and_keeps_paths_concise(
         "  No immediate access or follow-up commands were derived.",
         "[bright_magenta]Important paths:[/bright_magenta]",
         f"  Generated bundle: {fake_paths.generated_dir}",
-        f"  Deploy report: {fake_paths.inventory_dir / 'deploy-report.md'}",
+        f"  Deploy report: {fake_paths.reports_dir / 'deploy-report.md'}",
         "[green]Deploy completed[/green]",
     ]
     assert all("Validation JSON:" not in line for line in printed)
@@ -7473,7 +7556,7 @@ def test_deploy_command_accepts_config_yaml_target(
     output = _plain_output(result.output)
     assert "Deploy completed" in output
     assert "Deploy completed from" not in output
-    assert f"Deploy report: {fake_paths.inventory_dir / 'deploy-report.md'}" in output
+    assert f"Deploy report: {fake_paths.reports_dir / 'deploy-report.md'}" in output
 
 
 def test_deploy_command_rejects_generated_target_with_guidance(
@@ -8655,7 +8738,7 @@ def test_deploy_generated_artifacts_validates_before_apply_and_prepares_kube_env
         "write_inventory",
         lambda config, paths, **kwargs: (
             calls.append(("inventory", config, paths))
-            or SimpleNamespace(markdown=paths.inventory_dir / "deploy-report.md")
+            or SimpleNamespace(markdown=paths.reports_dir / "deploy-report.md")
         ),
     )
 
@@ -8745,7 +8828,7 @@ def test_deploy_generated_artifacts_external_target_skips_terraform_apply(
         "write_inventory",
         lambda config, paths, **kwargs: (
             calls.append(("inventory", config, paths))
-            or SimpleNamespace(markdown=paths.inventory_dir / "deploy-report.md")
+            or SimpleNamespace(markdown=paths.reports_dir / "deploy-report.md")
         ),
     )
     monkeypatch.setattr(
@@ -8959,7 +9042,7 @@ def test_deploy_generated_artifacts_without_apps_still_prepares_kube_env(
         "write_inventory",
         lambda config, paths, **kwargs: (
             calls.append(("inventory", config, paths))
-            or SimpleNamespace(markdown=paths.inventory_dir / "deploy-report.md")
+            or SimpleNamespace(markdown=paths.reports_dir / "deploy-report.md")
         ),
     )
 
@@ -9049,7 +9132,7 @@ def test_deploy_generated_artifacts_with_multiple_handoffs_and_no_apps_refreshes
         "write_inventory",
         lambda config, paths, **kwargs: (
             calls.append(("inventory", config, paths))
-            or SimpleNamespace(markdown=paths.inventory_dir / "deploy-report.md")
+            or SimpleNamespace(markdown=paths.reports_dir / "deploy-report.md")
         ),
     )
 
@@ -9119,7 +9202,7 @@ def test_deploy_generated_artifacts_defaults_multi_target_apps_to_all_targets(
         "write_inventory",
         lambda config, paths, **kwargs: (
             calls.append(("inventory", config, paths, kwargs.get("validations")))
-            or SimpleNamespace(markdown=paths.inventory_dir / "deploy-report.md")
+            or SimpleNamespace(markdown=paths.reports_dir / "deploy-report.md")
         ),
     )
     monkeypatch.setattr(
@@ -9211,7 +9294,7 @@ def test_deploy_generated_artifacts_prints_mk8s_gpu_warning_once(
         cli,
         "write_inventory",
         lambda config, paths, **kwargs: SimpleNamespace(
-            markdown=paths.inventory_dir / "deploy-report.md"
+            markdown=paths.reports_dir / "deploy-report.md"
         ),
     )
     monkeypatch.setattr(
@@ -9322,7 +9405,7 @@ def test_deploy_generated_artifacts_runs_manifest_gpu_validations(
         "write_inventory",
         lambda config, paths, **kwargs: (
             calls.append(("inventory", config, paths))
-            or SimpleNamespace(markdown=paths.inventory_dir / "deploy-report.md")
+            or SimpleNamespace(markdown=paths.reports_dir / "deploy-report.md")
         ),
     )
     monkeypatch.setattr(
@@ -9350,9 +9433,9 @@ def test_deploy_generated_artifacts_runs_manifest_gpu_validations(
     monkeypatch.setattr(
         cli,
         "run_mk8s_gpu_validations",
-        lambda validations, *, inventory_dir, extra_env, emit=None: (
-            calls.append(("gpu_validations", validations, inventory_dir, extra_env))
-            or [inventory_dir / "gpu-visibility-report.json"]
+        lambda validations, *, reports_dir, extra_env, emit=None: (
+            calls.append(("gpu_validations", validations, reports_dir, extra_env))
+            or [reports_dir / "gpu-visibility-report.json"]
         ),
     )
 
@@ -9397,7 +9480,7 @@ def test_deploy_generated_artifacts_runs_manifest_gpu_validations(
                     "target_ref": "mk8s",
                 }
             ],
-            fake_paths.inventory_dir,
+            fake_paths.reports_dir,
             {"KUBECONFIG": "/tmp/kubeconfig"},
         ),
         ("inventory", config, fake_paths),
@@ -9492,18 +9575,18 @@ def test_deploy_generated_artifacts_updates_validation_spinner_when_terminal(
     def _fake_run_mk8s_gpu_validations(
         validations: list[dict[str, object]],
         *,
-        inventory_dir: Path,
+        reports_dir: Path,
         extra_env: dict[str, str] | None,
         emit=None,
     ) -> list[Path]:
         assert validations == manifest["deploy"]["validations"]
-        assert inventory_dir == fake_paths.inventory_dir
+        assert reports_dir == fake_paths.reports_dir
         assert extra_env == {"KUBECONFIG": "/tmp/kubeconfig"}
         assert emit is not None
-        inventory_dir.mkdir(parents=True, exist_ok=True)
+        reports_dir.mkdir(parents=True, exist_ok=True)
         emit("Starting validation 1/2: GPU stack readiness.")
         emit("[bold white]GPU Operator[/bold white] [dim][5s][/dim] clusterpolicy state=ready")
-        (inventory_dir / "gpu-stack-readiness-report.json").write_text(
+        (reports_dir / "gpu-stack-readiness-report.json").write_text(
             json.dumps(
                 {
                     "passed": True,
@@ -9516,7 +9599,7 @@ def test_deploy_generated_artifacts_updates_validation_spinner_when_terminal(
         )
         emit("Starting validation 2/2: GPU Visibility test.")
         emit("[bold white]GPU Visibility[/bold white] [dim][9s][/dim] pods 3/3 Succeeded")
-        (inventory_dir / "gpu-visibility-report.json").write_text(
+        (reports_dir / "gpu-visibility-report.json").write_text(
             json.dumps(
                 {
                     "passed": True,
@@ -9530,8 +9613,8 @@ def test_deploy_generated_artifacts_updates_validation_spinner_when_terminal(
             encoding="utf-8",
         )
         return [
-            inventory_dir / "gpu-stack-readiness-report.json",
-            inventory_dir / "gpu-visibility-report.json",
+            reports_dir / "gpu-stack-readiness-report.json",
+            reports_dir / "gpu-visibility-report.json",
         ]
 
     monkeypatch.setattr(cli, "run_mk8s_gpu_validations", _fake_run_mk8s_gpu_validations)
@@ -9615,15 +9698,15 @@ def test_deploy_generated_artifacts_default_all_targets_reports_all_validations(
     def _fake_run_mk8s_gpu_validations(
         validations: list[dict[str, object]],
         *,
-        inventory_dir: Path,
+        reports_dir: Path,
         extra_env: dict[str, str] | None,
         emit=None,
     ) -> list[Path]:
         validation_calls.append((validations, extra_env))
-        inventory_dir.mkdir(parents=True, exist_ok=True)
+        reports_dir.mkdir(parents=True, exist_ok=True)
         written: list[Path] = []
         for validation in validations:
-            report_path = inventory_dir / str(validation["report_file"])
+            report_path = reports_dir / str(validation["report_file"])
             report_path.write_text(
                 json.dumps({"passed": True, "summary": str(validation["name"])}) + "\n",
                 encoding="utf-8",
@@ -9653,7 +9736,7 @@ def test_deploy_generated_artifacts_default_all_targets_reports_all_validations(
         ([cluster1_validation], {"KUBECONFIG": "/tmp/cluster1.kubeconfig"}),
         ([cluster2_validation], {"KUBECONFIG": "/tmp/cluster2.kubeconfig"}),
     ]
-    markdown = (fake_paths.inventory_dir / "deploy-report.md").read_text(encoding="utf-8")
+    markdown = (fake_paths.reports_dir / "deploy-report.md").read_text(encoding="utf-8")
     assert "GPU Visibility test (cluster1)" in markdown
     assert "GPU Visibility test (cluster2)" in markdown
 
@@ -9702,14 +9785,14 @@ def test_deploy_generated_artifacts_target_report_excludes_unselected_validation
     def _fake_run_mk8s_gpu_validations(
         validations: list[dict[str, object]],
         *,
-        inventory_dir: Path,
+        reports_dir: Path,
         extra_env: dict[str, str] | None,
         emit=None,
     ) -> list[Path]:
         assert validations == [cluster2_validation]
         assert extra_env == {"KUBECONFIG": "/tmp/cluster2.kubeconfig"}
-        inventory_dir.mkdir(parents=True, exist_ok=True)
-        report_path = inventory_dir / "gpu-visibility-report-cluster2.json"
+        reports_dir.mkdir(parents=True, exist_ok=True)
+        report_path = reports_dir / "gpu-visibility-report-cluster2.json"
         report_path.write_text(
             json.dumps(
                 {
@@ -9739,8 +9822,8 @@ def test_deploy_generated_artifacts_target_report_excludes_unselected_validation
     monkeypatch.setattr(
         cli.console, "print", lambda message, *args, **kwargs: printed.append(str(message))
     )
-    fake_paths.inventory_dir.mkdir(parents=True, exist_ok=True)
-    stale_cluster1_report = fake_paths.inventory_dir / "gpu-visibility-report-cluster1.json"
+    fake_paths.reports_dir.mkdir(parents=True, exist_ok=True)
+    stale_cluster1_report = fake_paths.reports_dir / "gpu-visibility-report-cluster1.json"
     stale_cluster1_report.write_text("{}\n", encoding="utf-8")
 
     cli._deploy_generated_artifacts(
@@ -9753,7 +9836,7 @@ def test_deploy_generated_artifacts_target_report_excludes_unselected_validation
         requested_target_ref="cluster2",
     )
 
-    markdown = (fake_paths.inventory_dir / "deploy-report.md").read_text(encoding="utf-8")
+    markdown = (fake_paths.reports_dir / "deploy-report.md").read_text(encoding="utf-8")
     assert "GPU Visibility test (cluster2)" in markdown
     assert "GPU Visibility test (cluster1)" not in markdown
     assert not stale_cluster1_report.exists()
@@ -9805,14 +9888,14 @@ def test_deploy_generated_artifacts_keeps_required_mysterybox_validation_when_sk
     def _fake_run_mysterybox_eso_validations(
         validations: list[dict[str, object]],
         *,
-        inventory_dir: Path,
+        reports_dir: Path,
         extra_env: dict[str, str] | None,
         emit=None,
     ) -> list[Path]:
         assert validations == [required_validation]
         assert extra_env == {"KUBECONFIG": "/tmp/kubeconfig"}
-        inventory_dir.mkdir(parents=True, exist_ok=True)
-        report_path = inventory_dir / "mysterybox-eso-connectivity-report-mk8s.json"
+        reports_dir.mkdir(parents=True, exist_ok=True)
+        report_path = reports_dir / "mysterybox-eso-connectivity-report-mk8s.json"
         report_path.write_text(
             json.dumps(
                 {
@@ -9862,8 +9945,8 @@ def test_deploy_generated_artifacts_keeps_required_mysterybox_validation_when_sk
         skip_validation_kinds=set(),
     )
 
-    assert not (fake_paths.inventory_dir / "gpu-visibility-report.json").exists()
-    assert (fake_paths.inventory_dir / "mysterybox-eso-connectivity-report-mk8s.json").exists()
+    assert not (fake_paths.reports_dir / "gpu-visibility-report.json").exists()
+    assert (fake_paths.reports_dir / "mysterybox-eso-connectivity-report-mk8s.json").exists()
     assert printed == [
         (
             "Skipping optional deploy-time validations for this run (--skip-validations); "
@@ -9908,18 +9991,18 @@ def test_deploy_generated_artifacts_prints_validation_phase_lines_when_console_i
     def _fake_run_mk8s_gpu_validations(
         _validations: list[dict[str, object]],
         *,
-        inventory_dir: Path,
+        reports_dir: Path,
         extra_env: dict[str, str] | None,
         emit=None,
     ) -> list[Path]:
-        assert inventory_dir == fake_paths.inventory_dir
+        assert reports_dir == fake_paths.reports_dir
         assert extra_env == {"KUBECONFIG": "/tmp/kubeconfig"}
         assert emit is not None
-        inventory_dir.mkdir(parents=True, exist_ok=True)
+        reports_dir.mkdir(parents=True, exist_ok=True)
         emit("Starting validation 1/1: GPU Visibility test.")
         emit("Starting validation 1/1: GPU Visibility test.")
         emit("[bold white]GPU Visibility[/bold white] [dim][7s][/dim] pods 3/3 Succeeded")
-        (inventory_dir / "gpu-visibility-report.json").write_text(
+        (reports_dir / "gpu-visibility-report.json").write_text(
             json.dumps(
                 {
                     "passed": True,
@@ -9932,7 +10015,7 @@ def test_deploy_generated_artifacts_prints_validation_phase_lines_when_console_i
             + "\n",
             encoding="utf-8",
         )
-        return [inventory_dir / "gpu-visibility-report.json"]
+        return [reports_dir / "gpu-visibility-report.json"]
 
     monkeypatch.setattr(cli, "run_mk8s_gpu_validations", _fake_run_mk8s_gpu_validations)
 
@@ -10009,15 +10092,15 @@ def test_deploy_generated_artifacts_writes_summary_even_when_validation_fails(
     def _fake_run_mk8s_gpu_validations(
         _validations: list[dict[str, object]],
         *,
-        inventory_dir: Path,
+        reports_dir: Path,
         extra_env: dict[str, str] | None,
         emit=None,
     ) -> list[Path]:
         assert extra_env == {"KUBECONFIG": "/tmp/kubeconfig"}
         assert emit is not None
-        inventory_dir.mkdir(parents=True, exist_ok=True)
+        reports_dir.mkdir(parents=True, exist_ok=True)
         emit("Starting validation 1/2: GPU stack readiness.")
-        (inventory_dir / "gpu-stack-readiness-report.json").write_text(
+        (reports_dir / "gpu-stack-readiness-report.json").write_text(
             json.dumps(
                 {
                     "passed": False,
@@ -10053,7 +10136,7 @@ def test_deploy_generated_artifacts_writes_summary_even_when_validation_fails(
             skip_validation_kinds=set(),
         )
 
-    markdown = (fake_paths.inventory_dir / "deploy-report.md").read_text(encoding="utf-8")
+    markdown = (fake_paths.reports_dir / "deploy-report.md").read_text(encoding="utf-8")
     assert "- Overall status: `FAIL`" in markdown
     assert "### GPU stack readiness" in markdown
     assert "### GPU Visibility test" in markdown
@@ -10070,7 +10153,7 @@ def test_deploy_generated_artifacts_writes_summary_even_when_validation_fails(
         "  No immediate access or follow-up commands were derived.",
         "[bright_magenta]Important paths:[/bright_magenta]",
         f"  Generated bundle: {fake_paths.generated_dir}",
-        f"  Deploy report: {fake_paths.inventory_dir / 'deploy-report.md'}",
+        f"  Deploy report: {fake_paths.reports_dir / 'deploy-report.md'}",
         "[red]Deploy failed[/red]",
     ]
 
@@ -15723,6 +15806,7 @@ def test_help_text_maps_commands_to_target_types() -> None:
     assert "flux uses generated/flux" in output
     assert "validate-sources accepts optional component_sources.yaml" in output
     assert "auth has no positional path" in output
+    assert "ext-soperator onboard registers existing Nebius MK8s targets in config.yaml" in output
     assert "report Use CONFIG_YAML" not in output
     assert "bootstrap-ci Use CONFIG_YAML" in output
     assert "component" in output
@@ -15775,16 +15859,16 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     destroy_result = runner.invoke(cli.app, ["destroy", "--help"])
     tf_destroy_result = runner.invoke(cli.app, ["terraform", "destroy", "--help"])
     flux_destroy_result = runner.invoke(cli.app, ["flux", "destroy", "--help"])
-    soperator_result = runner.invoke(cli.app, ["soperator", "--help"])
+    soperator_result = runner.invoke(cli.app, ["ext-soperator", "--help"])
     soperator_onboard_result = runner.invoke(
         cli.app,
-        ["soperator", "onboard", "--help"],
+        ["ext-soperator", "onboard", "--help"],
         env={"COLUMNS": "240"},
         terminal_width=240,
     )
     soperator_migrate_result = runner.invoke(
         cli.app,
-        ["soperator", "migrate", "--help"],
+        ["ext-soperator", "migrate", "--help"],
         env={"COLUMNS": "240"},
         terminal_width=240,
     )
@@ -15963,7 +16047,7 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "apps:soperator@target-mk8s-prod" in normalized_component_add_help
     assert "production worker profile" in normalized_component_add_help
     assert (
-        "nebius-cxcli soperator onboard <config.yaml-or-deployments-root>"
+        "nebius-cxcli ext-soperator onboard <config.yaml-or-deployments-root>"
         in normalized_component_add_help
     )
     assert "register an existing Nebius MK8s target" in normalized_component_add_help
@@ -15980,12 +16064,19 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "selecting soperator creates a complete production MK8s+SFS+Soperator cluster" in (
         normalized_create_help
     )
-    assert "use `soperator onboard` for existing Nebius MK8s targets" in normalized_create_help
+    assert "use `ext-soperator onboard` for existing Nebius MK8s targets" in normalized_create_help
     assert "onboard-existing-cluster role-mapping install" not in normalized_create_help
     assert "complete production MK8s+SFS+Soperator cluster" in normalized_create_help
-    assert "soperator [OPTIONS] COMMAND [ARGS]" in soperator_help
-    assert "Manage Soperator-specific day-2 workflows" in normalized_soperator_help
-    assert "use migrate to plan approved Soperator compute/storage migration" in (
+    assert "ext-soperator [OPTIONS] COMMAND [ARGS]" in soperator_help
+    assert "Manage external Soperator day-2 workflows" in normalized_soperator_help
+    assert "use migrate to plan approved target remediation" in normalized_soperator_help
+    assert "If migration work is required, do not deploy first" in normalized_soperator_help
+    assert "ext-soperator migrate --dry-run" in normalized_soperator_help
+    assert "ext-soperator migrate --execute --approve" in normalized_soperator_help
+    assert "Managed chart-only Soperator upgrades use upgrade helm-chart" in (
+        normalized_soperator_help
+    )
+    assert "Terraform-managed MK8s node-template upgrades use upgrade node-template" in (
         normalized_soperator_help
     )
     assert "onboard [OPTIONS] CONFIG_OR_DEPLOYMENTS_ROOT" in soperator_onboard_help
@@ -16013,23 +16104,67 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     )
     assert "--storage-mode" in normalized_soperator_onboard_help
     assert "--compute-mode" in normalized_soperator_onboard_help
+    assert "--source-version" in normalized_soperator_onboard_help
     assert "--validate-sources --no-validate-sources" in normalized_soperator_onboard_help
-    assert "Plan Soperator compute/storage migration from onboarding discovery" in (
+    assert "--storage-mode create-aligned-sfs" in normalized_soperator_onboard_help
+    assert "--compute-mode create-aligned-node-groups" in normalized_soperator_onboard_help
+    assert "nebius-cxcli validate <config.yaml>" in normalized_soperator_onboard_help
+    assert "nebius-cxcli render <config.yaml>" in normalized_soperator_onboard_help
+    assert "For install/adopt-only targets, run nebius-cxcli deploy <config.yaml>" in (
+        normalized_soperator_onboard_help
+    )
+    assert "For migration-required targets, do not deploy first" in (
+        normalized_soperator_onboard_help
+    )
+    assert (
+        "nebius-cxcli ext-soperator migrate <config.yaml> --target <target> --dry-run"
+        in normalized_soperator_onboard_help
+    )
+    assert (
+        "nebius-cxcli ext-soperator migrate <config.yaml> --target <target> --execute --approve"
+        in normalized_soperator_onboard_help
+    )
+    assert "Plan Soperator target remediation and migration from onboarding discovery" in (
         normalized_soperator_migrate_help
     )
     assert "--target" in normalized_soperator_migrate_help
     assert "--dry-run --execute" in normalized_soperator_migrate_help
     assert "--approve --no-approve" in normalized_soperator_migrate_help
-    assert "--worker-node-groups" in normalized_soperator_migrate_help
+    assert "--worker-node-groups" not in normalized_soperator_migrate_help
+    assert "auto-detects source worker node groups" in normalized_soperator_migrate_help
+    assert (
+        "nebius-cxcli ext-soperator migrate ./deployments/tenant/project/config.yaml "
+        "--target external-cluster --execute --approve"
+    ) in normalized_soperator_migrate_help
     assert "source-soperator-cluster-discovery-report.json" in (
         normalized_soperator_migrate_help
     )
     assert "validates the accepted onboarding analysis" in normalized_soperator_migrate_help
-    assert "advances supported storage, copy, compute, cutover, validation" in (
+    assert (
+        "advances supported external MK8s control-plane/node-template, target GPU stack, "
+        "storage, copy, compute, cutover, validation"
+    ) in normalized_soperator_migrate_help
+    assert "net-new aligned SFS and net-new service-role node-group quota" in (
         normalized_soperator_migrate_help
     )
+    assert "source node groups one group at a time with zero-surge node-group updates" in (
+        normalized_soperator_migrate_help
+    )
+    assert "attaches them to discovered Nebius node groups" in normalized_soperator_migrate_help
+    assert "max_surge=0, max_unavailable=1, drain_timeout=30m" in (
+        normalized_soperator_migrate_help
+    )
+    assert "applies target GPU stack app rows" in normalized_soperator_migrate_help
     assert "creates or reuses aligned SFS filesystems" in normalized_soperator_migrate_help
-    assert "checkpoints manual gates" in normalized_soperator_migrate_help
+    assert "Soperator/Slurm smoke validation" in normalized_soperator_migrate_help
+    assert "one-task srun job" in normalized_soperator_migrate_help
+    assert "migrate-report.md" in normalized_soperator_migrate_help
+    assert "prints phase-aware Soperator migration status" in normalized_soperator_migrate_help
+    assert "rechecks completed selected remediation/upgrade/cutover actions" in (
+        normalized_soperator_migrate_help
+    )
+    assert "retries them if they drift" in normalized_soperator_migrate_help
+    assert "checkpoints pending gates" in normalized_soperator_migrate_help
     assert "remove [OPTIONS] [COMPONENT_SELECTOR]..." in component_remove_help
     assert "--config CONFIG_YAML" in normalized_component_remove_help
     assert (
@@ -16186,6 +16321,13 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "Omit the path" in normalized_email_help
     assert "only when" in normalized_email_help
     assert "using --setup." in normalized_email_help
+
+
+def test_legacy_soperator_command_group_is_not_exposed() -> None:
+    result = runner.invoke(cli.app, ["soperator", "--help"])
+
+    assert result.exit_code != 0
+    assert "No such command" in _plain_output(result.output)
 
 
 def test_public_command_help_omits_legacy_mk8s_shortcut_fields() -> None:
@@ -17447,7 +17589,7 @@ def test_run_mysterybox_eso_connectivity_validation_writes_deploy_report_detail(
 
     written = cli.run_mysterybox_eso_validations(
         [spec],
-        inventory_dir=tmp_path,
+        reports_dir=tmp_path,
         extra_env={"KUBECONFIG": "/tmp/kubeconfig"},
     )
 

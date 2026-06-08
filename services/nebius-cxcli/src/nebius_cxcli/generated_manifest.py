@@ -67,7 +67,7 @@ def build_generated_manifest(
             "generated_dir": _repo_relative_path(paths.generated_dir, root=paths.repo_root),
             "infra_dir": _repo_relative_path(paths.infra_dir, root=paths.repo_root),
             "flux_dir": _repo_relative_path(paths.flux_dir, root=paths.repo_root),
-            "inventory_dir": _repo_relative_path(paths.inventory_dir, root=paths.repo_root),
+            "reports_dir": _repo_relative_path(paths.reports_dir, root=paths.repo_root),
         },
         "tools": {
             "flux_version": str(flux_version or "").strip(),

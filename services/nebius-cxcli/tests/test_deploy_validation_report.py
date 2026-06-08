@@ -90,7 +90,7 @@ def test_build_deploy_validation_report_aggregates_results(tmp_path: Path) -> No
         encoding="utf-8",
     )
 
-    report = build_deploy_validation_report(validations, inventory_dir=tmp_path)
+    report = build_deploy_validation_report(validations, reports_dir=tmp_path)
 
     assert report.markdown_path == tmp_path / DEPLOY_REPORT_FILENAME
     assert report.overall_status == "incomplete"
@@ -163,12 +163,53 @@ def test_clear_deploy_validation_artifacts_removes_stale_outputs(tmp_path: Path)
     ):
         (tmp_path / name).write_text("data\n", encoding="utf-8")
 
-    clear_deploy_validation_artifacts(validations, inventory_dir=tmp_path)
+    clear_deploy_validation_artifacts(validations, reports_dir=tmp_path)
 
     assert not (tmp_path / DEPLOY_REPORT_FILENAME).exists()
     assert not (tmp_path / "deploy-validation-report.md").exists()
     assert not (tmp_path / "gpu-visibility-report.json").exists()
     assert not (tmp_path / "nccl-test-report.json").exists()
+
+
+def test_build_deploy_validation_report_formats_soperator_smoke_summary(
+    tmp_path: Path,
+) -> None:
+    validations = [
+        {
+            "kind": "soperator_cluster_smoke",
+            "name": "Soperator cluster smoke test (training)",
+            "report_file": "soperator-cluster-validation-report-training.json",
+        }
+    ]
+    (tmp_path / "soperator-cluster-validation-report-training.json").write_text(
+        json.dumps(
+            {
+                "passed": True,
+                "status": "passed",
+                "summary": "5/5 Soperator/Slurm checks passed.",
+                "checks": [
+                    {
+                        "name": "Slurm srun smoke job",
+                        "passed": True,
+                        "summary": "one-task synchronous srun job completed successfully.",
+                    }
+                ],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    report = build_deploy_validation_report(validations, reports_dir=tmp_path)
+
+    assert format_deploy_validation_summary_lines(report) == [
+        "Deploy validation summary:",
+        "  Overall: PASS (1/1 completed, 0 not run)",
+        "  PASS Soperator cluster smoke test (training): 5/5 Soperator/Slurm checks passed.",
+        f"  Combined report: {tmp_path / DEPLOY_REPORT_FILENAME}",
+        f"  JSON detail: {tmp_path / 'soperator-cluster-validation-report-training.json'}",
+    ]
+    assert "Slurm srun smoke job" in "\n".join(validation_section_lines(report))
 
 
 def test_build_deploy_validation_report_formats_socket_mode_nccl_summary(tmp_path: Path) -> None:
@@ -195,7 +236,7 @@ def test_build_deploy_validation_report_formats_socket_mode_nccl_summary(tmp_pat
         encoding="utf-8",
     )
 
-    report = build_deploy_validation_report(validations, inventory_dir=tmp_path)
+    report = build_deploy_validation_report(validations, reports_dir=tmp_path)
 
     assert format_deploy_validation_summary_lines(report) == [
         "Deploy validation summary:",
@@ -242,7 +283,7 @@ def test_build_deploy_validation_report_formats_single_rank_nccl_smoke(
         encoding="utf-8",
     )
 
-    report = build_deploy_validation_report(validations, inventory_dir=tmp_path)
+    report = build_deploy_validation_report(validations, reports_dir=tmp_path)
 
     assert format_deploy_validation_summary_lines(report) == [
         "Deploy validation summary:",
@@ -296,7 +337,7 @@ def test_build_deploy_validation_report_formats_skipped_gpu_workload_summary(
             encoding="utf-8",
         )
 
-    report = build_deploy_validation_report(validations, inventory_dir=tmp_path)
+    report = build_deploy_validation_report(validations, reports_dir=tmp_path)
 
     assert format_deploy_validation_summary_lines(report) == [
         "Deploy validation summary:",
@@ -337,7 +378,7 @@ def test_build_deploy_validation_report_formats_rdma_dmabuf_summary(tmp_path: Pa
         encoding="utf-8",
     )
 
-    report = build_deploy_validation_report(validations, inventory_dir=tmp_path)
+    report = build_deploy_validation_report(validations, reports_dir=tmp_path)
 
     assert format_deploy_validation_summary_lines(report) == [
         "Deploy validation summary:",
@@ -380,7 +421,7 @@ def test_build_deploy_validation_report_prefers_target_scoped_spec_name(
         encoding="utf-8",
     )
 
-    report = build_deploy_validation_report(validations, inventory_dir=tmp_path)
+    report = build_deploy_validation_report(validations, reports_dir=tmp_path)
 
     assert report.results[0].name == "NCCL test (cluster2)"
 
@@ -405,7 +446,7 @@ def test_build_deploy_validation_report_summarizes_error_report(tmp_path: Path) 
         encoding="utf-8",
     )
 
-    report = build_deploy_validation_report(validations, inventory_dir=tmp_path)
+    report = build_deploy_validation_report(validations, reports_dir=tmp_path)
 
     assert format_deploy_validation_summary_lines(report) == [
         "Deploy validation summary:",

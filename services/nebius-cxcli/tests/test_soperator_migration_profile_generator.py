@@ -199,8 +199,26 @@ def test_generator_profile_payload_records_scope_contracts_and_compatibility_axe
         == "replace-and-roll"
     )
     assert (
+        payload["profile_groups"]["v3-to-target"]["compatibility_axes"]["node_label_layout"][
+            "source_role_label_keys"
+        ]
+        == ["slurm.nebius.ai/nodeset", "slurm.nebius.ai/nodeset-name"]
+    )
+    assert (
+        payload["profile_groups"]["v3-to-target"]["compatibility_axes"]["node_label_layout"][
+            "target_role_label_key"
+        ]
+        == "slurm.nebius.ai/nodeset-name"
+    )
+    assert (
         payload["profile_groups"]["v4-to-target"]["compatibility_axes"]["storage_layout"]
         == "adopt-existing-or-create-if-missing"
+    )
+    assert (
+        payload["profile_groups"]["v4-to-target"]["compatibility_axes"]["node_label_layout"][
+            "source_role_label_keys"
+        ]
+        == ["slurm.nebius.ai/nodeset-name"]
     )
     release = payload["releases"][1]
     assert release["chart_path"] == "helm/soperator"

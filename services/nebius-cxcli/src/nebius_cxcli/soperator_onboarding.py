@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import os
@@ -28,7 +29,7 @@ ONBOARDING_STATE_EXISTING_SOPERATOR_SUPPORTED = "existing-soperator-supported"
 ONBOARDING_STATE_EXISTING_SOPERATOR_TARGET = "existing-soperator-target"
 ONBOARDING_STATE_EXISTING_SOPERATOR_UNKNOWN = "existing-soperator-unknown"
 ONBOARDING_STATE_EXISTING_SOPERATOR_NEWER = "existing-soperator-newer"
-ONBOARDING_STATE_ANALYSIS_BLOCKED = "analysis-blocked"
+ONBOARDING_STATE_ANALYSIS_INCOMPLETE = "analysis-incomplete"
 ONBOARDING_ACTION_INSTALL_SOPERATOR = "install-soperator"
 ONBOARDING_ACTION_ADOPT_SOPERATOR = "adopt-soperator"
 ONBOARDING_ACTION_UPGRADE_SOPERATOR = "upgrade-soperator"
@@ -37,8 +38,12 @@ ONBOARDING_ACTION_CONFIGURE_STORAGE = "configure-soperator-storage"
 ONBOARDING_ACTION_CREATE_ALIGNED_SFS = "create-aligned-sfs"
 ONBOARDING_ACTION_PLAN_DATA_MIGRATION = "plan-soperator-data-migration"
 ONBOARDING_ACTION_PLAN_COMPUTE_MIGRATION = "plan-soperator-compute-migration"
+ONBOARDING_ACTION_REMEDIATE_TARGET_GPU_STACK = "remediate-target-gpu-stack"
+ONBOARDING_ACTION_UPGRADE_EXTERNAL_NODE_TEMPLATE = "upgrade-external-node-template"
 ONBOARDING_ACTION_ENABLE_TOPOLOGY = "enable-slurm-topology"
-ONBOARDING_ACTION_REVIEW_GPU_RDMA = "review-gpu-rdma"
+ONBOARDING_EXTERNAL_NODE_TEMPLATE_TARGET_K8S_VERSION = "1.33"
+ONBOARDING_EXTERNAL_NODE_TEMPLATE_TARGET_OS = "ubuntu24.04"
+ONBOARDING_EXTERNAL_NODE_TEMPLATE_TARGET_GPU_STACK_PRESET = "cuda13.0"
 ONBOARDING_STORAGE_MODE_KEEP_EXISTING = "keep-existing-storage"
 ONBOARDING_STORAGE_MODE_CREATE_ALIGNED_SFS = "create-aligned-sfs"
 ONBOARDING_COMPUTE_MODE_KEEP_EXISTING = "keep-existing-compute"
@@ -53,6 +58,12 @@ ONBOARDING_COMPUTE_MODES = frozenset(
     }
 )
 ONBOARDING_REQUIRED_STORAGE_KEYS = ("jail", "controller-spool", "accounting")
+ONBOARDING_SERVICE_ROLES = ("system", "controller", "login", "accounting")
+ONBOARDING_NODESET_LABEL_KEYS = (
+    "slurm.nebius.ai/nodeset-name",
+    "slurm.nebius.ai/nodeset",
+)
+ONBOARDING_WORKER_ROLE_PREFIX = "worker"
 ONBOARDING_ACCEPTABLE_STATES = frozenset(
     {
         ONBOARDING_STATE_NO_SOPERATOR_DETECTED,
@@ -73,6 +84,7 @@ SOPERATOR_MIGRATION_PROFILE_DATA_FILE = Path(__file__).with_name(
     "soperator_migration_profiles.yaml"
 )
 SOPERATOR_COMPATIBLE_RELEASE_NAMES = frozenset({"soperator", "slurm-operator"})
+SOPERATOR_COMPATIBLE_CONTROLLER_RELEASE_NAMES = frozenset({"soperator-controller"})
 SOPERATOR_COMPATIBLE_CHART_IDENTITIES = frozenset(
     {"soperator", "helm-soperator", "slurm-operator"}
 )
@@ -99,7 +111,6 @@ class SoperatorOnboardingAction:
     required: bool = False
     selected: bool = False
     disruptive: bool = False
-    blocked: bool = False
     reason: str = ""
 
 
@@ -185,6 +196,44 @@ def _analysis_fingerprint(snapshot: Mapping[str, Any]) -> str:
     return hashlib.sha256(_stable_json(_stable_analysis_snapshot(snapshot)).encode("utf-8")).hexdigest()
 
 
+def _stable_source_discovery_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
+    stable = dict(copy.deepcopy(to_plain_data(payload)))
+    stable.pop("generated_at", None)
+    report = stable.get("report")
+    if isinstance(report, dict):
+        report.pop("analyzed_at", None)
+    snapshot = stable.get("snapshot")
+    if isinstance(snapshot, dict):
+        snapshot["helm_releases"] = _stable_helm_releases(snapshot.get("helm_releases"))
+    return stable
+
+
+def _preserve_source_discovery_timestamps_if_stable(
+    *,
+    path: Path,
+    payload: dict[str, Any],
+) -> None:
+    if not path.exists():
+        return
+    try:
+        existing = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return
+    if not isinstance(existing, Mapping):
+        return
+    if _stable_source_discovery_payload(existing) != _stable_source_discovery_payload(payload):
+        return
+    generated_at = str(existing.get("generated_at", "") or "").strip()
+    if generated_at:
+        payload["generated_at"] = generated_at
+    existing_report = existing.get("report")
+    report = payload.get("report")
+    if isinstance(existing_report, Mapping) and isinstance(report, dict):
+        analyzed_at = str(existing_report.get("analyzed_at", "") or "").strip()
+        if analyzed_at:
+            report["analyzed_at"] = analyzed_at
+
+
 def soperator_onboarding_fingerprint(
     payload_or_config: Any,
     *,
@@ -214,6 +263,9 @@ def soperator_onboarding_fingerprint(
                 "migration_profile_id": str(
                     onboarding.get("migration_profile_id", "") or ""
                 ).strip(),
+                "node_template_upgrade": to_plain_data(
+                    onboarding.get("node_template_upgrade", {})
+                ),
                 "collection_errors": list(onboarding.get("collection_errors", []) or []),
             },
         },
@@ -394,6 +446,46 @@ def _onboarding_compute_mode_is_valid(onboarding: Mapping[str, Any]) -> bool:
     return configured_compute_mode == required_compute_mode
 
 
+def _report_has_finding(
+    report: SoperatorOnboardingReport,
+    *,
+    layer: str,
+    status: str,
+) -> bool:
+    return any(
+        finding.layer == layer and finding.status == status
+        for finding in report.findings
+    )
+
+
+def soperator_onboarding_effective_storage_mode(
+    report: SoperatorOnboardingReport,
+    storage_mode: str,
+) -> str:
+    """Return the storage mode after analyzer compatibility evidence is applied."""
+
+    if (
+        storage_mode == ONBOARDING_STORAGE_MODE_CREATE_ALIGNED_SFS
+        and _report_has_finding(report, layer="storage-sfs", status="target-compatible")
+    ):
+        return ONBOARDING_STORAGE_MODE_KEEP_EXISTING
+    return storage_mode
+
+
+def soperator_onboarding_effective_compute_mode(
+    report: SoperatorOnboardingReport,
+    compute_mode: str,
+) -> str:
+    """Return the compute mode after analyzer compatibility evidence is applied."""
+
+    if (
+        compute_mode == ONBOARDING_COMPUTE_MODE_CREATE_ALIGNED_NODE_GROUPS
+        and _report_has_finding(report, layer="role-mapping", status="target-compatible")
+    ):
+        return ONBOARDING_COMPUTE_MODE_KEEP_EXISTING
+    return compute_mode
+
+
 def _node_group_inventory_from_target(target: Mapping[str, Any] | None) -> Mapping[str, Any]:
     inventory = target.get("inventory") if isinstance(target, Mapping) else None
     node_groups = inventory.get("node_groups") if isinstance(inventory, Mapping) else None
@@ -433,6 +525,7 @@ def _node_groups_missing_selector_labels(node_groups: Mapping[str, Any]) -> set[
             str(labels.get(label_key, "") or "").strip()
             for label_key in (
                 "nebius.com/node-group",
+                "nebius.com/node-group-id",
                 "yandex.cloud/node-group-id",
                 "node.kubernetes.io/instance-type",
             )
@@ -446,6 +539,41 @@ def _node_groups_missing_selector_labels(node_groups: Mapping[str, Any]) -> set[
             continue
         missing.add(key)
     return missing
+
+
+def _node_group_soperator_role(raw_group: Mapping[str, Any]) -> str:
+    labels: dict[str, Any] = {}
+    for field in ("labels", "node_labels"):
+        value = raw_group.get(field)
+        if isinstance(value, Mapping):
+            labels.update(value)
+    for label_key in ONBOARDING_NODESET_LABEL_KEYS:
+        role = normalize_component_token(labels.get(label_key))
+        if role:
+            return role
+    return ""
+
+
+def _node_group_role_evidence(node_groups: Mapping[str, Any]) -> dict[str, list[str]]:
+    evidence: dict[str, list[str]] = {role: [] for role in ONBOARDING_SERVICE_ROLES}
+    evidence["worker"] = []
+    for raw_key, raw_group in node_groups.items():
+        group = normalize_component_token(raw_key)
+        if not group or not isinstance(raw_group, Mapping):
+            continue
+        role = _node_group_soperator_role(raw_group)
+        if role in ONBOARDING_SERVICE_ROLES:
+            evidence[role].append(group)
+        elif role.startswith(ONBOARDING_WORKER_ROLE_PREFIX):
+            evidence["worker"].append(group)
+    return {role: groups for role, groups in evidence.items() if groups}
+
+
+def _compute_layout_target_compatible(node_groups: Mapping[str, Any]) -> bool:
+    evidence = _node_group_role_evidence(node_groups)
+    return all(role in evidence for role in ONBOARDING_SERVICE_ROLES) and bool(
+        evidence.get("worker")
+    )
 
 
 def _sequence_of_mappings(value: Any) -> tuple[Mapping[str, Any], ...]:
@@ -665,10 +793,47 @@ def _migration_phase(
     )
 
 
+def _migration_approval_phase_title(
+    *,
+    include_data_migration: bool,
+    include_compute_migration: bool,
+    include_soperator_upgrade: bool = False,
+) -> str:
+    if include_data_migration and include_compute_migration:
+        return "Customer approval of role, NodeSet, SlurmCluster, and storage changes"
+    if include_data_migration:
+        return "Customer approval of SlurmCluster storage changes"
+    if include_compute_migration:
+        return "Customer approval of role, NodeSet, and SlurmCluster compute changes"
+    if include_soperator_upgrade:
+        return "Customer approval of Soperator chart upgrade and remediation"
+    return "Customer approval of Soperator remediation plan"
+
+
+def _migration_approval_action_title(
+    *,
+    include_data_migration: bool,
+    include_compute_migration: bool,
+    include_soperator_upgrade: bool = False,
+) -> str:
+    if include_data_migration and include_compute_migration:
+        return "Approve Soperator role, storage, and SlurmCluster remediation"
+    if include_data_migration:
+        return "Approve Soperator storage and SlurmCluster remediation"
+    if include_compute_migration:
+        return "Approve Soperator role, NodeSet, and SlurmCluster remediation"
+    if include_soperator_upgrade:
+        return "Approve Soperator chart upgrade and remediation"
+    return "Approve Soperator remediation"
+
+
 def _default_soperator_migration_plan(
     *,
     include_data_migration: bool,
     include_compute_migration: bool = True,
+    include_soperator_upgrade: bool = False,
+    include_target_gpu_remediation: bool = False,
+    include_external_node_template_upgrade: bool = False,
 ) -> tuple[SoperatorMigrationPhase, ...]:
     phases = [
         _migration_phase(
@@ -679,10 +844,47 @@ def _default_soperator_migration_plan(
         ),
         _migration_phase(
             "customer-approval",
-            "Customer approval of role, NodeSet, SlurmCluster, and storage changes",
+            _migration_approval_phase_title(
+                include_data_migration=include_data_migration,
+                include_compute_migration=include_compute_migration,
+                include_soperator_upgrade=include_soperator_upgrade,
+            ),
             requires_customer_approval=True,
         ),
     ]
+    if include_external_node_template_upgrade:
+        phases.append(
+            _migration_phase(
+                "external-node-template-upgrade",
+                "Upgrade external MK8s control plane and node templates",
+                progress_label=(
+                    "External MK8s Upgrade: control plane first, node groups one at a time"
+                ),
+                requires_customer_approval=True,
+                notes=(
+                    "Run direct Nebius cluster and node-group updates; do not call Terraform.",
+                    "Upgrade the control plane first, one Kubernetes minor at a time when needed.",
+                    "Upgrade source node groups with a temporary zero-surge strategy and restore "
+                    "their original strategy after each group.",
+                ),
+            )
+        )
+    if include_target_gpu_remediation:
+        phases.append(
+            _migration_phase(
+                "target-gpu-stack-remediation",
+                "Remediate target MK8s GPU operator stack",
+                progress_label="Remediating target GPU operator stack...",
+                requires_customer_approval=True,
+                notes=(
+                    "Apply the target-scoped GPU Operator app row.",
+                    "Apply the target-scoped Network Operator app row when the target GPU "
+                    "shape requires RDMA.",
+                    "Validate scheduler-visible GPU/RDMA and NCCL readiness after the "
+                    "target rollout.",
+                ),
+            )
+        )
     if include_data_migration:
         phases.extend(
             [
@@ -707,45 +909,102 @@ def _default_soperator_migration_plan(
                 ),
             ]
         )
-    if include_compute_migration:
+    if include_compute_migration or include_soperator_upgrade:
+        if include_compute_migration:
+            rolling_title = "In-place compute remediation with preserved worker node groups"
+            rolling_progress_label = (
+                "Compute Remediation: service roles aligned, preserved worker groups verified, "
+                "<running jobs> jobs remaining"
+            )
+            rolling_notes = (
+                "Create or reuse service-role node groups without duplicating worker capacity.",
+                "Map worker NodeSets to detected existing worker node groups.",
+                "Apply migration-owned template changes with zero-surge "
+                "Nebius node-group updates.",
+            )
+        else:
+            rolling_title = "Soperator chart upgrade with existing compute layout"
+            rolling_progress_label = (
+                "Soperator Upgrade: existing compute layout verified, "
+                "<running jobs> jobs remaining"
+            )
+            rolling_notes = (
+                "Reuse detected service-role and worker node groups.",
+                "Apply target Soperator values without creating parallel worker capacity.",
+                "Verify the preserved worker NodeSets before accepting production jobs.",
+            )
         phases.append(
             _migration_phase(
                 "rolling-compute-migration",
-                "Rolling compute migration by draining and validating nodes in batches",
-                progress_label=(
-                    "Compute Migration: <drained>/<total> nodes, <ready> target nodes, "
-                    "<running jobs> jobs remaining"
-                ),
-                notes=(
-                    "Do not terminate running jobs; drain old nodes and admit target nodes in batches.",
-                    "Validate target NodeSets before accepting production jobs.",
-                ),
+                rolling_title,
+                progress_label=rolling_progress_label,
+                notes=rolling_notes,
             )
         )
-    if include_data_migration or include_compute_migration:
+    if include_data_migration or include_compute_migration or include_soperator_upgrade:
+        if include_data_migration and include_compute_migration:
+            final_title = "Final Slurm controller, accounting, login, and storage-reference cutover"
+            final_progress_label = "Data/Compute Migration: final delta and control-plane cutover"
+            final_notes = (
+                "Pause new scheduling or drain partitions according to customer policy.",
+                "Run a final delta sync before updating Soperator values or CRs.",
+                "Validate target NodeSets before accepting production jobs.",
+            )
+            validation_notes = (
+                "Keep old storage and preserved worker node groups available until validation passes.",
+            )
+            retire_title = "Retire old storage and replaced service-role resources only after explicit approval"
+        elif include_data_migration:
+            final_title = "Final Slurm storage-reference cutover"
+            final_progress_label = "Data Migration: final delta and storage-reference cutover"
+            final_notes = (
+                "Pause new scheduling or drain partitions according to customer policy.",
+                "Run a final delta sync before updating Soperator values or CRs.",
+            )
+            validation_notes = (
+                "Keep old storage resources available until validation passes.",
+            )
+            retire_title = "Retire old storage resources only after explicit approval"
+        elif include_compute_migration:
+            final_title = "Final Soperator compute and control-plane cutover"
+            final_progress_label = "Compute Migration: final control-plane cutover"
+            final_notes = (
+                "Pause new scheduling or drain partitions according to customer policy.",
+                "Validate target NodeSets and SlurmCluster reconciliation before accepting production jobs.",
+            )
+            validation_notes = (
+                "Keep preserved worker node groups available until validation passes.",
+            )
+            retire_title = "Retire replaced service-role resources only after explicit approval"
+        else:
+            final_title = "Final Soperator chart cutover"
+            final_progress_label = "Soperator Upgrade: final control-plane cutover"
+            final_notes = (
+                "Pause new scheduling according to customer policy.",
+                "Validate target NodeSets and SlurmCluster reconciliation before accepting production jobs.",
+            )
+            validation_notes = (
+                "Keep preserved worker node groups available until validation passes.",
+            )
+            retire_title = "Retire old Soperator resources only after explicit approval"
         phases.extend(
             [
                 _migration_phase(
                     "final-control-plane-cutover",
-                    "Final Slurm controller, accounting, login, and storage-reference cutover",
-                    progress_label="Data Migration: final delta and control-plane cutover",
+                    final_title,
+                    progress_label=final_progress_label,
                     requires_customer_approval=True,
                     quiet_window=True,
-                    notes=(
-                        "Pause new scheduling or drain partitions according to customer policy.",
-                        "Run a final delta sync before updating Soperator values or CRs.",
-                    ),
+                    notes=final_notes,
                 ),
                 _migration_phase(
                     "validation-and-rollback-hold",
                     "Validation and rollback hold",
-                    notes=(
-                        "Keep old storage and old compute resources available until validation passes.",
-                    ),
+                    notes=validation_notes,
                 ),
                 _migration_phase(
                     "retire-old-resources",
-                    "Retire old storage and old resources only after explicit approval",
+                    retire_title,
                     requires_customer_approval=True,
                 ),
             ]
@@ -761,9 +1020,15 @@ def soperator_onboarding_report_for_modes(
 ) -> SoperatorOnboardingReport:
     """Return a report whose selected actions and phases match operator choices."""
 
-    include_data_migration = storage_mode == ONBOARDING_STORAGE_MODE_CREATE_ALIGNED_SFS
+    effective_storage_mode = soperator_onboarding_effective_storage_mode(report, storage_mode)
+    effective_compute_mode = soperator_onboarding_effective_compute_mode(report, compute_mode)
+    include_data_migration = effective_storage_mode == ONBOARDING_STORAGE_MODE_CREATE_ALIGNED_SFS
     include_compute_migration = (
-        compute_mode == ONBOARDING_COMPUTE_MODE_CREATE_ALIGNED_NODE_GROUPS
+        effective_compute_mode == ONBOARDING_COMPUTE_MODE_CREATE_ALIGNED_NODE_GROUPS
+    )
+    include_soperator_upgrade = any(
+        action.id == ONBOARDING_ACTION_UPGRADE_SOPERATOR and action.selected
+        for action in report.actions
     )
     filtered_actions: list[SoperatorOnboardingAction] = []
     for action in report.actions:
@@ -774,11 +1039,27 @@ def soperator_onboarding_report_for_modes(
             continue
         if action.id == ONBOARDING_ACTION_PLAN_COMPUTE_MIGRATION and not include_compute_migration:
             continue
+        if action.id == ONBOARDING_ACTION_APPROVE_MIGRATION:
+            action = replace(
+                action,
+                title=_migration_approval_action_title(
+                    include_data_migration=include_data_migration,
+                    include_compute_migration=include_compute_migration,
+                    include_soperator_upgrade=include_soperator_upgrade,
+                ),
+            )
         filtered_actions.append(action)
     migration_plan: tuple[SoperatorMigrationPhase, ...] = ()
     if report.migration_plan:
         selected_ids = {action.id for action in filtered_actions if action.selected}
         migration_plan = _default_soperator_migration_plan(
+            include_target_gpu_remediation=ONBOARDING_ACTION_REMEDIATE_TARGET_GPU_STACK
+            in selected_ids,
+            include_external_node_template_upgrade=(
+                ONBOARDING_ACTION_UPGRADE_EXTERNAL_NODE_TEMPLATE in selected_ids
+            ),
+            include_soperator_upgrade=ONBOARDING_ACTION_UPGRADE_SOPERATOR
+            in selected_ids,
             include_data_migration=bool(
                 selected_ids
                 & {
@@ -789,9 +1070,15 @@ def soperator_onboarding_report_for_modes(
             include_compute_migration=ONBOARDING_ACTION_PLAN_COMPUTE_MIGRATION
             in selected_ids,
         )
+    remediation = tuple(
+        item
+        for item in report.remediation
+        if include_data_migration or item.classification != "data-sensitive"
+    )
     return replace(
         report,
         actions=_dedupe_soperator_actions(filtered_actions),
+        remediation=remediation,
         migration_plan=migration_plan,
     )
 
@@ -811,8 +1098,8 @@ def _remediation_items_for_profile(
             requires_customer_approval=True,
         ),
         SoperatorRemediationItem(
-            id="role-layout-review",
-            title="Review role layout, NodeSets, and SlurmCluster spec changes",
+            id="role-layout-approval",
+            title="Approve role layout, NodeSets, and SlurmCluster spec changes",
             classification="customer-approval-required",
             reason=(
                 "Role, NodeSet, scheduling, accounting, REST, or controller changes can affect "
@@ -821,9 +1108,7 @@ def _remediation_items_for_profile(
             requires_customer_approval=True,
         ),
     ]
-    migration_class = str((profile or {}).get("migration_class", "") or "")
-    requires_aligned_sfs = bool((profile or {}).get("requires_aligned_sfs", False))
-    if migration_class == "storage-and-layout-migration" or requires_aligned_sfs or not storage_present:
+    if not storage_present:
         items.append(
             SoperatorRemediationItem(
                 id="aligned-sfs-data-migration",
@@ -894,20 +1179,26 @@ def _release_name(release: Mapping[str, Any]) -> str:
 
 
 def _is_soperator_release_candidate(release: Mapping[str, Any]) -> bool:
+    release_name = _release_name(release)
     return (
-        _release_name(release) in SOPERATOR_COMPATIBLE_RELEASE_NAMES
+        release_name in SOPERATOR_COMPATIBLE_RELEASE_NAMES
+        or release_name in SOPERATOR_COMPATIBLE_CONTROLLER_RELEASE_NAMES
         or _release_chart_identity(release) in SOPERATOR_COMPATIBLE_CHART_IDENTITIES
     )
 
 
 def _is_compatible_soperator_release(release: Mapping[str, Any]) -> bool:
+    release_name = _release_name(release)
     namespace = _release_namespace(release).lower()
     chart_identity = _release_chart_identity(release)
-    return (
-        _release_name(release) in SOPERATOR_COMPATIBLE_RELEASE_NAMES
-        and namespace in {"", "soperator"}
-        and chart_identity in {"", *SOPERATOR_COMPATIBLE_CHART_IDENTITIES}
-    )
+    if release_name in SOPERATOR_COMPATIBLE_RELEASE_NAMES:
+        return namespace in {"", "soperator"} and chart_identity in {
+            "",
+            *SOPERATOR_COMPATIBLE_CHART_IDENTITIES,
+        }
+    if release_name in SOPERATOR_COMPATIBLE_CONTROLLER_RELEASE_NAMES:
+        return namespace == "soperator-system" and chart_identity == "helm-soperator"
+    return False
 
 
 def _node_groups_with_topology_labels(node_groups: Mapping[str, Any]) -> set[str]:
@@ -944,6 +1235,7 @@ def analyze_soperator_onboarding_snapshot(
     target_ref: str,
     pinned_chart_version: str = "",
     pinned_app_version: str = "",
+    source_version_override: str = "",
 ) -> SoperatorOnboardingReport:
     node_groups = snapshot.get("node_groups")
     if not isinstance(node_groups, Mapping):
@@ -964,6 +1256,9 @@ def analyze_soperator_onboarding_snapshot(
     storage_keys = _storage_layout_keys(storage=storage, pvcs=pvcs, pvs=pvs)
     rdma_groups = _node_groups_with_rdma(node_groups)
     topology_groups = _node_groups_with_topology_labels(node_groups)
+    role_evidence = _node_group_role_evidence(node_groups)
+    compute_layout_compatible = _compute_layout_target_compatible(node_groups)
+    manual_source_version = normalize_soperator_release_version(source_version_override)
 
     findings: list[SoperatorOnboardingFinding] = []
     actions: list[SoperatorOnboardingAction] = []
@@ -972,8 +1267,8 @@ def analyze_soperator_onboarding_snapshot(
         findings.append(
             SoperatorOnboardingFinding(
                 layer="kubernetes",
-                status="blocked",
-                severity="blocked",
+                status="analysis-failed",
+                severity="required",
                 message=(
                     "Soperator onboarding analysis could not read the target cluster. "
                     "Fix kube context, auth, or network access and rerun the analysis."
@@ -985,7 +1280,7 @@ def analyze_soperator_onboarding_snapshot(
             schema=ONBOARDING_SCHEMA,
             target_ref=normalize_component_token(target_ref),
             analyzed_at=datetime.now(UTC).isoformat().replace("+00:00", "Z"),
-            state="analysis-blocked",
+            state=ONBOARDING_STATE_ANALYSIS_INCOMPLETE,
             fingerprint=_analysis_fingerprint(snapshot),
             findings=tuple(findings),
             actions=(),
@@ -995,7 +1290,7 @@ def analyze_soperator_onboarding_snapshot(
         findings.append(
             SoperatorOnboardingFinding(
                 layer="kubernetes",
-                status="blocked",
+                status="inventory-missing",
                 severity="required",
                 message="No node-group inventory was discovered for this target.",
                 action_id="refresh-inventory",
@@ -1018,8 +1313,8 @@ def analyze_soperator_onboarding_snapshot(
             findings.append(
                 SoperatorOnboardingFinding(
                     layer="role-mapping",
-                    status="blocked",
-                    severity="blocked",
+                    status="selector-required",
+                    severity="required",
                     message=(
                         "Discovered node groups are missing a usable selector label. "
                         "Label nodes with nebius.com/node-group, yandex.cloud/node-group-id, "
@@ -1038,6 +1333,39 @@ def analyze_soperator_onboarding_snapshot(
                     message="Namespace 'soperator' was not detected; cxcli will render it for install.",
                 )
             )
+        if compute_layout_compatible:
+            findings.append(
+                SoperatorOnboardingFinding(
+                    layer="role-mapping",
+                    status="target-compatible",
+                    severity="info",
+                    message=(
+                        "Existing Soperator service-role and worker node-group labels were "
+                        "detected and can be reused without creating a replacement compute layout."
+                    ),
+                    evidence={"roles": role_evidence},
+                )
+            )
+        elif role_evidence:
+            missing_roles = [
+                role for role in (*ONBOARDING_SERVICE_ROLES, "worker") if role not in role_evidence
+            ]
+            findings.append(
+                SoperatorOnboardingFinding(
+                    layer="role-mapping",
+                    status="incomplete",
+                    severity="recommended",
+                    message=(
+                        "Some Soperator node-group role labels were detected, but the "
+                        "standard service-role and worker layout is incomplete. Missing "
+                        "roles: "
+                        + ", ".join(missing_roles)
+                        + "."
+                    ),
+                    action_id=ONBOARDING_ACTION_PLAN_COMPUTE_MIGRATION,
+                    evidence={"roles": role_evidence, "missing_roles": missing_roles},
+                )
+            )
 
     if not gpu_groups:
         findings.append(
@@ -1048,26 +1376,48 @@ def analyze_soperator_onboarding_snapshot(
                 message="No GPU node group was discovered; worker role mapping will be CPU-only.",
             )
         )
-    elif not rdma_groups:
+    else:
         findings.append(
             SoperatorOnboardingFinding(
-                layer="gpu-rdma",
-                status="manual-review",
-                severity="recommended",
+                layer="gpu-stack",
+                status="planned",
+                severity="required",
                 message=(
-                    "GPU node groups were discovered, but no scheduler-visible RDMA resources "
-                    "were found in node allocatable data."
+                    "GPU node groups were discovered; target remediation will apply the "
+                    "standard cxcli MK8s GPU stack, including GPU Operator, Network Operator "
+                    "when the target is GPU-cluster/RDMA-capable, and deploy-time GPU "
+                    "readiness, GPU Visibility, and NCCL validations."
                 ),
-                action_id=ONBOARDING_ACTION_REVIEW_GPU_RDMA,
+                action_id=ONBOARDING_ACTION_REMEDIATE_TARGET_GPU_STACK,
+                evidence={"gpu_node_groups": sorted(gpu_groups)},
             )
         )
         actions.append(
             SoperatorOnboardingAction(
-                id=ONBOARDING_ACTION_REVIEW_GPU_RDMA,
-                title="Review GPU/RDMA readiness before production distributed jobs",
-                layer="gpu-rdma",
+                id=ONBOARDING_ACTION_REMEDIATE_TARGET_GPU_STACK,
+                title="Remediate target MK8s GPU stack and deploy-time validations",
+                layer="gpu-stack",
+                required=True,
                 selected=True,
-                reason="GPU workers exist but RDMA resources were not discovered.",
+                reason=(
+                    "GPU workers require the standard cxcli GPU/RDMA operator policy and "
+                    "deploy-time GPU validation reports on the target cluster."
+                ),
+            )
+        )
+    if gpu_groups and not rdma_groups:
+        findings.append(
+            SoperatorOnboardingFinding(
+                layer="gpu-rdma",
+                status="remediation-planned",
+                severity="required",
+                message=(
+                    "GPU node groups were discovered, but no scheduler-visible RDMA resources "
+                    "were found in node allocatable data. cxcli will remediate the target "
+                    "GPU/RDMA operator stack when the target is GPU-cluster/RDMA-capable, then "
+                    "verify scheduler-visible GPU/RDMA readiness and NCCL at deploy time."
+                ),
+                action_id=ONBOARDING_ACTION_REMEDIATE_TARGET_GPU_STACK,
             )
         )
 
@@ -1207,18 +1557,44 @@ def analyze_soperator_onboarding_snapshot(
         None,
     )
 
-    if incompatible_release is not None:
+    manual_source_version_applies = bool(
+        manual_source_version and (has_soperator_crds or incompatible_release is not None)
+    )
+    release_identity_needs_source_version = (
+        incompatible_release is not None and not manual_source_version_applies
+    )
+
+    if incompatible_release is not None and not manual_source_version_applies:
         state = ONBOARDING_STATE_EXISTING_SOPERATOR_UNKNOWN
         findings.append(
             SoperatorOnboardingFinding(
                 layer="soperator",
-                status="blocked",
-                severity="blocked",
+                status="source-version-required",
+                severity="required",
                 message=(
                     "Existing Soperator-like Helm release has incompatible release name, "
-                    "namespace, or chart identity; cxcli will not take it over silently."
+                    "namespace, or chart identity. Select the source Soperator version so "
+                    "cxcli can match a committed migration profile before it manages the "
+                    "release."
                 ),
                 evidence={"release": dict(incompatible_release)},
+            )
+        )
+    elif incompatible_release is not None:
+        state = ONBOARDING_STATE_EXISTING_SOPERATOR_UNKNOWN
+        findings.append(
+            SoperatorOnboardingFinding(
+                layer="soperator",
+                status="source-version-selected",
+                severity="recommended",
+                message=(
+                    "Existing Soperator-like Helm release has noncanonical identity; "
+                    "operator-selected source version will be used for migration profile matching."
+                ),
+                evidence={
+                    "release": dict(incompatible_release),
+                    "source_version": manual_source_version,
+                },
             )
         )
     elif soperator_release is None and not has_soperator_crds:
@@ -1265,16 +1641,38 @@ def analyze_soperator_onboarding_snapshot(
                 )
             )
 
-    source_version = _release_detected_version(soperator_release) if isinstance(soperator_release, Mapping) else ""
+    detected_source_version = (
+        _release_detected_version(soperator_release) if isinstance(soperator_release, Mapping) else ""
+    )
+    source_version = detected_source_version or (
+        manual_source_version if manual_source_version_applies else ""
+    )
     target_version = normalize_soperator_release_version(pinned_chart_version or pinned_app_version)
     migration_profile: Mapping[str, Any] | None = None
     migration_profile_id = ""
     remediation: tuple[SoperatorRemediationItem, ...] = ()
     migration_plan: tuple[SoperatorMigrationPhase, ...] = ()
 
-    if isinstance(soperator_release, Mapping):
-        live_chart = _release_chart_version(soperator_release)
-        live_app = str(soperator_release.get("app_version", "") or "").strip()
+    if source_version and (isinstance(soperator_release, Mapping) or manual_source_version_applies):
+        if isinstance(soperator_release, Mapping):
+            live_chart = _release_chart_version(soperator_release)
+            live_app = str(soperator_release.get("app_version", "") or "").strip()
+        else:
+            live_chart = source_version
+            live_app = source_version
+        if manual_source_version_applies and not detected_source_version:
+            findings.append(
+                SoperatorOnboardingFinding(
+                    layer="versions",
+                    status="source-version-selected",
+                    severity="info",
+                    message=(
+                        "Operator selected a Soperator source version because discovery did not "
+                        "find a compatible Helm release version."
+                    ),
+                    evidence={"source_version": source_version},
+                )
+            )
         comparison = compare_chart_versions(live_chart, pinned_chart_version)
         app_comparison = compare_chart_versions(live_app, pinned_app_version)
         migration_profile = soperator_migration_profile_for_version(source_version)
@@ -1283,8 +1681,8 @@ def analyze_soperator_onboarding_snapshot(
             findings.append(
                 SoperatorOnboardingFinding(
                     layer="migration-profile",
-                    status="blocked",
-                    severity="blocked",
+                    status="profile-missing",
+                    severity="required",
                     message=(
                         "Detected Soperator release does not match a committed cxcli "
                         "migration profile. Refresh the profile history before onboarding."
@@ -1311,7 +1709,7 @@ def analyze_soperator_onboarding_snapshot(
                 )
             )
         if comparison == "older" or app_comparison == "older":
-            if migration_profile is not None:
+            if migration_profile is not None and not release_identity_needs_source_version:
                 state = ONBOARDING_STATE_EXISTING_SOPERATOR_SUPPORTED
                 remediation = _remediation_items_for_profile(
                     profile=migration_profile,
@@ -1319,9 +1717,17 @@ def analyze_soperator_onboarding_snapshot(
                     target_version=pinned_chart_version or target_version,
                 )
                 migration_plan = _default_soperator_migration_plan(
+                    include_target_gpu_remediation=any(
+                        action.id == ONBOARDING_ACTION_REMEDIATE_TARGET_GPU_STACK
+                        and action.selected
+                        for action in actions
+                    ),
+                    include_external_node_template_upgrade=True,
+                    include_soperator_upgrade=True,
                     include_data_migration=any(
                         item.classification == "data-sensitive" for item in remediation
-                    )
+                    ),
+                    include_compute_migration=not compute_layout_compatible,
                 )
             findings.append(
                 SoperatorOnboardingFinding(
@@ -1329,11 +1735,15 @@ def analyze_soperator_onboarding_snapshot(
                     status="upgrade-available",
                     severity="recommended",
                     message="Existing Soperator version is older than the cxcli-pinned version.",
-                    action_id=ONBOARDING_ACTION_UPGRADE_SOPERATOR,
+                    action_id=(
+                        ""
+                        if release_identity_needs_source_version
+                        else ONBOARDING_ACTION_UPGRADE_SOPERATOR
+                    ),
                     evidence={"live_chart": live_chart, "live_app": live_app},
                 )
             )
-            if migration_profile is not None:
+            if migration_profile is not None and not release_identity_needs_source_version:
                 actions.append(
                     SoperatorOnboardingAction(
                         id=ONBOARDING_ACTION_UPGRADE_SOPERATOR,
@@ -1346,14 +1756,33 @@ def analyze_soperator_onboarding_snapshot(
                 actions.append(
                     SoperatorOnboardingAction(
                         id=ONBOARDING_ACTION_APPROVE_MIGRATION,
-                        title=(
-                            "Review and approve Soperator role, storage, and SlurmCluster "
-                            "remediation"
-                        ),
+                        title="Approve Soperator role, storage, and SlurmCluster remediation",
                         layer="migration",
                         selected=True,
                         disruptive=True,
                         reason="Migration changes require customer approval before execution.",
+                    )
+                )
+                findings.append(
+                    SoperatorOnboardingFinding(
+                        layer="mk8s-node-template",
+                        status="remediation-planned",
+                        severity="required",
+                        message=(
+                            "External MK8s control plane and node templates will be upgraded "
+                            "during migration through direct Nebius updates because the target "
+                            "is not Terraform-owned by cxcli."
+                        ),
+                        action_id=ONBOARDING_ACTION_UPGRADE_EXTERNAL_NODE_TEMPLATE,
+                        evidence={
+                            "target_k8s_version": (
+                                ONBOARDING_EXTERNAL_NODE_TEMPLATE_TARGET_K8S_VERSION
+                            ),
+                            "target_os": ONBOARDING_EXTERNAL_NODE_TEMPLATE_TARGET_OS,
+                            "target_gpu_stack_preset": (
+                                ONBOARDING_EXTERNAL_NODE_TEMPLATE_TARGET_GPU_STACK_PRESET
+                            ),
+                        },
                     )
                 )
                 if any(item.classification == "data-sensitive" for item in remediation):
@@ -1382,21 +1811,41 @@ def analyze_soperator_onboarding_snapshot(
                     )
                 actions.append(
                     SoperatorOnboardingAction(
-                        id=ONBOARDING_ACTION_PLAN_COMPUTE_MIGRATION,
-                        title="Plan rolling compute migration without terminating running jobs",
-                        layer="role-mapping",
+                        id=ONBOARDING_ACTION_UPGRADE_EXTERNAL_NODE_TEMPLATE,
+                        title="Upgrade external MK8s control plane and node templates",
+                        layer="mk8s-node-template",
                         selected=True,
                         disruptive=True,
-                        reason="NodeSet/layout changes need batch drain and validation phases.",
+                        reason=(
+                            "External Soperator targets are not Terraform-owned, so cxcli "
+                            "must align Kubernetes version, node OS image, and Nebius GPU "
+                            "driver preset through direct Nebius updates during migration."
+                        ),
                     )
                 )
+                if not compute_layout_compatible:
+                    actions.append(
+                        SoperatorOnboardingAction(
+                            id=ONBOARDING_ACTION_PLAN_COMPUTE_MIGRATION,
+                            title="Plan in-place compute remediation without duplicating workers",
+                            layer="role-mapping",
+                            selected=True,
+                            disruptive=True,
+                            reason=(
+                                "Service-role layout changes need guarded remediation; worker node "
+                                "groups stay in place while external node-template upgrades run "
+                                "through the migration executor."
+                            ),
+                        )
+                    )
         if comparison == "newer" or app_comparison == "newer":
-            state = ONBOARDING_STATE_EXISTING_SOPERATOR_NEWER
+            if not release_identity_needs_source_version:
+                state = ONBOARDING_STATE_EXISTING_SOPERATOR_NEWER
             findings.append(
                 SoperatorOnboardingFinding(
                     layer="versions",
                     status="newer-than-cxcli",
-                    severity="blocked",
+                    severity="required",
                     message=(
                         "Existing Soperator version is newer than the cxcli-pinned version; "
                         "cxcli will not downgrade it without an explicit replacement plan."
@@ -1409,14 +1858,15 @@ def analyze_soperator_onboarding_snapshot(
             findings.append(
                 SoperatorOnboardingFinding(
                     layer="versions",
-                    status="manual",
-                    severity="blocked",
+                    status="version-compare-required",
+                    severity="required",
                     message="Soperator chart version could not be compared safely.",
                     evidence={"live_chart": live_chart, "pinned_chart": pinned_chart_version},
                 )
             )
         if (
-            state
+            not release_identity_needs_source_version
+            and state
             not in {
                 ONBOARDING_STATE_EXISTING_SOPERATOR_SUPPORTED,
                 ONBOARDING_STATE_EXISTING_SOPERATOR_NEWER,
@@ -1436,16 +1886,16 @@ def analyze_soperator_onboarding_snapshot(
                 )
             )
 
-    if soperator_release is None and has_soperator_crds:
+    if soperator_release is None and has_soperator_crds and not source_version:
         state = ONBOARDING_STATE_EXISTING_SOPERATOR_UNKNOWN
         findings.append(
             SoperatorOnboardingFinding(
                 layer="versions",
-                status="manual",
-                severity="blocked",
+                status="source-version-required",
+                severity="required",
                 message=(
                     "Soperator CRDs were detected but no compatible Helm release version was found. "
-                    "Manual review is required before cxcli can plan migration."
+                    "Select the source Soperator version so cxcli can plan migration."
                 ),
             )
         )
@@ -1538,12 +1988,24 @@ def build_soperator_onboarding_report_from_config(
         target_ref=target_ref,
         pinned_chart_version=pinned_chart_version,
         pinned_app_version=pinned_app_version,
-    ).to_dict()
-    report["accepted_fingerprint"] = soperator_onboarding_fingerprint(
+    )
+    target = soperator_onboarding_target(payload_or_config, target_ref=target_ref)
+    onboarding = target.get("soperator_onboarding") if isinstance(target, Mapping) else {}
+    if isinstance(onboarding, Mapping):
+        storage_mode = str(onboarding.get("storage_mode", "") or "").strip()
+        compute_mode = str(onboarding.get("compute_mode", "") or "").strip()
+        if storage_mode or compute_mode:
+            report = soperator_onboarding_report_for_modes(
+                report,
+                storage_mode=storage_mode or ONBOARDING_STORAGE_MODE_KEEP_EXISTING,
+                compute_mode=compute_mode or ONBOARDING_COMPUTE_MODE_KEEP_EXISTING,
+            )
+    report_payload = report.to_dict()
+    report_payload["accepted_fingerprint"] = soperator_onboarding_fingerprint(
         payload_or_config,
         target_ref=target_ref,
     )
-    return report
+    return report_payload
 
 
 def write_soperator_onboarding_reports(
@@ -1606,6 +2068,12 @@ def write_source_soperator_discovery_report(
         "snapshot": to_plain_data(snapshot),
     }
     path.parent.mkdir(parents=True, exist_ok=True)
+    _preserve_source_discovery_timestamps_if_stable(path=path, payload=payload)
+    rendered = json.dumps(payload, indent=2, sort_keys=True) + "\n"
+    if path.exists():
+        with suppress(OSError):
+            if path.read_text(encoding="utf-8") == rendered:
+                return path
     tmp_path: Path | None = None
     try:
         with tempfile.NamedTemporaryFile(
@@ -1617,7 +2085,7 @@ def write_source_soperator_discovery_report(
             delete=False,
         ) as handle:
             tmp_path = Path(handle.name)
-            handle.write(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+            handle.write(rendered)
         tmp_path.replace(path)
     finally:
         if tmp_path is not None and tmp_path.exists():
@@ -1736,6 +2204,7 @@ def collect_kubectl_soperator_snapshot(
         selector_value = ""
         for candidate_key in (
             "nebius.com/node-group",
+            "nebius.com/node-group-id",
             "yandex.cloud/node-group-id",
             "node.kubernetes.io/instance-type",
         ):

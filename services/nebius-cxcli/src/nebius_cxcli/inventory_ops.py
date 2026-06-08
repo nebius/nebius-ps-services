@@ -1408,7 +1408,7 @@ def write_inventory(
 ) -> InventoryArtifacts:
     """Write the human-readable deploy report artifact to disk."""
     payload = _build_payload(config, paths)
-    paths.inventory_dir.mkdir(parents=True, exist_ok=True)
+    paths.reports_dir.mkdir(parents=True, exist_ok=True)
 
     payload_data = to_plain_data(config)
     client_info = _mapping(payload_data if isinstance(payload_data, dict) else {})
@@ -1470,10 +1470,10 @@ def write_inventory(
             f"- n8n: `enabled`; hostname `{_coalesce(_lookup(n8n_summary, 'hostname'), 'n/a')}`"
         )
 
-    markdown_path = paths.inventory_dir / DEPLOY_REPORT_FILENAME
+    markdown_path = paths.reports_dir / DEPLOY_REPORT_FILENAME
     validation_report = build_deploy_validation_report(
         validations,
-        inventory_dir=paths.inventory_dir,
+        reports_dir=paths.reports_dir,
         markdown_path=markdown_path,
     )
     lines = [

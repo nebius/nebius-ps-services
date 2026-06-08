@@ -34,7 +34,7 @@ def _project_paths(tmp_path: Path) -> ProjectPaths:
         generated_dir=generated_dir,
         infra_dir=generated_dir / "infra",
         flux_dir=generated_dir / "flux",
-        inventory_dir=generated_dir / "inventory",
+        reports_dir=generated_dir / "reports",
         path_tenant_folder="tenant-name-example",
         path_project_folder="project-name-example",
     )
@@ -118,7 +118,7 @@ def test_build_generated_manifest_uses_repo_relative_paths(tmp_path: Path) -> No
         "generated_dir": "deployments/tenant-name-example/project-name-example/generated",
         "infra_dir": "deployments/tenant-name-example/project-name-example/generated/infra",
         "flux_dir": "deployments/tenant-name-example/project-name-example/generated/flux",
-        "inventory_dir": "deployments/tenant-name-example/project-name-example/generated/inventory",
+        "reports_dir": "deployments/tenant-name-example/project-name-example/generated/reports",
     }
     assert manifest["tools"] == {
         "flux_version": "v2.8.0",

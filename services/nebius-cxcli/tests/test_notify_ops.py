@@ -50,7 +50,7 @@ def _project_paths(tmp_path: Path) -> ProjectPaths:
         generated_dir=generated_dir,
         infra_dir=generated_dir / "infra",
         flux_dir=generated_dir / "flux",
-        inventory_dir=generated_dir / "inventory",
+        reports_dir=generated_dir / "reports",
         path_tenant_folder="tenant-name-example",
         path_project_folder="project-name-example",
     )
@@ -113,8 +113,8 @@ def test_send_deploy_report_email_uses_local_smtp_settings_when_env_missing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     paths = _project_paths(tmp_path)
-    paths.inventory_dir.mkdir(parents=True, exist_ok=True)
-    (paths.inventory_dir / "deploy-report.md").write_text(
+    paths.reports_dir.mkdir(parents=True, exist_ok=True)
+    (paths.reports_dir / "deploy-report.md").write_text(
         "# Deploy Report\n\nBody\n", encoding="utf-8"
     )
 
@@ -159,8 +159,8 @@ def test_send_deploy_report_email_rejects_plaintext_smtp(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     paths = _project_paths(tmp_path)
-    paths.inventory_dir.mkdir(parents=True, exist_ok=True)
-    (paths.inventory_dir / "deploy-report.md").write_text("# Deploy Report\n", encoding="utf-8")
+    paths.reports_dir.mkdir(parents=True, exist_ok=True)
+    (paths.reports_dir / "deploy-report.md").write_text("# Deploy Report\n", encoding="utf-8")
 
     sent: list[FakeSMTP] = []
 
@@ -179,13 +179,13 @@ def test_send_deploy_report_email_rejects_plaintext_smtp(
     assert sent == []
 
 
-def test_send_deploy_report_email_uses_inventory_markdown_and_smtp_login(
+def test_send_deploy_report_email_uses_deploy_report_markdown_and_smtp_login(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     paths = _project_paths(tmp_path)
-    paths.inventory_dir.mkdir(parents=True, exist_ok=True)
-    (paths.inventory_dir / "deploy-report.md").write_text(
+    paths.reports_dir.mkdir(parents=True, exist_ok=True)
+    (paths.reports_dir / "deploy-report.md").write_text(
         "# Deploy Report\n\nBody\n", encoding="utf-8"
     )
 
@@ -224,14 +224,14 @@ def test_send_deploy_report_email_uses_inventory_markdown_and_smtp_login(
     assert "# Deploy Report" in message.get_content()
 
 
-def test_send_deploy_report_email_requires_inventory_markdown_body(
+def test_send_deploy_report_email_requires_deploy_report_markdown_body(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     paths = _project_paths(tmp_path)
 
     monkeypatch.setenv("SMTP_HOST", "smtp.example.com")
-    paths.inventory_dir.mkdir(parents=True, exist_ok=True)
+    paths.reports_dir.mkdir(parents=True, exist_ok=True)
 
     with pytest.raises(RuntimeError, match="Deploy report markdown is missing"):
         send_deploy_report_email(_config(), paths)
@@ -242,8 +242,8 @@ def test_send_deploy_report_email_requires_project_id_from_config(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     paths = _project_paths(tmp_path)
-    paths.inventory_dir.mkdir(parents=True, exist_ok=True)
-    (paths.inventory_dir / "deploy-report.md").write_text("# Deploy Report\n", encoding="utf-8")
+    paths.reports_dir.mkdir(parents=True, exist_ok=True)
+    (paths.reports_dir / "deploy-report.md").write_text("# Deploy Report\n", encoding="utf-8")
 
     monkeypatch.setenv("SMTP_HOST", "smtp.example.com")
 
@@ -259,8 +259,8 @@ def test_send_deploy_report_email_masks_project_and_tenant_ids_in_body(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     paths = _project_paths(tmp_path)
-    paths.inventory_dir.mkdir(parents=True, exist_ok=True)
-    (paths.inventory_dir / "deploy-report.md").write_text(
+    paths.reports_dir.mkdir(parents=True, exist_ok=True)
+    (paths.reports_dir / "deploy-report.md").write_text(
         (
             "# Deploy Report: project-456\n\n"
             "- Tenant: `tenant-123`\n"

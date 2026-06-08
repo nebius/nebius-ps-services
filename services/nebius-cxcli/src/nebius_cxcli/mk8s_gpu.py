@@ -33,6 +33,7 @@ from .components import ComponentEntry, component_entries
 from .deploy_targets import (
     TARGET_REF_FIELD,
     app_chart_target_ref,
+    deploy_target_is_external_mk8s,
     enabled_cluster_target_refs,
     is_auto_target_scoped_app_instance_id,
     target_scoped_app_instance_id,
@@ -393,6 +394,17 @@ def _target_mk8s_gpu_project_validation_defaults(
     return defaults
 
 
+def _gpu_enabled_target_refs(payload: Mapping[str, Any]) -> tuple[str, ...]:
+    refs: list[str] = []
+    seen: set[str] = set()
+    for context in _enabled_mk8s_gpu_contexts(_as_payload(payload)):
+        target_ref = context.instance_id
+        if target_ref and target_ref not in seen:
+            refs.append(target_ref)
+            seen.add(target_ref)
+    return tuple(refs)
+
+
 def _drop_generated_default_validation_overrides(
     existing: Mapping[str, Any],
     *,
@@ -433,25 +445,8 @@ def normalize_mk8s_gpu_project_validation_settings(payload: dict[str, Any]) -> b
     if not payload_map:
         return False
 
-    infra = payload_map.get("infra")
-    components = infra.get("components") if isinstance(infra, Mapping) else None
-    if not isinstance(components, list):
-        return False
-
-    enabled_gpu_target_refs: list[str] = []
+    enabled_gpu_target_refs = list(_gpu_enabled_target_refs(payload_map))
     changed = False
-
-    for item in components:
-        if not isinstance(item, dict):
-            continue
-        if component_type_id(item) != "mk8s" or not bool(item.get("enabled", False)):
-            continue
-        inputs = item.get("inputs")
-        if not isinstance(inputs, Mapping) or not node_group_gpu_enabled(inputs):
-            continue
-        instance_id = component_instance_id(item)
-        if instance_id:
-            enabled_gpu_target_refs.append(instance_id)
 
     if not enabled_gpu_target_refs:
         deploy = payload_map.get("deploy")
@@ -733,43 +728,148 @@ def _effective_mk8s_gpu_validation_overrides(
     )
 
 
-def _enabled_mk8s_gpu_contexts(payload: dict[str, Any]) -> tuple[Mk8sGpuClusterContext, ...]:
-    infra_node = payload.get("infra")
-    if not isinstance(infra_node, dict):
-        return ()
-    components = infra_node.get("components")
-    if not isinstance(components, list):
+def _inventory_group_gpu_enabled(raw_group: Mapping[str, Any]) -> bool:
+    explicit = _coerce_optional_bool(raw_group.get("gpu"))
+    if explicit is not None:
+        return explicit
+    allocatable = raw_group.get("allocatable")
+    if not isinstance(allocatable, Mapping):
+        return False
+    return any(
+        str(key).startswith("nvidia.com/gpu") and str(value).strip() not in {"", "0"}
+        for key, value in allocatable.items()
+    )
+
+
+def _inventory_group_labels(raw_group: Mapping[str, Any]) -> dict[str, Any]:
+    labels: dict[str, Any] = {}
+    for label_key in ("labels", "node_labels"):
+        value = raw_group.get(label_key)
+        if isinstance(value, Mapping):
+            labels.update(dict(value))
+    return labels
+
+
+def _inventory_group_gpu_cluster_enabled(raw_group: Mapping[str, Any]) -> bool:
+    explicit = _coerce_optional_bool(raw_group.get("gpu_cluster_enabled"))
+    if explicit is not None:
+        return explicit
+    if _as_text(raw_group.get("gpu_cluster_key")) or _as_text(raw_group.get("gpu_cluster_id")):
+        return True
+    allocatable = raw_group.get("allocatable")
+    if isinstance(allocatable, Mapping) and any(
+        str(resource).startswith("rdma/") for resource in allocatable
+    ):
+        return True
+    labels = _inventory_group_labels(raw_group)
+    return any(
+        str(label).startswith("topology.nebius.com/tier-")
+        or str(label) == "topology.nebius.com/gpu-cluster-id"
+        for label in labels
+    )
+
+
+def _inventory_group_gpu_stack_source(raw_group: Mapping[str, Any]) -> str:
+    explicit = _as_text(raw_group.get("gpu_stack_source")).lower()
+    if explicit:
+        return explicit
+    labels = _inventory_group_labels(raw_group)
+    if (
+        _coerce_optional_bool(labels.get("nebius.com/driverful")) is True
+        or _as_text(labels.get("nebius.com/drivers-preset"))
+        or _as_text(labels.get("nebius.com/nvidia_driver_version"))
+    ):
+        return "nebius_image"
+    return "nebius_image"
+
+
+def _external_mk8s_gpu_contexts(payload: Mapping[str, Any]) -> tuple[Mk8sGpuClusterContext, ...]:
+    deploy = payload.get("deploy")
+    targets = deploy.get("targets") if isinstance(deploy, Mapping) else None
+    if not isinstance(targets, list):
         return ()
 
-    mk8s_entry_ids = {
-        entry.id
-        for entry in component_entries("infra")
-        if entry.validation_profile == "mk8s_cluster"
-    }
     contexts: list[Mk8sGpuClusterContext] = []
-    for row in components:
-        if not isinstance(row, dict) or not bool(row.get("enabled", False)):
+    for target in targets:
+        if not isinstance(target, Mapping) or not deploy_target_is_external_mk8s(target):
             continue
-        component_id = component_type_id(row)
-        if component_id not in mk8s_entry_ids:
+        onboarding = target.get("soperator_onboarding")
+        if not isinstance(onboarding, Mapping) or onboarding.get("accepted") is not True:
             continue
-        inputs = row.get("inputs")
-        if not isinstance(inputs, dict) or not node_group_gpu_enabled(inputs):
+        target_ref = component_instance_id(target)
+        if not target_ref:
             continue
-        instance_id = component_instance_id(row) or component_id
-        for gpu_group in gpu_node_groups(inputs):
+        inventory = target.get("inventory")
+        node_groups = inventory.get("node_groups") if isinstance(inventory, Mapping) else None
+        if not isinstance(node_groups, Mapping):
+            continue
+        for raw_key, raw_group in node_groups.items():
+            if not isinstance(raw_group, Mapping) or not _inventory_group_gpu_enabled(raw_group):
+                continue
+            labels = _inventory_group_labels(raw_group)
+            platform = (
+                _as_text(raw_group.get("platform"))
+                or _as_text(labels.get("nebius.com/platform"))
+                or _as_text(raw_key)
+            )
+            preset = (
+                _as_text(raw_group.get("preset"))
+                or _as_text(labels.get("nebius.com/resource-preset"))
+                or _as_text(labels.get("node.kubernetes.io/instance-type"))
+            )
             contexts.append(
                 Mk8sGpuClusterContext(
-                    component_id=component_id,
-                    instance_id=instance_id,
-                    gpu_platform=gpu_group.platform,
-                    gpu_preset=gpu_group.preset,
-                    gpu_cluster_enabled=bool(
-                        gpu_group.gpu_cluster_key or gpu_group.gpu_cluster_id
-                    ),
-                    gpu_stack_source=gpu_group.gpu_stack_source,
+                    component_id="external-mk8s",
+                    instance_id=target_ref,
+                    gpu_platform=platform,
+                    gpu_preset=preset,
+                    gpu_cluster_enabled=_inventory_group_gpu_cluster_enabled(raw_group),
+                    gpu_stack_source=_inventory_group_gpu_stack_source(raw_group),
                 )
             )
+    return tuple(contexts)
+
+
+def _enabled_mk8s_gpu_contexts(payload: dict[str, Any]) -> tuple[Mk8sGpuClusterContext, ...]:
+    infra_node = payload.get("infra")
+    contexts: list[Mk8sGpuClusterContext] = []
+    if isinstance(infra_node, dict):
+        components = infra_node.get("components")
+        if isinstance(components, list):
+            mk8s_entry_ids = {
+                entry.id
+                for entry in component_entries("infra")
+                if entry.validation_profile == "mk8s_cluster"
+            }
+            for row in components:
+                if not isinstance(row, dict) or not bool(row.get("enabled", False)):
+                    continue
+                component_id = component_type_id(row)
+                if component_id not in mk8s_entry_ids:
+                    continue
+                inputs = row.get("inputs")
+                if not isinstance(inputs, dict) or not node_group_gpu_enabled(inputs):
+                    continue
+                instance_id = component_instance_id(row) or component_id
+                for gpu_group in gpu_node_groups(inputs):
+                    contexts.append(
+                        Mk8sGpuClusterContext(
+                            component_id=component_id,
+                            instance_id=instance_id,
+                            gpu_platform=gpu_group.platform,
+                            gpu_preset=gpu_group.preset,
+                            gpu_cluster_enabled=bool(
+                                gpu_group.gpu_cluster_key or gpu_group.gpu_cluster_id
+                            ),
+                            gpu_stack_source=gpu_group.gpu_stack_source,
+                        )
+                    )
+    managed_context_refs = {context.instance_id for context in contexts}
+    contexts.extend(
+        context
+        for context in _external_mk8s_gpu_contexts(payload)
+        if context.instance_id not in managed_context_refs
+    )
     return tuple(contexts)
 
 
@@ -2141,9 +2241,13 @@ def _run_kubectl(
     env = os.environ.copy()
     if extra_env:
         env.update(extra_env)
+    command = ["kubectl", *args]
+    context = str(env.get("KUBECTL_CONTEXT", "") or "").strip()
+    if context and "--context" not in args:
+        command = ["kubectl", "--context", context, *args]
     try:
         completed = subprocess.run(
-            ["kubectl", *args],
+            command,
             env=env,
             capture_output=True,
             text=True,
@@ -3022,7 +3126,7 @@ def _pod_phase_snapshot(
 def _run_gpu_visibility_validation(
     *,
     spec: dict[str, Any],
-    inventory_dir: Path,
+    reports_dir: Path,
     extra_env: dict[str, str] | None,
     emit: Callable[[str], None] | None,
 ) -> Path:
@@ -3031,7 +3135,7 @@ def _run_gpu_visibility_validation(
     cleanup = bool(spec.get("cleanup", True))
     timeout_seconds = _parse_go_duration_seconds(_as_text(spec.get("timeout")))
     max_nodes = max(1, int(spec.get("max_nodes", 1) or 1))
-    report_path = inventory_dir / _as_text(spec.get("report_file"))
+    report_path = reports_dir / _as_text(spec.get("report_file"))
     all_nodes = _gpu_nodes(extra_env=extra_env)
     if not all_nodes:
         raise RuntimeError(
@@ -3573,14 +3677,14 @@ def _nccl_chart_documents(
 def _run_nccl_validation(
     *,
     spec: dict[str, Any],
-    inventory_dir: Path,
+    reports_dir: Path,
     extra_env: dict[str, str] | None,
     emit: Callable[[str], None] | None,
 ) -> Path:
     timeout_seconds = _parse_go_duration_seconds(_as_text(spec.get("timeout")))
     namespace = _as_text(spec.get("namespace"))
     max_nodes = max(1, int(spec.get("max_nodes", 1) or 1))
-    report_path = inventory_dir / _as_text(spec.get("report_file"))
+    report_path = reports_dir / _as_text(spec.get("report_file"))
     transport_mode = _as_text(spec.get("transport_mode")).lower() or "auto"
     transport_label = _nccl_transport_label(transport_mode)
     threshold_gbps = float(spec.get("average_bus_bandwidth_threshold_gbps", 0) or 0)
@@ -3837,12 +3941,12 @@ def _run_nccl_validation(
 def _run_operator_readiness_validation(
     *,
     spec: dict[str, Any],
-    inventory_dir: Path,
+    reports_dir: Path,
     extra_env: dict[str, str] | None,
     emit: Callable[[str], None] | None,
 ) -> Path:
     timeout_seconds = _parse_go_duration_seconds(_as_text(spec.get("timeout")))
-    report_path = inventory_dir / _as_text(spec.get("report_file"))
+    report_path = reports_dir / _as_text(spec.get("report_file"))
     gpu_namespace = _as_text(spec.get("gpu_operator_namespace")) or "nvidia-gpu-operator"
     network_namespace = (
         _as_text(spec.get("network_operator_namespace")) or "nvidia-network-operator"
@@ -3963,13 +4067,13 @@ def _run_operator_readiness_validation(
 def _write_validation_error_report(
     *,
     spec: Mapping[str, Any],
-    inventory_dir: Path,
+    reports_dir: Path,
     error: Exception,
 ) -> None:
     report_file = _as_text(spec.get("report_file"))
     if not report_file:
         return
-    report_path = inventory_dir / report_file
+    report_path = reports_dir / report_file
     if report_path.exists():
         return
     kind = _as_text(spec.get("kind"))
@@ -4008,7 +4112,7 @@ def _write_validation_error_report(
 def run_mk8s_gpu_validations(
     validations: list[dict[str, Any]],
     *,
-    inventory_dir: Path,
+    reports_dir: Path,
     extra_env: dict[str, str] | None,
     emit: Callable[[str], None] | None = None,
 ) -> list[Path]:
@@ -4024,7 +4128,7 @@ def run_mk8s_gpu_validations(
                 written_reports.append(
                     _run_operator_readiness_validation(
                         spec=spec,
-                        inventory_dir=inventory_dir,
+                        reports_dir=reports_dir,
                         extra_env=extra_env,
                         emit=emit,
                     )
@@ -4033,7 +4137,7 @@ def run_mk8s_gpu_validations(
                 written_reports.append(
                     _run_gpu_visibility_validation(
                         spec=spec,
-                        inventory_dir=inventory_dir,
+                        reports_dir=reports_dir,
                         extra_env=extra_env,
                         emit=emit,
                     )
@@ -4042,13 +4146,13 @@ def run_mk8s_gpu_validations(
                 written_reports.append(
                     _run_nccl_validation(
                         spec=spec,
-                        inventory_dir=inventory_dir,
+                        reports_dir=reports_dir,
                         extra_env=extra_env,
                         emit=emit,
                     )
                 )
         except Exception as exc:
-            _write_validation_error_report(spec=spec, inventory_dir=inventory_dir, error=exc)
+            _write_validation_error_report(spec=spec, reports_dir=reports_dir, error=exc)
             raise
     return written_reports
 

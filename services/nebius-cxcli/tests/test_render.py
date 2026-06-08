@@ -3575,11 +3575,11 @@ def test_render_instance_resets_generated_bundle_and_removes_stale_files(
     bootstrap_components = bootstrap_flux_dir / "gotk-components.yaml"
     bootstrap_kustomization = bootstrap_flux_dir / "kustomization.yaml"
     stale_flux_file = paths.flux_dir / "stale.yaml"
-    stale_inventory = paths.inventory_dir / "old.json"
+    stale_report = paths.reports_dir / "old.json"
     stale_top_level = paths.generated_dir / "obsolete.txt"
     stale_tf.parent.mkdir(parents=True, exist_ok=True)
     bootstrap_flux_dir.mkdir(parents=True, exist_ok=True)
-    stale_inventory.parent.mkdir(parents=True, exist_ok=True)
+    stale_report.parent.mkdir(parents=True, exist_ok=True)
     stale_tf.write_text('resource "null_resource" "stale" {}\n', encoding="utf-8")
     bootstrap_sync.write_text("apiVersion: v1\nkind: ConfigMap\n", encoding="utf-8")
     bootstrap_components.write_text("apiVersion: v1\nkind: ConfigMap\n", encoding="utf-8")
@@ -3588,14 +3588,14 @@ def test_render_instance_resets_generated_bundle_and_removes_stale_files(
         encoding="utf-8",
     )
     stale_flux_file.write_text("apiVersion: v1\nkind: Secret\n", encoding="utf-8")
-    stale_inventory.write_text("{}\n", encoding="utf-8")
+    stale_report.write_text("{}\n", encoding="utf-8")
     stale_top_level.write_text("obsolete\n", encoding="utf-8")
 
     render_project(config, paths, source_profile=SourceProfile.LOCAL)
 
     assert not stale_tf.exists()
     assert not stale_flux_file.exists()
-    assert not stale_inventory.exists()
+    assert not stale_report.exists()
     assert not stale_top_level.exists()
     assert not bootstrap_sync.exists()
     assert not bootstrap_components.exists()
@@ -3605,7 +3605,7 @@ def test_render_instance_resets_generated_bundle_and_removes_stale_files(
         (_target_flux_dir(paths) / "kustomization.yaml").read_text(encoding="utf-8")
     )
     assert "./flux-system" not in kustomization_doc["resources"]
-    assert not (paths.inventory_dir / "deploy-report.md").exists()
+    assert not (paths.reports_dir / "deploy-report.md").exists()
 
 
 def test_render_instance_preserves_existing_generated_bundle_when_rerender_fails(

@@ -1281,9 +1281,9 @@ def write_grafana_status(
     *,
     preserve_existing: bool = False,
 ) -> Path:
-    inventory_dir = Path(paths.inventory_dir)
-    inventory_dir.mkdir(parents=True, exist_ok=True)
-    status_path = inventory_dir / GRAFANA_STATUS_FILENAME
+    reports_dir = Path(paths.reports_dir)
+    reports_dir.mkdir(parents=True, exist_ok=True)
+    status_path = reports_dir / GRAFANA_STATUS_FILENAME
     rows = [dict(item) for item in statuses]
     if preserve_existing:
         merged = {_grafana_status_key(item): dict(item) for item in read_grafana_status(paths)}
@@ -1298,7 +1298,7 @@ def write_grafana_status(
 
 
 def read_grafana_status(paths: Any) -> tuple[dict[str, Any], ...]:
-    status_path = Path(paths.inventory_dir) / GRAFANA_STATUS_FILENAME
+    status_path = Path(paths.reports_dir) / GRAFANA_STATUS_FILENAME
     if not status_path.exists():
         return ()
     try:

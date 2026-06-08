@@ -48,31 +48,31 @@ class DeployValidationReport:
     results: tuple[DeployValidationResult, ...]
 
 
-def deploy_report_path(inventory_dir: Path) -> Path:
-    return inventory_dir / DEPLOY_REPORT_FILENAME
+def deploy_report_path(reports_dir: Path) -> Path:
+    return reports_dir / DEPLOY_REPORT_FILENAME
 
 
 def clear_deploy_validation_artifacts(
     validations: Sequence[Mapping[str, Any]],
     *,
-    inventory_dir: Path,
+    reports_dir: Path,
 ) -> None:
     """Remove stale validation artifacts before a new deploy run."""
-    deploy_report_path(inventory_dir).unlink(missing_ok=True)
-    (inventory_dir / _LEGACY_VALIDATION_MARKDOWN_FILENAME).unlink(missing_ok=True)
+    deploy_report_path(reports_dir).unlink(missing_ok=True)
+    (reports_dir / _LEGACY_VALIDATION_MARKDOWN_FILENAME).unlink(missing_ok=True)
     for spec in validations:
-        _validation_report_path(spec, inventory_dir=inventory_dir).unlink(missing_ok=True)
+        _validation_report_path(spec, reports_dir=reports_dir).unlink(missing_ok=True)
 
 
 def build_deploy_validation_report(
     validations: Sequence[Mapping[str, Any]],
     *,
-    inventory_dir: Path,
+    reports_dir: Path,
     markdown_path: Path | None = None,
 ) -> DeployValidationReport:
     """Aggregate validation JSON detail files into one summary structure."""
     results = tuple(
-        _build_validation_result(spec, inventory_dir=inventory_dir) for spec in validations
+        _build_validation_result(spec, reports_dir=reports_dir) for spec in validations
     )
     completed_count = sum(1 for item in results if item.status != "not_run")
     passed_count = sum(1 for item in results if item.status == "passed")
@@ -87,7 +87,7 @@ def build_deploy_validation_report(
     else:
         overall_status = "passed"
     return DeployValidationReport(
-        markdown_path=markdown_path or deploy_report_path(inventory_dir),
+        markdown_path=markdown_path or deploy_report_path(reports_dir),
         overall_status=overall_status,
         total_count=len(results),
         completed_count=completed_count,
@@ -171,12 +171,12 @@ def _validation_markdown_summary(item: DeployValidationResult) -> str:
     )
 
 
-def _validation_report_path(spec: Mapping[str, Any], *, inventory_dir: Path) -> Path:
+def _validation_report_path(spec: Mapping[str, Any], *, reports_dir: Path) -> Path:
     report_file = str(spec.get("report_file", "") or "").strip()
     if report_file:
-        return inventory_dir / report_file
+        return reports_dir / report_file
     kind = str(spec.get("kind", "") or "").strip() or "validation"
-    return inventory_dir / f"{kind}-report.json"
+    return reports_dir / f"{kind}-report.json"
 
 
 def _validation_target_ref(
@@ -196,10 +196,10 @@ def _validation_target_ref(
 def _build_validation_result(
     spec: Mapping[str, Any],
     *,
-    inventory_dir: Path,
+    reports_dir: Path,
 ) -> DeployValidationResult:
     kind = str(spec.get("kind", "") or "").strip()
-    report_path = _validation_report_path(spec, inventory_dir=inventory_dir)
+    report_path = _validation_report_path(spec, reports_dir=reports_dir)
     target_ref = _validation_target_ref(spec)
     if not report_path.exists():
         return DeployValidationResult(
@@ -290,6 +290,8 @@ def _validation_summary(kind: str, payload: Mapping[str, Any]) -> str:
         return _observability_ingestion_summary(payload)
     if kind == "mysterybox_eso_connectivity":
         return _mysterybox_eso_connectivity_summary(payload)
+    if kind == "soperator_cluster_smoke":
+        return str(payload.get("summary", "") or "Soperator cluster smoke test completed.")
     validation_name = str(payload.get("validation", "") or "").strip() or "Validation"
     return f"{validation_name} completed with passed={bool(payload.get('passed'))}."
 
