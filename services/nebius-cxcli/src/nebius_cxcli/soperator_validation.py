@@ -19,6 +19,8 @@ SOPERATOR_CLUSTER_VALIDATION_SCHEMA = "nebius-cxcli-soperator-cluster-validation
 SOPERATOR_NAMESPACE = "soperator"
 
 _SMOKE_MARKER = "cxcli-soperator-srun-ok"
+_GPU_VISIBILITY_MARKER = "cxcli-soperator-gpu-visibility-ok"
+_NCCL_MARKER = "cxcli-soperator-nccl-ok"
 
 
 def _smoke_script(*, partition: str = "") -> str:
@@ -30,6 +32,34 @@ def _smoke_script(*, partition: str = "") -> str:
             f"{partition_arg} --nodes=1 --ntasks=1 "
             "--cpus-per-task=1 --time=00:02:00 --immediate=60 "
             "bash -lc 'set -euo pipefail; echo cxcli-soperator-srun-ok; hostname'",
+        ]
+    )
+
+
+def _gpu_visibility_script(*, partition: str) -> str:
+    partition_arg = f" --partition={shlex.quote(partition)}" if partition else ""
+    return "\n".join(
+        [
+            "set -euo pipefail",
+            "srun --job-name=cxcli-soperator-gpu-visibility"
+            f"{partition_arg} --nodes=1 --ntasks=1 --gres=gpu:1 "
+            "--time=00:03:00 --immediate=60 "
+            "bash -lc 'set -euo pipefail; echo cxcli-soperator-gpu-visibility-ok; "
+            "hostname; nvidia-smi -L'",
+        ]
+    )
+
+
+def _nccl_script(*, partition: str) -> str:
+    partition_arg = f" --partition={shlex.quote(partition)}" if partition else ""
+    return "\n".join(
+        [
+            "set -euo pipefail",
+            "srun --job-name=cxcli-soperator-nccl"
+            f"{partition_arg} --nodes=1 --ntasks=1 --gres=gpu:1 "
+            "--time=00:03:00 --immediate=60 "
+            "bash -lc 'set -euo pipefail; echo cxcli-soperator-nccl-ok; "
+            "/usr/bin/all_reduce_perf -b 8 -e 8 -f 2 -g 1'",
         ]
     )
 
@@ -458,6 +488,24 @@ def _sinfo_partition_candidates(stdout: str) -> tuple[str, ...]:
     return tuple(dict.fromkeys([*preferred, *fallback]))
 
 
+def _sinfo_gpu_partition_candidates(stdout: str) -> tuple[str, ...]:
+    preferred: list[str] = []
+    for line in stdout.splitlines():
+        parts = [item.strip() for item in line.split("|")]
+        if len(parts) < 3:
+            continue
+        partition = parts[0].rstrip("*").strip()
+        state = parts[1].lower().rstrip("*~#!%@^-+$")
+        gres = parts[2].lower()
+        if not partition or partition == "hidden":
+            continue
+        if "gpu" not in partition.lower() and "gpu" not in gres:
+            continue
+        if state in {"idle", "mix", "mixed"}:
+            preferred.append(partition)
+    return tuple(dict.fromkeys(preferred))
+
+
 def _select_srun_smoke_partition(
     runner: SoperatorValidationCommandRunner,
     spec: Mapping[str, Any],
@@ -471,6 +519,22 @@ def _select_srun_smoke_partition(
     if sinfo.returncode != 0:
         return ""
     candidates = _sinfo_partition_candidates(sinfo.stdout)
+    return candidates[0] if candidates else ""
+
+
+def _select_gpu_smoke_partition(
+    runner: SoperatorValidationCommandRunner,
+    spec: Mapping[str, Any],
+) -> str:
+    sinfo = _exec_login(
+        runner,
+        spec,
+        ("sinfo", "-h", "-o", "%P|%t|%G"),
+        timeout_seconds=120,
+    )
+    if sinfo.returncode != 0:
+        return ""
+    candidates = _sinfo_gpu_partition_candidates(sinfo.stdout)
     return candidates[0] if candidates else ""
 
 
@@ -511,6 +575,82 @@ def _check_srun_smoke(
         )
 
 
+def _check_slurm_gpu_visibility(
+    runner: SoperatorValidationCommandRunner,
+    spec: Mapping[str, Any],
+    checks: list[dict[str, Any]],
+) -> None:
+    partition = _select_gpu_smoke_partition(runner, spec)
+    if not partition:
+        return
+    result = _exec_login(
+        runner,
+        spec,
+        ("bash", "-lc", _gpu_visibility_script(partition=partition)),
+        timeout_seconds=420,
+    )
+    if result.returncode == 0 and _GPU_VISIBILITY_MARKER in result.stdout and "GPU " in result.stdout:
+        _append_check(
+            checks,
+            name="Slurm GPU visibility test",
+            status="passed",
+            summary=f"one-GPU Slurm allocation reported NVIDIA GPUs on partition {partition}.",
+            command=result.args,
+            stdout=result.stdout,
+        )
+    else:
+        _append_check(
+            checks,
+            name="Slurm GPU visibility test",
+            status="failed",
+            summary=(
+                "one-GPU Slurm allocation failed or did not report an NVIDIA GPU "
+                f"on partition {partition}."
+            ),
+            command=result.args,
+            stdout=result.stdout,
+            stderr=result.stderr,
+        )
+
+
+def _check_slurm_nccl_smoke(
+    runner: SoperatorValidationCommandRunner,
+    spec: Mapping[str, Any],
+    checks: list[dict[str, Any]],
+) -> None:
+    partition = _select_gpu_smoke_partition(runner, spec)
+    if not partition:
+        return
+    result = _exec_login(
+        runner,
+        spec,
+        ("bash", "-lc", _nccl_script(partition=partition)),
+        timeout_seconds=420,
+    )
+    if result.returncode == 0 and _NCCL_MARKER in result.stdout and "Avg bus bandwidth" in result.stdout:
+        _append_check(
+            checks,
+            name="Slurm NCCL smoke test",
+            status="passed",
+            summary=f"one-rank NCCL all_reduce_perf smoke completed on partition {partition}.",
+            command=result.args,
+            stdout=result.stdout,
+        )
+    else:
+        _append_check(
+            checks,
+            name="Slurm NCCL smoke test",
+            status="failed",
+            summary=(
+                "one-rank NCCL all_reduce_perf smoke failed or did not report "
+                f"bandwidth output on partition {partition}."
+            ),
+            command=result.args,
+            stdout=result.stdout,
+            stderr=result.stderr,
+        )
+
+
 def run_soperator_cluster_validations(
     validations: list[dict[str, Any]],
     *,
@@ -542,6 +682,8 @@ def run_soperator_cluster_validations(
             _check_slurm_status(runner, spec, checks)
             _check_slurm_queue(runner, spec, checks)
             _check_srun_smoke(runner, spec, checks)
+            _check_slurm_gpu_visibility(runner, spec, checks)
+            _check_slurm_nccl_smoke(runner, spec, checks)
         except Exception as exc:
             _append_check(
                 checks,

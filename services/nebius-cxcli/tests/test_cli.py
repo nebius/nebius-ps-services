@@ -118,6 +118,183 @@ def _stub_soperator_migration_gpu_validations(monkeypatch: pytest.MonkeyPatch) -
     )
 
 
+def test_deploy_managed_soperator_runs_gpu_validations_before_full_flux(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_path = tmp_path / "config.yaml"
+    paths = cli_module.resolve_project_paths(config_path)
+    target_flux_dir = paths.generated_dir / "flux" / "targets" / "mk8s"
+    target_flux_dir.mkdir(parents=True)
+    (target_flux_dir / "kustomization.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "apiVersion": "kustomize.config.k8s.io/v1beta1",
+                "kind": "Kustomization",
+                "resources": [
+                    "./namespace-soperator.yaml",
+                    "./helmrelease-platform-gpu-operator.yaml",
+                    "./helmrelease-slurm-soperator.yaml",
+                ],
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    (target_flux_dir / "namespace-soperator.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "apiVersion": "v1",
+                "kind": "Namespace",
+                "metadata": {"name": "soperator"},
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    (target_flux_dir / "helmrelease-platform-gpu-operator.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "apiVersion": "helm.toolkit.fluxcd.io/v2",
+                "kind": "HelmRelease",
+                "metadata": {"name": "gpu-operator", "namespace": "nvidia-gpu-operator"},
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    (target_flux_dir / "helmrelease-slurm-soperator.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "apiVersion": "helm.toolkit.fluxcd.io/v2",
+                "kind": "HelmRelease",
+                "metadata": {"name": "soperator", "namespace": "soperator"},
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    (target_flux_dir / "post-flux-helmrender-slurm-soperator.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "apiVersion": "slurm.nebius.ai/v1",
+                "kind": "SlurmCluster",
+                "metadata": {"name": "training", "namespace": "soperator"},
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    config = {
+        "infra": {"components": []},
+        "apps": {
+            "charts": [
+                {
+                    "id": "soperator",
+                    "instance_id": "mk8s",
+                    "enabled": True,
+                    "namespace": "soperator",
+                    "release-name": "soperator",
+                    "values": {},
+                }
+            ]
+        },
+        "deploy": {"targets": [{"instance_id": "mk8s"}]},
+    }
+    validations = [
+        {"kind": "mk8s_gpu_operator_readiness", "target_ref": "mk8s"},
+        {"kind": "mk8s_gpu_visibility", "target_ref": "mk8s"},
+        {"kind": "mk8s_nccl", "target_ref": "mk8s"},
+        {"kind": "soperator_cluster_smoke", "target_ref": "mk8s", "required": True},
+    ]
+    manifest = {
+        "deploy": {
+            "targets": [
+                {
+                    "component_id": "mk8s",
+                    "instance_id": "mk8s",
+                    "target_ref": "mk8s",
+                    "access": "external",
+                    "cluster_id_output_name": "mk8s_cluster_id",
+                    "component_output_ref": "mk8s.cluster_id",
+                    "flux_dir": str(target_flux_dir),
+                }
+            ],
+            "validations": validations,
+        }
+    }
+    events: list[tuple[str, tuple[str, ...] | bool]] = []
+
+    def _has_soperator_resources(flux_dir: Path) -> bool:
+        kustomization = yaml.safe_load(
+            (flux_dir / "kustomization.yaml").read_text(encoding="utf-8")
+        )
+        resources = kustomization.get("resources", [])
+        return (
+            "./helmrelease-slurm-soperator.yaml" in resources
+            or (flux_dir / "post-flux-helmrender-slurm-soperator.yaml").exists()
+        )
+
+    def fake_apply_rendered_flux(apply_paths, *, extra_env=None):
+        _ = extra_env
+        events.append(("apply", _has_soperator_resources(apply_paths.flux_dir)))
+
+    def fake_run_deploy_validations(validation_specs, *, reports_dir, extra_env, emit=None):
+        _ = reports_dir, extra_env, emit
+        events.append(
+            ("validations", tuple(str(item.get("kind", "")) for item in validation_specs))
+        )
+        return []
+
+    monkeypatch.setattr(cli_module, "_run_deploy_preflight", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        cli_module,
+        "_prepare_cluster_handoff_kube_env",
+        lambda *args, **kwargs: {"KUBECONFIG": "test"},
+    )
+    monkeypatch.setattr(cli_module, "_report_cluster_nodes_status", lambda **kwargs: None)
+    monkeypatch.setattr(cli_module, "_reconcile_observability_gpu_node_labels", lambda *a, **k: None)
+    monkeypatch.setattr(cli_module, "_ensure_mysterybox_eso_runtime_before_flux", lambda *a, **k: None)
+    monkeypatch.setattr(cli_module, "_ensure_grafana_runtime_before_flux", lambda *a, **k: None)
+    monkeypatch.setattr(cli_module, "_ensure_soperator_notifier_runtime_before_flux", lambda *a, **k: None)
+    monkeypatch.setattr(cli_module, "_ensure_soperator_backup_runtime_before_flux", lambda *a, **k: None)
+    monkeypatch.setattr(cli_module, "_apply_rendered_flux", fake_apply_rendered_flux)
+    monkeypatch.setattr(cli_module, "_run_deploy_validations", fake_run_deploy_validations)
+    monkeypatch.setattr(cli_module, "_collect_grafana_status_after_flux", lambda *a, **k: [])
+    monkeypatch.setattr(cli_module, "_warn_if_flux_gitops_not_bootstrapped", lambda *a, **k: "")
+    monkeypatch.setattr(
+        cli_module,
+        "write_inventory",
+        lambda _config, inventory_paths, *, validations=(): SimpleNamespace(
+            markdown=inventory_paths.reports_dir / "deploy-report.md"
+        ),
+    )
+
+    cli_module._deploy_generated_artifacts(
+        config,
+        paths,
+        manifest,
+        auto_auth_bootstrap=False,
+        skip_validations=False,
+        skip_validation_kinds=set(),
+        requested_target_ref="mk8s",
+    )
+
+    assert events == [
+        ("apply", False),
+        (
+            "validations",
+            (
+                "mk8s_gpu_operator_readiness",
+                "mk8s_gpu_visibility",
+                "mk8s_nccl",
+            ),
+        ),
+        ("apply", True),
+        ("validations", ("soperator_cluster_smoke",)),
+    ]
+
+
 def _tenant_folder_name(tenant_id: str = "tenant-123") -> str:
     folder_by_tenant_id = {
         "tenant-123": "tenant-acme-labs",
@@ -565,6 +742,10 @@ def _assert_soperator_onboard_next_steps(
         assert "Do not run `nebius-cxcli deploy` before `ext-soperator migrate`" in output
     else:
         assert f"`nebius-cxcli deploy {config_arg}`" in output
+        assert (
+            f"Use `--target {target_arg}` only when you intentionally want to narrow deploy "
+            "to this generated target."
+        ) in output
         assert (
             f"`nebius-cxcli ext-soperator migrate {config_arg} --target {target_arg} --dry-run`"
             not in output
@@ -4641,7 +4822,9 @@ def test_soperator_onboard_noninteractive_uses_source_version_for_crds_only_clus
             "ext-soperator",
             "onboard",
             str(config_path),
-            "--target",
+            "--cluster-id",
+            "mk8scluster-legacy",
+            "--target-id",
             "legacy-cluster",
             "--kube-context",
             "legacy-context",
@@ -4700,7 +4883,9 @@ def test_soperator_onboard_deployments_root_creates_project_config(
             "project-456",
             "--region-id",
             "eu-north1",
-            "--target",
+            "--cluster-id",
+            "mk8scluster-training",
+            "--target-id",
             "training-cluster",
             "--kube-context",
             "training-context",
@@ -4721,6 +4906,7 @@ def test_soperator_onboard_deployments_root_creates_project_config(
     assert payload["client_info"]["nebius"]["tenant_id"] == "tenant-123"
     assert payload["client_info"]["nebius"]["project_id"] == "project-456"
     assert payload["infra"]["components"] == []
+    assert payload["deploy"]["targets"][0]["cluster_id"] == "mk8scluster-training"
     assert [(row["id"], row["instance_id"]) for row in payload["apps"]["charts"]] == [
         ("soperator", "training-cluster"),
         ("cert-manager", "training-cluster"),
@@ -4766,7 +4952,9 @@ def test_soperator_onboard_project_directory_updates_existing_config(
             "ext-soperator",
             "onboard",
             str(project_dir),
-            "--target",
+            "--cluster-id",
+            "mk8scluster-external",
+            "--target-id",
             "external-cluster",
             "--kube-context",
             "external-context",
@@ -4781,6 +4969,7 @@ def test_soperator_onboard_project_directory_updates_existing_config(
     assert "Updated:" in result.output
     payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     assert payload["deploy"]["targets"][0]["instance_id"] == "external-cluster"
+    assert payload["deploy"]["targets"][0]["cluster_id"] == "mk8scluster-external"
     assert [(row["id"], row["instance_id"]) for row in payload["apps"]["charts"]] == [
         ("soperator", "external-cluster"),
         ("cert-manager", "external-cluster"),
@@ -4829,7 +5018,9 @@ def test_soperator_onboard_deployments_root_existing_config_restores_gitignore(
             "tenant-123",
             "--project-id",
             "project-456",
-            "--target",
+            "--cluster-id",
+            "mk8scluster-external",
+            "--target-id",
             "external-cluster",
             "--kube-context",
             "external-context",
@@ -5032,6 +5223,418 @@ def test_soperator_onboarding_defaults_require_aligned_sfs_for_old_layout() -> N
     assert "create-aligned-sfs" in onboarding["actions"]
     assert "plan-soperator-data-migration" in onboarding["actions"]
     assert "plan-soperator-compute-migration" in onboarding["actions"]
+
+
+def test_soperator_onboarding_preserves_live_adoption_values_after_materialization(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    snapshot = {
+        "node_groups": {
+            "mk8snodegroup-system": {
+                "gpu": False,
+                "node_count": 1,
+                "labels": {
+                    "nebius.com/node-group-id": "mk8snodegroup-system",
+                    "nebius.com/node-group": "cpu",
+                    "slurm.nebius.ai/nodeset": "system",
+                },
+            },
+            "mk8snodegroup-controller": {
+                "gpu": False,
+                "node_count": 1,
+                "labels": {
+                    "nebius.com/node-group-id": "mk8snodegroup-controller",
+                    "nebius.com/node-group": "cpu",
+                    "slurm.nebius.ai/nodeset": "controller",
+                },
+            },
+            "mk8snodegroup-login": {
+                "gpu": False,
+                "node_count": 1,
+                "labels": {
+                    "nebius.com/node-group-id": "mk8snodegroup-login",
+                    "nebius.com/node-group": "cpu",
+                    "slurm.nebius.ai/nodeset": "login",
+                },
+            },
+            "mk8snodegroup-accounting": {
+                "gpu": False,
+                "node_count": 1,
+                "labels": {
+                    "nebius.com/node-group-id": "mk8snodegroup-accounting",
+                    "nebius.com/node-group": "cpu",
+                    "slurm.nebius.ai/nodeset": "accounting",
+                },
+            },
+            "mk8snodegroup-worker-gpu": {
+                "gpu": True,
+                "node_count": 2,
+                "labels": {
+                    "nebius.com/node-group-id": "mk8snodegroup-worker-gpu",
+                    "slurm.nebius.ai/nodeset": "worker-gpu",
+                },
+                "allocatable": {"nvidia.com/gpu": "8"},
+            },
+            "mk8snodegroup-worker-cpu": {
+                "gpu": False,
+                "node_count": 2,
+                "labels": {
+                    "nebius.com/node-group-id": "mk8snodegroup-worker-cpu",
+                    "slurm.nebius.ai/nodeset": "worker-cpu",
+                },
+                "allocatable": {"cpu": "15900m", "memory": "65216560Ki"},
+            },
+        },
+        "helm_releases": [
+            {
+                "name": "soperator",
+                "namespace": "soperator",
+                "chart": "soperator-4.0.1-ps.1",
+                "app_version": "4.0.1",
+            }
+        ],
+        "crds": [],
+        "namespaces": ["soperator"],
+        "pvcs": [
+            {
+                "metadata": {"name": "controller-spool-pvc", "namespace": "soperator"},
+                "spec": {"resources": {"requests": {"storage": "30Gi"}}},
+                "status": {"capacity": {"storage": "128Gi"}},
+            },
+            {
+                "metadata": {"name": "jail-pvc", "namespace": "soperator"},
+                "spec": {"resources": {"requests": {"storage": "2Ti"}}},
+                "status": {"capacity": {"storage": "1Ti"}},
+            },
+        ],
+        "pvs": [
+            {
+                "metadata": {"name": "jail-pv"},
+                "spec": {
+                    "capacity": {"storage": "1Ti"},
+                    "nodeAffinity": {
+                        "required": {
+                            "nodeSelectorTerms": [
+                                {
+                                    "matchExpressions": [
+                                        {
+                                            "key": "slurm.nebius.ai/jail",
+                                            "operator": "In",
+                                            "values": ["true"],
+                                        }
+                                    ]
+                                }
+                            ]
+                        }
+                    },
+                },
+            },
+            {
+                "metadata": {"name": "controller-spool-pv"},
+                "spec": {
+                    "capacity": {"storage": "128Gi"},
+                    "nodeAffinity": {
+                        "required": {
+                            "nodeSelectorTerms": [
+                                {
+                                    "matchExpressions": [
+                                        {
+                                            "key": "slurm.nebius.ai/nodeset",
+                                            "operator": "In",
+                                            "values": ["controller"],
+                                        }
+                                    ]
+                                }
+                            ]
+                        }
+                    },
+                },
+            },
+            {
+                "metadata": {"name": "accounting-pv"},
+                "spec": {
+                    "capacity": {"storage": "128Gi"},
+                    "nodeAffinity": {
+                        "required": {
+                            "nodeSelectorTerms": [
+                                {
+                                    "matchExpressions": [
+                                        {
+                                            "key": "slurm.nebius.ai/nodeset",
+                                            "operator": "In",
+                                            "values": ["accounting"],
+                                        }
+                                    ]
+                                }
+                            ]
+                        }
+                    },
+                },
+            },
+        ],
+        "soperator_resources": [
+            {
+                "apiVersion": "slurm.nebius.ai/v1",
+                "kind": "SlurmCluster",
+                "metadata": {"name": "legacy-slurm"},
+                "status": {"phase": "Available"},
+            },
+            {
+                "apiVersion": "slurm.nebius.ai/v1",
+                "kind": "SlurmCluster",
+                "metadata": {"name": "external-cluster"},
+                "status": {"phase": "Pending"},
+            },
+            {
+                "apiVersion": "slurm.nebius.ai/v1",
+                "kind": "NodeSet",
+                "metadata": {"name": "worker-cpu"},
+                "spec": {
+                    "nodeConfig": {
+                        "features": ["cpu"],
+                        "static": "Boards=1 SocketsPerBoard=1 CoresPerSocket=8 ThreadsPerCore=2",
+                    },
+                    "slurmd": {
+                        "resources": {
+                            "cpu": "500m",
+                            "memory": "1024Mi",
+                            "ephemeral-storage": "10Gi",
+                        }
+                    },
+                },
+            },
+            {
+                "apiVersion": "slurm.nebius.ai/v1",
+                "kind": "NodeSet",
+                "metadata": {"name": "worker-gpu"},
+                "spec": {
+                    "gpu": {"enabled": True, "nvidia": {"gdrCopyEnabled": True}},
+                    "nodeConfig": {
+                        "features": ["gpu", "cuda"],
+                        "gresConfig": ["AutoDetect=nvidia"],
+                        "static": (
+                            "Boards=1 SocketsPerBoard=1 CoresPerSocket=8 "
+                            "ThreadsPerCore=1 Gres=gpu:8"
+                        ),
+                    },
+                    "slurmd": {
+                        "resources": {
+                            "cpu": "500m",
+                            "memory": "1024Mi",
+                            "ephemeral-storage": "10Gi",
+                            "nvidia.com/gpu": "8",
+                        }
+                    },
+                },
+            },
+        ],
+        "worker_topology_by_nodeset": {
+            "worker-gpu": {
+                "cpus": 128,
+                "boards": 1,
+                "sockets": 2,
+                "cores_per_socket": 32,
+                "threads_per_core": 2,
+                "source_pod": "worker-gpu-0",
+            }
+        },
+        "soperator_namespace_resources": [
+            {
+                "apiVersion": "apps/v1",
+                "kind": "Deployment",
+                "metadata": {
+                    "name": "soperator-manager",
+                    "namespace": "soperator",
+                    "labels": {"app.kubernetes.io/name": "helm-soperator"},
+                },
+            }
+        ],
+        "collection_errors": [],
+    }
+    target = cli_module._soperator_onboarding_target_defaults(
+        "external-cluster",
+        kube_context="external-context",
+        storage_mode="keep-existing-storage",
+        compute_mode="keep-existing-compute",
+        pinned_chart_version="4.0.1-ps.1",
+        pinned_app_version="4.0.1",
+        snapshot=snapshot,
+    )
+    payload = {
+        "client_info": {
+            "nebius": {
+                "tenant_id": "tenant-123",
+                "project_id": "project-456",
+                "region_id": "eu-north1",
+            }
+        },
+        "infra": {"components": []},
+        "apps": {
+            "charts": [
+                {
+                    "id": "soperator",
+                    "instance_id": "external-cluster",
+                    "enabled": True,
+                    "install_mode": "onboard-existing-cluster",
+                    "values": {
+                        "customUserValue": "keep",
+                        "volume": {
+                            "controllerSpool": {"size": "30Gi"},
+                            "jail": {"size": "2Ti"},
+                        },
+                        "storage": {
+                            "controllerSpool": {
+                                "matchExpressions": [
+                                    {
+                                        "key": "nebius.com/node-group",
+                                        "operator": "In",
+                                        "values": ["cpu"],
+                                    }
+                                ]
+                            }
+                        },
+                        "nodeGroupMapping": {
+                            "worker": [
+                                "mk8snodegroup-worker-cpu",
+                                "mk8snodegroup-worker-gpu",
+                            ]
+                        },
+                        "partitionConfiguration": {
+                            "configType": "structured",
+                            "partitions": [
+                                {
+                                    "name": "gpu",
+                                    "nodeSetRefs": [
+                                        "worker-mk8snodegroup-worker-cpu",
+                                        "worker-mk8snodegroup-worker-gpu",
+                                    ],
+                                }
+                            ],
+                        },
+                        "nodesets": [
+                            {
+                                "name": "worker-mk8snodegroup-worker-cpu",
+                                "gpu": {"enabled": True},
+                                "nodeSelector": {
+                                    "nebius.com/node-group-id": "mk8snodegroup-worker-cpu"
+                                },
+                                "slurmd": {
+                                    "resources": {
+                                        "cpu": "500m",
+                                        "memory": "1024Mi",
+                                        "gpu": 8,
+                                    }
+                                },
+                            },
+                            {
+                                "name": "worker-mk8snodegroup-worker-gpu",
+                                "gpu": {"enabled": True},
+                                "nodeSelector": {
+                                    "nebius.com/node-group-id": "mk8snodegroup-worker-gpu"
+                                },
+                                "slurmd": {
+                                    "resources": {
+                                        "cpu": "500m",
+                                        "memory": "1024Mi",
+                                        "gpu": 8,
+                                    }
+                                },
+                            },
+                        ],
+                    },
+                }
+            ]
+        },
+        "deploy": {"targets": []},
+    }
+
+    app_entries = component_entries("apps")
+    adoption_values = cli_module._soperator_onboarding_adoption_values_from_target_row(target)
+    cli_module._apply_soperator_onboarding_to_payload(
+        payload,
+        target_row=target,
+        app_entries=app_entries,
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "_app_chart_default_values",
+        lambda **_: {
+            "volume": {
+                "jail": {"size": "2Ti"},
+                "controllerSpool": {"size": "128Gi"},
+                "accounting": {"size": "128Gi"},
+            }
+        },
+    )
+    cli_module._prune_redundant_app_chart_default_values(
+        payload=payload,
+        app_entries=app_entries,
+    )
+    soperator = next(row for row in payload["apps"]["charts"] if row["id"] == "soperator")
+    assert soperator["values"].get("volume", {}).get("jail", {}).get("size") is None
+    cli_module._merge_soperator_onboarding_adoption_values_for_target(
+        payload,
+        target_ref="external-cluster",
+        adoption_values=adoption_values,
+    )
+    cli_module.normalize_runtime_config_payload(payload)
+
+    soperator = next(row for row in payload["apps"]["charts"] if row["id"] == "soperator")
+    values = soperator["values"]
+    assert soperator["profile"] == "nebius-mixed-v1"
+    assert values["customUserValue"] == "keep"
+    assert values["nameOverride"] == "helm-soperator"
+    assert values["clusterName"] == "legacy-slurm"
+    assert values["nodeGroupMapping"] == {
+        "system": ["mk8snodegroup-system"],
+        "controller": ["mk8snodegroup-controller"],
+        "login": ["mk8snodegroup-login"],
+        "accounting": ["mk8snodegroup-accounting"],
+        "worker-gpu": ["mk8snodegroup-worker-gpu"],
+        "worker-cpu": ["mk8snodegroup-worker-cpu"],
+    }
+    assert values["plugStackConfig"]["pyxis"] == {"required": False, "importerPath": ""}
+    nodeset_names = {
+        str(item.get("name"))
+        for item in values["nodesets"]
+        if isinstance(item, dict) and item.get("name")
+    }
+    assert "worker-cpu" in nodeset_names
+    assert "worker-gpu" in nodeset_names
+    assert "worker-mk8snodegroup-worker-cpu" not in nodeset_names
+    assert "worker-mk8snodegroup-worker-gpu" not in nodeset_names
+    worker_gpu = next(item for item in values["nodesets"] if item["name"] == "worker-gpu")
+    assert worker_gpu["nodeConfig"]["static"] == (
+        "CPUs=128 Boards=1 SocketsPerBoard=2 CoresPerSocket=32 ThreadsPerCore=2 Gres=gpu:8"
+    )
+    assert worker_gpu["slurmd"]["resources"]["gpu"] == 8
+    assert "nvidia.com/gpu" not in worker_gpu["slurmd"]["resources"]
+    assert "image" not in worker_gpu["slurmd"]
+    assert "image" not in worker_gpu["munge"]
+    worker_cpu = next(item for item in values["nodesets"] if item["name"] == "worker-cpu")
+    assert "image" not in worker_cpu["slurmd"]
+    assert "image" not in worker_cpu["munge"]
+    partitions = values["partitionConfiguration"]["partitions"]
+    assert {item["name"]: item["nodeSetRefs"] for item in partitions} == {
+        "cpu": ["worker-cpu"],
+        "gpu": ["worker-gpu"],
+    }
+    assert values["volume"]["controllerSpool"]["size"] == "128Gi"
+    assert values["volume"]["jail"]["size"] == "2Ti"
+    assert values["volume"]["accounting"]["size"] == "128Gi"
+    assert values["storage"]["jail"]["matchExpressions"] == [
+        {"key": "slurm.nebius.ai/jail", "operator": "In", "values": ["true"]}
+    ]
+    assert values["storage"]["controllerSpool"]["matchExpressions"] == [
+        {"key": "slurm.nebius.ai/nodeset", "operator": "In", "values": ["controller"]}
+    ]
+    assert values["storage"]["accounting"]["matchExpressions"] == [
+        {"key": "slurm.nebius.ai/nodeset", "operator": "In", "values": ["accounting"]}
+    ]
+    mariadb_storage = values["slurmNodes"]["accounting"]["mariadbOperator"]["storage"]
+    assert mariadb_storage["size"] == "128Gi"
+    assert mariadb_storage["storageClassName"] == "slurm-local-pv"
+    assert mariadb_storage["volumeClaimTemplate"]["resources"]["requests"]["storage"] == "128Gi"
 
 
 def test_soperator_onboarding_storage_mode_label_uses_no_change_wording() -> None:
@@ -5246,7 +5849,7 @@ def test_soperator_migrate_dry_run_prints_onboarding_migration_plan(tmp_path: Pa
     assert "Execution mode: dry-run; no cluster changes were made." in result.output
 
 
-def test_soperator_migrate_dry_run_treats_gpu_remediation_only_as_migration(
+def test_soperator_migrate_dry_run_treats_gpu_remediation_only_as_deploy_remediation(
     tmp_path: Path,
 ) -> None:
     config_path = _write_old_soperator_migration_config(
@@ -5277,15 +5880,13 @@ def test_soperator_migrate_dry_run_treats_gpu_remediation_only_as_migration(
     )
 
     assert result.exit_code == 0, result.output
-    assert "Migration required: yes" in result.output
+    assert "Migration required: no" in result.output
     assert "Storage migration required: no" in result.output
     assert "Compute migration required: no" in result.output
     assert "External node-template upgrade required: no" in result.output
     assert "Target GPU stack remediation required: yes" in result.output
-    assert "discovery-and-plan" in result.output
-    assert "customer-approval" in result.output
-    assert "target-gpu-stack-remediation" in result.output
-    assert "Migration phases: none" not in result.output
+    assert "target-gpu-stack-remediation" not in result.output
+    assert "Migration phases: none" in result.output
 
 
 @pytest.mark.parametrize(
@@ -5657,7 +6258,9 @@ def test_soperator_onboard_noninteractive_options_add_external_target(
             "ext-soperator",
             "onboard",
             str(config_path),
-            "--target",
+            "--cluster-id",
+            "mk8scluster-training",
+            "--target-id",
             "training-cluster",
             "--kube-context",
             "training-context",
@@ -5674,6 +6277,7 @@ def test_soperator_onboard_noninteractive_options_add_external_target(
     payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     target = payload["deploy"]["targets"][0]
     assert target["instance_id"] == "training-cluster"
+    assert target["cluster_id"] == "mk8scluster-training"
     assert target["kube_context"] == "training-context"
     assert target["soperator_onboarding"]["storage_mode"] == "create-aligned-sfs"
     assert [(row["id"], row["instance_id"]) for row in payload["apps"]["charts"]] == [
@@ -5682,6 +6286,76 @@ def test_soperator_onboard_noninteractive_options_add_external_target(
         ("nvidia-gpu-operator", "training-cluster"),
     ]
     assert payload["deploy"]["targets"][0]["validations"]["mk8s_gpu"]["nccl"]["enabled"] is True
+
+
+def test_soperator_onboard_noninteractive_cluster_id_generates_kube_access(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    deployments_root = tmp_path / "deployments"
+    deployments_root.mkdir(parents=True, exist_ok=True)
+    created = _create_non_interactive(
+        deployments_root,
+        "--infra",
+        "none",
+        "--app",
+        "none",
+        "--no-validate-config",
+    )
+    assert created.exit_code == 0, created.output
+
+    config_path = _project_config_path(deployments_root)
+    observed: dict[str, str] = {}
+
+    def _collect(
+        payload: object,
+        *,
+        cluster_id: str,
+        access: str = "external",
+    ) -> tuple[dict[str, object], str]:
+        _ = payload
+        observed["cluster_id"] = cluster_id
+        observed["access"] = access
+        return (
+            {
+                "node_groups": {"gpu-pool": {"gpu": True, "node_count": 1}},
+                "helm_releases": [],
+                "crds": [],
+                "namespaces": [],
+                "collection_errors": [],
+            },
+            "nebius-training-cluster-mk8scluster-e00training-external",
+        )
+
+    monkeypatch.setattr(
+        cli_module,
+        "_collect_soperator_snapshot_for_nebius_mk8s_cluster",
+        _collect,
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "ext-soperator",
+            "onboard",
+            str(config_path),
+            "--cluster-id",
+            "mk8scluster-e00training",
+            "--storage-mode",
+            "create-aligned-sfs",
+            "--no-interactive",
+            "--no-validate-sources",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert observed == {"cluster_id": "mk8scluster-e00training", "access": "external"}
+    assert "Registered external MK8s target: training-cluster" in result.output
+    payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    target = payload["deploy"]["targets"][0]
+    assert target["instance_id"] == "training-cluster"
+    assert target["cluster_id"] == "mk8scluster-e00training"
+    assert "kube_context" not in target
 
 
 def test_soperator_onboard_gpu_cluster_inventory_adds_network_operator(
@@ -5739,7 +6413,9 @@ def test_soperator_onboard_gpu_cluster_inventory_adds_network_operator(
             "ext-soperator",
             "onboard",
             str(config_path),
-            "--target",
+            "--cluster-id",
+            "mk8scluster-legacy",
+            "--target-id",
             "legacy-cluster",
             "--kube-context",
             "legacy-context",
@@ -5802,7 +6478,9 @@ def test_soperator_onboard_rejects_managed_mk8s_target_ref(
             "ext-soperator",
             "onboard",
             str(_project_config_path(deployments_root)),
-            "--target",
+            "--cluster-id",
+            "mk8scluster-managed",
+            "--target-id",
             "mk8s",
             "--kube-context",
             "managed-context",
@@ -5880,7 +6558,9 @@ def test_soperator_onboard_refreshes_stale_onboarding_fingerprint(
             "ext-soperator",
             "onboard",
             str(config_path),
-            "--target",
+            "--cluster-id",
+            "mk8scluster-external",
+            "--target-id",
             "external-cluster",
             "--kube-context",
             "external-context",

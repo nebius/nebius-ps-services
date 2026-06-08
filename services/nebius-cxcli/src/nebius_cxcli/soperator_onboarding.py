@@ -2188,6 +2188,13 @@ def collect_kubectl_soperator_snapshot(
         errors=collection_errors,
         extra_env=extra_env,
     )
+    worker_topology_by_nodeset = _collect_worker_topology_by_nodeset(
+        kube_context=context,
+        workloads=workloads,
+        timeout=timeout,
+        errors=collection_errors,
+        extra_env=extra_env,
+    )
     node_groups: dict[str, dict[str, Any]] = {}
     for item in nodes.get("items", []) if isinstance(nodes, Mapping) else []:
         if not isinstance(item, Mapping):
@@ -2203,9 +2210,9 @@ def collect_kubectl_soperator_snapshot(
         selector_key = ""
         selector_value = ""
         for candidate_key in (
-            "nebius.com/node-group",
             "nebius.com/node-group-id",
             "yandex.cloud/node-group-id",
+            "nebius.com/node-group",
             "node.kubernetes.io/instance-type",
         ):
             candidate_value = str(labels.get(candidate_key) or "").strip()
@@ -2270,6 +2277,7 @@ def collect_kubectl_soperator_snapshot(
         "soperator_namespace_resources": _sanitize_namespace_resource_items(
             workloads.get("items", []) if isinstance(workloads, Mapping) else []
         ),
+        "worker_topology_by_nodeset": worker_topology_by_nodeset,
         "collection_errors": collection_errors,
     }
 
@@ -2379,3 +2387,131 @@ def _helm_json(
         if errors is not None:
             errors.append(_subprocess_error_payload(command, exc))
         return []
+
+
+def _kubectl_text(
+    command: Sequence[str],
+    timeout: int,
+    *,
+    errors: list[dict[str, Any]] | None = None,
+    extra_env: Mapping[str, str] | None = None,
+) -> str:
+    run_env = None if extra_env is None else {**os.environ, **dict(extra_env)}
+    try:
+        completed = subprocess.run(
+            list(command),
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            env=run_env,
+        )
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as exc:
+        if errors is not None:
+            errors.append(_subprocess_error_payload(command, exc))
+        return ""
+    return completed.stdout or ""
+
+
+def _lscpu_field_map(payload: Mapping[str, Any]) -> dict[str, str]:
+    result: dict[str, str] = {}
+    entries = payload.get("lscpu")
+    if not isinstance(entries, Sequence) or isinstance(entries, (str, bytes, bytearray)):
+        return result
+    for item in entries:
+        if not isinstance(item, Mapping):
+            continue
+        field = str(item.get("field", "") or "").strip().rstrip(":").lower()
+        data = str(item.get("data", "") or "").strip()
+        if field and data:
+            result[field] = data
+    return result
+
+
+def _positive_int(value: Any, *, fallback: int = 0) -> int:
+    try:
+        parsed = int(str(value).strip())
+    except (TypeError, ValueError):
+        return fallback
+    return parsed if parsed > 0 else fallback
+
+
+def parse_worker_lscpu_topology(stdout: str) -> dict[str, Any]:
+    try:
+        payload = json.loads(stdout)
+    except json.JSONDecodeError:
+        return {}
+    if not isinstance(payload, Mapping):
+        return {}
+    fields = _lscpu_field_map(payload)
+    topology = {
+        "cpus": _positive_int(fields.get("cpu(s)"), fallback=0),
+        "boards": 1,
+        "sockets": _positive_int(fields.get("socket(s)"), fallback=0),
+        "cores_per_socket": _positive_int(fields.get("core(s) per socket"), fallback=0),
+        "threads_per_core": _positive_int(fields.get("thread(s) per core"), fallback=0),
+    }
+    if not all(
+        _positive_int(topology.get(key), fallback=0)
+        for key in ("cpus", "sockets", "cores_per_socket", "threads_per_core")
+    ):
+        return {}
+    return topology
+
+
+def _worker_pods_by_nodeset(workloads: Mapping[str, Any]) -> dict[str, str]:
+    pods: dict[str, str] = {}
+    for item in workloads.get("items", []) if isinstance(workloads, Mapping) else []:
+        if not isinstance(item, Mapping) or str(item.get("kind", "") or "") != "Pod":
+            continue
+        status = item.get("status") if isinstance(item.get("status"), Mapping) else {}
+        if str(status.get("phase", "") or "") != "Running":
+            continue
+        metadata = item.get("metadata") if isinstance(item.get("metadata"), Mapping) else {}
+        labels = metadata.get("labels") if isinstance(metadata.get("labels"), Mapping) else {}
+        pod_name = str(metadata.get("name", "") or "").strip()
+        nodeset_name = ""
+        for key in ONBOARDING_NODESET_LABEL_KEYS:
+            candidate = normalize_component_token(labels.get(key))
+            if candidate.startswith(ONBOARDING_WORKER_ROLE_PREFIX):
+                nodeset_name = candidate
+                break
+        if pod_name and nodeset_name:
+            pods.setdefault(nodeset_name, pod_name)
+    return pods
+
+
+def _collect_worker_topology_by_nodeset(
+    *,
+    kube_context: str,
+    workloads: Mapping[str, Any],
+    timeout: int,
+    errors: list[dict[str, Any]],
+    extra_env: Mapping[str, str] | None,
+) -> dict[str, Any]:
+    topology_by_nodeset: dict[str, Any] = {}
+    for nodeset_name, pod_name in sorted(_worker_pods_by_nodeset(workloads).items()):
+        stdout = _kubectl_text(
+            [
+                "kubectl",
+                "--context",
+                kube_context,
+                "-n",
+                "soperator",
+                "exec",
+                pod_name,
+                "-c",
+                "slurmd",
+                "--",
+                "lscpu",
+                "-J",
+            ],
+            timeout,
+            errors=errors,
+            extra_env=extra_env,
+        )
+        topology = parse_worker_lscpu_topology(stdout)
+        if topology:
+            topology["source_pod"] = pod_name
+            topology_by_nodeset[nodeset_name] = topology
+    return topology_by_nodeset

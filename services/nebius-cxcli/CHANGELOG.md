@@ -43,7 +43,23 @@ All notable changes to this project are tracked here. This changelog follows
 - Improved required Soperator/Slurm smoke validation: the one-task `srun`
   smoke job now prefers an idle non-GPU partition when available, while Slurm
   node status treats `inval` as unhealthy so invalid GPU workers remain a
-  visible pending validation gate.
+  visible pending validation gate. When Slurm exposes an idle or mixed GPU
+  partition, the smoke report now also runs Slurm-side one-GPU visibility and
+  one-rank NCCL checks through `srun`.
+- Fixed `deploy-report.md` Soperator GPU validation summaries so Kubernetes
+  GPU Visibility and NCCL scheduler skips caused by Soperator worker pod GPU
+  reservations lead with the same target's passed Slurm-side GPU visibility or
+  NCCL smoke result, while raw detail JSON keeps the Kubernetes skip evidence.
+- Changed local `deploy` for managed Soperator targets to stage app
+  reconciliation: cxcli now applies platform/GPU operator Flux resources and
+  runs MK8s GPU stack, GPU Visibility, and NCCL validations before applying the
+  full Soperator bundle that starts Slurm worker pods.
+- Changed `ext-soperator onboard` non-interactive identity flags: onboarding now
+  selects the Nebius MK8s cluster with `--cluster-id`, derives temporary
+  kubeconfig access through the Nebius API by default, and uses optional
+  `--target-id` only for the cxcli logical target alias. Install/adopt-only
+  next-step hints now prefer plain `deploy <config.yaml>` and document
+  `deploy --target <target-id>` only as a narrowing selector.
 - Tightened external Soperator rerun idempotency. No-op `ext-soperator
   onboard` reruns now keep stable source discovery reports instead of churning
   timestamps that invalidate migration checkpoints, and `ext-soperator
@@ -66,6 +82,25 @@ All notable changes to this project are tracked here. This changelog follows
 - Fixed `keep-existing-storage` external chart takeover so live chart-owned
   SFS/local PersistentVolume nodeAffinity selectors are preserved in target
   Helm values instead of attempting an immutable PV selector update.
+- Fixed `keep-existing-storage` external chart takeover so discovered live PVC
+  request/capacity and PV capacity are treated as lower bounds, preventing
+  onboarded Soperator storage from rendering a smaller PVC/PV size.
+- Fixed external Soperator chart takeover so live Soperator role labels produce
+  explicit `values.nodeGroupMapping.*`, preventing service-role operators from
+  being rescheduled onto an unrelated CPU worker group during adoption.
+- Fixed external Soperator onboarding to infer the mixed Soperator profile from
+  live `worker-cpu`/`worker-gpu` labels, replace stale generic worker mappings,
+  and remove stale generated `worker-<node-group-id>` NodeSets on rerender.
+- Fixed install/adopt-only external Soperator onboarding so reruns sample live
+  worker NodeSet CPU/socket/core/thread topology from a running `slurmd` pod
+  and preserve the normalized `values.nodesets[].nodeConfig.static` through
+  render/deploy instead of falling back to compact profile worker topology.
+- Fixed adopted worker NodeSet rendering so source/profile `slurmd`, `munge`,
+  and `sssd` image overrides are not reintroduced; target Soperator chart
+  defaults now own worker image tags during external chart takeover.
+- Fixed adopted Soperator chart values to make Pyxis optional and clear the
+  importer path so incompatible legacy Pyxis importer options do not stop
+  `slurmd` during chart takeover.
 - Fixed `keep-existing-compute` external chart takeover so source worker
   NodeSet names and partition references such as `worker-gpu` and `worker-cpu`
   are preserved instead of collapsing them into a new synthetic `worker`
@@ -98,7 +133,12 @@ All notable changes to this project are tracked here. This changelog follows
 - Aligned `ext-soperator --help`, `ext-soperator onboard --help`, and
   `ext-soperator migrate --help` examples with the complete external-cluster
   sequence, including the no-deploy-before-migration warning and zero-surge
-  preserved-worker quota contract.
+  external node-template update contract.
+- Clarified `ext-soperator` help text so `--target` is explicitly the cxcli
+  target id from `deploy.targets[].instance_id`, install/adopt-only targets
+  point to target-scoped render/deploy and `deploy-report.md`, and onboarding
+  flags describe current-context fallback, live storage preservation, and
+  source-validation intent.
 - Changed Soperator onboarding GPU/RDMA findings from an operator-owned placeholder
   action into target remediation: GPU-enabled external targets now record
   `remediate-target-gpu-stack`, add the target-scoped GPU Operator and

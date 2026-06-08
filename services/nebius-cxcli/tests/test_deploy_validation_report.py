@@ -350,6 +350,95 @@ def test_build_deploy_validation_report_formats_skipped_gpu_workload_summary(
     ]
 
 
+def test_build_deploy_validation_report_uses_soperator_owned_gpu_smoke_for_skips(
+    tmp_path: Path,
+) -> None:
+    validations = [
+        {
+            "kind": "mk8s_gpu_visibility",
+            "name": "GPU Visibility test (mk8s)",
+            "target_ref": "mk8s",
+            "report_file": "gpu-visibility-report-mk8s.json",
+        },
+        {
+            "kind": "mk8s_nccl",
+            "name": "NCCL test (mk8s)",
+            "target_ref": "mk8s",
+            "report_file": "nccl-test-report-mk8s.json",
+        },
+        {
+            "kind": "soperator_cluster_smoke",
+            "name": "Soperator cluster smoke test (mk8s)",
+            "target_ref": "mk8s",
+            "report_file": "soperator-cluster-validation-report-mk8s.json",
+        },
+    ]
+    for report_name, validation in (
+        ("gpu-visibility-report-mk8s.json", "GPU Visibility test"),
+        ("nccl-test-report-mk8s.json", "NCCL test"),
+    ):
+        (tmp_path / report_name).write_text(
+            json.dumps(
+                {
+                    "validation": validation,
+                    "passed": True,
+                    "skipped": True,
+                    "skip_reason": "all Ready GPU nodes already have their GPUs allocated to existing workloads",
+                    "total_gpu_node_count": 2,
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+    (tmp_path / "soperator-cluster-validation-report-mk8s.json").write_text(
+        json.dumps(
+            {
+                "kind": "soperator_cluster_smoke",
+                "target_ref": "mk8s",
+                "passed": True,
+                "status": "passed",
+                "summary": "7/7 Soperator/Slurm checks passed.",
+                "checks": [
+                    {
+                        "name": "Slurm GPU visibility test",
+                        "passed": True,
+                        "summary": "one-GPU Slurm allocation reported NVIDIA GPUs on partition gpu.",
+                    },
+                    {
+                        "name": "Slurm NCCL smoke test",
+                        "passed": True,
+                        "summary": "one-rank NCCL all_reduce_perf smoke completed on partition gpu.",
+                    },
+                ],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    report = build_deploy_validation_report(validations, reports_dir=tmp_path)
+
+    summary_lines = format_deploy_validation_summary_lines(report)
+    assert (
+        "  PASS GPU Visibility test (mk8s): Soperator-owned Slurm GPU visibility passed: "
+        "one-GPU Slurm allocation reported NVIDIA GPUs on partition gpu. "
+        "The Kubernetes workload check was not scheduled because Soperator worker pods "
+        "reserve all Ready GPU nodes."
+    ) in summary_lines
+    assert (
+        "  PASS NCCL test (mk8s): Soperator-owned Slurm NCCL smoke passed: "
+        "one-rank NCCL all_reduce_perf smoke completed on partition gpu. "
+        "The Kubernetes workload check was not scheduled because Soperator worker pods "
+        "reserve all Ready GPU nodes."
+    ) in summary_lines
+    markdown = "\n".join(validation_section_lines(report))
+    assert "### GPU Visibility test (mk8s)" in markdown
+    assert "### NCCL test (mk8s)" in markdown
+    assert "Summary: Skipped: all Ready GPU nodes" not in markdown
+    assert "Soperator-owned Slurm GPU visibility passed" in markdown
+    assert "Soperator-owned Slurm NCCL smoke passed" in markdown
+
+
 def test_build_deploy_validation_report_formats_rdma_dmabuf_summary(tmp_path: Path) -> None:
     validations = [
         {

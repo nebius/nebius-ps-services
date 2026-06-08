@@ -5041,6 +5041,7 @@ def _normalize_source_worker_nodeset_value(
             gpu_count = resources.get("gpu", resources.get("nvidia.com/gpu"))
             if gpu_count not in (None, "", 0, "0"):
                 resources["gpu"] = gpu_count
+                resources.pop("nvidia.com/gpu", None)
                 gpu = nodeset.setdefault("gpu", {})
                 if isinstance(gpu, dict):
                     gpu["enabled"] = True

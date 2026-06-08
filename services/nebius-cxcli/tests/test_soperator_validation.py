@@ -168,6 +168,134 @@ def test_run_soperator_cluster_validation_writes_smoke_report(tmp_path: Path) ->
     assert any("cxcli-soperator-smoke" in " ".join(command) for command in commands)
 
 
+def test_soperator_cluster_validation_runs_slurm_gpu_and_nccl_smoke(
+    tmp_path: Path,
+) -> None:
+    spec = {
+        "kind": SOPERATOR_CLUSTER_VALIDATION_KIND,
+        "name": "Soperator cluster smoke test (training)",
+        "target_ref": "training",
+        "namespace": "soperator",
+        "cluster_name": "training",
+        "kube_context": "training-context",
+        "report_file": "soperator-cluster-validation-report-training.json",
+    }
+    smoke_scripts: list[str] = []
+
+    def _runner(
+        args,
+        *,
+        input_text: str | None = None,
+        timeout_seconds: int = 300,
+        check: bool = True,
+    ) -> SoperatorValidationCommandResult:
+        del input_text, timeout_seconds, check
+        command = tuple(str(item) for item in args)
+        if command[:7] == (
+            "kubectl",
+            "--context",
+            "training-context",
+            "-n",
+            "soperator",
+            "get",
+            "pods",
+        ):
+            return SoperatorValidationCommandResult(
+                command,
+                0,
+                json.dumps(
+                    {
+                        "items": [
+                            {
+                                "metadata": {
+                                    "name": "login-0",
+                                    "labels": {"app.kubernetes.io/component": "login"},
+                                },
+                                "status": {"phase": "Running"},
+                            }
+                        ]
+                    }
+                ),
+                "",
+            )
+        if command[:8] == (
+            "kubectl",
+            "--context",
+            "training-context",
+            "-n",
+            "soperator",
+            "get",
+            "slurmclusters",
+            "-o",
+        ):
+            return SoperatorValidationCommandResult(
+                command,
+                0,
+                json.dumps({"items": [{"metadata": {"name": "training"}, "status": {"phase": "Available"}}]}),
+                "",
+            )
+        if command[:8] == (
+            "kubectl",
+            "--context",
+            "training-context",
+            "-n",
+            "soperator",
+            "exec",
+            "login-0",
+            "--",
+        ):
+            if command[8:11] == ("sinfo", "-h", "-o") and command[11] == "%t":
+                return SoperatorValidationCommandResult(command, 0, "idle\nidle\n", "")
+            if command[8:11] == ("sinfo", "-h", "-o") and command[11] == "%P|%t|%G":
+                return SoperatorValidationCommandResult(
+                    command,
+                    0,
+                    "cpu*|idle|(null)\ngpu|idle|gpu:8\n",
+                    "",
+                )
+            if command[8:10] == ("squeue", "-h"):
+                return SoperatorValidationCommandResult(command, 0, "", "")
+            if command[8:10] == ("bash", "-lc"):
+                script = command[10]
+                smoke_scripts.append(script)
+                if "cxcli-soperator-gpu-visibility" in script:
+                    return SoperatorValidationCommandResult(
+                        command,
+                        0,
+                        "cxcli-soperator-gpu-visibility-ok\nworker-gpu-0\nGPU 0: NVIDIA H100\n",
+                        "",
+                    )
+                if "cxcli-soperator-nccl" in script:
+                    return SoperatorValidationCommandResult(
+                        command,
+                        0,
+                        "cxcli-soperator-nccl-ok\n# Avg bus bandwidth    : 0\n",
+                        "",
+                    )
+                return SoperatorValidationCommandResult(
+                    command,
+                    0,
+                    "cxcli-soperator-srun-ok\nworker-cpu-0\n",
+                    "",
+                )
+        return SoperatorValidationCommandResult(command, 0, "ok\n", "")
+
+    written = run_soperator_cluster_validations(
+        [spec],
+        reports_dir=tmp_path,
+        command_runner=_runner,
+    )
+
+    report = json.loads(written[0].read_text(encoding="utf-8"))
+    assert report["passed"] is True
+    assert report["summary"] == "7/7 Soperator/Slurm checks passed."
+    assert [check["name"] for check in report["checks"]][-2:] == [
+        "Slurm GPU visibility test",
+        "Slurm NCCL smoke test",
+    ]
+    assert any("--partition=gpu" in script for script in smoke_scripts)
+
+
 def test_soperator_cluster_validation_prefers_idle_cpu_partition_for_smoke(
     tmp_path: Path,
 ) -> None:

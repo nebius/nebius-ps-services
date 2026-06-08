@@ -358,7 +358,7 @@ Bundled MK8s GPU policy is split deliberately between component source data, cxc
 - The bundled NVIDIA path intentionally does not ship a generic built-in "health checker" workload. NVIDIA's own docs separate fast install verification and sample workload validation from ongoing DCGM-based telemetry and deeper DCGM diagnostics. In cxcli, that means deploy-time checks stay focused on operator readiness, bounded CUDA visibility, and optional NCCL, while long-running telemetry/alerting remains the responsibility of DCGM Exporter / Prometheus / Grafana and deeper diagnostics remain explicit administrator workflows rather than something every `deploy` reruns. See: [About the NVIDIA GPU Operator](https://docs.nvidia.com/datacenter/cloud-native/gpu-operator/24.9/index.html), [GPU Operator Getting Started](https://docs.nvidia.com/datacenter/cloud-native/gpu-operator/23.9.0/getting-started.html), [NVIDIA GPU Telemetry](https://docs.nvidia.com/datacenter/cloud-native/gpu-telemetry/latest/index.html), [DCGM Diagnostics](https://docs.nvidia.com/datacenter/dcgm/latest/user-guide/dcgm-diagnostics.html), and [NVIDIA Network Operator readiness](https://docs.nvidia.com/networking/display/kubernetes2610/life-cycle-management.html).
 - That split still assumes DCGM Exporter itself stays enabled on the GPU Operator release. For GPU-enabled MK8s, DCGM Exporter must stay enabled in GPU Operator. Omitting `nvidia-gpu-operator.values.dcgmExporter.enabled` is valid because the bundled GPU Operator chart defaults it to enabled; explicitly setting it to `false` is rejected. Scraping and pushing those metrics to Nebius Monitoring happens only when the MK8s observability metrics path is enabled. Prometheus scrape wiring remains a chart-level concern under `values.dcgmExporter.serviceMonitor.*`, not a built-in `deploy` validation toggle, and should only be enabled when the target cluster has a Prometheus-operator-compatible observability stack. For the Nebius Observability Agent path, the settings catalog declares the DCGM exporter as an app metric target with `discovery.kind: prometheus_annotations`, so the agent discovers the GPU Operator service through its documented `prometheus.io/scrape=true` service endpoint path instead of through a duplicate `config.metrics.additionalTargets` scrape job. Live testing on the Nebius driverful-image path (`gpu_stack_source: nebius_image`) showed an important nuance: NVIDIA's `dcgmExporter.enabled=true` keeps the source configured in `ClusterPolicy`, but the chart's default NFD worker affinity can leave Nebius driverful GPU nodes without the NFD-owned `nvidia.com/gpu.present=true` label, and those same nodes can carry `nvidia.com/gpu.deploy.operands=false`. The bundled GPU Operator rule therefore pins NFD workers to Nebius GPU nodes only on `nebius_image` targets where Network Operator is not present; GPU-cluster / InfiniBand targets keep Network Operator as the single NFD owner. The DCGM metric target's `managed_gpu_node_policy.{labels,selector,stack_sources}` owns only the Nebius-specific operand labels. Those operand labels are Nebius-specific scheduling policy, not an NVIDIA chart default. When observability and Kubernetes metrics are enabled, cxcli materializes that policy into `inputs.node_groups[*].node_labels`, enabling only the DCGM exporter and validator operands while explicitly keeping GPU Operator device-plugin/GFD disabled so the Nebius-managed device-plugin path is not duplicated. During `deploy`, cxcli also reconciles the same settings-owned operand labels onto existing live GPU Node objects matching the catalog-owned selector because MK8s node-group label updates may not back-propagate to already-running nodes.
 - Observability architecture, endpoint guidance, project config shape, and onboarding workflow are documented in [Observability](#observability).
-- The three built-in validations are intentionally layered to avoid semantic overlap. `operator_readiness` is the cheapest prerequisite gate: policy objects plus scheduler-visible GPUs on Ready nodes. `gpu_visibility` is the bounded single-node data-path smoke test that proves a real CUDA workload can execute. `nccl` is the optional multi-node communication and bandwidth validation: Socket/TCPIP on Ethernet-only shapes, RDMA on GPU-cluster / InfiniBand shapes. The ordering is deliberate so common operator/runtime failures stop before the expensive NCCL phase, while NCCL remains the only bundled check that says anything about distributed GPU communication quality. Workload validations use scheduler-free GPUs and record a skipped report rather than failing when existing workloads such as Soperator workers already reserve every GPU on every Ready GPU node; NCCL also treats a transient `MPIJob` preemption as the same skip condition when those workload pods claim all GPUs while the NCCL launcher is starting.
+- The three built-in validations are intentionally layered to avoid semantic overlap. `operator_readiness` is the cheapest prerequisite gate: policy objects plus scheduler-visible GPUs on Ready nodes. `gpu_visibility` is the bounded single-node data-path smoke test that proves a real CUDA workload can execute. `nccl` is the optional multi-node communication and bandwidth validation: Socket/TCPIP on Ethernet-only shapes, RDMA on GPU-cluster / InfiniBand shapes. The ordering is deliberate so common operator/runtime failures stop before the expensive NCCL phase, while NCCL remains the only bundled check that says anything about distributed GPU communication quality. For cxcli-managed Soperator targets, local `deploy` stages app reconciliation by applying the platform/GPU operator Flux resources first, running the MK8s GPU stack, GPU Visibility, and NCCL validations, then applying the full Soperator bundle. Workload validations still use scheduler-free GPUs and record a skipped report rather than failing when existing workloads or already-running Soperator workers reserve every GPU on every Ready GPU node; NCCL also treats a transient `MPIJob` preemption as the same skip condition when those workload pods claim all GPUs while the NCCL launcher is starting. For Soperator targets, the required Soperator smoke validation covers the Slurm-owned GPU path separately by running one-GPU `nvidia-smi -L` and one-rank `all_reduce_perf` checks through `srun` when Slurm exposes an idle or mixed GPU partition.
 - Soperator targets use the same cxcli-owned MK8s GPU validation prompts as
   other GPU-enabled MK8s targets: `operator_readiness`, `gpu_visibility`, and
   `nccl` are prompted in the create/component wizard and persisted under
@@ -769,7 +769,12 @@ deployments root. Interactive onboarding lists existing Nebius MK8s clusters
 in the selected project, asks the operator to choose one cluster for that run,
 and stores the selected Nebius `cluster_id` as the durable target access
 handle instead of deriving target identity from an ambient local kube context.
-It records discovered live groups under
+Non-interactive onboarding uses `--cluster-id <mk8scluster-id>` as the
+authoritative Nebius cluster selector and generates temporary kubeconfig access
+through the Nebius API; `--target-id` is only an optional cxcli logical alias
+stored as `deploy.targets[].instance_id`, and `--kube-context` is an explicit
+discovery override rather than the default handoff mechanism. It records
+discovered live groups under
 `deploy.targets[].inventory.node_groups`, stores an accepted
 `deploy.targets[].soperator_onboarding` action plan, and derives
 `values.nodeGroupMapping` from discovered inventory and the selected profile
@@ -800,7 +805,28 @@ keep old storage active, run online bulk data sync, then perform final delta
 sync and storage-reference cutover during a controlled Slurm quiet window. The
 keep-existing storage path preserves live chart-owned PV nodeAffinity selectors
 in target Helm values so migration does not attempt immutable PV selector
-changes during chart takeover. The
+changes during chart takeover. It also treats discovered PVC/PV sizes as lower
+bounds, preserving the largest live PVC request, PVC capacity, and PV capacity
+for jail, controller-spool, and accounting storage so chart takeover does not
+attempt a storage shrink. When live Soperator role labels are present,
+onboarding persists `values.nodeGroupMapping.*` from discovered node-group ids
+so service-role pods keep their adopted scheduling shape. Live worker labels
+such as `worker-cpu` and `worker-gpu` also select the mixed Soperator profile
+and persist worker-specific `values.nodeGroupMapping.worker-cpu` and
+`values.nodeGroupMapping.worker-gpu` entries, so render keeps the adopted
+worker NodeSet names and partition references instead of creating synthetic
+worker NodeSets from raw node-group ids. Onboarding also samples `lscpu -J`
+from one running `slurmd` pod per worker NodeSet and preserves the normalized
+CPU/socket/core/thread topology in adopted
+`values.nodesets[].nodeConfig.static`, so install/adopt-only rerenders do not
+fall back to compact profile worker topology. Chart-owned worker image tags
+remain target chart defaults instead of being copied from the adopted source
+NodeSets. Adopted Soperator values also set Pyxis to optional and clear the
+importer path so a legacy or incompatible Pyxis importer option cannot prevent
+`slurmd` from starting during chart takeover. When an existing
+Soperator release is adopted, onboarding preserves the live `SlurmCluster`
+resource name in `values.clusterName` so target deploy and smoke validation
+continue to address the adopted cluster. The
 aligned-compute path means profile-aligned service-role node groups plus
 profile worker NodeSets mapped to the detected existing worker node groups.
 Worker node groups stay in place. External Kubernetes minor, node OS image, and
@@ -830,9 +856,11 @@ workflow is explicit: run
 the external Nebius MK8s target in `config.yaml`, run the read-only analysis,
 inspect the discovery report and Soperator app/remediation/migration plan plus
 role mapping, then validate and render the accepted target. If the accepted
-report says no migration work is required, deploy the rendered install/adopt-only
-target. If the accepted onboarding report says migration work is required, skip
-normal deploy and continue with
+report says no migration work is required, plain `deploy <config.yaml>`
+reconciles the generated desired state across every target; `deploy --target
+<target-id>` is only a narrowing selector for a deliberate one-target local run.
+If the accepted onboarding report says migration work is required, skip normal
+deploy and continue with
 `nebius-cxcli ext-soperator migrate <config.yaml> --target <target> --dry-run` to
 inspect the explicit compute/storage migration phases and target remediation
 actions. When the discovery snapshot contains GPU workers, onboarding records
@@ -841,15 +869,25 @@ used by new GPU clusters: GPU Operator for GPU targets, Network Operator when
 the target inventory is GPU-cluster/RDMA-capable, and deploy-time GPU stack,
 GPU Visibility, and NCCL validations. Missing scheduler-visible `rdma/*`
 resources in the source inventory are therefore saved as target remediation
-evidence, not as an operator-owned manual unblocking step. The migration command
-is the separate execution surface for live orchestration. `--execute` validates
-the accepted onboarding analysis, reads
+evidence, not as an operator-owned manual unblocking step. Target GPU stack
+remediation alone is not migration work; if no upgrade, storage, compute, or
+external node-template migration action is selected, normal render/deploy
+applies it as desired state. On Soperator clusters whose worker pods own all
+Kubernetes GPUs, those Kubernetes workload validations may report a scheduler
+skip, while the required Soperator smoke report still records Slurm-side GPU
+visibility and one-rank NCCL checks when a GPU partition is available. In that
+ownership model, `deploy-report.md` promotes the passed Slurm-side GPU
+visibility or NCCL smoke result into the matching human validation summary,
+while the raw Kubernetes detail JSON keeps the scheduler skip. The
+migration command is the separate execution
+surface for live orchestration. `--execute` validates the accepted onboarding
+analysis, reads
 `source-soperator-cluster-discovery-report.json`, rechecks the live source
 release and full discovery fingerprint before the first mutation, writes a
 local `.nebius-cxcli/soperator-migrations/` timeout-guarded checkpoint, and
 advances supported external MK8s control-plane/node-template, target GPU stack
-remediation phase, storage, copy, compute, cutover, validation, and retirement
-phases in order.
+remediation when paired with migration work, storage, copy, compute, cutover,
+validation, and retirement phases in order.
 Passing
 `--approve` records customer approval. The executor then auto-detects source
 worker node groups from live Nebius MK8s node-group names and Kubernetes

@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -71,7 +71,7 @@ def build_deploy_validation_report(
     markdown_path: Path | None = None,
 ) -> DeployValidationReport:
     """Aggregate validation JSON detail files into one summary structure."""
-    results = tuple(
+    results = _apply_soperator_owned_gpu_summaries(
         _build_validation_result(spec, reports_dir=reports_dir) for spec in validations
     )
     completed_count = sum(1 for item in results if item.status != "not_run")
@@ -96,6 +96,76 @@ def build_deploy_validation_report(
         not_run_count=not_run_count,
         results=results,
     )
+
+
+def _apply_soperator_owned_gpu_summaries(
+    results_iterable: Iterable[DeployValidationResult],
+) -> tuple[DeployValidationResult, ...]:
+    results = tuple(results_iterable)
+    soperator_by_target: dict[str, DeployValidationResult] = {
+        item.target_ref: item
+        for item in results
+        if item.kind == "soperator_cluster_smoke" and item.target_ref
+    }
+    unique_soperator = tuple(
+        item for item in results if item.kind == "soperator_cluster_smoke"
+    )
+    updated: list[DeployValidationResult] = []
+    for item in results:
+        if item.kind not in {"mk8s_gpu_visibility", "mk8s_nccl"}:
+            updated.append(item)
+            continue
+        if not _is_soperator_gpu_ownership_skip(item.summary):
+            updated.append(item)
+            continue
+        soperator = soperator_by_target.get(item.target_ref)
+        if soperator is None and not item.target_ref and len(unique_soperator) == 1:
+            soperator = unique_soperator[0]
+        replacement_summary = _soperator_owned_gpu_summary(item, soperator)
+        if replacement_summary:
+            updated.append(
+                replace(
+                    item,
+                    summary=replacement_summary,
+                    footer_summary=replacement_summary,
+                )
+            )
+        else:
+            updated.append(item)
+    return tuple(updated)
+
+
+def _is_soperator_gpu_ownership_skip(summary: str) -> bool:
+    return (
+        summary.startswith("Skipped: ")
+        and "all Ready GPU nodes already have their GPUs allocated" in summary
+    )
+
+
+def _soperator_owned_gpu_summary(
+    item: DeployValidationResult,
+    soperator: DeployValidationResult | None,
+) -> str:
+    if soperator is None or soperator.status != "passed":
+        return ""
+    if item.kind == "mk8s_gpu_visibility":
+        check_name = "Slurm GPU visibility test"
+        lead = "Soperator-owned Slurm GPU visibility passed"
+    elif item.kind == "mk8s_nccl":
+        check_name = "Slurm NCCL smoke test"
+        lead = "Soperator-owned Slurm NCCL smoke passed"
+    else:
+        return ""
+    for check in soperator.checks:
+        if check.name != check_name or check.status != "passed":
+            continue
+        suffix = f": {check.summary}" if check.summary else "."
+        return (
+            f"{lead}{suffix.rstrip('.')}. "
+            "The Kubernetes workload check was not scheduled because Soperator "
+            "worker pods reserve all Ready GPU nodes."
+        )
+    return ""
 
 
 def format_deploy_validation_summary_lines(

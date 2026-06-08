@@ -5,6 +5,7 @@ import subprocess
 
 import pytest
 
+import nebius_cxcli.soperator_onboarding as soperator_onboarding_module
 from nebius_cxcli.runtime_validation import validate_runtime_payload
 from nebius_cxcli.soperator_onboarding import (
     ONBOARDING_ACTION_APPROVE_MIGRATION,
@@ -127,6 +128,122 @@ def _target_compatible_legacy_snapshot() -> dict[str, object]:
         },
     }
     return snapshot
+
+
+def test_collect_snapshot_groups_nodes_by_unique_nebius_node_group_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_kubectl_json(cmd, *_args, **_kwargs):  # type: ignore[no-untyped-def]
+        if cmd[:5] == ["kubectl", "--context", "ctx", "get", "nodes"]:
+            return {
+                "items": [
+                    {
+                        "metadata": {
+                            "name": "node-system",
+                            "labels": {
+                                "nebius.com/node-group-id": "mk8snodegroup-system",
+                                "nebius.com/node-group": "cpu",
+                                "slurm.nebius.ai/nodeset": "system",
+                            },
+                        },
+                        "status": {"allocatable": {"cpu": "8"}},
+                    },
+                    {
+                        "metadata": {
+                            "name": "node-controller",
+                            "labels": {
+                                "nebius.com/node-group-id": "mk8snodegroup-controller",
+                                "nebius.com/node-group": "cpu",
+                                "slurm.nebius.ai/nodeset": "controller",
+                            },
+                        },
+                        "status": {"allocatable": {"cpu": "4"}},
+                        "spec": {
+                            "taints": [
+                                {
+                                    "key": "slurm.nebius.ai/nodeset",
+                                    "value": "controller",
+                                    "effect": "NoSchedule",
+                                }
+                            ]
+                        },
+                    },
+                ]
+            }
+        return {"items": []}
+
+    monkeypatch.setattr(soperator_onboarding_module, "_kubectl_json", fake_kubectl_json)
+    monkeypatch.setattr(soperator_onboarding_module, "_helm_json", lambda *_args, **_kwargs: [])
+
+    snapshot = collect_kubectl_soperator_snapshot(kube_context="ctx")
+
+    assert set(snapshot["node_groups"]) == {
+        "mk8snodegroup-system",
+        "mk8snodegroup-controller",
+    }
+    assert snapshot["node_groups"]["mk8snodegroup-system"]["selector"] == {
+        "key": "nebius.com/node-group-id",
+        "operator": "In",
+        "values": ["mk8snodegroup-system"],
+    }
+    assert snapshot["node_groups"]["mk8snodegroup-controller"]["labels"][
+        "slurm.nebius.ai/nodeset"
+    ] == "controller"
+
+
+def test_collect_snapshot_records_worker_nodeset_topology(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_kubectl_json(cmd, *_args, **_kwargs):  # type: ignore[no-untyped-def]
+        if cmd[:5] == ["kubectl", "--context", "ctx", "get", "namespace"]:
+            return {"items": [{"metadata": {"name": "soperator"}}]}
+        if (
+            cmd[:5] == ["kubectl", "--context", "ctx", "get", "deployments,statefulsets,daemonsets,pods,services,configmaps,secrets"]
+            and "-n" in cmd
+        ):
+            return {
+                "items": [
+                    {
+                        "kind": "Pod",
+                        "metadata": {
+                            "name": "worker-gpu-0",
+                            "labels": {"slurm.nebius.ai/nodeset": "worker-gpu"},
+                        },
+                        "status": {"phase": "Running"},
+                    }
+                ]
+            }
+        return {"items": []}
+
+    def fake_kubectl_text(cmd, *_args, **_kwargs):  # type: ignore[no-untyped-def]
+        assert "worker-gpu-0" in cmd
+        return json.dumps(
+            {
+                "lscpu": [
+                    {"field": "CPU(s):", "data": "128"},
+                    {"field": "Socket(s):", "data": "2"},
+                    {"field": "Core(s) per socket:", "data": "32"},
+                    {"field": "Thread(s) per core:", "data": "2"},
+                ]
+            }
+        )
+
+    monkeypatch.setattr(soperator_onboarding_module, "_kubectl_json", fake_kubectl_json)
+    monkeypatch.setattr(soperator_onboarding_module, "_kubectl_text", fake_kubectl_text)
+    monkeypatch.setattr(soperator_onboarding_module, "_helm_json", lambda *_args, **_kwargs: [])
+
+    snapshot = collect_kubectl_soperator_snapshot(kube_context="ctx")
+
+    assert snapshot["worker_topology_by_nodeset"] == {
+        "worker-gpu": {
+            "cpus": 128,
+            "boards": 1,
+            "sockets": 2,
+            "cores_per_socket": 32,
+            "threads_per_core": 2,
+            "source_pod": "worker-gpu-0",
+        }
+    }
 
 
 def test_soperator_onboarding_analyzer_detects_vanilla_cluster_actions() -> None:

@@ -400,9 +400,14 @@ from .soperator_child_charts import (
     materialize_soperator_child_chart_values,
     soperator_child_chart_warnings,
 )
-from .soperator_migration import execute_soperator_migration
+from .soperator_migration import (
+    _source_worker_nodeset_values,
+    _source_worker_partition_configuration,
+    execute_soperator_migration,
+)
 from .soperator_onboarding import (
     ONBOARDING_ACCEPTABLE_STATES,
+    ONBOARDING_ACTION_ADOPT_SOPERATOR,
     ONBOARDING_ACTION_APPROVE_MIGRATION,
     ONBOARDING_ACTION_CREATE_ALIGNED_SFS,
     ONBOARDING_ACTION_PLAN_COMPUTE_MIGRATION,
@@ -1421,22 +1426,25 @@ flux_app = typer.Typer(
 )
 ext_soperator_app = typer.Typer(
     help=(
-        "Manage external Soperator day-2 workflows. Use onboard to register an "
-        "existing Nebius MK8s target for Soperator app management without "
-        "Terraform-owning that cluster, then use migrate to plan approved "
-        "target remediation and compute/storage migration from the discovery "
-        "report."
+        "Manage existing external Nebius MK8s clusters for Soperator. "
+        "onboard registers/adopts one cluster into config.yaml without "
+        "Terraform-owning it. migrate is only for accepted onboarding plans "
+        "that contain migration actions."
     ),
     epilog=(
         "Workflow: run ext-soperator onboard for an external Nebius MK8s cluster, "
-        "then validate and render the accepted config. If the accepted report "
-        "says no migration work is required, run deploy. If migration work is "
-        "required, do not deploy first; run ext-soperator migrate --dry-run, then "
-        "ext-soperator migrate --execute --approve. Managed chart-only Soperator "
-        "upgrades use upgrade helm-chart; external MK8s control-plane and "
-        "node-template upgrades selected by onboarding are owned by ext-soperator "
-        "migrate; Terraform-managed MK8s node-template upgrades use upgrade "
-        "node-template."
+        "using its Nebius --cluster-id, then run validate and render. Onboarding "
+        "stores a cxcli target id in deploy.targets[].instance_id; by default it is "
+        "derived from the live MK8s cluster name, or it can be set with --target-id. "
+        "If the accepted onboarding report says no migration work is required, run "
+        "deploy <config.yaml>; this reconciles every generated target and produces "
+        "deploy-report.md plus deploy-time validations. Use deploy --target <target-id> "
+        "only to narrow one run. If migration work is required, "
+        "do not deploy first; run ext-soperator migrate --dry-run, then ext-soperator migrate "
+        "--execute --approve. Managed chart-only Soperator upgrades use upgrade "
+        "helm-chart; external MK8s control-plane and node-template upgrades "
+        "selected by onboarding are owned by ext-soperator migrate; "
+        "Terraform-managed MK8s node-template upgrades use upgrade node-template."
     ),
 )
 upgrade_app = typer.Typer(
@@ -6181,6 +6189,7 @@ def _print_render_deploy_hint(config_path: Path) -> None:
     except Exception:
         payload = {}
     migration_targets: list[str] = []
+    install_targets: list[str] = []
     if isinstance(payload, Mapping):
         for target_ref in soperator_onboarding_target_refs(payload):
             target = soperator_onboarding_target(payload, target_ref=target_ref)
@@ -6189,6 +6198,8 @@ def _print_render_deploy_hint(config_path: Path) -> None:
                 continue
             if _soperator_migration_action_flags(onboarding)["migration_required"]:
                 migration_targets.append(target_ref)
+            else:
+                install_targets.append(target_ref)
     if migration_targets:
         if len(migration_targets) == 1:
             target_arg = shlex.quote(migration_targets[0])
@@ -6212,6 +6223,15 @@ def _print_render_deploy_hint(config_path: Path) -> None:
             )
         console.print(
             "Do not run `nebius-cxcli deploy` before `ext-soperator migrate` for migration-required Soperator targets.",
+            soft_wrap=True,
+        )
+        return
+    if install_targets:
+        console.print(f"Next step: `nebius-cxcli deploy {config_arg}`", soft_wrap=True)
+        console.print(
+            "Use `--target <target-id>` only when you intentionally want to narrow this "
+            "run to one generated target. Install/adopt-only Soperator targets: "
+            + ", ".join(install_targets),
             soft_wrap=True,
         )
         return
@@ -6296,6 +6316,12 @@ def _print_soperator_onboard_next_steps(
             "Do not run `nebius-cxcli deploy` before `ext-soperator migrate` for this target; "
             "deploy applies the rendered Soperator resources, while migrate must verify "
             "the live source release first.",
+            soft_wrap=True,
+        )
+    else:
+        console.print(
+            f"Use `--target {target_arg}` only when you intentionally want to narrow "
+            "deploy to this generated target.",
             soft_wrap=True,
         )
 
@@ -8558,6 +8584,413 @@ def _write_soperator_source_discovery_report_from_target_row(
     )
 
 
+def _soperator_onboarding_snapshot_from_target_row(
+    target_row: Mapping[str, Any],
+) -> Mapping[str, Any]:
+    report_material = target_row.get(_SOPERATOR_DISCOVERY_REPORT_PRIVATE_KEY)
+    if not isinstance(report_material, Mapping):
+        return {}
+    snapshot = report_material.get("snapshot")
+    return snapshot if isinstance(snapshot, Mapping) else {}
+
+
+def _soperator_onboarding_sequence_of_mappings(value: Any) -> tuple[Mapping[str, Any], ...]:
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray)):
+        return ()
+    return tuple(item for item in value if isinstance(item, Mapping))
+
+
+def _soperator_onboarding_resource_name(resource: Mapping[str, Any]) -> str:
+    metadata = resource.get("metadata")
+    if isinstance(metadata, Mapping):
+        name = _non_empty_text(metadata.get("name"))
+        if name:
+            return name
+    return _non_empty_text(resource.get("name"))
+
+
+def _soperator_onboarding_resource_namespace(resource: Mapping[str, Any]) -> str:
+    metadata = resource.get("metadata")
+    if isinstance(metadata, Mapping):
+        namespace = _non_empty_text(metadata.get("namespace"))
+        if namespace:
+            return namespace
+    return _non_empty_text(resource.get("namespace"))
+
+
+def _soperator_onboarding_storage_quantity_bytes(value: str) -> int | None:
+    text = _non_empty_text(value)
+    if not text:
+        return None
+    match = re.fullmatch(r"(?P<number>[0-9]+(?:\.[0-9]+)?)(?P<suffix>[A-Za-z]+)?", text)
+    if match is None:
+        return None
+    suffix = match.group("suffix") or ""
+    multiplier_by_suffix = {
+        "": 1,
+        "Ki": 1024,
+        "Mi": 1024**2,
+        "Gi": 1024**3,
+        "Ti": 1024**4,
+        "Pi": 1024**5,
+        "Ei": 1024**6,
+        "K": 1000,
+        "M": 1000**2,
+        "G": 1000**3,
+        "T": 1000**4,
+        "P": 1000**5,
+        "E": 1000**6,
+    }
+    multiplier = multiplier_by_suffix.get(suffix)
+    if multiplier is None:
+        return None
+    return int(float(match.group("number")) * multiplier)
+
+
+def _soperator_onboarding_larger_storage_size(*values: str) -> str:
+    parsed: list[tuple[int, str]] = []
+    fallback = ""
+    for value in values:
+        text = _non_empty_text(value)
+        if not text:
+            continue
+        if not fallback:
+            fallback = text
+        size_bytes = _soperator_onboarding_storage_quantity_bytes(text)
+        if size_bytes is not None:
+            parsed.append((size_bytes, text))
+    if parsed:
+        return max(parsed, key=lambda item: item[0])[1]
+    return fallback
+
+
+def _soperator_onboarding_live_pvc_size(
+    snapshot: Mapping[str, Any],
+    pvc_name: str,
+) -> str:
+    for pvc in _soperator_onboarding_sequence_of_mappings(snapshot.get("pvcs")):
+        if _soperator_onboarding_resource_name(pvc) != pvc_name:
+            continue
+        namespace = _soperator_onboarding_resource_namespace(pvc)
+        if namespace and namespace != "soperator":
+            continue
+        request_size = _non_empty_text(
+            _mapping_path_value(pvc, "spec.resources.requests.storage")
+        )
+        status_size = _non_empty_text(_mapping_path_value(pvc, "status.capacity.storage"))
+        return _soperator_onboarding_larger_storage_size(request_size, status_size)
+    return ""
+
+
+def _soperator_onboarding_live_pv_size(
+    snapshot: Mapping[str, Any],
+    pv_name: str,
+) -> str:
+    for pv in _soperator_onboarding_sequence_of_mappings(snapshot.get("pvs")):
+        if _soperator_onboarding_resource_name(pv) != pv_name:
+            continue
+        return _non_empty_text(_mapping_path_value(pv, "spec.capacity.storage"))
+    return ""
+
+
+def _soperator_onboarding_live_pv_match_expressions(
+    snapshot: Mapping[str, Any],
+    pv_name: str,
+) -> list[dict[str, Any]]:
+    for pv in _soperator_onboarding_sequence_of_mappings(snapshot.get("pvs")):
+        if _soperator_onboarding_resource_name(pv) != pv_name:
+            continue
+        terms = _mapping_path_value(
+            pv,
+            "spec.nodeAffinity.required.nodeSelectorTerms",
+        )
+        if not isinstance(terms, Sequence) or isinstance(terms, (str, bytes, bytearray)):
+            return []
+        if len(terms) != 1 or not isinstance(terms[0], Mapping):
+            return []
+        expressions = terms[0].get("matchExpressions")
+        if not isinstance(expressions, Sequence) or isinstance(
+            expressions,
+            (str, bytes, bytearray),
+        ):
+            return []
+        return [
+            dict(copy.deepcopy(to_plain_data(expression)))
+            for expression in expressions
+            if isinstance(expression, Mapping)
+        ]
+    return []
+
+
+def _soperator_onboarding_live_name_override(snapshot: Mapping[str, Any]) -> str:
+    for resource in _soperator_onboarding_sequence_of_mappings(
+        snapshot.get("soperator_namespace_resources")
+    ):
+        if _non_empty_text(resource.get("kind")) != "Deployment":
+            continue
+        if _soperator_onboarding_resource_name(resource) != "soperator-manager":
+            continue
+        metadata = resource.get("metadata")
+        labels = metadata.get("labels") if isinstance(metadata, Mapping) else {}
+        if not isinstance(labels, Mapping):
+            continue
+        label_name = _non_empty_text(labels.get("app.kubernetes.io/name"))
+        if label_name == "helm-soperator":
+            return label_name
+    return ""
+
+
+def _soperator_onboarding_live_slurm_cluster_name(snapshot: Mapping[str, Any]) -> str:
+    clusters: list[tuple[str, str]] = []
+    for resource in _soperator_onboarding_sequence_of_mappings(
+        snapshot.get("soperator_resources")
+    ):
+        if _non_empty_text(resource.get("kind")) != "SlurmCluster":
+            continue
+        name = _soperator_onboarding_resource_name(resource)
+        if not name:
+            continue
+        phase = _non_empty_text(_mapping_path_value(resource, "status.phase"))
+        clusters.append((name, phase))
+        if phase == "Available":
+            return name
+    if len(clusters) == 1:
+        return clusters[0][0]
+    return ""
+
+
+def _soperator_onboarding_live_node_group_role(raw_group: Mapping[str, Any]) -> str:
+    labels: dict[str, Any] = {}
+    for label_field in ("labels", "node_labels"):
+        value = raw_group.get(label_field)
+        if isinstance(value, Mapping):
+            labels.update(value)
+    return normalize_component_token(
+        labels.get("slurm.nebius.ai/nodeset")
+        or labels.get("slurm.nebius.ai/nodeset-name")
+        or raw_group.get("nodeset_name")
+    )
+
+
+def _soperator_onboarding_live_worker_roles(snapshot: Mapping[str, Any]) -> set[str]:
+    roles: set[str] = set()
+    node_groups = snapshot.get("node_groups")
+    if isinstance(node_groups, Mapping):
+        for raw_group in node_groups.values():
+            if not isinstance(raw_group, Mapping):
+                continue
+            role = _soperator_onboarding_live_node_group_role(raw_group)
+            if role.startswith("worker"):
+                roles.add(role)
+                continue
+            workload = normalize_component_token(
+                _mapping_path_value(raw_group, "labels.slurm.nebius.ai/workload")
+            )
+            if workload == "worker":
+                roles.add("worker-gpu" if bool(raw_group.get("gpu", False)) else "worker-cpu")
+    for resource in _soperator_onboarding_sequence_of_mappings(
+        snapshot.get("soperator_resources")
+    ):
+        if _non_empty_text(resource.get("kind")) != "NodeSet":
+            continue
+        name = normalize_component_token(_soperator_onboarding_resource_name(resource))
+        if name.startswith("worker"):
+            roles.add(name)
+    return roles
+
+
+def _soperator_onboarding_profile_from_snapshot(snapshot: Mapping[str, Any]) -> str:
+    roles = _soperator_onboarding_live_worker_roles(snapshot)
+    has_cpu_worker = "worker-cpu" in roles
+    has_gpu_worker = "worker-gpu" in roles
+    if not has_cpu_worker and not has_gpu_worker:
+        return ""
+    profile_name = ""
+    if has_cpu_worker and has_gpu_worker:
+        profile_name = "nebius-mixed-v1"
+    elif has_cpu_worker:
+        profile_name = "nebius-cpu-v1"
+    elif has_gpu_worker:
+        profile_name = "nebius-gpu-v1"
+    _default_profile, profiles = _soperator_nodesets_profiles()
+    return profile_name if profile_name in profiles else ""
+
+
+def _soperator_onboarding_profile_from_target_row(target_row: Mapping[str, Any]) -> str:
+    snapshot = _soperator_onboarding_snapshot_from_target_row(target_row)
+    return _soperator_onboarding_profile_from_snapshot(snapshot) if snapshot else ""
+
+
+def _soperator_onboarding_live_node_group_mapping(
+    snapshot: Mapping[str, Any],
+) -> dict[str, list[str]]:
+    node_groups = snapshot.get("node_groups")
+    if not isinstance(node_groups, Mapping):
+        return {}
+    mapping: dict[str, list[str]] = {}
+    for raw_group_key, raw_group in node_groups.items():
+        group_key = normalize_component_token(raw_group_key)
+        if not group_key or not isinstance(raw_group, Mapping):
+            continue
+        role = _soperator_onboarding_live_node_group_role(raw_group)
+        if role in {"system", "controller", "login", "accounting"} or role.startswith("worker"):
+            role_key = role if role in {"worker-cpu", "worker-gpu"} else role
+            mapping.setdefault(role_key, [])
+            if group_key not in mapping[role_key]:
+                mapping[role_key].append(group_key)
+    return mapping
+
+
+def _soperator_onboarding_accounting_mariadb_storage(size: str) -> dict[str, Any]:
+    return {
+        "size": size,
+        "storageClassName": "slurm-local-pv",
+        "volumeClaimTemplate": {
+            "accessModes": ["ReadWriteMany"],
+            "resources": {"requests": {"storage": size}},
+            "storageClassName": "slurm-local-pv",
+        },
+    }
+
+
+def _soperator_onboarding_adoption_values_from_target_row(
+    target_row: Mapping[str, Any],
+) -> dict[str, Any]:
+    onboarding = target_row.get("soperator_onboarding")
+    if not isinstance(onboarding, Mapping):
+        return {}
+    actions = {
+        _non_empty_text(action)
+        for action in onboarding.get("actions", []) or []
+        if _non_empty_text(action)
+    }
+    if ONBOARDING_ACTION_ADOPT_SOPERATOR not in actions:
+        return {}
+    snapshot = _soperator_onboarding_snapshot_from_target_row(target_row)
+    if not snapshot:
+        return {}
+
+    values: dict[str, Any] = {}
+    name_override = _soperator_onboarding_live_name_override(snapshot)
+    if name_override:
+        values["nameOverride"] = name_override
+
+    cluster_name = _soperator_onboarding_live_slurm_cluster_name(snapshot)
+    if cluster_name:
+        values["clusterName"] = cluster_name
+
+    node_group_mapping = _soperator_onboarding_live_node_group_mapping(snapshot)
+    if node_group_mapping:
+        values["nodeGroupMapping"] = node_group_mapping
+
+    source_report = {"snapshot": snapshot, "report": onboarding}
+    worker_topology = (
+        snapshot.get("worker_topology_by_nodeset") if isinstance(snapshot, Mapping) else {}
+    )
+    source_worker_nodesets = _source_worker_nodeset_values(
+        source_report,
+        live_snapshot=snapshot,
+        topology_by_nodeset=worker_topology if isinstance(worker_topology, Mapping) else {},
+    )
+    if source_worker_nodesets:
+        values["nodesets"] = source_worker_nodesets
+        partition_config = _source_worker_partition_configuration(
+            source_report,
+            worker_names=tuple(
+                str(item.get("name", "") or "").strip()
+                for item in source_worker_nodesets
+                if str(item.get("name", "") or "").strip()
+            ),
+        )
+        if partition_config:
+            values["partitionConfiguration"] = partition_config
+
+    values["plugStackConfig"] = {"pyxis": {"required": False, "importerPath": ""}}
+
+    volume: dict[str, dict[str, Any]] = {}
+    for value_key, pvc_name, pv_name in (
+        ("jail", "jail-pvc", "jail-pv"),
+        ("controllerSpool", "controller-spool-pvc", "controller-spool-pv"),
+        ("accounting", "accounting-pvc", "accounting-pv"),
+    ):
+        live_size = _soperator_onboarding_larger_storage_size(
+            _soperator_onboarding_live_pvc_size(snapshot, pvc_name),
+            _soperator_onboarding_live_pv_size(snapshot, pv_name),
+        )
+        if live_size:
+            volume.setdefault(value_key, {})["size"] = live_size
+    if volume:
+        values["volume"] = volume
+
+    storage: dict[str, dict[str, Any]] = {}
+    for pv_name, value_key in (
+        ("jail-pv", "jail"),
+        ("controller-spool-pv", "controllerSpool"),
+        ("accounting-pv", "accounting"),
+    ):
+        match_expressions = _soperator_onboarding_live_pv_match_expressions(
+            snapshot,
+            pv_name,
+        )
+        if match_expressions:
+            storage.setdefault(value_key, {})["matchExpressions"] = match_expressions
+    if storage:
+        values["storage"] = storage
+
+    accounting_size = _soperator_onboarding_larger_storage_size(
+        _soperator_onboarding_live_pvc_size(snapshot, "accounting-pvc"),
+        _soperator_onboarding_live_pv_size(snapshot, "accounting-pv"),
+    )
+    if accounting_size:
+        values.setdefault("slurmNodes", {}).setdefault("accounting", {}).setdefault(
+            "mariadbOperator",
+            {},
+        )["storage"] = _soperator_onboarding_accounting_mariadb_storage(accounting_size)
+
+    return values
+
+
+def _merge_soperator_onboarding_adoption_values(
+    row: dict[str, Any],
+    adoption_values: Mapping[str, Any],
+) -> bool:
+    if not adoption_values:
+        return False
+    values = row.setdefault("values", {})
+    if not isinstance(values, dict):
+        values = {}
+        row["values"] = values
+    before = copy.deepcopy(values)
+    for key, value in adoption_values.items():
+        plain_value = to_plain_data(value)
+        if key == "nodeGroupMapping":
+            values[key] = copy.deepcopy(plain_value)
+            continue
+        if isinstance(values.get(key), dict) and isinstance(plain_value, Mapping):
+            _merge_replace_mapping(values[key], plain_value)
+            continue
+        values[key] = copy.deepcopy(plain_value)
+    return values != before
+
+
+def _merge_soperator_onboarding_adoption_values_for_target(
+    payload: dict[str, Any],
+    *,
+    target_ref: str,
+    adoption_values: Mapping[str, Any],
+) -> bool:
+    if not adoption_values:
+        return False
+    for row in _scope_rows(payload, scope="apps"):
+        if (
+            isinstance(row, dict)
+            and component_type_id(row) == _SOPERATOR_APP_ID
+            and component_instance_id(row) == target_ref
+        ):
+            return _merge_soperator_onboarding_adoption_values(row, adoption_values)
+    return False
+
+
 @contextmanager
 def _soperator_onboarding_status(message: str) -> Iterator[None]:
     if console.is_terminal:
@@ -8768,6 +9201,33 @@ def _soperator_onboarding_target_ref_from_context(kube_context: str) -> str:
     return normalize_component_token(match.group("target"))
 
 
+def _soperator_onboarding_target_ref_for_cluster_id(
+    payload: Mapping[str, Any] | None,
+    *,
+    cluster_id: str,
+) -> str:
+    normalized_cluster_id = _non_empty_text(cluster_id)
+    if not normalized_cluster_id or not isinstance(payload, Mapping):
+        return ""
+    deploy = payload.get("deploy")
+    targets = deploy.get("targets") if isinstance(deploy, Mapping) else None
+    if not isinstance(targets, list):
+        return ""
+    for row in targets:
+        if not isinstance(row, Mapping) or not deploy_target_is_external_mk8s(row):
+            continue
+        if _non_empty_text(row.get("cluster_id")) == normalized_cluster_id:
+            return component_instance_id(row)
+    return ""
+
+
+def _normalize_mk8s_handoff_access(raw_value: str | None) -> str:
+    access = normalize_component_token(raw_value) or "external"
+    if access not in {"external", "internal"}:
+        raise RuntimeError("MK8s access must be either external or internal.")
+    return access
+
+
 def _normalize_soperator_onboarding_storage_mode(raw_value: str | None) -> str:
     storage_mode = (
         normalize_component_token(raw_value) or _SOPERATOR_ONBOARDING_DEFAULT_STORAGE_MODE
@@ -8794,32 +9254,60 @@ def _normalize_soperator_onboarding_compute_mode(raw_value: str | None) -> str:
 
 def _soperator_onboarding_target_row_from_options(
     *,
-    target_ref: str | None,
+    payload: Mapping[str, Any] | None = None,
+    target_id: str | None,
+    cluster_id: str | None,
     kube_context: str | None,
+    access: str = "external",
     storage_mode: str | None,
     compute_mode: str | None = None,
     source_version: str | None = None,
+    interactive: bool = False,
 ) -> dict[str, Any]:
     explicit_storage_mode = storage_mode is not None
     explicit_compute_mode = compute_mode is not None
-    context = _non_empty_text(kube_context) or _current_kube_context_name()
-    if not context:
+    normalized_cluster_id = _non_empty_text(cluster_id)
+    if not normalized_cluster_id:
         raise RuntimeError(
-            "Manual Soperator onboarding options require a kubectl context for the "
-            "existing Nebius MK8s cluster. Pass --kube-context, or omit manual target "
-            "options in interactive mode so cxcli lists project MK8s clusters."
+            "Non-interactive Soperator onboarding requires --cluster-id with the Nebius "
+            "MK8s cluster id to adopt. Omit manual cluster options in interactive mode "
+            "to choose from the project's live MK8s cluster list."
         )
-    normalized_target = (
-        normalize_component_token(target_ref)
-        or _soperator_onboarding_target_ref_from_context(context)
-        or "mk8s"
-    )
+    normalized_access = _normalize_mk8s_handoff_access(access)
+    context = _non_empty_text(kube_context)
     normalized_storage_mode = _normalize_soperator_onboarding_storage_mode(storage_mode)
     normalized_compute_mode = _normalize_soperator_onboarding_compute_mode(compute_mode)
-    with _soperator_onboarding_status(
-        f"Discovering Soperator components on {normalized_target} ({context})..."
-    ):
-        snapshot = collect_kubectl_soperator_snapshot(kube_context=context)
+    generated_context = ""
+    if context:
+        snapshot_label = context
+        with _soperator_onboarding_status(
+            f"Discovering Soperator components on {normalized_cluster_id} ({snapshot_label})..."
+        ):
+            snapshot = collect_kubectl_soperator_snapshot(kube_context=context)
+    else:
+        if payload is None:
+            raise RuntimeError(
+                "Soperator onboarding by --cluster-id requires config identity so cxcli can "
+                "generate a temporary kubeconfig from the Nebius API."
+            )
+        with _soperator_onboarding_status(
+            f"Discovering Soperator components on {normalized_cluster_id} via Nebius API..."
+        ):
+            snapshot, generated_context = _collect_soperator_snapshot_for_nebius_mk8s_cluster(
+                payload,
+                cluster_id=normalized_cluster_id,
+                access=normalized_access,
+            )
+    normalized_target = (
+        normalize_component_token(target_id)
+        or _soperator_onboarding_target_ref_for_cluster_id(
+            payload,
+            cluster_id=normalized_cluster_id,
+        )
+        or _soperator_onboarding_target_ref_from_context(generated_context or context)
+        or normalize_component_token(normalized_cluster_id)
+        or "mk8s"
+    )
     chart_version, app_version = _soperator_catalog_pinned_versions()
     with _soperator_onboarding_status("Building migration profile diff..."):
         report = analyze_soperator_onboarding_snapshot(
@@ -8835,7 +9323,7 @@ def _soperator_onboarding_target_row_from_options(
         pinned_chart_version=chart_version,
         pinned_app_version=app_version,
         source_version=source_version,
-        interactive=False,
+        interactive=interactive,
     )
     _print_soperator_onboarding_report_summary(report)
     required_storage_mode = _soperator_onboarding_required_storage_mode_for_report(report)
@@ -8850,6 +9338,7 @@ def _soperator_onboarding_target_row_from_options(
     target_row = _soperator_onboarding_target_defaults(
         normalized_target,
         kube_context=context,
+        cluster_id=normalized_cluster_id,
         storage_mode=normalized_storage_mode,
         compute_mode=normalized_compute_mode,
         source_version=getattr(report, "source_version", ""),
@@ -8899,8 +9388,29 @@ def _upsert_soperator_onboarding_target(
             raise RuntimeError(
                 f"deploy target '{target_ref}' already exists and is not an external MK8s target."
             )
+        existing_cluster_id = _non_empty_text(row.get("cluster_id"))
+        next_cluster_id = _non_empty_text(target_row.get("cluster_id"))
+        if existing_cluster_id and next_cluster_id and existing_cluster_id != next_cluster_id:
+            raise RuntimeError(
+                f"deploy target '{target_ref}' already points to MK8s cluster "
+                f"'{existing_cluster_id}', not '{next_cluster_id}'. Choose a different "
+                "--target-id for the new cluster."
+            )
         row.update(copy.deepcopy(target_row))
         return False
+
+    next_cluster_id = _non_empty_text(target_row.get("cluster_id"))
+    if next_cluster_id:
+        for row in targets:
+            if not isinstance(row, Mapping) or not deploy_target_is_external_mk8s(row):
+                continue
+            if _non_empty_text(row.get("cluster_id")) == next_cluster_id:
+                existing_target = component_instance_id(row)
+                raise RuntimeError(
+                    f"MK8s cluster '{next_cluster_id}' is already onboarded as target "
+                    f"'{existing_target}'. Reuse --target-id {existing_target} to refresh it "
+                    "or choose a different cluster."
+                )
 
     targets.append(copy.deepcopy(target_row))
     return True
@@ -8911,6 +9421,8 @@ def _ensure_soperator_onboarding_app_row(
     *,
     target_ref: str,
     app_entries: tuple[ComponentEntry, ...],
+    adoption_values: Mapping[str, Any] | None = None,
+    adoption_profile: str = "",
 ) -> bool:
     entry_by_id = {entry.id: entry for entry in app_entries}
     soperator_entry = entry_by_id.get(_SOPERATOR_APP_ID)
@@ -8926,7 +9438,10 @@ def _ensure_soperator_onboarding_app_row(
         ):
             row["enabled"] = True
             row[_SOPERATOR_INSTALL_MODE_FIELD] = _SOPERATOR_INSTALL_MODE_ONBOARD_EXISTING_CLUSTER
+            if adoption_profile:
+                row["profile"] = adoption_profile
             row.setdefault("values", {})
+            _merge_soperator_onboarding_adoption_values(row, adoption_values or {})
             return False
 
     row = _append_component_instance_row(
@@ -8936,7 +9451,10 @@ def _ensure_soperator_onboarding_app_row(
         allow_unassigned_app_target=True,
     )
     row[_SOPERATOR_INSTALL_MODE_FIELD] = _SOPERATOR_INSTALL_MODE_ONBOARD_EXISTING_CLUSTER
+    if adoption_profile:
+        row["profile"] = adoption_profile
     row.setdefault("values", {})
+    _merge_soperator_onboarding_adoption_values(row, adoption_values or {})
     return True
 
 
@@ -8947,6 +9465,8 @@ def _apply_soperator_onboarding_to_payload(
     app_entries: tuple[ComponentEntry, ...],
 ) -> tuple[str, bool, bool, tuple[str, ...]]:
     target_row = copy.deepcopy(target_row)
+    adoption_values = _soperator_onboarding_adoption_values_from_target_row(target_row)
+    adoption_profile = _soperator_onboarding_profile_from_target_row(target_row)
     target_row.pop(_SOPERATOR_DISCOVERY_REPORT_PRIVATE_KEY, None)
     target_ref = component_instance_id(target_row)
     target_added = _upsert_soperator_onboarding_target(payload, target_row=target_row)
@@ -8954,6 +9474,8 @@ def _apply_soperator_onboarding_to_payload(
         payload,
         target_ref=target_ref,
         app_entries=app_entries,
+        adoption_values=adoption_values,
+        adoption_profile=adoption_profile,
     )
     dependency_rows = _ensure_soperator_onboarding_required_app_rows(
         payload,
@@ -8962,6 +9484,11 @@ def _apply_soperator_onboarding_to_payload(
     _materialize_single_target_app_bindings(payload)
     _ensure_soperator_onboarding_target(payload, interactive=False)
     _materialize_soperator_component_defaults(payload)
+    _merge_soperator_onboarding_adoption_values_for_target(
+        payload,
+        target_ref=target_ref,
+        adoption_values=adoption_values,
+    )
     selected_apps = _enabled_ids_from_runtime_payload(payload=payload, entries=app_entries)
     _materialize_soperator_child_chart_secret_dependencies(
         payload,
@@ -10234,6 +10761,15 @@ def _soperator_set_node_group_mapping(
         target = {}
         values["nodeGroupMapping"] = target
     for role, groups in mapping.items():
+        if (
+            role == "worker"
+            and any(
+                str(existing_role).startswith("worker-")
+                for existing_role in target
+                if str(existing_role).strip()
+            )
+        ):
+            continue
         if role not in target and groups:
             target[role] = list(groups)
 
@@ -10416,7 +10952,11 @@ def _soperator_node_group_selector_expression(
             value = _non_empty_text(labels.get("nebius.com/node-group"))
             if value:
                 return {"key": "nebius.com/node-group", "operator": "In", "values": [value]}
-            for fallback_key in ("yandex.cloud/node-group-id", "node.kubernetes.io/instance-type"):
+            for fallback_key in (
+                "nebius.com/node-group-id",
+                "yandex.cloud/node-group-id",
+                "node.kubernetes.io/instance-type",
+            ):
                 fallback_value = _non_empty_text(labels.get(fallback_key))
                 if fallback_value:
                     return {"key": fallback_key, "operator": "In", "values": [fallback_value]}
@@ -10470,6 +11010,8 @@ def _materialize_soperator_existing_node_group_mapping(
     }
     for role, group_keys in mapping.items():
         raw_role_config = role_mapping.get(role)
+        if not isinstance(raw_role_config, Mapping) and str(role).startswith("worker"):
+            raw_role_config = role_mapping.get("worker")
         if not isinstance(raw_role_config, Mapping):
             continue
         filesystem_keys = _soperator_role_filesystem_keys(raw_role_config)
@@ -10736,6 +11278,7 @@ def _soperator_set_storage_node_group_selector(
     inputs: Mapping[str, Any],
     tolerations: Sequence[Mapping[str, Any]] | None = None,
     include_profile_jail_aliases: bool = False,
+    preserve_existing_match_expressions: bool = False,
 ) -> None:
     storage_key = _soperator_storage_value_key(filesystem_key)
     selected_group_keys = list(group_keys)
@@ -10752,11 +11295,17 @@ def _soperator_set_storage_node_group_selector(
     if not isinstance(storage_section, dict):
         storage_section = {}
         storage[storage_key] = storage_section
-    storage_section["matchExpressions"] = [
-        expression
-        for term in _soperator_node_group_selector_terms(inputs, selected_groups)
-        for expression in term.get("matchExpressions", [])
-    ]
+    existing_match_expressions = storage_section.get("matchExpressions")
+    if not (
+        preserve_existing_match_expressions
+        and isinstance(existing_match_expressions, list)
+        and existing_match_expressions
+    ):
+        storage_section["matchExpressions"] = [
+            expression
+            for term in _soperator_node_group_selector_terms(inputs, selected_groups)
+            for expression in term.get("matchExpressions", [])
+        ]
     merged_tolerations = _soperator_merge_tolerations(
         storage_section.get("tolerations"),
         tolerations or [],
@@ -11104,6 +11653,13 @@ def _soperator_extend_nodeconfigurator_tolerations_from_nodesets(values: dict[st
             section["tolerations"] = merged
 
 
+def _soperator_strip_nodeset_image_overrides(nodeset: dict[str, Any]) -> None:
+    for key in ("slurmd", "munge", "sssd"):
+        section = nodeset.get(key)
+        if isinstance(section, dict):
+            section.pop("image", None)
+
+
 def _soperator_guided_sssd_enabled(values: Mapping[str, Any]) -> bool | None:
     helper = values.get("sssd")
     if not isinstance(helper, Mapping) or "enabled" not in helper:
@@ -11141,17 +11697,27 @@ def _materialize_soperator_guided_sssd_values(values: dict[str, Any]) -> None:
 def _soperator_merge_nodeset_with_generated(
     existing: Mapping[str, Any],
     generated: Mapping[str, Any],
+    *,
+    preserve_existing_node_config: bool = False,
 ) -> dict[str, Any]:
     merged = copy.deepcopy(dict(existing))
     _merge_missing_mapping(merged, generated)
 
     for nodeset_field in ("replicas", "nodeSelector", "affinity", "nodeConfig"):
+        if (
+            nodeset_field == "nodeConfig"
+            and preserve_existing_node_config
+            and isinstance(existing.get("nodeConfig"), Mapping)
+        ):
+            continue
         if nodeset_field in generated:
             merged[nodeset_field] = copy.deepcopy(generated[nodeset_field])
     if "nodeSelector" in generated:
         merged.pop("affinity", None)
     if "affinity" in generated:
         merged.pop("nodeSelector", None)
+    if preserve_existing_node_config:
+        _soperator_strip_nodeset_image_overrides(merged)
 
     generated_tolerations = generated.get("tolerations")
     if isinstance(generated_tolerations, list):
@@ -11173,6 +11739,8 @@ def _soperator_merge_nodeset_with_generated(
                 resources = {}
                 slurmd["resources"] = resources
             resources.update(copy.deepcopy(dict(generated_resources)))
+            if resources.get("gpu") not in (None, "", 0, "0"):
+                resources.pop("nvidia.com/gpu", None)
 
     return merged
 
@@ -11232,6 +11800,42 @@ def _soperator_all_profile_topology_values() -> tuple[Mapping[str, Any], ...]:
         if isinstance(profile, Mapping)
         for values in _soperator_profile_topology_values(profile)
     )
+
+
+def _soperator_without_nodesets(value: Mapping[str, Any]) -> Mapping[str, Any]:
+    if "nodesets" not in value:
+        return value
+    cleaned = dict(value)
+    cleaned.pop("nodesets", None)
+    return cleaned
+
+
+def _soperator_profile_values_for_install_mode(
+    value: Mapping[str, Any],
+    *,
+    install_mode: str,
+    values: Mapping[str, Any],
+) -> Mapping[str, Any]:
+    if (
+        install_mode == _SOPERATOR_INSTALL_MODE_ONBOARD_EXISTING_CLUSTER
+        and isinstance(values.get("nodesets"), list)
+    ):
+        return _soperator_without_nodesets(value)
+    return value
+
+
+def _soperator_profile_value_sets_for_install_mode(
+    value_sets: Sequence[Mapping[str, Any]],
+    *,
+    install_mode: str,
+    values: Mapping[str, Any],
+) -> tuple[Mapping[str, Any], ...]:
+    if (
+        install_mode == _SOPERATOR_INSTALL_MODE_ONBOARD_EXISTING_CLUSTER
+        and isinstance(values.get("nodesets"), list)
+    ):
+        return tuple(_soperator_without_nodesets(value) for value in value_sets)
+    return tuple(value_sets)
 
 
 def _soperator_profile_install_mode_chart_values(
@@ -11301,6 +11905,74 @@ def _materialize_soperator_mapping_chart_values(
     nodeset_ref_replacements: dict[str, list[str]] = {}
     storage_groups: dict[str, list[str]] = {}
 
+    def _generate_nodesets_from_template(
+        *,
+        template_name: str,
+        group_keys: Sequence[str],
+    ) -> None:
+        template = template_nodesets.get(template_name)
+        if not isinstance(template, Mapping):
+            return
+        replacement_names: list[str] = []
+        for group_key in group_keys:
+            nodeset = copy.deepcopy(to_plain_data(template))
+            nodeset_name = (
+                template_name
+                if len(group_keys) == 1
+                else normalize_component_token(f"{template_name}-{group_key}")
+            )
+            nodeset["name"] = nodeset_name
+            node_group = next(
+                (
+                    group
+                    for group in iter_mk8s_node_groups(inputs)
+                    if group.key == group_key
+                    and (
+                        group.node_count is not None
+                        or group.autoscaling_max_node_count is not None
+                    )
+                ),
+                None,
+            )
+            if node_group is not None:
+                nodeset["replicas"] = (
+                    node_group.node_count
+                    if node_group.node_count is not None
+                    else node_group.autoscaling_max_node_count
+                )
+            selector_expression = _soperator_node_group_selector_expression(inputs, group_key)
+            if (
+                selector_expression.get("operator") == "In"
+                and len(selector_expression.get("values", [])) == 1
+            ):
+                nodeset["nodeSelector"] = {
+                    str(selector_expression["key"]): str(selector_expression["values"][0])
+                }
+            else:
+                nodeset["affinity"] = {
+                    "nodeAffinity": {
+                        "requiredDuringSchedulingIgnoredDuringExecution": {
+                            "nodeSelectorTerms": [{"matchExpressions": [selector_expression]}]
+                        }
+                    }
+                }
+            nodeset_tolerations = _soperator_merge_tolerations(
+                nodeset.get("tolerations"),
+                _soperator_node_group_tolerations(inputs, [group_key]),
+            )
+            if nodeset_tolerations:
+                nodeset["tolerations"] = nodeset_tolerations
+            _soperator_fit_nodeset_resources_to_group(
+                nodeset,
+                group_key=group_key,
+                inputs=inputs,
+                install_mode=install_mode,
+            )
+            generated_nodesets.append(nodeset)
+            replacement_names.append(nodeset_name)
+        if replacement_names:
+            nodeset_ref_replacements[template_name] = replacement_names
+
     for role, raw_role_config in role_mapping.items():
         if not isinstance(raw_role_config, Mapping):
             continue
@@ -11343,67 +12015,23 @@ def _materialize_soperator_mapping_chart_values(
             template_name = _non_empty_text(raw_role_config.get("nodeset_template"))
             template_names = [template_name] if template_name else []
         for template_name in template_names:
-            template = template_nodesets.get(template_name)
-            if not isinstance(template, Mapping):
-                continue
-            replacement_names: list[str] = []
-            for group_key in group_keys:
-                nodeset = copy.deepcopy(to_plain_data(template))
-                nodeset_name = (
-                    template_name
-                    if len(group_keys) == 1
-                    else normalize_component_token(f"{template_name}-{group_key}")
-                )
-                nodeset["name"] = nodeset_name
-                node_group = next(
-                    (
-                        group
-                        for group in iter_mk8s_node_groups(inputs)
-                        if group.key == group_key
-                        and (
-                            group.node_count is not None
-                            or group.autoscaling_max_node_count is not None
-                        )
-                    ),
-                    None,
-                )
-                if node_group is not None:
-                    nodeset["replicas"] = (
-                        node_group.node_count
-                        if node_group.node_count is not None
-                        else node_group.autoscaling_max_node_count
-                    )
-                selector_expression = _soperator_node_group_selector_expression(inputs, group_key)
-                if (
-                    selector_expression.get("operator") == "In"
-                    and len(selector_expression.get("values", [])) == 1
-                ):
-                    nodeset["nodeSelector"] = {
-                        str(selector_expression["key"]): str(selector_expression["values"][0])
-                    }
-                else:
-                    nodeset["affinity"] = {
-                        "nodeAffinity": {
-                            "requiredDuringSchedulingIgnoredDuringExecution": {
-                                "nodeSelectorTerms": [{"matchExpressions": [selector_expression]}]
-                            }
-                        }
-                    }
-                nodeset_tolerations = _soperator_merge_tolerations(
-                    nodeset.get("tolerations"),
-                    _soperator_node_group_tolerations(inputs, [group_key]),
-                )
-                if nodeset_tolerations:
-                    nodeset["tolerations"] = nodeset_tolerations
-                _soperator_fit_nodeset_resources_to_group(
-                    nodeset,
-                    group_key=group_key,
-                    inputs=inputs,
-                    install_mode=install_mode,
-                )
-                generated_nodesets.append(nodeset)
-                replacement_names.append(nodeset_name)
-            nodeset_ref_replacements[template_name] = replacement_names
+            _generate_nodesets_from_template(template_name=template_name, group_keys=group_keys)
+
+    worker_role_config = role_mapping.get("worker")
+    worker_filesystem_keys = (
+        _soperator_role_filesystem_keys(worker_role_config)
+        if isinstance(worker_role_config, Mapping)
+        else []
+    )
+    for template_name, group_keys in mapping.items():
+        if template_name in role_mapping or not template_name.startswith("worker"):
+            continue
+        if template_name not in template_nodesets:
+            continue
+        for filesystem_key in worker_filesystem_keys:
+            storage_groups.setdefault(filesystem_key, [])
+            storage_groups[filesystem_key].extend(group_keys)
+        _generate_nodesets_from_template(template_name=template_name, group_keys=group_keys)
 
     for filesystem_key, group_keys in storage_groups.items():
         _soperator_set_storage_node_group_selector(
@@ -11414,6 +12042,9 @@ def _materialize_soperator_mapping_chart_values(
             tolerations=_soperator_node_group_tolerations(inputs, group_keys),
             include_profile_jail_aliases=(
                 install_mode != _SOPERATOR_INSTALL_MODE_ONBOARD_EXISTING_CLUSTER
+            ),
+            preserve_existing_match_expressions=(
+                install_mode == _SOPERATOR_INSTALL_MODE_ONBOARD_EXISTING_CLUSTER
             ),
         )
 
@@ -11441,12 +12072,42 @@ def _materialize_soperator_mapping_chart_values(
             existing_nodeset = existing_nodesets_by_name.get(_non_empty_text(nodeset.get("name")))
             if isinstance(existing_nodeset, Mapping):
                 merged_generated_nodesets.append(
-                    _soperator_merge_nodeset_with_generated(existing_nodeset, nodeset)
+                    _soperator_merge_nodeset_with_generated(
+                        existing_nodeset,
+                        nodeset,
+                        preserve_existing_node_config=(
+                            install_mode == _SOPERATOR_INSTALL_MODE_ONBOARD_EXISTING_CLUSTER
+                        ),
+                    )
                 )
             else:
                 merged_generated_nodesets.append(nodeset)
         generated_names = {_non_empty_text(item.get("name")) for item in generated_nodesets}
         replaced_template_names = set(nodeset_ref_replacements)
+        mapped_group_keys = {
+            group_key for group_keys in mapping.values() for group_key in group_keys if group_key
+        }
+
+        def _stale_onboarding_nodeset(item: Mapping[str, Any]) -> bool:
+            if install_mode != _SOPERATOR_INSTALL_MODE_ONBOARD_EXISTING_CLUSTER:
+                return False
+            name = _non_empty_text(item.get("name"))
+            if not name or name in generated_names or not name.startswith("worker-"):
+                return False
+            for group_key in mapped_group_keys:
+                if group_key and group_key in name:
+                    return True
+            node_selector = item.get("nodeSelector")
+            if isinstance(node_selector, Mapping):
+                selector_values = {
+                    _non_empty_text(value)
+                    for value in node_selector.values()
+                    if _non_empty_text(value)
+                }
+                if selector_values.intersection(mapped_group_keys):
+                    return True
+            return False
+
         preserved = [
             item
             for item in existing_nodesets_list
@@ -11454,6 +12115,7 @@ def _materialize_soperator_mapping_chart_values(
             and _non_empty_text(item.get("name"))
             and _non_empty_text(item.get("name")) not in generated_names
             and _non_empty_text(item.get("name")) not in replaced_template_names
+            and not _stale_onboarding_nodeset(item)
             and not (
                 _non_empty_text(item.get("name")) in all_profile_template_names
                 and _non_empty_text(item.get("name")) not in selected_template_names
@@ -11751,16 +12413,25 @@ def _materialize_soperator_partition_profile(
     *,
     values: dict[str, Any],
     profile: Mapping[str, Any],
+    install_mode: str = "",
 ) -> None:
     profile_name = _non_empty_text(values.get("partitionProfile"))
     chart_profile = _profile_mapping(profile, "chart")
     base_values = _profile_mapping(chart_profile, "values")
     partition_profiles = _profile_mapping(chart_profile, "partition_profiles")
-    partition_value_sets = _soperator_all_profile_partition_values()
+    partition_value_sets = _soperator_profile_value_sets_for_install_mode(
+        _soperator_all_profile_partition_values(),
+        install_mode=install_mode,
+        values=values,
+    )
     if not profile_name or profile_name == "shape-default":
         _merge_soperator_profile_values(
             values,
-            base_values,
+            _soperator_profile_values_for_install_mode(
+                base_values,
+                install_mode=install_mode,
+                values=values,
+            ),
             {},
             replaceable_base_values=partition_value_sets,
         )
@@ -11775,8 +12446,16 @@ def _materialize_soperator_partition_profile(
     profile_values = _profile_mapping(selected_partition_profile, "values")
     _merge_soperator_profile_values(
         values,
-        profile_values,
-        base_values,
+        _soperator_profile_values_for_install_mode(
+            profile_values,
+            install_mode=install_mode,
+            values=values,
+        ),
+        _soperator_profile_values_for_install_mode(
+            base_values,
+            install_mode=install_mode,
+            values=values,
+        ),
         replaceable_base_values=partition_value_sets,
     )
 
@@ -11785,12 +12464,17 @@ def _materialize_soperator_topology_profile(
     *,
     values: dict[str, Any],
     profile: Mapping[str, Any],
+    install_mode: str = "",
 ) -> None:
     profile_name = _non_empty_text(values.get("topologyProfile"))
     chart_profile = _profile_mapping(profile, "chart")
     base_values = _profile_mapping(chart_profile, "values")
     topology_profiles = _profile_mapping(chart_profile, "topology_profiles")
-    topology_value_sets = _soperator_all_profile_topology_values()
+    topology_value_sets = _soperator_profile_value_sets_for_install_mode(
+        _soperator_all_profile_topology_values(),
+        install_mode=install_mode,
+        values=values,
+    )
     if not profile_name or profile_name == "disabled":
         _merge_soperator_profile_values(
             values,
@@ -11809,8 +12493,16 @@ def _materialize_soperator_topology_profile(
     profile_values = _profile_mapping(topology_profile, "values")
     _merge_soperator_profile_values(
         values,
-        profile_values,
-        base_values,
+        _soperator_profile_values_for_install_mode(
+            profile_values,
+            install_mode=install_mode,
+            values=values,
+        ),
+        _soperator_profile_values_for_install_mode(
+            base_values,
+            install_mode=install_mode,
+            values=values,
+        ),
         replaceable_base_values=topology_value_sets,
     )
 
@@ -12009,9 +12701,21 @@ def _materialize_soperator_component_defaults(payload: dict[str, Any]) -> bool:
                 _profile_mapping(profile_by_target.get(target_ref, {}), "chart"),
                 "values",
             )
+            chart_profile_for_merge = chart_profile
+            if (
+                install_mode_by_target.get(
+                    target_ref,
+                    _default_soperator_install_mode(),
+                )
+                == _SOPERATOR_INSTALL_MODE_ONBOARD_EXISTING_CLUSTER
+                and isinstance(values.get("nodesets"), list)
+                and "nodesets" in chart_profile
+            ):
+                chart_profile_for_merge = dict(chart_profile)
+                chart_profile_for_merge.pop("nodesets", None)
             _merge_soperator_profile_values(
                 values,
-                chart_profile,
+                chart_profile_for_merge,
                 {},
                 replaceable_base_values=_soperator_all_profile_chart_values(),
             )
@@ -12029,10 +12733,18 @@ def _materialize_soperator_component_defaults(payload: dict[str, Any]) -> bool:
             _materialize_soperator_partition_profile(
                 values=values,
                 profile=profile_by_target.get(target_ref, {}),
+                install_mode=install_mode_by_target.get(
+                    target_ref,
+                    _default_soperator_install_mode(),
+                ),
             )
             _materialize_soperator_topology_profile(
                 values=values,
                 profile=profile_by_target.get(target_ref, {}),
+                install_mode=install_mode_by_target.get(
+                    target_ref,
+                    _default_soperator_install_mode(),
+                ),
             )
             _materialize_soperator_dcgm_exporter_values(
                 values=values,
@@ -26787,6 +27499,34 @@ def _run_deploy_validations(
     return written
 
 
+def _run_target_deploy_validations(
+    validations: list[dict[str, Any]],
+    *,
+    target_ref: str,
+    reports_dir: Path,
+    extra_env: dict[str, str] | None,
+) -> None:
+    with console.status(
+        f"[cyan]Running deploy-time validations for {target_ref}...[/cyan]",
+        spinner="dots",
+    ) as status:
+        last_validation_phase = ""
+
+        def _emit_validation_phase(message: str) -> None:
+            nonlocal last_validation_phase
+            status.update(message)
+            if not _console_is_terminal() and message != last_validation_phase:
+                console.print(message)
+            last_validation_phase = message
+
+        _run_deploy_validations(
+            validations,
+            reports_dir=reports_dir,
+            extra_env=extra_env,
+            emit=_emit_validation_phase,
+        )
+
+
 _DEPLOY_VALIDATION_SKIP_KIND_MAP = {
     "operator-readiness": "mk8s_gpu_operator_readiness",
     "operator_readiness": "mk8s_gpu_operator_readiness",
@@ -26860,6 +27600,199 @@ def _manifest_requires_flux_terraform_state(manifest: Mapping[str, Any]) -> bool
         _manifest_managed_deploy_targets(manifest)
         or _manifest_required_component_output_specs(manifest)
     )
+
+
+@dataclass(frozen=True)
+class _SoperatorReleaseRef:
+    namespace: str
+    release_name: str
+
+
+def _enabled_soperator_release_refs_for_target(
+    config: Any,
+    *,
+    target_ref: str,
+) -> tuple[_SoperatorReleaseRef, ...]:
+    payload = to_plain_data(config)
+    if not isinstance(payload, Mapping):
+        return ()
+    normalized_target_ref = normalize_component_token(target_ref)
+    if not normalized_target_ref:
+        return ()
+    apps = payload.get("apps")
+    charts = apps.get("charts") if isinstance(apps, Mapping) else []
+    if not isinstance(charts, list):
+        return ()
+    refs: list[_SoperatorReleaseRef] = []
+    for row in charts:
+        if not (
+            isinstance(row, Mapping)
+            and bool(row.get("enabled", False))
+            and component_type_id(row) == "soperator"
+        ):
+            continue
+        row_target_ref = normalize_component_token(
+            app_chart_target_ref(row) or component_instance_id(row)
+        )
+        if row_target_ref != normalized_target_ref:
+            continue
+        namespace = str(row.get("namespace") or "soperator").strip() or "soperator"
+        release_name = str(row.get("release-name") or "soperator").strip() or "soperator"
+        refs.append(_SoperatorReleaseRef(namespace=namespace, release_name=release_name))
+    return tuple(refs)
+
+
+def _yaml_docs(path: Path) -> tuple[Mapping[str, Any], ...]:
+    try:
+        return tuple(
+            doc
+            for doc in yaml.safe_load_all(path.read_text(encoding="utf-8"))
+            if isinstance(doc, Mapping)
+        )
+    except Exception:
+        return ()
+
+
+def _yaml_doc_metadata(doc: Mapping[str, Any]) -> Mapping[str, Any]:
+    metadata = doc.get("metadata")
+    return metadata if isinstance(metadata, Mapping) else {}
+
+
+def _flux_resource_is_soperator_helm_release(
+    path: Path,
+    *,
+    release_refs: tuple[_SoperatorReleaseRef, ...],
+) -> bool:
+    ref_pairs = {(ref.namespace, ref.release_name) for ref in release_refs}
+    for doc in _yaml_docs(path):
+        if str(doc.get("kind") or "") != "HelmRelease":
+            continue
+        metadata = _yaml_doc_metadata(doc)
+        if (
+            str(metadata.get("namespace") or "").strip(),
+            str(metadata.get("name") or "").strip(),
+        ) in ref_pairs:
+            return True
+    return False
+
+
+def _post_flux_manifest_is_soperator(
+    path: Path,
+    *,
+    release_refs: tuple[_SoperatorReleaseRef, ...],
+) -> bool:
+    namespaces = {ref.namespace for ref in release_refs}
+    release_names = {ref.release_name for ref in release_refs}
+    for doc in _yaml_docs(path):
+        metadata = _yaml_doc_metadata(doc)
+        namespace = str(metadata.get("namespace") or "").strip()
+        name = str(metadata.get("name") or "").strip()
+        kind = str(doc.get("kind") or "").strip()
+        if kind == "SlurmCluster" and (not namespace or namespace in namespaces):
+            return True
+        if kind == "Deployment" and name == "soperator-manager" and namespace in namespaces:
+            return True
+        if kind == "HelmRelease" and namespace in namespaces and name in release_names:
+            return True
+    return False
+
+
+def _resource_path_within_flux_dir(flux_dir: Path, resource: Any) -> Path | None:
+    resource_text = str(resource or "").strip()
+    if not resource_text or "://" in resource_text:
+        return None
+    resource_path = (flux_dir / resource_text).resolve()
+    try:
+        resource_path.relative_to(flux_dir.resolve())
+    except ValueError:
+        return None
+    return resource_path
+
+
+def _remove_soperator_resources_from_staged_flux(
+    flux_dir: Path,
+    *,
+    release_refs: tuple[_SoperatorReleaseRef, ...],
+) -> bool:
+    removed = False
+    kustomization_path = flux_dir / "kustomization.yaml"
+    if kustomization_path.exists():
+        kustomization = yaml.safe_load(kustomization_path.read_text(encoding="utf-8")) or {}
+        if isinstance(kustomization, dict):
+            resources = kustomization.get("resources")
+            if isinstance(resources, list):
+                next_resources: list[Any] = []
+                for resource in resources:
+                    resource_path = _resource_path_within_flux_dir(flux_dir, resource)
+                    if (
+                        resource_path is not None
+                        and resource_path.is_file()
+                        and _flux_resource_is_soperator_helm_release(
+                            resource_path,
+                            release_refs=release_refs,
+                        )
+                    ):
+                        resource_path.unlink(missing_ok=True)
+                        removed = True
+                        continue
+                    next_resources.append(resource)
+                kustomization["resources"] = next_resources
+                kustomization_path.write_text(
+                    yaml.safe_dump(kustomization, sort_keys=False),
+                    encoding="utf-8",
+                )
+    for manifest_path in sorted(flux_dir.glob("post-flux-*.yaml")):
+        if _post_flux_manifest_is_soperator(manifest_path, release_refs=release_refs):
+            manifest_path.unlink(missing_ok=True)
+            removed = True
+    return removed
+
+
+@contextmanager
+def _staged_flux_without_soperator(
+    paths: ProjectPaths,
+    *,
+    config: Any,
+    target_ref: str,
+) -> Iterator[ProjectPaths]:
+    release_refs = _enabled_soperator_release_refs_for_target(config, target_ref=target_ref)
+    if not release_refs:
+        raise RuntimeError(
+            f"Target '{target_ref}' has pre-Soperator GPU validations but no enabled "
+            "Soperator app row could be resolved for that target."
+        )
+    with tempfile.TemporaryDirectory(prefix="nebius-cxcli-pre-soperator-flux-") as temp_dir:
+        staged_flux_dir = Path(temp_dir) / "flux"
+        shutil.copytree(paths.flux_dir, staged_flux_dir)
+        if not _remove_soperator_resources_from_staged_flux(
+            staged_flux_dir,
+            release_refs=release_refs,
+        ):
+            raise RuntimeError(
+                f"Could not stage target '{target_ref}' Flux without Soperator resources. "
+                "Rerender the generated bundle and retry deploy."
+            )
+        yield replace(paths, flux_dir=staged_flux_dir)
+
+
+def _pre_soperator_gpu_validations(
+    config: Any,
+    *,
+    target: Mapping[str, str],
+    validations: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    target_ref = str(target.get("target_ref") or "").strip()
+    if not target_ref:
+        return []
+    if str(target.get(DEPLOY_TARGET_OWNERSHIP_FIELD, "")).strip() == EXTERNAL_TARGET_OWNERSHIP:
+        return []
+    if not _enabled_soperator_release_refs_for_target(config, target_ref=target_ref):
+        return []
+    return [
+        item
+        for item in validations
+        if str(item.get("kind", "") or "").strip() in _MK8S_GPU_VALIDATION_KINDS
+    ]
 
 
 def _enabled_cluster_handoffs(config: Any) -> list[dict[str, str]]:
@@ -28966,6 +29899,14 @@ def _deploy_generated_artifacts(
                 deploy_validations,
                 target_ref=target_ref,
             )
+            pre_soperator_validations = _pre_soperator_gpu_validations(
+                config,
+                target=target,
+                validations=target_validations,
+            )
+            post_soperator_validations = [
+                item for item in target_validations if item not in pre_soperator_validations
+            ]
             needs_cluster_ready = target_has_apps or bool(target_validations)
             if len(selected_targets) > 1:
                 console.print(f"[bold]Target {target_ref}[/bold]")
@@ -29013,6 +29954,27 @@ def _deploy_generated_artifacts(
                         extra_env=kube_env, emit=lambda message: console.print(message)
                     )
                 if target_has_apps:
+                    if pre_soperator_validations:
+                        console.print(
+                            "Applying platform Flux resources before Soperator GPU validations "
+                            f"for target {target_ref}..."
+                        )
+                        with _staged_flux_without_soperator(
+                            target_paths,
+                            config=config,
+                            target_ref=target_ref,
+                        ) as staged_target_paths:
+                            _apply_rendered_flux(staged_target_paths, extra_env=kube_env)
+                        try:
+                            _run_target_deploy_validations(
+                                pre_soperator_validations,
+                                target_ref=target_ref,
+                                reports_dir=paths.reports_dir,
+                                extra_env=kube_env,
+                            )
+                        except Exception as exc:
+                            validation_error = exc
+                            break
                     _apply_rendered_flux(target_paths, extra_env=kube_env)
                     grafana_statuses.extend(
                         _collect_grafana_status_after_flux(
@@ -29030,30 +29992,17 @@ def _deploy_generated_artifacts(
                     )
                     if bootstrap_command:
                         gitops_bootstrap_commands.append(bootstrap_command)
-                if target_validations:
-                    with console.status(
-                        f"[cyan]Running deploy-time validations for {target_ref}...[/cyan]",
-                        spinner="dots",
-                    ) as status:
-                        last_validation_phase = ""
-
-                        def _emit_validation_phase(message: str) -> None:
-                            nonlocal last_validation_phase
-                            status.update(message)
-                            if not _console_is_terminal() and message != last_validation_phase:
-                                console.print(message)
-                            last_validation_phase = message
-
-                        try:
-                            _run_deploy_validations(
-                                target_validations,
-                                reports_dir=paths.reports_dir,
-                                extra_env=kube_env,
-                                emit=_emit_validation_phase,
-                            )
-                        except Exception as exc:
-                            validation_error = exc
-                            break
+                if post_soperator_validations:
+                    try:
+                        _run_target_deploy_validations(
+                            post_soperator_validations,
+                            target_ref=target_ref,
+                            reports_dir=paths.reports_dir,
+                            extra_env=kube_env,
+                        )
+                    except Exception as exc:
+                        validation_error = exc
+                        break
             if validation_error is not None:
                 break
     elif has_enabled_app_charts or deploy_validations:
@@ -33289,7 +34238,7 @@ def component_add_command(
 
 @ext_soperator_app.command(
     "onboard",
-    short_help="Register an existing Nebius MK8s target for Soperator.",
+    short_help="Register/adopt an existing Nebius MK8s target for Soperator.",
     epilog=(
         "Examples: "
         "nebius-cxcli ext-soperator onboard ./deployments/tenant/project/config.yaml "
@@ -33298,16 +34247,22 @@ def component_add_command(
         "--tenant-id TENANT --project-id PROJECT --region-id eu-north1 "
         "(create a project config under the deployments root, then choose one existing "
         "Nebius MK8s cluster from the project); "
-        "nebius-cxcli ext-soperator onboard ./deployments/tenant/project/config.yaml "
-        "--target external-cluster --kube-context nebius-external-cluster-mk8scluster-... "
-        "--source-version 1.23.3 --storage-mode create-aligned-sfs "
-        "--compute-mode create-aligned-node-groups "
+        "nebius-cxcli ext-soperator onboard ./deployments --client-name acme "
+        "--tenant-id TENANT --project-id PROJECT --region-id eu-north1 "
+        "--cluster-id mk8scluster-... --target-id external-cluster "
+        "--storage-mode keep-existing-storage --compute-mode keep-existing-compute "
         "--no-interactive. "
+        "--cluster-id selects the Nebius MK8s cluster to adopt. --target-id is only "
+        "the optional cxcli logical target id saved as deploy.targets[].instance_id; "
+        "when omitted, cxcli derives it from the live cluster name. "
         f"The command updates config.yaml and writes {SOURCE_SOPERATOR_DISCOVERY_REPORT_NAME}; "
         "next run: nebius-cxcli validate <config.yaml>; nebius-cxcli render "
-        "<config.yaml>. For install/adopt-only targets, run nebius-cxcli deploy "
-        "<config.yaml>. For migration-required targets, do not deploy first; run "
-        "nebius-cxcli ext-soperator migrate <config.yaml> --target <target> --dry-run, "
+        "<config.yaml>. For install/adopt-only targets with no migration actions, "
+        "run nebius-cxcli deploy <config.yaml> to reconcile the generated desired "
+        "state and produce deploy-report.md; use deploy --target <target-id> only "
+        "to narrow a run. For migration-required targets, "
+        "do not deploy first; run nebius-cxcli ext-soperator migrate <config.yaml> "
+        "--target <target> --dry-run, "
         "then nebius-cxcli ext-soperator migrate <config.yaml> --target <target> "
         "--execute --approve."
     ),
@@ -33361,15 +34316,24 @@ def soperator_onboard_command(
             help="Optional notifications email for new config creation from a deployments root.",
         ),
     ] = None,
-    target_ref_opt: Annotated[
+    cluster_id_opt: Annotated[
         str | None,
         typer.Option(
-            "--target",
-            "--target-ref",
+            "--cluster-id",
             help=(
-                "Non-interactive external Nebius MK8s target id to write under "
-                "deploy.targets[].instance_id. Interactive onboarding lists project MK8s "
-                "clusters instead of prompting for this value."
+                "Nebius MK8s cluster id to adopt, for example mk8scluster-e00.... "
+                "Non-interactive onboarding uses this id to generate a temporary "
+                "kubeconfig through the Nebius API."
+            ),
+        ),
+    ] = None,
+    target_id_opt: Annotated[
+        str | None,
+        typer.Option(
+            "--target-id",
+            help=(
+                "Optional cxcli logical target id to save as deploy.targets[].instance_id. "
+                "When omitted, cxcli derives it from the live MK8s cluster name."
             ),
         ),
     ] = None,
@@ -33378,17 +34342,29 @@ def soperator_onboard_command(
         typer.Option(
             "--kube-context",
             help=(
-                "Non-interactive kubectl context for the existing Nebius MK8s cluster. "
-                "Interactive onboarding derives access from the selected Nebius MK8s cluster ID."
+                "Optional kubectl context override for discovery. By default cxcli uses "
+                "--cluster-id to generate temporary access through the Nebius API."
             ),
         ),
     ] = None,
+    access_opt: Annotated[
+        str,
+        typer.Option(
+            "--access",
+            help=(
+                "MK8s API endpoint to use when generating temporary kubeconfig from "
+                "--cluster-id: external or internal."
+            ),
+        ),
+    ] = "external",
     storage_mode_opt: Annotated[
         str | None,
         typer.Option(
             "--storage-mode",
             help=(
-                "Soperator onboarding storage mode: keep-existing-storage or create-aligned-sfs."
+                "Storage decision for an existing Soperator: keep-existing-storage "
+                "preserves live PVC/PV sizes and selectors; create-aligned-sfs "
+                "plans aligned SFS when the accepted profile requires storage migration."
             ),
         ),
     ] = None,
@@ -33397,8 +34373,9 @@ def soperator_onboard_command(
         typer.Option(
             "--compute-mode",
             help=(
-                "Soperator onboarding compute mode: keep-existing-compute or "
-                "create-aligned-node-groups."
+                "Compute decision for an existing Soperator: keep-existing-compute "
+                "reuses discovered node groups; create-aligned-node-groups plans "
+                "cxcli-aligned service/worker node groups when migration requires it."
             ),
         ),
     ] = None,
@@ -33407,8 +34384,8 @@ def soperator_onboard_command(
         typer.Option(
             "--source-version",
             help=(
-                "Existing Soperator source version to use when discovery finds Soperator CRDs "
-                "but no compatible Helm release version."
+                "Existing Soperator source version used only when discovery cannot infer "
+                "a compatible Helm release version from the live cluster."
             ),
         ),
     ] = None,
@@ -33417,8 +34394,9 @@ def soperator_onboard_command(
         typer.Option(
             "--validate-sources/--no-validate-sources",
             help=(
-                "Validate selected Soperator app chart sources before writing config.yaml "
-                "(enabled by default)."
+                "Validate selected Soperator dependency chart sources before writing "
+                "config.yaml; use --no-validate-sources only for disconnected/offline "
+                "source checks."
             ),
         ),
     ] = True,
@@ -33426,11 +34404,14 @@ def soperator_onboard_command(
         bool,
         typer.Option(
             "--no-interactive",
-            help="Disable project cluster selection; use explicit --target/--kube-context options.",
+            help=(
+                "Disable project cluster selection. Use --cluster-id to identify the "
+                "Nebius MK8s cluster; --target-id is optional."
+            ),
         ),
     ] = False,
 ) -> None:
-    """Register an existing Nebius MK8s target for Soperator."""
+    """Register/adopt an existing Nebius MK8s target for Soperator."""
     try:
         interactive_mode = not no_interactive
         infra_entries = _with_infra_provider_groups(component_entries("infra"))
@@ -33454,7 +34435,7 @@ def soperator_onboard_command(
         config_path = resolved_target.config_path
         payload = _load_config_payload(config_path)
 
-        if interactive_mode and not target_ref_opt and not kube_context_opt:
+        if interactive_mode and not cluster_id_opt and not target_id_opt and not kube_context_opt:
             _client_name, _tenant_id, resolved_project_id, _region_id, _email = (
                 _identity_values_from_payload(payload)
             )
@@ -33478,11 +34459,15 @@ def soperator_onboard_command(
                 )
         else:
             target_row = _soperator_onboarding_target_row_from_options(
-                target_ref=target_ref_opt,
+                payload=payload,
+                target_id=target_id_opt,
+                cluster_id=cluster_id_opt,
                 kube_context=kube_context_opt,
+                access=access_opt,
                 storage_mode=storage_mode_opt,
                 compute_mode=compute_mode_opt,
                 source_version=source_version_opt,
+                interactive=interactive_mode,
             )
 
         source_report_path = _write_soperator_source_discovery_report_from_target_row(
@@ -33502,6 +34487,7 @@ def soperator_onboard_command(
                 app_entries=app_entries,
             )
         )
+        adoption_values = _soperator_onboarding_adoption_values_from_target_row(target_row)
         added_app_ids = (
             _enabled_ids_from_runtime_payload(payload=next_payload, entries=app_entries)
             - before_enabled_app_ids
@@ -33514,6 +34500,11 @@ def soperator_onboard_command(
         _prune_redundant_app_chart_default_values(
             payload=next_payload,
             app_entries=app_entries,
+        )
+        _merge_soperator_onboarding_adoption_values_for_target(
+            next_payload,
+            target_ref=target_ref,
+            adoption_values=adoption_values,
         )
         _refresh_soperator_onboarding_fingerprints(next_payload)
 
@@ -33567,7 +34558,6 @@ _SOPERATOR_MIGRATION_ACTIONS = frozenset(
         ONBOARDING_ACTION_CREATE_ALIGNED_SFS,
         ONBOARDING_ACTION_PLAN_DATA_MIGRATION,
         ONBOARDING_ACTION_PLAN_COMPUTE_MIGRATION,
-        ONBOARDING_ACTION_REMEDIATE_TARGET_GPU_STACK,
         ONBOARDING_ACTION_UPGRADE_EXTERNAL_NODE_TEMPLATE,
         ONBOARDING_ACTION_UPGRADE_SOPERATOR,
     }
@@ -33717,10 +34707,8 @@ def _soperator_migration_output_phases(
         if isinstance(phases, list)
         else []
     )
-    if not output_phases and (
-        flags["external_node_template_upgrade_required"]
-        or flags["target_gpu_remediation_required"]
-        or flags["soperator_upgrade_required"]
+    if not output_phases and flags["migration_required"] and (
+        flags["external_node_template_upgrade_required"] or flags["soperator_upgrade_required"]
     ):
         output_phases = [
             {
@@ -33929,14 +34917,19 @@ def _soperator_migration_execute_payload(
 
 @ext_soperator_app.command(
     "migrate",
-    short_help="Plan Soperator target remediation and migration from onboarding discovery.",
+    short_help="Plan or execute accepted external Soperator migration actions.",
     epilog=(
         "Examples: nebius-cxcli ext-soperator migrate "
         "./deployments/tenant/project/config.yaml --target external-cluster --dry-run; "
         "nebius-cxcli ext-soperator migrate ./deployments/tenant/project/config.yaml "
-        "--target external-cluster --execute --approve. The command reads "
+        "--target external-cluster --execute --approve. --target is the cxcli target "
+        "id saved as deploy.targets[].instance_id, not the Nebius cluster_id or "
+        "display name. The command reads "
         f"{SOURCE_SOPERATOR_DISCOVERY_REPORT_NAME}, validates the accepted onboarding "
         "analysis, and prints the target remediation and compute/storage migration plan. "
+        "If the accepted onboarding report has no migration actions, run render and "
+        "deploy <config.yaml> instead; deploy writes deploy-report.md and runs "
+        "deploy-time validations. Use deploy --target <target-id> only to narrow one run. "
         "--execute verifies the source release and discovery fingerprint before mutation, "
         "checkpoints the live run, "
         "records explicit approval when --approve is passed, auto-detects source worker "
@@ -33971,9 +34964,10 @@ def soperator_migrate_command(
         str | None,
         typer.Option(
             "--target",
-            "--target-ref",
             help=(
-                "Onboarded external Nebius MK8s target id. Omit only when config.yaml "
+                "cxcli target id of the onboarded external MK8s target "
+                "(deploy.targets[].instance_id), for example external-cluster. "
+                "Not the Nebius cluster_id or display name. Omit only when config.yaml "
                 "contains exactly one onboarded Soperator target."
             ),
         ),
@@ -33983,12 +34977,11 @@ def soperator_migrate_command(
         typer.Option(
             "--dry-run/--execute",
             help=(
-                "Print the migration plan without live changes, or request live execution. "
-                "--execute performs the checkpointed live preflight, records approval "
-                "when --approve is passed, and advances supported external MK8s "
-                "control-plane/node-template, target GPU stack, storage, copy, "
-                "compute, cutover, validation, and retirement phases with guarded "
-                "resume checkpoints."
+                "Use --dry-run for the read-only plan. Use --execute only after "
+                "accepting that plan; it performs checkpointed live preflight and "
+                "advances supported external MK8s control-plane/node-template, "
+                "target GPU stack, storage, copy, compute, cutover, validation, "
+                "and retirement phases with guarded resume checkpoints."
             ),
         ),
     ] = True,
@@ -33997,13 +34990,13 @@ def soperator_migrate_command(
         typer.Option(
             "--approve/--no-approve",
             help=(
-                "Record customer approval for the accepted migration plan during --execute. "
-                "Required before checkpointed mutating phases can run."
+                "Confirm approval for the accepted migration plan during --execute. "
+                "Required before any checkpointed mutating phase can run."
             ),
         ),
     ] = False,
 ) -> None:
-    """Plan Soperator target remediation and migration from onboarding discovery."""
+    """Plan or execute accepted external Soperator migration actions."""
     try:
         payload = _load_source_payload(config_path)
         target_ref = _resolve_soperator_migration_target_ref(

@@ -646,11 +646,43 @@ def test_docs_define_component_selector_contract() -> None:
     assert "lists existing Nebius MK8s clusters in the selected project" in readme_flat
     assert "onboards one cluster per run" in readme_flat
     assert "records the selected Nebius `cluster_id` as the durable access handle" in readme_flat
+    assert (
+        "nebius-cxcli ext-soperator onboard <config.yaml-or-deployments-root> \\\n"
+        "  --client-name <client-name> \\\n"
+        "  --tenant-id <tenant-id> \\\n"
+        "  --project-id <project-id> \\\n"
+        "  --region-id <region-id> \\\n"
+        "  --cluster-id <mk8scluster-id> \\\n"
+        "  --target-id <logical-target-id> \\\n"
+        "  --storage-mode keep-existing-storage \\\n"
+        "  --compute-mode keep-existing-compute \\\n"
+        "  --no-interactive"
+    ) in readme
+    assert (
+        "When the first argument is an existing project `config.yaml`, the "
+        "`--client-name`, `--tenant-id`, `--project-id`, and `--region-id` "
+        "values can come from that file instead"
+    ) in readme_flat
+    assert "`--cluster-id`: Nebius MK8s cluster id to onboard" in readme_flat
+    assert "saved under `deploy.targets[].cluster_id`" in readme_flat
+    assert "fetch the cluster endpoint and CA with the Nebius Python SDK" in readme_flat
+    assert "`--target-id`: optional cxcli logical target id" in readme_flat
+    assert "It is not the Nebius MK8s `cluster_id`" in readme_flat
+    assert "Use the same cxcli target id for migrate" in readme_flat
+    assert "Do not pass the raw Nebius MK8s `cluster_id`" in readme_flat
+    assert "`--kube-context`: optional kubectl context override for discovery" in readme_flat
+    assert "`--access`: endpoint to use when generating temporary kubeconfig" in readme_flat
     assert "does not accept arbitrary vanilla Kubernetes clusters in the interactive flow" in readme_flat
     assert "External onboarding is not a Terraform import" in readme_flat
     assert "remain outside Terraform ownership" in readme_flat
     assert "If the accepted onboarding report says no migration work is required" in readme_flat
-    assert "the rendered install/adopt-only target" in readme_flat
+    assert "deploy the rendered desired state" in readme_flat
+    assert "`deploy <config.yaml>` applies the generated desired state" in readme_flat
+    assert "`nebius-cxcli deploy <config.yaml>`" in readme
+    assert "Plain `deploy <config.yaml>` reconciles every generated target" in readme_flat
+    assert "Use `deploy --target <target-id>` only when you intentionally want to narrow" in readme_flat
+    assert "Target GPU stack remediation alone is not migration work" in readme_flat
+    assert "if no upgrade, storage, compute, or external node-template migration action is selected" in readme_flat
     assert "do not run `deploy` before migration" in readme_flat
     assert "`ext-soperator migrate --execute` must first verify the live source release" in readme_flat
     assert "remediate-target-gpu-stack" in readme_flat
@@ -662,9 +694,13 @@ def test_docs_define_component_selector_contract() -> None:
     assert "Onboarding asks for two independent layers" in readme_flat
     assert "compute mode is `keep-existing-compute` or `create-aligned-node-groups`" in readme_flat
     assert "Keeping existing compute preserves the discovered node groups" in readme_flat
+    assert "discovered storage sizes are lower bounds" in readme_flat
+    assert "Render/deploy must not request a smaller PVC/PV size" in readme_flat
+    assert "from the live node-group ids" in readme_flat
+    assert "preserves the live `SlurmCluster` resource name as `values.clusterName`" in readme_flat
     assert "source release and full discovery fingerprint" in readme_flat
     assert "choose a source version from the committed migration profiles" in readme_flat
-    assert "--source-version <source-version>" in readme
+    assert "`--source-version`: source Soperator version to use when discovery finds" in readme
     assert "local `.nebius-cxcli/soperator-migrations/` timeout-guarded checkpoint" in readme_flat
     assert "`--approve` records customer approval" in readme_flat
     assert "auto-detects source worker node groups" in readme_flat
@@ -685,6 +721,7 @@ def test_docs_define_component_selector_contract() -> None:
     assert "ignored by cxcli-managed deployments `.gitignore` files" in readme_flat
     assert "creates or reuses aligned jail, controller-spool, and accounting SFS" in readme_flat
     assert "Quota must cover this spare target storage while source storage remains mounted" in readme_flat
+    assert "never attempts to shrink adopted storage" in readme_flat
     assert "runs Kubernetes data-copy Jobs when old and target PVC pairs exist" in readme_flat
     assert "required Soperator/Slurm smoke validation" in readme_flat
     assert "one short synchronous `srun` job" in readme_flat
@@ -698,12 +735,19 @@ def test_docs_define_component_selector_contract() -> None:
     assert "does not create Terraform-managed MK8s/SFS rows" in readme_flat
     assert "`values.nodeGroupMapping.*`" in readme
     assert "worker` on GPU node groups" in readme_flat
+    assert "worker labels distinguish `worker-cpu` and `worker-gpu`" in readme_flat
+    assert "`values.nodeGroupMapping.worker-cpu`" in readme
+    assert "`values.nodeGroupMapping.worker-gpu`" in readme
+    assert "make Pyxis optional and clear the importer path" in readme_flat
     assert "`nebius-cxcli ext-soperator onboard <config.yaml-or-deployments-root>`" in design
     assert "first-time onboarding can pass the deployments root" in design_flat
     assert "`onboard-existing-cluster` for an external Nebius MK8s target" in design_flat
     assert "lists existing Nebius MK8s clusters in the selected project" in design_flat
     assert "choose one cluster for that run" in design_flat
     assert "stores the selected Nebius `cluster_id` as the durable target access handle" in design_flat
+    assert "Non-interactive onboarding uses `--cluster-id <mk8scluster-id>`" in design_flat
+    assert "`--target-id` is only an optional cxcli logical alias" in design_flat
+    assert "`--kube-context` is an explicit discovery override" in design_flat
     assert "does not accept arbitrary vanilla Kubernetes clusters" in design_flat
     assert "`deploy.targets[].inventory.node_groups`" in design
     assert "two independent layer choices" in design_flat
@@ -712,13 +756,25 @@ def test_docs_define_component_selector_contract() -> None:
     assert "This is primarily a day-2 Soperator management and upgrade path" in design_flat
     assert "not a Terraform-managed MK8s row" in design_flat
     assert "If the accepted report says no migration work is required" in design_flat
+    assert "Target GPU stack remediation alone is not migration work" in design_flat
+    assert "plain `deploy <config.yaml>` reconciles the generated desired state" in design_flat
+    assert "`deploy --target <target-id>` is only a narrowing selector" in design_flat
+    assert "normal render/deploy applies it as desired state" in design_flat
     assert "If the accepted onboarding report says migration work is required" in design_flat
     assert "skip normal deploy and continue with" in design_flat
     assert "`nebius-cxcli ext-soperator migrate <config.yaml> --target <target> --dry-run`" in design
     assert "`--execute` validates the accepted onboarding analysis" in design_flat
     assert "rechecks the live source release and full discovery fingerprint before the first mutation" in design_flat
-    assert "target GPU stack remediation phase" in design_flat
-    assert "advances supported external MK8s control-plane/node-template, target GPU stack remediation phase, storage, copy, compute" in design_flat
+    assert "target GPU stack remediation when paired with migration work" in design_flat
+    assert "advances supported external MK8s control-plane/node-template, target GPU stack remediation when paired with migration work, storage, copy, compute" in design_flat
+    assert "discovered PVC/PV sizes as lower bounds" in design_flat
+    assert "does not attempt a storage shrink" in design_flat
+    assert "persists `values.nodeGroupMapping.*` from discovered node-group ids" in design_flat
+    assert "select the mixed Soperator profile" in design_flat
+    assert "`values.nodeGroupMapping.worker-cpu`" in design
+    assert "`values.nodeGroupMapping.worker-gpu`" in design
+    assert "Pyxis to optional and clear the importer path" in design_flat
+    assert "preserves the live `SlurmCluster` resource name in `values.clusterName`" in design_flat
     assert "no compatible Helm release version is detected" in design_flat
     assert "`soperator_migration_profiles.yaml`" in design
     assert "local `.nebius-cxcli/soperator-migrations/` timeout-guarded checkpoint" in design_flat

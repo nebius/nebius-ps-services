@@ -5676,7 +5676,7 @@ def test_render_command_invokes_renderer(tmp_path: Path, monkeypatch: pytest.Mon
 
 @pytest.mark.parametrize(
     "actions",
-    (["approve-soperator-migration"], ["remediate-target-gpu-stack"]),
+    (["approve-soperator-migration"], ["upgrade-soperator"]),
 )
 def test_render_command_points_migration_required_soperator_to_migrate(
     tmp_path: Path,
@@ -5755,6 +5755,81 @@ def test_render_command_points_migration_required_soperator_to_migrate(
         normalized_output
     )
     assert f"Next step: `nebius-cxcli deploy {config_arg}`" not in normalized_output
+
+
+def test_render_command_points_gpu_remediation_only_soperator_to_deploy(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_paths = _fake_paths(tmp_path)
+    payload = {
+        "client_info": {
+            "client_name": "client-a",
+            "nebius": {
+                "tenant_id": "tenant-123",
+                "project_id": "project-456",
+                "region_id": "eu-north1",
+            },
+        },
+        "infra": {"components": []},
+        "apps": {
+            "charts": [
+                {
+                    "id": "soperator",
+                    "instance_id": "external-cluster",
+                    "enabled": True,
+                    "install_mode": "onboard-existing-cluster",
+                }
+            ]
+        },
+        "deploy": {
+            "targets": [
+                {
+                    "instance_id": "external-cluster",
+                    "kind": "external-mk8s",
+                    "soperator_onboarding": {
+                        "accepted": True,
+                        "actions": ["remediate-target-gpu-stack", "adopt-soperator"],
+                    },
+                }
+            ]
+        },
+    }
+    fake_paths.config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    monkeypatch.setattr(cli, "_load_runtime_context", lambda _path: ("cfg", fake_paths))
+    monkeypatch.setattr(cli, "_confirm_render_overwrite", lambda _paths, *, force: True)
+    monkeypatch.setattr(cli, "reset_generated_bundle", lambda _paths: None)
+    monkeypatch.setattr(
+        cli,
+        "_ensure_deployments_gitignore",
+        lambda deployments_root: SimpleNamespace(path=None, wrote=False),
+    )
+    monkeypatch.setattr(cli, "render_terraform_artifacts", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(cli, "_runtime_component_output_values", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(cli, "render_flux", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(cli, "_try_generate_terraform_lock_file", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(
+        cli,
+        "_write_generated_runtime_manifest",
+        lambda config, paths, *, source_profile, **kwargs: paths.generated_dir
+        / "nebius-cxcli-manifest.json",
+    )
+
+    result = runner.invoke(cli.app, ["render", str(fake_paths.config_path)])
+
+    assert result.exit_code == 0, result.output
+    normalized_output = " ".join(_plain_output(result.output).split())
+    config_arg = str(fake_paths.config_path.resolve())
+    assert (
+        f"Next step: `nebius-cxcli deploy {config_arg}`"
+        in normalized_output
+    )
+    assert "Use `--target <target-id>` only when you intentionally want to narrow this run" in (
+        normalized_output
+    )
+    assert "Install/adopt-only Soperator targets: external-cluster" in normalized_output
+    assert "ext-soperator migrate" not in normalized_output
 
 
 def test_internal_render_command_suppresses_deploy_hint_context(
@@ -16248,8 +16323,24 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "onboard-existing-cluster role-mapping install" not in normalized_create_help
     assert "complete production MK8s+SFS+Soperator cluster" in normalized_create_help
     assert "ext-soperator [OPTIONS] COMMAND [ARGS]" in soperator_help
-    assert "Manage external Soperator day-2 workflows" in normalized_soperator_help
-    assert "use migrate to plan approved target remediation" in normalized_soperator_help
+    assert "Manage existing external Nebius MK8s clusters for Soperator" in (
+        normalized_soperator_help
+    )
+    assert "migrate is only for accepted onboarding plans that contain migration actions" in (
+        normalized_soperator_help
+    )
+    assert "using its Nebius --cluster-id" in normalized_soperator_help
+    assert "stores a cxcli target id in deploy.targets[].instance_id" in (
+        normalized_soperator_help
+    )
+    assert (
+        "If the accepted onboarding report says no migration work is required, run deploy <config.yaml>"
+        in normalized_soperator_help
+    )
+    assert "Use deploy --target <target-id> only to narrow one run" in (
+        normalized_soperator_help
+    )
+    assert "deploy-report.md plus deploy-time validations" in normalized_soperator_help
     assert "If migration work is required, do not deploy first" in normalized_soperator_help
     assert "ext-soperator migrate --dry-run" in normalized_soperator_help
     assert "ext-soperator migrate --execute --approve" in normalized_soperator_help
@@ -16261,7 +16352,7 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     )
     assert "onboard [OPTIONS] CONFIG_OR_DEPLOYMENTS_ROOT" in soperator_onboard_help
     assert "migrate [OPTIONS] CONFIG_YAML" in soperator_migrate_help
-    assert "Register an existing Nebius MK8s target for Soperator" in (
+    assert "Register/adopt an existing Nebius MK8s target for Soperator" in (
         normalized_soperator_onboard_help
     )
     assert "Existing project config.yaml, project directory containing config.yaml" in (
@@ -16271,26 +16362,62 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "--tenant-id" in normalized_soperator_onboard_help
     assert "--project-id" in normalized_soperator_onboard_help
     assert "--region-id" in normalized_soperator_onboard_help
-    assert "--target" in normalized_soperator_onboard_help
+    assert "--cluster-id" in normalized_soperator_onboard_help
+    assert "--target-id" in normalized_soperator_onboard_help
     assert "--kube-context" in normalized_soperator_onboard_help
+    assert "Nebius MK8s cluster id to adopt" in normalized_soperator_onboard_help
+    assert "generate a temporary kubeconfig through the Nebius API" in (
+        normalized_soperator_onboard_help
+    )
+    assert "Optional cxcli logical target id to save as deploy.targets[].instance_id" in (
+        normalized_soperator_onboard_help
+    )
+    assert "When omitted, cxcli derives it from the live MK8s cluster name" in (
+        normalized_soperator_onboard_help
+    )
     assert "choose one existing Nebius MK8s cluster from the project" in (
         normalized_soperator_onboard_help
     )
-    assert "Interactive onboarding lists project MK8s clusters" in (
-        normalized_soperator_onboard_help
-    )
-    assert "Interactive onboarding derives access from the selected Nebius MK8s cluster ID" in (
+    assert "Optional kubectl context override for discovery" in normalized_soperator_onboard_help
+    assert "By default cxcli uses --cluster-id" in normalized_soperator_onboard_help
+    assert "--access" in normalized_soperator_onboard_help
+    assert "external or internal" in normalized_soperator_onboard_help
+    assert "Use --cluster-id to identify the Nebius MK8s cluster" in (
         normalized_soperator_onboard_help
     )
     assert "--storage-mode" in normalized_soperator_onboard_help
     assert "--compute-mode" in normalized_soperator_onboard_help
     assert "--source-version" in normalized_soperator_onboard_help
     assert "--validate-sources --no-validate-sources" in normalized_soperator_onboard_help
-    assert "--storage-mode create-aligned-sfs" in normalized_soperator_onboard_help
-    assert "--compute-mode create-aligned-node-groups" in normalized_soperator_onboard_help
+    assert "keep-existing-storage preserves live PVC/PV sizes and selectors" in (
+        normalized_soperator_onboard_help
+    )
+    assert "keep-existing-compute reuses discovered node groups" in (
+        normalized_soperator_onboard_help
+    )
+    assert "source version used only when discovery cannot infer" in (
+        normalized_soperator_onboard_help
+    )
+    assert "--cluster-id mk8scluster-..." in normalized_soperator_onboard_help
+    assert "--target-id external-cluster" in normalized_soperator_onboard_help
+    assert "--storage-mode keep-existing-storage" in normalized_soperator_onboard_help
+    assert "--compute-mode keep-existing-compute" in normalized_soperator_onboard_help
+    assert "--source-version 1.23.3" not in normalized_soperator_onboard_help
     assert "nebius-cxcli validate <config.yaml>" in normalized_soperator_onboard_help
     assert "nebius-cxcli render <config.yaml>" in normalized_soperator_onboard_help
-    assert "For install/adopt-only targets, run nebius-cxcli deploy <config.yaml>" in (
+    assert "--cluster-id selects the Nebius MK8s cluster to adopt" in (
+        normalized_soperator_onboard_help
+    )
+    assert "--target-id is only the optional cxcli logical target id" in (
+        normalized_soperator_onboard_help
+    )
+    assert "For install/adopt-only targets with no migration actions" in (
+        normalized_soperator_onboard_help
+    )
+    assert "run nebius-cxcli deploy <config.yaml> to reconcile the generated desired state" in (
+        normalized_soperator_onboard_help
+    )
+    assert "use deploy --target <target-id> only to narrow a run" in (
         normalized_soperator_onboard_help
     )
     assert "For migration-required targets, do not deploy first" in (
@@ -16304,13 +16431,22 @@ def test_command_help_usage_labels_positional_target_types() -> None:
         "nebius-cxcli ext-soperator migrate <config.yaml> --target <target> --execute --approve"
         in normalized_soperator_onboard_help
     )
-    assert "Plan Soperator target remediation and migration from onboarding discovery" in (
+    assert "Plan or execute accepted external Soperator migration actions" in (
         normalized_soperator_migrate_help
     )
     assert "--target" in normalized_soperator_migrate_help
     assert "--dry-run --execute" in normalized_soperator_migrate_help
     assert "--approve --no-approve" in normalized_soperator_migrate_help
     assert "--worker-node-groups" not in normalized_soperator_migrate_help
+    assert "cxcli target id of the onboarded external MK8s target" in (
+        normalized_soperator_migrate_help
+    )
+    assert "Not the Nebius cluster_id or display name" in normalized_soperator_migrate_help
+    assert "Use --dry-run for the read-only plan" in normalized_soperator_migrate_help
+    assert "Use --execute only after accepting that plan" in normalized_soperator_migrate_help
+    assert "Confirm approval for the accepted migration plan" in (
+        normalized_soperator_migrate_help
+    )
     assert "auto-detects source worker node groups" in normalized_soperator_migrate_help
     assert (
         "nebius-cxcli ext-soperator migrate ./deployments/tenant/project/config.yaml "
@@ -16320,6 +16456,15 @@ def test_command_help_usage_labels_positional_target_types() -> None:
         normalized_soperator_migrate_help
     )
     assert "validates the accepted onboarding analysis" in normalized_soperator_migrate_help
+    assert "If the accepted onboarding report has no migration actions" in (
+        normalized_soperator_migrate_help
+    )
+    assert "run render and deploy <config.yaml> instead" in (
+        normalized_soperator_migrate_help
+    )
+    assert "deploy writes deploy-report.md and runs deploy-time validations" in (
+        normalized_soperator_migrate_help
+    )
     assert (
         "advances supported external MK8s control-plane/node-template, target GPU stack, "
         "storage, copy, compute, cutover, validation"
