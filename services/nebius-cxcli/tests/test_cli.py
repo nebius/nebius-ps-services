@@ -5654,7 +5654,8 @@ def test_soperator_onboarding_compute_mode_label_uses_no_change_wording() -> Non
 def test_soperator_onboard_option_path_rejects_invalid_compute_mode() -> None:
     with pytest.raises(RuntimeError, match="Invalid Soperator onboarding compute mode"):
         cli_module._soperator_onboarding_target_row_from_options(
-            target_ref="training-cluster",
+            target_id="training-cluster",
+            cluster_id="mk8scluster-training",
             kube_context="training-context",
             storage_mode=None,
             compute_mode="legacy-compute",
@@ -5679,7 +5680,8 @@ def test_soperator_onboard_option_path_allows_explicit_keep_existing_storage(
     monkeypatch.setattr(cli_module, "collect_kubectl_soperator_snapshot", _snapshot)
 
     target = cli_module._soperator_onboarding_target_row_from_options(
-        target_ref="training-cluster",
+        target_id="training-cluster",
+        cluster_id="mk8scluster-training",
         kube_context="training-context",
         storage_mode="keep-existing-storage",
     )
@@ -5707,7 +5709,8 @@ def test_soperator_onboard_option_path_defaults_to_aligned_sfs_when_storage_miss
     monkeypatch.setattr(cli_module, "collect_kubectl_soperator_snapshot", _snapshot)
 
     target = cli_module._soperator_onboarding_target_row_from_options(
-        target_ref="training-cluster",
+        target_id="training-cluster",
+        cluster_id="mk8scluster-training",
         kube_context="training-context",
         storage_mode=None,
     )
@@ -5790,7 +5793,8 @@ def test_soperator_onboard_option_path_uses_analyzer_for_compatible_layout(
     monkeypatch.setattr(cli_module, "collect_kubectl_soperator_snapshot", _snapshot)
 
     target = cli_module._soperator_onboarding_target_row_from_options(
-        target_ref="training-cluster",
+        target_id="training-cluster",
+        cluster_id="mk8scluster-training",
         kube_context="training-context",
         storage_mode="create-aligned-sfs",
         compute_mode="create-aligned-node-groups",

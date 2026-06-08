@@ -16,6 +16,8 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- declare the Click runtime dependency and keep output-extension inference stable across Typer/Click environments
+- constrain isolated wheel builds to the supported `setuptools-scm` major version used by the development environment
 - add `github-report loc` to count physical source lines for a repository or monorepo folder, defaulting to the `main` branch
 - make `make fmt` apply Ruff safe fixes before formatting so import-order issues are resolved before CI `lint`
 - replace personal-owner examples in the README and CLI help output with `nebius`

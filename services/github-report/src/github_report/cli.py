@@ -9,7 +9,6 @@ from textwrap import dedent
 from typing import Annotated, NoReturn
 
 import typer
-from click.core import ParameterSource
 from pydantic import ValidationError
 from rich.console import Console, RenderableType
 
@@ -585,10 +584,14 @@ def _resolve_output_format(
 ) -> OutputFormat:
     if output_path is None:
         return output_format
-    if ctx.get_parameter_source("format") is not ParameterSource.DEFAULT:
+    if not _is_default_parameter_source(ctx.get_parameter_source("format")):
         return output_format
     inferred_format = _infer_output_format_from_path(output_path)
     return inferred_format or output_format
+
+
+def _is_default_parameter_source(source: object | None) -> bool:
+    return source is None or getattr(source, "name", None) == "DEFAULT"
 
 
 def _infer_output_format_from_path(output_path: Path) -> OutputFormat | None:

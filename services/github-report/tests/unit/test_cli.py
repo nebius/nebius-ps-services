@@ -3,11 +3,12 @@ from __future__ import annotations
 import re
 from contextlib import nullcontext
 from datetime import UTC, datetime
+from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 from typer.testing import CliRunner
 
-from github_report.cli import app
+from github_report.cli import _resolve_output_format, app
 from github_report.models import (
     LocLanguageRow,
     LocReport,
@@ -18,9 +19,22 @@ from github_report.models import (
     RepositoryRef,
     UserContributorRow,
 )
-from github_report.settings import SortBy, WindowKind
+from github_report.settings import OutputFormat, SortBy, WindowKind
 
 ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+
+
+class FakeParameterSource:
+    def __init__(self, name: str) -> None:
+        self.name = name
+
+
+class FakeContext:
+    def __init__(self, source: FakeParameterSource | None) -> None:
+        self.source = source
+
+    def get_parameter_source(self, name: str) -> FakeParameterSource | None:
+        return self.source
 
 
 def _normalize_help_output(text: str) -> str:
@@ -345,6 +359,26 @@ def test_top_users_explicit_format_overrides_output_extension(tmp_path) -> None:
     markdown_output = output_path.read_text(encoding="utf-8")
     assert markdown_output.startswith("# Top Contributors for acme")
     assert "| rank | user_name | num_modifications | num_commits | repos |" in markdown_output
+
+
+def test_output_format_infers_when_format_source_is_default_by_name() -> None:
+    resolved = _resolve_output_format(
+        FakeContext(FakeParameterSource("DEFAULT")),
+        OutputFormat.markdown,
+        Path("report.csv"),
+    )
+
+    assert resolved is OutputFormat.csv
+
+
+def test_output_format_preserves_explicit_format_source() -> None:
+    resolved = _resolve_output_format(
+        FakeContext(FakeParameterSource("COMMANDLINE")),
+        OutputFormat.markdown,
+        Path("report.csv"),
+    )
+
+    assert resolved is OutputFormat.markdown
 
 
 def test_list_repos_output_text_infers_format_from_extension(tmp_path) -> None:

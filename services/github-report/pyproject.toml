@@ -10,6 +10,7 @@ classifiers = [
   "Programming Language :: Python :: 3 :: Only",
 ]
 dependencies = [
+  "click>=8.2.1,<9.0.0",
   "httpx>=0.28.0,<1.0.0",
   "pydantic>=2.10.0,<3.0.0",
   "PyGithub>=2.8.0,<3.0.0",
@@ -73,5 +74,5 @@ source = ["github_report"]
 skip_empty = true
 
 [build-system]
-requires = ["setuptools>=69", "setuptools-scm>=8"]
+requires = ["setuptools>=69", "setuptools-scm>=8,<9"]
 build-backend = "setuptools.build_meta"

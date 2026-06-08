@@ -2349,6 +2349,7 @@ def test_upgrade_cpu_preset_apply_updates_source_and_waits_for_node_layer_rollou
     )
     manifest = {"deploy": {"targets": [_mk8s_target(paths)]}}
     calls: list[object] = []
+    live_node_group = {"preset": "cpu-4-16"}
 
     class FakeSdk:
         def sync_close(self) -> None:
@@ -2379,7 +2380,7 @@ def test_upgrade_cpu_preset_apply_updates_source_and_waits_for_node_layer_rollou
                     id="ng-system",
                     name="mk8s-live-system",
                     os="ubuntu24.04",
-                    preset="cpu-4-16",
+                    preset=live_node_group["preset"],
                 ),
             )
 
@@ -2395,6 +2396,7 @@ def test_upgrade_cpu_preset_apply_updates_source_and_waits_for_node_layer_rollou
             value: str,
             timeout_seconds: int,
         ) -> None:
+            live_node_group["preset"] = value
             calls.append(
                 (
                     "wait-layer",
