@@ -164,6 +164,44 @@ def _mk8s_payload(
     }
 
 
+def _external_h100_sxm_payload() -> dict[str, Any]:
+    return {
+        "deploy": {
+            "targets": [
+                {
+                    "instance_id": "legacy-cluster",
+                    "kind": "external-mk8s",
+                    "ownership": "external",
+                    "access": "external",
+                    "kube_context": "legacy-context",
+                    "inventory": {
+                        "node_groups": {
+                            "cpu-d3": {"gpu": False, "node_count": 2},
+                            "gpu-h100-sxm": {
+                                "gpu": True,
+                                "node_count": 2,
+                                "allocatable": {"nvidia.com/gpu": "8"},
+                                "labels": {
+                                    "nebius.com/driverful": "true",
+                                    "nebius.com/resource-preset": "8gpu-128vcpu-1600gb",
+                                    "topology.nebius.com/gpu-cluster-id": "gpu-cluster-a",
+                                    "topology.nebius.com/tier-1": "leaf-a",
+                                },
+                            },
+                        }
+                    },
+                    "soperator_onboarding": {
+                        "accepted": True,
+                        "state": "existing-soperator-supported",
+                        "actions": ["remediate-target-gpu-stack"],
+                    },
+                }
+            ]
+        },
+        "apps": {"charts": []},
+    }
+
+
 def _cluster2_gpu_row() -> dict[str, Any]:
     return {
         "id": "mk8s",
@@ -724,6 +762,51 @@ def test_ensure_mk8s_gpu_app_rows_seeds_required_apps_per_target() -> None:
     ] == ["mk8s"]
 
 
+def test_external_mk8s_inventory_enables_gpu_cluster_operator_stack() -> None:
+    payload = _external_h100_sxm_payload()
+
+    selection = resolve_mk8s_gpu_app_selection(payload, app_entries=component_entries("apps"))
+
+    assert set(selection.auto_enabled_app_ids) == {
+        "nvidia-gpu-operator",
+        "nvidia-network-operator",
+    }
+    assert selection.cluster_contexts[0].instance_id == "legacy-cluster"
+    assert selection.cluster_contexts[0].gpu_platform == "gpu-h100-sxm"
+    assert selection.cluster_contexts[0].gpu_preset == "8gpu-128vcpu-1600gb"
+    assert selection.cluster_contexts[0].gpu_stack_source == "nebius_image"
+    assert selection.cluster_contexts[0].gpu_cluster_enabled is True
+
+    assert normalize_mk8s_gpu_project_validation_settings(payload) is True
+    assert ensure_mk8s_gpu_app_rows(payload, app_entries=component_entries("apps")) is True
+
+    mk8s_gpu_validations = payload["deploy"]["targets"][0]["validations"]["mk8s_gpu"]
+    assert mk8s_gpu_validations["operator_readiness"]["enabled"] is True
+    assert mk8s_gpu_validations["gpu_visibility"]["enabled"] is True
+    assert mk8s_gpu_validations["nccl"]["enabled"] is True
+    assert {
+        (row["id"], row["instance_id"], row["target_ref"])
+        for row in payload["apps"]["charts"]
+    } == {
+        ("nvidia-gpu-operator", "legacy-cluster", "legacy-cluster"),
+        ("nvidia-network-operator", "legacy-cluster", "legacy-cluster"),
+    }
+
+
+def test_external_mk8s_single_gpu_inventory_enables_gpu_operator_only() -> None:
+    payload = _external_h100_sxm_payload()
+    gpu_group = payload["deploy"]["targets"][0]["inventory"]["node_groups"]["gpu-h100-sxm"]
+    gpu_group["labels"] = {
+        "nebius.com/driverful": "true",
+        "nebius.com/resource-preset": "1gpu-16vcpu-200gb",
+    }
+    gpu_group["allocatable"] = {"nvidia.com/gpu": "1"}
+
+    selection = resolve_mk8s_gpu_app_selection(payload, app_entries=component_entries("apps"))
+
+    assert selection.auto_enabled_app_ids == ("nvidia-gpu-operator",)
+
+
 def test_prune_inactive_mk8s_gpu_app_rows_removes_stale_operator_only_apps() -> None:
     payload = {
         "infra": {
@@ -936,7 +1019,8 @@ def test_mk8s_gpu_validation_warnings_flag_single_gpu_nccl_override(
     assert warnings[0] == (
         "NCCL validation is enabled for 1-GPU Ethernet-only MK8s shape "
         "gpu-h100-sxm/1gpu-16vcpu-200gb; it will use Ethernet/TCPIP, not InfiniBand / "
-        "GPUDirect-RDMA, so the result is degraded and not production-training representative."
+        "GPUDirect-RDMA, so the run is a smoke check only: no collective bandwidth is "
+        "expected and the result is not production-training representative."
     )
     assert {item["kind"] for item in validations} == {
         "mk8s_gpu_operator_readiness",
@@ -1649,6 +1733,26 @@ def test_run_kubectl_timeout_reports_runtime_error(monkeypatch: pytest.MonkeyPat
         mk8s_gpu._run_kubectl(["get", "pod"], extra_env=None, timeout_seconds=30)
 
 
+def test_run_kubectl_adds_explicit_context_from_extra_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[list[str]] = []
+
+    def _run(command, **_kwargs):  # type: ignore[no-untyped-def]
+        calls.append(list(command))
+        return subprocess.CompletedProcess(command, 0, "{}", "")
+
+    monkeypatch.setattr(mk8s_gpu.subprocess, "run", _run)
+
+    mk8s_gpu._run_kubectl(
+        ["get", "nodes"],
+        extra_env={"KUBECTL_CONTEXT": "external-context"},
+        timeout_seconds=30,
+    )
+
+    assert calls == [["kubectl", "--context", "external-context", "get", "nodes"]]
+
+
 def test_gpu_visibility_retries_transient_pod_phase_timeout(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -1700,7 +1804,7 @@ def test_gpu_visibility_retries_transient_pod_phase_timeout(
 
     report_path = mk8s_gpu._run_gpu_visibility_validation(
         spec=spec,
-        inventory_dir=tmp_path,
+        reports_dir=tmp_path,
         extra_env=None,
         emit=emits.append,
     )
@@ -1746,7 +1850,7 @@ def test_gpu_visibility_skips_when_all_gpus_are_already_allocated(
 
     report_path = mk8s_gpu._run_gpu_visibility_validation(
         spec=spec,
-        inventory_dir=tmp_path,
+        reports_dir=tmp_path,
         extra_env=None,
         emit=emits.append,
     )
@@ -1796,7 +1900,7 @@ def test_nccl_validation_skips_when_all_gpus_are_already_allocated(
 
     report_path = mk8s_gpu._run_nccl_validation(
         spec=spec,
-        inventory_dir=tmp_path,
+        reports_dir=tmp_path,
         extra_env=None,
         emit=emits.append,
     )
@@ -1808,6 +1912,93 @@ def test_nccl_validation_skips_when_all_gpus_are_already_allocated(
     assert report["saturated_node_count"] == 1
     assert "already have their GPUs allocated" in report["skip_reason"]
     assert any("Skipping NCCL test" in item for item in emits)
+
+
+def test_nccl_validation_passes_single_rank_smoke_without_collective_bandwidth(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    spec = {
+        "namespace": "nccl-test",
+        "gpu_platform": "gpu-h100-sxm",
+        "transport_mode": "socket",
+        "threshold_enforced": False,
+        "average_bus_bandwidth_threshold_gbps": 300.0,
+        "timeout": "1m",
+        "max_nodes": 1,
+        "report_file": "nccl-test-report.json",
+        "chart_values": {
+            "image": {"repository": "nccl-test", "tag": "0.2.0"},
+            "benchmark": {"args": [], "mpiBaseArgs": [], "mpiExtraArgs": []},
+        },
+    }
+    logs = "\n".join(
+        [
+            "# Collective test starting: all_reduce_perf",
+            "# nThread 1 nGpus 1 minBytes 536870912 maxBytes 8589934592",
+            "# Out of bounds values : 0 OK",
+            "# Avg bus bandwidth    : 0",
+            "# Collective test concluded: all_reduce_perf",
+        ]
+    )
+
+    monkeypatch.setattr(
+        mk8s_gpu,
+        "_gpu_nodes",
+        lambda **_kwargs: [
+            {
+                "name": "gpu-node-a",
+                "gpu_count": 1,
+                "allocatable_resources": {"nvidia.com/gpu": "1"},
+            }
+        ],
+    )
+    monkeypatch.setattr(mk8s_gpu, "_pod_request_totals_by_node", lambda **_kwargs: {})
+    monkeypatch.setattr(mk8s_gpu, "_training_operator_present", lambda **_kwargs: True)
+    monkeypatch.setattr(mk8s_gpu, "_delete_resource", lambda _args, **_kwargs: None)
+    monkeypatch.setattr(
+        mk8s_gpu,
+        "_nccl_live_runtime_overrides",
+        lambda **_kwargs: (
+            {},
+            {
+                "worker_request_cpu": "100m",
+                "worker_request_memory": "1Gi",
+                "launcher_non_gpu_node_names": [],
+            },
+        ),
+    )
+    monkeypatch.setattr(mk8s_gpu, "_nccl_chart_documents", lambda **_kwargs: [{}])
+    monkeypatch.setattr(mk8s_gpu, "_apply_docs", lambda _docs, **_kwargs: None)
+    monkeypatch.setattr(
+        mk8s_gpu,
+        "_wait_for_launcher_completion",
+        lambda **_kwargs: "Succeeded",
+    )
+    monkeypatch.setattr(
+        mk8s_gpu,
+        "_run_kubectl",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess(
+            ["kubectl"], 0, stdout=logs, stderr=""
+        ),
+    )
+
+    report_path = mk8s_gpu._run_nccl_validation(
+        spec=spec,
+        reports_dir=tmp_path,
+        extra_env=None,
+        emit=None,
+    )
+
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert report["passed"] is True
+    assert report["launcher_phase"] == "Succeeded"
+    assert report["worker_node_count"] == 1
+    assert report["worker_gpus"] == 1
+    assert report["avg_bus_bandwidth_gbps"] == 0.0
+    assert report["bandwidth_observed"] is False
+    assert report["single_rank_smoke"] is True
+    assert "launcher_log_excerpt" not in report
 
 
 def test_nccl_wait_uses_mpijob_failure_when_launcher_pod_is_cleaned_up(
@@ -1895,7 +2086,7 @@ def test_nccl_validation_skips_when_gpu_workload_preempts_launcher(
 
     report_path = mk8s_gpu._run_nccl_validation(
         spec=spec,
-        inventory_dir=tmp_path,
+        reports_dir=tmp_path,
         extra_env=None,
         emit=emits.append,
     )
@@ -1935,7 +2126,7 @@ def test_run_mk8s_gpu_validations_writes_error_report_on_nccl_exception(
     with pytest.raises(RuntimeError, match="nccl-test-nebius-launcher timed out"):
         mk8s_gpu.run_mk8s_gpu_validations(
             validations,
-            inventory_dir=tmp_path,
+            reports_dir=tmp_path,
             extra_env=None,
         )
 
@@ -2110,7 +2301,7 @@ def test_operator_readiness_uses_allocatable_gpu_nodes_for_nebius_images(
             "network_operator_required": False,
             "report_file": "gpu-stack-readiness-report.json",
         },
-        inventory_dir=tmp_path,
+        reports_dir=tmp_path,
         extra_env=None,
         emit=emitted.append,
     )
@@ -2175,7 +2366,7 @@ def test_operator_readiness_collects_daemonset_summaries_only_after_readiness_lo
             "gpu_cluster_enabled": True,
             "report_file": "gpu-stack-readiness-report.json",
         },
-        inventory_dir=tmp_path,
+        reports_dir=tmp_path,
         extra_env=None,
         emit=None,
     )
@@ -2256,7 +2447,7 @@ def test_operator_readiness_requires_rdma_resources_for_gpu_cluster_shapes(
                 "gpu_cluster_enabled": True,
                 "report_file": "gpu-stack-readiness-report.json",
             },
-            inventory_dir=tmp_path,
+            reports_dir=tmp_path,
             extra_env=None,
             emit=None,
         )

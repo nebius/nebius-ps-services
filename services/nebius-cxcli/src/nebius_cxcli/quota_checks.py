@@ -6,7 +6,7 @@ import json
 import os
 import shutil
 import subprocess
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from typing import Any, cast
@@ -2294,6 +2294,120 @@ def assess_live_quotas(
             gaps.extend(row_gaps)
 
         aggregated_requirements = _aggregate_requirements(requirements)
+        if any(item.gpu_capacity_shape is not None for item in aggregated_requirements):
+            try:
+                capacity_resource_advice = session.list_capacity_resource_advice(
+                    parent_id=tenant_id
+                )
+            except Exception as exc:
+                capacity_resource_advice = None
+                errors.append(f"tenant Capacity Dashboard lookup failed for {tenant_id}: {exc}")
+        checks = tuple(
+            _evaluate_requirement(
+                item,
+                tenant_quotas=tenant_quotas,
+                project_quotas=project_quotas,
+                capacity_resource_advice=capacity_resource_advice,
+            )
+            for item in aggregated_requirements
+        )
+        if all_regions and aggregated_requirements:
+            regions = _sorted_quota_regions(
+                tenant_quotas,
+                project_quotas,
+                current_region=region_id,
+                extra_regions=tuple(
+                    item.region for item in (capacity_resource_advice or ()) if item.region
+                ),
+            )
+            regional_availability = tuple(
+                _regional_availability_for_requirement(
+                    item,
+                    tenant_quotas=tenant_quotas,
+                    project_quotas=project_quotas,
+                    capacity_resource_advice=capacity_resource_advice,
+                    regions=regions,
+                    current_region=region_id,
+                )
+                for item in aggregated_requirements
+            )
+    except Exception as exc:
+        errors.append(str(exc).strip() or exc.__class__.__name__)
+    finally:
+        try:
+            session.close()
+        except Exception as exc:
+            errors.append(f"quota session cleanup failed: {exc}")
+
+    return QuotaReport(
+        tenant_id=tenant_id,
+        project_id=project_id,
+        region_id=region_id,
+        checked_at=checked_at,
+        checks=checks,
+        coverage_gaps=tuple(gaps),
+        errors=tuple(errors),
+        regional_availability=regional_availability,
+    )
+
+
+def assess_live_quota_requirements(
+    *,
+    tenant_id: str,
+    project_id: str,
+    region_id: str,
+    requirements: Sequence[QuotaRequirement],
+    coverage_gaps: Sequence[QuotaCoverageGap] = (),
+    context: str = "quota assessment",
+    all_regions: bool = False,
+) -> QuotaReport:
+    """Assess an explicit set of live quota requirements.
+
+    This is used by workflows that operate on external resources and therefore
+    cannot be represented as normal enabled Terraform infra components.
+    """
+    checked_at = datetime.now(UTC).isoformat()
+    tenant_id = _as_text(tenant_id)
+    project_id = _as_text(project_id)
+    region_id = _as_text(region_id)
+    if not tenant_id or not project_id:
+        return QuotaReport(
+            tenant_id=tenant_id,
+            project_id=project_id,
+            region_id=region_id,
+            checked_at=checked_at,
+            errors=("quota assessment is missing tenant_id or project_id",),
+        )
+
+    try:
+        session = _QuotaSession(context=context, project_id=project_id)
+    except Exception as exc:
+        return QuotaReport(
+            tenant_id=tenant_id,
+            project_id=project_id,
+            region_id=region_id,
+            checked_at=checked_at,
+            errors=(str(exc).strip() or exc.__class__.__name__,),
+        )
+
+    errors: list[str] = []
+    checks: tuple[QuotaCheck, ...] = ()
+    regional_availability: tuple[RegionalQuotaAvailability, ...] = ()
+    gaps = list(coverage_gaps)
+    capacity_resource_advice: tuple[CapacityResourceAdvice, ...] | None = ()
+    try:
+        try:
+            tenant_quotas = session.list_quotas(parent_id=tenant_id)
+        except Exception as exc:
+            tenant_quotas = {}
+            errors.append(f"tenant quota lookup failed for {tenant_id}: {exc}")
+        try:
+            project_quotas = session.list_quotas(parent_id=project_id)
+        except Exception as exc:
+            project_quotas = {}
+            errors.append(f"project quota lookup failed for {project_id}: {exc}")
+
+        aggregated_requirements = _aggregate_requirements(list(requirements))
         if any(item.gpu_capacity_shape is not None for item in aggregated_requirements):
             try:
                 capacity_resource_advice = session.list_capacity_resource_advice(

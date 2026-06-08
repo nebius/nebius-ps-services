@@ -405,12 +405,14 @@ Kubernetes objects needed for Slurm.
 
 CRDs teach Kubernetes about Soperator resource types.
 
-This chart vendors the Slurm CRD under:
+This chart vendors the upstream Soperator CRD bundle under:
 
 - `crds/slurmcluster-crd.yaml`
 
-The vendored CRDs keep schema validation but omit generated description text.
-That keeps Helm release storage under the Kubernetes Secret size limit.
+The vendored CRDs are exact upstream imports from the release pinned in
+`upstream-soperator.lock.yaml`. Keeping them byte-for-byte aligned with the
+operator image avoids API-schema drift when upstream adds fields, defaults, or
+validation.
 
 Helm installs files in `crds/` before normal templates. Treat CRD changes as
 upgrade-sensitive work because CRD behavior is different from ordinary Helm
@@ -665,7 +667,7 @@ spec:
   slurmd:
     image:
       repository: cr.eu-north1.nebius.cloud/soperator/worker_slurmd
-      tag: 3.0.4-slurm25.11.3
+      tag: 3.0.5-slurm25.11.3
     resources:
       cpu: "64"
       memory: 512Gi
@@ -694,7 +696,7 @@ spec:
   munge:
     image:
       repository: cr.eu-north1.nebius.cloud/soperator/munge
-      tag: 3.0.4-slurm25.11.3
+      tag: 3.0.5-slurm25.11.3
 
   nodeSelector:
     slurm.nebius.ai/nodeset-name: worker
@@ -860,7 +862,7 @@ In this chart it is used for:
 - optional rebooter helper.
 
 The bundled rebooter RBAC includes cluster-scoped pod watch access and a
-`pods/eviction` create grant, but the upstream 3.0.4 rebooter path drains by
+`pods/eviction` create grant, but the upstream 3.0.5 rebooter path drains by
 marking the node unschedulable, adding a `NoExecute` taint, and then checking
 that non-DaemonSet pods without matching tolerations have left the node. When
 worker nodes are tainted, `rebooter.tolerations` must cover the same taints as
@@ -921,7 +923,7 @@ spec:
     evictionMethod: evict
     image:
       repository: cr.eu-north1.nebius.cloud/soperator/rebooter
-      tag: 3.0.4
+      tag: 3.0.5
 
   initContainers:
     - name: node-sysctl-params
@@ -2247,7 +2249,7 @@ node drain or undrain behavior.
 
 ### Memory Defaults
 
-The Soperator 3.0.4 CRD defaults `slurmConfig.defMemPerNode` to `0`. Slurm
+The Soperator 3.0.5 CRD defaults `slurmConfig.defMemPerNode` to `0`. Slurm
 does not allow `DefMemPerCPU` and `DefMemPerNode` together, so the chart fails
 rendering when `customSlurmConfig` contains `DefMemPerCPU`.
 
@@ -2549,29 +2551,28 @@ Exporter path.
 
 ## Chart Release And OCI Publish
 
-The chart package version is independent from the upstream Soperator release.
-`Chart.yaml.version` is this repository's SemVer for the packaged Helm chart.
+The chart package version follows the upstream Soperator release with a Nebius
+package suffix. `Chart.yaml.version` uses `<upstream>-ps.N`, while
 `Chart.yaml.appVersion` is the upstream Soperator release and must match
 `upstream-soperator.lock.yaml`.
 
 ```yaml
-version: 0.1.0
-appVersion: "3.0.4"
+version: 3.0.5-ps.1
+appVersion: "3.0.5"
 ```
 
-This separation lets the chart release packaging, docs, examples, cxcli wiring,
-or values improvements without implying that Nebius Soperator itself released a
-new version.
+The suffix lets this repository publish package respins without implying that
+Nebius Soperator itself released a different upstream version.
 
 Release prep and publish are intentionally local and explicit:
 
 1. Add release notes under `CHANGELOG.md` `## [Unreleased]`.
-2. Run `./publish-helm.sh --prep X.Y.Z` to move notes into a dated release
+2. Run `./publish-helm.sh --prep X.Y.Z-ps.N` to move notes into a dated release
    section, update `Chart.yaml.version`, validate the chart, commit, and push
    the branch.
 3. Merge to `main`.
-4. Run `./publish-helm.sh --publish X.Y.Z` from `main` to create and push the
-   `soperator-chart-vX.Y.Z` tag.
+4. Run `./publish-helm.sh --publish X.Y.Z-ps.N` from `main` to create and push
+   the `soperator-chart-vX.Y.Z-ps.N` tag.
 5. The tag starts `.github/workflows/helm-chart-publish.yml`, which reads
    `.github/helm-chart-publish.json`, packages the chart, pushes it to Nebius
    OCI, verifies anonymous pull, and writes a publish manifest artifact.
@@ -2582,8 +2583,8 @@ intended to be public.
 
 The workflow pushes to the OCI repository root, for example
 `oci://cr.<region>.nebius.cloud/<registry-short-id>/charts`. Helm derives the
-final `soperator` repository and `X.Y.Z` tag from the packaged chart, matching
-the [Helm OCI registry contract](https://helm.sh/docs/topics/registries/#the-push-subcommand).
+final `soperator` repository and `X.Y.Z-ps.N` tag from the packaged chart,
+matching the [Helm OCI registry contract](https://helm.sh/docs/topics/registries/#the-push-subcommand).
 
 ## Upstream Release Contract
 
@@ -2596,9 +2597,10 @@ The lock records:
 - upstream release and tag.
 - resolved upstream tag commit.
 - upstream-owned script imports copied into this repository.
+- upstream-owned CRD imports copied into this repository.
 - chart `appVersion` tracking for the parent and Soperator-family child charts.
 - image value imports checked against upstream chart values.
-- review-only upstream logic hashes for templates, CRDs, dashboards, custom
+- review-only upstream logic hashes for templates, dashboards, custom
   ConfigMaps, and storage classes.
 - the local-owned paths that script sync must not overwrite and image sync must
   explicitly target.
@@ -2608,20 +2610,22 @@ The lock records:
 Versioning uses two fields on purpose:
 
 ```yaml
-version: 0.1.0
-appVersion: "3.0.4"
+version: 3.0.5-ps.1
+appVersion: "3.0.5"
 ```
 
 `appVersion` is the upstream Soperator release and is derived from the lock by
-the sync script. `version` is the independent Helm chart package version owned
-by this repository and released through `publish-helm.sh`.
+the sync script. `version` is this repository's Helm chart package version; full
+upstream sync sets it to `<upstream>-ps.1`, and explicit parent-chart package
+respins may use `<upstream>-ps.N`.
 
-The upstream-owned script imports are:
+The upstream-owned exact imports are:
 
 - `helm/slurm-cluster/slurm_scripts` to
   `helm-charts/soperator/slurm_scripts`.
 - `helm/soperator-activechecks/scripts` to
   `helm-charts/soperator-activechecks/scripts`.
+- `helm/soperator/crds` to `helm-charts/soperator/crds`.
 
 ActiveChecks keeps the upstream script files byte-for-byte. The chart applies
 the local SlurmCluster name and namespace at render time in the helper that
@@ -2633,6 +2637,7 @@ cxcli renders from silently producing empty check payloads.
 Full upstream sync owns only derived upstream-tracking surfaces:
 
 - `Chart.yaml.appVersion` and upstream annotations.
+- parent `Chart.yaml.version` as `<upstream>-ps.1`.
 - upstream parent chart dependency versions and repositories that also exist in
   the local parent chart.
 - Soperator-family child chart `appVersion` and `<upstream>-ps.1` package
@@ -2640,6 +2645,7 @@ Full upstream sync owns only derived upstream-tracking surfaces:
 - parent dependency versions for those child charts.
 - `Chart.lock` when dependency metadata changes.
 - approved script imports.
+- approved CRD imports.
 - explicit image value paths listed under `imports.images`.
 - review-only upstream hashes in the lock.
 
@@ -2669,7 +2675,7 @@ from upstream, update the lock in the same PR so the verifier failure becomes
 an explicit review decision rather than hidden drift.
 
 Review-only hashes are updated by `--sync` so the PR records the upstream
-template, CRD, dashboard, custom ConfigMap, or storage class movement without
+template, dashboard, custom ConfigMap, or storage class movement without
 copying those upstream files into this chart.
 
 Validate the lock and upstream tracking with:
@@ -2682,24 +2688,36 @@ The report labels this lock group as `script`, matching `imports.scripts`.
 
 To intentionally move to a newer Soperator release:
 
-1. Create a feature branch.
-2. Update only `release` in `upstream-soperator.lock.yaml`.
-3. Run `scripts/verify-upstream-soperator-sync.sh --sync`.
-4. Review the PR diff, especially copied scripts, image values, dependency
-   versions, and review-only hash changes.
+1. From any clean working tree, run
+   `scripts/verify-upstream-soperator-sync.sh --latest --sync --report`.
+2. Review and test the unstaged diff locally.
+3. Stage and commit the reviewed sync changes.
+4. Open the PR. The PR is the human approval gate for copied scripts, CRD
+   schemas, image values, dependency versions, and review-only hash changes.
 
-The script refuses local `--sync` on `main` or the repository default branch.
-It refreshes the lock `tag` and resolved `commit`, updates derived chart
-metadata, copies approved scripts, updates tracked image values, updates
-review-only hashes, regenerates dependency metadata when child chart versions
-change, and runs Helm dependency, lint, and template validation. Write mode
-requires the full `all` scope plus `yq` and Helm; scoped `scripts` or `images`
-runs are read-only verification only.
+The script refuses local `--sync` from a dirty working tree. When run from
+`main`, `master`, or the repository default branch, it creates a clean
+`sync-soperator-<release>` feature branch before mutating files. It refreshes
+the lock `tag` and resolved `commit`, updates derived chart metadata, copies
+approved scripts and CRDs, updates tracked image values, updates review-only
+hashes, regenerates dependency metadata when chart versions change, runs Helm
+dependency, lint, and template validation under a temporary Helm repository
+config/cache, and leaves the resulting diff unstaged for local review and
+testing. The temporary Helm config is populated from the parent chart's remote
+dependency repositories, so local and CI sync runs do not require ambient
+`helm repo add` state. Write mode requires the full `all` scope plus `yq` v4
+and Helm; scoped `scripts`, `crds`, or `images` runs are read-only verification
+only. With `--report`, it also prints the changed-file list with readable
+status labels after sync validation.
+Missing-tool errors include macOS and Linux install hints, but the script does
+not install packages automatically. Local runs do not stage, commit, push, or
+create the PR.
 
-The scheduled GitHub workflow runs the same sync with `--latest`, pushes the
-result to `automation/soperator-upstream-sync`, and creates or updates a PR for
-human approval. `scripts/verify-upstream-soperator-sync.sh --check-latest`
-remains a read-only local or CI check.
+The scheduled GitHub workflow runs the same sync with `--latest`, stages and
+commits the validated result, pushes it to `automation/soperator-upstream-sync`,
+and creates or updates a PR for human approval.
+`scripts/verify-upstream-soperator-sync.sh --check-latest`
+remains a read-only local or CI check and is not required before sync.
 Before a scheduled `--latest` sync writes files, the script compares the lock
 release with GitHub's latest release. If the lock is newer, the workflow fails
 with a clear typo/stale-metadata message instead of mutating chart files.

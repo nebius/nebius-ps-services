@@ -87,7 +87,8 @@ jobs:
             echo "release=${release}"
           } >> "${GITHUB_OUTPUT}"
 
-          if [[ -z "$(git status --porcelain --untracked-files=no)" ]]; then
+          changed_files="$(git status --porcelain --untracked-files=all)"
+          if [[ -z "${changed_files}" ]]; then
             echo "changed=false" >> "${GITHUB_OUTPUT}"
           else
             echo "changed=true" >> "${GITHUB_OUTPUT}"
@@ -109,6 +110,16 @@ jobs:
             helm-charts/soperator-checks \
             helm-charts/soperator-dcgm-exporter \
             helm-charts/soperator-notifier
+
+          status_output="$(git status --short --untracked-files=all)"
+          unstaged_status="$(printf '%s\n' "${status_output}" | awk 'substr($0, 1, 2) == "??" || substr($0, 2, 1) != " " { print }')"
+          if [[ -n "${unstaged_status}" ]]; then
+            echo "Sync produced changes outside the expected staged chart paths." >&2
+            printf '%s\n' "${status_output}" >&2
+            exit 1
+          fi
+
+          git diff --cached --check
           git commit -m "Sync Soperator upstream ${RELEASE}"
 
           remote_sha="$(git ls-remote --heads origin "${BRANCH}" | awk '{print $1}')"
@@ -122,7 +133,7 @@ jobs:
           cat > "${body_file}" <<BODY
           Syncs the Nebius Soperator Helm chart tracking files to upstream Soperator ${RELEASE}.
 
-          This PR was created by the scheduled upstream sync workflow. The sync script updated the lock pin, script imports, tracked image values, chart appVersions, local child-chart dependency versions, and review-only upstream hashes without copying review-only templates.
+          This PR was created by the scheduled upstream sync workflow. The sync script updated the lock pin, script imports, CRD imports, tracked image values, chart package versions, chart appVersions, local child-chart dependency versions, and review-only upstream hashes without copying review-only templates.
 
           Validation run by the workflow:
           - helm dependency build

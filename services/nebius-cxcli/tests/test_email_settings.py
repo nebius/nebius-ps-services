@@ -29,7 +29,7 @@ def test_write_and_load_email_settings_round_trip(tmp_path: Path) -> None:
     settings = EmailSettings(
         host="smtp.example.com",
         port=2525,
-        starttls=False,
+        starttls=True,
         from_addr="deployments@example.com",
         username="mailer",
         password="secret",
@@ -41,6 +41,29 @@ def test_write_and_load_email_settings_round_trip(tmp_path: Path) -> None:
     assert written_path == config_path.resolve()
     assert loaded == settings
     assert written_path.stat().st_mode & 0o777 == 0o600
+
+
+def test_load_email_settings_accepts_legacy_starttls_disabled_file(tmp_path: Path) -> None:
+    config_path = tmp_path / "email.yaml"
+    config_path.write_text(
+        "smtp:\n  host: smtp.example.com\n  port: 2525\n  starttls: false\n",
+        encoding="utf-8",
+    )
+
+    settings = load_email_settings(explicit=config_path)
+
+    assert settings == EmailSettings(host="smtp.example.com", port=2525, starttls=False)
+
+
+def test_enabled_email_settings_require_starttls_for_write_and_runtime() -> None:
+    settings = EmailSettings(host="smtp.example.com", port=587, starttls=False)
+
+    with pytest.raises(ValueError, match="deploy report email requires STARTTLS"):
+        write_email_settings(settings, explicit=Path("/tmp/email.yaml"))
+    with pytest.raises(ValueError, match="deploy report email requires STARTTLS"):
+        email_environment_variables(settings)
+    with pytest.raises(ValueError, match="deploy report email requires STARTTLS"):
+        email_runtime_settings(settings)
 
 
 def test_load_email_settings_rejects_partial_credentials(tmp_path: Path) -> None:

@@ -23,6 +23,7 @@ from nebius_cxcli.quota_checks import (
     _estimate_vm_requirements,
     _evaluate_requirement,
     _NpcQuotaRequestUnavailableError,
+    assess_live_quota_requirements,
     format_quota_report_lines,
     format_quota_request_manual_followup_lines,
     plan_quota_request_changes,
@@ -96,6 +97,29 @@ def _resources(
             "allow_gpu_clustering": allow_gpu_clustering,
         },
     )()
+
+
+def _quota_record(
+    *,
+    name: str,
+    region: str = "eu-north1",
+    limit: int | None = 10,
+    usage: int = 0,
+    unit: str = "count",
+    description: str = "",
+) -> QuotaRecord:
+    return QuotaRecord(
+        name=name,
+        region=region,
+        limit=limit,
+        usage=usage,
+        service=name.split(".", 1)[0],
+        description=description or name,
+        unit=unit,
+        state="STATE_ACTIVE",
+        usage_state="USAGE_STATE_NORMAL",
+        usage_percentage="0",
+    )
 
 
 def test_aggregate_requirements_sums_shared_quota_usage() -> None:
@@ -651,6 +675,223 @@ def test_evaluate_requirement_marks_gpu_quota_unknown_when_capacity_dashboard_lo
     assert check.available is None
     assert check.sufficient is None
     assert check.source_scope == "unresolved"
+
+
+def test_assess_live_quota_requirements_reports_explicit_sufficiency_and_shortage(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _Session:
+        def __init__(self, *, context: str, project_id: str) -> None:
+            assert context == "external migration quota preflight"
+            assert project_id == "project-1"
+            self.closed = False
+
+        def list_quotas(self, *, parent_id: str) -> dict[tuple[str, str], QuotaRecord]:
+            if parent_id == "tenant-1":
+                return {
+                    ("compute.instance.count", "eu-north1"): _quota_record(
+                        name="compute.instance.count",
+                        limit=10,
+                        usage=1,
+                    ),
+                    ("compute.filesystem.count", "eu-north1"): _quota_record(
+                        name="compute.filesystem.count",
+                        limit=1,
+                        usage=0,
+                    ),
+                }
+            if parent_id == "project-1":
+                return {
+                    ("compute.instance.count", "eu-north1"): _quota_record(
+                        name="compute.instance.count",
+                        limit=5,
+                        usage=1,
+                    ),
+                    ("compute.filesystem.count", "eu-north1"): _quota_record(
+                        name="compute.filesystem.count",
+                        limit=1,
+                        usage=0,
+                    ),
+                }
+            raise AssertionError(parent_id)
+
+        def close(self) -> None:
+            self.closed = True
+
+    monkeypatch.setattr(quota_checks, "_QuotaSession", _Session)
+
+    report = assess_live_quota_requirements(
+        tenant_id="tenant-1",
+        project_id="project-1",
+        region_id="eu-north1",
+        context="external migration quota preflight",
+        requirements=[
+            QuotaRequirement(
+                component_id="mk8s",
+                instance_id="external",
+                component_label="external worker remediation",
+                quota_name="compute.instance.count",
+                region="eu-north1",
+                required=4,
+                reason="preserved worker node-template rollout",
+            ),
+            QuotaRequirement(
+                component_id="sfs",
+                instance_id="aligned-sfs",
+                component_label="aligned SFS",
+                quota_name="compute.filesystem.count",
+                region="eu-north1",
+                required=2,
+                reason="target SFS filesystems",
+            ),
+        ],
+    )
+
+    checks = {item.quota_name: item for item in report.checks}
+    assert report.errors == ()
+    assert checks["compute.instance.count"].available == 4
+    assert checks["compute.instance.count"].sufficient is True
+    assert checks["compute.filesystem.count"].available == 1
+    assert checks["compute.filesystem.count"].sufficient is False
+
+
+def test_assess_live_quota_requirements_requires_identity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _unexpected_session(**_kwargs: object) -> object:
+        raise AssertionError("quota session should not be opened without identity")
+
+    monkeypatch.setattr(quota_checks, "_QuotaSession", _unexpected_session)
+
+    report = assess_live_quota_requirements(
+        tenant_id="",
+        project_id="project-1",
+        region_id="eu-north1",
+        requirements=(),
+    )
+
+    assert report.checks == ()
+    assert report.errors == ("quota assessment is missing tenant_id or project_id",)
+
+
+def test_assess_live_quota_requirements_preserves_gaps_and_lookup_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _Session:
+        def __init__(self, *, context: str, project_id: str) -> None:
+            del context, project_id
+
+        def list_quotas(self, *, parent_id: str) -> dict[tuple[str, str], QuotaRecord]:
+            if parent_id == "tenant-1":
+                raise RuntimeError("tenant lookup unavailable")
+            return {
+                ("compute.disk.count", "eu-north1"): _quota_record(
+                    name="compute.disk.count",
+                    limit=3,
+                    usage=1,
+                )
+            }
+
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr(quota_checks, "_QuotaSession", _Session)
+    gap = QuotaCoverageGap(
+        component_id="mk8s",
+        instance_id="external",
+        component_label="external MK8s",
+        message="boot-disk size could not be resolved",
+    )
+
+    report = assess_live_quota_requirements(
+        tenant_id="tenant-1",
+        project_id="project-1",
+        region_id="eu-north1",
+        requirements=[
+            QuotaRequirement(
+                component_id="mk8s",
+                instance_id="external",
+                component_label="external MK8s",
+                quota_name="compute.disk.count",
+                region="eu-north1",
+                required=2,
+                reason="replacement node boot disks",
+            )
+        ],
+        coverage_gaps=(gap,),
+    )
+
+    assert report.coverage_gaps == (gap,)
+    assert report.checks[0].sufficient is True
+    assert report.errors == (
+        "tenant quota lookup failed for tenant-1: tenant lookup unavailable",
+    )
+
+
+def test_assess_live_quota_requirements_uses_capacity_dashboard_for_gpu_shape(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _Session:
+        def __init__(self, *, context: str, project_id: str) -> None:
+            del context, project_id
+
+        def list_quotas(self, *, parent_id: str) -> dict[tuple[str, str], QuotaRecord]:
+            del parent_id
+            return {}
+
+        def list_capacity_resource_advice(
+            self,
+            *,
+            parent_id: str,
+        ) -> tuple[CapacityResourceAdvice, ...]:
+            assert parent_id == "tenant-1"
+            return (
+                _capacity_advice(
+                    region="eu-north1",
+                    platform="gpu-h100-sxm",
+                    preset="8gpu-128vcpu-1600gb",
+                    fabric="fabric-6",
+                    reserved_available=2,
+                    reserved_limit=4,
+                    reserved_level="AVAILABILITY_LEVEL_HIGH",
+                ),
+            )
+
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr(quota_checks, "_QuotaSession", _Session)
+
+    report = assess_live_quota_requirements(
+        tenant_id="tenant-1",
+        project_id="project-1",
+        region_id="eu-north1",
+        requirements=[
+            QuotaRequirement(
+                component_id="mk8s",
+                instance_id="external",
+                component_label="external GPU workers",
+                quota_name="compute.instance.gpu.h100",
+                region="eu-north1",
+                required=16,
+                reason="2 GPU node(s) at gpu-h100-sxm/8gpu-128vcpu-1600gb",
+                gpu_capacity_shape=GpuCapacityShape(
+                    platform="gpu-h100-sxm",
+                    preset="8gpu-128vcpu-1600gb",
+                    fabric="fabric-6",
+                    mode="regular",
+                    gpu_count_per_instance=8,
+                ),
+            )
+        ],
+    )
+
+    assert report.errors == ()
+    assert len(report.checks) == 1
+    check = report.checks[0]
+    assert check.available == 16
+    assert check.sufficient is True
+    assert check.source_scope == "capacity-dashboard/reserved"
 
 
 def test_plan_quota_request_changes_targets_the_constraining_scopes() -> None:

@@ -87,6 +87,13 @@ def _settings_from_payload(payload: Any) -> EmailSettings:
     )
 
 
+def _require_starttls_for_enabled_settings(settings: EmailSettings) -> None:
+    if settings.enabled and not settings.starttls:
+        raise ValueError(
+            "smtp.starttls must be true when smtp.host is set; deploy report email requires STARTTLS"
+        )
+
+
 def resolve_email_config_file(*, explicit: Path | None = None) -> Path:
     return (explicit or EMAIL_CONFIG_FILE).expanduser().resolve()
 
@@ -100,6 +107,7 @@ def load_email_settings(*, explicit: Path | None = None) -> EmailSettings:
 
 
 def write_email_settings(settings: EmailSettings, *, explicit: Path | None = None) -> Path:
+    _require_starttls_for_enabled_settings(settings)
     path = resolve_email_config_file(explicit=explicit)
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
@@ -126,10 +134,11 @@ def disable_email_settings(*, explicit: Path | None = None) -> Path:
 def email_environment_variables(settings: EmailSettings) -> dict[str, str]:
     if not settings.enabled:
         return {}
+    _require_starttls_for_enabled_settings(settings)
     payload = {
         "SMTP_HOST": settings.host,
         "SMTP_PORT": str(settings.port),
-        "SMTP_STARTTLS": "true" if settings.starttls else "false",
+        "SMTP_STARTTLS": "true",
     }
     if settings.from_addr:
         payload["SMTP_FROM"] = settings.from_addr
@@ -148,10 +157,11 @@ def email_secret_values(settings: EmailSettings) -> dict[str, str]:
 def email_runtime_settings(settings: EmailSettings) -> dict[str, Any]:
     if not settings.enabled:
         return {}
+    _require_starttls_for_enabled_settings(settings)
     payload: dict[str, Any] = {
         "host": settings.host,
         "port": settings.port,
-        "starttls": settings.starttls,
+        "starttls": True,
     }
     if settings.from_addr:
         payload["from"] = settings.from_addr

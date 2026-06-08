@@ -60,3 +60,4 @@ src/github_report/_version.py
 # Local tool caches
 .cache/
 coverage/
+report.txt

@@ -6,6 +6,387 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Added final MK8s readiness checks for `upgrade k8s-version`,
+  `upgrade node-template`, MK8s `upgrade os-image`, node-layer upgrades, and
+  `ext-soperator migrate --execute`; commands now re-read live control-plane
+  and node-group state before reporting success, including Nebius OS image and
+  GPU `drivers_preset` / CUDA stack where applicable. Final checks now require
+  provider node-group status with ready, target, and total node counts instead
+  of treating matching spec fields alone as ready, and completed external
+  migrations emit a baseline MK8s cluster/node group readiness check even when
+  no node-template action was selected.
+- Added post-action Helm readiness checks for `upgrade helm-chart` and
+  `ext-soperator migrate --execute`; Soperator migration now verifies the
+  target chart workloads, suspends old source-family Flux HelmRelease and
+  Kustomization desired state, prunes old operational Soperator resources,
+  preserves shared/storage resources, and removes stale source-family Helm
+  release records before reporting completion. Managed Helm chart upgrades now
+  require the generated target handoff before running live readiness
+  verification.
+- Fixed `ext-soperator migrate --help` so the rendered epilog includes the
+  completed remediation/upgrade/cutover rerun recheck contract.
+- Changed the generated report artifact contract from `generated/inventory/` to
+  `generated/reports/`. Code paths now use `reports_dir` for deploy,
+  validation, notification, and external Soperator migration reports, and new
+  generated bundles scaffold `generated/reports/` without a compatibility
+  alias.
+- Fixed preserved-worker external Soperator cutover for heterogeneous worker
+  shapes. `ext-soperator migrate --execute` now samples one live worker pod per
+  preserved NodeSet for Slurm CPU/socket/core/thread topology, strips
+  source-era chart-owned worker mounts, normalizes target operator affinity to
+  Slurm role labels, and resumes Slurm nodes left drained after cutover.
+- Fixed external Soperator GPU-stack remediation so direct
+  `ext-soperator migrate --execute` Helm upgrades also apply catalog-owned
+  post-render patches such as the Network Operator `NicClusterPolicy`
+  `rdma/shared_device` overlay. Reruns now verify those live post-rendered
+  fields before considering `target-gpu-stack-remediation` complete.
+- Improved required Soperator/Slurm smoke validation: the one-task `srun`
+  smoke job now prefers an idle non-GPU partition when available, while Slurm
+  node status treats `inval` as unhealthy so invalid GPU workers remain a
+  visible pending validation gate. When Slurm exposes an idle or mixed GPU
+  partition, the smoke report now also runs Slurm-side one-GPU visibility and
+  one-rank NCCL checks through `srun`.
+- Fixed `deploy-report.md` Soperator GPU validation summaries so Kubernetes
+  GPU Visibility and NCCL scheduler skips caused by Soperator worker pod GPU
+  reservations lead with the same target's passed Slurm-side GPU visibility or
+  NCCL smoke result, while raw detail JSON keeps the Kubernetes skip evidence.
+- Changed local `deploy` for managed Soperator targets to stage app
+  reconciliation: cxcli now applies platform/GPU operator Flux resources and
+  runs MK8s GPU stack, GPU Visibility, and NCCL validations before applying the
+  full Soperator bundle that starts Slurm worker pods.
+- Changed `ext-soperator onboard` non-interactive identity flags: onboarding now
+  selects the Nebius MK8s cluster with `--cluster-id`, derives temporary
+  kubeconfig access through the Nebius API by default, and uses optional
+  `--target-id` only for the cxcli logical target alias. Install/adopt-only
+  next-step hints now prefer plain `deploy <config.yaml>` and document
+  `deploy --target <target-id>` only as a narrowing selector.
+- Tightened external Soperator rerun idempotency. No-op `ext-soperator
+  onboard` reruns now keep stable source discovery reports instead of churning
+  timestamps that invalidate migration checkpoints, and `ext-soperator
+  migrate --execute` rechecks completed selected actions against live state so
+  missing GPU-stack releases, node-template drift, aligned-SFS gaps, or target
+  cutover drift are retried instead of skipped solely because the local
+  checkpoint said the phase had completed.
+- Changed `ext-soperator migrate --execute` to own onboarded external MK8s
+  control-plane and node-template upgrades through direct Nebius updates:
+  control plane first, node groups one at a time with temporary zero-surge
+  strategy, original strategy restore, and no extra preserved-worker quota.
+- Fixed external node-template upgrade execution for legacy layouts by clearing
+  stale GPU driver presets from CPU node groups before Kubernetes/OS rollout
+  and by checkpointing temporary quiesce/restore of one-node
+  controller/login/accounting workloads during zero-surge service-role updates.
+- Hardened external Soperator chart takeover by suspending legacy Flux
+  HelmReleases before applying the cxcli target chart, forcing server-side CRD
+  conflict resolution, retrying transient target webhook startup failures, and
+  resuming partial cutovers when the source login pod has already been removed.
+- Fixed `keep-existing-storage` external chart takeover so live chart-owned
+  SFS/local PersistentVolume nodeAffinity selectors are preserved in target
+  Helm values instead of attempting an immutable PV selector update.
+- Fixed `keep-existing-storage` external chart takeover so discovered live PVC
+  request/capacity and PV capacity are treated as lower bounds, preventing
+  onboarded Soperator storage from rendering a smaller PVC/PV size.
+- Fixed external Soperator chart takeover so live Soperator role labels produce
+  explicit `values.nodeGroupMapping.*`, preventing service-role operators from
+  being rescheduled onto an unrelated CPU worker group during adoption.
+- Fixed external Soperator onboarding to infer the mixed Soperator profile from
+  live `worker-cpu`/`worker-gpu` labels, replace stale generic worker mappings,
+  and remove stale generated `worker-<node-group-id>` NodeSets on rerender.
+- Fixed install/adopt-only external Soperator onboarding so reruns sample live
+  worker NodeSet CPU/socket/core/thread topology from a running `slurmd` pod
+  and preserve the normalized `values.nodesets[].nodeConfig.static` through
+  render/deploy instead of falling back to compact profile worker topology.
+- Fixed adopted worker NodeSet rendering so source/profile `slurmd`, `munge`,
+  and `sssd` image overrides are not reintroduced; target Soperator chart
+  defaults now own worker image tags during external chart takeover.
+- Fixed adopted Soperator chart values to make Pyxis optional and clear the
+  importer path so incompatible legacy Pyxis importer options do not stop
+  `slurmd` during chart takeover.
+- Fixed `keep-existing-compute` external chart takeover so source worker
+  NodeSet names and partition references such as `worker-gpu` and `worker-cpu`
+  are preserved instead of collapsing them into a new synthetic `worker`
+  NodeSet, and stale source-era camelCase `ephemeralStorage` resource keys are
+  removed from adopted worker NodeSet CRs so target worker Pods can be created.
+- Tightened external Soperator migration completion so completed-checkpoint
+  reconciliation waits for target worker NodeSets to report desired-ready
+  replicas before returning `Pending phase: none`.
+- Changed `ext-soperator migrate --execute` validation hold to run the
+  target-scoped `deploy.targets[].validations.mk8s_gpu.*` checks for the
+  onboarded external target, including operator readiness, GPU Visibility, and
+  NCCL when enabled, and refresh `generated/reports/deploy-report.md`.
+- Added required Soperator/Slurm smoke validation for enabled Soperator
+  targets. `deploy` now records a `soperator_cluster_smoke` JSON report and
+  includes it in `deploy-report.md`; `ext-soperator migrate --execute` runs
+  the same smoke validation during validation hold and writes
+  `generated/reports/migrate-report.md` with migration phase, remediation,
+  upgrade, layout, validation, and event summaries.
+- Clarified the successful `ext-soperator onboard` config-only note so
+  migration-required targets point to the Soperator-specific next steps instead
+  of the generic deploy/destroy follow-up wording.
+- Fixed Soperator onboarding source-version detection for legacy controller
+  installs where the source operator Helm chart is released as
+  `soperator-controller` in `soperator-system` with chart identity
+  `helm-soperator`.
+- Expanded the successful `ext-soperator onboard` footer to print the selected
+  target's next-step command sequence: deploy for install/adopt-only targets,
+  or migration dry-run and approved migration execute for migration-required
+  targets.
+- Aligned `ext-soperator --help`, `ext-soperator onboard --help`, and
+  `ext-soperator migrate --help` examples with the complete external-cluster
+  sequence, including the no-deploy-before-migration warning and zero-surge
+  external node-template update contract.
+- Clarified `ext-soperator` help text so `--target` is explicitly the cxcli
+  target id from `deploy.targets[].instance_id`, install/adopt-only targets
+  point to target-scoped render/deploy and `deploy-report.md`, and onboarding
+  flags describe current-context fallback, live storage preservation, and
+  source-validation intent.
+- Changed Soperator onboarding GPU/RDMA findings from an operator-owned placeholder
+  action into target remediation: GPU-enabled external targets now record
+  `remediate-target-gpu-stack`, add the target-scoped GPU Operator and
+  Network Operator when GPU-cluster/RDMA inventory is present, persist MK8s GPU
+  deploy-time validation defaults, show the target GPU remediation in
+  `ext-soperator migrate --dry-run`, and execute it as a checkpointed
+  `target-gpu-stack-remediation` phase before Soperator compute/cutover work.
+- Renamed Soperator migration execution stop points to pending phases and
+  changed incomplete onboarding analysis wording to concrete
+  action-required/source-version-required statuses.
+- Split Soperator existing-cluster onboarding out of the `create` wizard:
+  selecting Soperator in `create` now stays on the production MK8s+SFS path,
+  while the new `nebius-cxcli ext-soperator onboard <config.yaml-or-deployments-root>`
+  command registers an external Nebius MK8s target, can scaffold a new
+  tenant/project `config.yaml` from a deployments root, lists existing MK8s
+  clusters in the resolved Nebius project for interactive onboarding,
+  registers one selected cluster per run by storing its `cluster_id`, repairs
+  target-scoped Soperator dependencies, and refreshes the accepted onboarding
+  fingerprint.
+- Tightened Soperator onboarding acceptance so day-2 Soperator Helm chart
+  version edits do not invalidate an already accepted target, exact pinned
+  Soperator releases classify as `existing-soperator-target`, lower `-ps.N`
+  package variants plan an upgrade to the cxcli target, and old-layout
+  migration plans persist `create-aligned-sfs` whenever aligned SFS data
+  migration is required.
+- Aligned Soperator external-cluster onboarding around two explicit layer
+  choices: storage mode (`keep-existing-storage` or `create-aligned-sfs`) and
+  compute mode (`keep-existing-compute` or `create-aligned-node-groups`).
+  Discovery still recommends aligned SFS for missing or incompatible storage,
+  and old profiled releases still default to full storage+compute migration,
+  but explicit keep-existing choices now narrow the saved migration plan.
+- Matched Soperator onboarding deployments-root behavior to the `create`
+  identity flow: after resolving tenant/project, interactive runs warn and ask
+  before updating an existing resolved `config.yaml`, while non-interactive
+  `--tenant-id`/`--project-id` runs print the warning and continue.
+- Added Soperator onboarding source-version recovery: when discovery finds
+  Soperator CRDs but no compatible Helm release version, interactive onboarding
+  asks for a committed migration-profile version or manual version entry, and
+  non-interactive runs can pass `--source-version`.
+- Added `nebius-cxcli ext-soperator migrate <config.yaml>` as the explicit
+  Soperator migration command surface. It validates the accepted onboarding
+  analysis, reads `source-soperator-cluster-discovery-report.json`, prints the
+  target remediation and compute/storage migration plan in dry-run mode, and
+  runs checkpointed live phases in `--execute` mode. The executor rechecks the
+  live source release and discovery fingerprint before the first mutation,
+  records customer approval when `--approve` is passed, auto-detects source
+  worker node groups from live Nebius node-group names and Slurm worker labels,
+  creates or reuses aligned SFS filesystems, attaches them to
+  discovered Nebius node groups, runs data-copy Jobs when PVC pairs exist, and
+  executes the guarded compute path by creating or reusing aligned service-role
+  MK8s node groups, verifying an empty Slurm queue from a login pod, applying
+  the pinned target Soperator chart values to preserved worker node groups,
+  normalizing target Slurm runtime plugin settings, recreating target worker
+  Kruise StatefulSets when immutable source-era specs cannot be updated in
+  place, validating cutover resources, and preserving in-place worker node
+  groups while holding old storage retirement for explicit confirmation.
+- Added phase-aware live status output for approved `ext-soperator migrate
+  --execute` runs. Storage phases now report aligned SFS/PVC copy progress
+  alongside MK8s and Slurm continuity, while compute/cutover phases report
+  MK8s node readiness, Slurm login/queue/node-state health, and Soperator
+  SlurmCluster reconciliation as best-effort degradation signals.
+- Added a strict Soperator migration quota preflight for approved `--execute`
+  runs. The executor now checks net-new aligned SFS storage and net-new
+  service-role node groups before any SFS, node-group, or Helm mutation, while
+  preserved worker node groups do not require parallel worker quota, and fails
+  fast on confirmed shortages, unresolved limits, coverage gaps, or quota lookup
+  errors. External node-group template mutations now use a temporary zero-surge
+  strategy (`max_surge=0`, `max_unavailable=1`, `drain_timeout=30m`) and restore
+  the original strategy afterward, so preserved workers require neither
+  parallel nor surge worker quota.
+- Consolidated README Soperator command guidance into a visible
+  `Soperator Commands` section covering managed create/deploy, external
+  onboarding, migration flags, storage/compute migration modes, safety rules,
+  and the difference between `upgrade helm-chart` for cxcli-managed Soperator
+  rows and onboard+migrate workflows for external clusters.
+- Hardened the Soperator migration profile generator with paginated GitHub
+  release fetching, release tarball extraction, official chart identity
+  detection, per-component chart archive, CRD, template, values, image, and
+  Slurm contract fingerprints, and tests that lock the expanded generator
+  scope.
+- Added node-role label compatibility axes to committed Soperator migration
+  profiles so legacy source labels such as `slurm.nebius.ai/nodeset` are
+  explicitly normalized to the target `slurm.nebius.ai/nodeset-name` contract.
+- Updated Soperator migration compute remediation to reuse existing
+  service-role node groups discovered by role name or
+  `slurm.nebius.ai/nodeset` / `slurm.nebius.ai/nodeset-name` labels, while
+  preserving worker node groups in place and using external zero-surge
+  node-group updates for migration-owned template remediation.
+- Added a final `Next step: nebius-cxcli deploy <config.yaml>` helper line to
+  successful `render` command output, while suppressing that hint for internal
+  rerenders used by upgrade flows.
+- Clarified `component add` help and examples so `--config` is shown as the
+  required config path option, target-bound app examples use the plural
+  `apps:<chart>@<target>` selector form, and singular `app:` selector errors
+  point operators at `apps:`.
+- Clarified `upgrade node-template` help so the command list and subcommand
+  help call out that Kubernetes version, OS image, and GPU stack move together
+  in one non-interactive command with examples below.
+- Updated the development lockfile to `aiohttp` 3.14.0 to resolve the open
+  Dependabot alerts on `services/nebius-cxcli/uv.lock`.
+- Fixed high-priority teardown, recovery, notification, and observability
+  guardrails: `destroy` now stops before Terraform when rendered app teardown
+  fails, MK8s destroy recovery refuses unconfirmable node-group delete
+  operations, non-force Terraform unlock refuses ownerless locks, deploy-report
+  email setup/sync/send require STARTTLS and redact tenant/project identifiers,
+  and OTLP EndpointSlice readiness now requires `ready=true`.
+- Added `usage.lifecycle: transient` and `usage.config.ref` metadata for
+  deploy-time Helm chart sources such as `nccl-test`, with catalog validation
+  and selector guidance driven from that metadata instead of a hard-coded chart
+  id.
+- Fixed NCCL deploy validation on one-GPU Ethernet-only MK8s targets so a
+  successful single-rank smoke run passes without requiring collective bus
+  bandwidth, while multi-rank checks still require observed bandwidth and RDMA
+  checks still enforce the configured threshold.
+- Fixed MK8s Nebius-image GPU stack selection so live compatibility matrix
+  choices are constrained by the selected/defaulted OS, stale profile defaults
+  are replaced during create/component add when live choices exclude them, and
+  `validate-generated`, deploy, and direct generated-bundle `terraform apply`
+  fail before Terraform if an existing config combines an unsupported GPU
+  platform, OS, and `gpu_stack_preset` or omits OS while setting an
+  OS-specific GPU stack preset. The live compatibility lookup now shares the
+  provider timeout policy and accepts both top-level and version-nested matrix
+  response shapes.
+- Added the top-level `upgrade` command group with `upgrade k8s-version
+  <config.yaml> [infra:mk8s@<target>] --to-version <major.minor>` implemented for
+  Terraform-managed MK8s targets. The new flow plans with live Nebius SDK data,
+  prompts for target/version/core options from a config-only interactive
+  wizard, supports `--no-interactive` fail-fast automation, `--dry-run`,
+  disruption policies, and drain-timeout defaults, syncs `config.yaml` plus
+  `generated/`, runs Terraform plan and apply in staged control-plane then
+  per-node-group order, writes explicit node-group versions during the upgrade,
+  uses the SDK for live discovery/status/error watching rather than MK8s
+  mutation, keeps provider drain timeout separate from cxcli's rollout wait
+  budget, sizes SDK node-group rollout watches by node-group size, defaults
+  `allow-unavailable` drain timeout to `30m`, uses the explicit disruption
+  policy instead of a separate upgrade `--yes` confirmation, matches live node
+  groups by Terraform-default names, blocks mutation when Kubernetes preflight
+  inspection cannot prove safety, restores temporary node-group disruption
+  strategies in source/generated files after failed stages,
+  reconciles stale source config even when live resources are already at the
+  target version, resumes already-started rollouts, and reserves explicit
+  command/flag shapes for GPU stack, platform, hardware preset, and Helm chart
+  layers.
+- Implemented `upgrade os-image <config.yaml> infra:mk8s@<target> --to-os <os>`
+  for Terraform-managed MK8s node groups. The command validates the requested
+  node-template OS against the live Nebius MK8s compatibility matrix for the
+  current Kubernetes version, platform, and GPU stack preset, updates
+  `inputs.node_groups.*.os`, rerenders and validates `generated/`, runs quiet
+  Terraform plan/apply stages one node group at a time in CPU/system-before-GPU
+  order, supports `--node-group`, `--dry-run`, disruption policies, and
+  drain-timeout defaults, and waits for Managed Kubernetes rolling replacement
+  to finish without SSHing to nodes or running apt-based OS upgrades.
+- Implemented non-interactive
+  `upgrade node-template <config.yaml> infra:mk8s@<target> --to-version <major.minor> --to-os <os> [--to-gpu-stack-preset <preset>]`
+  for combined MK8s control-plane, node-group Kubernetes version, node OS, and
+  Nebius-image GPU stack upgrades. The command validates the requested tuple
+  through the SDK compatibility matrix, stages control plane first, then writes
+  version, OS, and Nebius-image `gpu_stack_preset` together for each selected
+  node group in CPU/system-before-GPU order so the group rolls once. The GPU
+  stack flag is required for selected Nebius-image GPU groups and rejected for
+  CPU-only or operator-managed GPU selections. Generated-bundle GPU stack
+  compatibility validation now honors explicit node-group `version` values, so
+  a staged control-plane hop can validate old node templates against their
+  pinned node-group version until the node-group stage writes the new template.
+- Added a guided `upgrade os-image <config.yaml>` wizard that lists
+  Terraform-managed `infra:mk8s@<target>` targets and generic
+  `infra:vm@<target>` components, prompts for missing OS-image values, defaults
+  guided runs to dry-run, supports `--no-interactive` fail-fast automation, and
+  implements generic `infra:vm@<target>` `source_image_family` upgrades through
+  the same config/render/validate/Terraform plan/apply path with the selected
+  VM status watcher. VM upgrades are limited to module-managed boot disks that
+  use `inputs.source_image_family`; `source_image_id`, `boot_disk_existing_id`,
+  node-group, and MK8s disruption-policy semantics remain outside the VM path.
+- Simplified the guided MK8s `upgrade os-image` `node_group` prompt so it maps
+  directly to the optional `--node-group` flag: blank omits the flag and updates
+  all managed node groups, while a typed source key or live name narrows the
+  upgrade to one group.
+- Wrapped upgrade dry-run repeat commands across shell-safe continuation lines
+  so long config paths and selected flags remain readable and copy-pasteable.
+- Implemented `upgrade gpu-stack-preset`, `upgrade platform`,
+  `upgrade cpu-preset`, `upgrade gpu-preset`, and `upgrade helm-chart` with the
+  same wizard/non-interactive flag contract as `k8s-version` and `os-image`.
+  The node-layer commands update selected MK8s node-group desired-state fields,
+  support `--node-group`, `--dry-run`, disruption policies, drain-timeout
+  defaults, rendered-bundle validation, quiet Terraform plan/apply, and rollout
+  waits; CPU preset changes target only CPU/system groups, GPU preset and GPU
+  stack changes target only GPU groups, and GPU stack/platform changes use the
+  live MK8s compatibility matrix where applicable. The Helm chart command
+  updates the selected target-scoped `apps.charts[]` version, rerenders,
+  validates, and applies that target's Flux bundle. The GPU-stack command uses
+  the explicit `--to-gpu-stack-preset` flag for Nebius `drivers_preset`; hardware
+  CPU/GPU preset commands keep `--to-preset`.
+- Refactored guided upgrade value prompts through a reusable upgrade wizard
+  choice builder and provider lookup path. MK8s OS image, GPU stack preset,
+  platform, CPU preset, and GPU preset prompts now show live SDK/provider-driven
+  choices when available instead of falling back immediately to raw required
+  scalar input; non-interactive flags continue to use the same shared execution
+  path.
+- Aligned component wizard provider-option parsing so interactive choice
+  rendering, strict provider-value validation, and auto-selected defaults use
+  the same wizard metadata resolver while preserving planned VPC choices and
+  legacy static-choice prompts.
+- Reorganized README upgrade guidance into a dedicated top-level `Upgrade`
+  section with a visible table-of-contents entry, disruption-policy
+  drain-timeout defaults, copy-paste Kubernetes upgrade examples, node-layer
+  upgrade examples, Helm chart upgrade examples, and manual desired-state
+  fallback guidance.
+- Aligned `upgrade --help` and upgrade subcommand help output with the README
+  upgrade examples, including implemented Kubernetes dry-run/disruption-policy
+  examples, node-layer examples, and Helm chart examples.
+- Removed public/private endpoint access from the guided `upgrade k8s-version`
+  target picker labels so managed MK8s targets are shown by selector only,
+  avoiding confusion with external-cluster ownership.
+- Clarified guided and explicit `upgrade k8s-version` multi-minor handling with
+  upstream Kubernetes guidance that skipped minor upgrades are unsupported.
+- Improved guided `upgrade k8s-version --dry-run` output by aggregating
+  `emptyDir` pod findings into one PVC-aware advisory, printing a repeatable
+  dry-run command with the selected arguments, and styling the warnings section
+  with the shared amber warning color.
+- Suppressed raw Terraform plan dumps during live `upgrade k8s-version` staged
+  applies while still running each staged plan as a safety gate before apply.
+- Fixed live `upgrade k8s-version` staged Terraform plans when a temporary
+  node-group disruption strategy is applied to only the node group currently
+  being upgraded.
+- Hardened `upgrade k8s-version` ordering by rejecting live node groups that
+  are already above the requested control-plane minor, and documented the
+  post-upgrade GPU canary, add-on, and rollback boundaries.
+- Clarified live `upgrade k8s-version` output so execution stages are labeled
+  as per control-plane hop and per node group rather than per node, and
+  de-duplicated repeated deploy-validation advisories across nested render and
+  validation calls within one upgrade run.
+- Clarified `upgrade k8s-version` OS/platform/GPU compatibility blockers so
+  implemented OS-image, platform, and GPU-stack node-layer commands are printed
+  as runnable follow-up commands where available, while manual
+  config/render/deploy follow-up remains documented. Also tightened the
+  `force-delete` warning around graceful shutdown and in-flight application
+  state.
+- Documented that manual desired-state upgrades through `config.yaml`, render,
+  plan review, and `deploy`/`terraform apply` remain supported outside the
+  structured `upgrade` command, with `deploy` running full generated-bundle
+  preflight and `terraform apply` preserving the infra-only MK8s preflight and
+  Terraform/provider validation path.
+- Removed the reserved `upgrade firmware` command surface and documented node
+  firmware as owned by the Nebius hardware team rather than a customer upgrade
+  responsibility.
+- Clarified the MK8s node-group service-account wizard prompt so the default
+  no-service-account path is the first semantic choice, without an extra
+  generic skip row, and the existing/create choices explain what they do.
 - Changed `create <deployments-root>` to create the deployments root directory
   when it is missing, while keeping `discover` strict about existing
   deployment-scope directories and preserving the nested managed-root guard.
@@ -22,6 +403,12 @@ All notable changes to this project are tracked here. This changelog follows
   official public Nebius Terraform provider source `nebius/nebius` with the
   shared constraint `>= 0.6.8, < 0.7.0`, and updated the cxcli-managed
   Terraform client version to `1.15.5`.
+- Updated the bundled Soperator app catalog pin to chart version
+  `3.0.5-ps.1`, and made local-profile Helm chart sources derive missing
+  chart name/version metadata from their checked-out `Chart.yaml` so generated
+  `config.yaml` rows show the active local chart version. The bundled
+  Soperator profile defaults now use the matching `3.0.5-slurm25.11.3`
+  worker and Munge image tags.
 - Added live VPC network/subnet selection for subnet-attached infra in `create`
   and `component add`. `mk8s`, `vm`, `nfs`, `wireguard-gw`, and
   `ssh-jumphost` now list project VPC networks first, list only subnets in the
@@ -235,14 +622,12 @@ All notable changes to this project are tracked here. This changelog follows
   `component add soperator@<external-target>` now infers onboarding for
   existing external MK8s targets and repairs missing target-scoped
   Soperator-required app rows without adding Terraform MK8s/SFS rows. External
-  onboarding now also materializes `use-existing-pvc-or-storageclass` storage
-  as the chart's one-node local storage profile, pins generated local-storage
-  Slurm pods to one discovered node, disables accounting/REST/chart-managed
-  MariaDB for that profile while keeping SConfigController enabled, and applies
-  compact OpenKruise, MariaDB, Slurm control-plane, worker pod requests, and
-  CPU worker topology derived from the discovered node group's allocatable CPU
-  count so modest external CPU clusters can schedule and register the
-  onboarded stack before operators tune production sizing. The
+  onboarding now writes a source-cluster discovery report next to the project
+  config, records stable `no-soperator-detected` or existing-Soperator
+  migration states, matches installed releases against committed migration
+  profile history, and plans `keep-existing-storage` or `create-aligned-sfs`
+  remediation without embedding the full discovery snapshot in `config.yaml`.
+  The
   local-storage onboarding path also defaults `populateJail.overwrite: true` so
   failed partial installs do not leave stale jail sentinel files that skip
   required jail population on the next deploy.
@@ -406,11 +791,10 @@ All notable changes to this project are tracked here. This changelog follows
 - Extended the catalog-owned NCCL `-mca coll ^hcoll` MPI overlay to the Nebius
   B300/GB300 shape alongside B200/B200A, keeping Blackwell-specific MPI policy in
   `component_cli_settings.yaml` instead of the shared `nccl-test` chart.
-- Clarified the NCCL validation chart contract: `nccl-test` remains an
-  internal deploy-time validation chart rather than a selectable `--app` /
-  `component add` target, and the CLI now points operators to
-  `deploy.targets[].validations.mk8s_gpu.nccl.enabled` when they try to select
-  it directly.
+- Clarified the NCCL validation chart contract: `nccl-test` is a transient
+  deploy-time chart source rather than a selectable `--app` / `component add`
+  target, and selector guidance now comes from the catalog's
+  `usage.config.ref`.
 - Fixed Soperator production profile materialization so catalog-owned CPU shape
   defaults are applied to the `system`, `controller`, `login`, `accounting`,
   and CPU worker MK8s node groups before Terraform render.
@@ -696,7 +1080,7 @@ All notable changes to this project are tracked here. This changelog follows
   important generated paths limited to the generated bundle and `deploy-report.md`.
   The footer highlights section headers plus PASS/FAIL/completion status with
   terminal color and keeps machine-readable validation JSON paths inside
-  `generated/inventory/` instead of printing them in the footer.
+  `generated/reports/` instead of printing them in the footer.
 - WireGuard deploy footer/report generation now omits `--component` for the
   common single-gateway case, keeps day-2 subnet add/remove examples in
   README/help instead of the generated handoff report, and shows enabled-only
@@ -709,7 +1093,7 @@ All notable changes to this project are tracked here. This changelog follows
   wizard profile, validation profile, Terraform module source path, render
   output names, help text, docs, and deploy report wording now use the gateway
   name with no legacy component-id compatibility shim.
-- `create` and `render` no longer create `generated/inventory/deploy-report.md`;
+- `create` and `render` no longer create `generated/reports/deploy-report.md`;
   the Markdown handoff report is now created/refreshed only by deployment/apply
   paths after live state can be read, while render keeps quota and runtime
   metadata in `generated/nebius-cxcli-manifest.json`.
@@ -1224,7 +1608,7 @@ All notable changes to this project are tracked here. This changelog follows
   generated manifest for observability-enabled targets, and `deploy` verifies
   the live agent HelmRelease, rendered signal config, DaemonSet readiness, and
   trace OTLP service endpoints before rolling the result into
-  `generated/inventory/deploy-report.md`. The settings catalog now exposes only
+  `generated/reports/deploy-report.md`. The settings catalog now exposes only
   `components.infra.mk8s.cli.observability.primary_agent.validation` as a
   boolean enabled/disabled switch that defaults to enabled; the Nebius-agent
   object names, signal value paths, selectors, trace service binding, and
@@ -1286,7 +1670,7 @@ All notable changes to this project are tracked here. This changelog follows
   and errors so informational Grafana.com-import provenance is not shown as a
   warning. It supports `--target <target-id>` for target-scoped Grafana rows
   in multi-target configs, resolves the target MK8s cluster ID from generated
-  Grafana status, generated inventory, or the persisted kube context, and
+  Grafana status, generated reports, or the persisted kube context, and
   scopes Metrics/Logs dashboard checks to that cluster so another
   cluster's data cannot mask a broken target dashboard.
 - Simplified bundled Grafana catalog metadata by removing the redundant nested
@@ -1305,14 +1689,14 @@ All notable changes to this project are tracked here. This changelog follows
   chart's broad built-in cluster-metrics jobs, avoiding NFD/high-volume node
   labels on container metrics while preserving user-defined `additionalTargets`.
 - Added a deploy completion footer that prints the complete
-  `generated/inventory/deploy-report.md` path after a successful local
+  `generated/reports/deploy-report.md` path after a successful local
   `deploy`.
 - Split generated deploy reports into a `Client` section and an `Infra`
   section. MK8s rows and Grafana target metadata now include the Nebius cluster
   ID and derived kube context when Terraform state or live Grafana status has
   that target metadata, so the Grafana admin-password command is copy-pasteable
   with `kubectl --context=...` for each cluster.
-- Reorganized `generated/inventory/deploy-report.md` into smaller subsections:
+- Reorganized `generated/reports/deploy-report.md` into smaller subsections:
   `Infra Component Status` and MK8s cluster details are separated, app handoff
   details are grouped by platform/observability/workloads, and Grafana links plus
   credentials are grouped under one subsection per target with shared notes
@@ -1468,7 +1852,7 @@ All notable changes to this project are tracked here. This changelog follows
 - Removed the standalone `report` command. Deploy reports are generated as part
   of the lifecycle commands that actually apply state (`deploy`,
   `terraform apply`, `flux apply`, and `flux bootstrap`), while
-  `email` now only sends the existing `generated/inventory/deploy-report.md`
+  `email` now only sends the existing `generated/reports/deploy-report.md`
   artifact instead of pointing operators at a separate manual rewrite command.
   Report refresh no longer carries cleanup logic for removed inventory sidecar
   formats.
@@ -1578,7 +1962,7 @@ All notable changes to this project are tracked here. This changelog follows
   `nebius-observability-agent` app with defaults. The canonical customer
   observability contract now lives under `deploy:`; top-level `observability:`
   is no longer accepted.
-- Expanded `generated/inventory/deploy-report.md` with Grafana read data-source
+- Expanded `generated/reports/deploy-report.md` with Grafana read data-source
   hints for enabled observability signals, including Prometheus, Loki, and Tempo
   data-source types, real Nebius read URLs, server/proxy access mode, and the
   required `Authorization: Bearer <observability static token or IAM token>`
@@ -1866,7 +2250,7 @@ All notable changes to this project are tracked here. This changelog follows
   immediately on stale old node-group error events from a previous failed run
   when Terraform is about to replace that failed group. Fresh terminal API
   errors from the current run still abort early.
-- Fixed `generated/inventory/deploy-report.md` formatting so report output no
+- Fixed `generated/reports/deploy-report.md` formatting so report output no
   longer ends with duplicate blank lines when deploy validations are
   present, keeping the generated Markdown clean for linting in customer repos.
 - Changed interactive `create` so `tenant_id` / `project_id` no longer
@@ -1874,7 +2258,7 @@ All notable changes to this project are tracked here. This changelog follows
   now assumes a new target unless you explicitly pass or type an existing
   tenant/project, and only then warns before overwriting that resolved folder.
 - Merged the human-readable inventory and deploy-validation markdown outputs
-  into one canonical `generated/inventory/deploy-report.md`. It now combines
+  into one canonical `generated/reports/deploy-report.md`. It now combines
   `Infra`, `Apps`, and `Validations`, `email` sends that same file,
   deploy-time validations still keep their
   per-validation JSON detail reports, and stale markdown/report artifacts are
@@ -1884,7 +2268,7 @@ All notable changes to this project are tracked here. This changelog follows
   `deploy`, `destroy`, and `email` now accept only
   `config.yaml`, resolve sibling `generated/` automatically, and reject direct
   `generated/` targets instead of keeping a backward-compatibility dual path.
-  The generated manifest and rendered inventory artifacts remain the
+  The generated manifest and rendered report artifacts remain the
   authoritative runtime contract after render, so post-render source edits do
   not silently change what gets applied, destroyed, written, or emailed.
 - Clarified `validate` and `quota-check` help/docs wording so the command
@@ -2099,7 +2483,7 @@ All notable changes to this project are tracked here. This changelog follows
 - Aligned the remaining strict-validation and docs surfaces with the current Helm/source contract: the MK8s GPU strict-validation coverage now enables `nvidia-gpu-operator` before asserting missing GPU shape fields, and the README/design examples now consistently show app charts under `source.portable` instead of the removed top-level `source.repo/chart/version` layout.
 - Added a bundled `vm` infra component backed by `platform-infra/modules/vm`: the catalog now exposes guided project-subnet and live compute platform/preset selection, resolves `source_image_family` from the live Nebius public image inventory without a bundled hardcoded family default, preserves static public-IP mode choices plus optional GPU-cluster fabric guidance, and includes runtime validation/quota estimation for standalone Nebius VMs so the new module behaves like a first-class `nebius-cxcli` component instead of a raw custom Terraform source.
 - Refactored the bundled MK8s GPU contract around the actual Nebius node-group model: `inputs.gpu_stack_source` and `inputs.gpu_stack_preset` now replace the earlier driver-centric terminology in the customer- and catalog-facing contracts, the MK8s module/docs now describe Nebius-managed `gpu_settings.drivers_preset` vs operator-managed GPU stacks explicitly, and the NCCL path now renders a first-party `helm-charts/nccl-test` chart selected through the same Helm `source.portable` / `source.local` contract used by other bundled charts instead of assembling the raw `MPIJob` manifest in Python.
-- Replaced the old MK8s GPU hardcoded profile split with component-local settings policy: `component_cli_settings.yaml` now keeps MK8s GPU image preferences and validations under `components.infra.mk8s.cli.gpu`, keeps GPU operator/network operator auto-enable rules and Helm value overrides on the operator app entries under `components.apps.<id>.cli.mk8s_gpu_policy`, while `component_sources.yaml` keeps the reusable Terraform/Helm source and release metadata. The catalog pair removes the unused standalone `nvidia-device-plugin` entry, still materializes Nebius-image vs operator-managed MK8s defaults from the live Nebius compatibility matrix, keeps the GPU Operator B300 driver pin out of Python, and still persists deploy-time GPU readiness/visibility/NCCL reports under `generated/inventory/`.
+- Replaced the old MK8s GPU hardcoded profile split with component-local settings policy: `component_cli_settings.yaml` now keeps MK8s GPU image preferences and validations under `components.infra.mk8s.cli.gpu`, keeps GPU operator/network operator auto-enable rules and Helm value overrides on the operator app entries under `components.apps.<id>.cli.mk8s_gpu_policy`, while `component_sources.yaml` keeps the reusable Terraform/Helm source and release metadata. The catalog pair removes the unused standalone `nvidia-device-plugin` entry, still materializes Nebius-image vs operator-managed MK8s defaults from the live Nebius compatibility matrix, keeps the GPU Operator B300 driver pin out of Python, and still persists deploy-time GPU readiness/visibility/NCCL reports under `generated/reports/`.
 - Changed interactive `create` overwrite UX so it now resolves `tenant_id` / `project_id` before showing any overwrite warning: existing deployments roots no longer emit a root-wide pre-warning, and confirmation appears only when the chosen resolved project folder already exists.
 - Changed the canonical project layout to match the two-level project hierarchy under the deployments root: project configs now live at `<deployments-root>/<tenant-folder>/<project-folder>/config.yaml`, and `create <deployments-root>` is a bootstrap/overwrite command instead of an existing-config reconcile path. Once that resolved project folder already exists, interactive reruns now require explicit overwrite confirmation unless `--force` is provided, non-interactive reruns require `--force`, overwrite recreates only that one resolved project folder from scratch, client-info prompts restart from the normal create defaults, and infra/apps selections plus component values are rebuilt from the current create inputs instead of being merged from the old config; docs/help/tests were realigned to make `component list/add/remove` the default day-2 editing surface.
 - Tightened the remaining help/docs wording around the project-folder layout so `create --help`, README, and the design doc consistently describe the canonical overwrite target and the generated customer workflow's canonical `<tenant-folder>/<project-folder>/generated/**` watch scope.
@@ -2123,7 +2507,7 @@ All notable changes to this project are tracked here. This changelog follows
 - Hardened local Flux deploy/apply waiting so terminal `HelmRelease`/`Kustomization` failures are surfaced from the actual failing workload resource, remaining workload resources are allowed to settle before the command exits, and the default outer wait window now honors rendered workload `spec.timeout` hints plus a short grace period instead of assuming one fixed chart timeout.
 - Extended the source-catalog Flux timeout contract so `cli.flux.release_timeout` defines the global default rendered `HelmRelease.spec.timeout`, while per-app `release.timeout` remains optional and only overrides that default when a specific chart needs a different install/upgrade budget; the bundled default is now `5m`, aligned with the upstream Helm/Flux action timeout.
 - Fixed the bundled `cert-manager` app catalog defaults to enable chart CRD installation (`values.crds.enabled: true`), preventing fresh-cluster installs from hanging on the startup API check job while cert-manager CRDs are still absent.
-- Fixed `render` overwrite prompting so the first render after `create` no longer warns just because the project already has the empty generated scaffold and placeholder `generated/inventory/inventory.md`; the warning now targets meaningful existing rendered artifacts.
+- Fixed `render` overwrite prompting so the first render after `create` no longer warns just because the project already has the empty generated scaffold and placeholder report artifact; the warning now targets meaningful existing rendered artifacts.
 - Improved config-path error handling for config-driven commands such as `render`: passing a directory like `generated/` now fails with a targeted “expected project config.yaml file path” message instead of leaking a raw `Is a directory` exception.
 - Improved complex wizard prompt wording to ask for single-line YAML/JSON values for maps, objects, and object lists, and stopped app components with an empty top-level `values: {}` block from showing a confusing whole-map prompt when no concrete Helm value leaves are known yet.
 - Added `wizard.<field>.prompt: false` support so bundled profiles can suppress optional advanced fields from the interactive wizard; the MK8s profile now hides the raw `mk8s_*_overrides` passthrough maps while keeping them available for manual `config.yaml` edits.
@@ -2182,12 +2566,15 @@ All notable changes to this project are tracked here. This changelog follows
   portable component catalog, Terraform modules, and Helm chart sources are
   validated in automation instead of relying only on unit tests.
 - Hardened `publish-release.sh` so `--prep` now requires a strictly clean worktree, including untracked files, and first-time pushes from a new local release branch automatically set `origin/<branch>` as upstream instead of failing with Git's "no upstream branch" error; `--publish` now fails before tagging if the target changelog section is missing or empty.
-- Made `render` transactional: rerenders now build the replacement bundle under a hidden sibling staging directory and swap it into `generated/` only after the new Terraform/Flux/inventory bundle plus generated manifest are complete, so failed rerenders leave the current bundle intact.
+- Made `render` transactional: rerenders now build the replacement bundle under a hidden sibling staging directory and swap it into `generated/` only after the new Terraform/Flux/report bundle plus generated manifest are complete, so failed rerenders leave the current bundle intact.
 - Clarified docs/help that rerender is now a transactional replace action rather than an eager reset, and documented the Flux-safe workflow: rerender locally, then commit/push one final watched-path snapshot instead of unbootstrapping Flux or publishing intermediate manifest-deletion commits.
 - Clarified the `deploy` command contract so help/docs now explicitly say it is the local direct-apply path and does not run `flux bootstrap`; added workflow coverage that generated customer apply jobs use `flux bootstrap` rather than `deploy`.
 - Removed the last render-time `generated/flux/flux-system` preservation path. `render` now fully resets `generated/` and deletes any stale legacy Flux bootstrap subtree instead of carrying it forward.
 - Reworked email delivery to be disabled by default and operator-local: `nebius-cxcli email --setup` now manages `~/.config/nebius-cxcli/email.yaml`, `bootstrap-ci` syncs non-secret SMTP fields into GitHub Environment variables plus credentials into GitHub Environment secrets, and per-client send/no-send is now controlled by `client_info.notifications.email_enabled` in `config.yaml`.
-- Tightened `email <generated-dir>` so it sends only the rendered `inventory.md`, fails fast when that file is missing, and masks tenant/project identifiers in the email subject/body down to their last 4 characters.
+- Tightened `email <generated-dir>` so it sends only the rendered
+  `deploy-report.md`, fails fast when that file is missing, and masks
+  tenant/project identifiers in the email subject/body down to their last 4
+  characters.
 - Changed the email contract so generated workflows always run the email step after apply and use `client_info.notifications.email_enabled` as the single send/no-send switch; when email is enabled but SMTP is not configured, the command now warns and continues instead of failing the deploy.
 - Changed `bootstrap-ci` to reconcile GitHub SMTP settings from local `email --setup` on every run, including removal of stale `SMTP_*` environment variables/secrets when local SMTP is disabled; `--no-auth-bootstrap` now skips only Nebius CI auth bootstrap.
 - Fixed `validate-sources` to accept an optional positional catalog path such as `nebius-cxcli validate-sources component_sources.yaml`, instead of requiring only the global `--component-sources-file` override.
@@ -2201,8 +2588,14 @@ All notable changes to this project are tracked here. This changelog follows
 - Replaced `azure/setup-kubectl` in generated customer workflows with a direct upstream `kubectl` install step, avoiding the GitHub Actions Node 20 deprecation path.
 - Switched render-time Terraform lockfile generation to backend-disabled `terraform init -backend=false` and now remove transient `.terraform/` workdir state afterward, so canonical generated bundles no longer retain local Terraform runtime residue from render.
 - Simplified generated customer workflows to rely on the generated-bundle CLI commands for `terraform.auto.tfvars.json` recreation instead of carrying a duplicate inline restore script, and now reconcile the deployments-root `.gitignore` during `bootstrap-ci` as well.
-- Removed the unused generated inventory JSON sidecars (`infra.json`, `apps.json`, `mk8s.json`, `postgresql.json`, `sfs.json`); the generated inventory contract is now `inventory.md` only, and refreshes delete any stale legacy inventory JSON files.
-- Fixed generated `inventory.md` spacing so section headers and lists remain markdownlint-safe, and clarified in docs that email recipients still come from `client_info.notifications.email` in the generated manifest/runtime config.
+- Removed the unused generated deploy-report JSON sidecars (`infra.json`,
+  `apps.json`, `mk8s.json`, `postgresql.json`, `sfs.json`); the generated
+  deploy-report contract is now `deploy-report.md` only, and refreshes delete
+  any stale legacy inventory JSON files.
+- Fixed generated `deploy-report.md` spacing so section headers and lists remain
+  markdownlint-safe, and clarified in docs that email recipients still come
+  from `client_info.notifications.email` in the generated manifest/runtime
+  config.
 - Replaced the split `component_sources.yaml` and `component_sources.release.yaml` model with a single dual-source `component_sources.yaml` schema using required `portable_source` plus optional `local_source` per Terraform module.
 - Replaced command-local `--render-profile` with the global `--source-profile {portable|local}` override and added `NEBIUS_CXCLI_COMPONENT_SOURCES_PROFILE` for workstation-vs-portable source selection across config-based commands.
 - Aligned wheel/release packaging and repo workflows with the single-catalog contract, and hardened release-catalog verification so published portable catalogs reject local filesystem `portable_source` entries.

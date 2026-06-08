@@ -1,0 +1,217 @@
+#!/usr/bin/env python3
+"""Read-only idempotency preflight for a local Codex home.
+
+The check intentionally validates the minimal config-codex contract instead of
+diffing config.toml against the public template. Existing local config files
+often contain app, plugin, project, hook-trust, desktop, or MCP settings that
+must be preserved and are not part of this skill's convergence target.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+from pathlib import Path
+import stat
+import sys
+import tomllib
+
+
+REQUIRED_AGENT_NAMES = ("repo_mapper", "test_strategist", "risk_reviewer")
+MANAGED_BEGIN = "<!-- BEGIN config-codex managed context -->"
+MANAGED_END = "<!-- END config-codex managed context -->"
+TEMPLATE_ASSETS = {
+    "hooks.json": "hooks.json.template",
+    "hooks/session_start_context.py": "hooks/session_start_context.py.template",
+    "hooks/user_prompt_context.py": "hooks/user_prompt_context.py.template",
+    "agents/repo_mapper.toml": "agents/repo_mapper.toml.template",
+    "agents/test_strategist.toml": "agents/test_strategist.toml.template",
+    "agents/risk_reviewer.toml": "agents/risk_reviewer.toml.template",
+}
+
+
+def parse_args(argv: list[str]) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description=(
+            "Check whether a local Codex home already satisfies the "
+            "config-codex idempotency contract. Performs no writes and prints "
+            "only redacted structural results."
+        )
+    )
+    parser.add_argument(
+        "--codex-home",
+        type=Path,
+        default=Path(os.environ.get("CODEX_HOME", Path.home() / ".codex")),
+        help="Codex home to inspect. Defaults to CODEX_HOME or ~/.codex.",
+    )
+    parser.add_argument(
+        "--strict-agents-template",
+        action="store_true",
+        help=(
+            "Require AGENTS.md to exactly match assets/AGENTS.md.template. "
+            "Use for validating this repo's canonical laptop setup."
+        ),
+    )
+    return parser.parse_args(argv)
+
+
+def skill_root() -> Path:
+    return Path(__file__).resolve().parent.parent
+
+
+def ok(message: str) -> None:
+    print(f"OK {message}")
+
+
+def fail(message: str, failures: list[str]) -> None:
+    print(f"FAIL {message}")
+    failures.append(message)
+
+
+def load_toml(path: Path, label: str, failures: list[str]) -> dict:
+    try:
+        return tomllib.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        fail(f"{label} is missing", failures)
+    except tomllib.TOMLDecodeError as exc:
+        fail(f"{label} is not valid TOML: {exc}", failures)
+    return {}
+
+
+def check_agents_md(codex_home: Path, strict: bool, failures: list[str]) -> None:
+    agents_path = codex_home / "AGENTS.md"
+    template_path = skill_root() / "assets" / "AGENTS.md.template"
+    try:
+        actual = agents_path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        fail("AGENTS.md is missing", failures)
+        return
+    template = template_path.read_text(encoding="utf-8")
+    if actual == template:
+        ok("AGENTS.md matches AGENTS.md.template")
+        return
+    if strict:
+        fail("AGENTS.md differs from AGENTS.md.template", failures)
+        return
+    if MANAGED_BEGIN in actual and MANAGED_END in actual:
+        ok("AGENTS.md has config-codex managed markers")
+        return
+    fail("AGENTS.md has neither exact template content nor managed markers", failures)
+
+
+def check_config_toml(codex_home: Path, failures: list[str]) -> None:
+    config_path = codex_home / "config.toml"
+    config = load_toml(config_path, "config.toml", failures)
+    if not config:
+        return
+
+    features = config.get("features", {})
+    for key in ("hooks", "multi_agent"):
+        if features.get(key) is True:
+            ok(f"features.{key}=true")
+        else:
+            fail(f"features.{key} is not true", failures)
+
+    agents = config.get("agents", {})
+    if agents.get("max_threads") == 4:
+        ok("agents.max_threads=4")
+    else:
+        fail("agents.max_threads is not 4", failures)
+    if agents.get("max_depth") == 1:
+        ok("agents.max_depth=1")
+    else:
+        fail("agents.max_depth is not 1", failures)
+
+    for name in REQUIRED_AGENT_NAMES:
+        agent = agents.get(name, {})
+        config_file = agent.get("config_file")
+        if not isinstance(config_file, str) or not config_file:
+            fail(f"agents.{name}.config_file is missing", failures)
+            continue
+        if Path(config_file).is_absolute() or ".." in Path(config_file).parts:
+            fail(f"agents.{name}.config_file must stay inside Codex home", failures)
+            continue
+        agent_config_path = codex_home / config_file
+        if not agent_config_path.exists():
+            fail(f"agents.{name}.config_file target is missing", failures)
+            continue
+        agent_config = load_toml(
+            agent_config_path,
+            f"agents.{name}.config_file target",
+            failures,
+        )
+        if agent_config.get("sandbox_mode") == "read-only":
+            ok(f"agents.{name} is read-only")
+        else:
+            fail(f"agents.{name} is not read-only", failures)
+
+
+def check_template_asset(relative: str, template_relative: str, codex_home: Path, failures: list[str]) -> None:
+    actual_path = codex_home / relative
+    template_path = skill_root() / "assets" / template_relative
+    try:
+        actual = actual_path.read_bytes()
+    except FileNotFoundError:
+        fail(f"{relative} is missing", failures)
+        return
+    try:
+        expected = template_path.read_bytes()
+    except FileNotFoundError:
+        fail(f"template asset for {relative} is missing", failures)
+        return
+    if actual == expected:
+        ok(f"{relative} matches template")
+    else:
+        fail(f"{relative} differs from template and needs review", failures)
+
+
+def check_runtime_files(codex_home: Path, failures: list[str]) -> None:
+    for relative, template_relative in TEMPLATE_ASSETS.items():
+        check_template_asset(relative, template_relative, codex_home, failures)
+
+    hooks_json = codex_home / "hooks.json"
+    try:
+        json.loads(hooks_json.read_text(encoding="utf-8"))
+        ok("hooks.json is valid JSON")
+    except FileNotFoundError:
+        fail("hooks.json is missing", failures)
+    except json.JSONDecodeError as exc:
+        fail(f"hooks.json is not valid JSON: {exc}", failures)
+
+    task_state = codex_home / "task-state"
+    if not task_state.is_dir():
+        fail("task-state directory is missing", failures)
+        return
+    mode = stat.S_IMODE(task_state.stat().st_mode)
+    if mode == 0o700:
+        ok("task-state directory mode is 0700")
+    else:
+        fail(f"task-state directory mode is {oct(mode)}, expected 0o700", failures)
+
+    policy = codex_home / "hooks/global_context_policy.json"
+    if policy.exists():
+        try:
+            json.loads(policy.read_text(encoding="utf-8"))
+            ok("optional global_context_policy.json is valid JSON")
+        except json.JSONDecodeError as exc:
+            fail(f"global_context_policy.json is not valid JSON: {exc}", failures)
+
+
+def main(argv: list[str]) -> int:
+    args = parse_args(argv)
+    codex_home = args.codex_home.expanduser()
+    failures: list[str] = []
+    print("Checking Codex home: <codex-home>")
+    check_agents_md(codex_home, args.strict_agents_template, failures)
+    check_config_toml(codex_home, failures)
+    check_runtime_files(codex_home, failures)
+    if failures:
+        print(f"Idempotency preflight failed: {len(failures)} issue(s)")
+        return 1
+    print("Idempotency preflight passed: no local changes required for checked surfaces")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))

@@ -1,6 +1,6 @@
 ---
 name: align
-description: Safely review and align a project end to end across code, wiring, modules, tests, CI, CLI, documentation, README, design documents, workflows, and applicable project skills. Use when the user wants a senior code-review style alignment pass or implementation-level fixes that make the repository internally consistent without harmful rewrites, hidden business-logic assumptions, or speculative changes.
+description: "Use for project-wide alignment or review: reconcile code, wiring, tests, CI, CLI/help, config, README/design docs, workflows, and project skills. Make minimal evidence-backed fixes for inconsistencies. Do not use for skill-folder-only metadata validation; use align-skill."
 ---
 
 # Align

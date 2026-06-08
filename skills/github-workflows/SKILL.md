@@ -1,6 +1,6 @@
 ---
 name: github-workflows
-description: Create, review, and standardize GitHub Actions workflows in this monorepo, including PR/merge CI, bot-safe merge automation, tag-driven GitHub Releases, and container image publish pipelines with least-privilege permissions and clear service scoping.
+description: "Use for GitHub Actions workflow work: create, review, or standardize PR/merge CI, bot-safe merge automation, reusable workflows, permissions, service-scoped checks, and release/image workflow YAML. For full project-specific release, image, or Helm publication flows with scripts or changelogs, use the matching publish-* skill."
 ---
 
 # GitHub Workflows

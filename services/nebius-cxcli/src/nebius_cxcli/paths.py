@@ -18,7 +18,7 @@ class ProjectPaths:
     generated_dir: Path
     infra_dir: Path
     flux_dir: Path
-    inventory_dir: Path
+    reports_dir: Path
     path_tenant_folder: str
     path_project_folder: str
 
@@ -105,7 +105,7 @@ def resolve_project_paths(
         generated_dir=generated_dir,
         infra_dir=generated_dir / "infra",
         flux_dir=generated_dir / "flux",
-        inventory_dir=generated_dir / "inventory",
+        reports_dir=generated_dir / "reports",
         path_tenant_folder=tenant_folder,
         path_project_folder=project_folder,
     )

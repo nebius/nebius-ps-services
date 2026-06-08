@@ -44,6 +44,7 @@ SUPPORTED_PROVIDER_OPTION_SOURCES = frozenset(
         "project_subnets",
         "project_networks",
         "tenant_projects",
+        "project_mk8s_clusters",
         "mk8s_control_plane_versions",
         "soperator_node_groups",
         "soperator_nodesets_profiles",
@@ -285,9 +286,7 @@ def _cidr_text(value: object | None) -> str | None:
 
 
 def _cidr_texts(values: object) -> tuple[str, ...]:
-    return tuple(
-        cidr for cidr in (_cidr_text(item) for item in list(values or [])) if cidr
-    )
+    return tuple(cidr for cidr in (_cidr_text(item) for item in list(values or [])) if cidr)
 
 
 def _arg_texts(value: object) -> tuple[str, ...]:
@@ -586,6 +585,7 @@ class ProviderOptionLookup:
                 "project_networks": self._resolve_project_networks,
                 "operator_public_ip_cidr": self._resolve_operator_public_ip_cidr,
                 "tenant_projects": self._resolve_tenant_projects,
+                "project_mk8s_clusters": self._resolve_project_mk8s_clusters,
                 "mk8s_control_plane_versions": self._resolve_mk8s_control_plane_versions,
                 "soperator_node_groups": self._resolve_soperator_node_groups,
                 "soperator_nodesets_profiles": self._resolve_soperator_nodesets_profiles,
@@ -1533,7 +1533,14 @@ class ProviderOptionLookup:
         if not platform_name:
             return ()
 
-        cache_key = ("mk8s_gpu_stack_presets", version, platform_name)
+        os_path = _as_str(args.get("os_path"))
+        if not os_path and field_path.endswith(".gpu_stack_preset"):
+            os_path = f"{field_path.rsplit('.', maxsplit=1)[0]}.os"
+        os_name = _as_str(args.get("os"))
+        if not os_name and os_path:
+            os_name = _as_str(_payload_value(payload, os_path))
+
+        cache_key = ("mk8s_gpu_stack_presets", version, platform_name, os_name)
         if cache_key in self._cache:
             return self._cache[cache_key]
 
@@ -1541,6 +1548,8 @@ class ProviderOptionLookup:
         seen: set[str] = set()
         for item in self._resolve_mk8s_compatibility_items(version):
             if platform_name not in item.compatible_platforms:
+                continue
+            if os_name and item.os != os_name:
                 continue
             preset = item.drivers_preset
             if not preset or preset in seen:
@@ -1752,14 +1761,16 @@ class ProviderOptionLookup:
         if not project_id:
             return ()
 
+        platform_name = _as_str(args.get("platform"))
         platform_path = _as_str(args.get("platform_path"))
         if not platform_path:
             if field_path.endswith(".preset"):
                 platform_path = f"{field_path[: -len('.preset')]}.platform"
-            else:
+            elif not platform_name:
                 return ()
 
-        platform_name = _as_str(_payload_value(payload, platform_path))
+        if not platform_name:
+            platform_name = _as_str(_payload_value(payload, platform_path))
         if not platform_name:
             return ()
 
@@ -2083,6 +2094,14 @@ class ProviderOptionLookup:
             .wait()
         )
 
+        response_items = list(getattr(response, "items", []) or [])
+        if not response_items:
+            response_items = [
+                item
+                for version_item in list(getattr(response, "versions", []))
+                for item in list(getattr(version_item, "items", []))
+            ]
+
         resolved: tuple[_Mk8sCompatibilityItem, ...] = tuple(
             _Mk8sCompatibilityItem(
                 compatible_platforms=tuple(
@@ -2093,8 +2112,7 @@ class ProviderOptionLookup:
                 drivers_preset=_as_str(getattr(item, "drivers_preset", None)),
                 os=_as_str(getattr(item, "os", None)),
             )
-            for version_item in list(getattr(response, "versions", []))
-            for item in list(getattr(version_item, "items", []))
+            for item in response_items
         )
         self._mk8s_compatibility_cache[version] = resolved
         return resolved
@@ -2159,8 +2177,7 @@ class ProviderOptionLookup:
                     cidr
                     for pool in list(getattr(private_pools, "pools", []) or [])
                     for cidr in (
-                        _cidr_text(cidr_obj)
-                        for cidr_obj in list(getattr(pool, "cidrs", []) or [])
+                        _cidr_text(cidr_obj) for cidr_obj in list(getattr(pool, "cidrs", []) or [])
                     )
                     if cidr
                 )
@@ -2293,8 +2310,7 @@ class ProviderOptionLookup:
             if version == "IPV6":
                 continue
             allocated_cidr = _ipv4_cidr_text(
-                getattr(details, "allocated_cidr", None)
-                or getattr(spec_private, "cidr", None)
+                getattr(details, "allocated_cidr", None) or getattr(spec_private, "cidr", None)
             )
             if not allocated_cidr:
                 continue
@@ -2533,6 +2549,63 @@ class ProviderOptionLookup:
             options.append(OptionChoice(value=project_id, label=label))
 
         options.sort(key=lambda item: item.value)
+        resolved = tuple(options)
+        self._cache[cache_key] = resolved
+        return resolved
+
+    def _resolve_project_mk8s_clusters(
+        self,
+        *,
+        args: dict[str, Any],
+        payload: dict[str, Any],
+        field_path: str,
+    ) -> tuple[OptionChoice, ...]:
+        project_id = self._resolve_project_id(payload, args)
+        if not project_id:
+            return ()
+        cache_key = ("project_mk8s_clusters", project_id)
+        if cache_key in self._cache:
+            return self._cache[cache_key]
+
+        sdk = self._sdk_or_none()
+        if sdk is None:
+            return ()
+        from nebius.api.nebius.mk8s.v1 import ClusterServiceClient, ListClustersRequest
+
+        client = ClusterServiceClient(sdk)
+        items = self._paged_list(
+            request_factory=lambda page_token: ListClustersRequest(
+                parent_id=project_id,
+                page_size=_NEBIUS_LIST_PAGE_SIZE,
+                page_token=page_token,
+            ),
+            request_call=client.list,
+        )
+
+        options: list[OptionChoice] = []
+        for item in items:
+            metadata = getattr(item, "metadata", None)
+            cluster_id = _as_str(getattr(metadata, "id", None))
+            if not cluster_id:
+                continue
+            name = _as_str(getattr(metadata, "name", None))
+            target_ref = self._normalize_component_token(name) or self._normalize_component_token(
+                cluster_id
+            )
+            label = f"{name or target_ref or cluster_id}  ({cluster_id})"
+            options.append(
+                OptionChoice(
+                    value=cluster_id,
+                    label=label,
+                    metadata={
+                        "cluster_id": cluster_id,
+                        "name": name or "",
+                        "target_ref": target_ref or "",
+                    },
+                )
+            )
+
+        options.sort(key=lambda item: (str(item.metadata.get("name") or item.value), item.value))
         resolved = tuple(options)
         self._cache[cache_key] = resolved
         return resolved

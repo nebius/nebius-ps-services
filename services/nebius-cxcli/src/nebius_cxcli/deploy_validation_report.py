@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -48,31 +48,31 @@ class DeployValidationReport:
     results: tuple[DeployValidationResult, ...]
 
 
-def deploy_report_path(inventory_dir: Path) -> Path:
-    return inventory_dir / DEPLOY_REPORT_FILENAME
+def deploy_report_path(reports_dir: Path) -> Path:
+    return reports_dir / DEPLOY_REPORT_FILENAME
 
 
 def clear_deploy_validation_artifacts(
     validations: Sequence[Mapping[str, Any]],
     *,
-    inventory_dir: Path,
+    reports_dir: Path,
 ) -> None:
     """Remove stale validation artifacts before a new deploy run."""
-    deploy_report_path(inventory_dir).unlink(missing_ok=True)
-    (inventory_dir / _LEGACY_VALIDATION_MARKDOWN_FILENAME).unlink(missing_ok=True)
+    deploy_report_path(reports_dir).unlink(missing_ok=True)
+    (reports_dir / _LEGACY_VALIDATION_MARKDOWN_FILENAME).unlink(missing_ok=True)
     for spec in validations:
-        _validation_report_path(spec, inventory_dir=inventory_dir).unlink(missing_ok=True)
+        _validation_report_path(spec, reports_dir=reports_dir).unlink(missing_ok=True)
 
 
 def build_deploy_validation_report(
     validations: Sequence[Mapping[str, Any]],
     *,
-    inventory_dir: Path,
+    reports_dir: Path,
     markdown_path: Path | None = None,
 ) -> DeployValidationReport:
     """Aggregate validation JSON detail files into one summary structure."""
-    results = tuple(
-        _build_validation_result(spec, inventory_dir=inventory_dir) for spec in validations
+    results = _apply_soperator_owned_gpu_summaries(
+        _build_validation_result(spec, reports_dir=reports_dir) for spec in validations
     )
     completed_count = sum(1 for item in results if item.status != "not_run")
     passed_count = sum(1 for item in results if item.status == "passed")
@@ -87,7 +87,7 @@ def build_deploy_validation_report(
     else:
         overall_status = "passed"
     return DeployValidationReport(
-        markdown_path=markdown_path or deploy_report_path(inventory_dir),
+        markdown_path=markdown_path or deploy_report_path(reports_dir),
         overall_status=overall_status,
         total_count=len(results),
         completed_count=completed_count,
@@ -96,6 +96,76 @@ def build_deploy_validation_report(
         not_run_count=not_run_count,
         results=results,
     )
+
+
+def _apply_soperator_owned_gpu_summaries(
+    results_iterable: Iterable[DeployValidationResult],
+) -> tuple[DeployValidationResult, ...]:
+    results = tuple(results_iterable)
+    soperator_by_target: dict[str, DeployValidationResult] = {
+        item.target_ref: item
+        for item in results
+        if item.kind == "soperator_cluster_smoke" and item.target_ref
+    }
+    unique_soperator = tuple(
+        item for item in results if item.kind == "soperator_cluster_smoke"
+    )
+    updated: list[DeployValidationResult] = []
+    for item in results:
+        if item.kind not in {"mk8s_gpu_visibility", "mk8s_nccl"}:
+            updated.append(item)
+            continue
+        if not _is_soperator_gpu_ownership_skip(item.summary):
+            updated.append(item)
+            continue
+        soperator = soperator_by_target.get(item.target_ref)
+        if soperator is None and not item.target_ref and len(unique_soperator) == 1:
+            soperator = unique_soperator[0]
+        replacement_summary = _soperator_owned_gpu_summary(item, soperator)
+        if replacement_summary:
+            updated.append(
+                replace(
+                    item,
+                    summary=replacement_summary,
+                    footer_summary=replacement_summary,
+                )
+            )
+        else:
+            updated.append(item)
+    return tuple(updated)
+
+
+def _is_soperator_gpu_ownership_skip(summary: str) -> bool:
+    return (
+        summary.startswith("Skipped: ")
+        and "all Ready GPU nodes already have their GPUs allocated" in summary
+    )
+
+
+def _soperator_owned_gpu_summary(
+    item: DeployValidationResult,
+    soperator: DeployValidationResult | None,
+) -> str:
+    if soperator is None or soperator.status != "passed":
+        return ""
+    if item.kind == "mk8s_gpu_visibility":
+        check_name = "Slurm GPU visibility test"
+        lead = "Soperator-owned Slurm GPU visibility passed"
+    elif item.kind == "mk8s_nccl":
+        check_name = "Slurm NCCL smoke test"
+        lead = "Soperator-owned Slurm NCCL smoke passed"
+    else:
+        return ""
+    for check in soperator.checks:
+        if check.name != check_name or check.status != "passed":
+            continue
+        suffix = f": {check.summary}" if check.summary else "."
+        return (
+            f"{lead}{suffix.rstrip('.')}. "
+            "The Kubernetes workload check was not scheduled because Soperator "
+            "worker pods reserve all Ready GPU nodes."
+        )
+    return ""
 
 
 def format_deploy_validation_summary_lines(
@@ -171,12 +241,12 @@ def _validation_markdown_summary(item: DeployValidationResult) -> str:
     )
 
 
-def _validation_report_path(spec: Mapping[str, Any], *, inventory_dir: Path) -> Path:
+def _validation_report_path(spec: Mapping[str, Any], *, reports_dir: Path) -> Path:
     report_file = str(spec.get("report_file", "") or "").strip()
     if report_file:
-        return inventory_dir / report_file
+        return reports_dir / report_file
     kind = str(spec.get("kind", "") or "").strip() or "validation"
-    return inventory_dir / f"{kind}-report.json"
+    return reports_dir / f"{kind}-report.json"
 
 
 def _validation_target_ref(
@@ -196,10 +266,10 @@ def _validation_target_ref(
 def _build_validation_result(
     spec: Mapping[str, Any],
     *,
-    inventory_dir: Path,
+    reports_dir: Path,
 ) -> DeployValidationResult:
     kind = str(spec.get("kind", "") or "").strip()
-    report_path = _validation_report_path(spec, inventory_dir=inventory_dir)
+    report_path = _validation_report_path(spec, reports_dir=reports_dir)
     target_ref = _validation_target_ref(spec)
     if not report_path.exists():
         return DeployValidationResult(
@@ -290,6 +360,8 @@ def _validation_summary(kind: str, payload: Mapping[str, Any]) -> str:
         return _observability_ingestion_summary(payload)
     if kind == "mysterybox_eso_connectivity":
         return _mysterybox_eso_connectivity_summary(payload)
+    if kind == "soperator_cluster_smoke":
+        return str(payload.get("summary", "") or "Soperator cluster smoke test completed.")
     validation_name = str(payload.get("validation", "") or "").strip() or "Validation"
     return f"{validation_name} completed with passed={bool(payload.get('passed'))}."
 
@@ -347,6 +419,12 @@ def _nccl_footer_summary(payload: Mapping[str, Any]) -> str:
     worker_label = f"{worker_count} {_plural_word(worker_count, 'worker')}"
     transport = str(payload.get("transport_label", "") or "").strip() or "auto"
     parts = [phase]
+    if bool(payload.get("single_rank_smoke")) and not bool(payload.get("bandwidth_observed")):
+        parts.append(f"{transport} single-rank smoke across {worker_label}")
+        parts.append("no collective bandwidth observed")
+        if not bool(payload.get("threshold_enforced", True)):
+            parts.append("RDMA threshold not enforced")
+        return "; ".join(parts) + "."
     if bool(payload.get("threshold_enforced", True)):
         parts.append(
             f"{transport} {avg:.1f} Gbps (threshold {threshold:.1f}) across {worker_label}"
@@ -445,6 +523,18 @@ def _nccl_summary(payload: Mapping[str, Any]) -> str:
     worker_count = int(payload.get("selected_worker_node_count", 0) or 0)
     transport = str(payload.get("transport_label", "") or "").strip() or "auto"
     dmabuf = _nccl_dmabuf_summary(payload)
+    if bool(payload.get("single_rank_smoke")) and not bool(payload.get("bandwidth_observed")):
+        dmabuf_text = f"; {dmabuf}" if dmabuf else ""
+        threshold_text = (
+            "; RDMA threshold not enforced for this run"
+            if not bool(payload.get("threshold_enforced", True))
+            else ""
+        )
+        return (
+            f"Launcher phase {phase}; {transport} single-rank smoke run across "
+            f"{worker_count} worker node(s); no collective bus bandwidth observed"
+            f"{dmabuf_text}{threshold_text}."
+        )
     if not bool(payload.get("threshold_enforced", True)):
         dmabuf_text = f"; {dmabuf}" if dmabuf else ""
         return (

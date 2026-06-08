@@ -223,8 +223,7 @@ def _soperator_wizard_profile() -> dict[str, dict[str, Any]]:
                 (
                     "production-cluster",
                     "Create complete production Soperator cluster (MK8s + SFS + Soperator)",
-                ),
-                ("onboard-existing-cluster", "Onboard existing Nebius MK8s cluster"),
+                )
             ),
         },
         "profile": {

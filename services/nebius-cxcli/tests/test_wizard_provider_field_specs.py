@@ -167,6 +167,109 @@ def test_dynamic_choices_use_explicit_wizard_wiring_for_declared_field() -> None
     ]
 
 
+def test_dynamic_choices_reuse_provider_source_specs_for_filter_args() -> None:
+    entry = _infra_entry(
+        "managed-postgresql",
+        wizard_fields={
+            "inputs.network_id": {
+                "options": {
+                    "from": "project_networks",
+                    "filter": "^vpcnetwork-prod-",
+                }
+            }
+        },
+    )
+
+    class _FilterAwareLookup:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, dict[str, str], str]] = []
+
+        def resolve(
+            self,
+            *,
+            provider: str,
+            args: dict[str, str],
+            payload: dict[str, object],
+            field_path: str,
+        ) -> list[OptionChoice]:
+            _ = payload
+            self.calls.append((provider, args, field_path))
+            return [OptionChoice(value="vpcnetwork-prod-a", label="prod")]
+
+    provider_lookup = _FilterAwareLookup()
+    choices = _resolve_dynamic_field_choices(
+        payload={"infra": {"components": [{"inputs": {}}]}},
+        entry=entry,
+        full_path_label="infra.components[0].inputs.network_id",
+        provider_lookup=provider_lookup,
+    )
+
+    assert [item.value for item in choices] == ["vpcnetwork-prod-a"]
+    assert provider_lookup.calls == [
+        (
+            "project_networks",
+            {"_filter": "^vpcnetwork-prod-"},
+            "infra.components[0].inputs.network_id",
+        )
+    ]
+
+
+def test_dynamic_vpc_choices_still_include_planned_networks() -> None:
+    entry = _infra_entry(
+        "managed-postgresql",
+        wizard_fields={
+            "inputs.network_id": {
+                "options": {
+                    "from": "project_networks",
+                }
+            }
+        },
+    )
+
+    class _NetworkLookup:
+        def resolve(
+            self,
+            *,
+            provider: str,
+            args: dict[str, str],
+            payload: dict[str, object],
+            field_path: str,
+        ) -> list[OptionChoice]:
+            _ = args, payload, field_path
+            assert provider == "project_networks"
+            return [OptionChoice(value="vpcnetwork-live", label="live network")]
+
+    choices = _resolve_dynamic_field_choices(
+        payload={
+            "infra": {
+                "components": [
+                    {
+                        "id": "vpc",
+                        "instance_id": "network-a",
+                        "enabled": True,
+                        "inputs": {"network": {"name": "training-network"}},
+                    },
+                    {
+                        "id": "managed-postgresql",
+                        "instance_id": "postgres",
+                        "enabled": True,
+                        "inputs": {},
+                    },
+                ]
+            }
+        },
+        entry=entry,
+        full_path_label="infra.components[1].inputs.network_id",
+        provider_lookup=_NetworkLookup(),
+    )
+
+    assert [item.value for item in choices] == [
+        "vpcnetwork-live",
+        "planned:vpc@network-a.network_id",
+    ]
+    assert choices[1].label == "planned: training-network  (infra:vpc@network-a)"
+
+
 def test_dynamic_choices_normalize_relative_depends_on_paths() -> None:
     entry = _infra_entry(
         "mk8s",

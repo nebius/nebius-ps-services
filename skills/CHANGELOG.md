@@ -26,6 +26,12 @@ All notable changes to the reusable Codex skills are tracked here.
 - Added the `commit-push` Codex skill for committing all current feature-branch
   changes with `git add -A`, pushing the branch to `origin`, and reporting
   final worktree cleanliness without opening a pull request.
+- Added the `code-info` Codex skill for copy/paste-friendly project code
+  metrics, including LOC by language and component, repo size and link,
+  test-file counts, CLI command detection, module/package counts, artifact
+  sizes, and available coverage artifacts. It supports local folders and
+  remote GitHub repositories that are not cloned locally by reading a temporary
+  repository archive with local GitHub token discovery when needed.
 - Added the `create-pr` Codex skill for branch-safe GitHub PR creation.
 - Added the `config-codex` Codex skill for bootstrapping public-safe local
   Codex runtime setup, including global `AGENTS.md`, `config.toml` features
@@ -51,6 +57,28 @@ All notable changes to the reusable Codex skills are tracked here.
 
 ### Changed
 
+- Tightened the `code-info` skill contract so invoking it is explicitly
+  read-only information gathering: it reports from existing files only and does
+  not edit, format, build, test, install, generate coverage, or stage files.
+  Its helper also disables Git optional locks for Git inspection commands.
+- Minimized the global AGENTS template to durable always-on policy, moved
+  detailed workflow guidance back to skills, preserved the explicit `$align`
+  post-edit rule, and shortened high-impact skill descriptions so implicit
+  routing front-loads trigger keywords.
+- Tightened `config-codex` idempotency guidance so existing laptop
+  `AGENTS.md` and `config.toml` files are inspected before backup or patching,
+  template-only config settings are not backfilled on already working setups,
+  and a read-only local preflight can verify that no changes are required.
+- Clarified that `commit-push` always commits the whole Git repository from
+  the Git root with `git add -A`, regardless of the service, package, chart, or
+  project directory where the agent starts. Project-folder, current-directory,
+  and pathspec-limited staging remain out of scope for this skill.
+- Tightened `commit-push` so remote branch refresh uses the full
+  `refs/heads/<branch>:refs/remotes/origin/<branch>` refspec and staged
+  validation can repair small mechanical whitespace blockers, such as trailing
+  whitespace or an extra blank line at EOF, before committing. Conflict markers,
+  unresolved conflicts, broad formatter churn, semantic changes, dependency
+  updates, and branch divergence still stop the workflow.
 - Expanded the `nebius` skill's VPC networking guidance with the current
   Nebius network-pool/subnet model: explicit subnet CIDRs use
   `use_network_pools=false`, inherited subnets do not own every displayed
@@ -129,6 +157,11 @@ All notable changes to the reusable Codex skills are tracked here.
 - Updated the `create-pr` guidance and metadata so Codex treats explicit
   user-supplied PR titles and bodies as authoritative instead of inferring a
   generic title from the branch name.
+- Tightened the `create-pr` current-feature-branch path so invoking it from a
+  non-default branch reuses that branch, stages existing work with
+  `git add -A`, validates the staged diff, commits before switching or
+  merging, pushes the branch, and opens or reuses the PR without creating
+  another branch.
 - Updated the `create-pr` guidance and metadata so PR commits always stage
   current dirty work from the repository root with `git add -A` instead of
   narrowing commits to selected paths.
@@ -170,5 +203,6 @@ All notable changes to the reusable Codex skills are tracked here.
 - Updated the shared `python-project` skill to explain when a minimal
   compatibility `setup.py` shim still makes sense alongside `pyproject.toml`.
 - Updated `create-pr` so local-work PR creation explicitly stages the complete
-  monorepo diff with `git add -A` before committing, unless the user requests a
-  narrower PR scope.
+  monorepo diff with `git add -A` before committing, and stops instead of
+  path-limiting the commit when repo-wide staging would include work that
+  should not be part of the PR.

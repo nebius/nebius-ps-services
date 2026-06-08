@@ -177,6 +177,9 @@ def test_mk8s_gpu_module_uses_explicit_stack_source_contract() -> None:
     assert specs["node_groups"].required is True
     assert "gpu_stack_source" in specs["node_groups"].type_hint
     assert "gpu_stack_preset" in specs["node_groups"].type_hint
+    assert "strategy    = optional(any)" not in specs["node_groups"].type_hint
+    assert "strategy = optional(object({" in specs["node_groups"].type_hint
+    assert "max_unavailable" in specs["node_groups"].type_hint
     assert "gpu_stack_source" not in specs
     assert "cpu_nodes_os" not in specs
     assert "gpu_nodes_os" not in specs

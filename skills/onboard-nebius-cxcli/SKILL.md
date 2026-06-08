@@ -1,6 +1,6 @@
 ---
 name: onboard-nebius-cxcli
-description: Onboard a Nebius Terraform module into nebius-cxcli. Use when adding a new Terraform-based infra component to component_sources.yaml, deciding whether onboarding can stay catalog-only or must also touch wizard_profiles.py, provider_options.py, cli.py, validation_profiles.py, runtime_component_validation.py, cluster_handoffs.py, deployment_status.py, and the focused tests/docs that enforce this contract.
+description: "Use to onboard a Nebius Terraform module or infra component into nebius-cxcli: component catalog, component_sources.yaml, component add, render/deploy wiring, generated roots, catalog-only vs code-owned layers, wizard_profiles.py, provider_options.py, cli.py, runtime validation, cluster handoffs, deployment status, tests, and docs."
 ---
 
 # Onboard Nebius CXCLI

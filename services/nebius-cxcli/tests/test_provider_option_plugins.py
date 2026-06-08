@@ -49,6 +49,8 @@ def _install_fake_mk8s_module(
     *,
     compatible_platforms: list[str] | None = None,
     compatibility_items: list[dict[str, object]] | None = None,
+    compatibility_items_at_top_level: bool = False,
+    clusters: list[dict[str, object]] | None = None,
 ) -> None:
     mk8s_module = ModuleType("nebius.api.nebius.mk8s.v1")
 
@@ -75,17 +77,50 @@ def _install_fake_mk8s_module(
                 items = [
                     SimpleNamespace(compatible_platforms=list(compatible_platforms or [])),
                 ]
+            response = (
+                SimpleNamespace(items=items)
+                if compatibility_items_at_top_level
+                else SimpleNamespace(
+                    versions=[
+                        SimpleNamespace(
+                            items=items,
+                        )
+                    ]
+                )
+            )
+            return SimpleNamespace(wait=lambda: response)
+
+    class ListClustersRequest:
+        def __init__(self, *, parent_id: str, page_size: int, page_token: str) -> None:
+            self.parent_id = parent_id
+            self.page_size = page_size
+            self.page_token = page_token
+
+    class ClusterServiceClient:
+        def __init__(self, sdk: object) -> None:
+            self.sdk = sdk
+
+        def list(self, request: object, **_kwargs: object) -> SimpleNamespace:
+            assert request.parent_id == "project-123"
+            assert 1 <= request.page_size <= 999
             response = SimpleNamespace(
-                versions=[
+                items=[
                     SimpleNamespace(
-                        items=items,
+                        metadata=SimpleNamespace(
+                            id=item.get("id"),
+                            name=item.get("name"),
+                        )
                     )
-                ]
+                    for item in (clusters or [])
+                ],
+                next_page_token="",
             )
             return SimpleNamespace(wait=lambda: response)
 
     mk8s_module.GetNodeGroupCompatibilityMatrixRequest = GetNodeGroupCompatibilityMatrixRequest
     mk8s_module.NodeGroupServiceClient = NodeGroupServiceClient
+    mk8s_module.ListClustersRequest = ListClustersRequest
+    mk8s_module.ClusterServiceClient = ClusterServiceClient
     _install_module(monkeypatch, "nebius.api.nebius.mk8s.v1", mk8s_module)
 
 
@@ -615,6 +650,7 @@ def _mk8s_gpu_defaults(
     platform: str | None = None,
     preset: str | None = None,
     stack_preset: str | None = None,
+    os_value: str | None = None,
     infiniband_fabric: str | None = None,
 ) -> dict[str, object]:
     gpu: dict[str, object] = {}
@@ -624,6 +660,8 @@ def _mk8s_gpu_defaults(
         gpu["preset"] = preset
     if stack_preset is not None:
         gpu["gpu_stack_preset"] = stack_preset
+    if os_value is not None:
+        gpu["os"] = os_value
     if infiniband_fabric is not None:
         gpu["infiniband_fabric"] = infiniband_fabric
     return {"node_group_defaults": {"gpu": gpu}}
@@ -1190,6 +1228,38 @@ def test_project_filesystems_lists_live_project_filesystems(monkeypatch) -> None
     ]
 
 
+def test_project_mk8s_clusters_lists_live_project_clusters(monkeypatch) -> None:
+    _install_fake_mk8s_module(
+        monkeypatch,
+        clusters=[
+            {
+                "id": "mk8scluster-e00alpha",
+                "name": "training-cluster",
+            },
+            {
+                "id": "mk8scluster-e00beta",
+                "name": "soperator-prod",
+            },
+        ],
+    )
+
+    lookup = ProviderOptionLookup()
+    monkeypatch.setattr(lookup, "_sdk_or_none", lambda: object())
+
+    resolved = lookup.resolve(
+        provider="project_mk8s_clusters",
+        args={},
+        payload={"client_info": {"nebius": {"project_id": "project-123"}}},
+        field_path="deploy.targets[].cluster_id",
+    )
+
+    assert [(choice.value, choice.label) for choice in resolved] == [
+        ("mk8scluster-e00beta", "soperator-prod  (mk8scluster-e00beta)"),
+        ("mk8scluster-e00alpha", "training-cluster  (mk8scluster-e00alpha)"),
+    ]
+    assert resolved[0].metadata["target_ref"] == "soperator-prod"
+
+
 def test_compute_public_image_families_follow_live_platform_recommendations(
     monkeypatch,
 ) -> None:
@@ -1422,6 +1492,90 @@ def test_mk8s_gpu_stack_presets_follow_selected_platform(monkeypatch) -> None:
     ]
 
 
+def test_mk8s_gpu_stack_presets_follow_selected_os(monkeypatch) -> None:
+    _install_fake_mk8s_module(
+        monkeypatch,
+        compatibility_items=[
+            {
+                "compatible_platforms": ["gpu-h100-sxm"],
+                "drivers_preset": "cuda13.0",
+                "os": "ubuntu22.04",
+            },
+            {
+                "compatible_platforms": ["gpu-h100-sxm"],
+                "drivers_preset": "cuda12.8",
+                "os": "ubuntu24.04",
+            },
+        ],
+    )
+
+    lookup = ProviderOptionLookup()
+    monkeypatch.setattr(lookup, "_sdk_or_none", lambda: object())
+    monkeypatch.setattr(lookup, "_resolve_k8s_version", lambda payload, args, field_path="": "1.33")
+
+    resolved = lookup.resolve(
+        provider="mk8s_gpu_stack_presets",
+        args={"platform_path": "infra.components[0].inputs.node_group_defaults.gpu.platform"},
+        payload={
+            "infra": {
+                "components": [
+                    {
+                        "inputs": _mk8s_gpu_defaults(
+                            platform="gpu-h100-sxm",
+                            os_value="ubuntu24.04",
+                        ),
+                    }
+                ]
+            }
+        },
+        field_path="infra.components[0].inputs.node_group_defaults.gpu.gpu_stack_preset",
+    )
+
+    assert [(choice.value, choice.label) for choice in resolved] == [
+        ("cuda12.8", "cuda12.8  (ubuntu24.04)"),
+    ]
+
+
+def test_mk8s_gpu_stack_presets_accept_top_level_compatibility_items(monkeypatch) -> None:
+    _install_fake_mk8s_module(
+        monkeypatch,
+        compatibility_items=[
+            {
+                "compatible_platforms": ["gpu-h100-sxm"],
+                "drivers_preset": "cuda12.8",
+                "os": "ubuntu24.04",
+            },
+        ],
+        compatibility_items_at_top_level=True,
+    )
+
+    lookup = ProviderOptionLookup()
+    monkeypatch.setattr(lookup, "_sdk_or_none", lambda: object())
+    monkeypatch.setattr(lookup, "_resolve_k8s_version", lambda payload, args, field_path="": "1.33")
+
+    resolved = lookup.resolve(
+        provider="mk8s_gpu_stack_presets",
+        args={"platform_path": "infra.components[0].inputs.node_group_defaults.gpu.platform"},
+        payload={
+            "infra": {
+                "components": [
+                    {
+                        "inputs": _mk8s_gpu_defaults(
+                            platform="gpu-h100-sxm",
+                            os_value="ubuntu24.04",
+                        ),
+                    }
+                ]
+            }
+        },
+        field_path="infra.components[0].inputs.node_group_defaults.gpu.gpu_stack_preset",
+    )
+
+    assert [(choice.value, choice.label) for choice in resolved] == [
+        ("cuda12.8", "cuda12.8  (ubuntu24.04)"),
+    ]
+
+
 def test_mk8s_node_group_os_values_follow_selected_driver_preset(monkeypatch) -> None:
     _install_fake_mk8s_module(
         monkeypatch,
@@ -1591,6 +1745,38 @@ def test_compute_platform_presets_follow_concrete_mk8s_node_group_platform_path(
             "8gpu-128vcpu-1600gb",
             "8gpu-128vcpu-1600gb  (vCPU=128, RAM=1600GiB, GPU=8, GPU cluster, InfiniBand)",
         ),
+    ]
+
+
+def test_compute_platform_presets_accept_explicit_live_platform_argument(monkeypatch) -> None:
+    _install_fake_compute_module(
+        monkeypatch,
+        platforms=[("cpu-d3", "CPU D3")],
+        presets_by_platform={
+            "cpu-d3": [
+                {
+                    "name": "cpu-8-32",
+                    "vcpu_count": 8,
+                    "memory_gibibytes": 32,
+                    "gpu_count": 0,
+                    "allow_gpu_clustering": False,
+                },
+            ],
+        },
+    )
+
+    lookup = ProviderOptionLookup()
+    monkeypatch.setattr(lookup, "_sdk_or_none", lambda: object())
+
+    resolved = lookup.resolve(
+        provider="compute_platform_presets",
+        args={"platform": "cpu-d3"},
+        payload={"client_info": {"nebius": {"project_id": "project-123"}}},
+        field_path="upgrade.cpu_preset.to_preset",
+    )
+
+    assert [(choice.value, choice.label) for choice in resolved] == [
+        ("cpu-8-32", "cpu-8-32  (vCPU=8, RAM=32GiB)"),
     ]
 
 

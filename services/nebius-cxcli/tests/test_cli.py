@@ -14,6 +14,7 @@ from typer.testing import CliRunner
 import nebius_cxcli.cli as cli_module
 import nebius_cxcli.component_sources as component_sources
 import nebius_cxcli.deploy_targets as deploy_targets_module
+import nebius_cxcli.soperator_migration as soperator_migration_module
 import nebius_cxcli.templates as templates_module
 from nebius_cxcli.cli import _load_context, _load_runtime_context, app
 from nebius_cxcli.component_instances import component_instance_id
@@ -29,6 +30,10 @@ from nebius_cxcli.email_settings import EmailSettings
 from nebius_cxcli.quota_checks import QuotaCheck, QuotaReport
 from nebius_cxcli.runtime_config import to_plain_data
 from nebius_cxcli.runtime_validation import validate_dynamic_payload_structure
+from nebius_cxcli.soperator_migration import (
+    SoperatorMigrationCommandResult,
+    SoperatorMigrationExecutionResult,
+)
 from nebius_cxcli.wizard_profiles import BUILTIN_WIZARD_PROFILES
 
 runner = CliRunner()
@@ -55,6 +60,239 @@ def _empty_quota_report() -> cli_module.QuotaReport:
         region_id="eu-north1",
         checked_at="2026-04-10T00:00:00+00:00",
     )
+
+
+def _stub_soperator_migration_quota(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        soperator_migration_module,
+        "estimate_mk8s_quota_requirements",
+        lambda **_kwargs: ((), ()),
+    )
+    monkeypatch.setattr(
+        soperator_migration_module,
+        "assess_live_quota_requirements",
+        lambda **kwargs: QuotaReport(
+            tenant_id=str(kwargs.get("tenant_id", "")),
+            project_id=str(kwargs.get("project_id", "")),
+            region_id=str(kwargs.get("region_id", "")),
+            checked_at="2026-04-10T00:00:00+00:00",
+        ),
+    )
+
+
+def _stub_soperator_migration_gpu_validations(monkeypatch: pytest.MonkeyPatch) -> None:
+    def _run_mk8s_gpu_validations(
+        validations,
+        *,
+        reports_dir: Path,
+        extra_env,
+        emit,
+    ):
+        del extra_env
+        reports_dir.mkdir(parents=True, exist_ok=True)
+        written: list[Path] = []
+        validation_list = list(validations)
+        for spec in validation_list:
+            report_file = str(spec.get("report_file") or f"{spec.get('kind')}-report.json")
+            report_path = reports_dir / report_file
+            report_path.write_text(
+                json.dumps(
+                    {
+                        "kind": spec.get("kind"),
+                        "name": spec.get("name"),
+                        "target_ref": spec.get("target_ref"),
+                        "passed": True,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            written.append(report_path)
+        if emit and validation_list:
+            emit(f"Starting validation 1/{len(validation_list)}: {validation_list[0].get('name')}.")
+        return written
+
+    monkeypatch.setattr(
+        soperator_migration_module,
+        "run_mk8s_gpu_validations",
+        _run_mk8s_gpu_validations,
+    )
+
+
+def test_deploy_managed_soperator_runs_gpu_validations_before_full_flux(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_path = tmp_path / "config.yaml"
+    paths = cli_module.resolve_project_paths(config_path)
+    target_flux_dir = paths.generated_dir / "flux" / "targets" / "mk8s"
+    target_flux_dir.mkdir(parents=True)
+    (target_flux_dir / "kustomization.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "apiVersion": "kustomize.config.k8s.io/v1beta1",
+                "kind": "Kustomization",
+                "resources": [
+                    "./namespace-soperator.yaml",
+                    "./helmrelease-platform-gpu-operator.yaml",
+                    "./helmrelease-slurm-soperator.yaml",
+                ],
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    (target_flux_dir / "namespace-soperator.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "apiVersion": "v1",
+                "kind": "Namespace",
+                "metadata": {"name": "soperator"},
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    (target_flux_dir / "helmrelease-platform-gpu-operator.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "apiVersion": "helm.toolkit.fluxcd.io/v2",
+                "kind": "HelmRelease",
+                "metadata": {"name": "gpu-operator", "namespace": "nvidia-gpu-operator"},
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    (target_flux_dir / "helmrelease-slurm-soperator.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "apiVersion": "helm.toolkit.fluxcd.io/v2",
+                "kind": "HelmRelease",
+                "metadata": {"name": "soperator", "namespace": "soperator"},
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    (target_flux_dir / "post-flux-helmrender-slurm-soperator.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "apiVersion": "slurm.nebius.ai/v1",
+                "kind": "SlurmCluster",
+                "metadata": {"name": "training", "namespace": "soperator"},
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    config = {
+        "infra": {"components": []},
+        "apps": {
+            "charts": [
+                {
+                    "id": "soperator",
+                    "instance_id": "mk8s",
+                    "enabled": True,
+                    "namespace": "soperator",
+                    "release-name": "soperator",
+                    "values": {},
+                }
+            ]
+        },
+        "deploy": {"targets": [{"instance_id": "mk8s"}]},
+    }
+    validations = [
+        {"kind": "mk8s_gpu_operator_readiness", "target_ref": "mk8s"},
+        {"kind": "mk8s_gpu_visibility", "target_ref": "mk8s"},
+        {"kind": "mk8s_nccl", "target_ref": "mk8s"},
+        {"kind": "soperator_cluster_smoke", "target_ref": "mk8s", "required": True},
+    ]
+    manifest = {
+        "deploy": {
+            "targets": [
+                {
+                    "component_id": "mk8s",
+                    "instance_id": "mk8s",
+                    "target_ref": "mk8s",
+                    "access": "external",
+                    "cluster_id_output_name": "mk8s_cluster_id",
+                    "component_output_ref": "mk8s.cluster_id",
+                    "flux_dir": str(target_flux_dir),
+                }
+            ],
+            "validations": validations,
+        }
+    }
+    events: list[tuple[str, tuple[str, ...] | bool]] = []
+
+    def _has_soperator_resources(flux_dir: Path) -> bool:
+        kustomization = yaml.safe_load(
+            (flux_dir / "kustomization.yaml").read_text(encoding="utf-8")
+        )
+        resources = kustomization.get("resources", [])
+        return (
+            "./helmrelease-slurm-soperator.yaml" in resources
+            or (flux_dir / "post-flux-helmrender-slurm-soperator.yaml").exists()
+        )
+
+    def fake_apply_rendered_flux(apply_paths, *, extra_env=None):
+        _ = extra_env
+        events.append(("apply", _has_soperator_resources(apply_paths.flux_dir)))
+
+    def fake_run_deploy_validations(validation_specs, *, reports_dir, extra_env, emit=None):
+        _ = reports_dir, extra_env, emit
+        events.append(
+            ("validations", tuple(str(item.get("kind", "")) for item in validation_specs))
+        )
+        return []
+
+    monkeypatch.setattr(cli_module, "_run_deploy_preflight", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        cli_module,
+        "_prepare_cluster_handoff_kube_env",
+        lambda *args, **kwargs: {"KUBECONFIG": "test"},
+    )
+    monkeypatch.setattr(cli_module, "_report_cluster_nodes_status", lambda **kwargs: None)
+    monkeypatch.setattr(cli_module, "_reconcile_observability_gpu_node_labels", lambda *a, **k: None)
+    monkeypatch.setattr(cli_module, "_ensure_mysterybox_eso_runtime_before_flux", lambda *a, **k: None)
+    monkeypatch.setattr(cli_module, "_ensure_grafana_runtime_before_flux", lambda *a, **k: None)
+    monkeypatch.setattr(cli_module, "_ensure_soperator_notifier_runtime_before_flux", lambda *a, **k: None)
+    monkeypatch.setattr(cli_module, "_ensure_soperator_backup_runtime_before_flux", lambda *a, **k: None)
+    monkeypatch.setattr(cli_module, "_apply_rendered_flux", fake_apply_rendered_flux)
+    monkeypatch.setattr(cli_module, "_run_deploy_validations", fake_run_deploy_validations)
+    monkeypatch.setattr(cli_module, "_collect_grafana_status_after_flux", lambda *a, **k: [])
+    monkeypatch.setattr(cli_module, "_warn_if_flux_gitops_not_bootstrapped", lambda *a, **k: "")
+    monkeypatch.setattr(
+        cli_module,
+        "write_inventory",
+        lambda _config, inventory_paths, *, validations=(): SimpleNamespace(
+            markdown=inventory_paths.reports_dir / "deploy-report.md"
+        ),
+    )
+
+    cli_module._deploy_generated_artifacts(
+        config,
+        paths,
+        manifest,
+        auto_auth_bootstrap=False,
+        skip_validations=False,
+        skip_validation_kinds=set(),
+        requested_target_ref="mk8s",
+    )
+
+    assert events == [
+        ("apply", False),
+        (
+            "validations",
+            (
+                "mk8s_gpu_operator_readiness",
+                "mk8s_gpu_visibility",
+                "mk8s_nccl",
+            ),
+        ),
+        ("apply", True),
+        ("validations", ("soperator_cluster_smoke",)),
+    ]
 
 
 def _tenant_folder_name(tenant_id: str = "tenant-123") -> str:
@@ -470,6 +708,50 @@ def _component_add(config_path: Path, *extra: str, input_text: str | None = None
     )
 
 
+def _assert_soperator_onboard_next_steps(
+    output: str,
+    *,
+    config_path: Path,
+    target_ref: str,
+    migration_required: bool,
+) -> None:
+    config_arg = shlex.quote(str(config_path.resolve()))
+    target_arg = shlex.quote(target_ref)
+    normalized_output = " ".join(output.split())
+    assert (
+        "Only config.yaml was updated. Existing generated/ artifacts and live resources are "
+        "unchanged until you run render and then follow the Soperator next steps below."
+    ) in normalized_output
+    assert (
+        "unchanged until you run render and then deploy/destroy as needed" not in normalized_output
+    )
+    assert "Next steps:" in output
+    assert f"`nebius-cxcli validate {config_arg}`" in output
+    assert f"`nebius-cxcli render {config_arg}`" in output
+    if migration_required:
+        assert f"`nebius-cxcli deploy {config_arg}`" not in output
+        assert (
+            f"`nebius-cxcli ext-soperator migrate {config_arg} --target {target_arg} --dry-run`"
+            in output
+        )
+        assert (
+            "`nebius-cxcli ext-soperator migrate "
+            f"{config_arg} --target {target_arg} --execute --approve`" in output
+        )
+        assert "after the dry run is accepted" in output
+        assert "Do not run `nebius-cxcli deploy` before `ext-soperator migrate`" in output
+    else:
+        assert f"`nebius-cxcli deploy {config_arg}`" in output
+        assert (
+            f"Use `--target {target_arg}` only when you intentionally want to narrow deploy "
+            "to this generated target."
+        ) in output
+        assert (
+            f"`nebius-cxcli ext-soperator migrate {config_arg} --target {target_arg} --dry-run`"
+            not in output
+        )
+
+
 def _external_mk8s_target_row(instance_id: str = "external-cluster") -> dict[str, object]:
     return {
         "instance_id": instance_id,
@@ -486,11 +768,503 @@ def _external_mk8s_target_row(instance_id: str = "external-cluster") -> dict[str
         "soperator_onboarding": {
             "accepted": True,
             "analysis_fingerprint": "",
-            "state": "vanilla-mk8s",
+            "state": "no-soperator-detected",
             "actions": ["install-soperator"],
-            "storage_mode": "adopt-existing-storage",
+            "storage_mode": "keep-existing-storage",
+            "compute_mode": "keep-existing-compute",
+            "target_version": "4.0.1-ps.1",
+            "source_version": "",
+            "migration_profile_id": "",
         },
     }
+
+
+def _old_soperator_snapshot() -> dict[str, object]:
+    return {
+        "node_groups": {
+            "gpu-pool": {
+                "gpu": True,
+                "node_count": 2,
+                "labels": {
+                    "nebius.com/node-group": "gpu-pool",
+                    "nebius.com/node-group-id": "nodegroup-gpu-pool",
+                },
+                "allocatable": {"nvidia.com/gpu": "8"},
+                "nodes": ["node-a", "node-b"],
+            }
+        },
+        "helm_releases": [
+            {
+                "name": "soperator",
+                "namespace": "soperator",
+                "chart": "soperator-3.0.5",
+                "app_version": "3.0.5",
+            }
+        ],
+        "crds": [],
+        "namespaces": ["soperator"],
+        "pvs": [],
+        "pvcs": [],
+        "collection_errors": [],
+    }
+
+
+def _write_old_soperator_migration_config(
+    tmp_path: Path,
+    *,
+    storage_mode: str | None = None,
+    compute_mode: str | None = None,
+) -> Path:
+    config_path = tmp_path / "config.yaml"
+    snapshot = _old_soperator_snapshot()
+    target = cli_module._soperator_onboarding_target_defaults(
+        "external-cluster",
+        kube_context="external-context",
+        storage_mode=storage_mode,
+        compute_mode=compute_mode,
+        pinned_chart_version="4.0.1-ps.1",
+        pinned_app_version="4.0.1",
+        snapshot=snapshot,
+    )
+    cli_module._write_soperator_source_discovery_report_from_target_row(
+        config_path=config_path,
+        target_row=target,
+    )
+    target.pop(cli_module._SOPERATOR_DISCOVERY_REPORT_PRIVATE_KEY, None)
+    payload = {
+        "client_info": {
+            "client_name": "client-a",
+            "nebius": {
+                "tenant_id": "tenant-123",
+                "project_id": "project-456",
+                "region_id": "eu-north1",
+            },
+        },
+        "infra": {"components": []},
+        "apps": {
+            "charts": [
+                {
+                    "id": "soperator",
+                    "instance_id": "external-cluster",
+                    "enabled": True,
+                    "install_mode": "onboard-existing-cluster",
+                    "version": "4.0.1-ps.1",
+                    "values": {},
+                },
+                {
+                    "id": "nvidia-gpu-operator",
+                    "instance_id": "external-cluster",
+                    "enabled": True,
+                    "repo": (
+                        "oci://registry.example.invalid/nvidia-gpu-operator/chart/gpu-operator"
+                    ),
+                    "version": "v25.10.0",
+                    "namespace": "nvidia-gpu-operator",
+                    "release-name": "gpu-operator",
+                    "values": {"driver": {"enabled": False}},
+                },
+                {
+                    "id": "nvidia-network-operator",
+                    "instance_id": "external-cluster",
+                    "enabled": True,
+                    "repo": (
+                        "oci://registry.example.invalid/nvidia-network-operator/chart/"
+                        "network-operator"
+                    ),
+                    "version": "25.7.0",
+                    "namespace": "nvidia-network-operator",
+                    "release-name": "network-operator",
+                    "values": {"operator": {"ofedDriver": {"deploy": False}}},
+                },
+            ]
+        },
+        "deploy": {"targets": [target]},
+    }
+    cli_module._refresh_soperator_onboarding_fingerprints(payload)
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+    return config_path
+
+
+class _FakeSoperatorMigrationCommandRunner:
+    def __init__(self) -> None:
+        self.cluster: dict[str, object] = {
+            "metadata": {"id": "cluster-123", "name": "external-cluster"},
+            "spec": {"control_plane": {"version": "1.31"}},
+        }
+        self.node_groups: dict[str, dict[str, object]] = {
+            "nodegroup-gpu-pool": {
+                "metadata": {
+                    "id": "nodegroup-gpu-pool",
+                    "name": "gpu-pool",
+                    "parent_id": "cluster-123",
+                },
+                "spec": {
+                    "version": "1.31",
+                    "template": {
+                        "filesystems": [],
+                        "resources": {
+                            "platform": "gpu-h100-sxm",
+                            "preset": "8gpu-128vcpu-1600gb",
+                        },
+                        "gpu_settings": {"drivers_preset": "cuda12.8"},
+                        "os": "ubuntu22.04",
+                    },
+                },
+                "status": {
+                    "ready_node_count": 1,
+                    "target_node_count": 1,
+                    "node_count": 1,
+                    "outdated_node_count": 0,
+                    "reconciling": False,
+                },
+            }
+        }
+        self.helm_releases: list[dict[str, object]] = [
+            {
+                "name": "soperator",
+                "namespace": "soperator",
+                "chart": "soperator-4.0.1-ps.1",
+                "app_version": "4.0.1",
+                "status": "deployed",
+            }
+        ]
+        self.helm_manifests: dict[tuple[str, str], str] = {
+            (
+                "soperator",
+                "soperator",
+            ): """
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: soperator-manager
+  namespace: soperator
+spec:
+  replicas: 1
+"""
+        }
+
+    def _upsert_helm_release(
+        self,
+        *,
+        namespace: str,
+        release_name: str,
+        chart: str,
+        app_version: str,
+    ) -> None:
+        replacement = {
+            "name": release_name,
+            "namespace": namespace,
+            "chart": chart,
+            "app_version": app_version,
+            "status": "deployed",
+        }
+        for index, release in enumerate(self.helm_releases):
+            if release.get("name") == release_name and release.get("namespace") == namespace:
+                self.helm_releases[index] = replacement
+                return
+        self.helm_releases.append(replacement)
+
+    def __call__(
+        self,
+        args,
+        *,
+        input_text: str | None = None,
+        timeout_seconds: int = 300,
+        check: bool = True,
+    ) -> SoperatorMigrationCommandResult:
+        del input_text, timeout_seconds, check
+        command = tuple(str(item) for item in args)
+        if command[:4] == ("nebius", "compute", "filesystem", "get-by-name"):
+            return SoperatorMigrationCommandResult(command, 1, "", "not found")
+        if command[:4] == ("nebius", "compute", "filesystem", "create"):
+            name = command[command.index("--name") + 1]
+            return SoperatorMigrationCommandResult(
+                command,
+                0,
+                json.dumps({"metadata": {"id": f"filesystem-{name}"}}),
+                "",
+            )
+        if command[:4] == ("nebius", "mk8s", "node-group", "get"):
+            node_group = self.node_groups.get(command[4])
+            return SoperatorMigrationCommandResult(
+                command,
+                0,
+                json.dumps(
+                    node_group
+                    or {
+                        "metadata": {"id": command[4], "parent_id": "cluster-123"},
+                        "spec": {"template": {"filesystems": []}},
+                    }
+                ),
+                "",
+            )
+        if command[:4] == ("nebius", "mk8s", "node-group", "list"):
+            return SoperatorMigrationCommandResult(
+                command,
+                0,
+                json.dumps({"items": list(self.node_groups.values())}),
+                "",
+            )
+        if command[:4] == ("nebius", "mk8s", "node-group", "update"):
+            node_group = self.node_groups.setdefault(
+                command[4],
+                {
+                    "metadata": {"id": command[4], "parent_id": "cluster-123"},
+                    "spec": {"template": {"filesystems": []}},
+                },
+            )
+            if "--file" in command:
+                replacement = json.loads(
+                    Path(command[command.index("--file") + 1]).read_text(encoding="utf-8")
+                )
+                node_group.clear()
+                node_group.update(replacement)
+                node_group.setdefault(
+                    "status",
+                    {
+                        "ready_node_count": 1,
+                        "target_node_count": 1,
+                        "node_count": 1,
+                        "outdated_node_count": 0,
+                        "reconciling": False,
+                    },
+                )
+                return SoperatorMigrationCommandResult(command, 0, json.dumps(node_group), "")
+            spec = node_group.setdefault("spec", {})
+            if not isinstance(spec, dict):
+                spec = {}
+                node_group["spec"] = spec
+            template = spec.setdefault("template", {})
+            if not isinstance(template, dict):
+                template = {}
+                spec["template"] = template
+            if "--template-filesystems" in command:
+                template["filesystems"] = json.loads(
+                    command[command.index("--template-filesystems") + 1]
+                )
+            if "--version" in command:
+                spec["version"] = command[command.index("--version") + 1]
+            if "--template-os" in command:
+                template["os"] = command[command.index("--template-os") + 1]
+            if "--template-gpu-settings-drivers-preset" in command:
+                gpu_settings = template.setdefault("gpu_settings", {})
+                if not isinstance(gpu_settings, dict):
+                    gpu_settings = {}
+                    template["gpu_settings"] = gpu_settings
+                gpu_settings["drivers_preset"] = command[
+                    command.index("--template-gpu-settings-drivers-preset") + 1
+                ]
+            node_group.setdefault(
+                "status",
+                {
+                    "ready_node_count": 1,
+                    "target_node_count": 1,
+                    "node_count": 1,
+                    "outdated_node_count": 0,
+                    "reconciling": False,
+                },
+            )
+            return SoperatorMigrationCommandResult(command, 0, json.dumps(node_group), "")
+        if command[:4] == ("nebius", "mk8s", "cluster", "get"):
+            return SoperatorMigrationCommandResult(command, 0, json.dumps(self.cluster), "")
+        if command[:4] == ("nebius", "mk8s", "cluster", "update"):
+            spec = self.cluster.setdefault("spec", {})
+            if not isinstance(spec, dict):
+                spec = {}
+                self.cluster["spec"] = spec
+            control_plane = spec.setdefault("control_plane", {})
+            if not isinstance(control_plane, dict):
+                control_plane = {}
+                spec["control_plane"] = control_plane
+            if "--control-plane-version" in command:
+                control_plane["version"] = command[command.index("--control-plane-version") + 1]
+            return SoperatorMigrationCommandResult(command, 0, json.dumps(self.cluster), "")
+        if command and command[0] == "helm" and "list" in command:
+            namespace = command[command.index("-n") + 1] if "-n" in command else ""
+            filter_pattern = command[command.index("--filter") + 1] if "--filter" in command else ""
+            releases = []
+            for release in self.helm_releases:
+                if namespace and release.get("namespace") != namespace:
+                    continue
+                if filter_pattern and not re.search(filter_pattern, str(release.get("name") or "")):
+                    continue
+                releases.append(release)
+            return SoperatorMigrationCommandResult(command, 0, json.dumps(releases), "")
+        if command and command[0] == "helm" and "get" in command and "manifest" in command:
+            release_name = command[command.index("manifest") + 1]
+            namespace = command[command.index("-n") + 1] if "-n" in command else ""
+            manifest = self.helm_manifests.get((namespace, release_name), "")
+            if manifest:
+                return SoperatorMigrationCommandResult(command, 0, manifest, "")
+            return SoperatorMigrationCommandResult(command, 1, "", "not found")
+        if command and command[0] == "helm" and "upgrade" in command:
+            release_name = command[command.index("--install") + 1] if "--install" in command else ""
+            namespace = command[command.index("-n") + 1] if "-n" in command else ""
+            version = (
+                command[command.index("--version") + 1] if "--version" in command else "4.0.1-ps.1"
+            )
+            chart = (
+                command[command.index("--install") + 2] if "--install" in command else release_name
+            )
+            chart_name = Path(chart).name or release_name
+            app_version = "4.0.1" if release_name == "soperator" else version
+            chart_version = (
+                "soperator-4.0.1-ps.1" if release_name == "soperator" else f"{chart_name}-{version}"
+            )
+            self._upsert_helm_release(
+                namespace=namespace,
+                release_name=release_name,
+                chart=chart_version,
+                app_version=app_version,
+            )
+            self.helm_manifests.setdefault(
+                (namespace, release_name),
+                f"""
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {release_name}
+  namespace: {namespace}
+spec:
+  replicas: 1
+""",
+            )
+            return SoperatorMigrationCommandResult(command, 0, "{}", "")
+        if command[:5] == (
+            "kubectl",
+            "--context",
+            "external-context",
+            "get",
+            "nodes",
+        ):
+            return SoperatorMigrationCommandResult(
+                command,
+                0,
+                json.dumps(
+                    {
+                        "items": [
+                            {
+                                "metadata": {
+                                    "name": "node-a",
+                                    "labels": {"nebius.com/node-group": "gpu-pool"},
+                                },
+                                "status": {"conditions": [{"type": "Ready", "status": "True"}]},
+                            }
+                        ]
+                    }
+                ),
+                "",
+            )
+        if (
+            command
+            and command[0] == "kubectl"
+            and "--context" in command
+            and "-n" in command
+            and "get" in command
+            and "-o" in command
+            and command[-1] == "json"
+        ):
+            resource = command[command.index("get") + 1]
+            name = command[command.index("get") + 2]
+            namespace = command[command.index("-n") + 1]
+            if resource in {"deployment", "deploy"}:
+                return SoperatorMigrationCommandResult(
+                    command,
+                    0,
+                    json.dumps(
+                        {
+                            "kind": "Deployment",
+                            "metadata": {
+                                "name": name,
+                                "namespace": namespace,
+                                "generation": 1,
+                            },
+                            "spec": {"replicas": 1},
+                            "status": {
+                                "observedGeneration": 1,
+                                "readyReplicas": 1,
+                                "availableReplicas": 1,
+                                "updatedReplicas": 1,
+                            },
+                        }
+                    ),
+                    "",
+                )
+        if command[:7] == (
+            "kubectl",
+            "--context",
+            "external-context",
+            "-n",
+            "soperator",
+            "get",
+            "pods",
+        ):
+            return SoperatorMigrationCommandResult(
+                command,
+                0,
+                json.dumps(
+                    {
+                        "items": [
+                            {
+                                "metadata": {
+                                    "name": "login-0",
+                                    "labels": {"app.kubernetes.io/component": "login"},
+                                },
+                                "status": {"phase": "Running"},
+                            }
+                        ]
+                    }
+                ),
+                "",
+            )
+        if command[:8] == (
+            "kubectl",
+            "--context",
+            "external-context",
+            "-n",
+            "soperator",
+            "get",
+            "slurmclusters",
+            "-o",
+        ):
+            return SoperatorMigrationCommandResult(
+                command,
+                0,
+                json.dumps(
+                    {
+                        "items": [
+                            {
+                                "metadata": {"name": "external-cluster"},
+                                "status": {"phase": "Available"},
+                            }
+                        ]
+                    }
+                ),
+                "",
+            )
+        if command[:8] == (
+            "kubectl",
+            "--context",
+            "external-context",
+            "-n",
+            "soperator",
+            "exec",
+            "login-0",
+            "--",
+        ):
+            if command[8:11] == ("sinfo", "-h", "-o"):
+                return SoperatorMigrationCommandResult(command, 0, "idle\n", "")
+            if command[8:10] == ("squeue", "-h"):
+                return SoperatorMigrationCommandResult(command, 0, "", "")
+            if command[8:10] == ("bash", "-lc") and "cxcli-soperator-smoke" in command[10]:
+                return SoperatorMigrationCommandResult(
+                    command,
+                    0,
+                    "cxcli-soperator-srun-ok\nworker-0\n",
+                    "",
+                )
+            return SoperatorMigrationCommandResult(command, 0, "ok\n", "")
+        return SoperatorMigrationCommandResult(command, 0, "{}", "")
 
 
 def _component_remove(config_path: Path, *extra: str, input_text: str | None = None):
@@ -1148,10 +1922,7 @@ def test_component_field_wizard_configures_planned_vpc_before_mk8s_consumer(
                 entry=entry,
                 full_path_label=full_path_label,
                 provider="project_subnets",
-                args={
-                    "network_id_path": full_path_label.removesuffix("subnet_id")
-                    + "network_id"
-                },
+                args={"network_id_path": full_path_label.removesuffix("subnet_id") + "network_id"},
                 live_choices=[],
             )
         return []
@@ -1861,6 +2632,8 @@ def test_create_writes_deployments_gitignore_when_target_is_in_git_repo(tmp_path
     assert "Managed by `nebius-cxcli`" in content
     assert "Keep config.yaml and generated/nebius-cxcli-manifest.json versioned" in content
     assert "tfvars duplicates recreated from the generated manifest" in content
+    assert "local cxcli operational checkpoints" in content
+    assert "*/*/.nebius-cxcli/" in content
     assert "*/*/wireguard-clients/" in content
     assert "*/*/generated/infra/.terraform/" in content
     assert "*/*/generated/infra/crash.*.log" in content
@@ -1964,6 +2737,8 @@ def test_render_recreates_deployments_gitignore_in_git_repo(tmp_path: Path) -> N
     assert "Managed by `nebius-cxcli`" in content
     assert "Keep config.yaml and generated/nebius-cxcli-manifest.json versioned" in content
     assert "tfvars duplicates recreated from the generated manifest" in content
+    assert "local cxcli operational checkpoints" in content
+    assert "*/*/.nebius-cxcli/" in content
     assert "*/*/wireguard-clients/" in content
     assert "*/*/generated/infra/.terraform/" in content
     assert "*/*/generated/infra/crash.*.log" in content
@@ -2308,7 +3083,7 @@ def test_create_force_overwrite_recreates_project_folder_and_removes_stale_files
     assert (project_dir / "config.yaml").exists()
     assert (project_dir / "generated" / "infra").is_dir()
     assert (project_dir / "generated" / "flux").is_dir()
-    assert not (project_dir / "generated" / "inventory" / "deploy-report.md").exists()
+    assert not (project_dir / "generated" / "reports" / "deploy-report.md").exists()
 
 
 def test_create_force_overwrite_does_not_touch_other_projects(tmp_path: Path) -> None:
@@ -2647,10 +3422,6 @@ def test_create_prompts_soperator_profile_before_field_wizard(
     monkeypatch.setattr(cli_module, "_wizard_continue_phase", lambda *_args, **_kwargs: True)
     monkeypatch.setattr(cli_module, "_optional_email_or_prompt", lambda *_args, **_kwargs: None)
 
-    def _capture_install_mode() -> str:
-        events.append("install_mode")
-        return "production-cluster"
-
     def _capture_profile() -> str:
         events.append("profile")
         return "nebius-cpu-v1"
@@ -2667,7 +3438,13 @@ def test_create_prompts_soperator_profile_before_field_wizard(
         assert soperator["profile"] == "nebius-cpu-v1"
         return kwargs["config_yaml"], True
 
-    monkeypatch.setattr(cli_module, "_prompt_soperator_install_mode", _capture_install_mode)
+    monkeypatch.setattr(
+        cli_module,
+        "_prompt_soperator_install_mode",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("Create should not prompt for Soperator install mode")
+        ),
+    )
     monkeypatch.setattr(cli_module, "_prompt_soperator_profile", _capture_profile)
     monkeypatch.setattr(cli_module, "_run_component_field_wizard", _capture_field_wizard)
 
@@ -2694,7 +3471,7 @@ def test_create_prompts_soperator_profile_before_field_wizard(
     )
 
     assert result.exit_code == 0, result.output
-    assert events == ["install_mode", "profile", "field_wizard"]
+    assert events == ["profile", "field_wizard"]
     payload = yaml.safe_load(_project_config_path(deployments_root).read_text(encoding="utf-8"))
     infra_rows = payload["infra"]["components"]
     app_rows = payload["apps"]["charts"]
@@ -2722,7 +3499,13 @@ def test_create_soperator_cpu_worker_count_prompt_updates_persisted_node_groups(
 
     monkeypatch.setattr(cli_module, "_wizard_continue_phase", lambda *_args, **_kwargs: True)
     monkeypatch.setattr(cli_module, "_optional_email_or_prompt", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(cli_module, "_prompt_soperator_install_mode", lambda: "production-cluster")
+    monkeypatch.setattr(
+        cli_module,
+        "_prompt_soperator_install_mode",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("Create should not prompt for Soperator install mode")
+        ),
+    )
     monkeypatch.setattr(cli_module, "_prompt_soperator_profile", lambda: "nebius-cpu-v1")
 
     def _set_worker_count_fields(**kwargs):  # type: ignore[no-untyped-def]
@@ -2888,10 +3671,6 @@ def test_component_add_soperator_from_empty_config_prompts_profile_before_field_
         lambda *, payload, add_targets, infra_entries: add_targets,
     )
 
-    def _capture_install_mode() -> str:
-        events.append("install_mode")
-        return "production-cluster"
-
     def _capture_profile() -> str:
         events.append("profile")
         return "nebius-cpu-v1"
@@ -2917,14 +3696,20 @@ def test_component_add_soperator_from_empty_config_prompts_profile_before_field_
         assert "gpu_clusters" not in mk8s_inputs
         return kwargs["config_yaml"], True
 
-    monkeypatch.setattr(cli_module, "_prompt_soperator_install_mode", _capture_install_mode)
+    monkeypatch.setattr(
+        cli_module,
+        "_prompt_soperator_install_mode",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("Component add should not prompt for Soperator install mode")
+        ),
+    )
     monkeypatch.setattr(cli_module, "_prompt_soperator_profile", _capture_profile)
     monkeypatch.setattr(cli_module, "_run_component_field_wizard", _capture_field_wizard)
 
     result = _component_add(config_path, "soperator")
 
     assert result.exit_code == 0, result.output
-    assert events == ["install_mode", "profile", "field_wizard"]
+    assert events == ["profile", "field_wizard"]
     payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     infra_rows = payload["infra"]["components"]
     app_rows = payload["apps"]["charts"]
@@ -2937,97 +3722,6 @@ def test_component_add_soperator_from_empty_config_prompts_profile_before_field_
         ("cert-manager", "mk8s"),
     ]
     assert app_rows[0]["profile"] == "nebius-cpu-v1"
-
-
-def test_component_add_soperator_onboarding_adds_external_target_without_mk8s_infra(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    deployments_root = tmp_path / "deployments"
-    deployments_root.mkdir(parents=True, exist_ok=True)
-    created = _create_non_interactive(
-        deployments_root,
-        "--infra",
-        "none",
-        "--app",
-        "none",
-        "--no-validate-config",
-    )
-    assert created.exit_code == 0, created.output
-
-    events: list[str] = []
-    config_path = _project_config_path(deployments_root)
-
-    monkeypatch.setattr(cli_module, "_wizard_continue_phase", lambda *_args, **_kwargs: True)
-    monkeypatch.setattr(
-        cli_module,
-        "_prompt_soperator_profile",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            AssertionError("Soperator production profile should not be prompted")
-        ),
-    )
-
-    def _capture_install_mode() -> str:
-        events.append("install_mode")
-        return "onboard-existing-cluster"
-
-    def _external_target_row() -> dict[str, object]:
-        events.append("external_target")
-        return {
-            "instance_id": "external-cluster",
-            "kind": "external-mk8s",
-            "ownership": "external",
-            "access": "external",
-            "kube_context": "external-context",
-            "inventory": {
-                "node_groups": {
-                    "cpu-pool": {"gpu": False, "node_count": 2},
-                    "gpu-pool": {"gpu": True, "node_count": 1},
-                }
-            },
-            "soperator_onboarding": {
-                "accepted": True,
-                "analysis_fingerprint": "",
-                "state": "vanilla-mk8s",
-                "actions": ["install-soperator"],
-                "storage_mode": "adopt-existing-storage",
-            },
-        }
-
-    def _capture_field_wizard(**kwargs):  # type: ignore[no-untyped-def]
-        events.append("field_wizard")
-        assert kwargs["selected_infra"] == set()
-        assert kwargs["selected_apps"] == {"soperator", "cert-manager"}
-        assert "skip_soperator_profile_prompt" not in kwargs
-        payload = yaml.safe_load(kwargs["config_yaml"]) or {}
-        assert payload["infra"]["components"] == []
-        targets = payload.get("deploy", {}).get("targets", [])
-        assert [(row.get("instance_id"), row.get("kind")) for row in targets] == [
-            ("external-cluster", "external-mk8s")
-        ]
-        app_rows = payload.get("apps", {}).get("charts", [])
-        assert {(row.get("id"), row.get("instance_id")) for row in app_rows} == {
-            ("soperator", "external-cluster"),
-            ("cert-manager", "external-cluster"),
-        }
-        return kwargs["config_yaml"], True
-
-    monkeypatch.setattr(cli_module, "_prompt_soperator_install_mode", _capture_install_mode)
-    monkeypatch.setattr(cli_module, "_prompt_soperator_onboarding_target_row", _external_target_row)
-    monkeypatch.setattr(cli_module, "_run_component_field_wizard", _capture_field_wizard)
-
-    result = _component_add(config_path, "mk8s", "soperator")
-
-    assert result.exit_code == 0, result.output
-    assert "install_mode=onboard-existing-cluster uses an external MK8s" in result.output
-    assert events == ["install_mode", "external_target", "field_wizard"]
-    payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-    assert payload["infra"]["components"] == []
-    assert [(row["id"], row["instance_id"]) for row in payload["apps"]["charts"]] == [
-        ("soperator", "external-cluster"),
-        ("cert-manager", "external-cluster"),
-    ]
-    assert payload["deploy"]["targets"][0]["kind"] == "external-mk8s"
 
 
 def test_component_add_soperator_onboarding_reuses_existing_external_target(
@@ -3065,9 +3759,9 @@ def test_component_add_soperator_onboarding_reuses_existing_external_target(
                 "soperator_onboarding": {
                     "accepted": True,
                     "analysis_fingerprint": "",
-                    "state": "vanilla-mk8s",
+                    "state": "no-soperator-detected",
                     "actions": ["install-soperator"],
-                    "storage_mode": "adopt-existing-storage",
+                    "storage_mode": "keep-existing-storage",
                 },
             }
         ]
@@ -3084,10 +3778,6 @@ def test_component_add_soperator_onboarding_reuses_existing_external_target(
         ),
     )
 
-    def _capture_install_mode() -> str:
-        events.append("install_mode")
-        return "onboard-existing-cluster"
-
     def _capture_field_wizard(**kwargs):  # type: ignore[no-untyped-def]
         events.append("field_wizard")
         payload = yaml.safe_load(kwargs["config_yaml"]) or {}
@@ -3100,22 +3790,30 @@ def test_component_add_soperator_onboarding_reuses_existing_external_target(
         assert {(row.get("id"), row.get("instance_id")) for row in app_rows} == {
             ("soperator", "external-cluster"),
             ("cert-manager", "external-cluster"),
+            ("nvidia-gpu-operator", "external-cluster"),
         }
         return kwargs["config_yaml"], True
 
-    monkeypatch.setattr(cli_module, "_prompt_soperator_install_mode", _capture_install_mode)
+    monkeypatch.setattr(
+        cli_module,
+        "_prompt_soperator_install_mode",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("Explicit external-target add should infer onboarding")
+        ),
+    )
     monkeypatch.setattr(cli_module, "_run_component_field_wizard", _capture_field_wizard)
 
-    result = _component_add(config_path, "soperator")
+    result = _component_add(config_path, "soperator@external-cluster")
 
     assert result.exit_code == 0, result.output
-    assert events == ["install_mode", "field_wizard"]
+    assert events == ["field_wizard"]
     payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     assert len(payload["deploy"]["targets"]) == 1
-    assert [(row["id"], row["instance_id"]) for row in payload["apps"]["charts"]] == [
+    assert {(row["id"], row["instance_id"]) for row in payload["apps"]["charts"]} == {
         ("soperator", "external-cluster"),
         ("cert-manager", "external-cluster"),
-    ]
+        ("nvidia-gpu-operator", "external-cluster"),
+    }
 
 
 def test_component_add_soperator_external_target_noninteractive_infers_onboarding(
@@ -3165,10 +3863,11 @@ def test_component_add_soperator_external_target_noninteractive_infers_onboardin
     payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     assert payload["infra"]["components"] == []
     app_rows = payload["apps"]["charts"]
-    assert [(row["id"], row["instance_id"]) for row in app_rows] == [
+    assert {(row["id"], row["instance_id"]) for row in app_rows} == {
         ("soperator", "external-cluster"),
         ("cert-manager", "external-cluster"),
-    ]
+        ("nvidia-gpu-operator", "external-cluster"),
+    }
     soperator = next(row for row in app_rows if row["id"] == "soperator")
     assert soperator["install_mode"] == "onboard-existing-cluster"
     assert payload["deploy"]["targets"][0]["kind"] == "external-mk8s"
@@ -3212,10 +3911,11 @@ def test_component_add_soperator_repairs_existing_onboarding_dependency_without_
     assert "Config up-to-date" not in repaired.output
     payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     assert payload["infra"]["components"] == []
-    assert [(row["id"], row["instance_id"]) for row in payload["apps"]["charts"]] == [
+    assert {(row["id"], row["instance_id"]) for row in payload["apps"]["charts"]} == {
         ("soperator", "external-cluster"),
         ("cert-manager", "external-cluster"),
-    ]
+        ("nvidia-gpu-operator", "external-cluster"),
+    }
 
 
 def test_component_add_soperator_external_targets_noninteractive_scopes_dependencies(
@@ -3253,12 +3953,14 @@ def test_component_add_soperator_external_targets_noninteractive_scopes_dependen
     assert result.exit_code == 0, result.output
     payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     assert payload["infra"]["components"] == []
-    assert [(row["id"], row["instance_id"]) for row in payload["apps"]["charts"]] == [
+    assert {(row["id"], row["instance_id"]) for row in payload["apps"]["charts"]} == {
         ("soperator", "external-a"),
         ("soperator", "external-b"),
         ("cert-manager", "external-a"),
         ("cert-manager", "external-b"),
-    ]
+        ("nvidia-gpu-operator", "external-a"),
+        ("nvidia-gpu-operator", "external-b"),
+    }
     assert all(
         row["install_mode"] == "onboard-existing-cluster"
         for row in payload["apps"]["charts"]
@@ -3310,12 +4012,14 @@ def test_component_add_soperator_repairs_multi_target_onboarding_dependencies(
     assert "Config up-to-date" not in repaired.output
     payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     assert payload["infra"]["components"] == []
-    assert [(row["id"], row["instance_id"]) for row in payload["apps"]["charts"]] == [
+    assert {(row["id"], row["instance_id"]) for row in payload["apps"]["charts"]} == {
         ("soperator", "external-a"),
         ("soperator", "external-b"),
         ("cert-manager", "external-a"),
         ("cert-manager", "external-b"),
-    ]
+        ("nvidia-gpu-operator", "external-a"),
+        ("nvidia-gpu-operator", "external-b"),
+    }
 
 
 def test_component_add_soperator_repairs_multi_target_onboarding_with_explicit_dependency(
@@ -3361,12 +4065,14 @@ def test_component_add_soperator_repairs_multi_target_onboarding_with_explicit_d
     assert repaired.exit_code == 0, repaired.output
     payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     assert payload["infra"]["components"] == []
-    assert [(row["id"], row["instance_id"]) for row in payload["apps"]["charts"]] == [
+    assert {(row["id"], row["instance_id"]) for row in payload["apps"]["charts"]} == {
         ("soperator", "external-a"),
         ("soperator", "external-b"),
         ("cert-manager", "external-a"),
         ("cert-manager", "external-b"),
-    ]
+        ("nvidia-gpu-operator", "external-a"),
+        ("nvidia-gpu-operator", "external-b"),
+    }
     assert all(component_instance_id(row) != "cert-manager" for row in payload["apps"]["charts"])
 
 
@@ -3404,9 +4110,9 @@ def test_component_add_soperator_onboarding_adds_dependency_for_external_target(
             "soperator_onboarding": {
                 "accepted": True,
                 "analysis_fingerprint": "",
-                "state": "vanilla-mk8s",
+                "state": "no-soperator-detected",
                 "actions": ["install-soperator"],
-                "storage_mode": "adopt-existing-storage",
+                "storage_mode": "keep-existing-storage",
             },
         }
     )
@@ -3422,10 +4128,6 @@ def test_component_add_soperator_onboarding_adds_dependency_for_external_target(
         ),
     )
 
-    def _capture_install_mode() -> str:
-        events.append("install_mode")
-        return "onboard-existing-cluster"
-
     def _capture_field_wizard(**kwargs):  # type: ignore[no-untyped-def]
         events.append("field_wizard")
         payload = yaml.safe_load(kwargs["config_yaml"]) or {}
@@ -3434,22 +4136,30 @@ def test_component_add_soperator_onboarding_adds_dependency_for_external_target(
             ("cert-manager", "mk8s"),
             ("soperator", "external-cluster"),
             ("cert-manager", "external-cluster"),
+            ("nvidia-gpu-operator", "external-cluster"),
         }
         return kwargs["config_yaml"], True
 
-    monkeypatch.setattr(cli_module, "_prompt_soperator_install_mode", _capture_install_mode)
+    monkeypatch.setattr(
+        cli_module,
+        "_prompt_soperator_install_mode",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("Explicit external-target add should infer onboarding")
+        ),
+    )
     monkeypatch.setattr(cli_module, "_run_component_field_wizard", _capture_field_wizard)
 
-    result = _component_add(config_path, "soperator")
+    result = _component_add(config_path, "soperator@external-cluster")
 
     assert result.exit_code == 0, result.output
-    assert events == ["install_mode", "field_wizard"]
+    assert events == ["field_wizard"]
     payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-    assert [(row["id"], row["instance_id"]) for row in payload["apps"]["charts"]] == [
+    assert {(row["id"], row["instance_id"]) for row in payload["apps"]["charts"]} == {
         ("cert-manager", "mk8s"),
         ("soperator", "external-cluster"),
         ("cert-manager", "external-cluster"),
-    ]
+        ("nvidia-gpu-operator", "external-cluster"),
+    }
 
 
 def test_component_add_soperator_onboarding_does_not_duplicate_existing_external_dependency(
@@ -3481,9 +4191,9 @@ def test_component_add_soperator_onboarding_does_not_duplicate_existing_external
             "soperator_onboarding": {
                 "accepted": True,
                 "analysis_fingerprint": "",
-                "state": "vanilla-mk8s",
+                "state": "no-soperator-detected",
                 "actions": ["install-soperator"],
-                "storage_mode": "adopt-existing-storage",
+                "storage_mode": "keep-existing-storage",
             },
         }
     )
@@ -3508,10 +4218,6 @@ def test_component_add_soperator_onboarding_does_not_duplicate_existing_external
         ),
     )
 
-    def _capture_install_mode() -> str:
-        events.append("install_mode")
-        return "onboard-existing-cluster"
-
     def _capture_field_wizard(**kwargs):  # type: ignore[no-untyped-def]
         events.append("field_wizard")
         payload = yaml.safe_load(kwargs["config_yaml"]) or {}
@@ -3524,16 +4230,27 @@ def test_component_add_soperator_onboarding_does_not_duplicate_existing_external
             ("cert-manager", "mk8s"),
             ("cert-manager", "external-cluster"),
             ("soperator", "external-cluster"),
+            ("nvidia-gpu-operator", "external-cluster"),
         }
         return kwargs["config_yaml"], True
 
-    monkeypatch.setattr(cli_module, "_prompt_soperator_install_mode", _capture_install_mode)
+    monkeypatch.setattr(
+        cli_module,
+        "_prompt_soperator_install_mode",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("Explicit external-target add should infer onboarding")
+        ),
+    )
     monkeypatch.setattr(cli_module, "_run_component_field_wizard", _capture_field_wizard)
 
-    result = _component_add(config_path, "cert-manager", "soperator")
+    result = _component_add(
+        config_path,
+        "cert-manager@external-cluster",
+        "soperator@external-cluster",
+    )
 
     assert result.exit_code == 0, result.output
-    assert events == ["install_mode", "field_wizard"]
+    assert events == ["field_wizard"]
     payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     app_pairs = [(row["id"], row["instance_id"]) for row in payload["apps"]["charts"]]
     assert app_pairs.count(("cert-manager", "external-cluster")) == 1
@@ -3541,10 +4258,11 @@ def test_component_add_soperator_onboarding_does_not_duplicate_existing_external
         ("cert-manager", "mk8s"),
         ("cert-manager", "external-cluster"),
         ("soperator", "external-cluster"),
+        ("nvidia-gpu-operator", "external-cluster"),
     }
 
 
-def test_component_add_soperator_onboarding_preserves_existing_infra_rows(
+def test_soperator_onboard_preserves_existing_infra_rows(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -3563,60 +4281,32 @@ def test_component_add_soperator_onboarding_preserves_existing_infra_rows(
     events: list[str] = []
     config_path = _project_config_path(deployments_root)
 
-    monkeypatch.setattr(cli_module, "_wizard_continue_phase", lambda *_args, **_kwargs: True)
-
-    def _capture_install_mode() -> str:
-        events.append("install_mode")
-        return "onboard-existing-cluster"
-
-    def _external_target_row() -> dict[str, object]:
+    def _external_target_row(**_kwargs: object) -> dict[str, object]:
         events.append("external_target")
-        return {
-            "instance_id": "external-cluster",
-            "kind": "external-mk8s",
-            "ownership": "external",
-            "access": "external",
-            "kube_context": "external-context",
-            "inventory": {
-                "node_groups": {
-                    "cpu-pool": {"gpu": False, "node_count": 2},
-                    "gpu-pool": {"gpu": True, "node_count": 1},
-                }
-            },
-            "soperator_onboarding": {
-                "accepted": True,
-                "analysis_fingerprint": "",
-                "state": "vanilla-mk8s",
-                "actions": ["install-soperator"],
-                "storage_mode": "adopt-existing-storage",
-            },
-        }
+        return _external_mk8s_target_row()
 
-    def _capture_field_wizard(**kwargs):  # type: ignore[no-untyped-def]
-        events.append("field_wizard")
-        payload = yaml.safe_load(kwargs["config_yaml"]) or {}
-        assert [
-            (row.get("id"), row.get("instance_id")) for row in payload["infra"]["components"]
-        ] == [
-            ("mk8s", "mk8s"),
-            ("sfs", "sfs"),
-        ]
-        app_rows = payload.get("apps", {}).get("charts", [])
-        assert {(row.get("id"), row.get("instance_id")) for row in app_rows} == {
-            ("soperator", "external-cluster"),
-            ("cert-manager", "external-cluster"),
-        }
-        return kwargs["config_yaml"], True
-
-    monkeypatch.setattr(cli_module, "_prompt_soperator_install_mode", _capture_install_mode)
+    monkeypatch.setattr(
+        cli_module,
+        "_prompt_soperator_install_mode",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("Soperator install mode should not be prompted for onboard")
+        ),
+    )
     monkeypatch.setattr(cli_module, "_prompt_soperator_onboarding_target_row", _external_target_row)
-    monkeypatch.setattr(cli_module, "_run_component_field_wizard", _capture_field_wizard)
 
-    result = _component_add(config_path, "mk8s", "sfs", "soperator")
+    result = runner.invoke(
+        app,
+        [
+            "ext-soperator",
+            "onboard",
+            str(config_path),
+            "--no-validate-sources",
+        ],
+    )
 
     assert result.exit_code == 0, result.output
-    assert "install_mode=onboard-existing-cluster uses an external MK8s" in result.output
-    assert events == ["install_mode", "external_target", "field_wizard"]
+    assert "Registered external MK8s target: external-cluster" in result.output
+    assert events == ["external_target"]
     payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     assert [(row["id"], row["instance_id"]) for row in payload["infra"]["components"]] == [
         ("mk8s", "mk8s"),
@@ -3625,6 +4315,7 @@ def test_component_add_soperator_onboarding_preserves_existing_infra_rows(
     assert [(row["id"], row["instance_id"]) for row in payload["apps"]["charts"]] == [
         ("soperator", "external-cluster"),
         ("cert-manager", "external-cluster"),
+        ("nvidia-gpu-operator", "external-cluster"),
     ]
 
 
@@ -3689,76 +4380,500 @@ def test_component_add_interactive_mk8s_only_keeps_existing_apps_on_original_tar
     assert ("cert-manager", "cluster2") not in app_pairs
 
 
-def test_create_interactive_soperator_onboarding_adds_external_target_without_mk8s_infra(
+def test_soperator_onboard_adds_external_target_without_mk8s_infra(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     deployments_root = tmp_path / "deployments"
     deployments_root.mkdir(parents=True, exist_ok=True)
-    events: list[str] = []
+    created = _create_non_interactive(
+        deployments_root,
+        "--infra",
+        "none",
+        "--app",
+        "none",
+        "--no-validate-config",
+    )
+    assert created.exit_code == 0, created.output
 
-    monkeypatch.setattr(cli_module, "_wizard_continue_phase", lambda *_args, **_kwargs: True)
-    monkeypatch.setattr(cli_module, "_optional_email_or_prompt", lambda *_args, **_kwargs: None)
+    events: list[str] = []
+    config_path = _project_config_path(deployments_root)
+
     monkeypatch.setattr(
         cli_module,
         "_prompt_soperator_profile",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            AssertionError("Soperator production profile should not be prompted")
+            AssertionError("Soperator production profile should not be prompted for onboard")
+        ),
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "_prompt_soperator_install_mode",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("Soperator install mode should not be prompted for onboard")
         ),
     )
 
-    def _capture_install_mode() -> str:
-        events.append("install_mode")
-        return "onboard-existing-cluster"
-
-    def _external_target_row() -> dict[str, object]:
+    def _external_target_row(**_kwargs: object) -> dict[str, object]:
         events.append("external_target")
-        return {
-            "instance_id": "external-cluster",
-            "kind": "external-mk8s",
-            "ownership": "external",
-            "access": "external",
-            "kube_context": "external-context",
-            "inventory": {
-                "node_groups": {
-                    "cpu-pool": {"gpu": False, "node_count": 2},
-                    "gpu-pool": {"gpu": True, "node_count": 1},
-                }
-            },
-            "soperator_onboarding": {
-                "accepted": True,
-                "analysis_fingerprint": "",
-                "state": "vanilla-mk8s",
-                "actions": ["install-soperator"],
-                "storage_mode": "adopt-existing-storage",
-            },
-        }
+        return _external_mk8s_target_row()
 
-    def _capture_field_wizard(**kwargs):  # type: ignore[no-untyped-def]
-        events.append("field_wizard")
-        assert kwargs["selected_infra"] == set()
-        assert kwargs["selected_apps"] == {"soperator", "cert-manager"}
-        payload = yaml.safe_load(kwargs["config_yaml"]) or {}
-        assert payload["infra"]["components"] == []
-        targets = payload.get("deploy", {}).get("targets", [])
-        assert [(row.get("instance_id"), row.get("kind")) for row in targets] == [
-            ("external-cluster", "external-mk8s")
-        ]
-        app_rows = payload.get("apps", {}).get("charts", [])
-        assert {(row.get("id"), row.get("instance_id")) for row in app_rows} == {
-            ("soperator", "external-cluster"),
-            ("cert-manager", "external-cluster"),
-        }
-        return kwargs["config_yaml"], True
-
-    monkeypatch.setattr(cli_module, "_prompt_soperator_install_mode", _capture_install_mode)
     monkeypatch.setattr(cli_module, "_prompt_soperator_onboarding_target_row", _external_target_row)
-    monkeypatch.setattr(cli_module, "_run_component_field_wizard", _capture_field_wizard)
 
     result = runner.invoke(
         app,
         [
-            "create",
+            "ext-soperator",
+            "onboard",
+            str(config_path),
+            "--no-validate-sources",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Registered external MK8s target: external-cluster" in result.output
+    assert events == ["external_target"]
+    payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    assert payload["infra"]["components"] == []
+    assert [(row["id"], row["instance_id"]) for row in payload["apps"]["charts"]] == [
+        ("soperator", "external-cluster"),
+        ("cert-manager", "external-cluster"),
+        ("nvidia-gpu-operator", "external-cluster"),
+    ]
+    assert payload["apps"]["charts"][0]["install_mode"] == "onboard-existing-cluster"
+    onboarding = payload["deploy"]["targets"][0]["soperator_onboarding"]
+    assert payload["deploy"]["targets"][0]["kind"] == "external-mk8s"
+    assert onboarding["analysis_fingerprint"]
+    _assert_soperator_onboard_next_steps(
+        result.output,
+        config_path=config_path,
+        target_ref="external-cluster",
+        migration_required=False,
+    )
+
+
+def test_soperator_onboard_interactive_lists_project_mk8s_clusters(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    deployments_root = tmp_path / "deployments"
+    deployments_root.mkdir(parents=True, exist_ok=True)
+    created = _create_non_interactive(
+        deployments_root,
+        "--infra",
+        "none",
+        "--app",
+        "none",
+        "--no-validate-config",
+    )
+    assert created.exit_code == 0, created.output
+
+    config_path = _project_config_path(deployments_root)
+    listed_projects: list[str] = []
+    snapshot_clusters: list[str] = []
+    prompt_labels: list[str] = []
+
+    def _cluster_choices(
+        *,
+        project_id: str,
+        provider_lookup: object,
+    ) -> list[cli_module.OptionChoice]:
+        _ = provider_lookup
+        listed_projects.append(project_id)
+        return [
+            cli_module.OptionChoice(
+                value="mk8scluster-e00alpha",
+                label="alpha-cluster  (mk8scluster-e00alpha)",
+                metadata={
+                    "cluster_id": "mk8scluster-e00alpha",
+                    "name": "alpha-cluster",
+                    "target_ref": "alpha-cluster",
+                },
+            ),
+            cli_module.OptionChoice(
+                value="mk8scluster-e00beta",
+                label="selected-cluster  (mk8scluster-e00beta)",
+                metadata={
+                    "cluster_id": "mk8scluster-e00beta",
+                    "name": "selected-cluster",
+                    "target_ref": "selected-cluster",
+                },
+            ),
+        ]
+
+    def _prompt_scalar(
+        field_label: str,
+        default: object,
+        **kwargs: object,
+    ) -> tuple[str, bool]:
+        _ = kwargs
+        prompt_labels.append(field_label)
+        if field_label != "Nebius MK8s cluster":
+            return str(default), False
+        return "mk8scluster-e00beta", False
+
+    def _snapshot_for_cluster(
+        payload: object,
+        *,
+        cluster_id: str,
+        access: str = "external",
+    ) -> tuple[dict[str, object], str]:
+        _ = payload, access
+        snapshot_clusters.append(cluster_id)
+        return (
+            {
+                "node_groups": {"gpu-pool": {"gpu": True, "node_count": 1}},
+                "helm_releases": [],
+                "crds": [],
+                "namespaces": [],
+                "collection_errors": [],
+            },
+            "nebius-selected-cluster-mk8scluster-e00beta-external",
+        )
+
+    monkeypatch.setattr(cli_module, "_project_mk8s_cluster_choices", _cluster_choices)
+    monkeypatch.setattr(cli_module, "_prompt_scalar_override", _prompt_scalar)
+    monkeypatch.setattr(
+        cli_module,
+        "_collect_soperator_snapshot_for_nebius_mk8s_cluster",
+        _snapshot_for_cluster,
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "ext-soperator",
+            "onboard",
+            str(config_path),
+            "--storage-mode",
+            "create-aligned-sfs",
+            "--no-validate-sources",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert listed_projects == ["project-456"]
+    assert prompt_labels == [
+        "Nebius MK8s cluster",
+        "deploy.targets[].soperator_onboarding.compute_mode",
+    ]
+    assert snapshot_clusters == ["mk8scluster-e00beta"]
+    assert "Registered external MK8s target: selected-cluster" in result.output
+    payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    target = payload["deploy"]["targets"][0]
+    assert target["instance_id"] == "selected-cluster"
+    assert target["cluster_id"] == "mk8scluster-e00beta"
+    assert target["soperator_onboarding"]["compute_mode"] == "keep-existing-compute"
+    assert "kube_context" not in target
+    assert "analysis_report" not in target["soperator_onboarding"]
+    source_report = config_path.parent / "source-soperator-cluster-discovery-report.json"
+    assert source_report.exists()
+    assert "Wrote Soperator source discovery report:" in result.output
+    assert [(row["id"], row["instance_id"]) for row in payload["apps"]["charts"]] == [
+        ("soperator", "selected-cluster"),
+        ("cert-manager", "selected-cluster"),
+        ("nvidia-gpu-operator", "selected-cluster"),
+    ]
+
+
+def test_soperator_onboard_prompts_source_version_when_discovery_has_crds_only(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    deployments_root = tmp_path / "deployments"
+    deployments_root.mkdir(parents=True, exist_ok=True)
+    created = _create_non_interactive(
+        deployments_root,
+        "--infra",
+        "none",
+        "--app",
+        "none",
+        "--no-validate-config",
+    )
+    assert created.exit_code == 0, created.output
+
+    config_path = _project_config_path(deployments_root)
+
+    def _cluster_choices(
+        *,
+        project_id: str,
+        provider_lookup: object,
+    ) -> list[cli_module.OptionChoice]:
+        _ = project_id, provider_lookup
+        return [
+            cli_module.OptionChoice(
+                value="mk8scluster-e00legacy",
+                label="legacy-cluster  (mk8scluster-e00legacy)",
+                metadata={
+                    "cluster_id": "mk8scluster-e00legacy",
+                    "name": "legacy-cluster",
+                    "target_ref": "legacy-cluster",
+                },
+            )
+        ]
+
+    def _prompt_scalar(
+        field_label: str,
+        default: object,
+        **kwargs: object,
+    ) -> tuple[str, bool]:
+        _ = default, kwargs
+        assert field_label == "Nebius MK8s cluster"
+        return "mk8scluster-e00legacy", False
+
+    def _snapshot_for_cluster(
+        payload: object,
+        *,
+        cluster_id: str,
+        access: str = "external",
+    ) -> tuple[dict[str, object], str]:
+        _ = payload, access
+        assert cluster_id == "mk8scluster-e00legacy"
+        return (
+            {
+                "node_groups": {"gpu-pool": {"gpu": True, "node_count": 1}},
+                "helm_releases": [],
+                "crds": ["slurmclusters.slurm.nebius.ai"],
+                "namespaces": ["soperator"],
+                "collection_errors": [],
+            },
+            "nebius-legacy-cluster-mk8scluster-e00legacy-external",
+        )
+
+    monkeypatch.setattr(cli_module, "_project_mk8s_cluster_choices", _cluster_choices)
+    monkeypatch.setattr(cli_module, "_prompt_scalar_override", _prompt_scalar)
+    monkeypatch.setattr(
+        cli_module,
+        "_collect_soperator_snapshot_for_nebius_mk8s_cluster",
+        _snapshot_for_cluster,
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "ext-soperator",
+            "onboard",
+            str(config_path),
+            "--storage-mode",
+            "create-aligned-sfs",
+            "--compute-mode",
+            "create-aligned-node-groups",
+            "--no-validate-sources",
+        ],
+        input="3.0.5\n",
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Loading Soperator migration profile versions..." in result.output
+    assert "deploy.targets[].soperator_onboarding.source_version" in result.output
+    assert "Detected Soperator version: 3.0.5" in result.output
+    assert "Migration profile: v3-to-target" in result.output
+    payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    onboarding = payload["deploy"]["targets"][0]["soperator_onboarding"]
+    assert onboarding["accepted"] is True
+    assert onboarding["state"] == "existing-soperator-supported"
+    assert onboarding["source_version"] == "3.0.5"
+    assert onboarding["migration_profile_id"] == "v3-to-target"
+
+
+def test_soperator_onboard_detects_legacy_controller_release_without_prompt(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    deployments_root = tmp_path / "deployments"
+    deployments_root.mkdir(parents=True, exist_ok=True)
+    created = _create_non_interactive(
+        deployments_root,
+        "--infra",
+        "none",
+        "--app",
+        "none",
+        "--no-validate-config",
+    )
+    assert created.exit_code == 0, created.output
+
+    config_path = _project_config_path(deployments_root)
+
+    def _cluster_choices(
+        *,
+        project_id: str,
+        provider_lookup: object,
+    ) -> list[cli_module.OptionChoice]:
+        _ = project_id, provider_lookup
+        return [
+            cli_module.OptionChoice(
+                value="mk8scluster-e00legacy",
+                label="legacy-cluster  (mk8scluster-e00legacy)",
+                metadata={
+                    "cluster_id": "mk8scluster-e00legacy",
+                    "name": "legacy-cluster",
+                    "target_ref": "legacy-cluster",
+                },
+            )
+        ]
+
+    def _prompt_scalar(
+        field_label: str,
+        default: object,
+        **kwargs: object,
+    ) -> tuple[str, bool]:
+        _ = default, kwargs
+        assert field_label == "Nebius MK8s cluster"
+        return "mk8scluster-e00legacy", False
+
+    def _snapshot_for_cluster(
+        payload: object,
+        *,
+        cluster_id: str,
+        access: str = "external",
+    ) -> tuple[dict[str, object], str]:
+        _ = payload, access
+        assert cluster_id == "mk8scluster-e00legacy"
+        return (
+            {
+                "node_groups": {"gpu-pool": {"gpu": True, "node_count": 1}},
+                "helm_releases": [
+                    {
+                        "name": "soperator-controller",
+                        "namespace": "soperator-system",
+                        "chart": "helm-soperator-1.23.3",
+                        "app_version": "1.23.3",
+                    }
+                ],
+                "crds": ["slurmclusters.slurm.nebius.ai"],
+                "namespaces": ["soperator", "soperator-system"],
+                "collection_errors": [],
+            },
+            "nebius-legacy-cluster-mk8scluster-e00legacy-external",
+        )
+
+    monkeypatch.setattr(cli_module, "_project_mk8s_cluster_choices", _cluster_choices)
+    monkeypatch.setattr(cli_module, "_prompt_scalar_override", _prompt_scalar)
+    monkeypatch.setattr(
+        cli_module,
+        "_collect_soperator_snapshot_for_nebius_mk8s_cluster",
+        _snapshot_for_cluster,
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "ext-soperator",
+            "onboard",
+            str(config_path),
+            "--storage-mode",
+            "create-aligned-sfs",
+            "--compute-mode",
+            "create-aligned-node-groups",
+            "--no-validate-sources",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "deploy.targets[].soperator_onboarding.source_version" not in result.output
+    assert "Detected Soperator version: 1.23.3" in result.output
+    assert "Migration profile: legacy-v1-to-target" in result.output
+    payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    onboarding = payload["deploy"]["targets"][0]["soperator_onboarding"]
+    assert onboarding["accepted"] is True
+    assert onboarding["state"] == "existing-soperator-supported"
+    assert onboarding["source_version"] == "1.23.3"
+    assert onboarding["migration_profile_id"] == "legacy-v1-to-target"
+    _assert_soperator_onboard_next_steps(
+        result.output,
+        config_path=config_path,
+        target_ref="legacy-cluster",
+        migration_required=True,
+    )
+
+
+def test_soperator_onboard_noninteractive_uses_source_version_for_crds_only_cluster(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    deployments_root = tmp_path / "deployments"
+    deployments_root.mkdir(parents=True, exist_ok=True)
+    created = _create_non_interactive(
+        deployments_root,
+        "--infra",
+        "none",
+        "--app",
+        "none",
+        "--no-validate-config",
+    )
+    assert created.exit_code == 0, created.output
+    config_path = _project_config_path(deployments_root)
+
+    def _snapshot(*, kube_context: str) -> dict[str, object]:
+        assert kube_context == "legacy-context"
+        return {
+            "node_groups": {"gpu-pool": {"gpu": True, "node_count": 1}},
+            "helm_releases": [],
+            "crds": ["slurmclusters.slurm.nebius.ai"],
+            "namespaces": ["soperator"],
+            "collection_errors": [],
+        }
+
+    monkeypatch.setattr(cli_module, "collect_kubectl_soperator_snapshot", _snapshot)
+
+    result = runner.invoke(
+        app,
+        [
+            "ext-soperator",
+            "onboard",
+            str(config_path),
+            "--cluster-id",
+            "mk8scluster-legacy",
+            "--target-id",
+            "legacy-cluster",
+            "--kube-context",
+            "legacy-context",
+            "--storage-mode",
+            "create-aligned-sfs",
+            "--compute-mode",
+            "create-aligned-node-groups",
+            "--source-version",
+            "3.0.5",
+            "--no-interactive",
+            "--no-validate-sources",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Detected Soperator version: 3.0.5" in result.output
+    assert "Migration profile: v3-to-target" in result.output
+    payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    onboarding = payload["deploy"]["targets"][0]["soperator_onboarding"]
+    assert onboarding["state"] == "existing-soperator-supported"
+    assert onboarding["source_version"] == "3.0.5"
+    assert onboarding["migration_profile_id"] == "v3-to-target"
+
+
+def test_soperator_onboard_deployments_root_creates_project_config(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    deployments_root = tmp_path / "deployments"
+    deployments_root.mkdir(parents=True, exist_ok=True)
+    snapshot_contexts: list[str] = []
+
+    def _snapshot(*, kube_context: str) -> dict[str, object]:
+        snapshot_contexts.append(kube_context)
+        return {
+            "node_groups": {"gpu-pool": {"gpu": True, "node_count": 1}},
+            "helm_releases": [],
+            "crds": [],
+            "namespaces": [],
+            "collection_errors": [],
+        }
+
+    monkeypatch.setattr(cli_module, "collect_kubectl_soperator_snapshot", _snapshot)
+
+    result = runner.invoke(
+        app,
+        [
+            "ext-soperator",
+            "onboard",
             str(deployments_root),
             "--client-name",
             "client-a",
@@ -3768,25 +4883,1702 @@ def test_create_interactive_soperator_onboarding_adds_external_target_without_mk
             "project-456",
             "--region-id",
             "eu-north1",
+            "--cluster-id",
+            "mk8scluster-training",
+            "--target-id",
+            "training-cluster",
+            "--kube-context",
+            "training-context",
+            "--no-interactive",
             "--no-validate-sources",
-            "--no-validate-config",
-            "--infra",
-            "mk8s",
-            "--app",
-            "soperator",
         ],
     )
 
     assert result.exit_code == 0, result.output
-    assert "install_mode=onboard-existing-cluster uses an external MK8s" in result.output
-    assert events == ["install_mode", "external_target", "field_wizard"]
-    payload = yaml.safe_load(_project_config_path(deployments_root).read_text(encoding="utf-8"))
+    assert snapshot_contexts == ["training-context"]
+    config_path = _project_config_path(deployments_root)
+    assert config_path.exists()
+    assert (config_path.parent / "generated" / "infra").is_dir()
+    assert "Created project:" in result.output
+    assert "Updated:" in result.output
+    payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    assert payload["client_info"]["client_name"] == "client-a"
+    assert payload["client_info"]["nebius"]["tenant_id"] == "tenant-123"
+    assert payload["client_info"]["nebius"]["project_id"] == "project-456"
     assert payload["infra"]["components"] == []
+    assert payload["deploy"]["targets"][0]["cluster_id"] == "mk8scluster-training"
+    assert [(row["id"], row["instance_id"]) for row in payload["apps"]["charts"]] == [
+        ("soperator", "training-cluster"),
+        ("cert-manager", "training-cluster"),
+        ("nvidia-gpu-operator", "training-cluster"),
+    ]
+    assert payload["deploy"]["targets"][0]["validations"]["mk8s_gpu"]["nccl"]["enabled"] is True
+
+
+def test_soperator_onboard_project_directory_updates_existing_config(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    deployments_root = tmp_path / "deployments"
+    deployments_root.mkdir(parents=True, exist_ok=True)
+    created = _create_non_interactive(
+        deployments_root,
+        "--infra",
+        "none",
+        "--app",
+        "none",
+        "--no-validate-config",
+    )
+    assert created.exit_code == 0, created.output
+    project_dir = _project_dir(deployments_root)
+    config_path = _project_config_path(deployments_root)
+    snapshot_contexts: list[str] = []
+
+    def _snapshot(*, kube_context: str) -> dict[str, object]:
+        snapshot_contexts.append(kube_context)
+        return {
+            "node_groups": {"cpu-pool": {"gpu": False, "node_count": 2}},
+            "helm_releases": [],
+            "crds": [],
+            "namespaces": [],
+            "collection_errors": [],
+        }
+
+    monkeypatch.setattr(cli_module, "collect_kubectl_soperator_snapshot", _snapshot)
+
+    result = runner.invoke(
+        app,
+        [
+            "ext-soperator",
+            "onboard",
+            str(project_dir),
+            "--cluster-id",
+            "mk8scluster-external",
+            "--target-id",
+            "external-cluster",
+            "--kube-context",
+            "external-context",
+            "--no-interactive",
+            "--no-validate-sources",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert snapshot_contexts == ["external-context"]
+    assert "Created project:" not in result.output
+    assert "Updated:" in result.output
+    payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    assert payload["deploy"]["targets"][0]["instance_id"] == "external-cluster"
+    assert payload["deploy"]["targets"][0]["cluster_id"] == "mk8scluster-external"
     assert [(row["id"], row["instance_id"]) for row in payload["apps"]["charts"]] == [
         ("soperator", "external-cluster"),
         ("cert-manager", "external-cluster"),
     ]
-    assert payload["deploy"]["targets"][0]["kind"] == "external-mk8s"
+
+
+def test_soperator_onboard_deployments_root_existing_config_restores_gitignore(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    _git_init(repo_root)
+    deployments_root = repo_root / "deployments"
+    created = _create_non_interactive(
+        deployments_root,
+        "--infra",
+        "none",
+        "--app",
+        "none",
+        "--no-validate-config",
+    )
+    assert created.exit_code == 0, created.output
+    gitignore_path = deployments_root / ".gitignore"
+    gitignore_path.unlink()
+
+    def _snapshot(*, kube_context: str) -> dict[str, object]:
+        assert kube_context == "external-context"
+        return {
+            "node_groups": {"cpu-pool": {"gpu": False, "node_count": 2}},
+            "helm_releases": [],
+            "crds": [],
+            "namespaces": [],
+            "collection_errors": [],
+        }
+
+    monkeypatch.setattr(cli_module, "collect_kubectl_soperator_snapshot", _snapshot)
+
+    result = runner.invoke(
+        app,
+        [
+            "ext-soperator",
+            "onboard",
+            str(deployments_root),
+            "--tenant-id",
+            "tenant-123",
+            "--project-id",
+            "project-456",
+            "--cluster-id",
+            "mk8scluster-external",
+            "--target-id",
+            "external-cluster",
+            "--kube-context",
+            "external-context",
+            "--no-interactive",
+            "--no-validate-sources",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Created project:" not in result.output
+    assert "Existing project config detected." in result.output
+    assert "`ext-soperator onboard` will update" in result.output
+    assert "Ensured deployments .gitignore:" in result.output
+    assert cli_module._DEPLOYMENTS_GITIGNORE_BEGIN in gitignore_path.read_text(encoding="utf-8")
+
+
+def test_soperator_onboard_interactive_existing_root_requires_confirmation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    deployments_root = tmp_path / "deployments"
+    deployments_root.mkdir(parents=True, exist_ok=True)
+    created = _create_non_interactive(
+        deployments_root,
+        "--infra",
+        "none",
+        "--app",
+        "none",
+        "--no-validate-config",
+    )
+    assert created.exit_code == 0, created.output
+    config_path = _project_config_path(deployments_root)
+    original = config_path.read_text(encoding="utf-8")
+
+    monkeypatch.setattr(
+        cli_module,
+        "_prompt_soperator_onboarding_target_row",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("Declining existing config update should stop before discovery")
+        ),
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "ext-soperator",
+            "onboard",
+            str(deployments_root),
+            "--no-validate-sources",
+        ],
+        input="tenant-123\nproject-456\nn\n",
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Tenant ID" in result.output
+    assert "Project ID" in result.output
+    assert "Existing project config detected." in result.output
+    assert (
+        "Continue and update the existing config.yaml with Soperator onboarding?" in result.output
+    )
+    assert "No changes applied." in result.output
+    assert config_path.read_text(encoding="utf-8") == original
+
+
+def test_soperator_onboard_interactive_honors_storage_mode_option(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    deployments_root = tmp_path / "deployments"
+    deployments_root.mkdir(parents=True, exist_ok=True)
+    created = _create_non_interactive(
+        deployments_root,
+        "--infra",
+        "none",
+        "--app",
+        "none",
+        "--no-validate-config",
+    )
+    assert created.exit_code == 0, created.output
+
+    config_path = _project_config_path(deployments_root)
+    storage_modes: list[str | None] = []
+
+    def _external_target_row(
+        *,
+        storage_mode: str | None = None,
+        **_kwargs: object,
+    ) -> dict[str, object]:
+        storage_modes.append(storage_mode)
+        row = _external_mk8s_target_row()
+        row["soperator_onboarding"]["storage_mode"] = storage_mode or "keep-existing-storage"  # type: ignore[index]
+        return row
+
+    monkeypatch.setattr(cli_module, "_prompt_soperator_onboarding_target_row", _external_target_row)
+
+    result = runner.invoke(
+        app,
+        [
+            "ext-soperator",
+            "onboard",
+            str(config_path),
+            "--storage-mode",
+            "create-aligned-sfs",
+            "--no-validate-sources",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert storage_modes == ["create-aligned-sfs"]
+    payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    onboarding = payload["deploy"]["targets"][0]["soperator_onboarding"]
+    assert onboarding["storage_mode"] == "create-aligned-sfs"
+
+
+def test_soperator_onboard_interactive_honors_compute_mode_option(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    deployments_root = tmp_path / "deployments"
+    deployments_root.mkdir(parents=True, exist_ok=True)
+    created = _create_non_interactive(
+        deployments_root,
+        "--infra",
+        "none",
+        "--app",
+        "none",
+        "--no-validate-config",
+    )
+    assert created.exit_code == 0, created.output
+
+    config_path = _project_config_path(deployments_root)
+    compute_modes: list[str | None] = []
+
+    def _external_target_row(
+        *,
+        compute_mode: str | None = None,
+        **_kwargs: object,
+    ) -> dict[str, object]:
+        compute_modes.append(compute_mode)
+        row = _external_mk8s_target_row()
+        row["soperator_onboarding"]["compute_mode"] = compute_mode or "keep-existing-compute"  # type: ignore[index]
+        return row
+
+    monkeypatch.setattr(cli_module, "_prompt_soperator_onboarding_target_row", _external_target_row)
+
+    result = runner.invoke(
+        app,
+        [
+            "ext-soperator",
+            "onboard",
+            str(config_path),
+            "--compute-mode",
+            "create-aligned-node-groups",
+            "--no-validate-sources",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert compute_modes == ["create-aligned-node-groups"]
+    payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    onboarding = payload["deploy"]["targets"][0]["soperator_onboarding"]
+    assert onboarding["compute_mode"] == "create-aligned-node-groups"
+
+
+def test_soperator_onboarding_defaults_require_aligned_sfs_for_old_layout() -> None:
+    target = cli_module._soperator_onboarding_target_defaults(
+        "external-cluster",
+        kube_context="",
+        pinned_chart_version="4.0.1-ps.1",
+        pinned_app_version="4.0.1",
+        snapshot={
+            "node_groups": {
+                "gpu-pool": {
+                    "gpu": True,
+                    "node_count": 2,
+                    "labels": {"nebius.com/node-group": "gpu-pool"},
+                    "allocatable": {"nvidia.com/gpu": "8"},
+                }
+            },
+            "helm_releases": [
+                {
+                    "name": "soperator",
+                    "namespace": "soperator",
+                    "chart": "soperator-3.0.5",
+                    "app_version": "3.0.5",
+                }
+            ],
+            "crds": [],
+            "namespaces": ["soperator"],
+            "pvs": [],
+            "pvcs": [],
+            "collection_errors": [],
+        },
+    )
+
+    onboarding = target["soperator_onboarding"]
+    assert onboarding["state"] == "existing-soperator-supported"
+    assert onboarding["storage_mode"] == "create-aligned-sfs"
+    assert onboarding["compute_mode"] == "create-aligned-node-groups"
+    assert "create-aligned-sfs" in onboarding["actions"]
+    assert "plan-soperator-data-migration" in onboarding["actions"]
+    assert "plan-soperator-compute-migration" in onboarding["actions"]
+
+
+def test_soperator_onboarding_preserves_live_adoption_values_after_materialization(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    snapshot = {
+        "node_groups": {
+            "mk8snodegroup-system": {
+                "gpu": False,
+                "node_count": 1,
+                "labels": {
+                    "nebius.com/node-group-id": "mk8snodegroup-system",
+                    "nebius.com/node-group": "cpu",
+                    "slurm.nebius.ai/nodeset": "system",
+                },
+            },
+            "mk8snodegroup-controller": {
+                "gpu": False,
+                "node_count": 1,
+                "labels": {
+                    "nebius.com/node-group-id": "mk8snodegroup-controller",
+                    "nebius.com/node-group": "cpu",
+                    "slurm.nebius.ai/nodeset": "controller",
+                },
+            },
+            "mk8snodegroup-login": {
+                "gpu": False,
+                "node_count": 1,
+                "labels": {
+                    "nebius.com/node-group-id": "mk8snodegroup-login",
+                    "nebius.com/node-group": "cpu",
+                    "slurm.nebius.ai/nodeset": "login",
+                },
+            },
+            "mk8snodegroup-accounting": {
+                "gpu": False,
+                "node_count": 1,
+                "labels": {
+                    "nebius.com/node-group-id": "mk8snodegroup-accounting",
+                    "nebius.com/node-group": "cpu",
+                    "slurm.nebius.ai/nodeset": "accounting",
+                },
+            },
+            "mk8snodegroup-worker-gpu": {
+                "gpu": True,
+                "node_count": 2,
+                "labels": {
+                    "nebius.com/node-group-id": "mk8snodegroup-worker-gpu",
+                    "slurm.nebius.ai/nodeset": "worker-gpu",
+                },
+                "allocatable": {"nvidia.com/gpu": "8"},
+            },
+            "mk8snodegroup-worker-cpu": {
+                "gpu": False,
+                "node_count": 2,
+                "labels": {
+                    "nebius.com/node-group-id": "mk8snodegroup-worker-cpu",
+                    "slurm.nebius.ai/nodeset": "worker-cpu",
+                },
+                "allocatable": {"cpu": "15900m", "memory": "65216560Ki"},
+            },
+        },
+        "helm_releases": [
+            {
+                "name": "soperator",
+                "namespace": "soperator",
+                "chart": "soperator-4.0.1-ps.1",
+                "app_version": "4.0.1",
+            }
+        ],
+        "crds": [],
+        "namespaces": ["soperator"],
+        "pvcs": [
+            {
+                "metadata": {"name": "controller-spool-pvc", "namespace": "soperator"},
+                "spec": {"resources": {"requests": {"storage": "30Gi"}}},
+                "status": {"capacity": {"storage": "128Gi"}},
+            },
+            {
+                "metadata": {"name": "jail-pvc", "namespace": "soperator"},
+                "spec": {"resources": {"requests": {"storage": "2Ti"}}},
+                "status": {"capacity": {"storage": "1Ti"}},
+            },
+        ],
+        "pvs": [
+            {
+                "metadata": {"name": "jail-pv"},
+                "spec": {
+                    "capacity": {"storage": "1Ti"},
+                    "nodeAffinity": {
+                        "required": {
+                            "nodeSelectorTerms": [
+                                {
+                                    "matchExpressions": [
+                                        {
+                                            "key": "slurm.nebius.ai/jail",
+                                            "operator": "In",
+                                            "values": ["true"],
+                                        }
+                                    ]
+                                }
+                            ]
+                        }
+                    },
+                },
+            },
+            {
+                "metadata": {"name": "controller-spool-pv"},
+                "spec": {
+                    "capacity": {"storage": "128Gi"},
+                    "nodeAffinity": {
+                        "required": {
+                            "nodeSelectorTerms": [
+                                {
+                                    "matchExpressions": [
+                                        {
+                                            "key": "slurm.nebius.ai/nodeset",
+                                            "operator": "In",
+                                            "values": ["controller"],
+                                        }
+                                    ]
+                                }
+                            ]
+                        }
+                    },
+                },
+            },
+            {
+                "metadata": {"name": "accounting-pv"},
+                "spec": {
+                    "capacity": {"storage": "128Gi"},
+                    "nodeAffinity": {
+                        "required": {
+                            "nodeSelectorTerms": [
+                                {
+                                    "matchExpressions": [
+                                        {
+                                            "key": "slurm.nebius.ai/nodeset",
+                                            "operator": "In",
+                                            "values": ["accounting"],
+                                        }
+                                    ]
+                                }
+                            ]
+                        }
+                    },
+                },
+            },
+        ],
+        "soperator_resources": [
+            {
+                "apiVersion": "slurm.nebius.ai/v1",
+                "kind": "SlurmCluster",
+                "metadata": {"name": "legacy-slurm"},
+                "status": {"phase": "Available"},
+            },
+            {
+                "apiVersion": "slurm.nebius.ai/v1",
+                "kind": "SlurmCluster",
+                "metadata": {"name": "external-cluster"},
+                "status": {"phase": "Pending"},
+            },
+            {
+                "apiVersion": "slurm.nebius.ai/v1",
+                "kind": "NodeSet",
+                "metadata": {"name": "worker-cpu"},
+                "spec": {
+                    "nodeConfig": {
+                        "features": ["cpu"],
+                        "static": "Boards=1 SocketsPerBoard=1 CoresPerSocket=8 ThreadsPerCore=2",
+                    },
+                    "slurmd": {
+                        "resources": {
+                            "cpu": "500m",
+                            "memory": "1024Mi",
+                            "ephemeral-storage": "10Gi",
+                        }
+                    },
+                },
+            },
+            {
+                "apiVersion": "slurm.nebius.ai/v1",
+                "kind": "NodeSet",
+                "metadata": {"name": "worker-gpu"},
+                "spec": {
+                    "gpu": {"enabled": True, "nvidia": {"gdrCopyEnabled": True}},
+                    "nodeConfig": {
+                        "features": ["gpu", "cuda"],
+                        "gresConfig": ["AutoDetect=nvidia"],
+                        "static": (
+                            "Boards=1 SocketsPerBoard=1 CoresPerSocket=8 "
+                            "ThreadsPerCore=1 Gres=gpu:8"
+                        ),
+                    },
+                    "slurmd": {
+                        "resources": {
+                            "cpu": "500m",
+                            "memory": "1024Mi",
+                            "ephemeral-storage": "10Gi",
+                            "nvidia.com/gpu": "8",
+                        }
+                    },
+                },
+            },
+        ],
+        "worker_topology_by_nodeset": {
+            "worker-gpu": {
+                "cpus": 128,
+                "boards": 1,
+                "sockets": 2,
+                "cores_per_socket": 32,
+                "threads_per_core": 2,
+                "source_pod": "worker-gpu-0",
+            }
+        },
+        "soperator_namespace_resources": [
+            {
+                "apiVersion": "apps/v1",
+                "kind": "Deployment",
+                "metadata": {
+                    "name": "soperator-manager",
+                    "namespace": "soperator",
+                    "labels": {"app.kubernetes.io/name": "helm-soperator"},
+                },
+            }
+        ],
+        "collection_errors": [],
+    }
+    target = cli_module._soperator_onboarding_target_defaults(
+        "external-cluster",
+        kube_context="external-context",
+        storage_mode="keep-existing-storage",
+        compute_mode="keep-existing-compute",
+        pinned_chart_version="4.0.1-ps.1",
+        pinned_app_version="4.0.1",
+        snapshot=snapshot,
+    )
+    payload = {
+        "client_info": {
+            "nebius": {
+                "tenant_id": "tenant-123",
+                "project_id": "project-456",
+                "region_id": "eu-north1",
+            }
+        },
+        "infra": {"components": []},
+        "apps": {
+            "charts": [
+                {
+                    "id": "soperator",
+                    "instance_id": "external-cluster",
+                    "enabled": True,
+                    "install_mode": "onboard-existing-cluster",
+                    "values": {
+                        "customUserValue": "keep",
+                        "volume": {
+                            "controllerSpool": {"size": "30Gi"},
+                            "jail": {"size": "2Ti"},
+                        },
+                        "storage": {
+                            "controllerSpool": {
+                                "matchExpressions": [
+                                    {
+                                        "key": "nebius.com/node-group",
+                                        "operator": "In",
+                                        "values": ["cpu"],
+                                    }
+                                ]
+                            }
+                        },
+                        "nodeGroupMapping": {
+                            "worker": [
+                                "mk8snodegroup-worker-cpu",
+                                "mk8snodegroup-worker-gpu",
+                            ]
+                        },
+                        "partitionConfiguration": {
+                            "configType": "structured",
+                            "partitions": [
+                                {
+                                    "name": "gpu",
+                                    "nodeSetRefs": [
+                                        "worker-mk8snodegroup-worker-cpu",
+                                        "worker-mk8snodegroup-worker-gpu",
+                                    ],
+                                }
+                            ],
+                        },
+                        "nodesets": [
+                            {
+                                "name": "worker-mk8snodegroup-worker-cpu",
+                                "gpu": {"enabled": True},
+                                "nodeSelector": {
+                                    "nebius.com/node-group-id": "mk8snodegroup-worker-cpu"
+                                },
+                                "slurmd": {
+                                    "resources": {
+                                        "cpu": "500m",
+                                        "memory": "1024Mi",
+                                        "gpu": 8,
+                                    }
+                                },
+                            },
+                            {
+                                "name": "worker-mk8snodegroup-worker-gpu",
+                                "gpu": {"enabled": True},
+                                "nodeSelector": {
+                                    "nebius.com/node-group-id": "mk8snodegroup-worker-gpu"
+                                },
+                                "slurmd": {
+                                    "resources": {
+                                        "cpu": "500m",
+                                        "memory": "1024Mi",
+                                        "gpu": 8,
+                                    }
+                                },
+                            },
+                        ],
+                    },
+                }
+            ]
+        },
+        "deploy": {"targets": []},
+    }
+
+    app_entries = component_entries("apps")
+    adoption_values = cli_module._soperator_onboarding_adoption_values_from_target_row(target)
+    cli_module._apply_soperator_onboarding_to_payload(
+        payload,
+        target_row=target,
+        app_entries=app_entries,
+    )
+    monkeypatch.setattr(
+        cli_module,
+        "_app_chart_default_values",
+        lambda **_: {
+            "volume": {
+                "jail": {"size": "2Ti"},
+                "controllerSpool": {"size": "128Gi"},
+                "accounting": {"size": "128Gi"},
+            }
+        },
+    )
+    cli_module._prune_redundant_app_chart_default_values(
+        payload=payload,
+        app_entries=app_entries,
+    )
+    soperator = next(row for row in payload["apps"]["charts"] if row["id"] == "soperator")
+    assert soperator["values"].get("volume", {}).get("jail", {}).get("size") is None
+    cli_module._merge_soperator_onboarding_adoption_values_for_target(
+        payload,
+        target_ref="external-cluster",
+        adoption_values=adoption_values,
+    )
+    cli_module.normalize_runtime_config_payload(payload)
+
+    soperator = next(row for row in payload["apps"]["charts"] if row["id"] == "soperator")
+    values = soperator["values"]
+    assert soperator["profile"] == "nebius-mixed-v1"
+    assert values["customUserValue"] == "keep"
+    assert values["nameOverride"] == "helm-soperator"
+    assert values["clusterName"] == "legacy-slurm"
+    assert values["nodeGroupMapping"] == {
+        "system": ["mk8snodegroup-system"],
+        "controller": ["mk8snodegroup-controller"],
+        "login": ["mk8snodegroup-login"],
+        "accounting": ["mk8snodegroup-accounting"],
+        "worker-gpu": ["mk8snodegroup-worker-gpu"],
+        "worker-cpu": ["mk8snodegroup-worker-cpu"],
+    }
+    assert values["plugStackConfig"]["pyxis"] == {"required": False, "importerPath": ""}
+    nodeset_names = {
+        str(item.get("name"))
+        for item in values["nodesets"]
+        if isinstance(item, dict) and item.get("name")
+    }
+    assert "worker-cpu" in nodeset_names
+    assert "worker-gpu" in nodeset_names
+    assert "worker-mk8snodegroup-worker-cpu" not in nodeset_names
+    assert "worker-mk8snodegroup-worker-gpu" not in nodeset_names
+    worker_gpu = next(item for item in values["nodesets"] if item["name"] == "worker-gpu")
+    assert worker_gpu["nodeConfig"]["static"] == (
+        "CPUs=128 Boards=1 SocketsPerBoard=2 CoresPerSocket=32 ThreadsPerCore=2 Gres=gpu:8"
+    )
+    assert worker_gpu["slurmd"]["resources"]["gpu"] == 8
+    assert "nvidia.com/gpu" not in worker_gpu["slurmd"]["resources"]
+    assert "image" not in worker_gpu["slurmd"]
+    assert "image" not in worker_gpu["munge"]
+    worker_cpu = next(item for item in values["nodesets"] if item["name"] == "worker-cpu")
+    assert "image" not in worker_cpu["slurmd"]
+    assert "image" not in worker_cpu["munge"]
+    partitions = values["partitionConfiguration"]["partitions"]
+    assert {item["name"]: item["nodeSetRefs"] for item in partitions} == {
+        "cpu": ["worker-cpu"],
+        "gpu": ["worker-gpu"],
+    }
+    assert values["volume"]["controllerSpool"]["size"] == "128Gi"
+    assert values["volume"]["jail"]["size"] == "2Ti"
+    assert values["volume"]["accounting"]["size"] == "128Gi"
+    assert values["storage"]["jail"]["matchExpressions"] == [
+        {"key": "slurm.nebius.ai/jail", "operator": "In", "values": ["true"]}
+    ]
+    assert values["storage"]["controllerSpool"]["matchExpressions"] == [
+        {"key": "slurm.nebius.ai/nodeset", "operator": "In", "values": ["controller"]}
+    ]
+    assert values["storage"]["accounting"]["matchExpressions"] == [
+        {"key": "slurm.nebius.ai/nodeset", "operator": "In", "values": ["accounting"]}
+    ]
+    mariadb_storage = values["slurmNodes"]["accounting"]["mariadbOperator"]["storage"]
+    assert mariadb_storage["size"] == "128Gi"
+    assert mariadb_storage["storageClassName"] == "slurm-local-pv"
+    assert mariadb_storage["volumeClaimTemplate"]["resources"]["requests"]["storage"] == "128Gi"
+
+
+def test_soperator_onboarding_storage_mode_label_uses_no_change_wording() -> None:
+    choices = cli_module._soperator_onboarding_storage_mode_choices("keep-existing-storage")
+
+    assert choices[0].value == "keep-existing-storage"
+    assert choices[0].label == "Keep existing storage with no changes"
+
+
+def test_soperator_onboarding_compute_mode_label_uses_no_change_wording() -> None:
+    choices = cli_module._soperator_onboarding_compute_mode_choices("keep-existing-compute")
+
+    assert choices[0].value == "keep-existing-compute"
+    assert choices[0].label == "Keep existing compute node groups"
+
+
+def test_soperator_onboard_option_path_rejects_invalid_compute_mode() -> None:
+    with pytest.raises(RuntimeError, match="Invalid Soperator onboarding compute mode"):
+        cli_module._soperator_onboarding_target_row_from_options(
+            target_id="training-cluster",
+            cluster_id="mk8scluster-training",
+            kube_context="training-context",
+            storage_mode=None,
+            compute_mode="legacy-compute",
+        )
+
+
+def test_soperator_onboard_option_path_allows_explicit_keep_existing_storage(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _snapshot(*, kube_context: str) -> dict[str, object]:
+        assert kube_context == "training-context"
+        return {
+            "node_groups": {"cpu-pool": {"gpu": False, "node_count": 2}},
+            "helm_releases": [],
+            "crds": [],
+            "namespaces": [],
+            "pvs": [],
+            "pvcs": [],
+            "collection_errors": [],
+        }
+
+    monkeypatch.setattr(cli_module, "collect_kubectl_soperator_snapshot", _snapshot)
+
+    target = cli_module._soperator_onboarding_target_row_from_options(
+        target_id="training-cluster",
+        cluster_id="mk8scluster-training",
+        kube_context="training-context",
+        storage_mode="keep-existing-storage",
+    )
+
+    onboarding = target["soperator_onboarding"]
+    assert onboarding["storage_mode"] == "keep-existing-storage"
+    assert "create-aligned-sfs" not in onboarding["actions"]
+
+
+def test_soperator_onboard_option_path_defaults_to_aligned_sfs_when_storage_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _snapshot(*, kube_context: str) -> dict[str, object]:
+        assert kube_context == "training-context"
+        return {
+            "node_groups": {"cpu-pool": {"gpu": False, "node_count": 2}},
+            "helm_releases": [],
+            "crds": [],
+            "namespaces": [],
+            "pvs": [],
+            "pvcs": [],
+            "collection_errors": [],
+        }
+
+    monkeypatch.setattr(cli_module, "collect_kubectl_soperator_snapshot", _snapshot)
+
+    target = cli_module._soperator_onboarding_target_row_from_options(
+        target_id="training-cluster",
+        cluster_id="mk8scluster-training",
+        kube_context="training-context",
+        storage_mode=None,
+    )
+
+    onboarding = target["soperator_onboarding"]
+    assert onboarding["storage_mode"] == "create-aligned-sfs"
+    assert "create-aligned-sfs" in onboarding["actions"]
+
+
+def test_soperator_onboard_option_path_uses_analyzer_for_compatible_layout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _snapshot(*, kube_context: str) -> dict[str, object]:
+        assert kube_context == "training-context"
+        return {
+            "node_groups": {
+                "system": {
+                    "gpu": False,
+                    "node_count": 3,
+                    "labels": {
+                        "nebius.com/node-group": "system",
+                        "slurm.nebius.ai/nodeset": "system",
+                    },
+                },
+                "controller": {
+                    "gpu": False,
+                    "node_count": 1,
+                    "labels": {
+                        "nebius.com/node-group": "controller",
+                        "slurm.nebius.ai/nodeset": "controller",
+                    },
+                },
+                "login": {
+                    "gpu": False,
+                    "node_count": 1,
+                    "labels": {
+                        "nebius.com/node-group": "login",
+                        "slurm.nebius.ai/nodeset": "login",
+                    },
+                },
+                "accounting": {
+                    "gpu": False,
+                    "node_count": 1,
+                    "labels": {
+                        "nebius.com/node-group": "accounting",
+                        "slurm.nebius.ai/nodeset": "accounting",
+                    },
+                },
+                "worker-gpu": {
+                    "gpu": True,
+                    "node_count": 2,
+                    "labels": {
+                        "nebius.com/node-group": "worker-gpu",
+                        "slurm.nebius.ai/nodeset": "worker-gpu",
+                        "topology.nebius.com/tier-0": "leaf-a",
+                    },
+                    "allocatable": {"nvidia.com/gpu": "8"},
+                },
+            },
+            "helm_releases": [
+                {
+                    "name": "soperator-controller",
+                    "namespace": "soperator-system",
+                    "chart": "helm-soperator-1.23.3",
+                    "app_version": "1.23.3",
+                }
+            ],
+            "crds": [],
+            "namespaces": ["soperator"],
+            "storage": {
+                "jail": {"source": "pvc/jail"},
+                "controller-spool": {"source": "pvc/controller-spool"},
+                "accounting": {"source": "pvc/accounting"},
+            },
+            "pvs": [],
+            "pvcs": [],
+            "collection_errors": [],
+        }
+
+    monkeypatch.setattr(cli_module, "collect_kubectl_soperator_snapshot", _snapshot)
+
+    target = cli_module._soperator_onboarding_target_row_from_options(
+        target_id="training-cluster",
+        cluster_id="mk8scluster-training",
+        kube_context="training-context",
+        storage_mode="create-aligned-sfs",
+        compute_mode="create-aligned-node-groups",
+    )
+
+    onboarding = target["soperator_onboarding"]
+    assert onboarding["storage_mode"] == "keep-existing-storage"
+    assert onboarding["compute_mode"] == "keep-existing-compute"
+    assert "create-aligned-sfs" not in onboarding["actions"]
+    assert "plan-soperator-data-migration" not in onboarding["actions"]
+    assert "plan-soperator-compute-migration" not in onboarding["actions"]
+    assert "upgrade-soperator" in onboarding["actions"]
+
+
+def test_soperator_migrate_dry_run_prints_onboarding_migration_plan(tmp_path: Path) -> None:
+    config_path = _write_old_soperator_migration_config(tmp_path)
+
+    result = runner.invoke(
+        app,
+        [
+            "ext-soperator",
+            "migrate",
+            str(config_path),
+            "--dry-run",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Soperator migration target: external-cluster" in result.output
+    assert "Source discovery report:" in result.output
+    assert "source-soperator-cluster-discovery-report.json" in result.output
+    assert "Onboarding state: existing-soperator-supported" in result.output
+    assert "Source version: 3.0.5" in result.output
+    assert "Target version: 4.0.1-ps.1" in result.output
+    assert "Storage mode: create-aligned-sfs" in result.output
+    assert "Compute mode: create-aligned-node-groups" in result.output
+    assert "Migration required: yes" in result.output
+    assert "Storage migration required: yes" in result.output
+    assert "Compute migration required: yes" in result.output
+    assert "Soperator upgrade required: yes" in result.output
+    assert "External node-template upgrade required: yes" in result.output
+    assert "Target GPU stack remediation required: yes" in result.output
+    assert "external-node-template-upgrade" in result.output
+    assert "target-gpu-stack-remediation" in result.output
+    assert "create-aligned-sfs" in result.output
+    assert "online-bulk-data-sync" in result.output
+    assert "rolling-compute-migration" in result.output
+    assert "final-control-plane-cutover" in result.output
+    assert "Live executor contract:" in result.output
+    assert "External node-template contract:" in result.output
+    assert "Worker node-template quota contract:" in result.output
+    assert "temporary zero-surge strategy" in result.output
+    assert "do not require extra worker quota" in result.output
+    assert "Failure handling contract:" in result.output
+    assert "Resume contract:" in result.output
+    assert "Execution mode: dry-run; no cluster changes were made." in result.output
+
+
+def test_soperator_migrate_dry_run_treats_gpu_remediation_only_as_deploy_remediation(
+    tmp_path: Path,
+) -> None:
+    config_path = _write_old_soperator_migration_config(
+        tmp_path,
+        storage_mode="keep-existing-storage",
+        compute_mode="keep-existing-compute",
+    )
+    payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    target = payload["deploy"]["targets"][0]
+    onboarding = target["soperator_onboarding"]
+    onboarding["actions"] = ["remediate-target-gpu-stack"]
+    onboarding["node_template_upgrade"] = {}
+    cli_module._refresh_soperator_onboarding_fingerprints(payload)
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+    report_path = config_path.parent / "source-soperator-cluster-discovery-report.json"
+    source_report = json.loads(report_path.read_text(encoding="utf-8"))
+    source_report["report"]["migration_plan"] = []
+    report_path.write_text(json.dumps(source_report), encoding="utf-8")
+
+    result = runner.invoke(
+        app,
+        [
+            "ext-soperator",
+            "migrate",
+            str(config_path),
+            "--dry-run",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Migration required: no" in result.output
+    assert "Storage migration required: no" in result.output
+    assert "Compute migration required: no" in result.output
+    assert "External node-template upgrade required: no" in result.output
+    assert "Target GPU stack remediation required: yes" in result.output
+    assert "target-gpu-stack-remediation" not in result.output
+    assert "Migration phases: none" in result.output
+
+
+@pytest.mark.parametrize(
+    ("storage_mode", "compute_mode", "present", "absent"),
+    [
+        (
+            "keep-existing-storage",
+            "keep-existing-compute",
+            (
+                "external-node-template-upgrade",
+                "target-gpu-stack-remediation",
+                "rolling-compute-migration",
+                "final-control-plane-cutover",
+            ),
+            (
+                "create-aligned-sfs",
+                "online-bulk-data-sync",
+            ),
+        ),
+        (
+            "create-aligned-sfs",
+            "keep-existing-compute",
+            (
+                "external-node-template-upgrade",
+                "target-gpu-stack-remediation",
+                "create-aligned-sfs",
+                "online-bulk-data-sync",
+                "rolling-compute-migration",
+                "final-control-plane-cutover",
+            ),
+            (),
+        ),
+        (
+            "keep-existing-storage",
+            "create-aligned-node-groups",
+            (
+                "external-node-template-upgrade",
+                "target-gpu-stack-remediation",
+                "rolling-compute-migration",
+                "final-control-plane-cutover",
+            ),
+            ("create-aligned-sfs", "online-bulk-data-sync"),
+        ),
+        (
+            "create-aligned-sfs",
+            "create-aligned-node-groups",
+            (
+                "external-node-template-upgrade",
+                "target-gpu-stack-remediation",
+                "create-aligned-sfs",
+                "online-bulk-data-sync",
+                "rolling-compute-migration",
+                "final-control-plane-cutover",
+            ),
+            (),
+        ),
+    ],
+)
+def test_soperator_migrate_dry_run_respects_storage_compute_mode_matrix(
+    tmp_path: Path,
+    storage_mode: str,
+    compute_mode: str,
+    present: tuple[str, ...],
+    absent: tuple[str, ...],
+) -> None:
+    config_path = _write_old_soperator_migration_config(
+        tmp_path,
+        storage_mode=storage_mode,
+        compute_mode=compute_mode,
+    )
+
+    result = runner.invoke(app, ["ext-soperator", "migrate", str(config_path), "--dry-run"])
+
+    assert result.exit_code == 0, result.output
+    assert f"Storage mode: {storage_mode}" in result.output
+    assert f"Compute mode: {compute_mode}" in result.output
+    for phase_id in present:
+        assert phase_id in result.output
+    for phase_id in absent:
+        assert phase_id not in result.output
+
+
+def test_soperator_migrate_execute_runs_checkpointed_preflight(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_path = _write_old_soperator_migration_config(tmp_path)
+    monkeypatch.setattr(
+        cli_module,
+        "collect_kubectl_soperator_snapshot",
+        lambda *, kube_context: _old_soperator_snapshot(),
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "ext-soperator",
+            "migrate",
+            str(config_path),
+            "--target",
+            "external-cluster",
+            "--execute",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Soperator migration target: external-cluster" in result.output
+    assert "Execution mode: execute." in result.output
+    assert "Execute preflight checkpoint:" in result.output
+    assert "Live source version verified: 3.0.5" in result.output
+    assert "Pending phase: customer-approval" in result.output
+    assert "Mutation performed: no." in result.output
+    checkpoint_path = (
+        config_path.parent
+        / ".nebius-cxcli"
+        / "soperator-migrations"
+        / "external-cluster"
+        / "checkpoint.json"
+    )
+    checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+    assert checkpoint["completed_phases"] == ["discovery-and-plan"]
+    assert checkpoint["pending_phase"] == "customer-approval"
+
+
+def test_soperator_migrate_execute_derives_kube_context_from_cluster_id(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_path = _write_old_soperator_migration_config(tmp_path)
+    payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    target = payload["deploy"]["targets"][0]
+    target.pop("kube_context", None)
+    target["cluster_id"] = "mk8scluster-e00legacy"
+    target["access"] = "external"
+    payload["client_info"]["notifications"] = {"email_enabled": False, "email": None}
+    cli_module._refresh_soperator_onboarding_fingerprints(payload)
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+    observed: dict[str, object] = {}
+
+    monkeypatch.setattr(cli_module, "_runtime_auth_env_available", lambda: True)
+    monkeypatch.setattr(
+        cli_module,
+        "_mk8s_cluster_handoff_spec_for_identity",
+        lambda **_kwargs: cli_module._Mk8sKubeconfigSpec(
+            cluster_entry_name="legacy-cluster",
+            user_entry_name="legacy-user",
+            context_name="generated-context",
+            server="https://mk8s.example.test",
+            ca_pem="ca",
+            exec_command="nebius-cxcli",
+            exec_args=("mk8s-token",),
+        ),
+    )
+
+    def _execute(**kwargs):
+        execution_target = kwargs["payload"]["deploy"]["targets"][0]
+        observed["kube_context"] = execution_target.get("kube_context")
+        observed["kubeconfig_exists"] = Path(cli_module.os.environ["KUBECONFIG"]).exists()
+        return SoperatorMigrationExecutionResult(
+            checkpoint_path=tmp_path / "checkpoint.json",
+            completed_phases=("discovery-and-plan",),
+            pending_phase="customer-approval",
+            pending_reason="approval required",
+            live_source_version="3.0.5",
+            target_version="4.0.1-ps.1",
+            mutation_performed=False,
+            lines=("cluster-id execute path used",),
+        )
+
+    monkeypatch.setattr(cli_module, "execute_soperator_migration", _execute)
+    monkeypatch.setattr(
+        cli_module,
+        "collect_kubectl_soperator_snapshot",
+        lambda *, kube_context: _old_soperator_snapshot(),
+    )
+    real_execute = cli_module.execute_soperator_migration
+
+    def _execute_with_fake_commands(**kwargs):
+        kwargs["command_runner"] = _FakeSoperatorMigrationCommandRunner()
+        return real_execute(**kwargs)
+
+    monkeypatch.setattr(cli_module, "execute_soperator_migration", _execute_with_fake_commands)
+
+    result = runner.invoke(
+        app,
+        [
+            "ext-soperator",
+            "migrate",
+            str(config_path),
+            "--target",
+            "external-cluster",
+            "--execute",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert observed == {"kube_context": "generated-context", "kubeconfig_exists": True}
+    assert "cluster-id execute path used" in result.output
+
+
+def test_soperator_migrate_execute_records_approval_and_worker_groups(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_path = _write_old_soperator_migration_config(tmp_path)
+    _stub_soperator_migration_quota(monkeypatch)
+    _stub_soperator_migration_gpu_validations(monkeypatch)
+    monkeypatch.setattr(
+        cli_module,
+        "collect_kubectl_soperator_snapshot",
+        lambda *, kube_context: _old_soperator_snapshot(),
+    )
+    real_execute = cli_module.execute_soperator_migration
+
+    def _execute_with_fake_commands(**kwargs):
+        kwargs["command_runner"] = _FakeSoperatorMigrationCommandRunner()
+        return real_execute(**kwargs)
+
+    monkeypatch.setattr(cli_module, "execute_soperator_migration", _execute_with_fake_commands)
+
+    result = runner.invoke(
+        app,
+        [
+            "ext-soperator",
+            "migrate",
+            str(config_path),
+            "--target",
+            "external-cluster",
+            "--execute",
+            "--approve",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Auto-selected source worker node groups: gpu-pool" in result.output
+    assert "Soperator migration status" in result.output
+    assert "phase target-gpu-stack-remediation" in result.output
+    assert "phase create-aligned-sfs" in result.output
+    assert (
+        "Completed execute phases: discovery-and-plan, customer-approval, "
+        "external-node-template-upgrade, target-gpu-stack-remediation, "
+        "create-aligned-sfs, online-bulk-data-sync, "
+        "rolling-compute-migration, final-control-plane-cutover, validation-and-rollback-hold, "
+        "retire-old-resources"
+    ) in result.output
+    assert "Pending phase: none" in result.output
+    assert "Mutation performed: yes." in result.output
+    migrate_report_path = config_path.parent / "generated" / "reports" / "migrate-report.md"
+    assert f"Migrate report: {migrate_report_path}" in result.output
+    assert migrate_report_path.exists()
+    assert "Soperator and Slurm smoke" in migrate_report_path.read_text(encoding="utf-8")
+    checkpoint_path = (
+        config_path.parent
+        / ".nebius-cxcli"
+        / "soperator-migrations"
+        / "external-cluster"
+        / "checkpoint.json"
+    )
+    checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+    assert checkpoint["worker_node_groups"] == ["gpu-pool"]
+    assert checkpoint["pending_phase"] == "none"
+
+
+def test_soperator_migrate_execute_auto_selects_worker_groups_for_approval(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_path = _write_old_soperator_migration_config(tmp_path)
+    _stub_soperator_migration_quota(monkeypatch)
+    _stub_soperator_migration_gpu_validations(monkeypatch)
+    monkeypatch.setattr(
+        cli_module,
+        "collect_kubectl_soperator_snapshot",
+        lambda *, kube_context: _old_soperator_snapshot(),
+    )
+    real_execute = cli_module.execute_soperator_migration
+
+    def _execute_with_fake_commands(**kwargs):
+        kwargs["command_runner"] = _FakeSoperatorMigrationCommandRunner()
+        return real_execute(**kwargs)
+
+    monkeypatch.setattr(cli_module, "execute_soperator_migration", _execute_with_fake_commands)
+
+    result = runner.invoke(
+        app,
+        [
+            "ext-soperator",
+            "migrate",
+            str(config_path),
+            "--target",
+            "external-cluster",
+            "--execute",
+            "--approve",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Auto-selected source worker node groups: gpu-pool" in result.output
+
+
+def test_soperator_migrate_requires_matching_source_discovery_report(tmp_path: Path) -> None:
+    config_path = _write_old_soperator_migration_config(tmp_path)
+    report_path = config_path.parent / "source-soperator-cluster-discovery-report.json"
+    report_payload = json.loads(report_path.read_text(encoding="utf-8"))
+    report_payload["target_ref"] = "different-cluster"
+    report_path.write_text(json.dumps(report_payload), encoding="utf-8")
+
+    result = runner.invoke(
+        app,
+        [
+            "ext-soperator",
+            "migrate",
+            str(config_path),
+            "--target",
+            "external-cluster",
+            "--dry-run",
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "belongs to target 'different-cluster'" in result.output
+    assert "not 'external-cluster'" in result.output
+
+
+def test_soperator_onboard_noninteractive_options_add_external_target(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    deployments_root = tmp_path / "deployments"
+    deployments_root.mkdir(parents=True, exist_ok=True)
+    created = _create_non_interactive(
+        deployments_root,
+        "--infra",
+        "none",
+        "--app",
+        "none",
+        "--no-validate-config",
+    )
+    assert created.exit_code == 0, created.output
+
+    config_path = _project_config_path(deployments_root)
+    snapshot_contexts: list[str] = []
+
+    def _snapshot(*, kube_context: str) -> dict[str, object]:
+        snapshot_contexts.append(kube_context)
+        return {
+            "node_groups": {
+                "cpu-pool": {"gpu": False, "node_count": 2},
+                "gpu-pool": {"gpu": True, "node_count": 1},
+            },
+            "helm_releases": [],
+            "crds": [],
+            "namespaces": [],
+            "collection_errors": [],
+        }
+
+    monkeypatch.setattr(cli_module, "collect_kubectl_soperator_snapshot", _snapshot)
+    monkeypatch.setattr(
+        cli_module,
+        "_prompt_soperator_onboarding_target_row",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("Non-interactive option path should not prompt for target")
+        ),
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "ext-soperator",
+            "onboard",
+            str(config_path),
+            "--cluster-id",
+            "mk8scluster-training",
+            "--target-id",
+            "training-cluster",
+            "--kube-context",
+            "training-context",
+            "--storage-mode",
+            "create-aligned-sfs",
+            "--no-interactive",
+            "--no-validate-sources",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert snapshot_contexts == ["training-context"]
+    assert "Registered external MK8s target: training-cluster" in result.output
+    payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    target = payload["deploy"]["targets"][0]
+    assert target["instance_id"] == "training-cluster"
+    assert target["cluster_id"] == "mk8scluster-training"
+    assert target["kube_context"] == "training-context"
+    assert target["soperator_onboarding"]["storage_mode"] == "create-aligned-sfs"
+    assert [(row["id"], row["instance_id"]) for row in payload["apps"]["charts"]] == [
+        ("soperator", "training-cluster"),
+        ("cert-manager", "training-cluster"),
+        ("nvidia-gpu-operator", "training-cluster"),
+    ]
+    assert payload["deploy"]["targets"][0]["validations"]["mk8s_gpu"]["nccl"]["enabled"] is True
+
+
+def test_soperator_onboard_noninteractive_cluster_id_generates_kube_access(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    deployments_root = tmp_path / "deployments"
+    deployments_root.mkdir(parents=True, exist_ok=True)
+    created = _create_non_interactive(
+        deployments_root,
+        "--infra",
+        "none",
+        "--app",
+        "none",
+        "--no-validate-config",
+    )
+    assert created.exit_code == 0, created.output
+
+    config_path = _project_config_path(deployments_root)
+    observed: dict[str, str] = {}
+
+    def _collect(
+        payload: object,
+        *,
+        cluster_id: str,
+        access: str = "external",
+    ) -> tuple[dict[str, object], str]:
+        _ = payload
+        observed["cluster_id"] = cluster_id
+        observed["access"] = access
+        return (
+            {
+                "node_groups": {"gpu-pool": {"gpu": True, "node_count": 1}},
+                "helm_releases": [],
+                "crds": [],
+                "namespaces": [],
+                "collection_errors": [],
+            },
+            "nebius-training-cluster-mk8scluster-e00training-external",
+        )
+
+    monkeypatch.setattr(
+        cli_module,
+        "_collect_soperator_snapshot_for_nebius_mk8s_cluster",
+        _collect,
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "ext-soperator",
+            "onboard",
+            str(config_path),
+            "--cluster-id",
+            "mk8scluster-e00training",
+            "--storage-mode",
+            "create-aligned-sfs",
+            "--no-interactive",
+            "--no-validate-sources",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert observed == {"cluster_id": "mk8scluster-e00training", "access": "external"}
+    assert "Registered external MK8s target: training-cluster" in result.output
+    payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    target = payload["deploy"]["targets"][0]
+    assert target["instance_id"] == "training-cluster"
+    assert target["cluster_id"] == "mk8scluster-e00training"
+    assert "kube_context" not in target
+
+
+def test_soperator_onboard_gpu_cluster_inventory_adds_network_operator(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    deployments_root = tmp_path / "deployments"
+    deployments_root.mkdir(parents=True, exist_ok=True)
+    created = _create_non_interactive(
+        deployments_root,
+        "--infra",
+        "none",
+        "--app",
+        "none",
+        "--no-validate-config",
+    )
+    assert created.exit_code == 0, created.output
+
+    config_path = _project_config_path(deployments_root)
+
+    def _snapshot(*, kube_context: str) -> dict[str, object]:
+        assert kube_context == "legacy-context"
+        return {
+            "node_groups": {
+                "gpu-h100-sxm": {
+                    "gpu": True,
+                    "node_count": 2,
+                    "allocatable": {"nvidia.com/gpu": "8"},
+                    "labels": {
+                        "nebius.com/driverful": "true",
+                        "nebius.com/resource-preset": "8gpu-128vcpu-1600gb",
+                        "topology.nebius.com/gpu-cluster-id": "gpu-cluster-a",
+                        "topology.nebius.com/tier-1": "leaf-a",
+                    },
+                }
+            },
+            "helm_releases": [
+                {
+                    "name": "soperator-controller",
+                    "namespace": "soperator-system",
+                    "chart": "helm-soperator-1.23.3",
+                    "app_version": "1.23.3",
+                }
+            ],
+            "crds": ["slurmclusters.slurm.nebius.ai"],
+            "namespaces": ["soperator", "soperator-system"],
+            "collection_errors": [],
+        }
+
+    monkeypatch.setattr(cli_module, "collect_kubectl_soperator_snapshot", _snapshot)
+
+    result = runner.invoke(
+        app,
+        [
+            "ext-soperator",
+            "onboard",
+            str(config_path),
+            "--cluster-id",
+            "mk8scluster-legacy",
+            "--target-id",
+            "legacy-cluster",
+            "--kube-context",
+            "legacy-context",
+            "--storage-mode",
+            "keep-existing-storage",
+            "--compute-mode",
+            "create-aligned-node-groups",
+            "--no-interactive",
+            "--no-validate-sources",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    onboarding = payload["deploy"]["targets"][0]["soperator_onboarding"]
+    assert "remediate-target-gpu-stack" in onboarding["actions"]
+    assert {(row["id"], row["instance_id"]) for row in payload["apps"]["charts"]} == {
+        ("soperator", "legacy-cluster"),
+        ("cert-manager", "legacy-cluster"),
+        ("nvidia-gpu-operator", "legacy-cluster"),
+        ("nvidia-network-operator", "legacy-cluster"),
+    }
+    mk8s_gpu_validations = payload["deploy"]["targets"][0]["validations"]["mk8s_gpu"]
+    assert mk8s_gpu_validations["operator_readiness"]["enabled"] is True
+    assert mk8s_gpu_validations["gpu_visibility"]["enabled"] is True
+    assert mk8s_gpu_validations["nccl"]["enabled"] is True
+
+
+def test_soperator_onboard_rejects_managed_mk8s_target_ref(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    deployments_root = tmp_path / "deployments"
+    deployments_root.mkdir(parents=True, exist_ok=True)
+    created = _create_non_interactive(
+        deployments_root,
+        "--infra",
+        "mk8s",
+        "--app",
+        "none",
+        "--no-validate-config",
+    )
+    assert created.exit_code == 0, created.output
+
+    def _snapshot(*, kube_context: str) -> dict[str, object]:
+        assert kube_context == "managed-context"
+        return {
+            "node_groups": {},
+            "helm_releases": [],
+            "crds": [],
+            "namespaces": [],
+            "collection_errors": [],
+        }
+
+    monkeypatch.setattr(cli_module, "collect_kubectl_soperator_snapshot", _snapshot)
+
+    result = runner.invoke(
+        app,
+        [
+            "ext-soperator",
+            "onboard",
+            str(_project_config_path(deployments_root)),
+            "--cluster-id",
+            "mk8scluster-managed",
+            "--target-id",
+            "mk8s",
+            "--kube-context",
+            "managed-context",
+            "--no-interactive",
+            "--no-validate-sources",
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "Terraform-managed" in result.output
+    assert "choose a different external target id" in result.output
+
+
+def test_soperator_onboard_refreshes_stale_onboarding_fingerprint(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    deployments_root = tmp_path / "deployments"
+    deployments_root.mkdir(parents=True, exist_ok=True)
+    created = _create_non_interactive(
+        deployments_root,
+        "--infra",
+        "none",
+        "--app",
+        "none",
+        "--no-validate-config",
+    )
+    assert created.exit_code == 0, created.output
+
+    config_path = _project_config_path(deployments_root)
+    payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    payload.setdefault("apps", {})["charts"] = [
+        {
+            "id": "soperator",
+            "instance_id": "external-cluster",
+            "enabled": True,
+            "install_mode": "onboard-existing-cluster",
+            "values": {},
+        }
+    ]
+    payload.setdefault("deploy", {})["targets"] = [
+        {
+            "instance_id": "external-cluster",
+            "kind": "external-mk8s",
+            "ownership": "external",
+            "access": "external",
+            "kube_context": "external-context",
+            "inventory": {"node_groups": {"cpu-pool": {"gpu": False, "node_count": 2}}},
+            "soperator_onboarding": {
+                "accepted": True,
+                "analysis_fingerprint": "stale",
+                "state": "no-soperator-detected",
+                "storage_mode": "keep-existing-storage",
+                "actions": ["install-soperator"],
+            },
+        }
+    ]
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    def _snapshot(*, kube_context: str) -> dict[str, object]:
+        assert kube_context == "external-context"
+        return {
+            "node_groups": {"cpu-pool": {"gpu": False, "node_count": 2}},
+            "helm_releases": [],
+            "crds": [],
+            "namespaces": [],
+            "collection_errors": [],
+        }
+
+    monkeypatch.setattr(cli_module, "collect_kubectl_soperator_snapshot", _snapshot)
+
+    result = runner.invoke(
+        app,
+        [
+            "ext-soperator",
+            "onboard",
+            str(config_path),
+            "--cluster-id",
+            "mk8scluster-external",
+            "--target-id",
+            "external-cluster",
+            "--kube-context",
+            "external-context",
+            "--no-interactive",
+            "--no-validate-sources",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Refreshed external MK8s target: external-cluster" in result.output
+    updated = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    onboarding = updated["deploy"]["targets"][0]["soperator_onboarding"]
+    assert onboarding["analysis_fingerprint"]
+    assert onboarding["analysis_fingerprint"] != "stale"
 
 
 def test_create_validates_late_auto_enabled_nfs_csi_driver_sources(
@@ -5329,8 +8121,9 @@ def test_create_rejects_internal_nccl_test_app_with_validation_guidance(
     result = _create_non_interactive(deployments_root, "--infra", "mk8s", "--app", "nccl-test")
 
     assert result.exit_code == 1, result.output
-    assert "internal to deploy-time NCCL validation" in result.output
-    assert "deploy.targets[].validations.mk8s_gpu.nccl.enabled" in result.output
+    assert "transient runtime chart" in result.output
+    assert "not a selectable persistent app" in result.output
+    assert "deploy.targets[].validations.mk8s_gpu.nccl" in result.output
     assert "--app" in result.output
     assert not _project_config_path(deployments_root).exists()
 
@@ -6602,6 +9395,25 @@ def test_component_add_allows_multiple_mk8s_instances(tmp_path: Path) -> None:
     ]
 
 
+def test_component_add_rejects_singular_app_scope_with_plural_hint(tmp_path: Path) -> None:
+    deployments_root = tmp_path / "deployments"
+    deployments_root.mkdir(parents=True, exist_ok=True)
+
+    created = _create_non_interactive(deployments_root, "--infra", "mk8s", "--app", "none")
+    assert created.exit_code == 0, created.output
+
+    config_path = _project_config_path(deployments_root)
+    result = _component_add(
+        config_path,
+        "app:external-secrets@mk8s",
+        "--no-interactive",
+    )
+
+    assert result.exit_code != 0
+    assert "Invalid component selector 'app:external-secrets@mk8s'" in result.output
+    assert "plural apps:, not app:" in result.output
+
+
 def test_component_add_list_remove_bind_app_instance_to_explicit_mk8s_target(
     tmp_path: Path,
 ) -> None:
@@ -6778,10 +9590,6 @@ def test_component_add_prompts_soperator_profile_before_field_wizard(
     events: list[str] = []
     monkeypatch.setattr(cli_module, "_wizard_continue_phase", lambda *_args, **_kwargs: True)
 
-    def _capture_install_mode() -> str:
-        events.append("install_mode")
-        return "production-cluster"
-
     def _capture_profile() -> str:
         events.append("profile")
         return "nebius-cpu-v1"
@@ -6798,7 +9606,13 @@ def test_component_add_prompts_soperator_profile_before_field_wizard(
         assert soperator["profile"] == "nebius-cpu-v1"
         return kwargs["config_yaml"], True
 
-    monkeypatch.setattr(cli_module, "_prompt_soperator_install_mode", _capture_install_mode)
+    monkeypatch.setattr(
+        cli_module,
+        "_prompt_soperator_install_mode",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("Component add should not prompt for Soperator install mode")
+        ),
+    )
     monkeypatch.setattr(cli_module, "_prompt_soperator_profile", _capture_profile)
     monkeypatch.setattr(cli_module, "_run_component_field_wizard", _capture_field_wizard)
 
@@ -6806,7 +9620,7 @@ def test_component_add_prompts_soperator_profile_before_field_wizard(
     result = _component_add(config_path, "soperator")
 
     assert result.exit_code == 0, result.output
-    assert events == ["install_mode", "profile", "field_wizard"]
+    assert events == ["profile", "field_wizard"]
 
 
 def test_component_add_does_not_expand_existing_soperator_onboarding_selection(
@@ -6858,9 +9672,9 @@ def test_component_add_does_not_expand_existing_soperator_onboarding_selection(
                     "soperator_onboarding": {
                         "accepted": True,
                         "analysis_fingerprint": "",
-                        "state": "vanilla-mk8s",
+                        "state": "no-soperator-detected",
                         "actions": ["install-soperator"],
-                        "storage_mode": "adopt-existing-storage",
+                        "storage_mode": "keep-existing-storage",
                     },
                 }
             ]

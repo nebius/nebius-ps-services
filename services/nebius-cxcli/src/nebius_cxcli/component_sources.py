@@ -536,6 +536,12 @@ class SoperatorNodesetsProfileSettings:
 
 
 @dataclass(frozen=True)
+class HelmChartUsage:
+    lifecycle: str = ""
+    config_ref: str = ""
+
+
+@dataclass(frozen=True)
 class HelmChartSource:
     name: str
     source: HelmChartLocator = HelmChartLocator()
@@ -553,6 +559,7 @@ class HelmChartSource:
     defaults: tuple[ComponentDefault, ...] = ()
     outputs: tuple[ComponentOutput, ...] = ()
     input_bindings: tuple[ComponentInputBinding, ...] = ()
+    usage: HelmChartUsage = HelmChartUsage()
     mk8s_gpu: Mk8sGpuAppPolicy = Mk8sGpuAppPolicy()
     observability: AppObservabilitySettings = AppObservabilitySettings()
     grafana: GrafanaCliSettings = GrafanaCliSettings()
@@ -3579,7 +3586,9 @@ def _parse_helm_chart_locator(
     if not path and not repo and not raw_chart_name and not version:
         return HelmChartLocator()
     if path:
-        chart_name = raw_chart_name or default_chart_name
+        metadata_chart_name, metadata_version = _local_helm_chart_metadata(path)
+        chart_name = raw_chart_name or metadata_chart_name or default_chart_name
+        version = version or metadata_version or None
         return HelmChartLocator(chart_name=chart_name, version=version, path=path)
     if allow_path:
         raise ValueError(f"{field_label}.path is required")
@@ -3587,6 +3596,17 @@ def _parse_helm_chart_locator(
         raise ValueError(f"{field_label}.repo is required")
     chart_name = raw_chart_name or default_chart_name
     return HelmChartLocator(repo=repo, chart_name=chart_name, version=version)
+
+
+def _local_helm_chart_metadata(path: str) -> tuple[str, str]:
+    chart_yaml = Path(path).expanduser() / "Chart.yaml"
+    if not chart_yaml.exists() or not chart_yaml.is_file():
+        return "", ""
+    with suppress(Exception):
+        payload = yaml.safe_load(chart_yaml.read_text(encoding="utf-8")) or {}
+        if isinstance(payload, Mapping):
+            return _as_text(payload.get("name")), _as_text(payload.get("version"))
+    return "", ""
 
 
 def _parse_helm_chart_source_block(
@@ -3655,6 +3675,52 @@ def _parse_ui_block(
     enabled = bool(raw.get("enabled", False))
     selectable = bool(raw.get("selectable", True))
     return title, group, enabled, selectable
+
+
+def _parse_helm_chart_usage(raw: Any, *, field_label: str) -> HelmChartUsage:
+    if raw is None:
+        return HelmChartUsage()
+    if not isinstance(raw, dict):
+        raise ValueError(f"{field_label}.usage must be a mapping")
+
+    supported_usage_keys = {"lifecycle", "config"}
+    unknown_usage_keys = sorted(str(key) for key in raw if str(key) not in supported_usage_keys)
+    if unknown_usage_keys:
+        raise ValueError(
+            f"{field_label}.usage has unsupported field(s): "
+            + ", ".join(unknown_usage_keys)
+        )
+
+    lifecycle = _as_text(raw.get("lifecycle"))
+    if lifecycle and lifecycle != "transient":
+        raise ValueError(f"{field_label}.usage.lifecycle must be 'transient' when set")
+
+    config_ref = ""
+    raw_config = raw.get("config")
+    if raw_config is not None:
+        if not isinstance(raw_config, dict):
+            raise ValueError(f"{field_label}.usage.config must be a mapping")
+        supported_config_keys = {"ref"}
+        unknown_config_keys = sorted(
+            str(key) for key in raw_config if str(key) not in supported_config_keys
+        )
+        if unknown_config_keys:
+            raise ValueError(
+                f"{field_label}.usage.config has unsupported field(s): "
+                + ", ".join(unknown_config_keys)
+            )
+        config_ref = _as_text(raw_config.get("ref"))
+        if not lifecycle:
+            raise ValueError(
+                f"{field_label}.usage.lifecycle is required when usage.config is set"
+            )
+
+    if lifecycle == "transient" and not config_ref:
+        raise ValueError(
+            f"{field_label}.usage.config.ref is required when usage.lifecycle=transient"
+        )
+
+    return HelmChartUsage(lifecycle=lifecycle, config_ref=config_ref)
 
 
 def _parse_component_cli_settings_payload(payload: Any) -> ComponentCliSettingsPayload:
@@ -3894,6 +3960,7 @@ def _parse_sources_payload(
             raise ValueError(f"components.apps.{component_id} must be a mapping")
         supported_chart_keys = {
             "source",
+            "usage",
             "ui",
             "release",
             "defaults",
@@ -3943,6 +4010,21 @@ def _parse_sources_payload(
             raw.get("ui"),
             field_label=f"components.apps.{component_id}",
         )
+        usage = _parse_helm_chart_usage(
+            raw.get("usage"),
+            field_label=f"components.apps.{component_id}",
+        )
+        if usage.lifecycle == "transient":
+            if enable:
+                raise ValueError(
+                    f"components.apps.{component_id}.ui.enabled must be false "
+                    "when usage.lifecycle=transient"
+                )
+            if selectable:
+                raise ValueError(
+                    f"components.apps.{component_id}.ui.selectable must be false "
+                    "when usage.lifecycle=transient"
+                )
         wizard_fields = _parse_component_wizard_fields(
             component_id=component_id,
             raw_profile=raw.get("wizard_profile"),
@@ -3995,6 +4077,7 @@ def _parse_sources_payload(
                 defaults=defaults,
                 outputs=(),
                 input_bindings=input_bindings,
+                usage=usage,
                 mk8s_gpu=mk8s_gpu,
                 observability=observability,
                 grafana=grafana,

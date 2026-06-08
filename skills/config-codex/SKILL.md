@@ -21,6 +21,9 @@ read-only agents that support `global-context-management`.
 - Installing hook and custom-agent templates for global context management.
 - Validating that the resulting local Codex config parses and is ready for
   hook review.
+- Re-running against an already configured laptop and reporting "no changes"
+  when the required AGENTS, config, hook, and read-only agent surfaces already
+  match the intended setup.
 
 ## Safety Rules
 
@@ -31,12 +34,18 @@ read-only agents that support `global-context-management`.
 - Store secret values only in the user's shell, password manager, or external
   secret manager. In `config.toml`, reference secret variable names such as
   `CONTEXT7_API_KEY` or `GITHUB_TOKEN`.
-- Back up existing local files before editing `AGENTS.md`, `config.toml`, or
-  `hooks.json`.
+- Inspect and build a patch plan before writing. Back up an existing local file
+  only when that file will actually be changed.
 - `AGENTS.md` and `config.toml` are patch-only when they already exist. Create
   them from templates only when they are missing.
 - Do not overwrite, replace, reformat, sort, or regenerate an existing
   `AGENTS.md` or `config.toml`.
+- Do not treat `config.toml.template` as desired state for existing machines.
+  It is a create-only baseline plus examples of supported settings.
+- For hooks, custom-agent TOML files, and optional policy files, copy missing
+  files directly from templates. Replace an existing file only when it still
+  matches the previous template, or after showing the diff and receiving user
+  confirmation.
 - Treat full-access settings as intended only for trusted local developer
   machines.
 
@@ -45,6 +54,8 @@ read-only agents that support `global-context-management`.
 For existing `$CODEX_HOME/AGENTS.md`:
 
 - Preserve all unrelated user rules and ordering.
+- If the whole file already matches `assets/AGENTS.md.template`, leave it
+  unchanged and do not create a backup.
 - Add a compact `config-codex` managed section only if the equivalent guidance
   is missing.
 - If managed markers already exist, update only the content between those
@@ -55,10 +66,20 @@ For existing `$CODEX_HOME/AGENTS.md`:
 For existing `$CODEX_HOME/config.toml`:
 
 - Parse the file before editing.
-- Add only missing keys, tables, or `[[skills.config]]` entries needed for the
-  requested setup.
+- Add only missing keys, tables, or `[[skills.config]]` entries that are
+  required for the requested setup and absent from the current config.
 - Preserve existing user values, comments, profiles, project trust entries,
   MCP servers, app settings, and unrelated feature flags.
+- Do not add template-only preferences such as model defaults, app/plugin
+  settings, MCP servers, project trust entries, `[[skills.config]]` entries, or
+  writable roots when the current config already provides the requested
+  behavior or the user did not ask for that integration.
+- Treat `hooks = true`, `multi_agent = true`, `agents.max_threads`,
+  `agents.max_depth`, and the three read-only custom-agent config references as
+  the minimal config surface for global context management.
+- Treat explicit `[[skills.config]]` entries for `global-context-management`
+  and `config-codex` as optional when the skills are already discoverable from
+  the installed user skills directory.
 - Do not silently change stricter approval or sandbox settings. Report the
   difference and ask before switching to the trusted-machine full-access
   profile.
@@ -71,16 +92,19 @@ For existing `$CODEX_HOME/config.toml`:
 1. Identify the target `$CODEX_HOME`; default to `$HOME/.codex`.
 2. Identify the installed skills directory; default to `$HOME/.agents/skills`.
 3. Inspect existing local Codex files with redaction. Do not print secrets.
-4. Back up `AGENTS.md`, `config.toml`, and `hooks.json` when they exist.
-5. Create missing local files from templates, but patch existing
+4. Run an idempotency preflight. If existing files already satisfy the required
+   setup, report that no local changes are needed and stop without creating
+   backups.
+5. Back up only files that the patch plan will change.
+6. Create missing local files from templates, but patch existing
    `AGENTS.md` and `config.toml` according to the patch-only contract.
-6. Create the local layout:
+7. Create the local layout:
    - `$CODEX_HOME/hooks/`
    - `$CODEX_HOME/agents/`
    - `$CODEX_HOME/task-state/`
    - optional `$CODEX_HOME/hooks/global_context_policy.json` only when the
      user deliberately wants hook-assisted read-only subagent delegation
-7. Render or adapt templates from `assets/`:
+8. Render or adapt templates from `assets/`:
    - `AGENTS.md.template`
    - `config.toml.template`
    - `hooks.json.template`
@@ -88,10 +112,15 @@ For existing `$CODEX_HOME/config.toml`:
    - optional hook policy template
    - custom-agent TOML templates
    - task-state template
-8. Keep `global-context-management` and `config-codex` installed or enabled as
-   skill folders, not as paths to individual `SKILL.md` files.
-9. Validate local hook scripts, TOML, JSON, feature flags, and secret hygiene.
-10. Tell the user to restart Codex, open `/hooks`, review the two local hooks,
+   For hook and custom-agent assets, use replace-if-unmodified behavior:
+   copy missing files, leave matching files unchanged, and stop for review when
+   an existing file differs from both the old and new expected content.
+9. Confirm `global-context-management` and `config-codex` are installed,
+   discoverable, or explicitly enabled as skill folders. Do not add explicit
+   skill entries if discovery already works.
+10. Validate local hook scripts, TOML, JSON, feature flags, idempotency, and
+   secret hygiene.
+11. Tell the user to restart Codex, open `/hooks`, review the two local hooks,
    and trust them only after confirming the paths are expected.
 
 ## Template Rules
@@ -115,6 +144,8 @@ sections or keys.
 
 Use the focused checks in `references/local-setup.md`. At minimum:
 
+- Run `python3 scripts/check-local-idempotency.py --strict-agents-template` for
+  a laptop already expected to match these templates. This script is read-only.
 - Python-compile hook scripts.
 - Parse `config.toml` with `tomllib`.
 - Parse `hooks.json` with `json`.

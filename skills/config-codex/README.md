@@ -77,10 +77,11 @@ on that user's machine.
 
 ### Back Up, Then Patch
 
-Existing `AGENTS.md`, `config.toml`, and `hooks.json` should be backed up
-before changes. For real users, patching is safer than replacing the full file
-because local MCP servers, profiles, app settings, and project trust entries
-may already exist.
+First inspect, then decide whether any write is needed. Existing `AGENTS.md`,
+`config.toml`, and `hooks.json` should be backed up only when that specific
+file will actually be changed. This keeps reruns idempotent: if the local
+laptop already satisfies the contract, the skill should report "no changes"
+and leave the filesystem untouched.
 
 For `AGENTS.md` and `config.toml`, patching is not just preferred; it is the
 default contract:
@@ -90,11 +91,29 @@ default contract:
   guidance, keys, tables, or skill entries.
 - If an existing value conflicts with the template, report it instead of
   silently overwriting it.
+- If the file already satisfies the contract, do not rewrite it, reformat it,
+  sort it, normalize comments, or create a backup.
 
-For `AGENTS.md`, add or update only the compact managed context section. For
-`config.toml`, parse the file first and patch the minimum supported settings
-needed for features, MCP servers, custom agent config layers, and skill
-discovery.
+For `AGENTS.md`, exact template parity is a no-op. Otherwise, add or update
+only the compact managed context section. For `config.toml`, parse the file
+first and patch the minimum settings needed for hooks, multi-agent support, and
+the three read-only custom agent config layers.
+
+Do not treat `assets/config.toml.template` as desired state for existing
+machines. It is the create-only baseline for a missing config plus examples of
+supported settings. Do not add template-only model defaults, app/plugin
+settings, MCP servers, project trust entries, `[[skills.config]]` entries, or
+writable roots unless the user explicitly asked for them or the current setup
+cannot otherwise satisfy the requested behavior. If `global-context-management`
+and `config-codex` are already discoverable from the installed skills
+directory, explicit `[[skills.config]]` entries are optional and should not be
+added just to match the template.
+
+Hook scripts, custom-agent TOML files, and optional policy files are template
+assets rather than semantic patch targets. Copy them when missing. If an
+existing file byte-matches the previous template, replacing it with the current
+template is idempotent and safe. If it differs from the expected template, stop
+and show the diff instead of overwriting local customizations.
 
 ### Secrets Stay Out Of Config
 
@@ -216,10 +235,21 @@ setup.
    project root=<PROJECT_ROOT>
    ```
 
-4. Let Codex patch local files from the templates in `assets/`. Existing
-   `AGENTS.md` and `config.toml` must be patched in place, not replaced.
+4. Before writing, run the read-only idempotency preflight. On an already
+   configured laptop this should pass and the skill should stop without
+   creating backups or changing files:
 
-5. Validate the rendered setup:
+   ```bash
+   python3 config-codex/scripts/check-local-idempotency.py \
+     --codex-home "$CODEX_HOME" \
+     --strict-agents-template
+   ```
+
+5. If the preflight fails, let Codex patch only the failed surfaces from the
+   templates in `assets/`. Existing `AGENTS.md` and `config.toml` must be
+   patched in place, not replaced.
+
+6. Validate the rendered setup:
 
    ```bash
    python3 -m py_compile \
@@ -247,7 +277,7 @@ setup.
    PY
    ```
 
-6. Confirm feature flags:
+7. Confirm feature flags:
 
    ```bash
    codex features list | rg '^(hooks|multi_agent)\s'
@@ -260,7 +290,7 @@ setup.
    multi_agent  stable  true
    ```
 
-7. Restart Codex. For Codex CLI, exit the current session:
+8. Restart Codex. For Codex CLI, exit the current session:
 
    ```text
    /quit
@@ -282,7 +312,7 @@ setup.
    For the VS Code extension, run `Developer: Restart Extension Host` from the
    Command Palette, then open a new Codex chat for the target repo.
 
-8. In the fresh session, open:
+9. In the fresh session, open:
 
    ```text
    /hooks
@@ -299,7 +329,7 @@ setup.
    Trust or enable the hooks only after the resolved paths are local and
    expected.
 
-9. Run a non-mutating probe:
+10. Run a non-mutating probe:
 
    ```bash
    codex exec --sandbox read-only --cd <PROJECT_ROOT> \
@@ -347,6 +377,9 @@ setup.
   template for hook-assisted read-only subagent delegation.
 - `assets/agents/*.toml.template`: read-only custom-agent config templates.
 - `assets/task-state-template.md`: initial durable task-state document.
+- `scripts/check-local-idempotency.py`: read-only preflight that checks the
+  minimal no-change contract for an already configured Codex home without
+  printing config values.
 - `agents/openai.yaml`: UI metadata and implicit invocation policy.
 
 ## Validation For This Skill
@@ -356,6 +389,9 @@ From the skills repo root:
 ```bash
 python3 align-skill/scripts/validate-skill-structure.py config-codex
 python3 align-skill/scripts/validate-skill-structure.py global-context-management
+python3 config-codex/scripts/check-local-idempotency.py \
+  --codex-home "$HOME/.codex" \
+  --strict-agents-template
 python3 global-context-management/scripts/validate-local-templates.py
 markdownlint README.md CHANGELOG.md config-codex/**/*.md
 git diff --check

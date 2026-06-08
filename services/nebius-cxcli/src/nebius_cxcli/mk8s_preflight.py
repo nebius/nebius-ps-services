@@ -10,7 +10,11 @@ from typing import Any
 
 from nebius.api.nebius.common.v1 import GetByNameRequest
 from nebius.api.nebius.compute.v1 import GpuClusterServiceClient
-from nebius.api.nebius.mk8s.v1 import ClusterServiceClient
+from nebius.api.nebius.mk8s.v1 import (
+    ClusterServiceClient,
+    GetNodeGroupCompatibilityMatrixRequest,
+    NodeGroupServiceClient,
+)
 from nebius.api.nebius.vpc.v1 import (
     GetNetworkRequest,
     GetSubnetRequest,
@@ -28,6 +32,7 @@ from .mk8s_node_groups import (
     cluster_subnet_id,
     gpu_node_groups,
 )
+from .provider_options import _provider_request_kwargs
 from .runtime_config import to_plain_data
 from .sdk_auth import init_nebius_sdk
 
@@ -63,6 +68,20 @@ class _VpcNetworkingRef:
     project_id: str
     network_id: str
     subnet_id: str | None = None
+
+
+@dataclass(frozen=True)
+class _Mk8sGpuStackCompatibilityChoice:
+    platform: str
+    os: str
+    drivers_preset: str
+
+
+@dataclass(frozen=True)
+class _Mk8sGpuStackCompatibilityTarget:
+    component: _Mk8sResolvedComponent
+    group: Any
+    version: str
 
 
 def _resolved_mk8s_components(payload: Mapping[str, Any]) -> tuple[_Mk8sResolvedComponent, ...]:
@@ -114,6 +133,241 @@ def _resolved_mk8s_components(payload: Mapping[str, Any]) -> tuple[_Mk8sResolved
             )
         )
     return tuple(resolved_components)
+
+
+def _cluster_k8s_version(inputs: Mapping[str, Any]) -> str:
+    cluster_inputs = inputs.get("cluster")
+    if not isinstance(cluster_inputs, Mapping):
+        return ""
+    return _as_text(cluster_inputs.get("k8s_version"))
+
+
+def _node_group_k8s_version(inputs: Mapping[str, Any], group: Any) -> str:
+    raw_groups = inputs.get("node_groups")
+    if isinstance(raw_groups, Mapping):
+        raw_group = raw_groups.get(getattr(group, "key", ""))
+        if isinstance(raw_group, Mapping):
+            version = _as_text(raw_group.get("version"))
+            if version:
+                return version
+    return _cluster_k8s_version(inputs)
+
+
+def _gpu_stack_compatibility_targets(
+    payload: Mapping[str, Any],
+) -> tuple[_Mk8sGpuStackCompatibilityTarget, ...]:
+    targets: list[_Mk8sGpuStackCompatibilityTarget] = []
+    for component in _resolved_mk8s_components(payload):
+        for group in gpu_node_groups(component.inputs):
+            version = _node_group_k8s_version(component.inputs, group)
+            if not version:
+                continue
+            if group.gpu_stack_source != "nebius_image":
+                continue
+            if not group.platform or not group.gpu_stack_preset:
+                continue
+            targets.append(
+                _Mk8sGpuStackCompatibilityTarget(
+                    component=component,
+                    group=group,
+                    version=version,
+                )
+            )
+    return tuple(targets)
+
+
+def has_mk8s_gpu_stack_compatibility_preflight_targets(config: Any) -> bool:
+    payload = to_plain_data(config)
+    if not isinstance(payload, Mapping):
+        return False
+    return bool(_gpu_stack_compatibility_targets(payload))
+
+
+def _mk8s_gpu_stack_compatibility_choices(response: Any) -> tuple[_Mk8sGpuStackCompatibilityChoice, ...]:
+    items = list(getattr(response, "items", []) or [])
+    if not items:
+        items = [
+            item
+            for version_item in getattr(response, "versions", []) or []
+            for item in getattr(version_item, "items", []) or []
+        ]
+
+    choices: list[_Mk8sGpuStackCompatibilityChoice] = []
+    for item in items:
+        drivers_preset = _as_text(getattr(item, "drivers_preset", None))
+        if not drivers_preset:
+            continue
+        os_value = _as_text(getattr(item, "os", None))
+        for platform in getattr(item, "compatible_platforms", []) or []:
+            platform_name = _as_text(platform)
+            if platform_name:
+                choices.append(
+                    _Mk8sGpuStackCompatibilityChoice(
+                        platform=platform_name,
+                        os=os_value,
+                        drivers_preset=drivers_preset,
+                    )
+                )
+    return tuple(choices)
+
+
+def _gpu_stack_choice_matches_group(
+    choice: _Mk8sGpuStackCompatibilityChoice,
+    group: Any,
+) -> bool:
+    if choice.platform != group.platform:
+        return False
+    if not group.os or choice.os != group.os:
+        return False
+    return choice.drivers_preset == group.gpu_stack_preset
+
+
+def _compatible_gpu_stack_os_values_for_preset(
+    choices: Collection[_Mk8sGpuStackCompatibilityChoice],
+    group: Any,
+) -> tuple[str, ...]:
+    return tuple(
+        dict.fromkeys(
+            choice.os
+            for choice in choices
+            if choice.platform == group.platform
+            and choice.drivers_preset == group.gpu_stack_preset
+            and choice.os
+        )
+    )
+
+
+def _compatible_gpu_stack_presets(
+    choices: Collection[_Mk8sGpuStackCompatibilityChoice],
+    group: Any,
+) -> tuple[str, ...]:
+    return tuple(
+        dict.fromkeys(
+            choice.drivers_preset
+            for choice in choices
+            if choice.platform == group.platform
+            and choice.drivers_preset
+            and (not group.os or choice.os == group.os)
+        )
+    )
+
+
+def _compatible_gpu_stack_os_values(
+    choices: Collection[_Mk8sGpuStackCompatibilityChoice],
+    group: Any,
+) -> tuple[str, ...]:
+    return tuple(
+        dict.fromkeys(
+            choice.os
+            for choice in choices
+            if choice.platform == group.platform and choice.os
+        )
+    )
+
+
+def _gpu_stack_compatibility_error(
+    *,
+    component: _Mk8sResolvedComponent,
+    group: Any,
+    version: str,
+    choices: Collection[_Mk8sGpuStackCompatibilityChoice],
+) -> RuntimeError:
+    if not group.os:
+        candidate_os_values = _compatible_gpu_stack_os_values_for_preset(choices, group)
+        if candidate_os_values:
+            candidate_text = (
+                " Compatible OS values for this platform/preset: "
+                f"{', '.join(candidate_os_values)}."
+            )
+        else:
+            candidate_text = " The live compatibility matrix returned no OS values for that platform/preset."
+        return RuntimeError(
+            "MK8s GPU stack compatibility preflight failed: "
+            f"component '{component.component_label}' node group '{group.name}' uses "
+            f"gpu_stack_preset '{group.gpu_stack_preset}' with platform '{group.platform}' "
+            f"for Kubernetes {version}, but omits os. Nebius GPU stack compatibility is "
+            f"OS-specific.{candidate_text} "
+            f"Set inputs.node_groups.{group.key}.os and rerender before deploy."
+        )
+
+    os_fragment = f" and OS '{group.os}'" if group.os else ""
+    candidate_presets = _compatible_gpu_stack_presets(choices, group)
+    candidate_os_values = _compatible_gpu_stack_os_values(choices, group)
+    if candidate_presets:
+        candidate_text = (
+            " Compatible GPU stack presets for this platform"
+            f"{('/OS' if group.os else '')}: {', '.join(candidate_presets)}."
+        )
+    elif candidate_os_values:
+        candidate_text = (
+            f" Compatible OS values for platform '{group.platform}': "
+            f"{', '.join(candidate_os_values)}."
+        )
+    else:
+        candidate_text = " The live compatibility matrix returned no GPU stack presets for that platform."
+    return RuntimeError(
+        "MK8s GPU stack compatibility preflight failed: "
+        f"component '{component.component_label}' node group '{group.name}' uses "
+        f"gpu_stack_preset '{group.gpu_stack_preset}' with platform '{group.platform}'"
+        f"{os_fragment} for Kubernetes {version}, but the live Nebius compatibility "
+        f"matrix does not list that combination.{candidate_text} "
+        f"Update inputs.node_groups.{group.key}.gpu_stack_preset and rerender before deploy."
+    )
+
+
+def validate_mk8s_gpu_stack_compatibility_preflight(config: Any) -> None:
+    """Fail fast when a Nebius-image GPU node group uses an unsupported stack tuple."""
+    payload = to_plain_data(config)
+    if not isinstance(payload, Mapping):
+        return
+
+    targets = _gpu_stack_compatibility_targets(payload)
+    if not targets:
+        return
+
+    sdk_by_project: dict[str, Any] = {}
+    choices_by_project_version: dict[
+        tuple[str, str], tuple[_Mk8sGpuStackCompatibilityChoice, ...]
+    ] = {}
+    try:
+        for target in targets:
+            component = target.component
+            group = target.group
+            version = target.version
+            cache_key = (component.project_id, version)
+            choices = choices_by_project_version.get(cache_key)
+            if choices is None:
+                sdk = sdk_by_project.get(component.project_id)
+                if sdk is None:
+                    sdk = init_nebius_sdk(
+                        parent_id=component.project_id or None,
+                        context="MK8s GPU stack compatibility preflight",
+                    )
+                    sdk_by_project[component.project_id] = sdk
+                response = (
+                    NodeGroupServiceClient(sdk)
+                    .get_compatibility_matrix(
+                        GetNodeGroupCompatibilityMatrixRequest(
+                            cluster_kubernetes_version=version,
+                        ),
+                        **_provider_request_kwargs(),
+                    )
+                    .wait()
+                )
+                choices = _mk8s_gpu_stack_compatibility_choices(response)
+                choices_by_project_version[cache_key] = choices
+            if any(_gpu_stack_choice_matches_group(choice, group) for choice in choices):
+                continue
+            raise _gpu_stack_compatibility_error(
+                component=component,
+                group=group,
+                version=version,
+                choices=choices,
+            )
+    finally:
+        for sdk in sdk_by_project.values():
+            with suppress(Exception):
+                sdk.sync_close()
 
 
 def _default_project_id(payload: Mapping[str, Any]) -> str:
@@ -770,7 +1024,9 @@ def validate_mk8s_resource_name_preflight(
 
 
 __all__ = [
+    "has_mk8s_gpu_stack_compatibility_preflight_targets",
     "has_mk8s_resource_name_preflight_targets",
+    "validate_mk8s_gpu_stack_compatibility_preflight",
     "validate_mk8s_resource_name_preflight",
     "validate_vpc_networking_preflight",
 ]

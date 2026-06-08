@@ -67,11 +67,11 @@ def _write_report(path: Path, payload: Mapping[str, Any]) -> None:
     path.write_text(json.dumps(dict(payload), indent=2, sort_keys=False) + "\n", encoding="utf-8")
 
 
-def _report_path(spec: Mapping[str, Any], *, inventory_dir: Path) -> Path:
+def _report_path(spec: Mapping[str, Any], *, reports_dir: Path) -> Path:
     report_file = _as_text(spec.get("report_file"))
     if report_file:
-        return inventory_dir / report_file
-    return inventory_dir / "observability-ingestion-report.json"
+        return reports_dir / report_file
+    return reports_dir / "observability-ingestion-report.json"
 
 
 def _check(
@@ -376,7 +376,7 @@ def _otlp_service_check(
                 continue
             endpoint_sample_count += 1
             conditions = _mapping(endpoint.get("conditions"))
-            if conditions.get("ready") is not False:
+            if conditions.get("ready") is True:
                 ready_endpoint_found = True
                 break
         if ready_endpoint_found:
@@ -405,10 +405,10 @@ def _otlp_service_check(
 def _validation_error_report(
     *,
     spec: Mapping[str, Any],
-    inventory_dir: Path,
+    reports_dir: Path,
     error: BaseException,
 ) -> None:
-    report_path = _report_path(spec, inventory_dir=inventory_dir)
+    report_path = _report_path(spec, reports_dir=reports_dir)
     if report_path.exists():
         return
     _write_report(
@@ -428,7 +428,7 @@ def _validation_error_report(
 def _run_observability_ingestion_validation(
     spec: Mapping[str, Any],
     *,
-    inventory_dir: Path,
+    reports_dir: Path,
     extra_env: dict[str, str] | None,
     emit: Callable[[str], None] | None = None,
 ) -> Path:
@@ -503,7 +503,7 @@ def _run_observability_ingestion_validation(
         )
 
     passed = all(bool(check.get("passed")) for check in checks)
-    report_path = _report_path(spec, inventory_dir=inventory_dir)
+    report_path = _report_path(spec, reports_dir=reports_dir)
     report = {
         "validation": validation_name,
         "kind": OBSERVABILITY_INGESTION_VALIDATION_KIND,
@@ -530,7 +530,7 @@ def _run_observability_ingestion_validation(
 def run_observability_validations(
     validations: list[dict[str, Any]],
     *,
-    inventory_dir: Path,
+    reports_dir: Path,
     extra_env: dict[str, str] | None,
     emit: Callable[[str], None] | None = None,
 ) -> list[Path]:
@@ -546,13 +546,13 @@ def run_observability_validations(
                 written_reports.append(
                     _run_observability_ingestion_validation(
                         spec,
-                        inventory_dir=inventory_dir,
+                        reports_dir=reports_dir,
                         extra_env=extra_env,
                         emit=emit,
                     )
                 )
         except Exception as exc:
-            _validation_error_report(spec=spec, inventory_dir=inventory_dir, error=exc)
+            _validation_error_report(spec=spec, reports_dir=reports_dir, error=exc)
             raise
     return written_reports
 

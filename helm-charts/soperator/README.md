@@ -2,7 +2,7 @@
 
 Umbrella chart for self-managed Nebius Soperator on MK8s.
 
-This chart vendors the upstream Soperator 3.0.4 operator, CRDs, OpenKruise
+This chart vendors the upstream Soperator 3.0.5 operator, CRDs, OpenKruise
 dependency, MariaDB Operator dependency, SlurmCluster, NodeConfigurator,
 NodeSet, and SFS storage templates into one installable chart. It intentionally
 does not include upstream `soperator-fluxcd`; `nebius-cxcli` renders Flux.
@@ -123,7 +123,7 @@ normal wizard does not prompt this raw host-maintenance gate; set it
 deliberately in Helm values or `config.yaml` only when Soperator-managed node
 maintenance is wanted. It is not
 a per-NodeSet switch, does not reboot nodes at install time, and does not create
-a reboot schedule by itself. The upstream 3.0.4 helper acts after `SlurmNodeDrain` or
+a reboot schedule by itself. The upstream 3.0.5 helper acts after `SlurmNodeDrain` or
 `SlurmNodeReboot` is set on the Kubernetes Node and drains by cordoning the node
 plus adding a `NoExecute` taint. NodeConfigurator still renders a no-op
 `customContainer` by default so its host setup initContainers have a valid
@@ -371,22 +371,23 @@ it is still included in packaged chart releases.
 
 ## Chart Release And OCI Publish
 
-The chart has its own SemVer package version in `Chart.yaml.version`.
-`Chart.yaml.appVersion` stays pinned to the upstream Soperator release recorded
-in `upstream-soperator.lock.yaml`.
+The chart package version follows the upstream Soperator release with a Nebius
+package suffix. `Chart.yaml.appVersion` stays pinned to the upstream Soperator
+release recorded in `upstream-soperator.lock.yaml`, while
+`Chart.yaml.version` uses `<upstream>-ps.N`.
 
 ```yaml
-version: 0.1.0
-appVersion: "3.0.4"
+version: 3.0.5-ps.1
+appVersion: "3.0.5"
 ```
 
 Release flow:
 
 1. Add the user-facing release notes under `CHANGELOG.md` `## [Unreleased]`.
-2. Run `./publish-helm.sh --prep X.Y.Z` from this chart directory.
+2. Run `./publish-helm.sh --prep X.Y.Z-ps.N` from this chart directory.
 3. Merge the generated release-prep commit to `main`.
-4. Run `./publish-helm.sh --publish X.Y.Z` from `main`.
-5. The `soperator-chart-vX.Y.Z` tag triggers
+4. Run `./publish-helm.sh --publish X.Y.Z-ps.N` from `main`.
+5. The `soperator-chart-vX.Y.Z-ps.N` tag triggers
    `.github/workflows/helm-chart-publish.yml`.
 
 The shared publish workflow reads `.github/helm-chart-publish.json` to map the
@@ -423,25 +424,27 @@ Public pull example:
 
 ```bash
 helm pull oci://cr.<region>.nebius.cloud/<registry-short-id>/charts/soperator \
-  --version X.Y.Z
+  --version X.Y.Z-ps.N
 ```
 
 ## Upstream Release Contract
 
 This chart is anchored to one Soperator release at a time. The pinned upstream
 release is recorded in `upstream-soperator.lock.yaml`; the sync script derives
-`Chart.yaml.appVersion`, upstream annotations, child-chart versions, dependency
-pins, script imports, image values, and review-only hashes from that lock.
-`Chart.yaml.version` is this chart package's own SemVer and is bumped only by
-the chart release flow.
+`Chart.yaml.version`, `Chart.yaml.appVersion`, upstream annotations, child-chart
+versions, dependency pins, script imports, CRD imports, image values, and
+review-only hashes from that lock. Upstream sync sets the parent and
+Soperator-family child chart package versions to `<upstream>-ps.1`; follow-up
+parent-chart package respins may use `<upstream>-ps.N`.
 
-The lock describes upstream tracking in four groups:
+The lock describes upstream tracking in five groups:
 
 - script imports, such as Slurm scripts and ActiveChecks scripts.
+- CRD imports, such as the core Soperator CRD bundle under `crds/`.
 - chart `appVersion` tracking for the parent and Soperator-family child charts.
 - image values tracked against upstream chart values.
-- review-only upstream logic hashes for templates, CRDs, dashboards,
-  custom ConfigMaps, and storage classes.
+- review-only upstream logic hashes for templates, dashboards, custom
+  ConfigMaps, and storage classes.
 
 The verifier enforces that contract without writing files:
 
@@ -453,78 +456,63 @@ helm-charts/soperator/scripts/verify-upstream-soperator-sync.sh --scope all --re
 
 Use this flow when upstream Soperator publishes a newer Helm chart release:
 
-1. Start from an up-to-date `main` branch and create a feature branch:
+1. From any clean working tree, run the latest-release sync:
 
    ```bash
-   git switch main
-   git pull --ff-only
-   git switch -c sync-soperator-<upstream-version>
+   helm-charts/soperator/scripts/verify-upstream-soperator-sync.sh --latest --sync --report
    ```
 
-2. Optional: compare the lock with GitHub's latest release:
+   `--latest --sync` updates the lock pin to GitHub latest and derives all
+   upstream-owned version, dependency, script, CRD, image, and review-hash
+   changes.
+   Use plain `--sync` only when you want to refresh the release already pinned
+   in the lock; it does not query GitHub latest.
+   `--report` prints detailed per-import status and the changed-file list with
+   readable status labels after sync validation.
+   Sync validation seeds a temporary Helm repository config/cache from the
+   remote dependencies in `Chart.yaml` before dependency update/build, so clean
+   runners do not need preconfigured `helm repo add` state.
 
-   ```bash
-   helm-charts/soperator/scripts/verify-upstream-soperator-sync.sh --check-latest
-   ```
+2. Review and test the unstaged diff locally.
+3. Stage and commit the reviewed sync changes.
+4. Open the PR. The PR is the human approval gate for script diffs, CRD schema
+   changes, image changes, dependency movement, and review-only hash changes.
 
-   A nonzero result means the lock does not match GitHub latest. The message
-   distinguishes a newer upstream release from a lock value that is newer than
-   GitHub latest or not valid SemVer.
+`scripts/verify-upstream-soperator-sync.sh --check-latest` remains a read-only
+status check. It is not required before sync.
 
-3. Edit only the `release` field in
-   `helm-charts/soperator/upstream-soperator.lock.yaml`:
+Expected sync-owned changes can include:
 
-   ```yaml
-   release: "<upstream-version>"
-   ```
+- `upstream-soperator.lock.yaml` `tag`, `commit`, image values, and review-only
+  hashes.
+- parent `Chart.yaml` package version, upstream annotations, upstream dependency
+  versions, and child-chart dependency versions.
+- Soperator-family child chart `version` and `appVersion` fields.
+- `Chart.lock` when dependency metadata changed.
+- approved upstream script imports under `slurm_scripts/` and
+  `soperator-activechecks/scripts/`.
+- approved upstream CRD imports under `crds/`.
+- tracked image values in the values files listed in the lock.
 
-   Leave `tag`, `commit`, chart `appVersion`, child chart versions, image
-   values, and review hashes unchanged. The sync script derives those fields.
-
-4. Run the sync from the repository root:
-
-   ```bash
-   helm-charts/soperator/scripts/verify-upstream-soperator-sync.sh --sync
-   ```
-
-   Add `--report` when you want the detailed per-import status:
-
-   ```bash
-   helm-charts/soperator/scripts/verify-upstream-soperator-sync.sh --sync --report
-   ```
-
-5. Review the generated diff before opening a PR. Expected sync-owned changes
-   can include:
-
-   - `upstream-soperator.lock.yaml` `tag`, `commit`, image values, and
-     review-only hashes.
-   - parent `Chart.yaml` upstream annotations, upstream dependency versions,
-     and child-chart dependency versions.
-   - Soperator-family child chart `version` and `appVersion` fields.
-   - `Chart.lock` when dependency metadata changed.
-   - approved upstream script imports under `slurm_scripts/` and
-     `soperator-activechecks/scripts/`.
-   - tracked image values in the values files listed in the lock.
-
-6. Run a final read-only verification if you want a clean status report:
-
-   ```bash
-   helm-charts/soperator/scripts/verify-upstream-soperator-sync.sh --scope all --report
-   ```
-
-7. Open the PR. The PR is the human approval gate for script diffs, image
-   changes, dependency movement, and review-only hash changes.
-
-`--sync` refuses to write on `main` or the repository default branch. It
-refreshes the lock `tag` and resolved `commit`, copies approved script imports,
-updates tracked image values, updates child chart `appVersion` and
+`--sync` refuses to write from a dirty working tree. When run from `main`,
+`master`, or the repository default branch, it creates a clean feature branch
+named `sync-soperator-<release>` before mutating files. It refreshes the lock
+`tag` and resolved `commit`, copies approved script and CRD imports, updates
+tracked image values, updates parent and child chart `appVersion` and
 `<upstream>-ps.1` package versions, refreshes upstream parent dependency
-versions, regenerates dependency metadata when needed, and runs Helm dependency,
-lint, and template validation.
-Scoped `--scope scripts` and `--scope images` runs are read-only checks only;
-write-mode sync always uses the full upstream release contract.
+versions, regenerates dependency metadata when needed, runs Helm dependency,
+lint, and template validation under a temporary Helm repository config/cache,
+and leaves the resulting diff unstaged for local review and testing. The
+temporary Helm config is populated from the remote repositories declared in
+`Chart.yaml`, so local and CI sync runs do not require ambient `helm repo add`
+state. Local runs do not stage, commit, push, or create the PR.
+Scoped `--scope scripts`, `--scope crds`, and `--scope images` runs are
+read-only checks only; write-mode sync always uses the full upstream release
+contract.
 
-Write mode requires `yq` and Helm; read-only CI verification does not.
+Write mode requires `yq` v4 and Helm; read-only CI verification does not.
+Missing-tool errors include macOS and Linux install hints, but the sync script
+does not install packages automatically.
 
 The local chart templates, examples, docs, release tooling, and cxcli
 wiring are not overwritten by upstream sync. Those files are this chart's
@@ -537,8 +525,8 @@ the intentional divergence is visible and reviewed.
 
 The repository CI runs the same verifier on chart changes. A daily scheduled
 workflow creates or updates an upstream-sync feature branch and PR when GitHub
-has a newer public Soperator release; local runs only update the current
-feature branch and leave PR creation to the user.
+has a newer public Soperator release; local runs update the current feature
+branch and leave staging, commit, and PR creation to the user.
 The scheduled sync compares release versions before writing files and fails
 early when the lock release is newer than GitHub's latest release, which helps
 catch lock typos without mutating chart files.

@@ -1,6 +1,6 @@
 ---
 name: terraform
-description: Generate and harden Terraform repositories for reusable modules and multi-environment infrastructure deployments. Use when users ask to scaffold, standardize, or improve Terraform project structure, state/backends, environment layout, module interfaces, validation/test strategy, security controls, CI checks, or Terraform best practices.
+description: "Use for Terraform repo/module hardening: scaffold, standardize, or improve Terraform project structure, state/backends, environment roots, module interfaces, validation/test strategy, security controls, CI checks, and Terraform best practices. Do not use for onboarding Nebius Terraform modules into nebius-cxcli; use onboard-nebius-cxcli."
 ---
 
 # Terraform

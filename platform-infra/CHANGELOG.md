@@ -66,6 +66,9 @@ All notable changes to this project are documented in this file.
   autoscaling validates integer min/max bounds, and an explicit
   `autoscaling.enabled = false` helper block is normalized away before provider
   rendering.
+- Typed `modules/mk8s` node-group `strategy` objects to match the Nebius
+  provider schema, so callers can set a temporary strategy on one node group
+  without Terraform rejecting the heterogeneous `node_groups` map.
 - Redesigned `modules/mk8s` around required typed `cluster` and `node_groups`
   inputs. The module now separates cluster provisioning from node-group shape,
   reservation, SSH, service account, GPU cluster, and filesystem attachment

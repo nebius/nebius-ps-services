@@ -1,6 +1,6 @@
 ---
 name: align-skill
-description: "Use this skill to review, validate, and safely fix Codex or Agent Skill folders. Trigger for SKILL.md alignment, local or GitHub skill folders, canonical skill structure, official vendor-doc checks, safety guardrails, live-validation policy, and skill metadata standardization."
+description: "Use for Codex or Agent Skill folder alignment: SKILL.md front matter/YAML metadata, name/description trigger quality, implicit skill detection, duplicate or stale descriptions, canonical structure, official vendor-doc checks, safety guardrails, and validation."
 ---
 
 # Align Skill

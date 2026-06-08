@@ -15,6 +15,7 @@ class FakeSMTP:
         self.port = port
         self.timeout = timeout
         self.started_tls = False
+        self.tls_context: object | None = None
         self.logged_in: tuple[str, str] | None = None
         self.messages: list[object] = []
 
@@ -24,8 +25,9 @@ class FakeSMTP:
     def __exit__(self, exc_type, exc, tb) -> None:
         return None
 
-    def starttls(self) -> None:
+    def starttls(self, *, context: object | None = None) -> None:
         self.started_tls = True
+        self.tls_context = context
 
     def login(self, username: str, password: str) -> None:
         self.logged_in = (username, password)
@@ -48,7 +50,7 @@ def _project_paths(tmp_path: Path) -> ProjectPaths:
         generated_dir=generated_dir,
         infra_dir=generated_dir / "infra",
         flux_dir=generated_dir / "flux",
-        inventory_dir=generated_dir / "inventory",
+        reports_dir=generated_dir / "reports",
         path_tenant_folder="tenant-name-example",
         path_project_folder="project-name-example",
     )
@@ -111,8 +113,8 @@ def test_send_deploy_report_email_uses_local_smtp_settings_when_env_missing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     paths = _project_paths(tmp_path)
-    paths.inventory_dir.mkdir(parents=True, exist_ok=True)
-    (paths.inventory_dir / "deploy-report.md").write_text(
+    paths.reports_dir.mkdir(parents=True, exist_ok=True)
+    (paths.reports_dir / "deploy-report.md").write_text(
         "# Deploy Report\n\nBody\n", encoding="utf-8"
     )
 
@@ -137,7 +139,7 @@ def test_send_deploy_report_email_uses_local_smtp_settings_when_env_missing(
         smtp_settings={
             "host": "smtp.catalog.example.com",
             "port": 2525,
-            "starttls": False,
+            "starttls": True,
             "from": "catalog@example.com",
         },
     ) == DeployReportEmailResult(sent=True, reason="sent", message="Deploy report email sent")
@@ -145,19 +147,45 @@ def test_send_deploy_report_email_uses_local_smtp_settings_when_env_missing(
     smtp = sent[0]
     assert smtp.host == "smtp.catalog.example.com"
     assert smtp.port == 2525
-    assert smtp.started_tls is False
+    assert smtp.started_tls is True
+    assert smtp.tls_context is not None
     assert smtp.logged_in is None
     message = smtp.messages[0]
     assert message["From"] == "catalog@example.com"
 
 
-def test_send_deploy_report_email_uses_inventory_markdown_and_smtp_login(
+def test_send_deploy_report_email_rejects_plaintext_smtp(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     paths = _project_paths(tmp_path)
-    paths.inventory_dir.mkdir(parents=True, exist_ok=True)
-    (paths.inventory_dir / "deploy-report.md").write_text(
+    paths.reports_dir.mkdir(parents=True, exist_ok=True)
+    (paths.reports_dir / "deploy-report.md").write_text("# Deploy Report\n", encoding="utf-8")
+
+    sent: list[FakeSMTP] = []
+
+    def _fake_smtp(host: str, port: int, timeout: int) -> FakeSMTP:
+        smtp = FakeSMTP(host, port, timeout)
+        sent.append(smtp)
+        return smtp
+
+    monkeypatch.setenv("SMTP_HOST", "smtp.example.com")
+    monkeypatch.setenv("SMTP_STARTTLS", "false")
+    monkeypatch.setattr("nebius_cxcli.notify_ops.smtplib.SMTP", _fake_smtp)
+
+    with pytest.raises(RuntimeError, match="requires SMTP STARTTLS"):
+        send_deploy_report_email(_config(), paths)
+
+    assert sent == []
+
+
+def test_send_deploy_report_email_uses_deploy_report_markdown_and_smtp_login(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    paths = _project_paths(tmp_path)
+    paths.reports_dir.mkdir(parents=True, exist_ok=True)
+    (paths.reports_dir / "deploy-report.md").write_text(
         "# Deploy Report\n\nBody\n", encoding="utf-8"
     )
 
@@ -187,22 +215,23 @@ def test_send_deploy_report_email_uses_inventory_markdown_and_smtp_login(
     assert smtp.port == 2525
     assert smtp.timeout == 20
     assert smtp.started_tls is True
+    assert smtp.tls_context is not None
     assert smtp.logged_in == ("mailer", "secret")
     message = smtp.messages[0]
-    assert message["Subject"] == "Nebius deploy report: *******-456"
+    assert message["Subject"] == "Nebius deploy report: [redacted project_id]"
     assert message["From"] == "deployments@example.com"
     assert message["To"] == "ops@example.com"
     assert "# Deploy Report" in message.get_content()
 
 
-def test_send_deploy_report_email_requires_inventory_markdown_body(
+def test_send_deploy_report_email_requires_deploy_report_markdown_body(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     paths = _project_paths(tmp_path)
 
     monkeypatch.setenv("SMTP_HOST", "smtp.example.com")
-    paths.inventory_dir.mkdir(parents=True, exist_ok=True)
+    paths.reports_dir.mkdir(parents=True, exist_ok=True)
 
     with pytest.raises(RuntimeError, match="Deploy report markdown is missing"):
         send_deploy_report_email(_config(), paths)
@@ -213,8 +242,8 @@ def test_send_deploy_report_email_requires_project_id_from_config(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     paths = _project_paths(tmp_path)
-    paths.inventory_dir.mkdir(parents=True, exist_ok=True)
-    (paths.inventory_dir / "deploy-report.md").write_text("# Deploy Report\n", encoding="utf-8")
+    paths.reports_dir.mkdir(parents=True, exist_ok=True)
+    (paths.reports_dir / "deploy-report.md").write_text("# Deploy Report\n", encoding="utf-8")
 
     monkeypatch.setenv("SMTP_HOST", "smtp.example.com")
 
@@ -230,9 +259,14 @@ def test_send_deploy_report_email_masks_project_and_tenant_ids_in_body(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     paths = _project_paths(tmp_path)
-    paths.inventory_dir.mkdir(parents=True, exist_ok=True)
-    (paths.inventory_dir / "deploy-report.md").write_text(
-        "# Deploy Report: project-456\n\n- Tenant: `tenant-123`\n- Project: `project-456`\n",
+    paths.reports_dir.mkdir(parents=True, exist_ok=True)
+    (paths.reports_dir / "deploy-report.md").write_text(
+        (
+            "# Deploy Report: project-456\n\n"
+            "- Tenant: `tenant-123`\n"
+            "- Project: `project-456`\n"
+            "- Unrelated token: myproject-4567\n"
+        ),
         encoding="utf-8",
     )
 
@@ -244,7 +278,7 @@ def test_send_deploy_report_email_masks_project_and_tenant_ids_in_body(
         return smtp
 
     monkeypatch.setenv("SMTP_HOST", "smtp.example.com")
-    monkeypatch.setenv("SMTP_STARTTLS", "false")
+    monkeypatch.setenv("SMTP_STARTTLS", "true")
     monkeypatch.setattr("nebius_cxcli.notify_ops.smtplib.SMTP", _fake_smtp)
 
     assert send_deploy_report_email(
@@ -256,8 +290,8 @@ def test_send_deploy_report_email_masks_project_and_tenant_ids_in_body(
     )
 
     message = sent[0].messages[0]
+    assert message["Subject"] == "Nebius deploy report: [redacted project_id]"
     content = message.get_content()
-    assert "tenant-123" not in content
-    assert "project-456" not in content
-    assert "******-123" in content
-    assert "*******-456" in content
+    assert "- Tenant: `[redacted tenant_id]`" in content
+    assert "- Project: `[redacted project_id]`" in content
+    assert "myproject-4567" in content

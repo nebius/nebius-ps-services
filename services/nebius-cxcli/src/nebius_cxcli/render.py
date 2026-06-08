@@ -47,7 +47,7 @@ def staged_generated_paths(paths: ProjectPaths) -> ProjectPaths:
         generated_dir=staging_dir,
         infra_dir=staging_dir / "infra",
         flux_dir=staging_dir / "flux",
-        inventory_dir=staging_dir / "inventory",
+        reports_dir=staging_dir / "reports",
     )
 
 
@@ -104,7 +104,7 @@ def _render_project_to_paths(
     )
     paths.infra_dir.mkdir(parents=True, exist_ok=True)
     paths.flux_dir.mkdir(parents=True, exist_ok=True)
-    paths.inventory_dir.mkdir(parents=True, exist_ok=True)
+    paths.reports_dir.mkdir(parents=True, exist_ok=True)
 
     written: list[Path] = []
     written.extend(render_terraform_artifacts(config, paths, source_profile=source_profile))

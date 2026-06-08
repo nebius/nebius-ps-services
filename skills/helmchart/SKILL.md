@@ -1,6 +1,6 @@
 ---
 name: helmchart
-description: Review, harden, refactor, create, lint, or standardize Helm charts, including Chart.yaml, values.yaml, values.schema.json, templates/, NOTES.txt, README, and chart CI. Use when the user asks about Helm chart best practices, production hardening, chart validation, template quality, values design, or Helm CI. Do not use for plain Kubernetes YAML, Kustomize overlays, Dockerfiles, or Terraform unless the task is explicitly about converting or integrating them with a Helm chart.
+description: "Use for Helm chart work: create, review, harden, refactor, lint, template, or standardize Chart.yaml, values.yaml, values.schema.json, templates/, NOTES.txt, README, and chart CI. Do not use for OCI chart publication flow generation; use publish-helm. Do not use for plain Kubernetes YAML, Kustomize, Dockerfiles, or Terraform unless integrating with Helm."
 ---
 
 # Helm Chart

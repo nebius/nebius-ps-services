@@ -4,16 +4,40 @@ All notable changes to this chart are tracked here.
 
 ## [Unreleased]
 
+- Made the upstream sync `--report` changed-file summary use readable status
+  labels such as `modified` and `new` instead of raw Git short-status codes.
+- Fixed upstream sync Helm validation on clean GitHub runners by having
+  `verify-upstream-soperator-sync.sh --sync` seed a temporary Helm repository
+  config/cache from the parent chart's remote dependencies before running
+  `helm dependency update` or `helm dependency build`, removing the need for
+  ambient `helm repo add` state.
+- Aligned Soperator example values and the Slurm memory validation message with
+  the chart's upstream `3.0.5` image/defaults baseline.
+- Hardened `verify-upstream-soperator-sync.sh --sync` so write mode requires a
+  clean working tree, automatically creates a `sync-soperator-<release>` branch
+  when run from the default branch, validates `yq` v4, provides macOS/Linux
+  install hints for missing tools without installing packages automatically, and
+  leaves the validated sync diff unstaged for local review while printing a
+  changed-file summary when `--report` is used. The scheduled workflow still
+  stages and commits automation PR changes after validation.
+- Promoted Soperator CRDs from review-only hash tracking to exact upstream sync
+  imports, so `--sync` refreshes `crds/` alongside the pinned operator image and
+  catches upstream API schema additions such as `slurmConfig.suspendTime`.
+- Aligned the parent `soperator` chart package version with the
+  Soperator-family `<upstream>-ps.N` format. Upstream sync now sets the parent
+  and child chart package versions to `<upstream>-ps.1`, and chart publish
+  tooling accepts prerelease-suffixed SemVer tags such as
+  `soperator-chart-v3.0.4-ps.1`.
 - Added a design-doc inventory for the imported `slurm_scripts/` files,
   including their trigger contexts, scheduling model, and runtime purpose.
 - Renamed the upstream Soperator sync lock group to `imports.scripts`, so the
   lock schema, report output, and `--scope scripts` terminology match.
-- Made `upstream-soperator.lock.yaml` the single manual upstream-release input:
-  `verify-upstream-soperator-sync.sh --sync` now derives chart appVersions,
-  upstream parent dependency versions, child dependency versions, script
-  imports, image values, review-only hashes, and Helm validation from the lock,
-  while the scheduled workflow opens an upstream-sync PR from an automation
-  branch.
+- Made `upstream-soperator.lock.yaml` the single upstream-release source of
+  truth: `verify-upstream-soperator-sync.sh --latest --sync` now updates the
+  lock pin and derives chart appVersions, upstream parent dependency versions,
+  child dependency versions, script imports, CRD imports, image values,
+  review-only hashes, and Helm validation, while the scheduled workflow commits
+  and opens an upstream-sync PR from an automation branch.
 - Added a pre-mutation release-order guard so scheduled `--latest` sync fails
   clearly when the lock release is newer than GitHub's latest release.
 - Hardened upstream sync verification so read-only checks validate child chart
@@ -211,9 +235,8 @@ All notable changes to this chart are tracked here.
   authentication.
 - Added `publish-helm.sh` and a shared `helm-chart-publish` workflow
   for publishing this chart to a Nebius OCI registry.
-- Split chart package versioning from the upstream Soperator release:
-  `Chart.yaml.version` is now this chart's SemVer, while
-  `Chart.yaml.appVersion` remains pinned to the upstream Soperator release.
+- Added chart package publishing with Nebius `-ps.N` SemVer suffixes while
+  keeping `Chart.yaml.appVersion` pinned to the upstream Soperator release.
 - Added fail-fast validation for duplicate NodeSet names, structured partitions
   that reference missing NodeSets, empty structured partition lists, and
   malformed exporter accounting lookback durations.

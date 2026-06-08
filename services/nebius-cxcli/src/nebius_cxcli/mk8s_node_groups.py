@@ -49,6 +49,7 @@ class Mk8sNodeGroup:
     gpu: bool
     platform: str
     preset: str
+    os: str
     node_count: int | None
     autoscaling_min_node_count: int | None
     autoscaling_max_node_count: int | None
@@ -173,6 +174,7 @@ def iter_node_groups(inputs: Mapping[str, Any] | None) -> tuple[Mk8sNodeGroup, .
                 gpu=gpu,
                 platform=_text(raw_group.get("platform")),
                 preset=_text(raw_group.get("preset")),
+                os=_text(raw_group.get("os")),
                 node_count=_positive_int_or_none(raw_group.get("node_count")),
                 autoscaling_min_node_count=(
                     _positive_int_or_none(autoscaling.get("min_node_count"))

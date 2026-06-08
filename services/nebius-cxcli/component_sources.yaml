@@ -196,6 +196,10 @@ components:
           version: 0.2.8
         local:
           path: ../../helm-charts/nccl-test
+      usage:
+        lifecycle: transient
+        config:
+          ref: deploy.targets[].validations.mk8s_gpu.nccl
       ui:
         title: NCCL benchmark validation chart
         group: Validations
@@ -210,7 +214,7 @@ components:
         portable:
           repo: https://github.com/nebius/nebius-ps-services/tree/main/helm-charts/soperator
           chart: soperator
-          version: 0.1.0
+          version: 4.0.1-ps.1
         local:
           path: ../../helm-charts/soperator
       ui:

@@ -90,7 +90,7 @@ def test_build_deploy_validation_report_aggregates_results(tmp_path: Path) -> No
         encoding="utf-8",
     )
 
-    report = build_deploy_validation_report(validations, inventory_dir=tmp_path)
+    report = build_deploy_validation_report(validations, reports_dir=tmp_path)
 
     assert report.markdown_path == tmp_path / DEPLOY_REPORT_FILENAME
     assert report.overall_status == "incomplete"
@@ -163,12 +163,53 @@ def test_clear_deploy_validation_artifacts_removes_stale_outputs(tmp_path: Path)
     ):
         (tmp_path / name).write_text("data\n", encoding="utf-8")
 
-    clear_deploy_validation_artifacts(validations, inventory_dir=tmp_path)
+    clear_deploy_validation_artifacts(validations, reports_dir=tmp_path)
 
     assert not (tmp_path / DEPLOY_REPORT_FILENAME).exists()
     assert not (tmp_path / "deploy-validation-report.md").exists()
     assert not (tmp_path / "gpu-visibility-report.json").exists()
     assert not (tmp_path / "nccl-test-report.json").exists()
+
+
+def test_build_deploy_validation_report_formats_soperator_smoke_summary(
+    tmp_path: Path,
+) -> None:
+    validations = [
+        {
+            "kind": "soperator_cluster_smoke",
+            "name": "Soperator cluster smoke test (training)",
+            "report_file": "soperator-cluster-validation-report-training.json",
+        }
+    ]
+    (tmp_path / "soperator-cluster-validation-report-training.json").write_text(
+        json.dumps(
+            {
+                "passed": True,
+                "status": "passed",
+                "summary": "5/5 Soperator/Slurm checks passed.",
+                "checks": [
+                    {
+                        "name": "Slurm srun smoke job",
+                        "passed": True,
+                        "summary": "one-task synchronous srun job completed successfully.",
+                    }
+                ],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    report = build_deploy_validation_report(validations, reports_dir=tmp_path)
+
+    assert format_deploy_validation_summary_lines(report) == [
+        "Deploy validation summary:",
+        "  Overall: PASS (1/1 completed, 0 not run)",
+        "  PASS Soperator cluster smoke test (training): 5/5 Soperator/Slurm checks passed.",
+        f"  Combined report: {tmp_path / DEPLOY_REPORT_FILENAME}",
+        f"  JSON detail: {tmp_path / 'soperator-cluster-validation-report-training.json'}",
+    ]
+    assert "Slurm srun smoke job" in "\n".join(validation_section_lines(report))
 
 
 def test_build_deploy_validation_report_formats_socket_mode_nccl_summary(tmp_path: Path) -> None:
@@ -195,7 +236,7 @@ def test_build_deploy_validation_report_formats_socket_mode_nccl_summary(tmp_pat
         encoding="utf-8",
     )
 
-    report = build_deploy_validation_report(validations, inventory_dir=tmp_path)
+    report = build_deploy_validation_report(validations, reports_dir=tmp_path)
 
     assert format_deploy_validation_summary_lines(report) == [
         "Deploy validation summary:",
@@ -208,6 +249,58 @@ def test_build_deploy_validation_report_formats_socket_mode_nccl_summary(tmp_pat
         "- Summary: Launcher phase Succeeded; Socket/TCPIP average bus bandwidth "
         "**41.7** Gbps across 2 worker node(s); RDMA threshold not enforced for this run."
         in validation_section_lines(report)
+    )
+
+
+def test_build_deploy_validation_report_formats_single_rank_nccl_smoke(
+    tmp_path: Path,
+) -> None:
+    validations = [
+        {
+            "kind": "mk8s_nccl",
+            "name": "NCCL test",
+            "report_file": "nccl-test-report.json",
+        }
+    ]
+    (tmp_path / "nccl-test-report.json").write_text(
+        json.dumps(
+            {
+                "passed": True,
+                "launcher_phase": "Succeeded",
+                "transport_label": "Socket/TCPIP",
+                "avg_bus_bandwidth_gbps": 0.0,
+                "threshold_gbps": 300.0,
+                "threshold_enforced": False,
+                "bandwidth_observed": False,
+                "single_rank_smoke": True,
+                "selected_worker_node_count": 1,
+                "nccl_dmabuf_env_name": "NCCL_DMABUF_ENABLE",
+                "nccl_dmabuf_enable": "unset",
+                "nccl_dmabuf_enable_source": "unset",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    report = build_deploy_validation_report(validations, reports_dir=tmp_path)
+
+    assert format_deploy_validation_summary_lines(report) == [
+        "Deploy validation summary:",
+        "  Overall: PASS (1/1 completed, 0 not run)",
+        "  PASS NCCL test: Launcher phase Succeeded; Socket/TCPIP single-rank smoke run across 1 worker node(s); no collective bus bandwidth observed; NCCL_DMABUF_ENABLE=unset; RDMA threshold not enforced for this run.",
+        f"  Combined report: {tmp_path / DEPLOY_REPORT_FILENAME}",
+        f"  JSON detail: {tmp_path / 'nccl-test-report.json'}",
+    ]
+    assert (
+        "- Summary: Launcher phase Succeeded; Socket/TCPIP single-rank smoke run "
+        "across 1 worker node(s); no collective bus bandwidth observed; "
+        "NCCL_DMABUF_ENABLE=unset; RDMA threshold not enforced for this run."
+        in validation_section_lines(report)
+    )
+    assert report.results[0].footer_summary == (
+        "Succeeded; Socket/TCPIP single-rank smoke across 1 worker; "
+        "no collective bandwidth observed; RDMA threshold not enforced."
     )
 
 
@@ -244,7 +337,7 @@ def test_build_deploy_validation_report_formats_skipped_gpu_workload_summary(
             encoding="utf-8",
         )
 
-    report = build_deploy_validation_report(validations, inventory_dir=tmp_path)
+    report = build_deploy_validation_report(validations, reports_dir=tmp_path)
 
     assert format_deploy_validation_summary_lines(report) == [
         "Deploy validation summary:",
@@ -255,6 +348,95 @@ def test_build_deploy_validation_report_formats_skipped_gpu_workload_summary(
         f"  JSON detail: {tmp_path / 'gpu-visibility-report.json'}",
         f"  JSON detail: {tmp_path / 'nccl-test-report.json'}",
     ]
+
+
+def test_build_deploy_validation_report_uses_soperator_owned_gpu_smoke_for_skips(
+    tmp_path: Path,
+) -> None:
+    validations = [
+        {
+            "kind": "mk8s_gpu_visibility",
+            "name": "GPU Visibility test (mk8s)",
+            "target_ref": "mk8s",
+            "report_file": "gpu-visibility-report-mk8s.json",
+        },
+        {
+            "kind": "mk8s_nccl",
+            "name": "NCCL test (mk8s)",
+            "target_ref": "mk8s",
+            "report_file": "nccl-test-report-mk8s.json",
+        },
+        {
+            "kind": "soperator_cluster_smoke",
+            "name": "Soperator cluster smoke test (mk8s)",
+            "target_ref": "mk8s",
+            "report_file": "soperator-cluster-validation-report-mk8s.json",
+        },
+    ]
+    for report_name, validation in (
+        ("gpu-visibility-report-mk8s.json", "GPU Visibility test"),
+        ("nccl-test-report-mk8s.json", "NCCL test"),
+    ):
+        (tmp_path / report_name).write_text(
+            json.dumps(
+                {
+                    "validation": validation,
+                    "passed": True,
+                    "skipped": True,
+                    "skip_reason": "all Ready GPU nodes already have their GPUs allocated to existing workloads",
+                    "total_gpu_node_count": 2,
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+    (tmp_path / "soperator-cluster-validation-report-mk8s.json").write_text(
+        json.dumps(
+            {
+                "kind": "soperator_cluster_smoke",
+                "target_ref": "mk8s",
+                "passed": True,
+                "status": "passed",
+                "summary": "7/7 Soperator/Slurm checks passed.",
+                "checks": [
+                    {
+                        "name": "Slurm GPU visibility test",
+                        "passed": True,
+                        "summary": "one-GPU Slurm allocation reported NVIDIA GPUs on partition gpu.",
+                    },
+                    {
+                        "name": "Slurm NCCL smoke test",
+                        "passed": True,
+                        "summary": "one-rank NCCL all_reduce_perf smoke completed on partition gpu.",
+                    },
+                ],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    report = build_deploy_validation_report(validations, reports_dir=tmp_path)
+
+    summary_lines = format_deploy_validation_summary_lines(report)
+    assert (
+        "  PASS GPU Visibility test (mk8s): Soperator-owned Slurm GPU visibility passed: "
+        "one-GPU Slurm allocation reported NVIDIA GPUs on partition gpu. "
+        "The Kubernetes workload check was not scheduled because Soperator worker pods "
+        "reserve all Ready GPU nodes."
+    ) in summary_lines
+    assert (
+        "  PASS NCCL test (mk8s): Soperator-owned Slurm NCCL smoke passed: "
+        "one-rank NCCL all_reduce_perf smoke completed on partition gpu. "
+        "The Kubernetes workload check was not scheduled because Soperator worker pods "
+        "reserve all Ready GPU nodes."
+    ) in summary_lines
+    markdown = "\n".join(validation_section_lines(report))
+    assert "### GPU Visibility test (mk8s)" in markdown
+    assert "### NCCL test (mk8s)" in markdown
+    assert "Summary: Skipped: all Ready GPU nodes" not in markdown
+    assert "Soperator-owned Slurm GPU visibility passed" in markdown
+    assert "Soperator-owned Slurm NCCL smoke passed" in markdown
 
 
 def test_build_deploy_validation_report_formats_rdma_dmabuf_summary(tmp_path: Path) -> None:
@@ -285,7 +467,7 @@ def test_build_deploy_validation_report_formats_rdma_dmabuf_summary(tmp_path: Pa
         encoding="utf-8",
     )
 
-    report = build_deploy_validation_report(validations, inventory_dir=tmp_path)
+    report = build_deploy_validation_report(validations, reports_dir=tmp_path)
 
     assert format_deploy_validation_summary_lines(report) == [
         "Deploy validation summary:",
@@ -328,7 +510,7 @@ def test_build_deploy_validation_report_prefers_target_scoped_spec_name(
         encoding="utf-8",
     )
 
-    report = build_deploy_validation_report(validations, inventory_dir=tmp_path)
+    report = build_deploy_validation_report(validations, reports_dir=tmp_path)
 
     assert report.results[0].name == "NCCL test (cluster2)"
 
@@ -353,7 +535,7 @@ def test_build_deploy_validation_report_summarizes_error_report(tmp_path: Path) 
         encoding="utf-8",
     )
 
-    report = build_deploy_validation_report(validations, inventory_dir=tmp_path)
+    report = build_deploy_validation_report(validations, reports_dir=tmp_path)
 
     assert format_deploy_validation_summary_lines(report) == [
         "Deploy validation summary:",

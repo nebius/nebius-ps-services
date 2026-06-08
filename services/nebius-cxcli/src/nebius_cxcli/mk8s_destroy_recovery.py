@@ -193,13 +193,32 @@ def delete_node_group(
         operation = client.delete(DeleteNodeGroupRequest(id=candidate.node_group_id)).wait()
         operation_id = _as_text(getattr(operation, "id", None))
         sync_wait = getattr(operation, "sync_wait", None)
-        if callable(sync_wait):
-            sync_wait(timeout=timeout_seconds)
-        if hasattr(operation, "successful") and not operation.successful():
+        if not callable(sync_wait):
+            raise RuntimeError(
+                "Nebius MK8s node-group delete operation cannot be confirmed because "
+                "`sync_wait` is unavailable: "
+                f"{candidate.node_group_name} ({candidate.node_group_id}), "
+                f"operation={operation_id or '(unknown)'}"
+            )
+        wait_result = sync_wait(timeout=timeout_seconds)
+        if wait_result is not None:
+            operation = wait_result
+            operation_id = _as_text(getattr(operation, "id", None)) or operation_id
+        successful = getattr(operation, "successful", None)
+        if not callable(successful):
+            raise RuntimeError(
+                "Nebius MK8s node-group delete operation cannot be confirmed because "
+                "`successful` is unavailable after waiting: "
+                f"{candidate.node_group_name} ({candidate.node_group_id}), "
+                f"operation={operation_id or '(unknown)'}"
+            )
+        if not successful():
+            status = getattr(operation, "status", None)
+            rendered_status = status() if callable(status) else status
             raise RuntimeError(
                 "Nebius MK8s node-group delete did not complete successfully: "
                 f"{candidate.node_group_name} ({candidate.node_group_id}), "
-                f"operation={operation_id or '(unknown)'} status={operation.status()}"
+                f"operation={operation_id or '(unknown)'} status={rendered_status}"
             )
         return operation_id or "(unknown)"
     finally:

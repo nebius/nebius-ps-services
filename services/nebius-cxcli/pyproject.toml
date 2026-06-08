@@ -43,7 +43,12 @@ where = ["src"]
 include = ["nebius_cxcli*"]
 
 [tool.setuptools.package-data]
-nebius_cxcli = ["component_sources.yaml", "component_cli_settings.yaml", "grafana_dashboards/*.json"]
+nebius_cxcli = [
+  "component_sources.yaml",
+  "component_cli_settings.yaml",
+  "grafana_dashboards/*.json",
+  "soperator_migration_profiles.yaml",
+]
 
 [tool.setuptools_scm]
 version_scheme = "python-simplified-semver"

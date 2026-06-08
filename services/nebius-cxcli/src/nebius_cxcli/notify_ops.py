@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import os
+import re
 import smtplib
+import ssl
 from collections.abc import Mapping
 from dataclasses import dataclass
 from email.message import EmailMessage
@@ -69,13 +71,22 @@ def _env_or_config_bool(
     return bool(raw)
 
 
-def _mask_identifier(value: str) -> str:
+_IDENTIFIER_BOUNDARY_CHARS = "A-Za-z0-9_-"
+
+
+def _redacted_identifier(label: str) -> str:
+    return f"[redacted {label}]"
+
+
+def _redact_identifier_occurrences(body: str, value: str, *, label: str) -> str:
     token = str(value or "").strip()
     if not token:
-        return token
-    if len(token) <= 4:
-        return token
-    return ("*" * (len(token) - 4)) + token[-4:]
+        return body
+    pattern = re.compile(
+        rf"(?<![{_IDENTIFIER_BOUNDARY_CHARS}]){re.escape(token)}"
+        rf"(?![{_IDENTIFIER_BOUNDARY_CHARS}])"
+    )
+    return pattern.sub(_redacted_identifier(label), body)
 
 
 def send_deploy_report_email(
@@ -129,9 +140,21 @@ def send_deploy_report_email(
             "Deploy report email requires `client_info.nebius.project_id` from config.yaml; "
             "folder names are not used as an identity fallback."
         )
-    masked_project_id = _mask_identifier(project_id)
+    redacted_project_id = _redacted_identifier("project_id")
+    starttls = _env_or_config_bool(
+        "SMTP_STARTTLS",
+        smtp_settings,
+        "starttls",
+        default=True,
+    )
+    if not starttls:
+        raise RuntimeError(
+            "Deploy report email requires SMTP STARTTLS so report contents and SMTP credentials "
+            "are not sent in plaintext. Set SMTP_STARTTLS=true or enable STARTTLS in "
+            "`nebius-cxcli email --setup`."
+        )
 
-    markdown_path = paths.inventory_dir / DEPLOY_REPORT_FILENAME
+    markdown_path = paths.reports_dir / DEPLOY_REPORT_FILENAME
     if not markdown_path.exists():
         raise RuntimeError(
             f"Deploy report markdown is missing: {markdown_path}. "
@@ -139,25 +162,18 @@ def send_deploy_report_email(
         )
     body = markdown_path.read_text(encoding="utf-8")
     if tenant_id:
-        body = body.replace(tenant_id, _mask_identifier(tenant_id))
+        body = _redact_identifier_occurrences(body, tenant_id, label="tenant_id")
     if project_id:
-        body = body.replace(project_id, masked_project_id)
+        body = _redact_identifier_occurrences(body, project_id, label="project_id")
 
     message = EmailMessage()
-    message["Subject"] = f"Nebius deploy report: {masked_project_id}"
+    message["Subject"] = f"Nebius deploy report: {redacted_project_id}"
     message["From"] = from_addr
     message["To"] = recipient
     message.set_content(body)
 
     with smtplib.SMTP(host, port, timeout=20) as smtp:
-        starttls = _env_or_config_bool(
-            "SMTP_STARTTLS",
-            smtp_settings,
-            "starttls",
-            default=True,
-        )
-        if starttls:
-            smtp.starttls()
+        smtp.starttls(context=ssl.create_default_context())
         if username and password:
             smtp.login(username, password)
         smtp.send_message(message)
