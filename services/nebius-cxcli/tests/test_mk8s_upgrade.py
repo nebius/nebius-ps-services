@@ -38,6 +38,16 @@ def _node_group(
     )
 
 
+def _ready_status() -> SimpleNamespace:
+    return SimpleNamespace(
+        ready_node_count=1,
+        target_node_count=1,
+        node_count=1,
+        outdated_node_count=0,
+        reconciling=False,
+    )
+
+
 def _source_node_group(
     *,
     key: str,
@@ -257,6 +267,208 @@ def test_update_source_node_group_os_rejects_unknown_source_key() -> None:
             instance_id="prod",
             target_os="ubuntu24.04",
             node_group_keys=("missing",),
+        )
+
+
+def test_verify_mk8s_upgrade_plan_ready_confirms_live_k8s_os_and_gpu_stack() -> None:
+    live_group = _node_group(
+        id="ng-gpu",
+        name="gpu-workers",
+        version="1.33",
+        platform="gpu-platform",
+        preset="8gpu",
+        os="ubuntu24.04",
+        drivers_preset="cuda13.0",
+    )
+    live_group.status = _ready_status()
+    planned_group = upgrade.live_node_group_from_sdk(
+        live_group,
+        source=_source_node_group(
+            key="gpu",
+            name="gpu-workers",
+            gpu=True,
+            platform="gpu-platform",
+            preset="8gpu",
+            os="ubuntu22.04",
+            gpu_stack_source="nebius_image",
+            gpu_stack_preset="cuda12.8",
+        ),
+    )
+    plan = upgrade.Mk8sNodeTemplateUpgradePlan(
+        target=upgrade.UpgradeTarget("infra:mk8s@prod", "prod"),
+        cluster_id="cluster-1",
+        cluster_name="mk8s-live",
+        current_version="1.32",
+        target_version="1.33",
+        target_os="ubuntu24.04",
+        target_gpu_stack_preset="cuda13.0",
+        hops=(upgrade.UpgradeHop("1.32", "1.33"),),
+        disruption_policy=upgrade.DISRUPTION_POLICY_SAFE,
+        drain_timeout=upgrade.resolve_drain_timeout(upgrade.DISRUPTION_POLICY_SAFE, "auto"),
+        all_node_groups=(planned_group,),
+        node_groups=(planned_group,),
+        compatibility_failures=(),
+    )
+
+    class FakeExecutor:
+        def get_cluster(self, cluster_id: str) -> SimpleNamespace:
+            assert cluster_id == "cluster-1"
+            return _cluster(version="1.33")
+
+        def list_node_groups(self, cluster_id: str) -> tuple[SimpleNamespace, ...]:
+            assert cluster_id == "cluster-1"
+            return (live_group,)
+
+    result = upgrade.verify_mk8s_upgrade_plan_ready(
+        executor=FakeExecutor(),
+        plan=plan,
+        label="MK8s node-template upgrade",
+    )
+
+    assert result.ready_node_group_count == 1
+    assert "Kubernetes 1.33" in result.summary()
+
+
+def test_verify_mk8s_upgrade_plan_ready_fails_when_live_os_does_not_match() -> None:
+    planned_raw = _node_group(
+        id="ng-system",
+        name="system",
+        version="1.33",
+        os="ubuntu22.04",
+    )
+    planned_raw.status = _ready_status()
+    planned_group = upgrade.live_node_group_from_sdk(
+        planned_raw,
+        source=_source_node_group(key="system", name="system", os="ubuntu22.04"),
+    )
+    live_raw = _node_group(
+        id="ng-system",
+        name="system",
+        version="1.33",
+        os="ubuntu22.04",
+    )
+    live_raw.status = _ready_status()
+    plan = upgrade.Mk8sOsImageUpgradePlan(
+        target=upgrade.UpgradeTarget("infra:mk8s@prod", "prod"),
+        cluster_id="cluster-1",
+        cluster_name="mk8s-live",
+        k8s_version="1.33",
+        target_os="ubuntu24.04",
+        disruption_policy=upgrade.DISRUPTION_POLICY_SAFE,
+        drain_timeout=upgrade.resolve_drain_timeout(upgrade.DISRUPTION_POLICY_SAFE, "auto"),
+        node_groups=(planned_group,),
+        compatibility_failures=(),
+    )
+
+    class FakeExecutor:
+        def get_cluster(self, cluster_id: str) -> SimpleNamespace:
+            assert cluster_id == "cluster-1"
+            return _cluster(version="1.33")
+
+        def list_node_groups(self, cluster_id: str) -> tuple[SimpleNamespace, ...]:
+            assert cluster_id == "cluster-1"
+            return (live_raw,)
+
+    with pytest.raises(RuntimeError, match="system: os=ubuntu22.04"):
+        upgrade.verify_mk8s_upgrade_plan_ready(
+            executor=FakeExecutor(),
+            plan=plan,
+            label="MK8s OS image upgrade",
+        )
+
+
+def test_verify_mk8s_upgrade_plan_ready_fails_when_status_is_missing() -> None:
+    planned_raw = _node_group(
+        id="ng-system",
+        name="system",
+        version="1.33",
+        os="ubuntu24.04",
+    )
+    planned_raw.status = _ready_status()
+    planned_group = upgrade.live_node_group_from_sdk(
+        planned_raw,
+        source=_source_node_group(key="system", name="system", os="ubuntu24.04"),
+    )
+    live_raw = _node_group(
+        id="ng-system",
+        name="system",
+        version="1.33",
+        os="ubuntu24.04",
+    )
+    plan = upgrade.Mk8sOsImageUpgradePlan(
+        target=upgrade.UpgradeTarget("infra:mk8s@prod", "prod"),
+        cluster_id="cluster-1",
+        cluster_name="mk8s-live",
+        k8s_version="1.33",
+        target_os="ubuntu24.04",
+        disruption_policy=upgrade.DISRUPTION_POLICY_SAFE,
+        drain_timeout=upgrade.resolve_drain_timeout(upgrade.DISRUPTION_POLICY_SAFE, "auto"),
+        node_groups=(planned_group,),
+        compatibility_failures=(),
+    )
+
+    class FakeExecutor:
+        def get_cluster(self, cluster_id: str) -> SimpleNamespace:
+            assert cluster_id == "cluster-1"
+            return _cluster(version="1.33")
+
+        def list_node_groups(self, cluster_id: str) -> tuple[SimpleNamespace, ...]:
+            assert cluster_id == "cluster-1"
+            return (live_raw,)
+
+    with pytest.raises(RuntimeError, match="status not returned by Nebius SDK"):
+        upgrade.verify_mk8s_upgrade_plan_ready(
+            executor=FakeExecutor(),
+            plan=plan,
+            label="MK8s OS image upgrade",
+        )
+
+
+def test_verify_mk8s_upgrade_plan_ready_fails_when_status_counts_are_missing() -> None:
+    planned_raw = _node_group(
+        id="ng-system",
+        name="system",
+        version="1.33",
+        os="ubuntu24.04",
+    )
+    planned_raw.status = _ready_status()
+    planned_group = upgrade.live_node_group_from_sdk(
+        planned_raw,
+        source=_source_node_group(key="system", name="system", os="ubuntu24.04"),
+    )
+    live_raw = _node_group(
+        id="ng-system",
+        name="system",
+        version="1.33",
+        os="ubuntu24.04",
+    )
+    live_raw.status = SimpleNamespace(version="1.33")
+    plan = upgrade.Mk8sOsImageUpgradePlan(
+        target=upgrade.UpgradeTarget("infra:mk8s@prod", "prod"),
+        cluster_id="cluster-1",
+        cluster_name="mk8s-live",
+        k8s_version="1.33",
+        target_os="ubuntu24.04",
+        disruption_policy=upgrade.DISRUPTION_POLICY_SAFE,
+        drain_timeout=upgrade.resolve_drain_timeout(upgrade.DISRUPTION_POLICY_SAFE, "auto"),
+        node_groups=(planned_group,),
+        compatibility_failures=(),
+    )
+
+    class FakeExecutor:
+        def get_cluster(self, cluster_id: str) -> SimpleNamespace:
+            assert cluster_id == "cluster-1"
+            return _cluster(version="1.33")
+
+        def list_node_groups(self, cluster_id: str) -> tuple[SimpleNamespace, ...]:
+            assert cluster_id == "cluster-1"
+            return (live_raw,)
+
+    with pytest.raises(RuntimeError, match="status missing ready_node_count"):
+        upgrade.verify_mk8s_upgrade_plan_ready(
+            executor=FakeExecutor(),
+            plan=plan,
+            label="MK8s OS image upgrade",
         )
 
 

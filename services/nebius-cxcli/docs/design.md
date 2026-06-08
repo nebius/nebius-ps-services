@@ -601,13 +601,14 @@ rollout watch is for the whole group, starts after each Terraform apply, and
 uses max(`1h`, `10m * target node count`).
 
 Terraform apply is not considered complete by cxcli until the live node-group
-rollout is fully settled. cxcli waits until provider node-group status shows the target ready
-count, total node count, zero outdated nodes, and no active reconciliation. If a
-previous run already requested the target version and old nodes are still being
-retired, rerunning `upgrade k8s-version` treats that as a resumable wait rather
-than a new mutation; PDB/drain blockers still gate new mutation but do not block
-waiting for an already-started provider rollout. If live resources are already
-at the target version but source config is stale, cxcli still updates
+rollout is fully settled. cxcli waits until provider node-group status shows
+ready, target, and total node counts; if the provider also returns outdated-node
+or reconciliation fields, those must be clean. If a previous run already
+requested the target version and old nodes are still being retired, rerunning
+`upgrade k8s-version` treats that as a resumable wait rather than a new
+mutation; PDB/drain blockers still gate new mutation but do not block waiting
+for an already-started provider rollout. If live resources are already at the
+target version but source config is stale, cxcli still updates
 `config.yaml`, rerenders `generated/`, runs Terraform plan, and applies the
 rendered bundle so Terraform desired state cannot drift backward on the next
 run. If a stage fails after a temporary node-group disruption strategy is
@@ -888,16 +889,26 @@ storage and compute early. Reruns are action-idempotent: the accepted
 `deploy.targets[].soperator_onboarding.actions` list defines the desired work,
 and `ext-soperator migrate --execute` rechecks completed action phases against
 live state before skipping them. External node-template upgrade checks the live
-MK8s control plane and node-group templates, target GPU stack remediation
-checks selected GPU/Network Operator Helm releases, aligned-SFS checks verify
-filesystems and node-group attachments, and final cutover checks the target
-SlurmCluster/NodeSet state. Preserved worker NodeSet Slurm CPU/GPU topology is
-sampled from live inventory and one representative worker pod per NodeSet so
-reruns can repair source-era static config without hardcoding a GPU platform
-or node count. If one of those completed actions no longer
+MK8s control plane and node-group templates, including Kubernetes version, node
+OS image, and Nebius `drivers_preset` / CUDA stack where applicable; target GPU
+stack remediation checks selected GPU/Network Operator Helm releases;
+aligned-SFS checks verify filesystems and node-group attachments; and final
+cutover checks the target SlurmCluster/NodeSet state. Preserved worker NodeSet
+Slurm CPU/GPU topology is sampled from live inventory and one representative
+worker pod per NodeSet so reruns can repair source-era static config without
+hardcoding a GPU platform or node count. If one of those completed actions no longer
 satisfies live state, cxcli removes the phase from the local completed set and
-runs the existing phase handler again; data-copy and retirement remain
-checkpoint-gated because rerunning them can affect customer data or teardown.
+runs the existing phase handler again. Before completion, cxcli verifies the
+external MK8s control plane and discovered Nebius node-group provider readiness,
+repeats the final MK8s node-template check when that action was accepted,
+verifies the target Soperator Helm release and rendered workloads, then fails
+if stale old source-family Soperator Helm releases or active old source Flux
+HelmReleases still remain after automatic retirement. Automatic retirement
+suspends old Flux HelmRelease/Kustomization desired state, prunes old
+operational Soperator resources, removes stale Helm release records, and
+preserves shared/storage/custom resources. Data-copy and infrastructure
+retirement remain checkpoint-gated because rerunning them can affect customer
+data or teardown.
 The executor-owned live status surface is
 phase-aware rather than a generic spinner: storage phases emit `Soperator
 migration status` with aligned SFS/PVC copy progress plus MK8s and Slurm
@@ -3161,7 +3172,7 @@ Modules that expose collection/object inputs, such as `mysterybox.secrets`, `ssh
   - Runs Terraform plan and apply in staged order: first the control-plane version while node groups are pinned to their live versions, then node groups one at a time in cxcli's CPU/system-before-GPU order. Each enabled source node group receives an explicit `inputs.node_groups.*.version` during the upgrade so the day-2 artifact is auditable even though the Terraform module still supports defaulting node-group version from `inputs.cluster.k8s_version`.
   - Prints that upgrade stages are per control-plane hop and per node group, not per node. Large node groups therefore increase provider rollout/watch time, not the number of cxcli render stages.
   - `--dry-run` resolves the live cluster through the SDK, prints the live plan plus a wrapped repeat dry-run command, and exits without changing `config.yaml`, `generated/`, Terraform backend state, or live Nebius resources.
-  - Non-dry runs use the SDK for live discovery, compatibility checks, generated handoff, progress/error watching, and final rollout verification. Terraform remains the reconciler that changes cluster and node-group version fields.
+  - Non-dry runs use the SDK for live discovery, compatibility checks, generated handoff, progress/error watching, and final rollout verification. Terraform remains the reconciler that changes cluster and node-group version fields. Before success, a final MK8s readiness check re-reads the live control plane and selected node groups to verify the requested Kubernetes version has settled, and it requires provider node-group status rather than accepting matching spec fields alone.
   - Non-dry runs wait for node groups to finish provider rollout and can resume that wait after partial live progress. If live resources are already at the target version but source config is stale, cxcli still syncs the desired-state files through Terraform plan/apply.
   - Kubernetes preflight inspection failures block non-dry runs for every disruption policy, including `force-delete`, so unknown cluster state cannot be treated as a known PDB or drain blocker.
   - After GPU node groups settle, enabled target-scoped deploy validations such as GPU stack readiness, GPU Visibility, and NCCL are the post-upgrade GPU canary phase.
@@ -3182,7 +3193,9 @@ Modules that expose collection/object inputs, such as `mysterybox.secrets`, `ssh
   - Updates `inputs.node_groups.<group>.os`, rerenders `generated/`, validates
     the rendered bundle, runs quiet Terraform plan, applies one node group at a
     time in CPU/system-before-GPU order, then waits for Managed Kubernetes
-    rolling node replacement to finish.
+    rolling node replacement to finish. Before success, a final MK8s readiness
+    check re-reads the selected node groups and verifies their live node-template
+    OS value matches `--to-os`.
   - For `infra:vm` targets, updates only `inputs.source_image_family` on
     generic VM components with module-managed boot disks, rerenders, validates,
     runs quiet Terraform plan/apply, and reuses the existing compute instance
@@ -3213,6 +3226,9 @@ Modules that expose collection/object inputs, such as `mysterybox.secrets`, `ssh
     `inputs.node_groups.<group>.version`, `.os`, and Nebius-image
     `.gpu_stack_preset` together before render/validate/Terraform
     plan/apply/wait, so the group rolls once for the combined template change.
+    Before success, a final MK8s readiness check re-reads the live control plane
+    and selected node groups to verify Kubernetes version, OS, and Nebius
+    `drivers_preset` / CUDA stack.
   - Carries the same `--node-group`, `--dry-run`, `--disruption-policy`,
     `--drain-timeout`, auth bootstrap, and validation skip guardrails as the
     other MK8s upgrade commands. It has no `--yes` and no interactive flags.
@@ -3228,11 +3244,13 @@ Modules that expose collection/object inputs, such as `mysterybox.secrets`, `ssh
   `--dry-run`, `--disruption-policy`, and `--drain-timeout`, plans from live
   SDK node groups, writes only the selected source `config.yaml` fields,
   rerenders, validates, runs quiet Terraform plan/apply, and waits for Managed
-  Kubernetes node-group replacement to settle. GPU stack and platform changes
-  are checked against the live MK8s compatibility matrix when that matrix
-  covers the layer; preset validity is left to generated-bundle validation and
-  Terraform/provider plan checks. `cpu-preset` never selects GPU node groups,
-  and `gpu-preset` / `gpu-stack-preset` never select CPU/system node groups.
+  Kubernetes node-group replacement to settle. Before success, a final MK8s
+  readiness check re-reads selected node groups and verifies the requested
+  platform, hardware preset, or Nebius `drivers_preset` / CUDA stack. GPU stack
+  and platform changes are checked against the live MK8s compatibility matrix
+  when that matrix covers the layer; preset validity is left to generated-bundle
+  validation and Terraform/provider plan checks. `cpu-preset` never selects GPU
+  node groups, and `gpu-preset` / `gpu-stack-preset` never select CPU/system node groups.
   Missing target values in the guided wizard are offered from live provider
   choices when available instead of raw required scalar prompts: platform uses
   the live MK8s compatibility matrix plus project platform inventory, GPU stack
@@ -3241,9 +3259,11 @@ Modules that expose collection/object inputs, such as `mysterybox.secrets`, `ssh
 - `upgrade helm-chart <config.yaml> apps:<chart>@<target> --to-version
   <chart-version>` updates the target-scoped `apps.charts[]` row version,
   rerenders, validates, and applies the selected target's Flux bundle through
-  the same target-scoped Flux apply path as `flux apply --target`. It carries
-  `--dry-run` and interactive prompt/confirmation flags, but no node-drain
-  flags.
+  the same target-scoped Flux apply path as `flux apply --target`. After the
+  apply, it requires the selected generated target handoff and then verifies
+  the live Helm release plus rendered Deployment/StatefulSet/DaemonSet
+  workloads. It carries `--dry-run` and interactive prompt/confirmation flags,
+  but no node-drain flags.
 - Manual desired-state upgrades remain valid outside the structured upgrade
   command: operators may edit `config.yaml` fields such as Kubernetes version,
   OS image, platform, preset, GPU stack preset, or chart version and then run

@@ -274,6 +274,9 @@ def test_readme_upgrade_section_is_visible_and_consolidated() -> None:
     assert "Kubernetes preflight inspection failures block non-dry runs" in upgrade
     assert "temporary node-group disruption strategy" in upgrade
     assert "source/generated files through Terraform plan/apply" in upgrade
+    assert "final MK8s readiness check" in upgrade
+    assert "requested Kubernetes version has settled" in upgrade
+    assert "provider node-group status rather than accepting matching spec fields alone" in upgrade
     assert "Manual desired-state upgrades remain supported outside the `upgrade` command" in upgrade
     assert "Guided upgrade value prompts use the same reusable `OptionChoice` provider" in upgrade
     assert "live SDK-backed compatibility matrix" in upgrade
@@ -304,6 +307,7 @@ def test_readme_upgrade_section_is_visible_and_consolidated() -> None:
     assert "treats OS as `inputs.node_groups.<group>.os`" in upgrade
     assert "all managed node groups by leaving `--node-group` unset" in upgrade
     assert "one node group at a time in the same CPU/system-before-GPU order" in upgrade_flat
+    assert "verifying their live node-template OS value matches `--to-os`" in upgrade_flat
     assert "will not SSH to nodes and run apt-based Ubuntu upgrades" not in upgrade
     assert "not as SSH or apt-based package management" in upgrade_flat
     assert "does not SSH to VMs, run apt, or mutate packages in place" in upgrade
@@ -316,12 +320,14 @@ def test_readme_upgrade_section_is_visible_and_consolidated() -> None:
     assert (
         "upgrade helm-chart <config.yaml> apps:<chart>@<target> --to-version <chart-version>"
     ) in upgrade
+    assert "requires the selected generated target handoff" in upgrade
     assert "Node firmware is maintained by the Nebius hardware team" in upgrade_flat
     assert "not a customer upgrade responsibility" in upgrade_flat
     assert (
         "`to_platform`, hardware `to_preset`, `to_gpu_stack_preset`, and OS-image prompts are live provider-driven"
         in upgrade_flat
     )
+    assert "verifying the selected live node groups expose the requested platform" in upgrade_flat
     assert "optional `node_group` prompt stays a simple flag-value prompt" in upgrade_flat
     assert "nebius-cxcli upgrade k8s-version" not in quick_start
     assert "pass `config.yaml` alone in an interactive terminal" in supporting
@@ -725,6 +731,8 @@ def test_docs_define_component_selector_contract() -> None:
     assert "Reruns are action-idempotent" in design_flat
     assert "`deploy.targets[].soperator_onboarding.actions` list defines the desired work" in design_flat
     assert "rechecks completed action phases against live state before skipping them" in design_flat
+    assert "Before completion, cxcli verifies the external MK8s control plane" in design_flat
+    assert "discovered Nebius node-group provider readiness" in design_flat
     assert "migration-owned external node-group template changes, including Kubernetes version, node OS image, Nebius-image GPU stack, and aligned SFS filesystem attachments" in design_flat
     assert "does not create parallel worker node groups" in design_flat
     assert "direct Nebius node-group updates with a temporary zero-surge strategy" in design_flat
@@ -1152,6 +1160,10 @@ def test_design_supporting_commands_include_quota_request_and_flux_targets() -> 
         "Temporary `allow-unavailable` or `force-delete` node-group strategy settings" in supporting
     )
     assert "source config is stale" in supporting
+    assert "final MK8s readiness check re-reads the live control plane" in supporting_flat
+    assert "requires provider node-group status" in supporting_flat
+    assert "verifies their live node-template OS value matches `--to-os`" in supporting_flat
+    assert "verifies the requested platform, hardware preset, or Nebius `drivers_preset`" in supporting_flat
     assert "- `flux apply <generated-path>`" in supporting
     assert "- `flux destroy <generated-path>`" in supporting
     assert "- `flux bootstrap <generated-path>`" in supporting

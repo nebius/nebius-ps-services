@@ -30,6 +30,7 @@ from .deploy_validation_report import (
     status_label,
     validation_section_lines,
 )
+from .helm_readiness import list_helm_releases, verify_helm_chart_ready
 from .inventory_ops import write_inventory
 from .mk8s_gpu import (
     mk8s_gpu_flux_release_post_render_patches,
@@ -158,6 +159,62 @@ _SOPERATOR_STORAGE_DEFAULTS: Mapping[str, Mapping[str, Any]] = {
     },
 }
 _SOPERATOR_NAMESPACE = "soperator"
+_SOPERATOR_TARGET_RELEASE_NAME = "soperator"
+_SOPERATOR_SOURCE_RELEASE_NAMES = frozenset(
+    {
+        "flux-system-soperator-fluxcd",
+        "slurm-cluster-storage",
+        "soperator-checks",
+        "soperator-controller",
+        "soperator-node-configurator",
+        "soperator-nodesets",
+        "soperator-storageclasses",
+    }
+)
+_SOPERATOR_SOURCE_RELEASE_RETIRE_ORDER = (
+    "soperator-checks",
+    "soperator-node-configurator",
+    "soperator-controller",
+    "soperator-nodesets",
+    "slurm-cluster-storage",
+    "soperator-storageclasses",
+    "flux-system-soperator-fluxcd",
+)
+_SOPERATOR_SOURCE_SAFE_PRUNE_RELEASE_NAMES = frozenset(
+    {
+        "soperator-checks",
+        "soperator-controller",
+        "soperator-node-configurator",
+    }
+)
+_SOPERATOR_SOURCE_SAFE_NAMESPACED_RESOURCE_TYPES = (
+    "deployment",
+    "daemonset",
+    "statefulset",
+    "service",
+    "serviceaccount",
+    "role",
+    "rolebinding",
+    "configmap",
+    "secret",
+    "job",
+    "cronjob",
+    "poddisruptionbudget",
+    "servicemonitor",
+)
+_SOPERATOR_SOURCE_SAFE_CLUSTER_RESOURCE_TYPES = (
+    "clusterrole",
+    "clusterrolebinding",
+    "mutatingwebhookconfiguration",
+    "validatingwebhookconfiguration",
+)
+_SOPERATOR_SOURCE_CHART_PREFIXES = (
+    "helm-soperator",
+    "helm-slurm",
+    "helm-nodeconfigurator",
+    "helm-nodesets",
+    "helm-storageclasses",
+)
 _ROLLING_COMPUTE_VALUES_REVISION = 8
 _VALIDATION_HOLD_REVISION = 2
 _TARGET_SLURM_PLUGIN_DIR = "/usr/lib/x86_64-linux-gnu/slurm"
@@ -250,12 +307,7 @@ class SoperatorMigrationStatusSnapshot:
 
 def soperator_migration_checkpoint_path(config_path: Path, target_ref: str) -> Path:
     normalized = normalize_component_token(target_ref) or "mk8s"
-    return (
-        config_path.parent
-        / SOPERATOR_MIGRATION_CHECKPOINT_DIR
-        / normalized
-        / "checkpoint.json"
-    )
+    return config_path.parent / SOPERATOR_MIGRATION_CHECKPOINT_DIR / normalized / "checkpoint.json"
 
 
 def soperator_migration_lock_path(config_path: Path, target_ref: str) -> Path:
@@ -398,7 +450,9 @@ def _phase_state(checkpoint: dict[str, Any], phase_id: str) -> dict[str, Any]:
         raise RuntimeError("Soperator migration checkpoint phase_state must be a mapping.")
     phase = state.setdefault(phase_id, {})
     if not isinstance(phase, dict):
-        raise RuntimeError(f"Soperator migration checkpoint phase_state.{phase_id} must be a mapping.")
+        raise RuntimeError(
+            f"Soperator migration checkpoint phase_state.{phase_id} must be a mapping."
+        )
     return phase
 
 
@@ -472,7 +526,9 @@ def _external_node_template_target(
         or ONBOARDING_EXTERNAL_NODE_TEMPLATE_TARGET_K8S_VERSION
     ).strip()
     target_os = str(
-        configured.get("target_os", configured.get("os", ONBOARDING_EXTERNAL_NODE_TEMPLATE_TARGET_OS))
+        configured.get(
+            "target_os", configured.get("os", ONBOARDING_EXTERNAL_NODE_TEMPLATE_TARGET_OS)
+        )
         or ONBOARDING_EXTERNAL_NODE_TEMPLATE_TARGET_OS
     ).strip()
     gpu_stack_preset = str(
@@ -560,10 +616,7 @@ def _target_gpu_stack_app_rows(
         if instance_id != normalized_target:
             continue
         rows.append(row)
-    order = {
-        component_id: index
-        for index, component_id in enumerate(_TARGET_GPU_STACK_APP_ORDER)
-    }
+    order = {component_id: index for index, component_id in enumerate(_TARGET_GPU_STACK_APP_ORDER)}
     return tuple(
         sorted(
             rows,
@@ -602,7 +655,9 @@ def _string_sequence(value: Any) -> tuple[str, ...]:
     return ()
 
 
-def _target_role_mapping(payload: Mapping[str, Any], target_ref: str) -> Mapping[str, tuple[str, ...]]:
+def _target_role_mapping(
+    payload: Mapping[str, Any], target_ref: str
+) -> Mapping[str, tuple[str, ...]]:
     values = _target_soperator_values(payload, target_ref)
     raw_mapping = _mapping(values.get("nodeGroupMapping"))
     result: dict[str, tuple[str, ...]] = {}
@@ -627,9 +682,7 @@ def _approved_role_attachment_keys(
     role_mapping = _target_role_mapping(payload, target_ref)
     result: dict[str, list[str]] = {}
     worker_groups = {
-        group
-        for group in (normalize_component_token(item) for item in worker_node_groups)
-        if group
+        group for group in (normalize_component_token(item) for item in worker_node_groups) if group
     }
     for group in worker_groups:
         result.setdefault(group, []).append("jail")
@@ -662,7 +715,9 @@ def _approved_role_attachment_keys(
     return {group: tuple(keys) for group, keys in result.items() if keys}
 
 
-def _source_report_payload(source_report: Mapping[str, Any]) -> tuple[Mapping[str, Any], Mapping[str, Any]]:
+def _source_report_payload(
+    source_report: Mapping[str, Any],
+) -> tuple[Mapping[str, Any], Mapping[str, Any]]:
     snapshot = _mapping(source_report.get("snapshot"))
     report = _mapping(source_report.get("report"))
     if not snapshot or not report:
@@ -761,10 +816,7 @@ def _normalize_soperator_resource_contract(resource: dict[str, Any]) -> None:
 
 
 def _kubernetes_resource_contracts(value: Any) -> list[dict[str, Any]]:
-    resources = [
-        _kubernetes_resource_contract(item)
-        for item in _sequence_of_mappings(value)
-    ]
+    resources = [_kubernetes_resource_contract(item) for item in _sequence_of_mappings(value)]
     return sorted(
         resources,
         key=lambda item: (
@@ -828,7 +880,9 @@ def _execution_source_contract(
         "collection_errors": _strip_volatile_kubernetes_contract(
             snapshot.get("collection_errors", [])
         ),
-        "crds": sorted(str(item).strip() for item in snapshot.get("crds", []) or [] if str(item).strip()),
+        "crds": sorted(
+            str(item).strip() for item in snapshot.get("crds", []) or [] if str(item).strip()
+        ),
         "helm_releases": _helm_release_contracts(snapshot.get("helm_releases")),
         "namespaces": sorted(
             str(item).strip() for item in snapshot.get("namespaces", []) or [] if str(item).strip()
@@ -839,9 +893,7 @@ def _execution_source_contract(
         ),
         "pvcs": _kubernetes_resource_contracts(snapshot.get("pvcs")),
         "pvs": _kubernetes_resource_contracts(snapshot.get("pvs")),
-        "soperator_resources": _kubernetes_resource_contracts(
-            snapshot.get("soperator_resources")
-        ),
+        "soperator_resources": _kubernetes_resource_contracts(snapshot.get("soperator_resources")),
         "storage": _strip_volatile_kubernetes_contract(_mapping(snapshot.get("storage"))),
     }
 
@@ -959,7 +1011,9 @@ def _source_group_node_group_name(source_group: Mapping[str, Any]) -> str:
         value = str(labels.get(key, "") or "").strip()
         if value:
             return value
-    return str(source_group.get("node_group_name", "") or source_group.get("name", "") or "").strip()
+    return str(
+        source_group.get("node_group_name", "") or source_group.get("name", "") or ""
+    ).strip()
 
 
 def _source_group_nodeset(source_group: Mapping[str, Any]) -> str:
@@ -1194,7 +1248,9 @@ def _aligned_filesystem_specs(
                     fallback=bool(defaults["forbid_deletion"]),
                 ),
                 filesystem_type=_nebius_filesystem_type(
-                    configured_spec.get("type", configured_spec.get("filesystem_type", defaults["type"]))
+                    configured_spec.get(
+                        "type", configured_spec.get("filesystem_type", defaults["type"])
+                    )
                 ),
             )
         )
@@ -1215,13 +1271,17 @@ def _filesystem_spec(payload: Mapping[str, Any]) -> Mapping[str, Any]:
     return spec if isinstance(spec, Mapping) else {}
 
 
-def _validate_existing_filesystem(spec: SoperatorAlignedFilesystemSpec, payload: Mapping[str, Any]) -> None:
+def _validate_existing_filesystem(
+    spec: SoperatorAlignedFilesystemSpec, payload: Mapping[str, Any]
+) -> None:
     live_spec = _filesystem_spec(payload)
     mismatches: list[str] = []
     live_size = _positive_int(live_spec.get("size_gibibytes"), fallback=spec.size_gib)
     if live_size != spec.size_gib:
         mismatches.append(f"size_gibibytes={live_size} expected {spec.size_gib}")
-    live_block = _positive_int(live_spec.get("block_size_bytes"), fallback=spec.block_size_kib * 1024)
+    live_block = _positive_int(
+        live_spec.get("block_size_bytes"), fallback=spec.block_size_kib * 1024
+    )
     if live_block != spec.block_size_kib * 1024:
         mismatches.append(f"block_size_bytes={live_block} expected {spec.block_size_kib * 1024}")
     live_type = _nebius_filesystem_type(live_spec.get("type"))
@@ -1262,7 +1322,9 @@ def _get_filesystem_by_name(
     try:
         parsed = json.loads(result.stdout or "{}")
     except json.JSONDecodeError as exc:
-        raise RuntimeError(f"nebius compute filesystem get-by-name returned invalid JSON: {exc}") from exc
+        raise RuntimeError(
+            f"nebius compute filesystem get-by-name returned invalid JSON: {exc}"
+        ) from exc
     return parsed if isinstance(parsed, Mapping) else {}
 
 
@@ -1352,10 +1414,7 @@ def _cluster_control_plane_version(cluster: Mapping[str, Any]) -> str:
     if not control_plane:
         control_plane = _mapping(spec.get("controlPlane"))
     return str(
-        control_plane.get("version")
-        or spec.get("version")
-        or cluster.get("version")
-        or ""
+        control_plane.get("version") or spec.get("version") or cluster.get("version") or ""
     ).strip()
 
 
@@ -1629,9 +1688,7 @@ def _set_node_group_strategy_from_args(
         spec["strategy"] = strategy
     command = tuple(strategy_args)
     if "--strategy-max-surge-count" in command:
-        strategy["max_surge"] = {
-            "count": command[command.index("--strategy-max-surge-count") + 1]
-        }
+        strategy["max_surge"] = {"count": command[command.index("--strategy-max-surge-count") + 1]}
     if "--strategy-max-surge-percent" in command:
         strategy["max_surge"] = {
             "percent": command[command.index("--strategy-max-surge-percent") + 1]
@@ -1642,9 +1699,7 @@ def _set_node_group_strategy_from_args(
         }
     if "--strategy-max-unavailable-percent" in command:
         strategy["max_unavailable"] = {
-            "percent": command[
-                command.index("--strategy-max-unavailable-percent") + 1
-            ]
+            "percent": command[command.index("--strategy-max-unavailable-percent") + 1]
         }
     if "--strategy-drain-timeout" in command:
         strategy["drain_timeout"] = _protobuf_duration_text(
@@ -1688,9 +1743,7 @@ def _node_group_full_update_payload(
     if "--template-os" in command:
         template["os"] = command[command.index("--template-os") + 1]
     if "--template-filesystems" in command:
-        template["filesystems"] = json.loads(
-            command[command.index("--template-filesystems") + 1]
-        )
+        template["filesystems"] = json.loads(command[command.index("--template-filesystems") + 1])
     if "--template-gpu-settings-drivers-preset" in command:
         preset = command[command.index("--template-gpu-settings-drivers-preset") + 1]
         gpu_settings = template.setdefault("gpu_settings", {})
@@ -1840,7 +1893,9 @@ def _node_group_template_filesystems(node_group: Mapping[str, Any]) -> list[dict
     return items
 
 
-def _filesystem_attachment(spec: SoperatorAlignedFilesystemSpec, filesystem_id: str) -> dict[str, Any]:
+def _filesystem_attachment(
+    spec: SoperatorAlignedFilesystemSpec, filesystem_id: str
+) -> dict[str, Any]:
     return {
         "attach_mode": "READ_WRITE",
         "existing_filesystem": {"id": filesystem_id},
@@ -1866,7 +1921,9 @@ def _merge_filesystem_attachments(
     for item in desired:
         mount_tag = str(item.get("mount_tag", "") or "").strip()
         filesystem_id = str(_mapping(item.get("existing_filesystem")).get("id", "") or "").strip()
-        if (mount_tag and mount_tag in seen_mounts) or (filesystem_id and filesystem_id in seen_ids):
+        if (mount_tag and mount_tag in seen_mounts) or (
+            filesystem_id and filesystem_id in seen_ids
+        ):
             continue
         merged.append(dict(to_plain_data(item)))
         if mount_tag:
@@ -1980,9 +2037,9 @@ def _target_pvc_name_for_storage_key(payload: Mapping[str, Any], target_ref: str
                     continue
                 volumes = _mapping(_mapping(nodeset.get("slurmd")).get("volumes"))
                 claim_name = str(
-                    _mapping(
-                        _mapping(volumes.get("jail")).get("persistentVolumeClaim")
-                    ).get("claimName", "")
+                    _mapping(_mapping(volumes.get("jail")).get("persistentVolumeClaim")).get(
+                        "claimName", ""
+                    )
                     or ""
                 ).strip()
                 if claim_name:
@@ -2116,8 +2173,10 @@ def _kubectl_rollout_status(
 
 def _has_soperator_custom_resources(snapshot: Mapping[str, Any]) -> bool:
     resources = snapshot.get("soperator_resources")
-    return isinstance(resources, Sequence) and not isinstance(resources, (str, bytes, bytearray)) and any(
-        isinstance(item, Mapping) for item in resources
+    return (
+        isinstance(resources, Sequence)
+        and not isinstance(resources, (str, bytes, bytearray))
+        and any(isinstance(item, Mapping) for item in resources)
     )
 
 
@@ -2222,8 +2281,7 @@ def _source_compute_group_names(
     worker_set = {
         alias_map.get(group, group)
         for group in (normalize_component_token(item) for item in worker_node_groups)
-        if group
-        and group not in ambiguous_aliases
+        if group and group not in ambiguous_aliases
     }
     worker_group = next(
         (
@@ -2435,7 +2493,9 @@ def _node_name(item: Mapping[str, Any]) -> str:
     return str(_mapping(item.get("metadata")).get("name", "") or "").strip()
 
 
-def _nodes_by_node_group_id(nodes: Sequence[Mapping[str, Any]]) -> Mapping[str, tuple[Mapping[str, Any], ...]]:
+def _nodes_by_node_group_id(
+    nodes: Sequence[Mapping[str, Any]],
+) -> Mapping[str, tuple[Mapping[str, Any], ...]]:
     grouped: dict[str, list[Mapping[str, Any]]] = {}
     for item in nodes:
         labels = _node_metadata_labels(item)
@@ -2503,10 +2563,12 @@ def _live_nebius_node_group_inventory(
         nodes = live_nodes_by_group_id.get(node_group_id, ())
         labels: dict[str, str] = {}
         labels.update(_node_group_template_labels(node_group))
-        labels.update({
-            str(k): str(v)
-            for k, v in _mapping(_mapping(node_group.get("metadata")).get("labels")).items()
-        })
+        labels.update(
+            {
+                str(k): str(v)
+                for k, v in _mapping(_mapping(node_group.get("metadata")).get("labels")).items()
+            }
+        )
         for node in nodes:
             labels.update(_node_metadata_labels(node))
         labels.setdefault("nebius.com/node-group", node_group_name)
@@ -2689,7 +2751,9 @@ def _role_node_group_template(
     source_node_group: Mapping[str, Any],
     filesystems: Sequence[Mapping[str, Any]],
 ) -> Mapping[str, Any]:
-    source_template = copy.deepcopy(_mapping(_mapping(source_node_group.get("spec")).get("template")))
+    source_template = copy.deepcopy(
+        _mapping(_mapping(source_node_group.get("spec")).get("template"))
+    )
     if not source_template:
         raise SoperatorMigrationPhasePending(
             f"rolling-compute-migration could not clone a Nebius node template for role '{role}'."
@@ -2728,7 +2792,9 @@ def _filesystem_identity_set(filesystems: Sequence[Mapping[str, Any]]) -> set[tu
     identities: set[tuple[str, str]] = set()
     for filesystem in filesystems:
         mount_tag = str(filesystem.get("mount_tag", "") or "").strip()
-        filesystem_id = str(_mapping(filesystem.get("existing_filesystem")).get("id", "") or "").strip()
+        filesystem_id = str(
+            _mapping(filesystem.get("existing_filesystem")).get("id", "") or ""
+        ).strip()
         if mount_tag or filesystem_id:
             identities.add((mount_tag, filesystem_id))
     return identities
@@ -2778,9 +2844,7 @@ def _validate_reused_target_node_group(
             actual = _normalized_text(_path_text(template, path))
             expected = _normalized_text(_path_text(expected_template, path))
             if expected and actual and actual != expected:
-                mismatches.append(
-                    f"template.{'.'.join(path)}={actual} expected {expected}"
-                )
+                mismatches.append(f"template.{'.'.join(path)}={actual} expected {expected}")
 
     expected_filesystems = _filesystem_identity_set(
         _sequence_of_mappings(expected_template.get("filesystems"))
@@ -2804,9 +2868,7 @@ def _validate_reused_target_node_group(
             and str(taint.get("value", "") or "").strip() == role
             for taint in taints
         ):
-            mismatches.append(
-                f"missing compatible Soperator role NoSchedule taint for {role}"
-            )
+            mismatches.append(f"missing compatible Soperator role NoSchedule taint for {role}")
     if role == "worker":
         taints = _sequence_of_mappings(template.get("taints"))
         if not any(str(taint.get("key", "") or "").strip() == "nvidia.com/gpu" for taint in taints):
@@ -2833,13 +2895,21 @@ def _create_or_reuse_target_node_groups(
     phase = _phase_state(checkpoint, "rolling-compute-migration")
     target_groups = phase.setdefault("target_node_groups", {})
     if not isinstance(target_groups, dict):
-        raise RuntimeError("Soperator migration checkpoint rolling-compute-migration.target_node_groups must be a mapping.")
+        raise RuntimeError(
+            "Soperator migration checkpoint rolling-compute-migration.target_node_groups must be a mapping."
+        )
     old_groups = phase.setdefault("old_node_groups", {})
     if not isinstance(old_groups, dict):
-        raise RuntimeError("Soperator migration checkpoint rolling-compute-migration.old_node_groups must be a mapping.")
-    in_place_worker_groups = tuple(dict.fromkeys(
-        normalize_component_token(group) for group in worker_node_groups if normalize_component_token(group)
-    ))
+        raise RuntimeError(
+            "Soperator migration checkpoint rolling-compute-migration.old_node_groups must be a mapping."
+        )
+    in_place_worker_groups = tuple(
+        dict.fromkeys(
+            normalize_component_token(group)
+            for group in worker_node_groups
+            if normalize_component_token(group)
+        )
+    )
     phase["in_place_worker_node_groups"] = list(in_place_worker_groups)
     phase["in_place_worker_node_count"] = _source_worker_node_count(
         source_report=source_report,
@@ -2897,8 +2967,7 @@ def _create_or_reuse_target_node_groups(
         )
 
     specs_by_key = {
-        spec.key: spec
-        for spec in _aligned_filesystem_specs(payload=payload, target_ref=target_ref)
+        spec.key: spec for spec in _aligned_filesystem_specs(payload=payload, target_ref=target_ref)
     }
     live_node_groups = _list_node_groups(command_runner=command_runner, cluster_id=cluster_id)
     mutation_performed = False
@@ -2922,7 +2991,8 @@ def _create_or_reuse_target_node_groups(
             filesystems = [
                 item
                 for item in _node_group_template_filesystems(source_node_group)
-                if str(item.get("mount_tag", "") or "").strip() in _SOPERATOR_ROLE_STORAGE_KEYS[role]
+                if str(item.get("mount_tag", "") or "").strip()
+                in _SOPERATOR_ROLE_STORAGE_KEYS[role]
             ]
         expected_template = _role_node_group_template(
             role=role,
@@ -2981,10 +3051,12 @@ def _create_or_reuse_target_node_groups(
         )
         node_group_id = _node_group_id(created)
         if not node_group_id:
-            node_group_id = _node_group_id(_find_node_group_by_name(
-                _list_node_groups(command_runner=command_runner, cluster_id=cluster_id),
-                target_name,
-            ))
+            node_group_id = _node_group_id(
+                _find_node_group_by_name(
+                    _list_node_groups(command_runner=command_runner, cluster_id=cluster_id),
+                    target_name,
+                )
+            )
         if not node_group_id:
             raise RuntimeError(f"target node group '{target_name}' did not return an id.")
         target_groups[role] = {
@@ -2998,9 +3070,7 @@ def _create_or_reuse_target_node_groups(
     phase["cluster_id"] = cluster_id
     phase["source_groups"] = dict(source_groups_by_kind)
     lines.append(
-        "Worker node groups preserved in place: "
-        + ", ".join(in_place_worker_groups)
-        + "."
+        "Worker node groups preserved in place: " + ", ".join(in_place_worker_groups) + "."
     )
     return mutation_performed, lines
 
@@ -3241,8 +3311,7 @@ def _quota_preflight_failure_message(report: QuotaReport) -> str:
     return (
         "Soperator migration quota preflight failed before any cluster mutation. "
         "Resolve confirmed shortages, unresolved quota limits, quota coverage gaps, "
-        "or quota lookup errors before rerunning migration.\n"
-        + details
+        "or quota lookup errors before rerunning migration.\n" + details
     )
 
 
@@ -3295,12 +3364,14 @@ def _run_soperator_migration_quota_preflight(
         and "rolling-compute-migration" not in completed_phases
         and _has_soperator_custom_resources(source_snapshot)
     ):
-        compute_requirements, compute_gaps, compute_lines = _new_target_node_group_quota_requirements(
-            payload=payload,
-            target_ref=target_ref,
-            source_report=source_report,
-            worker_node_groups=worker_node_groups,
-            command_runner=command_runner,
+        compute_requirements, compute_gaps, compute_lines = (
+            _new_target_node_group_quota_requirements(
+                payload=payload,
+                target_ref=target_ref,
+                source_report=source_report,
+                worker_node_groups=worker_node_groups,
+                command_runner=command_runner,
+            )
         )
         requirements.extend(compute_requirements)
         gaps.extend(compute_gaps)
@@ -3517,8 +3588,7 @@ def _collect_mk8s_status(
         if _node_ready(item):
             group[0] += 1
     group_summary = ", ".join(
-        f"{name}:{counts[0]}/{counts[1]}"
-        for name, counts in sorted(groups.items())[:4]
+        f"{name}:{counts[0]}/{counts[1]}" for name, counts in sorted(groups.items())[:4]
     )
     if len(groups) > 4:
         group_summary += f", +{len(groups) - 4} more"
@@ -3601,17 +3671,23 @@ def _collect_storage_status(
     try:
         payload_json = json.loads(result.stdout or "{}")
     except json.JSONDecodeError:
-        return SoperatorMigrationStatusSignal("Storage", "unknown", "PVC status returned invalid JSON")
+        return SoperatorMigrationStatusSignal(
+            "Storage", "unknown", "PVC status returned invalid JSON"
+        )
     present = {
         str(_mapping(item.get("metadata")).get("name", "") or "").strip()
-        for item in _sequence_of_mappings(payload_json.get("items") if isinstance(payload_json, Mapping) else None)
+        for item in _sequence_of_mappings(
+            payload_json.get("items") if isinstance(payload_json, Mapping) else None
+        )
     }
     present.discard("")
     source_present = sum(1 for name in source_pvcs if name in present)
     target_present = sum(1 for name in target_pvcs if name in present)
     online_state = _mapping(_mapping(checkpoint.get("phase_state")).get("online-bulk-data-sync"))
     jobs = _mapping(online_state.get("jobs"))
-    copy_jobs = sum(1 for item in jobs.values() if isinstance(item, Mapping) and item.get("skipped") is not True)
+    copy_jobs = sum(
+        1 for item in jobs.values() if isinstance(item, Mapping) and item.get("skipped") is not True
+    )
     parts = [
         aligned_summary,
         f"source PVCs {source_present}/{len(source_pvcs)}",
@@ -3757,7 +3833,9 @@ def _collect_soperator_status(
         )
     clusters = []
     target_phase = ""
-    for item in _sequence_of_mappings(payload.get("items") if isinstance(payload, Mapping) else None):
+    for item in _sequence_of_mappings(
+        payload.get("items") if isinstance(payload, Mapping) else None
+    ):
         metadata = _mapping(item.get("metadata"))
         name = str(metadata.get("name", "") or "").strip()
         if not name:
@@ -3767,7 +3845,9 @@ def _collect_soperator_status(
         if name == target_ref:
             target_phase = phase
     if not clusters:
-        return SoperatorMigrationStatusSignal("Soperator", "unknown", "no SlurmCluster resources visible")
+        return SoperatorMigrationStatusSignal(
+            "Soperator", "unknown", "no SlurmCluster resources visible"
+        )
     state = "serving"
     if target_phase and target_phase != "Available":
         state = "degraded"
@@ -3775,7 +3855,9 @@ def _collect_soperator_status(
 
 
 def _status_scope_for_phase(phase_id: str, phase_ids: Sequence[str]) -> Mapping[str, bool]:
-    storage_planned = any(phase in phase_ids for phase in ("create-aligned-sfs", "online-bulk-data-sync"))
+    storage_planned = any(
+        phase in phase_ids for phase in ("create-aligned-sfs", "online-bulk-data-sync")
+    )
     compute_planned = "rolling-compute-migration" in phase_ids
     storage = phase_id in _STATUS_PHASES_WITH_STORAGE and storage_planned
     compute = phase_id in _STATUS_PHASES_WITH_COMPUTE and compute_planned
@@ -3834,7 +3916,9 @@ class SoperatorMigrationStatusReporter:
         if self._thread is not None:
             return
         self._stop_event.clear()
-        self._thread = threading.Thread(target=self._run, name="soperator-migration-status", daemon=True)
+        self._thread = threading.Thread(
+            target=self._run, name="soperator-migration-status", daemon=True
+        )
         self._thread.start()
 
     def stop(self) -> None:
@@ -3925,7 +4009,9 @@ class SoperatorMigrationStatusReporter:
         )
         if not signal_text:
             signal_text = "no phase-specific status checks are planned"
-        summary = f"Soperator migration status [{elapsed}] phase {phase_id} ({state}): {signal_text}"
+        summary = (
+            f"Soperator migration status [{elapsed}] phase {phase_id} ({state}): {signal_text}"
+        )
         return SoperatorMigrationStatusSnapshot(
             phase=phase_id,
             elapsed=elapsed,
@@ -3995,7 +4081,9 @@ def _ensure_slurm_quiet(
         timeout_seconds=120,
     )
     if drain.returncode != 0:
-        return ["Slurm quiet window verified; partition drain command was not supported by the source release."]
+        return [
+            "Slurm quiet window verified; partition drain command was not supported by the source release."
+        ]
     return ["Slurm quiet window verified: no jobs in queue and partitions set to DRAIN."]
 
 
@@ -4052,7 +4140,9 @@ def _run_kubectl_node_action(
     detail = (result.stderr or result.stdout or "").lower()
     if "notfound" in detail or "not found" in detail:
         return
-    raise RuntimeError(f"{_command_text(args)} failed: {result.stderr.strip() or result.stdout.strip()}")
+    raise RuntimeError(
+        f"{_command_text(args)} failed: {result.stderr.strip() or result.stdout.strip()}"
+    )
 
 
 def _kubectl_get_namespace_resource(
@@ -4081,8 +4171,7 @@ def _kubectl_get_namespace_resource(
         if "notfound" in detail or "not found" in detail:
             return False, {}
         raise RuntimeError(
-            f"{_command_text(result.args)} failed: "
-            f"{result.stderr.strip() or result.stdout.strip()}"
+            f"{_command_text(result.args)} failed: {result.stderr.strip() or result.stdout.strip()}"
         )
     try:
         parsed = json.loads(result.stdout or "{}")
@@ -4384,7 +4473,9 @@ def _target_role_mapping_values(
     return mapping
 
 
-def _role_match_expression(role: str, *, label_key: str = "slurm.nebius.ai/nodeset-name") -> dict[str, Any]:
+def _role_match_expression(
+    role: str, *, label_key: str = "slurm.nebius.ai/nodeset-name"
+) -> dict[str, Any]:
     return {
         "key": label_key,
         "operator": "In",
@@ -4409,7 +4500,9 @@ def _role_affinity(role: str) -> dict[str, Any]:
     }
 
 
-def _role_toleration(role: str, *, label_key: str = "slurm.nebius.ai/nodeset-name") -> dict[str, str]:
+def _role_toleration(
+    role: str, *, label_key: str = "slurm.nebius.ai/nodeset-name"
+) -> dict[str, str]:
     return {
         "key": label_key,
         "operator": "Equal",
@@ -4419,7 +4512,9 @@ def _role_toleration(role: str, *, label_key: str = "slurm.nebius.ai/nodeset-nam
 
 
 def _role_tolerations(role: str) -> list[dict[str, str]]:
-    return [_role_toleration(role, label_key=label_key) for label_key in _SOPERATOR_NODESET_LABEL_KEYS]
+    return [
+        _role_toleration(role, label_key=label_key) for label_key in _SOPERATOR_NODESET_LABEL_KEYS
+    ]
 
 
 def _target_k8s_node_filters() -> list[dict[str, Any]]:
@@ -4470,7 +4565,9 @@ def _patch_target_values_for_compute(
     values.setdefault("nameOverride", "helm-soperator")
     _patch_target_slurm_runtime(values)
     _preserve_live_storage_sizes(values, live_snapshot=live_snapshot)
-    rolling_state = _mapping(_mapping(checkpoint.get("phase_state")).get("rolling-compute-migration"))
+    rolling_state = _mapping(
+        _mapping(checkpoint.get("phase_state")).get("rolling-compute-migration")
+    )
     in_place_worker_groups = tuple(
         str(group or "").strip()
         for group in rolling_state.get("in_place_worker_node_groups", []) or []
@@ -4570,7 +4667,9 @@ def _nodeset_slurmd_resources(nodeset: Mapping[str, Any]) -> Mapping[str, Any]:
     return _mapping(_mapping(nodeset.get("slurmd")).get("resources"))
 
 
-def _nodeset_gpu_count(nodeset: Mapping[str, Any], source_group: Mapping[str, Any] | None) -> int | None:
+def _nodeset_gpu_count(
+    nodeset: Mapping[str, Any], source_group: Mapping[str, Any] | None
+) -> int | None:
     resources = _nodeset_slurmd_resources(nodeset)
     for value in (
         resources.get("gpu"),
@@ -4958,7 +5057,11 @@ def _normalize_source_worker_nodeset_value(
     munge = nodeset.get("munge")
     if isinstance(munge, dict):
         resources = munge.get("resources")
-        if isinstance(resources, dict) and "ephemeral-storage" in resources and "ephemeralStorage" not in resources:
+        if (
+            isinstance(resources, dict)
+            and "ephemeral-storage" in resources
+            and "ephemeralStorage" not in resources
+        ):
             resources["ephemeralStorage"] = resources.pop("ephemeral-storage")
 
 
@@ -4968,9 +5071,7 @@ def _source_worker_partition_configuration(
     worker_names: Sequence[str],
 ) -> dict[str, Any]:
     worker_name_set = {
-        normalize_component_token(name)
-        for name in worker_names
-        if normalize_component_token(name)
+        normalize_component_token(name) for name in worker_names if normalize_component_token(name)
     }
     if not worker_name_set:
         return {}
@@ -5013,7 +5114,10 @@ def _patch_legacy_worker_nodeset_fallback(
     if isinstance(nodesets, Sequence) and not isinstance(nodesets, (str, bytes, bytearray)):
         patched_nodesets: list[Any] = []
         for nodeset in nodesets:
-            if isinstance(nodeset, Mapping) and normalize_component_token(nodeset.get("name")) in {"", "worker"}:
+            if isinstance(nodeset, Mapping) and normalize_component_token(nodeset.get("name")) in {
+                "",
+                "worker",
+            }:
                 item = dict(copy.deepcopy(to_plain_data(nodeset)))
                 if worker_count:
                     item["replicas"] = worker_count
@@ -5027,11 +5131,7 @@ def _patch_legacy_worker_nodeset_fallback(
 
 def _patch_target_slurm_runtime(values: dict[str, Any]) -> None:
     raw_custom = str(values.get("customSlurmConfig") or "")
-    lines = [
-        line
-        for line in raw_custom.splitlines()
-        if not re.match(r"^\s*PluginDir\s*=", line)
-    ]
+    lines = [line for line in raw_custom.splitlines() if not re.match(r"^\s*PluginDir\s*=", line)]
     lines.append(f"PluginDir={_TARGET_SLURM_PLUGIN_DIR}")
     values["customSlurmConfig"] = "\n".join(line for line in lines if line.strip())
 
@@ -5110,7 +5210,9 @@ def _pv_live_match_expressions(snapshot: Mapping[str, Any], pv_name: str) -> lis
         if len(terms) != 1 or not isinstance(terms[0], Mapping):
             return []
         expressions = terms[0].get("matchExpressions")
-        if not isinstance(expressions, Sequence) or isinstance(expressions, (str, bytes, bytearray)):
+        if not isinstance(expressions, Sequence) or isinstance(
+            expressions, (str, bytes, bytearray)
+        ):
             return []
         result: list[dict[str, Any]] = []
         for expression in expressions:
@@ -5212,11 +5314,15 @@ def _pv_live_size(snapshot: Mapping[str, Any], pv_name: str) -> str:
         metadata = _mapping(pv.get("metadata"))
         if str(metadata.get("name", "") or "").strip() != pv_name:
             continue
-        return str(_mapping(_mapping(pv.get("spec")).get("capacity")).get("storage", "") or "").strip()
+        return str(
+            _mapping(_mapping(pv.get("spec")).get("capacity")).get("storage", "") or ""
+        ).strip()
     return ""
 
 
-def _preserve_live_storage_sizes(values: dict[str, Any], *, live_snapshot: Mapping[str, Any]) -> None:
+def _preserve_live_storage_sizes(
+    values: dict[str, Any], *, live_snapshot: Mapping[str, Any]
+) -> None:
     volume = values.setdefault("volume", {})
     if not isinstance(volume, dict):
         return
@@ -5241,9 +5347,7 @@ def _helm_upgrade_target_app_chart(
 ) -> Mapping[str, str]:
     component_id = normalize_component_token(row.get("id"))
     chart_ref = _app_chart_ref(row)
-    release_name = str(
-        row.get("release-name", "") or row.get("release_name", "") or ""
-    ).strip()
+    release_name = str(row.get("release-name", "") or row.get("release_name", "") or "").strip()
     if not release_name:
         release_name = component_id
     namespace = str(row.get("namespace", "") or "").strip()
@@ -5277,12 +5381,20 @@ def _helm_upgrade_target_app_chart(
         command.extend(["--version", version])
     values_text = json.dumps(to_plain_data(_mapping(row.get("values"))), sort_keys=True)
     command_runner(command, input_text=values_text, timeout_seconds=3000)
+    readiness = verify_helm_chart_ready(
+        command_runner=command_runner,
+        kube_context=kube_context,
+        release_name=release_name,
+        namespace=namespace,
+        expected_version=version,
+    )
     return {
         "id": component_id,
         "release_name": release_name,
         "namespace": namespace,
         "chart_ref": chart_ref,
         "version": version,
+        "readiness": readiness.summary(),
         "applied_at": _utc_now(),
     }
 
@@ -5456,6 +5568,7 @@ def _helm_upgrade_target_soperator(
     command_runner: SoperatorMigrationCommandRunner,
     kube_context: str,
     values: Mapping[str, Any],
+    expected_version: str = "",
     wait: bool = True,
 ) -> None:
     chart_path = _target_soperator_chart_path()
@@ -5497,6 +5610,14 @@ def _helm_upgrade_target_soperator(
         while True:
             try:
                 command_runner(command, input_text=values_text, timeout_seconds=3000)
+                if wait:
+                    verify_helm_chart_ready(
+                        command_runner=command_runner,
+                        kube_context=kube_context,
+                        release_name=_SOPERATOR_TARGET_RELEASE_NAME,
+                        namespace=_SOPERATOR_NAMESPACE,
+                        expected_version=expected_version,
+                    )
                 return
             except RuntimeError as exc:
                 error_text = str(exc)
@@ -5657,8 +5778,7 @@ def _clear_worker_nodeset_ephemeral_storage_aliases(
         if "not found" in detail or "no resources found" in detail:
             continue
         raise RuntimeError(
-            f"{_command_text(result.args)} failed: "
-            f"{result.stderr.strip() or result.stdout.strip()}"
+            f"{_command_text(result.args)} failed: {result.stderr.strip() or result.stdout.strip()}"
         )
 
 
@@ -5759,9 +5879,7 @@ def _wait_for_target_worker_nodesets_ready(
         if not pending:
             return
         if time.monotonic() >= deadline:
-            details = ", ".join(
-                f"{name} ({last_state.get(name, 'unknown')})" for name in pending
-            )
+            details = ", ".join(f"{name} ({last_state.get(name, 'unknown')})" for name in pending)
             raise SoperatorMigrationPhasePending(
                 "target worker NodeSet(s) did not become Ready within "
                 f"{timeout_seconds}s: {details}."
@@ -5799,7 +5917,9 @@ def _delete_pending_accounting_pvcs(
         phase = str(_mapping(item.get("status")).get("phase", "") or "").strip()
         if not name.startswith(prefix) or phase != "Pending":
             continue
-        access_modes = {str(mode).strip() for mode in _mapping(item.get("spec")).get("accessModes", [])}
+        access_modes = {
+            str(mode).strip() for mode in _mapping(item.get("spec")).get("accessModes", [])
+        }
         if "ReadWriteMany" not in access_modes and not stale_statefulset_deleted:
             command_runner(
                 [
@@ -5954,8 +6074,7 @@ def _suspend_legacy_flux_helmreleases(
         if "notfound" in detail or "not found" in detail:
             return []
         raise RuntimeError(
-            f"{_command_text(result.args)} failed: "
-            f"{result.stderr.strip() or result.stdout.strip()}"
+            f"{_command_text(result.args)} failed: {result.stderr.strip() or result.stdout.strip()}"
         )
     try:
         parsed = json.loads(result.stdout or "{}")
@@ -6080,7 +6199,9 @@ def _resume_slurm_after_cutover(
     )
     lines = ["Slurm partitions resumed after target Soperator cutover."]
     if resumed_nodes:
-        lines.append("Slurm nodes resumed after target Soperator cutover: " + ", ".join(resumed_nodes) + ".")
+        lines.append(
+            "Slurm nodes resumed after target Soperator cutover: " + ", ".join(resumed_nodes) + "."
+        )
     return lines
 
 
@@ -6152,7 +6273,9 @@ def _ensure_live_nodes_ready(snapshot: Mapping[str, Any]) -> None:
         if isinstance(group, Mapping) and int(group.get("node_count", 0) or 0) <= 0
     ]
     if empty:
-        raise RuntimeError("Soperator migration validation found empty node groups: " + ", ".join(empty))
+        raise RuntimeError(
+            "Soperator migration validation found empty node groups: " + ", ".join(empty)
+        )
 
 
 def _execute_external_node_template_upgrade_phase(
@@ -6251,8 +6374,7 @@ def _execute_external_node_template_upgrade_phase(
         state["status"] = "completed"
         state["completed_at"] = _utc_now()
         state["observed_version"] = (
-            _minor_version_text_or_empty(_cluster_control_plane_version(cluster))
-            or hop.to_version
+            _minor_version_text_or_empty(_cluster_control_plane_version(cluster)) or hop.to_version
         )
         control_plane["current_version"] = state["observed_version"]
         if checkpoint_writer is not None:
@@ -6312,9 +6434,7 @@ def _execute_external_node_template_upgrade_phase(
                 "source_group": group_name,
                 "target": dict(target_payload),
                 "current": {
-                    "k8s_version": _minor_version_text_or_empty(
-                        _node_group_version(node_group)
-                    ),
+                    "k8s_version": _minor_version_text_or_empty(_node_group_version(node_group)),
                     "os": _node_group_template_os(node_group),
                     "gpu_stack_preset": _node_group_template_gpu_drivers_preset(node_group),
                 },
@@ -6412,11 +6532,7 @@ def _execute_external_node_template_upgrade_phase(
         lines.append(
             "External node-template upgraded: "
             f"{group_name} -> Kubernetes {target.k8s_version}, OS {target.os}"
-            + (
-                f", GPU stack {target.gpu_stack_preset}"
-                if _source_group_is_gpu(raw_group)
-                else ""
-            )
+            + (f", GPU stack {target.gpu_stack_preset}" if _source_group_is_gpu(raw_group) else "")
             + "."
         )
     lines.append(
@@ -6476,8 +6592,7 @@ def _execute_target_gpu_stack_remediation_phase(
         for patch in post_render_patches:
             patch_name = patch.get("name") or patch.get("kind") or "resource"
             lines.append(
-                "Applied target GPU stack post-render patch: "
-                f"{result['id']} -> {patch_name}"
+                f"Applied target GPU stack post-render patch: {result['id']} -> {patch_name}"
             )
     phase["charts"] = [dict(item) for item in applied]
     phase["completed_at"] = _utc_now()
@@ -6499,7 +6614,9 @@ def _execute_create_aligned_sfs_phase(
     phase = _phase_state(checkpoint, "create-aligned-sfs")
     filesystems = phase.setdefault("filesystems", {})
     if not isinstance(filesystems, dict):
-        raise RuntimeError("Soperator migration checkpoint create-aligned-sfs.filesystems must be a mapping.")
+        raise RuntimeError(
+            "Soperator migration checkpoint create-aligned-sfs.filesystems must be a mapping."
+        )
     mutation_performed = False
     lines: list[str] = []
     filesystem_ids_by_key: dict[str, str] = {}
@@ -6583,7 +6700,9 @@ def _execute_online_bulk_data_sync_phase(
     phase = _phase_state(checkpoint, "online-bulk-data-sync")
     jobs = phase.setdefault("jobs", {})
     if not isinstance(jobs, dict):
-        raise RuntimeError("Soperator migration checkpoint online-bulk-data-sync.jobs must be a mapping.")
+        raise RuntimeError(
+            "Soperator migration checkpoint online-bulk-data-sync.jobs must be a mapping."
+        )
     storage = _snapshot_storage(source_report)
     if not storage:
         phase["skipped_reason"] = "source discovery did not detect old Soperator storage"
@@ -6603,19 +6722,17 @@ def _execute_online_bulk_data_sync_phase(
                 missing_pvcs.append(f"{role}:{key}:{pvc_name}")
         if source_pvc == target_pvc:
             jobs[key] = {"source_pvc": source_pvc, "target_pvc": target_pvc, "skipped": True}
-            lines.append(f"Data sync {key}: skipped because source and target PVC are {source_pvc}.")
+            lines.append(
+                f"Data sync {key}: skipped because source and target PVC are {source_pvc}."
+            )
             continue
-        manifests.append(
-            _copy_job_manifest(key=key, source_pvc=source_pvc, target_pvc=target_pvc)
-        )
+        manifests.append(_copy_job_manifest(key=key, source_pvc=source_pvc, target_pvc=target_pvc))
         jobs[key] = {"source_pvc": source_pvc, "target_pvc": target_pvc}
     if missing_pvcs:
         phase["missing_pvcs"] = missing_pvcs
         raise SoperatorMigrationPhasePending(
             "online-bulk-data-sync requires existing source and target PVCs before copy Jobs run. "
-            "Missing PVCs: "
-            + ", ".join(missing_pvcs)
-            + "."
+            "Missing PVCs: " + ", ".join(missing_pvcs) + "."
         )
     if not manifests:
         phase["skipped_reason"] = "no source PVC to target PVC copy pairs were detected"
@@ -6728,6 +6845,9 @@ def _execute_rolling_compute_migration_phase(
             command_runner=command_runner,
             kube_context=kube_context,
             values=values,
+            expected_version=str(
+                _mapping(source_report.get("report")).get("target_version", "") or ""
+            ),
             wait=False,
         )
         _clear_worker_nodeset_ephemeral_storage_aliases(
@@ -6835,6 +6955,7 @@ def _reapply_stale_rolling_compute_values(
         command_runner=command_runner,
         kube_context=kube_context,
         values=values,
+        expected_version=str(_mapping(source_report.get("report")).get("target_version", "") or ""),
         wait=False,
     )
     _clear_worker_nodeset_ephemeral_storage_aliases(
@@ -6868,7 +6989,9 @@ def _reapply_stale_rolling_compute_values(
     )
     phase["target_values_revision"] = _ROLLING_COMPUTE_VALUES_REVISION
     phase["target_values_reapplied_at"] = _utc_now()
-    lines.append("Target Soperator chart values reapplied for the current compute migration contract.")
+    lines.append(
+        "Target Soperator chart values reapplied for the current compute migration contract."
+    )
     return True, lines
 
 
@@ -6986,9 +7109,7 @@ def _clear_controller_spool_clustername(
                             "volumes": [
                                 {
                                     "name": "controller-spool",
-                                    "persistentVolumeClaim": {
-                                        "claimName": "controller-spool-pvc"
-                                    },
+                                    "persistentVolumeClaim": {"claimName": "controller-spool-pvc"},
                                 }
                             ],
                         }
@@ -7137,10 +7258,7 @@ def _wait_for_target_slurmcluster_available(
 
 def _resource_output_contains(names: Sequence[str], kind: str, name: str) -> bool:
     kind_lower = kind.lower()
-    return any(
-        kind_lower in item.lower() and item.rsplit("/", 1)[-1] == name
-        for item in names
-    )
+    return any(kind_lower in item.lower() and item.rsplit("/", 1)[-1] == name for item in names)
 
 
 def _expected_cutover_nodesets(checkpoint: Mapping[str, Any]) -> tuple[str, ...]:
@@ -7213,9 +7331,7 @@ def _execute_final_cutover_phase(
     if missing_nodesets:
         raise SoperatorMigrationPhasePending(
             "final-control-plane-cutover expected target NodeSet resources after "
-            "target chart apply, but these were not found: "
-            + ", ".join(missing_nodesets)
-            + "."
+            "target chart apply, but these were not found: " + ", ".join(missing_nodesets) + "."
         )
     phase["validated_resources"] = list(names)
     phase["cutover_at"] = _utc_now()
@@ -7305,7 +7421,9 @@ def _run_migration_soperator_cluster_validation(
     phase["soperator_cluster_validation_count"] = len(validations)
     if not validations:
         phase["soperator_cluster_validations"] = []
-        return ["Soperator cluster smoke validation skipped: no Soperator app row is configured for this target."]
+        return [
+            "Soperator cluster smoke validation skipped: no Soperator app row is configured for this target."
+        ]
     reports_dir = _migration_validation_reports_dir(config_path)
     reports_dir.mkdir(parents=True, exist_ok=True)
     messages: list[str] = []
@@ -7326,7 +7444,10 @@ def _run_migration_soperator_cluster_validation(
             for spec in validations
         ]
         phase["soperator_cluster_validation_reports"] = [
-            str(reports_dir / str(spec.get("report_file") or "soperator-cluster-validation-report.json"))
+            str(
+                reports_dir
+                / str(spec.get("report_file") or "soperator-cluster-validation-report.json")
+            )
             for spec in validations
         ]
         raise SoperatorMigrationPhasePending(
@@ -7362,8 +7483,7 @@ def _write_validation_only_deploy_report(
         markdown_path=report_path,
     )
     project_id = str(
-        _mapping(_mapping(payload.get("client_info")).get("nebius")).get("project_id", "")
-        or ""
+        _mapping(_mapping(payload.get("client_info")).get("nebius")).get("project_id", "") or ""
     ).strip()
     heading = f"Deploy Report: {project_id}" if project_id else "Deploy Report"
     lines = [
@@ -7536,9 +7656,7 @@ def _execute_retire_old_resources_phase(
                 "and replaced service-role compute references are no longer active."
             )
         phase["skipped_reason"] = "in-place worker node groups preserved"
-        return False, [
-            "Retire old resources skipped: in-place worker node groups are preserved."
-        ]
+        return False, ["Retire old resources skipped: in-place worker node groups are preserved."]
 
     old_nodes = _nodes_for_source_groups(
         source_report=source_report,
@@ -7602,7 +7720,9 @@ def _load_checkpoint(path: Path) -> dict[str, Any] | None:
 
 def _write_checkpoint(path: Path, checkpoint: Mapping[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(to_plain_data(checkpoint), indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    path.write_text(
+        json.dumps(to_plain_data(checkpoint), indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
 
 
 def _phase_report_status(
@@ -7629,25 +7749,35 @@ def _phase_report_summary(phase_id: str, phase: Mapping[str, Any]) -> str:
         return f"target GPU stack app rows applied or verified: {len(apps)}."
     if phase_id == "create-aligned-sfs":
         filesystems = _mapping(phase.get("filesystems"))
-        return f"aligned SFS filesystems recorded: {len(filesystems)}/{len(_SOPERATOR_STORAGE_KEYS)}."
+        return (
+            f"aligned SFS filesystems recorded: {len(filesystems)}/{len(_SOPERATOR_STORAGE_KEYS)}."
+        )
     if phase_id == "online-bulk-data-sync":
         jobs = _mapping(phase.get("jobs"))
         return f"data-copy jobs recorded: {len(jobs)}."
     if phase_id == "rolling-compute-migration":
         target_groups = _mapping(phase.get("target_node_groups"))
         workers = phase.get("in_place_worker_node_groups")
-        worker_count = len(workers) if isinstance(workers, Sequence) and not isinstance(workers, (str, bytes, bytearray)) else 0
+        worker_count = (
+            len(workers)
+            if isinstance(workers, Sequence) and not isinstance(workers, (str, bytes, bytearray))
+            else 0
+        )
         return (
             f"service-role target groups recorded: {len(target_groups)}; "
             f"in-place worker groups preserved: {worker_count}."
         )
     if phase_id == "final-control-plane-cutover":
-        target = str(phase.get("target_slurmcluster", "") or phase.get("target_ref", "") or "").strip()
+        target = str(
+            phase.get("target_slurmcluster", "") or phase.get("target_ref", "") or ""
+        ).strip()
         return f"target Soperator chart and SlurmCluster cutover validated{f' for {target}' if target else ''}."
     if phase_id == "validation-and-rollback-hold":
         gpu_count = _positive_int(phase.get("mk8s_gpu_validation_count"), fallback=0)
         soperator_count = _positive_int(phase.get("soperator_cluster_validation_count"), fallback=0)
-        return f"validation checks recorded: MK8s GPU={gpu_count}, Soperator/Slurm={soperator_count}."
+        return (
+            f"validation checks recorded: MK8s GPU={gpu_count}, Soperator/Slurm={soperator_count}."
+        )
     if phase_id == "retire-old-resources":
         retired = _sequence_of_mappings(phase.get("retired_node_groups"))
         skipped = str(phase.get("skipped_reason", "") or "").strip()
@@ -7718,9 +7848,7 @@ def _mk8s_gpu_validation_report_lines(
             f"{item.summary or 'No summary recorded.'}"
         )
         for check in item.checks:
-            lines.append(
-                f"  - `{status_label(check.status)}` {check.name}: {check.summary}"
-            )
+            lines.append(f"  - `{status_label(check.status)}` {check.name}: {check.summary}")
     lines.append("")
     return lines
 
@@ -7949,10 +8077,607 @@ def _helm_release_deployed(
         return False
     if not isinstance(payload, Mapping):
         return False
-    status = str(
-        _mapping(payload.get("info")).get("status") or payload.get("status") or ""
-    ).strip().lower()
+    status = (
+        str(_mapping(payload.get("info")).get("status") or payload.get("status") or "")
+        .strip()
+        .lower()
+    )
     return status == "deployed"
+
+
+def _soperator_source_release_family(release: Any) -> bool:
+    name = str(getattr(release, "name", "") or "").strip().lower()
+    chart = str(getattr(release, "chart", "") or "").strip().lower()
+    if (
+        name == _SOPERATOR_TARGET_RELEASE_NAME
+        and str(getattr(release, "namespace", "") or "").strip() == _SOPERATOR_NAMESPACE
+    ):
+        return False
+    if name in _SOPERATOR_SOURCE_RELEASE_NAMES:
+        return True
+    return any(chart.startswith(prefix) for prefix in _SOPERATOR_SOURCE_CHART_PREFIXES)
+
+
+def _soperator_release_versions(release: Any) -> set[str]:
+    versions: set[str] = set()
+    for value in (
+        getattr(release, "chart", ""),
+        getattr(release, "chart_version", ""),
+        getattr(release, "app_version", ""),
+    ):
+        normalized = normalize_soperator_release_version(str(value or ""))
+        if normalized:
+            versions.add(normalized)
+    return versions
+
+
+def _deployed_stale_source_soperator_releases(
+    *,
+    command_runner: SoperatorMigrationCommandRunner,
+    kube_context: str,
+    target_version: str,
+) -> tuple[Any, ...]:
+    target_versions = _target_resume_versions(target_version)
+    stale: list[Any] = []
+    releases = list_helm_releases(
+        command_runner=command_runner,
+        kube_context=kube_context,
+        all_namespaces=True,
+    )
+    for release in releases:
+        if str(getattr(release, "status", "") or "").strip().lower() != "deployed":
+            continue
+        if not _soperator_source_release_family(release):
+            continue
+        release_versions = _soperator_release_versions(release)
+        if release_versions and not release_versions.issubset(target_versions):
+            stale.append(release)
+    return tuple(stale)
+
+
+def _release_key(namespace: Any, name: Any) -> tuple[str, str]:
+    return (str(namespace or "").strip(), str(name or "").strip())
+
+
+def _release_sort_key(release: Any) -> tuple[int, str, str]:
+    name = str(getattr(release, "name", "") or "").strip()
+    try:
+        order = _SOPERATOR_SOURCE_RELEASE_RETIRE_ORDER.index(name)
+    except ValueError:
+        order = len(_SOPERATOR_SOURCE_RELEASE_RETIRE_ORDER)
+    namespace = str(getattr(release, "namespace", "") or "").strip()
+    return (order, namespace, name)
+
+
+def _kubectl_json_or_empty(
+    *,
+    command_runner: SoperatorMigrationCommandRunner,
+    command: Sequence[str],
+    description: str,
+) -> Mapping[str, Any]:
+    result = command_runner(command, timeout_seconds=120, check=False)
+    if result.returncode != 0:
+        return {}
+    try:
+        payload = json.loads(result.stdout or "{}")
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"{description} returned invalid JSON: {exc}") from exc
+    return payload if isinstance(payload, Mapping) else {}
+
+
+def _source_flux_helmrelease_matches_release(
+    item: Mapping[str, Any],
+    release_keys: set[tuple[str, str]],
+) -> bool:
+    if not release_keys:
+        return False
+    metadata = _mapping(item.get("metadata"))
+    spec = _mapping(item.get("spec"))
+    status = _mapping(item.get("status"))
+    target_namespace = str(spec.get("targetNamespace", "") or metadata.get("namespace", "") or "")
+    release_name = str(spec.get("releaseName", "") or metadata.get("name", "") or "")
+    if _release_key(target_namespace, release_name) in release_keys:
+        return True
+    for history in _sequence_of_mappings(status.get("history")):
+        if _release_key(history.get("namespace"), history.get("name")) in release_keys:
+            return True
+    return False
+
+
+def _source_flux_helmrelease_chart_family(
+    item: Mapping[str, Any],
+    *,
+    target_version: str,
+) -> bool:
+    spec = _mapping(item.get("spec"))
+    chart_spec = _mapping(_mapping(spec.get("chart")).get("spec"))
+    chart_name = str(chart_spec.get("chart", "") or "").strip().lower()
+    if not any(chart_name.startswith(prefix) for prefix in _SOPERATOR_SOURCE_CHART_PREFIXES):
+        return False
+    target_versions = _target_resume_versions(target_version)
+    release_versions: set[str] = set()
+    for value in (chart_spec.get("version"), chart_spec.get("appVersion")):
+        normalized = normalize_soperator_release_version(str(value or ""))
+        if normalized:
+            release_versions.add(normalized)
+    for history in _sequence_of_mappings(_mapping(item.get("status")).get("history")):
+        for value in (history.get("chartVersion"), history.get("appVersion")):
+            normalized = normalize_soperator_release_version(str(value or ""))
+            if normalized:
+                release_versions.add(normalized)
+    return not release_versions or not release_versions.issubset(target_versions)
+
+
+def _source_flux_helmrelease_suspend_candidates(
+    *,
+    payload: Mapping[str, Any],
+    stale_releases: Sequence[Any],
+    target_version: str,
+) -> tuple[Mapping[str, Any], ...]:
+    release_keys = {
+        _release_key(getattr(release, "namespace", ""), getattr(release, "name", ""))
+        for release in stale_releases
+    }
+    candidates: list[Mapping[str, Any]] = []
+    for item in _sequence_of_mappings(payload.get("items")):
+        spec = _mapping(item.get("spec"))
+        if bool(spec.get("suspend")):
+            continue
+        if _source_flux_helmrelease_matches_release(
+            item,
+            release_keys,
+        ) or _source_flux_helmrelease_chart_family(item, target_version=target_version):
+            candidates.append(item)
+    return tuple(candidates)
+
+
+def _source_flux_helmrelease_kustomization_refs(
+    items: Sequence[Mapping[str, Any]],
+) -> tuple[tuple[str, str], ...]:
+    refs: list[tuple[str, str]] = []
+    for item in items:
+        labels = _mapping(_mapping(item.get("metadata")).get("labels"))
+        name = str(labels.get("kustomize.toolkit.fluxcd.io/name", "") or "").strip()
+        namespace = str(
+            labels.get("kustomize.toolkit.fluxcd.io/namespace", "") or ""
+        ).strip()
+        if name and namespace:
+            refs.append((namespace, name))
+    return tuple(sorted(dict.fromkeys(refs)))
+
+
+def _suspend_source_flux_kustomizations(
+    *,
+    command_runner: SoperatorMigrationCommandRunner,
+    kube_context: str,
+    items: Sequence[Mapping[str, Any]],
+) -> tuple[str, ...]:
+    suspended: list[str] = []
+    for namespace, name in _source_flux_helmrelease_kustomization_refs(items):
+        command_runner(
+            [
+                "kubectl",
+                "--context",
+                kube_context,
+                "-n",
+                namespace,
+                "patch",
+                "kustomization.kustomize.toolkit.fluxcd.io",
+                name,
+                "--type=merge",
+                "-p",
+                json.dumps({"spec": {"suspend": True}}, separators=(",", ":")),
+            ],
+            timeout_seconds=120,
+        )
+        suspended.append(f"{namespace}/{name}")
+    return tuple(suspended)
+
+
+def _suspend_source_flux_helmreleases(
+    *,
+    command_runner: SoperatorMigrationCommandRunner,
+    kube_context: str,
+    stale_releases: Sequence[Any],
+    target_version: str,
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    payload = _kubectl_json_or_empty(
+        command_runner=command_runner,
+        command=[
+            "kubectl",
+            "--context",
+            kube_context,
+            "get",
+            "helmreleases.helm.toolkit.fluxcd.io",
+            "-A",
+            "-o",
+            "json",
+        ],
+        description="kubectl get HelmRelease",
+    )
+    candidates = _source_flux_helmrelease_suspend_candidates(
+        payload=payload,
+        stale_releases=stale_releases,
+        target_version=target_version,
+    )
+    suspended_kustomizations = _suspend_source_flux_kustomizations(
+        command_runner=command_runner,
+        kube_context=kube_context,
+        items=candidates,
+    )
+    suspended: list[str] = []
+    for item in candidates:
+        metadata = _mapping(item.get("metadata"))
+        namespace = str(metadata.get("namespace", "") or "").strip()
+        name = str(metadata.get("name", "") or "").strip()
+        if not namespace or not name:
+            continue
+        command_runner(
+            [
+                "kubectl",
+                "--context",
+                kube_context,
+                "-n",
+                namespace,
+                "patch",
+                "helmrelease.helm.toolkit.fluxcd.io",
+                name,
+                "--type=merge",
+                "-p",
+                json.dumps({"spec": {"suspend": True}}, separators=(",", ":")),
+            ],
+            timeout_seconds=120,
+        )
+        suspended.append(f"{namespace}/{name}")
+    return (
+        tuple(sorted(dict.fromkeys(suspended))),
+        tuple(sorted(dict.fromkeys(suspended_kustomizations))),
+    )
+
+
+def _active_source_flux_helmreleases(
+    *,
+    command_runner: SoperatorMigrationCommandRunner,
+    kube_context: str,
+    target_version: str,
+) -> tuple[Mapping[str, Any], ...]:
+    payload = _kubectl_json_or_empty(
+        command_runner=command_runner,
+        command=[
+            "kubectl",
+            "--context",
+            kube_context,
+            "get",
+            "helmreleases.helm.toolkit.fluxcd.io",
+            "-A",
+            "-o",
+            "json",
+        ],
+        description="kubectl get HelmRelease",
+    )
+    return _source_flux_helmrelease_suspend_candidates(
+        payload=payload,
+        stale_releases=(),
+        target_version=target_version,
+    )
+
+
+def _resource_annotation_release_name(item: Mapping[str, Any]) -> str:
+    metadata = _mapping(item.get("metadata"))
+    annotations = _mapping(metadata.get("annotations"))
+    return str(annotations.get("meta.helm.sh/release-name", "") or "").strip()
+
+
+def _delete_kubernetes_resource(
+    *,
+    command_runner: SoperatorMigrationCommandRunner,
+    kube_context: str,
+    resource_type: str,
+    name: str,
+    namespace: str = "",
+) -> None:
+    command = ["kubectl", "--context", kube_context]
+    if namespace:
+        command.extend(["-n", namespace])
+    command.extend(
+        [
+            "delete",
+            resource_type,
+            name,
+            "--ignore-not-found=true",
+            "--wait=true",
+            "--timeout=5m",
+        ]
+    )
+    command_runner(command, timeout_seconds=360)
+
+
+def _prune_safe_source_soperator_resources(
+    *,
+    command_runner: SoperatorMigrationCommandRunner,
+    kube_context: str,
+    stale_releases: Sequence[Any],
+) -> tuple[str, ...]:
+    safe_names = {
+        str(getattr(release, "name", "") or "").strip()
+        for release in stale_releases
+        if str(getattr(release, "name", "") or "").strip()
+        in _SOPERATOR_SOURCE_SAFE_PRUNE_RELEASE_NAMES
+    }
+    if not safe_names:
+        return ()
+    deleted: list[str] = []
+    for resource_type in _SOPERATOR_SOURCE_SAFE_NAMESPACED_RESOURCE_TYPES:
+        payload = _kubectl_json_or_empty(
+            command_runner=command_runner,
+            command=[
+                "kubectl",
+                "--context",
+                kube_context,
+                "get",
+                resource_type,
+                "-A",
+                "-o",
+                "json",
+            ],
+            description=f"kubectl get {resource_type}",
+        )
+        for item in _sequence_of_mappings(payload.get("items")):
+            release_name = _resource_annotation_release_name(item)
+            if release_name not in safe_names:
+                continue
+            metadata = _mapping(item.get("metadata"))
+            namespace = str(metadata.get("namespace", "") or "").strip()
+            name = str(metadata.get("name", "") or "").strip()
+            if not namespace or not name:
+                continue
+            _delete_kubernetes_resource(
+                command_runner=command_runner,
+                kube_context=kube_context,
+                resource_type=resource_type,
+                namespace=namespace,
+                name=name,
+            )
+            deleted.append(f"{resource_type}/{namespace}/{name}")
+    for resource_type in _SOPERATOR_SOURCE_SAFE_CLUSTER_RESOURCE_TYPES:
+        payload = _kubectl_json_or_empty(
+            command_runner=command_runner,
+            command=[
+                "kubectl",
+                "--context",
+                kube_context,
+                "get",
+                resource_type,
+                "-o",
+                "json",
+            ],
+            description=f"kubectl get {resource_type}",
+        )
+        for item in _sequence_of_mappings(payload.get("items")):
+            release_name = _resource_annotation_release_name(item)
+            if release_name not in safe_names:
+                continue
+            metadata = _mapping(item.get("metadata"))
+            name = str(metadata.get("name", "") or "").strip()
+            if not name:
+                continue
+            _delete_kubernetes_resource(
+                command_runner=command_runner,
+                kube_context=kube_context,
+                resource_type=resource_type,
+                name=name,
+            )
+            deleted.append(f"{resource_type}/{name}")
+    return tuple(sorted(dict.fromkeys(deleted)))
+
+
+def _delete_stale_helm_storage_records(
+    *,
+    command_runner: SoperatorMigrationCommandRunner,
+    kube_context: str,
+    stale_releases: Sequence[Any],
+) -> tuple[str, ...]:
+    stale_names = {
+        str(getattr(release, "name", "") or "").strip()
+        for release in stale_releases
+        if str(getattr(release, "name", "") or "").strip()
+    }
+    if not stale_names:
+        return ()
+    payload = _kubectl_json_or_empty(
+        command_runner=command_runner,
+        command=[
+            "kubectl",
+            "--context",
+            kube_context,
+            "get",
+            "secrets",
+            "-A",
+            "-l",
+            "owner=helm",
+            "-o",
+            "json",
+        ],
+        description="kubectl get Helm storage secrets",
+    )
+    deleted: list[str] = []
+    for item in _sequence_of_mappings(payload.get("items")):
+        metadata = _mapping(item.get("metadata"))
+        labels = _mapping(metadata.get("labels"))
+        release_name = str(labels.get("name", "") or "").strip()
+        if release_name not in stale_names:
+            continue
+        namespace = str(metadata.get("namespace", "") or "").strip()
+        name = str(metadata.get("name", "") or "").strip()
+        if not namespace or not name:
+            continue
+        command_runner(
+            [
+                "kubectl",
+                "--context",
+                kube_context,
+                "-n",
+                namespace,
+                "delete",
+                "secret",
+                name,
+                "--ignore-not-found=true",
+                "--wait=false",
+            ],
+            timeout_seconds=120,
+        )
+        deleted.append(f"{namespace}/{name}")
+    return tuple(sorted(dict.fromkeys(deleted)))
+
+
+def _retire_stale_source_soperator_helm_releases(
+    *,
+    command_runner: SoperatorMigrationCommandRunner,
+    kube_context: str,
+    target_version: str,
+) -> tuple[str, ...]:
+    stale = tuple(
+        sorted(
+            _deployed_stale_source_soperator_releases(
+                command_runner=command_runner,
+                kube_context=kube_context,
+                target_version=target_version,
+            ),
+            key=_release_sort_key,
+        )
+    )
+    suspended, suspended_kustomizations = _suspend_source_flux_helmreleases(
+        command_runner=command_runner,
+        kube_context=kube_context,
+        stale_releases=stale,
+        target_version=target_version,
+    )
+    pruned = _prune_safe_source_soperator_resources(
+        command_runner=command_runner,
+        kube_context=kube_context,
+        stale_releases=stale,
+    )
+    records = _delete_stale_helm_storage_records(
+        command_runner=command_runner,
+        kube_context=kube_context,
+        stale_releases=stale,
+    )
+    lines: list[str] = []
+    if stale:
+        retired_names = ", ".join(
+            f"{getattr(release, 'namespace', '')}/{getattr(release, 'name', '')}"
+            for release in stale
+        )
+        lines.append("Retired stale source Soperator Helm release records: " + retired_names + ".")
+    elif suspended or suspended_kustomizations:
+        lines.append("No stale source Soperator Helm release records remained.")
+    if suspended_kustomizations:
+        lines.append(
+            "Suspended old Flux Kustomization desired state: "
+            + ", ".join(suspended_kustomizations)
+            + "."
+        )
+    if suspended:
+        lines.append("Suspended old Flux HelmRelease desired state: " + ", ".join(suspended) + ".")
+    if pruned:
+        lines.append(f"Pruned {len(pruned)} old source operational resource(s).")
+    protected = [
+        str(getattr(release, "name", "") or "").strip()
+        for release in stale
+        if str(getattr(release, "name", "") or "").strip()
+        not in _SOPERATOR_SOURCE_SAFE_PRUNE_RELEASE_NAMES
+    ]
+    if protected:
+        lines.append(
+            "Preserved shared/storage/custom resources for source release(s): "
+            + ", ".join(sorted(dict.fromkeys(protected)))
+            + "."
+        )
+    if records:
+        lines.append(f"Deleted {len(records)} stale Helm storage record(s).")
+    elif stale:
+        lines.append("No stale Helm storage records were found to delete.")
+    return tuple(lines)
+
+
+def _verify_completed_soperator_migration_helm_state(
+    *,
+    command_runner: SoperatorMigrationCommandRunner,
+    kube_context: str,
+    target_version: str,
+) -> tuple[str, ...]:
+    target_readiness = verify_helm_chart_ready(
+        command_runner=command_runner,
+        kube_context=kube_context,
+        release_name=_SOPERATOR_TARGET_RELEASE_NAME,
+        namespace=_SOPERATOR_NAMESPACE,
+        expected_version=target_version,
+    )
+    target_line = "Verified target Soperator Helm chart readiness: " + target_readiness.summary()
+    retirement_lines = _retire_stale_source_soperator_helm_releases(
+        command_runner=command_runner,
+        kube_context=kube_context,
+        target_version=target_version,
+    )
+    stale = _deployed_stale_source_soperator_releases(
+        command_runner=command_runner,
+        kube_context=kube_context,
+        target_version=target_version,
+    )
+    active_source_helmreleases = _active_source_flux_helmreleases(
+        command_runner=command_runner,
+        kube_context=kube_context,
+        target_version=target_version,
+    )
+    if stale:
+        stale_lines = [
+            (
+                f"- {release.namespace}/{release.name}: chart={release.chart or 'unknown'} "
+                f"app={release.app_version or 'unknown'} status={release.status or 'unknown'}"
+            )
+            for release in stale
+        ]
+        raise RuntimeError(
+            target_line
+            + ("\n" + "\n".join(retirement_lines) if retirement_lines else "")
+            + "\nStale source Soperator Helm releases remain after migration:\n"
+            + "\n".join(stale_lines)
+            + "\nRetire or remove the remaining old source releases before considering "
+            "the migration complete."
+        )
+    if active_source_helmreleases:
+        active_lines = []
+        for item in active_source_helmreleases:
+            metadata = _mapping(item.get("metadata"))
+            spec = _mapping(item.get("spec"))
+            chart_spec = _mapping(_mapping(spec.get("chart")).get("spec"))
+            namespace = str(metadata.get("namespace", "") or "").strip()
+            name = str(metadata.get("name", "") or "").strip()
+            active_lines.append(
+                "- "
+                + f"{namespace}/{name}: chart={chart_spec.get('chart') or 'unknown'} "
+                + f"version={chart_spec.get('version') or 'unknown'}"
+            )
+        raise RuntimeError(
+            target_line
+            + ("\n" + "\n".join(retirement_lines) if retirement_lines else "")
+            + "\nActive old source Flux HelmReleases remain after migration:\n"
+            + "\n".join(active_lines)
+            + "\nSuspend or remove the remaining old source desired state before considering "
+            "the migration complete."
+        )
+    return (target_line, *retirement_lines)
+
+
+def _helm_state_lines_include_retirement_mutation(lines: Sequence[str]) -> bool:
+    mutating_prefixes = (
+        "Retired stale source Soperator Helm release records:",
+        "Suspended old Flux Kustomization desired state:",
+        "Suspended old Flux HelmRelease desired state:",
+        "Pruned ",
+        "Deleted ",
+    )
+    return any(str(line).startswith(mutating_prefixes) for line in lines)
 
 
 def _target_gpu_stack_remediation_satisfied(
@@ -8040,6 +8765,217 @@ def _external_node_template_upgrade_satisfied(
         if update_args or clear_template_gpu_settings:
             return False
     return True
+
+
+def _int_or_none(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    try:
+        return int(raw)
+    except ValueError:
+        return None
+
+
+def _first_mapping_value(mapping: Mapping[str, Any], *keys: str) -> Any:
+    for key in keys:
+        if key in mapping:
+            return mapping[key]
+    return None
+
+
+def _node_group_readiness_summary(node_group: Mapping[str, Any]) -> tuple[bool, str]:
+    status = _mapping(node_group.get("status"))
+    name = _node_group_name(node_group) or _node_group_id(node_group) or "unknown"
+    if not status:
+        return (
+            False,
+            f"{name}: status not returned by Nebius CLI; rollout readiness cannot be verified",
+        )
+    ready = _int_or_none(_first_mapping_value(status, "ready_node_count", "readyNodeCount"))
+    target = _int_or_none(_first_mapping_value(status, "target_node_count", "targetNodeCount"))
+    node_count = _int_or_none(_first_mapping_value(status, "node_count", "nodeCount"))
+    outdated = _int_or_none(
+        _first_mapping_value(status, "outdated_node_count", "outdatedNodeCount")
+    )
+    reconciling = bool(status.get("reconciling", False))
+    summary = (
+        f"{name}: ready={ready}/{target}, nodes={node_count}, "
+        f"outdated={outdated}, reconciling={reconciling}"
+    )
+    missing = [
+        field
+        for field, value in (
+            ("ready_node_count", ready),
+            ("target_node_count", target),
+            ("node_count", node_count),
+        )
+        if value is None
+    ]
+    if missing:
+        return (
+            False,
+            f"{summary}; status missing {', '.join(missing)}, "
+            "rollout readiness cannot be verified",
+        )
+    if ready is not None and target is not None and ready < target:
+        return False, summary
+    if node_count is not None and target is not None and node_count != target:
+        return False, summary
+    if outdated is not None and outdated > 0:
+        return False, summary
+    if reconciling:
+        return False, summary
+    return True, summary
+
+
+def _verify_completed_soperator_migration_mk8s_state(
+    *,
+    payload: Mapping[str, Any],
+    source_report: Mapping[str, Any],
+    target_ref: str,
+    worker_node_groups: Sequence[str],
+    phase_ids: Sequence[str],
+    command_runner: SoperatorMigrationCommandRunner,
+) -> list[str]:
+    cluster_id = _external_migration_cluster_id(
+        payload=payload,
+        target_ref=target_ref,
+        source_report=source_report,
+        command_runner=command_runner,
+    )
+    cluster = _cluster_payload_by_id(command_runner=command_runner, cluster_id=cluster_id)
+    current_version = _minor_version_text_or_empty(_cluster_control_plane_version(cluster))
+    errors: list[str] = []
+    if not current_version:
+        errors.append("control plane did not report a Kubernetes version")
+    if _EXTERNAL_NODE_TEMPLATE_PHASE_ID in phase_ids:
+        return _verify_completed_soperator_migration_node_template_state(
+            payload=payload,
+            source_report=source_report,
+            target_ref=target_ref,
+            worker_node_groups=worker_node_groups,
+            command_runner=command_runner,
+            current_version=current_version,
+            errors=errors,
+        )
+    groups = _source_inventory_node_groups_with_ids(source_report)
+    if not groups:
+        errors.append("no source node-group inventory was available for MK8s verification")
+    verified_groups = 0
+    for group_name, raw_group in groups:
+        node_group_id = _source_group_node_group_id(raw_group)
+        node_group = _node_group_payload_by_id(
+            command_runner=command_runner,
+            node_group_id=node_group_id,
+        )
+        ready, readiness_summary = _node_group_readiness_summary(node_group)
+        if not ready:
+            errors.append(f"{group_name}: node group rollout is not ready: {readiness_summary}")
+            continue
+        verified_groups += 1
+    if errors:
+        raise RuntimeError(
+            "Soperator migration MK8s verification failed after execute:\n"
+            + "\n".join(f"- {item}" for item in errors)
+        )
+    return [
+        "External MK8s cluster verified: "
+        f"control plane Kubernetes {current_version}; "
+        f"node groups {verified_groups}/{len(groups)} ready."
+    ]
+
+
+def _verify_completed_soperator_migration_node_template_state(
+    *,
+    payload: Mapping[str, Any],
+    source_report: Mapping[str, Any],
+    target_ref: str,
+    worker_node_groups: Sequence[str],
+    command_runner: SoperatorMigrationCommandRunner,
+    current_version: str,
+    errors: list[str],
+) -> list[str]:
+    onboarding = _target_onboarding(payload, target_ref)
+    target = _external_node_template_target(onboarding)
+    if not current_version or not _minor_version_at_least(current_version, target.k8s_version):
+        errors.append(
+            f"control plane reports Kubernetes {current_version or 'unknown'}, "
+            f"expected at least {target.k8s_version}"
+        )
+    groups = _external_node_template_upgrade_groups(
+        source_report=source_report,
+        worker_node_groups=worker_node_groups,
+    )
+    if not groups:
+        errors.append("no source node-group inventory was available for node-template verification")
+    verified_groups = 0
+    for group_name, raw_group in groups:
+        node_group_id = _source_group_node_group_id(raw_group)
+        if not node_group_id:
+            errors.append(f"{group_name}: missing Nebius node group id")
+            continue
+        node_group = _node_group_payload_by_id(
+            command_runner=command_runner,
+            node_group_id=node_group_id,
+        )
+        update_args = _external_node_template_update_args(
+            node_group=node_group,
+            source_group=raw_group,
+            target=target,
+        )
+        clear_template_gpu_settings = _external_node_template_clears_cpu_gpu_settings(
+            node_group=node_group,
+            source_group=raw_group,
+        )
+        ready, readiness_summary = _node_group_readiness_summary(node_group)
+        if update_args or clear_template_gpu_settings:
+            current = (
+                f"Kubernetes {_minor_version_text_or_empty(_node_group_version(node_group)) or 'unknown'}, "
+                f"OS {_node_group_template_os(node_group) or 'unknown'}, "
+                f"GPU stack {_node_group_template_gpu_drivers_preset(node_group) or 'driverless'}"
+            )
+            errors.append(
+                f"{group_name}: live node template still needs update args "
+                f"{' '.join(update_args) or 'clear CPU GPU settings'}; current {current}"
+            )
+            continue
+        if not ready:
+            errors.append(f"{group_name}: node group rollout is not ready: {readiness_summary}")
+            continue
+        verified_groups += 1
+    if errors:
+        raise RuntimeError(
+            "Soperator migration MK8s node-template verification failed after execute:\n"
+            + "\n".join(f"- {item}" for item in errors)
+        )
+    return [
+        "External MK8s node-template verified: "
+        f"control plane Kubernetes {current_version}; "
+        f"node groups {verified_groups}/{len(groups)} match Kubernetes {target.k8s_version}, "
+        f"OS {target.os}, and GPU stack {target.gpu_stack_preset} for GPU groups."
+    ]
+
+
+def _source_inventory_node_groups_with_ids(
+    source_report: Mapping[str, Any],
+) -> tuple[tuple[str, Mapping[str, Any]], ...]:
+    groups: list[tuple[str, Mapping[str, Any]]] = []
+    seen_ids: set[str] = set()
+    for raw_group_name, raw_group in sorted(_source_node_group_inventory(source_report).items()):
+        group_name = normalize_component_token(raw_group_name)
+        if not group_name or not isinstance(raw_group, Mapping):
+            continue
+        node_group_id = _source_group_node_group_id(raw_group)
+        if not node_group_id or node_group_id in seen_ids:
+            continue
+        seen_ids.add(node_group_id)
+        groups.append((group_name, raw_group))
+    return tuple(groups)
 
 
 def _create_aligned_sfs_satisfied(
@@ -8233,7 +9169,10 @@ def _reconcile_completed_action_phases(
             lines.append(f"{phase_id}: live state already satisfies completed action.")
             continue
         completed_phases.discard(phase_id)
-        if phase_id == "final-control-plane-cutover" and "rolling-compute-migration" in completed_phases:
+        if (
+            phase_id == "final-control-plane-cutover"
+            and "rolling-compute-migration" in completed_phases
+        ):
             completed_phases.discard("rolling-compute-migration")
             rolling = _phase_state(checkpoint, "rolling-compute-migration")
             rolling["target_values_revision"] = 0
@@ -8330,7 +9269,9 @@ def _execute_soperator_migration_unlocked(
         )
     expected_source_contract = _execution_source_contract(source_snapshot)
     expected_source_contract_fingerprint = _fingerprint(expected_source_contract)
-    target_version = str(onboarding.get("target_version", "") or report.get("target_version", "") or "")
+    target_version = str(
+        onboarding.get("target_version", "") or report.get("target_version", "") or ""
+    )
     actions = _onboarding_actions(onboarding)
     phase_ids = _phase_ids_for_actions(report=report, onboarding=onboarding)
     if not phase_ids:
@@ -8419,9 +9360,8 @@ def _execute_soperator_migration_unlocked(
         if str(phase or "").strip()
     )
     completed_phases.add("discovery-and-plan")
-    existing_approval = (
-        "customer-approval" in completed_phases
-        or bool(str(checkpoint.get("customer_approved_at", "") or "").strip())
+    existing_approval = "customer-approval" in completed_phases or bool(
+        str(checkpoint.get("customer_approved_at", "") or "").strip()
     )
     effective_approval = approved or existing_approval
     preflight_worker_groups: tuple[str, ...] = ()
@@ -8549,9 +9489,7 @@ def _execute_soperator_migration_unlocked(
             )
             if phase_mutation or lines:
                 mutation_performed = mutation_performed or phase_mutation
-                phase_lines.extend(
-                    [f"rolling-compute-migration: {line}" for line in lines]
-                )
+                phase_lines.extend([f"rolling-compute-migration: {line}" for line in lines])
                 _append_event(
                     checkpoint,
                     "execute-phase-reconciled",
@@ -8576,17 +9514,15 @@ def _execute_soperator_migration_unlocked(
             phase_lines.extend(action_reconcile_lines)
             _checkpoint_progress()
         phase_handlers: Mapping[str, Callable[[], tuple[bool, list[str]]]] = {
-            _EXTERNAL_NODE_TEMPLATE_PHASE_ID: lambda: (
-                _execute_external_node_template_upgrade_phase(
-                    checkpoint=checkpoint,
-                    payload=payload,
-                    source_report=execution_source_report,
-                    target_ref=normalized_target,
-                    kube_context=kube_context,
-                    worker_node_groups=approved_worker_groups,
-                    command_runner=active_command_runner,
-                    checkpoint_writer=_checkpoint_progress,
-                )
+            _EXTERNAL_NODE_TEMPLATE_PHASE_ID: lambda: _execute_external_node_template_upgrade_phase(
+                checkpoint=checkpoint,
+                payload=payload,
+                source_report=execution_source_report,
+                target_ref=normalized_target,
+                kube_context=kube_context,
+                worker_node_groups=approved_worker_groups,
+                command_runner=active_command_runner,
+                checkpoint_writer=_checkpoint_progress,
             ),
             _TARGET_GPU_STACK_PHASE_ID: lambda: _execute_target_gpu_stack_remediation_phase(
                 checkpoint=checkpoint,
@@ -8698,6 +9634,32 @@ def _execute_soperator_migration_unlocked(
                     after_phase=phase_id,
                 )
                 _checkpoint_progress()
+
+    if not pending_phase and effective_approval:
+        mk8s_state_lines = _verify_completed_soperator_migration_mk8s_state(
+            payload=payload,
+            source_report=execution_source_report,
+            target_ref=normalized_target,
+            worker_node_groups=approved_worker_groups,
+            phase_ids=phase_ids,
+            command_runner=active_command_runner,
+        )
+        mk8s_phase_lines = [f"post-migration-mk8s-check: {line}" for line in mk8s_state_lines]
+        phase_lines.extend(mk8s_phase_lines)
+        try:
+            helm_state_lines = _verify_completed_soperator_migration_helm_state(
+                command_runner=active_command_runner,
+                kube_context=kube_context,
+                target_version=target_version,
+            )
+        except RuntimeError as exc:
+            if mk8s_phase_lines:
+                raise RuntimeError("\n".join(mk8s_phase_lines) + "\n" + str(exc)) from exc
+            raise
+        mutation_performed = mutation_performed or _helm_state_lines_include_retirement_mutation(
+            helm_state_lines
+        )
+        phase_lines.extend(f"post-migration-helm-check: {line}" for line in helm_state_lines)
 
     if pending_phase:
         checkpoint["pending_phase"] = pending_phase

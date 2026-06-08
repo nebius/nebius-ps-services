@@ -63,6 +63,17 @@ _RUNTIME_AUTH_ENV_KEYS = (
 )
 
 
+def _mk8s_ready_status(version: str = "1.33", *, nodes: int = 1) -> SimpleNamespace:
+    return SimpleNamespace(
+        version=version,
+        ready_node_count=nodes,
+        target_node_count=nodes,
+        node_count=nodes,
+        outdated_node_count=0,
+        reconciling=False,
+    )
+
+
 def _empty_quota_report() -> cli.QuotaReport:
     return cli.QuotaReport(
         tenant_id="tenant-123",
@@ -315,6 +326,7 @@ def test_upgrade_k8s_version_runs_staged_terraform_plan_apply_not_sdk_updates(
     plan_stages: list[tuple[dict[str, str], bool]] = []
     apply_stages: list[dict[str, str]] = []
     wait_calls: list[tuple[str, str]] = []
+    completed_versions: dict[str, str] = {}
 
     def _node_group(
         *,
@@ -335,6 +347,7 @@ def test_upgrade_k8s_version_runs_staged_terraform_plan_apply_not_sdk_updates(
                     gpu_settings=SimpleNamespace(drivers_preset=drivers_preset),
                 ),
             ),
+            status=_mk8s_ready_status(version),
         )
 
     class FakeSdk:
@@ -352,6 +365,13 @@ def test_upgrade_k8s_version_runs_staged_terraform_plan_apply_not_sdk_updates(
                 spec=SimpleNamespace(control_plane=SimpleNamespace(version="1.32")),
             )
 
+        def get_cluster(self, cluster_id: str) -> SimpleNamespace:
+            assert cluster_id == "cluster-1"
+            return SimpleNamespace(
+                metadata=SimpleNamespace(id="cluster-1", name="mk8s-live", resource_version=1),
+                spec=SimpleNamespace(control_plane=SimpleNamespace(version="1.33")),
+            )
+
         def control_plane_versions(self) -> tuple[str, ...]:
             return ("1.33",)
 
@@ -361,14 +381,14 @@ def test_upgrade_k8s_version_runs_staged_terraform_plan_apply_not_sdk_updates(
                 _node_group(
                     id="ng-system",
                     name="mk8s-live-system",
-                    version="1.32",
+                    version=completed_versions.get("ng-system", "1.32"),
                     platform="cpu-platform",
                     preset="cpu-4-16",
                 ),
                 _node_group(
                     id="ng-gpu",
                     name="mk8s-live-gpu",
-                    version="1.32",
+                    version=completed_versions.get("ng-gpu", "1.32"),
                     platform="gpu-platform",
                     preset="8gpu",
                     drivers_preset="cuda13.0",
@@ -393,6 +413,7 @@ def test_upgrade_k8s_version_runs_staged_terraform_plan_apply_not_sdk_updates(
             version: str,
             timeout_seconds: int,
         ) -> None:
+            completed_versions[node_group_id] = version
             wait_calls.append(
                 ("node-group", f"{cluster_id}:{node_group_id}:{version}:{timeout_seconds}")
             )
@@ -554,6 +575,7 @@ def test_upgrade_node_template_stages_control_plane_then_combined_node_groups(
     plan_stages: list[dict[str, str]] = []
     apply_stages: list[dict[str, str]] = []
     wait_calls: list[tuple[str, str]] = []
+    completed_templates: dict[str, tuple[str, str, str]] = {}
 
     def _live_node_group(
         *,
@@ -575,6 +597,7 @@ def test_upgrade_node_template_stages_control_plane_then_combined_node_groups(
                     gpu_settings=SimpleNamespace(drivers_preset=drivers_preset),
                 ),
             ),
+            status=_mk8s_ready_status(version),
         )
 
     class FakeSdk:
@@ -592,28 +615,44 @@ def test_upgrade_node_template_stages_control_plane_then_combined_node_groups(
                 spec=SimpleNamespace(control_plane=SimpleNamespace(version="1.32")),
             )
 
+        def get_cluster(self, cluster_id: str) -> SimpleNamespace:
+            assert cluster_id == "cluster-1"
+            return SimpleNamespace(
+                metadata=SimpleNamespace(id="cluster-1", name="mk8s-live", resource_version=1),
+                spec=SimpleNamespace(control_plane=SimpleNamespace(version="1.33")),
+            )
+
         def control_plane_versions(self) -> tuple[str, ...]:
             return ("1.33",)
 
         def list_node_groups(self, cluster_id: str) -> tuple[SimpleNamespace, ...]:
             assert cluster_id == "cluster-1"
+            system_template = completed_templates.get(
+                "ng-system",
+                ("1.32", "ubuntu22.04", ""),
+            )
+            gpu_template = completed_templates.get(
+                "ng-gpu",
+                ("1.32", "ubuntu22.04", "cuda12.8"),
+            )
             return (
                 _live_node_group(
                     id="ng-system",
                     name="mk8s-live-system",
-                    version="1.32",
-                    os="ubuntu22.04",
+                    version=system_template[0],
+                    os=system_template[1],
                     platform="cpu-platform",
                     preset="cpu-4-16",
+                    drivers_preset=system_template[2],
                 ),
                 _live_node_group(
                     id="ng-gpu",
                     name="mk8s-live-gpu",
-                    version="1.32",
-                    os="ubuntu22.04",
+                    version=gpu_template[0],
+                    os=gpu_template[1],
                     platform="gpu-platform",
                     preset="8gpu",
-                    drivers_preset="cuda12.8",
+                    drivers_preset=gpu_template[2],
                 ),
             )
 
@@ -640,6 +679,7 @@ def test_upgrade_node_template_stages_control_plane_then_combined_node_groups(
             drivers_preset: str | None,
             timeout_seconds: int,
         ) -> None:
+            completed_templates[node_group_id] = (version, os, drivers_preset or "")
             wait_calls.append(
                 (
                     "node-template",
@@ -818,6 +858,7 @@ def test_upgrade_node_template_node_group_stages_only_selected_group(
     plan_stages: list[dict[str, str]] = []
     apply_stages: list[dict[str, str]] = []
     wait_calls: list[tuple[str, str]] = []
+    completed_templates: dict[str, tuple[str, str, str]] = {}
 
     def _live_node_group(
         *,
@@ -839,6 +880,7 @@ def test_upgrade_node_template_node_group_stages_only_selected_group(
                     gpu_settings=SimpleNamespace(drivers_preset=drivers_preset),
                 ),
             ),
+            status=_mk8s_ready_status(version),
         )
 
     class FakeSdk:
@@ -856,28 +898,44 @@ def test_upgrade_node_template_node_group_stages_only_selected_group(
                 spec=SimpleNamespace(control_plane=SimpleNamespace(version="1.32")),
             )
 
+        def get_cluster(self, cluster_id: str) -> SimpleNamespace:
+            assert cluster_id == "cluster-1"
+            return SimpleNamespace(
+                metadata=SimpleNamespace(id="cluster-1", name="mk8s-live", resource_version=1),
+                spec=SimpleNamespace(control_plane=SimpleNamespace(version="1.33")),
+            )
+
         def control_plane_versions(self) -> tuple[str, ...]:
             return ("1.33",)
 
         def list_node_groups(self, cluster_id: str) -> tuple[SimpleNamespace, ...]:
             assert cluster_id == "cluster-1"
+            system_template = completed_templates.get(
+                "ng-system",
+                ("1.32", "ubuntu22.04", ""),
+            )
+            gpu_template = completed_templates.get(
+                "ng-gpu",
+                ("1.32", "ubuntu22.04", "cuda12.8"),
+            )
             return (
                 _live_node_group(
                     id="ng-system",
                     name="mk8s-live-system",
-                    version="1.32",
-                    os="ubuntu22.04",
+                    version=system_template[0],
+                    os=system_template[1],
                     platform="cpu-platform",
                     preset="cpu-4-16",
+                    drivers_preset=system_template[2],
                 ),
                 _live_node_group(
                     id="ng-gpu",
                     name="mk8s-live-gpu",
-                    version="1.32",
-                    os="ubuntu22.04",
+                    version=gpu_template[0],
+                    os=gpu_template[1],
                     platform="gpu-platform",
                     preset="8gpu",
-                    drivers_preset="cuda12.8",
+                    drivers_preset=gpu_template[2],
                 ),
             )
 
@@ -904,6 +962,7 @@ def test_upgrade_node_template_node_group_stages_only_selected_group(
             drivers_preset: str | None,
             timeout_seconds: int,
         ) -> None:
+            completed_templates[node_group_id] = (version, os, drivers_preset or "")
             wait_calls.append(
                 (
                     "node-template",
@@ -1070,6 +1129,13 @@ def test_upgrade_k8s_version_syncs_stale_source_when_live_is_already_target(
             assert (project_id, name) == ("project-1", "mk8s-live")
             return SimpleNamespace(
                 metadata=SimpleNamespace(id="cluster-1", name=name, resource_version=1),
+                spec=SimpleNamespace(control_plane=SimpleNamespace(version="1.33")),
+            )
+
+        def get_cluster(self, cluster_id: str) -> SimpleNamespace:
+            assert cluster_id == "cluster-1"
+            return SimpleNamespace(
+                metadata=SimpleNamespace(id="cluster-1", name="mk8s-live", resource_version=1),
                 spec=SimpleNamespace(control_plane=SimpleNamespace(version="1.33")),
             )
 
@@ -1337,9 +1403,8 @@ def _mk8s_os_live_node_group(
                 gpu_settings=SimpleNamespace(drivers_preset=drivers_preset),
             ),
         ),
+        status=status if status is not None else _mk8s_ready_status(),
     )
-    if status is not None:
-        group.status = status
     return group
 
 
@@ -1371,6 +1436,13 @@ def _install_os_image_upgrade_fakes(
                 spec=SimpleNamespace(control_plane=SimpleNamespace(version="1.33")),
             )
 
+        def get_cluster(self, cluster_id: str) -> SimpleNamespace:
+            assert cluster_id == "cluster-1"
+            return SimpleNamespace(
+                metadata=SimpleNamespace(id="cluster-1", name="mk8s-live", resource_version=1),
+                spec=SimpleNamespace(control_plane=SimpleNamespace(version="1.33")),
+            )
+
         def list_node_groups(self, cluster_id: str) -> tuple[SimpleNamespace, ...]:
             assert cluster_id == "cluster-1"
             return live_node_groups
@@ -1394,8 +1466,41 @@ def _install_os_image_upgrade_fakes(
             os: str,
             timeout_seconds: int,
         ) -> None:
+            for group in live_node_groups:
+                metadata = getattr(group, "metadata", None)
+                if getattr(metadata, "id", "") != node_group_id:
+                    continue
+                template = getattr(getattr(group, "spec", None), "template", None)
+                if template is not None:
+                    template.os = os
             wait_calls.append(
                 ("node-group-os", f"{cluster_id}:{node_group_id}:{os}:{timeout_seconds}")
+            )
+
+        def wait_node_group_layer(
+            self,
+            *,
+            cluster_id: str,
+            node_group_id: str,
+            field: str,
+            value: str,
+            timeout_seconds: int,
+        ) -> None:
+            for group in live_node_groups:
+                metadata = getattr(group, "metadata", None)
+                if getattr(metadata, "id", "") != node_group_id:
+                    continue
+                template = getattr(getattr(group, "spec", None), "template", None)
+                resources = getattr(template, "resources", None)
+                gpu_settings = getattr(template, "gpu_settings", None)
+                if field == "platform" and resources is not None:
+                    resources.platform = value
+                elif field == "preset" and resources is not None:
+                    resources.preset = value
+                elif field == "drivers_preset" and gpu_settings is not None:
+                    gpu_settings.drivers_preset = value
+            wait_calls.append(
+                ("node-group-layer", f"{cluster_id}:{node_group_id}:{field}:{value}:{timeout_seconds}")
             )
 
     def _record_validation(*_args: object, **kwargs: object) -> dict[str, object]:
@@ -2260,6 +2365,13 @@ def test_upgrade_cpu_preset_apply_updates_source_and_waits_for_node_layer_rollou
                 spec=SimpleNamespace(control_plane=SimpleNamespace(version="1.33")),
             )
 
+        def get_cluster(self, cluster_id: str) -> SimpleNamespace:
+            assert cluster_id == "cluster-1"
+            return SimpleNamespace(
+                metadata=SimpleNamespace(id="cluster-1", name="mk8s-live", resource_version=1),
+                spec=SimpleNamespace(control_plane=SimpleNamespace(version="1.33")),
+            )
+
         def list_node_groups(self, cluster_id: str) -> tuple[SimpleNamespace, ...]:
             assert cluster_id == "cluster-1"
             return (
@@ -2510,6 +2622,11 @@ def test_upgrade_helm_chart_apply_updates_source_and_runs_target_flux_apply(
         "flux_apply_command",
         lambda *args, **kwargs: calls.append(("flux-apply", args, kwargs)),
     )
+    monkeypatch.setattr(
+        cli,
+        "_verify_helm_chart_upgrade_ready",
+        lambda *_args, **_kwargs: calls.append("helm-ready"),
+    )
 
     cli.upgrade_helm_chart_command(
         paths.config_path,
@@ -2528,7 +2645,34 @@ def test_upgrade_helm_chart_apply_updates_source_and_runs_target_flux_apply(
             (paths.generated_dir,),
             {"auto_auth_bootstrap": True, "target_ref": "mk8s", "all_targets": False},
         ),
+        "helm-ready",
     ]
+
+
+def test_upgrade_helm_chart_readiness_requires_generated_target(
+    tmp_path: Path,
+) -> None:
+    paths = _fake_paths(tmp_path)
+    plan = cli._HelmChartUpgradePlan(
+        target=cli._HelmChartUpgradeTarget(
+            selector="apps:soperator@missing",
+            chart_id="soperator",
+            target_ref="missing",
+        ),
+        instance_id="missing",
+        namespace="soperator",
+        release_name="soperator",
+        current_version="0.25.0",
+        target_version="0.26.0",
+    )
+
+    with pytest.raises(RuntimeError, match="No built-in cluster targets"):
+        cli._verify_helm_chart_upgrade_ready(
+            SimpleNamespace(),
+            paths,
+            {"deploy": {"targets": []}},
+            plan,
+        )
 
 
 def test_upgrade_os_image_config_only_guided_vm_dry_run_prompts_target_and_image(
@@ -2892,6 +3036,13 @@ def test_upgrade_os_image_dry_run_does_not_write_or_apply(
                 spec=SimpleNamespace(control_plane=SimpleNamespace(version="1.33")),
             )
 
+        def get_cluster(self, cluster_id: str) -> SimpleNamespace:
+            assert cluster_id == "cluster-1"
+            return SimpleNamespace(
+                metadata=SimpleNamespace(id="cluster-1", name="mk8s-live", resource_version=1),
+                spec=SimpleNamespace(control_plane=SimpleNamespace(version="1.33")),
+            )
+
         def list_node_groups(self, cluster_id: str) -> tuple[SimpleNamespace, ...]:
             assert cluster_id == "cluster-1"
             return (
@@ -2901,13 +3052,13 @@ def test_upgrade_os_image_dry_run_does_not_write_or_apply(
                         name="mk8s-live-system",
                         resource_version=1,
                     ),
-                    spec=SimpleNamespace(
-                        version="1.33",
-                        template=SimpleNamespace(
-                            os="ubuntu22.04",
-                            resources=SimpleNamespace(
-                                platform="cpu-platform",
-                                preset="cpu-4-16",
+                        spec=SimpleNamespace(
+                            version="1.33",
+                            template=SimpleNamespace(
+                                os="ubuntu22.04",
+                                resources=SimpleNamespace(
+                                    platform="cpu-platform",
+                                    preset="cpu-4-16",
                             ),
                             gpu_settings=SimpleNamespace(drivers_preset=""),
                         ),
@@ -3029,6 +3180,7 @@ def test_upgrade_os_image_runs_single_node_group_stage(
     plan_stages: list[tuple[dict[str, str], bool]] = []
     apply_stages: list[dict[str, str]] = []
     wait_calls: list[tuple[str, str]] = []
+    completed_os: dict[str, str] = {}
 
     class FakeSdk:
         def sync_close(self) -> None:
@@ -3045,6 +3197,13 @@ def test_upgrade_os_image_runs_single_node_group_stage(
                 spec=SimpleNamespace(control_plane=SimpleNamespace(version="1.33")),
             )
 
+        def get_cluster(self, cluster_id: str) -> SimpleNamespace:
+            assert cluster_id == "cluster-1"
+            return SimpleNamespace(
+                metadata=SimpleNamespace(id="cluster-1", name="mk8s-live", resource_version=1),
+                spec=SimpleNamespace(control_plane=SimpleNamespace(version="1.33")),
+            )
+
         def list_node_groups(self, cluster_id: str) -> tuple[SimpleNamespace, ...]:
             assert cluster_id == "cluster-1"
             return (
@@ -3057,7 +3216,7 @@ def test_upgrade_os_image_runs_single_node_group_stage(
                     spec=SimpleNamespace(
                         version="1.33",
                         template=SimpleNamespace(
-                            os="ubuntu22.04",
+                            os=completed_os.get("ng-system", "ubuntu22.04"),
                             resources=SimpleNamespace(
                                 platform="cpu-platform",
                                 preset="cpu-4-16",
@@ -3065,6 +3224,7 @@ def test_upgrade_os_image_runs_single_node_group_stage(
                             gpu_settings=SimpleNamespace(drivers_preset=""),
                         ),
                     ),
+                    status=_mk8s_ready_status(),
                 ),
                 SimpleNamespace(
                     metadata=SimpleNamespace(
@@ -3075,7 +3235,7 @@ def test_upgrade_os_image_runs_single_node_group_stage(
                     spec=SimpleNamespace(
                         version="1.33",
                         template=SimpleNamespace(
-                            os="ubuntu22.04",
+                            os=completed_os.get("ng-gpu", "ubuntu22.04"),
                             resources=SimpleNamespace(
                                 platform="gpu-platform",
                                 preset="8gpu",
@@ -3083,6 +3243,7 @@ def test_upgrade_os_image_runs_single_node_group_stage(
                             gpu_settings=SimpleNamespace(drivers_preset="cuda13.0"),
                         ),
                     ),
+                    status=_mk8s_ready_status(),
                 ),
             )
 
@@ -3104,6 +3265,7 @@ def test_upgrade_os_image_runs_single_node_group_stage(
             os: str,
             timeout_seconds: int,
         ) -> None:
+            completed_os[node_group_id] = os
             wait_calls.append(
                 ("node-group-os", f"{cluster_id}:{node_group_id}:{os}:{timeout_seconds}")
             )
@@ -3698,6 +3860,13 @@ def test_upgrade_k8s_version_config_only_guided_dry_run_prompts_required_and_opt
                 spec=SimpleNamespace(control_plane=SimpleNamespace(version="1.32")),
             )
 
+        def get_cluster(self, cluster_id: str) -> SimpleNamespace:
+            assert cluster_id == "cluster-1"
+            return SimpleNamespace(
+                metadata=SimpleNamespace(id="cluster-1", name="mk8s-live", resource_version=1),
+                spec=SimpleNamespace(control_plane=SimpleNamespace(version="1.33")),
+            )
+
         def control_plane_versions(self) -> tuple[str, ...]:
             return ("1.32", "1.33")
 
@@ -3958,6 +4127,13 @@ def test_upgrade_k8s_version_restores_temporary_strategy_after_failed_stage(
             return SimpleNamespace(
                 metadata=SimpleNamespace(id="cluster-1", name=name, resource_version=1),
                 spec=SimpleNamespace(control_plane=SimpleNamespace(version="1.32")),
+            )
+
+        def get_cluster(self, cluster_id: str) -> SimpleNamespace:
+            assert cluster_id == "cluster-1"
+            return SimpleNamespace(
+                metadata=SimpleNamespace(id="cluster-1", name="mk8s-live", resource_version=1),
+                spec=SimpleNamespace(control_plane=SimpleNamespace(version="1.33")),
             )
 
         def control_plane_versions(self) -> tuple[str, ...]:
@@ -15632,6 +15808,7 @@ def test_help_text_aligns_render_and_apply_surfaces() -> None:
     assert "last-resort force-delete:" in upgrade_k8s_help
     assert "safe -> none, allow-unavailable -> 30m, force-delete -> 10m" in upgrade_k8s_help
     assert "force-delete never deletes pvc/pv objects" in upgrade_k8s_help
+    assert "final mk8s readiness check" in upgrade_k8s_help
     assert (f"nebius-cxcli upgrade k8s-version {upgrade_example_config}") in upgrade_k8s_help
     assert (
         f"nebius-cxcli upgrade k8s-version {upgrade_example_config} "
@@ -15670,11 +15847,13 @@ def test_help_text_aligns_render_and_apply_surfaces() -> None:
         "--to-gpu-stack-preset cuda13.0 --dry-run"
     ) in upgrade_node_template_help
     assert "selected node group rolls once" in upgrade_node_template_help
+    assert "final mk8s readiness check" in upgrade_node_template_help
     assert "upgrade mk8s node-group or generic vm os images" in upgrade_os_help
     assert "reserved future command shape" not in upgrade_os_help
     assert "this changes the mk8s node template os through terraform" in upgrade_os_help
     assert "generic vm source_image_family through terraform replacement" in upgrade_os_help
     assert "does not ssh to nodes or run apt" in upgrade_os_help
+    assert "final mk8s readiness check" in upgrade_os_help
     assert "config_yaml [target]" in upgrade_os_help
     assert "--node-group" in upgrade_os_help
     assert "--dry-run" in upgrade_os_help
@@ -15714,6 +15893,7 @@ def test_help_text_aligns_render_and_apply_surfaces() -> None:
         assert "--drain-timeout" in node_layer_help
         assert "--interactive" in node_layer_help
         assert "--no-interactive" in node_layer_help
+        assert "final mk8s readiness check" in node_layer_help
     assert "--to-gpu-stack-preset" in upgrade_gpu_stack_help
     assert "--to-preset" not in upgrade_gpu_stack_help
     assert "--to-platform" in upgrade_platform_help
@@ -16164,6 +16344,15 @@ def test_command_help_usage_labels_positional_target_types() -> None:
         normalized_soperator_migrate_help
     )
     assert "retries them if they drift" in normalized_soperator_migrate_help
+    assert "repeats the final MK8s readiness check" in normalized_soperator_migrate_help
+    assert "verifies the target Helm release workloads" in normalized_soperator_migrate_help
+    assert (
+        "retires old source-family Flux HelmRelease/Kustomization desired state and Helm "
+        "release records"
+    ) in (
+        normalized_soperator_migrate_help
+    )
+    assert "preserving shared/storage resources" in normalized_soperator_migrate_help
     assert "checkpoints pending gates" in normalized_soperator_migrate_help
     assert "remove [OPTIONS] [COMPONENT_SELECTOR]..." in component_remove_help
     assert "--config CONFIG_YAML" in normalized_component_remove_help

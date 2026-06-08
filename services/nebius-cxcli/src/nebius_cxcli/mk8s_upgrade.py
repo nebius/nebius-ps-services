@@ -282,6 +282,53 @@ class Mk8sNodeTemplateUpgradePlan:
         return self.node_group_updates_required
 
 
+@dataclass(frozen=True)
+class Mk8sNodeGroupReadiness:
+    """Final live readiness state for one upgraded MK8s node group."""
+
+    id: str
+    name: str
+    ready: bool
+    summary: str
+
+
+@dataclass(frozen=True)
+class Mk8sUpgradeReadinessResult:
+    """Final live readiness state for one MK8s upgrade command."""
+
+    label: str
+    cluster_id: str
+    cluster_name: str
+    expected_k8s_version: str
+    observed_k8s_version: str
+    node_groups: tuple[Mk8sNodeGroupReadiness, ...]
+
+    @property
+    def ready_node_group_count(self) -> int:
+        return sum(1 for group in self.node_groups if group.ready)
+
+    @property
+    def control_plane_ready(self) -> bool:
+        if not self.expected_k8s_version:
+            return True
+        return _version_prefix_matches(self.observed_k8s_version, self.expected_k8s_version)
+
+    def summary(self) -> str:
+        total = len(self.node_groups)
+        ready = self.ready_node_group_count
+        state = "verified" if self.control_plane_ready and ready == total else "verification failed"
+        node_text = (
+            f"node groups {ready}/{total} ready"
+            if total
+            else "no node groups selected"
+        )
+        return (
+            f"{self.label} {state}: cluster {self.cluster_name or self.cluster_id} "
+            f"Kubernetes {self.observed_k8s_version or 'unknown'} "
+            f"(expected {self.expected_k8s_version or 'unchanged'}); {node_text}."
+        )
+
+
 def _text(value: Any) -> str:
     return str(value or "").strip()
 
@@ -1942,17 +1989,7 @@ def node_group_rollout_complete(node_group: Any, *, version: str) -> bool:
     status_version = _text(getattr(status, "version", None))
     if status_version and not _version_prefix_matches(status_version, version):
         return False
-    ready = getattr(status, "ready_node_count", None)
-    target = getattr(status, "target_node_count", None)
-    node_count = getattr(status, "node_count", None)
-    outdated = getattr(status, "outdated_node_count", None)
-    if isinstance(ready, int) and isinstance(target, int) and ready < target:
-        return False
-    if isinstance(node_count, int) and isinstance(target, int) and node_count != target:
-        return False
-    if isinstance(outdated, int) and outdated > 0:
-        return False
-    return not bool(getattr(status, "reconciling", False))
+    return _node_group_status_ready(node_group)
 
 
 def _node_group_template_os(node_group: Any) -> str:
@@ -1984,6 +2021,8 @@ def _node_group_status_ready(node_group: Any) -> bool:
     target = getattr(status, "target_node_count", None)
     node_count = getattr(status, "node_count", None)
     outdated = getattr(status, "outdated_node_count", None)
+    if not all(isinstance(value, int) for value in (ready, target, node_count)):
+        return False
     if isinstance(ready, int) and isinstance(target, int) and ready < target:
         return False
     if isinstance(node_count, int) and isinstance(target, int) and node_count != target:
@@ -2123,6 +2162,224 @@ def node_group_rollout_wait_seconds(group: LiveNodeGroup) -> int:
         MIN_ROLLOUT_WAIT_SECONDS,
         node_group_target_size(group) * ROLLOUT_WAIT_SECONDS_PER_NODE,
     )
+
+
+def verify_mk8s_upgrade_plan_ready(
+    *,
+    executor: Any,
+    plan: (
+        Mk8sUpgradePlan
+        | Mk8sOsImageUpgradePlan
+        | Mk8sNodeLayerUpgradePlan
+        | Mk8sNodeTemplateUpgradePlan
+    ),
+    label: str = "MK8s upgrade",
+) -> Mk8sUpgradeReadinessResult:
+    """Re-read live MK8s state and fail unless the requested upgrade is complete."""
+
+    cluster = executor.get_cluster(plan.cluster_id)
+    observed_version = _cluster_control_plane_version_from_sdk(cluster)
+    expected_version = _plan_expected_cluster_version(plan)
+    errors: list[str] = []
+    if expected_version and not _version_prefix_matches(observed_version, expected_version):
+        errors.append(
+            f"control plane reports Kubernetes {observed_version or 'unknown'}, "
+            f"expected {expected_version}"
+        )
+
+    live_node_groups = executor.list_node_groups(plan.cluster_id)
+    live_by_id: dict[str, Any] = {}
+    live_by_name: dict[str, Any] = {}
+    for item in live_node_groups:
+        metadata = getattr(item, "metadata", None)
+        if group_id := _text(getattr(metadata, "id", None)):
+            live_by_id[group_id] = item
+        if group_name := _metadata_name(metadata):
+            live_by_name[group_name] = item
+
+    readiness: list[Mk8sNodeGroupReadiness] = []
+    for planned_group in plan.node_groups:
+        live_group = live_by_id.get(planned_group.id) or live_by_name.get(planned_group.name)
+        if live_group is None:
+            summary = "node group was not found in the live MK8s API response"
+            readiness.append(
+                Mk8sNodeGroupReadiness(
+                    id=planned_group.id,
+                    name=planned_group.name,
+                    ready=False,
+                    summary=summary,
+                )
+            )
+            errors.append(f"{planned_group.name or planned_group.id}: {summary}")
+            continue
+        ready, summary = _plan_node_group_ready(plan, planned_group, live_group)
+        readiness.append(
+            Mk8sNodeGroupReadiness(
+                id=planned_group.id,
+                name=planned_group.name,
+                ready=ready,
+                summary=summary,
+            )
+        )
+        if not ready:
+            errors.append(f"{planned_group.name or planned_group.id}: {summary}")
+
+    result = Mk8sUpgradeReadinessResult(
+        label=label,
+        cluster_id=plan.cluster_id,
+        cluster_name=plan.cluster_name,
+        expected_k8s_version=expected_version,
+        observed_k8s_version=parse_k8s_version(observed_version).minor_text
+        if observed_version
+        else "",
+        node_groups=tuple(readiness),
+    )
+    if errors:
+        raise RuntimeError(result.summary() + "\n" + "\n".join(f"- {item}" for item in errors))
+    return result
+
+
+def _cluster_control_plane_version_from_sdk(cluster: Any) -> str:
+    return _text(
+        getattr(
+            getattr(getattr(cluster, "spec", None), "control_plane", None),
+            "version",
+            None,
+        )
+    )
+
+
+def _plan_expected_cluster_version(
+    plan: (
+        Mk8sUpgradePlan
+        | Mk8sOsImageUpgradePlan
+        | Mk8sNodeLayerUpgradePlan
+        | Mk8sNodeTemplateUpgradePlan
+    ),
+) -> str:
+    if isinstance(plan, (Mk8sUpgradePlan, Mk8sNodeTemplateUpgradePlan)):
+        return plan.target_version
+    return plan.k8s_version
+
+
+def _plan_node_group_ready(
+    plan: (
+        Mk8sUpgradePlan
+        | Mk8sOsImageUpgradePlan
+        | Mk8sNodeLayerUpgradePlan
+        | Mk8sNodeTemplateUpgradePlan
+    ),
+    planned_group: LiveNodeGroup,
+    live_group: Any,
+) -> tuple[bool, str]:
+    if not _node_group_has_status(live_group):
+        return (
+            False,
+            _node_group_status_missing_summary(plan, live_group),
+        )
+    missing_status_fields = _missing_required_status_count_fields(live_group)
+    if missing_status_fields:
+        return (
+            False,
+            _node_group_status_incomplete_summary(
+                plan,
+                live_group,
+                missing_fields=missing_status_fields,
+            ),
+        )
+    if isinstance(plan, Mk8sUpgradePlan):
+        return (
+            node_group_rollout_complete(live_group, version=plan.target_version),
+            node_group_rollout_summary(live_group),
+        )
+    if isinstance(plan, Mk8sOsImageUpgradePlan):
+        return (
+            node_group_os_rollout_complete(live_group, os=plan.target_os),
+            node_group_os_rollout_summary(live_group),
+        )
+    if isinstance(plan, Mk8sNodeLayerUpgradePlan):
+        return (
+            node_group_layer_rollout_complete(
+                live_group,
+                field=plan.spec.live_field,
+                value=plan.target_value,
+            ),
+            node_group_layer_rollout_summary(live_group, field=plan.spec.live_field),
+        )
+    drivers_preset = node_template_target_drivers_preset(
+        planned_group,
+        target_gpu_stack_preset=plan.target_gpu_stack_preset,
+    )
+    return (
+        node_group_node_template_rollout_complete(
+            live_group,
+            version=plan.target_version,
+            os=plan.target_os,
+            drivers_preset=drivers_preset,
+        ),
+        node_group_node_template_rollout_summary(live_group),
+    )
+
+
+def _node_group_status_missing_summary(
+    plan: (
+        Mk8sUpgradePlan
+        | Mk8sOsImageUpgradePlan
+        | Mk8sNodeLayerUpgradePlan
+        | Mk8sNodeTemplateUpgradePlan
+    ),
+    live_group: Any,
+) -> str:
+    if isinstance(plan, Mk8sUpgradePlan):
+        summary = node_group_rollout_summary(live_group)
+    elif isinstance(plan, Mk8sOsImageUpgradePlan):
+        summary = node_group_os_rollout_summary(live_group)
+    elif isinstance(plan, Mk8sNodeLayerUpgradePlan):
+        summary = node_group_layer_rollout_summary(live_group, field=plan.spec.live_field)
+    else:
+        summary = node_group_node_template_rollout_summary(live_group)
+    return summary + "; status not returned by Nebius SDK, rollout readiness cannot be verified"
+
+
+def _node_group_status_incomplete_summary(
+    plan: (
+        Mk8sUpgradePlan
+        | Mk8sOsImageUpgradePlan
+        | Mk8sNodeLayerUpgradePlan
+        | Mk8sNodeTemplateUpgradePlan
+    ),
+    live_group: Any,
+    *,
+    missing_fields: Sequence[str],
+) -> str:
+    if isinstance(plan, Mk8sUpgradePlan):
+        summary = node_group_rollout_summary(live_group)
+    elif isinstance(plan, Mk8sOsImageUpgradePlan):
+        summary = node_group_os_rollout_summary(live_group)
+    elif isinstance(plan, Mk8sNodeLayerUpgradePlan):
+        summary = node_group_layer_rollout_summary(live_group, field=plan.spec.live_field)
+    else:
+        summary = node_group_node_template_rollout_summary(live_group)
+    missing = ", ".join(missing_fields)
+    return (
+        f"{summary}; status missing {missing}, rollout readiness cannot be verified"
+    )
+
+
+def _missing_required_status_count_fields(node_group: Any) -> tuple[str, ...]:
+    status = getattr(node_group, "status", None)
+    if status is None:
+        return ()
+    required = ("ready_node_count", "target_node_count", "node_count")
+    return tuple(
+        field
+        for field in required
+        if not isinstance(getattr(status, field, None), int)
+    )
+
+
+def _node_group_has_status(node_group: Any) -> bool:
+    return getattr(node_group, "status", None) is not None
 
 
 def terraform_node_group_strategy_for_policy(

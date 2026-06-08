@@ -6,6 +6,25 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Added final MK8s readiness checks for `upgrade k8s-version`,
+  `upgrade node-template`, MK8s `upgrade os-image`, node-layer upgrades, and
+  `ext-soperator migrate --execute`; commands now re-read live control-plane
+  and node-group state before reporting success, including Nebius OS image and
+  GPU `drivers_preset` / CUDA stack where applicable. Final checks now require
+  provider node-group status with ready, target, and total node counts instead
+  of treating matching spec fields alone as ready, and completed external
+  migrations emit a baseline MK8s cluster/node group readiness check even when
+  no node-template action was selected.
+- Added post-action Helm readiness checks for `upgrade helm-chart` and
+  `ext-soperator migrate --execute`; Soperator migration now verifies the
+  target chart workloads, suspends old source-family Flux HelmRelease and
+  Kustomization desired state, prunes old operational Soperator resources,
+  preserves shared/storage resources, and removes stale source-family Helm
+  release records before reporting completion. Managed Helm chart upgrades now
+  require the generated target handoff before running live readiness
+  verification.
+- Fixed `ext-soperator migrate --help` so the rendered epilog includes the
+  completed remediation/upgrade/cutover rerun recheck contract.
 - Changed the generated report artifact contract from `generated/inventory/` to
   `generated/reports/`. Code paths now use `reports_dir` for deploy,
   validation, notification, and external Soperator migration reports, and new

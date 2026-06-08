@@ -205,6 +205,7 @@ from .grafana_runtime import (
     write_grafana_status,
 )
 from .helm_client import HelmChartReference, HelmClient, chart_cli_contract_findings
+from .helm_readiness import SubprocessHelmCommandRunner, verify_helm_chart_ready
 from .iam_bootstrap import (
     auth_public_key_exists,
     bootstrap_ci_service_account,
@@ -297,6 +298,7 @@ from .mk8s_upgrade import (
     validate_disruption_policy,
     validate_node_layer_value,
     validate_os_image_value,
+    verify_mk8s_upgrade_plan_ready,
     wait_for_node_group_rollout,
     wait_for_node_layer_rollout,
     wait_for_node_template_rollout,
@@ -1330,7 +1332,9 @@ _UPGRADE_K8S_EPILOG = (
     f"Last-resort force-delete: nebius-cxcli upgrade k8s-version {_UPGRADE_EXAMPLE_CONFIG} "
     "infra:mk8s@mk8s --to-version 1.33 --disruption-policy force-delete. "
     "Defaults: safe -> none, allow-unavailable -> 30m, force-delete -> 10m. "
-    "force-delete never deletes PVC/PV objects."
+    "force-delete never deletes PVC/PV objects. Non-dry runs finish with a "
+    "final MK8s readiness check against the live control plane and selected "
+    "node groups."
 )
 _UPGRADE_OS_IMAGE_EPILOG = (
     "Examples: "
@@ -1346,7 +1350,9 @@ _UPGRADE_OS_IMAGE_EPILOG = (
     "Defaults: safe -> none, allow-unavailable -> 30m, force-delete -> 10m. "
     "This changes the MK8s node template OS through Terraform and Managed "
     "Kubernetes rolling node replacement, or a generic VM source_image_family "
-    "through Terraform replacement; it does not SSH to nodes or run apt."
+    "through Terraform replacement; it does not SSH to nodes or run apt. "
+    "Non-dry MK8s runs finish with a final MK8s readiness check against the "
+    "live selected node groups."
 )
 _UPGRADE_NODE_TEMPLATE_EPILOG = (
     "Example: nebius-cxcli upgrade node-template <config.yaml> "
@@ -1354,7 +1360,8 @@ _UPGRADE_NODE_TEMPLATE_EPILOG = (
     "--to-gpu-stack-preset cuda13.0 --dry-run. "
     "This non-interactive command upgrades the control plane first, then writes "
     "node-group version, OS, and Nebius-image GPU stack changes together so each "
-    "selected node group rolls once."
+    "selected node group rolls once. Non-dry runs finish with a final MK8s "
+    "readiness check against the live control plane and selected node groups."
 )
 app = typer.Typer(
     add_completion=False,
@@ -2732,6 +2739,41 @@ def _format_helm_chart_upgrade_plan(
     return tuple(lines)
 
 
+def _verify_helm_chart_upgrade_ready(
+    config: Any,
+    paths: ProjectPaths,
+    manifest: Mapping[str, Any],
+    plan: _HelmChartUpgradePlan,
+) -> None:
+    selected_targets = _resolve_selected_deploy_targets(
+        manifest,
+        requested_target_ref=plan.target.target_ref,
+        all_targets=False,
+    )
+    target = selected_targets[0] if selected_targets else None
+    if target is None:
+        raise RuntimeError(
+            f"Cannot verify Helm chart upgrade for {plan.target.selector}: "
+            f"target '{plan.target.target_ref}' was not found in the generated deploy manifest."
+        )
+    with ExitStack() as stack:
+        kube_env = _prepare_cluster_handoff_kube_env(
+            config,
+            paths,
+            stack=stack,
+            target=target,
+            persist_local_kubeconfig=False,
+            set_current_context=False,
+        )
+        result = verify_helm_chart_ready(
+            command_runner=SubprocessHelmCommandRunner(extra_env=kube_env),
+            release_name=plan.release_name,
+            namespace=plan.namespace or "default",
+            expected_version=plan.target_version,
+        )
+    console.print(f"[green]{result.summary()}[/green]")
+
+
 def _status_watchers_for_component(
     watchers: Sequence[Mapping[str, Any]],
     *,
@@ -3195,6 +3237,12 @@ def upgrade_k8s_version_command(
                         f"Upgrade preflight blockers must be resolved first: {blocker_labels}"
                     )
             if not plan.mutates and not plan.rollout_incomplete and not source_sync_required:
+                readiness = verify_mk8s_upgrade_plan_ready(
+                    executor=executor,
+                    plan=plan,
+                    label="MK8s Kubernetes upgrade",
+                )
+                console.print(f"[green]{readiness.summary()}[/green]")
                 console.print(
                     f"MK8s target {target.selector} is already on Kubernetes {normalized_to_version}."
                 )
@@ -3428,6 +3476,12 @@ def upgrade_k8s_version_command(
                     extra_env=kube_env,
                     emit=lambda message: console.print(message, highlight=False),
                 )
+            readiness = verify_mk8s_upgrade_plan_ready(
+                executor=executor,
+                plan=plan,
+                label="MK8s Kubernetes upgrade",
+            )
+            console.print(f"[green]{readiness.summary()}[/green]")
             console.print(
                 f"[green]MK8s Kubernetes upgrade completed[/green]: "
                 f"{target.selector} -> {normalized_to_version}"
@@ -3703,6 +3757,12 @@ def upgrade_node_template_command(
                         f"Upgrade preflight blockers must be resolved first: {blocker_labels}"
                     )
             if not plan.mutates and not plan.rollout_incomplete and not source_sync_required:
+                readiness = verify_mk8s_upgrade_plan_ready(
+                    executor=executor,
+                    plan=plan,
+                    label="MK8s node-template upgrade",
+                )
+                console.print(f"[green]{readiness.summary()}[/green]")
                 console.print(
                     f"MK8s target {target.selector} is already on Kubernetes "
                     f"{normalized_to_version}, OS {target_os}, and the requested GPU stack."
@@ -3898,8 +3958,7 @@ def upgrade_node_template_command(
                         or planned_group.drivers_preset == target_drivers_preset
                     )
                     if (
-                        parse_k8s_version(planned_group.version).minor_text
-                        == normalized_to_version
+                        parse_k8s_version(planned_group.version).minor_text == normalized_to_version
                         and planned_group.os == target_os
                         and live_driver_matches
                     ):
@@ -3939,7 +3998,11 @@ def upgrade_node_template_command(
                     node_group_versions=final_group_versions,
                 )
                 strategy_restored = _stage_strategy(None)
-                if final_changed or strategy_restored or (source_sync_required and not stage_applied):
+                if (
+                    final_changed
+                    or strategy_restored
+                    or (source_sync_required and not stage_applied)
+                ):
                     stage_title = (
                         "node-group strategy restore"
                         if strategy_restored
@@ -3967,6 +4030,12 @@ def upgrade_node_template_command(
                     extra_env=kube_env,
                     emit=lambda message: console.print(message, highlight=False),
                 )
+            readiness = verify_mk8s_upgrade_plan_ready(
+                executor=executor,
+                plan=plan,
+                label="MK8s node-template upgrade",
+            )
+            console.print(f"[green]{readiness.summary()}[/green]")
             console.print(
                 f"[green]MK8s node-template upgrade completed[/green]: "
                 f"{target.selector} -> Kubernetes {normalized_to_version}, OS {target_os}"
@@ -4249,6 +4318,12 @@ def upgrade_os_image_command(
                         f"Upgrade preflight blockers must be resolved first: {blocker_labels}"
                     )
             if not plan.mutates and not plan.rollout_incomplete and not source_sync_required:
+                readiness = verify_mk8s_upgrade_plan_ready(
+                    executor=executor,
+                    plan=plan,
+                    label="MK8s OS image upgrade",
+                )
+                console.print(f"[green]{readiness.summary()}[/green]")
                 console.print(f"MK8s target {target.selector} is already on OS image {target_os}.")
                 return
             if not plan.mutates and not plan.rollout_incomplete and source_sync_required:
@@ -4449,6 +4524,12 @@ def upgrade_os_image_command(
                 _restore_temporary_strategy_files_after_error()
                 raise
 
+            readiness = verify_mk8s_upgrade_plan_ready(
+                executor=executor,
+                plan=plan,
+                label="MK8s OS image upgrade",
+            )
+            console.print(f"[green]{readiness.summary()}[/green]")
             console.print(
                 f"[green]MK8s OS image upgrade completed[/green]: {target.selector} -> {target_os}"
             )
@@ -4670,6 +4751,12 @@ def _run_mk8s_node_layer_upgrade_command(
                         f"Upgrade preflight blockers must be resolved first: {blocker_labels}"
                     )
             if not plan.mutates and not plan.rollout_incomplete and not source_sync_required:
+                readiness = verify_mk8s_upgrade_plan_ready(
+                    executor=executor,
+                    plan=plan,
+                    label=f"MK8s {spec.target_label} upgrade",
+                )
+                console.print(f"[green]{readiness.summary()}[/green]")
                 console.print(
                     f"MK8s target {target.selector} is already on {spec.target_label} "
                     f"{request.target_value}."
@@ -4886,6 +4973,12 @@ def _run_mk8s_node_layer_upgrade_command(
                 _restore_temporary_strategy_files_after_error()
                 raise
 
+            readiness = verify_mk8s_upgrade_plan_ready(
+                executor=executor,
+                plan=plan,
+                label=f"MK8s {spec.target_label} upgrade",
+            )
+            console.print(f"[green]{readiness.summary()}[/green]")
             console.print(
                 f"[green]MK8s {spec.target_label} upgrade completed[/green]: "
                 f"{target.selector} -> {request.target_value}"
@@ -4906,7 +4999,9 @@ def _run_mk8s_node_layer_upgrade_command(
     short_help="Upgrade MK8s GPU node-group GPU stack presets.",
     epilog=(
         "Example: nebius-cxcli upgrade gpu-stack-preset <config.yaml> "
-        "infra:mk8s@<target> --to-gpu-stack-preset cuda13.0 --dry-run."
+        "infra:mk8s@<target> --to-gpu-stack-preset cuda13.0 --dry-run. "
+        "Non-dry runs finish with a final MK8s readiness check against the live "
+        "selected node groups."
     ),
 )
 def upgrade_gpu_stack_preset_command(
@@ -4978,7 +5073,9 @@ def upgrade_gpu_stack_preset_command(
     short_help="Upgrade MK8s node-group platforms.",
     epilog=(
         "Example: nebius-cxcli upgrade platform <config.yaml> "
-        "infra:mk8s@<target> --to-platform cpu-d3 --node-group worker --dry-run."
+        "infra:mk8s@<target> --to-platform cpu-d3 --node-group worker --dry-run. "
+        "Non-dry runs finish with a final MK8s readiness check against the live "
+        "selected node groups."
     ),
 )
 def upgrade_platform_command(
@@ -5049,7 +5146,9 @@ def upgrade_platform_command(
     short_help="Upgrade MK8s CPU/system node-group presets.",
     epilog=(
         "Example: nebius-cxcli upgrade cpu-preset <config.yaml> "
-        "infra:mk8s@<target> --to-preset <preset> --node-group system --dry-run."
+        "infra:mk8s@<target> --to-preset <preset> --node-group system --dry-run. "
+        "Non-dry runs finish with a final MK8s readiness check against the live "
+        "selected node groups."
     ),
 )
 def upgrade_cpu_preset_command(
@@ -5120,7 +5219,9 @@ def upgrade_cpu_preset_command(
     short_help="Upgrade MK8s GPU node-group hardware presets.",
     epilog=(
         "Example: nebius-cxcli upgrade gpu-preset <config.yaml> "
-        "infra:mk8s@<target> --to-preset <preset> --node-group worker --dry-run."
+        "infra:mk8s@<target> --to-preset <preset> --node-group worker --dry-run. "
+        "Non-dry runs finish with a final MK8s readiness check against the live "
+        "selected node groups."
     ),
 )
 def upgrade_gpu_preset_command(
@@ -5275,6 +5376,7 @@ def upgrade_helm_chart_command(
         if dry_run:
             return
         if not plan.mutates:
+            _verify_helm_chart_upgrade_ready(generated_config, paths, manifest, plan)
             console.print(
                 f"Helm chart target {target.selector} already uses version {target_version}."
             )
@@ -5323,6 +5425,7 @@ def upgrade_helm_chart_command(
             target_ref=target.target_ref,
             all_targets=False,
         )
+        _verify_helm_chart_upgrade_ready(staged_config, staged_paths, staged_manifest, plan)
         console.print(
             f"[green]Helm chart upgrade completed[/green]: {target.selector} -> {target_version}"
         )
@@ -6104,8 +6207,7 @@ def _print_render_deploy_hint(config_path: Path) -> None:
             console.print(
                 "Next step: run `nebius-cxcli ext-soperator migrate "
                 f"{config_arg} --target <target> --dry-run` for each migration-required "
-                "Soperator target: "
-                + ", ".join(migration_targets),
+                "Soperator target: " + ", ".join(migration_targets),
                 soft_wrap=True,
             )
         console.print(
@@ -8249,7 +8351,9 @@ def _print_soperator_onboarding_report_summary(report: Any) -> None:
         "existing-soperator-newer": "Existing Soperator is newer than cxcli target",
         "analysis-incomplete": "Analysis incomplete",
     }
-    console.print(f"[dim]Soperator onboarding state: {labels.get(report.state, report.state)}[/dim]")
+    console.print(
+        f"[dim]Soperator onboarding state: {labels.get(report.state, report.state)}[/dim]"
+    )
     source_version = _non_empty_text(getattr(report, "source_version", ""))
     target_version = _non_empty_text(getattr(report, "target_version", ""))
     migration_profile_id = _non_empty_text(getattr(report, "migration_profile_id", ""))
@@ -8263,7 +8367,11 @@ def _print_soperator_onboarding_report_summary(report: Any) -> None:
         if finding.severity in {"required", "recommended"}:
             console.print(f"[dim]- {finding.layer}: {finding.status} - {finding.message}[/dim]")
     if getattr(report, "migration_plan", ()):
-        console.print("[dim]Migration phases: " + ", ".join(phase.id for phase in report.migration_plan) + "[/dim]")
+        console.print(
+            "[dim]Migration phases: "
+            + ", ".join(phase.id for phase in report.migration_plan)
+            + "[/dim]"
+        )
     selected_actions = [action.id for action in report.actions if action.selected]
     if selected_actions:
         console.print("[dim]Selected onboarding actions: " + ", ".join(selected_actions) + "[/dim]")
@@ -8364,7 +8472,9 @@ def _soperator_onboarding_target_defaults(
     requested_storage_mode = (
         storage_mode or required_storage_mode or _SOPERATOR_ONBOARDING_DEFAULT_STORAGE_MODE
     )
-    requested_compute_mode = compute_mode or _soperator_onboarding_default_compute_mode_for_report(report)
+    requested_compute_mode = compute_mode or _soperator_onboarding_default_compute_mode_for_report(
+        report
+    )
     effective_storage_mode = soperator_onboarding_effective_storage_mode(
         report,
         requested_storage_mode,
@@ -8401,9 +8511,7 @@ def _soperator_onboarding_target_defaults(
             "report": adjusted_report.to_dict(),
         },
     }
-    selected_action_ids = {
-        action.id for action in adjusted_report.actions if action.selected
-    }
+    selected_action_ids = {action.id for action in adjusted_report.actions if action.selected}
     if ONBOARDING_ACTION_UPGRADE_EXTERNAL_NODE_TEMPLATE in selected_action_ids:
         target_row["soperator_onboarding"]["node_template_upgrade"] = {  # type: ignore[index]
             "target_k8s_version": ONBOARDING_EXTERNAL_NODE_TEMPLATE_TARGET_K8S_VERSION,
@@ -8661,23 +8769,25 @@ def _soperator_onboarding_target_ref_from_context(kube_context: str) -> str:
 
 
 def _normalize_soperator_onboarding_storage_mode(raw_value: str | None) -> str:
-    storage_mode = normalize_component_token(raw_value) or _SOPERATOR_ONBOARDING_DEFAULT_STORAGE_MODE
+    storage_mode = (
+        normalize_component_token(raw_value) or _SOPERATOR_ONBOARDING_DEFAULT_STORAGE_MODE
+    )
     if storage_mode not in _SOPERATOR_ONBOARDING_STORAGE_MODES:
         available = ", ".join(_SOPERATOR_ONBOARDING_STORAGE_MODES)
         raise RuntimeError(
-            "Invalid Soperator onboarding storage mode "
-            f"'{raw_value}'. Choose one of: {available}."
+            f"Invalid Soperator onboarding storage mode '{raw_value}'. Choose one of: {available}."
         )
     return storage_mode
 
 
 def _normalize_soperator_onboarding_compute_mode(raw_value: str | None) -> str:
-    compute_mode = normalize_component_token(raw_value) or _SOPERATOR_ONBOARDING_DEFAULT_COMPUTE_MODE
+    compute_mode = (
+        normalize_component_token(raw_value) or _SOPERATOR_ONBOARDING_DEFAULT_COMPUTE_MODE
+    )
     if compute_mode not in _SOPERATOR_ONBOARDING_COMPUTE_MODES:
         available = ", ".join(_SOPERATOR_ONBOARDING_COMPUTE_MODES)
         raise RuntimeError(
-            "Invalid Soperator onboarding compute mode "
-            f"'{raw_value}'. Choose one of: {available}."
+            f"Invalid Soperator onboarding compute mode '{raw_value}'. Choose one of: {available}."
         )
     return compute_mode
 
@@ -31108,10 +31218,7 @@ def _resolve_soperator_onboard_config_target(
             _existing_region_id,
             _existing_email,
         ) = _identity_values_from_payload(loaded_payload)
-        if (
-            existing_tenant_id != resolved_tenant_id
-            or existing_project_id != resolved_project_id
-        ):
+        if existing_tenant_id != resolved_tenant_id or existing_project_id != resolved_project_id:
             raise RuntimeError(
                 "Resolved name-based project path collision: "
                 f"{config_path.parent} already belongs to tenant_id/project_id "
@@ -32456,10 +32563,7 @@ def component_add_command(
                 )
             else:
                 soperator_install_mode = _SOPERATOR_INSTALL_MODE_PRODUCTION
-            if (
-                interactive_mode
-                and soperator_install_mode == _SOPERATOR_INSTALL_MODE_PRODUCTION
-            ):
+            if interactive_mode and soperator_install_mode == _SOPERATOR_INSTALL_MODE_PRODUCTION:
                 console.print(
                     "[dim]Soperator component add materializes the production "
                     "MK8s+SFS+Soperator bundle. Use "
@@ -33504,6 +33608,12 @@ _SOPERATOR_MIGRATION_EXECUTOR_CONTRACT_LINES = (
     "resume without rerunning completed data-copy or retirement phases, while "
     "--execute still rechecks completed selected remediation/upgrade/cutover "
     "actions against live state and retries them if they drift.",
+    "Completion contract: before reporting success, --execute repeats the final "
+    "MK8s readiness check for accepted external node-template work, verifies the "
+    "target Helm release workloads, retires old source-family Flux "
+    "HelmRelease/Kustomization desired state and Helm release records, preserves "
+    "shared/storage resources, and fails only if stale source-family releases "
+    "remain afterward.",
 )
 
 
@@ -33550,9 +33660,13 @@ def _load_soperator_source_discovery_report(
     try:
         payload = json.loads(report_path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:
-        raise RuntimeError(f"Soperator source discovery report is invalid JSON: {report_path}") from exc
+        raise RuntimeError(
+            f"Soperator source discovery report is invalid JSON: {report_path}"
+        ) from exc
     if not isinstance(payload, dict):
-        raise RuntimeError(f"Soperator source discovery report must be a JSON object: {report_path}")
+        raise RuntimeError(
+            f"Soperator source discovery report must be a JSON object: {report_path}"
+        )
     report_target_ref = normalize_component_token(payload.get("target_ref"))
     if report_target_ref != target_ref:
         raise RuntimeError(
@@ -33730,12 +33844,9 @@ def _format_soperator_migration_plan_lines(
         "Compute mode: "
         + str(onboarding.get("compute_mode", "") or _SOPERATOR_ONBOARDING_DEFAULT_COMPUTE_MODE),
         "Migration required: " + ("yes" if flags["migration_required"] else "no"),
-        "Storage migration required: "
-        + ("yes" if flags["storage_migration_required"] else "no"),
-        "Compute migration required: "
-        + ("yes" if flags["compute_migration_required"] else "no"),
-        "Soperator upgrade required: "
-        + ("yes" if flags["soperator_upgrade_required"] else "no"),
+        "Storage migration required: " + ("yes" if flags["storage_migration_required"] else "no"),
+        "Compute migration required: " + ("yes" if flags["compute_migration_required"] else "no"),
+        "Soperator upgrade required: " + ("yes" if flags["soperator_upgrade_required"] else "no"),
         "External node-template upgrade required: "
         + ("yes" if flags["external_node_template_upgrade_required"] else "no"),
         "Target GPU stack remediation required: "
@@ -33796,7 +33907,9 @@ def _soperator_migration_execute_payload(
         access=_non_empty_text(target.get("access")) or "external",
     )
     with ExitStack() as stack:
-        kube_root = Path(stack.enter_context(tempfile.TemporaryDirectory(prefix="nebius-cxcli-kube-")))
+        kube_root = Path(
+            stack.enter_context(tempfile.TemporaryDirectory(prefix="nebius-cxcli-kube-"))
+        )
         kubeconfig_path = kube_root / "config"
         _write_kubeconfig_file(kubeconfig_path, spec)
         execution_payload = copy.deepcopy(payload)
@@ -33840,7 +33953,13 @@ def _soperator_migration_execute_payload(
         "deploy.targets[].validations.mk8s_gpu.* checks, runs the required "
         "Soperator/Slurm smoke validation with a one-task srun job, refreshes "
         "deploy-report.md for MK8s GPU checks, writes migrate-report.md, and "
-        "checkpoints pending gates instead of retiring old resources early."
+        "rechecks completed selected remediation/upgrade/cutover actions "
+        "against live state, retries them if they drift, repeats the final MK8s "
+        "readiness check for accepted external node-template work, verifies the "
+        "target Helm release workloads, retires old source-family Flux "
+        "HelmRelease/Kustomization desired state and Helm release records while "
+        "preserving shared/storage resources, and checkpoints pending gates "
+        "instead of retiring old infrastructure early."
     ),
 )
 def soperator_migrate_command(
@@ -33905,7 +34024,9 @@ def soperator_migrate_command(
         ):
             console.print(line, soft_wrap=True)
         if not dry_run:
-            with _soperator_migration_execute_payload(payload, target_ref=target_ref) as execution_payload:
+            with _soperator_migration_execute_payload(
+                payload, target_ref=target_ref
+            ) as execution_payload:
                 execution_result = execute_soperator_migration(
                     config_path=config_path,
                     target_ref=target_ref,

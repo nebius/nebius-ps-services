@@ -119,7 +119,9 @@ nebius-cxcli bootstrap-ci <config.yaml>
 - `upgrade k8s-version` performs SDK-backed MK8s planning and staged
   Terraform upgrades for Terraform-managed MK8s targets; `upgrade os-image`
   can guide MK8s node-template OS upgrades or generic VM
-  `source_image_family` upgrades from the same config.
+  `source_image_family` upgrades from the same config. MK8s upgrade commands
+  finish with a final MK8s readiness check against the live control plane and
+  selected node groups.
 - GitOps bootstrap/reconcile flows for rendered Flux trees.
 - Bundled MK8s GPU automation for NVIDIA GPU Operator, Network Operator, DCGM metrics, and deploy-time GPU/NCCL validation.
 - Bundled Soperator self-deployment chart entry plus sibling MK8s, SFS, and
@@ -2084,8 +2086,8 @@ to render/apply the Soperator app and to run guarded migration phases.
 | --- | --- | --- |
 | `nebius-cxcli ext-soperator onboard <config.yaml-or-deployments-root>` | Register one existing Nebius MK8s target, discover source Soperator state, choose storage/compute onboarding modes, and write the accepted onboarding plan. | Read-only against the existing cluster; writes local `config.yaml` and `source-soperator-cluster-discovery-report.json`. No-op reruns preserve stable discovery content so unchanged onboarding does not invalidate migration checkpoints. |
 | `nebius-cxcli ext-soperator migrate <config.yaml> --target <target> --dry-run` | Inspect the accepted external-cluster migration plan before any live mutation. | Read-only; validates accepted onboarding and prints the phase plan. |
-| `nebius-cxcli ext-soperator migrate <config.yaml> --target <target> --execute --approve` | Execute approved external-cluster MK8s control-plane/node-template, target GPU stack, storage, compute, Soperator cutover, configured MK8s GPU validations, and required Soperator/Slurm smoke validation when the dry run is accepted. | Mutates only supported migration surfaces, auto-detects source worker node groups, writes a local checkpoint, rechecks completed selected actions against live state on rerun, writes validation detail reports under `generated/reports/`, refreshes `deploy-report.md` for MK8s GPU checks, writes `migrate-report.md`, and stops at guarded pending gates. |
-| `nebius-cxcli upgrade helm-chart <config.yaml> apps:soperator@<target> --to-version <chart-version>` | Upgrade a cxcli-managed Soperator Helm chart row after it is already part of the generated bundle. | Updates the source app version, rerenders, validates, and applies the target Flux bundle. |
+| `nebius-cxcli ext-soperator migrate <config.yaml> --target <target> --execute --approve` | Execute approved external-cluster MK8s control-plane/node-template, target GPU stack, storage, compute, Soperator cutover, configured MK8s GPU validations, and required Soperator/Slurm smoke validation when the dry run is accepted. | Mutates only supported migration surfaces, auto-detects source worker node groups, writes a local checkpoint, rechecks completed selected actions against live state on rerun, verifies external MK8s node-template state, verifies target Helm chart workloads, retires old source-family Flux HelmRelease/Kustomization desired state and Helm release records while preserving shared/storage resources, writes validation detail reports under `generated/reports/`, refreshes `deploy-report.md` for MK8s GPU checks, writes `migrate-report.md`, and stops at guarded pending gates. |
+| `nebius-cxcli upgrade helm-chart <config.yaml> apps:soperator@<target> --to-version <chart-version>` | Upgrade a cxcli-managed Soperator Helm chart row after it is already part of the generated bundle. | Updates the source app version, rerenders, validates, applies the target Flux bundle, and verifies the live Helm release plus rendered Deployment/StatefulSet/DaemonSet workloads. |
 | `nebius-cxcli upgrade k8s-version`, `upgrade node-template`, `upgrade os-image`, and node-layer upgrade commands | Upgrade Terraform-managed MK8s or VM infrastructure underneath a cxcli-managed deployment. | Terraform desired-state updates for managed infra only; they do not manage external onboarded MK8s node groups. |
 
 ### Managed Soperator Clusters
@@ -2130,6 +2132,14 @@ For day-2 upgrades of a cxcli-managed Soperator deployment:
 These `upgrade` commands are desired-state workflows. They run live discovery
 and safety checks, update `config.yaml`, rerender `generated/`, validate the
 bundle, and apply the relevant Terraform or Flux target when not in `--dry-run`.
+For MK8s targets, non-dry runs finish with a final MK8s readiness check that
+re-reads the live control plane and selected node groups, then verifies the
+expected Kubernetes version, node OS image, platform/preset layer, and Nebius
+`drivers_preset` / CUDA stack where that command changed them. This requires
+provider node-group status rather than accepting matching spec fields alone:
+the live node group must show ready, target, and total node counts. If the
+provider also returns outdated-node or reconciliation fields, those must be
+clean before cxcli reports success.
 They do not have `--yes`; `--dry-run` is the non-mutating preview path. See
 [Upgrade](#upgrade) for the full upgrade command contract, disruption policies,
 and examples.
@@ -2411,9 +2421,16 @@ Operator and Network Operator Helm releases; aligned-SFS phases verify the
 filesystems and node-group attachments; final cutover verifies the target
 SlurmCluster and expected NodeSets. If a completed action is no longer
 satisfied, cxcli removes that phase from the local completed set and reruns the
-existing phase handler. Data-copy and retirement phases remain guarded by their
-explicit checkpoints because rerunning them can have customer-data or teardown
-impact.
+existing phase handler. Before reporting completion, cxcli verifies the target
+Soperator Helm release and rendered workloads, then retires stale old
+source-family Flux HelmRelease/Kustomization desired state and Helm release
+records while preserving shared/storage/custom resources. This completion path
+also verifies the external MK8s control plane and discovered Nebius node-group
+provider readiness before the Helm checks; when onboarding selected external
+MK8s node-template changes, that MK8s check also verifies the requested
+Kubernetes version, OS image, and GPU driver preset. Data-copy and old
+infrastructure retirement phases remain guarded by their explicit checkpoints
+because rerunning them can have customer-data or teardown impact.
 
 Approved `--execute` runs print phase-aware `Soperator migration status` lines.
 Storage phases show aligned SFS/PVC copy progress plus MK8s and Slurm
@@ -2466,7 +2483,10 @@ Underlying MK8s infrastructure upgrade commands are also different:
 - Soperator migration owns external Kubernetes minor, node OS image, and
   Nebius-image GPU-stack upgrades selected by onboarding. It uses direct Nebius
   `mk8s cluster update` and `mk8s node-group update` calls, upgrades the
-  control plane first, then updates external node groups one group at a time.
+  control plane first, then updates external node groups one group at a time,
+  and does not report completion until the live control plane and selected node
+  groups match the requested Kubernetes version, OS image, and Nebius
+  `drivers_preset` / CUDA stack.
 - For external node-group template updates, migration uses the same zero-surge
   disruption policy as the managed
   `upgrade node-template --disruption-policy allow-unavailable` path: it
@@ -2630,8 +2650,14 @@ For MK8s Kubernetes version upgrades, cxcli:
 - refuses live node groups that already report a Kubernetes minor above the
   requested target/control-plane version instead of attempting to plan a
   downgrade or hidden skew repair;
-- waits for provider node-group status to report target ready/node counts, no
-  outdated nodes, and no active reconciliation;
+- waits for provider node-group status to report ready, target, and total node
+  counts, plus clean outdated-node and reconciliation fields when the provider
+  returns them;
+- runs a final MK8s readiness check before success by re-reading the live
+  control plane and selected node groups through the SDK, then verifying the
+  requested Kubernetes version has settled;
+- requires provider node-group status rather than accepting matching spec fields alone
+  in the final readiness check;
 - treats GPU validation as a post-upgrade canary phase: after GPU node groups
   settle, cxcli runs the enabled target-scoped deploy validations such as GPU
   stack readiness, GPU Visibility, and NCCL unless skipped;
@@ -2694,7 +2720,9 @@ The rollout order is control plane first, then selected node groups in the same
 CPU/system-before-GPU order as other MK8s upgrades. During a node-group stage,
 cxcli writes the node-group Kubernetes version, OS, and Nebius-image
 `gpu_stack_preset` together, rerenders, validates, runs Terraform plan/apply,
-and waits for the Managed Kubernetes rolling replacement to finish. Leave
+waits for the Managed Kubernetes rolling replacement to finish, and then runs a
+final MK8s readiness check for the live control-plane version plus selected
+node-group version, OS, and Nebius `drivers_preset` / CUDA stack. Leave
 `--node-group` unset to select all managed node groups, or pass one source key
 or live name to narrow the command.
 
@@ -2747,6 +2775,8 @@ For MK8s OS image upgrades, cxcli:
   CPU/system-before-GPU order used by Kubernetes version upgrades;
 - waits for Managed Kubernetes to finish rolling replacement for each selected
   node group before moving on;
+- runs a final MK8s readiness check before success by re-reading selected node
+  groups and verifying their live node-template OS value matches `--to-os`;
 - uses the same disruption policies and drain-timeout defaults as
   `upgrade k8s-version`.
 
@@ -2950,14 +2980,19 @@ nebius-cxcli upgrade helm-chart <config.yaml> apps:<chart>@<target> --to-version
   plan/apply, and Managed Kubernetes rollout wait path as the other MK8s
   upgrade commands. `cpu-preset` targets CPU/system node groups, while
   `gpu-preset` targets GPU node groups.
+- Before success, MK8s node-layer commands run the same final MK8s readiness
+  check as other MK8s upgrade commands, verifying the selected live node
+  groups expose the requested platform, hardware preset, or Nebius
+  `drivers_preset` / CUDA stack.
 - In guided mode, `to_platform`, hardware `to_preset`,
   `to_gpu_stack_preset`, and OS-image prompts are live provider-driven lists
   when Nebius SDK/provider data is available. The optional `node_group` prompt
   stays a simple flag-value prompt; blank keeps `--node-group` unset and
   applies the command's normal group filter.
 - `helm-chart` updates the selected target-scoped `apps.charts[]` row version,
-  rerenders, validates, and applies the selected target's Flux bundle. It has
-  no node-drain flags.
+  rerenders, validates, and applies the selected target's Flux bundle. Its live
+  readiness check requires the selected generated target handoff, then verifies
+  the Helm release and rendered workloads. It has no node-drain flags.
 - Operators can still upgrade manually by editing the required desired-state
   values in `config.yaml`, such as Kubernetes version, OS image, platform,
   preset, GPU stack preset, or chart version, then running `render` and

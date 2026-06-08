@@ -546,8 +546,7 @@ def _assert_soperator_onboard_next_steps(
         "unchanged until you run render and then follow the Soperator next steps below."
     ) in normalized_output
     assert (
-        "unchanged until you run render and then deploy/destroy as needed"
-        not in normalized_output
+        "unchanged until you run render and then deploy/destroy as needed" not in normalized_output
     )
     assert "Next steps:" in output
     assert f"`nebius-cxcli validate {config_arg}`" in output
@@ -560,8 +559,7 @@ def _assert_soperator_onboard_next_steps(
         )
         assert (
             "`nebius-cxcli ext-soperator migrate "
-            f"{config_arg} --target {target_arg} --execute --approve`"
-            in output
+            f"{config_arg} --target {target_arg} --execute --approve`" in output
         )
         assert "after the dry run is accepted" in output
         assert "Do not run `nebius-cxcli deploy` before `ext-soperator migrate`" in output
@@ -677,8 +675,7 @@ def _write_old_soperator_migration_config(
                     "instance_id": "external-cluster",
                     "enabled": True,
                     "repo": (
-                        "oci://registry.example.invalid/nvidia-gpu-operator/chart/"
-                        "gpu-operator"
+                        "oci://registry.example.invalid/nvidia-gpu-operator/chart/gpu-operator"
                     ),
                     "version": "v25.10.0",
                     "namespace": "nvidia-gpu-operator",
@@ -732,8 +729,59 @@ class _FakeSoperatorMigrationCommandRunner:
                         "os": "ubuntu22.04",
                     },
                 },
+                "status": {
+                    "ready_node_count": 1,
+                    "target_node_count": 1,
+                    "node_count": 1,
+                    "outdated_node_count": 0,
+                    "reconciling": False,
+                },
             }
         }
+        self.helm_releases: list[dict[str, object]] = [
+            {
+                "name": "soperator",
+                "namespace": "soperator",
+                "chart": "soperator-4.0.1-ps.1",
+                "app_version": "4.0.1",
+                "status": "deployed",
+            }
+        ]
+        self.helm_manifests: dict[tuple[str, str], str] = {
+            (
+                "soperator",
+                "soperator",
+            ): """
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: soperator-manager
+  namespace: soperator
+spec:
+  replicas: 1
+"""
+        }
+
+    def _upsert_helm_release(
+        self,
+        *,
+        namespace: str,
+        release_name: str,
+        chart: str,
+        app_version: str,
+    ) -> None:
+        replacement = {
+            "name": release_name,
+            "namespace": namespace,
+            "chart": chart,
+            "app_version": app_version,
+            "status": "deployed",
+        }
+        for index, release in enumerate(self.helm_releases):
+            if release.get("name") == release_name and release.get("namespace") == namespace:
+                self.helm_releases[index] = replacement
+                return
+        self.helm_releases.append(replacement)
 
     def __call__(
         self,
@@ -786,12 +834,20 @@ class _FakeSoperatorMigrationCommandRunner:
             )
             if "--file" in command:
                 replacement = json.loads(
-                    Path(command[command.index("--file") + 1]).read_text(
-                        encoding="utf-8"
-                    )
+                    Path(command[command.index("--file") + 1]).read_text(encoding="utf-8")
                 )
                 node_group.clear()
                 node_group.update(replacement)
+                node_group.setdefault(
+                    "status",
+                    {
+                        "ready_node_count": 1,
+                        "target_node_count": 1,
+                        "node_count": 1,
+                        "outdated_node_count": 0,
+                        "reconciling": False,
+                    },
+                )
                 return SoperatorMigrationCommandResult(command, 0, json.dumps(node_group), "")
             spec = node_group.setdefault("spec", {})
             if not isinstance(spec, dict):
@@ -817,6 +873,16 @@ class _FakeSoperatorMigrationCommandRunner:
                 gpu_settings["drivers_preset"] = command[
                     command.index("--template-gpu-settings-drivers-preset") + 1
                 ]
+            node_group.setdefault(
+                "status",
+                {
+                    "ready_node_count": 1,
+                    "target_node_count": 1,
+                    "node_count": 1,
+                    "outdated_node_count": 0,
+                    "reconciling": False,
+                },
+            )
             return SoperatorMigrationCommandResult(command, 0, json.dumps(node_group), "")
         if command[:4] == ("nebius", "mk8s", "cluster", "get"):
             return SoperatorMigrationCommandResult(command, 0, json.dumps(self.cluster), "")
@@ -832,6 +898,57 @@ class _FakeSoperatorMigrationCommandRunner:
             if "--control-plane-version" in command:
                 control_plane["version"] = command[command.index("--control-plane-version") + 1]
             return SoperatorMigrationCommandResult(command, 0, json.dumps(self.cluster), "")
+        if command and command[0] == "helm" and "list" in command:
+            namespace = command[command.index("-n") + 1] if "-n" in command else ""
+            filter_pattern = command[command.index("--filter") + 1] if "--filter" in command else ""
+            releases = []
+            for release in self.helm_releases:
+                if namespace and release.get("namespace") != namespace:
+                    continue
+                if filter_pattern and not re.search(filter_pattern, str(release.get("name") or "")):
+                    continue
+                releases.append(release)
+            return SoperatorMigrationCommandResult(command, 0, json.dumps(releases), "")
+        if command and command[0] == "helm" and "get" in command and "manifest" in command:
+            release_name = command[command.index("manifest") + 1]
+            namespace = command[command.index("-n") + 1] if "-n" in command else ""
+            manifest = self.helm_manifests.get((namespace, release_name), "")
+            if manifest:
+                return SoperatorMigrationCommandResult(command, 0, manifest, "")
+            return SoperatorMigrationCommandResult(command, 1, "", "not found")
+        if command and command[0] == "helm" and "upgrade" in command:
+            release_name = command[command.index("--install") + 1] if "--install" in command else ""
+            namespace = command[command.index("-n") + 1] if "-n" in command else ""
+            version = (
+                command[command.index("--version") + 1] if "--version" in command else "4.0.1-ps.1"
+            )
+            chart = (
+                command[command.index("--install") + 2] if "--install" in command else release_name
+            )
+            chart_name = Path(chart).name or release_name
+            app_version = "4.0.1" if release_name == "soperator" else version
+            chart_version = (
+                "soperator-4.0.1-ps.1" if release_name == "soperator" else f"{chart_name}-{version}"
+            )
+            self._upsert_helm_release(
+                namespace=namespace,
+                release_name=release_name,
+                chart=chart_version,
+                app_version=app_version,
+            )
+            self.helm_manifests.setdefault(
+                (namespace, release_name),
+                f"""
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {release_name}
+  namespace: {namespace}
+spec:
+  replicas: 1
+""",
+            )
+            return SoperatorMigrationCommandResult(command, 0, "{}", "")
         if command[:5] == (
             "kubectl",
             "--context",
@@ -850,15 +967,48 @@ class _FakeSoperatorMigrationCommandRunner:
                                     "name": "node-a",
                                     "labels": {"nebius.com/node-group": "gpu-pool"},
                                 },
-                                "status": {
-                                    "conditions": [{"type": "Ready", "status": "True"}]
-                                },
+                                "status": {"conditions": [{"type": "Ready", "status": "True"}]},
                             }
                         ]
                     }
                 ),
                 "",
             )
+        if (
+            command
+            and command[0] == "kubectl"
+            and "--context" in command
+            and "-n" in command
+            and "get" in command
+            and "-o" in command
+            and command[-1] == "json"
+        ):
+            resource = command[command.index("get") + 1]
+            name = command[command.index("get") + 2]
+            namespace = command[command.index("-n") + 1]
+            if resource in {"deployment", "deploy"}:
+                return SoperatorMigrationCommandResult(
+                    command,
+                    0,
+                    json.dumps(
+                        {
+                            "kind": "Deployment",
+                            "metadata": {
+                                "name": name,
+                                "namespace": namespace,
+                                "generation": 1,
+                            },
+                            "spec": {"replicas": 1},
+                            "status": {
+                                "observedGeneration": 1,
+                                "readyReplicas": 1,
+                                "availableReplicas": 1,
+                                "updatedReplicas": 1,
+                            },
+                        }
+                    ),
+                    "",
+                )
         if command[:7] == (
             "kubectl",
             "--context",
@@ -1591,10 +1741,7 @@ def test_component_field_wizard_configures_planned_vpc_before_mk8s_consumer(
                 entry=entry,
                 full_path_label=full_path_label,
                 provider="project_subnets",
-                args={
-                    "network_id_path": full_path_label.removesuffix("subnet_id")
-                    + "network_id"
-                },
+                args={"network_id_path": full_path_label.removesuffix("subnet_id") + "network_id"},
                 live_choices=[],
             )
         return []
@@ -4740,7 +4887,9 @@ def test_soperator_onboard_interactive_existing_root_requires_confirmation(
     assert "Tenant ID" in result.output
     assert "Project ID" in result.output
     assert "Existing project config detected." in result.output
-    assert "Continue and update the existing config.yaml with Soperator onboarding?" in result.output
+    assert (
+        "Continue and update the existing config.yaml with Soperator onboarding?" in result.output
+    )
     assert "No changes applied." in result.output
     assert config_path.read_text(encoding="utf-8") == original
 
@@ -5224,7 +5373,11 @@ def test_soperator_migrate_execute_runs_checkpointed_preflight(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     config_path = _write_old_soperator_migration_config(tmp_path)
-    monkeypatch.setattr(cli_module, "collect_kubectl_soperator_snapshot", lambda *, kube_context: _old_soperator_snapshot())
+    monkeypatch.setattr(
+        cli_module,
+        "collect_kubectl_soperator_snapshot",
+        lambda *, kube_context: _old_soperator_snapshot(),
+    )
 
     result = runner.invoke(
         app,
@@ -5603,10 +5756,7 @@ def test_soperator_onboard_gpu_cluster_inventory_adds_network_operator(
     payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     onboarding = payload["deploy"]["targets"][0]["soperator_onboarding"]
     assert "remediate-target-gpu-stack" in onboarding["actions"]
-    assert {
-        (row["id"], row["instance_id"])
-        for row in payload["apps"]["charts"]
-    } == {
+    assert {(row["id"], row["instance_id"]) for row in payload["apps"]["charts"]} == {
         ("soperator", "legacy-cluster"),
         ("cert-manager", "legacy-cluster"),
         ("nvidia-gpu-operator", "legacy-cluster"),
