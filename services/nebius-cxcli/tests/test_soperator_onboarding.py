@@ -8,12 +8,13 @@ import pytest
 import nebius_cxcli.soperator_onboarding as soperator_onboarding_module
 from nebius_cxcli.runtime_validation import validate_runtime_payload
 from nebius_cxcli.soperator_onboarding import (
+    ONBOARDING_ACTION_ADOPT_SOPERATOR,
     ONBOARDING_ACTION_APPROVE_MIGRATION,
     ONBOARDING_ACTION_CREATE_ALIGNED_SFS,
     ONBOARDING_ACTION_INSTALL_SOPERATOR,
     ONBOARDING_ACTION_PLAN_COMPUTE_MIGRATION,
     ONBOARDING_ACTION_PLAN_DATA_MIGRATION,
-    ONBOARDING_ACTION_REMEDIATE_TARGET_GPU_STACK,
+    ONBOARDING_ACTION_RECONCILE_TARGET_GPU_STACK,
     ONBOARDING_ACTION_UPGRADE_EXTERNAL_NODE_TEMPLATE,
     ONBOARDING_ACTION_UPGRADE_SOPERATOR,
     ONBOARDING_COMPUTE_MODE_CREATE_ALIGNED_NODE_GROUPS,
@@ -130,6 +131,45 @@ def _target_compatible_legacy_snapshot() -> dict[str, object]:
     return snapshot
 
 
+def _with_provider_node_template_inventory(
+    snapshot: dict[str, object],
+    *,
+    stale_group: str = "",
+    stale_gpu_preset: str = "",
+) -> dict[str, object]:
+    snapshot = json.loads(json.dumps(snapshot))
+    snapshot["provider"] = {
+        "mk8s_cluster": {
+            "id": "mk8scluster-source",
+            "name": "source",
+            "control_plane_version": "1.33",
+        }
+    }
+    node_groups = snapshot["node_groups"]
+    assert isinstance(node_groups, dict)
+    for group_name, raw_group in node_groups.items():
+        assert isinstance(raw_group, dict)
+        node_group_id = f"mk8snodegroup-{group_name}"
+        raw_group["node_group_id"] = node_group_id
+        raw_group["node_group_name"] = group_name
+        labels = raw_group.setdefault("labels", {})
+        assert isinstance(labels, dict)
+        labels.setdefault("nebius.com/node-group-id", node_group_id)
+        gpu_stack_preset = "cuda13.0" if raw_group.get("gpu") is True else ""
+        if group_name == stale_group:
+            gpu_stack_preset = stale_gpu_preset
+        raw_group["provider"] = {
+            "node_group_id": node_group_id,
+            "node_group_name": group_name,
+            "node_template": {
+                "k8s_version": "1.33",
+                "os": "ubuntu24.04",
+                "gpu_stack_preset": gpu_stack_preset,
+            },
+        }
+    return snapshot
+
+
 def test_collect_snapshot_groups_nodes_by_unique_nebius_node_group_id(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -189,6 +229,142 @@ def test_collect_snapshot_groups_nodes_by_unique_nebius_node_group_id(
     assert snapshot["node_groups"]["mk8snodegroup-controller"]["labels"][
         "slurm.nebius.ai/nodeset"
     ] == "controller"
+
+
+def test_collect_snapshot_discovers_soperator_helm_releases_by_namespace(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    helm_commands: list[list[str]] = []
+
+    monkeypatch.setattr(
+        soperator_onboarding_module,
+        "_kubectl_json",
+        lambda *_args, **_kwargs: {"items": []},
+    )
+
+    def fake_helm_json(cmd, *_args, **_kwargs):  # type: ignore[no-untyped-def]
+        helm_commands.append(list(cmd))
+        if "-n" in cmd and cmd[cmd.index("-n") + 1] == "flux-system":
+            return [
+                {
+                    "name": "flux-system-soperator-fluxcd",
+                    "namespace": "flux-system",
+                    "chart": "helm-soperator-2.0.5",
+                    "app_version": "2.0.5",
+                    "status": "deployed",
+                }
+            ]
+        return []
+
+    monkeypatch.setattr(soperator_onboarding_module, "_helm_json", fake_helm_json)
+
+    snapshot = collect_kubectl_soperator_snapshot(kube_context="ctx")
+
+    assert snapshot["helm_releases"] == [
+        {
+            "name": "flux-system-soperator-fluxcd",
+            "namespace": "flux-system",
+            "chart": "helm-soperator-2.0.5",
+            "app_version": "2.0.5",
+            "status": "deployed",
+        }
+    ]
+    assert helm_commands
+    assert all("-A" not in cmd for cmd in helm_commands)
+    assert {
+        cmd[cmd.index("-n") + 1] for cmd in helm_commands if "-n" in cmd
+    } == {
+        "soperator",
+        "soperator-system",
+        "flux-system",
+        "nvidia-gpu-operator",
+        "nvidia-network-operator",
+    }
+    assert snapshot["gpu_stack"]["helm_releases"] == []
+
+
+def test_collect_snapshot_discovers_gpu_stack_helm_releases_and_policies(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_kubectl_json(cmd, *_args, **_kwargs):  # type: ignore[no-untyped-def]
+        if cmd[:5] == ["kubectl", "--context", "ctx", "get", "clusterpolicy,nicclusterpolicy"]:
+            return {
+                "items": [
+                    {
+                        "kind": "ClusterPolicy",
+                        "metadata": {"name": "cluster-policy"},
+                        "status": {"state": "ready"},
+                    },
+                    {
+                        "kind": "NicClusterPolicy",
+                        "metadata": {"name": "nic-cluster-policy"},
+                        "status": {"state": "ready"},
+                    },
+                ]
+            }
+        return {"items": []}
+
+    def fake_helm_json(cmd, *_args, **_kwargs):  # type: ignore[no-untyped-def]
+        if "-n" not in cmd:
+            return []
+        namespace = cmd[cmd.index("-n") + 1]
+        if namespace == "nvidia-gpu-operator":
+            return [
+                {
+                    "name": "gpu-operator",
+                    "namespace": "nvidia-gpu-operator",
+                    "chart": "gpu-operator-v25.10.0",
+                    "app_version": "v25.10.0",
+                    "status": "deployed",
+                }
+            ]
+        if namespace == "nvidia-network-operator":
+            return [
+                {
+                    "name": "network-operator",
+                    "namespace": "nvidia-network-operator",
+                    "chart": "network-operator-25.7.0",
+                    "app_version": "v25.7.0",
+                    "status": "deployed",
+                }
+            ]
+        return []
+
+    monkeypatch.setattr(soperator_onboarding_module, "_kubectl_json", fake_kubectl_json)
+    monkeypatch.setattr(soperator_onboarding_module, "_helm_json", fake_helm_json)
+
+    snapshot = collect_kubectl_soperator_snapshot(kube_context="ctx")
+
+    assert snapshot["gpu_stack"] == {
+        "helm_releases": [
+            {
+                "name": "gpu-operator",
+                "namespace": "nvidia-gpu-operator",
+                "chart": "gpu-operator-v25.10.0",
+                "app_version": "v25.10.0",
+                "status": "deployed",
+            },
+            {
+                "name": "network-operator",
+                "namespace": "nvidia-network-operator",
+                "chart": "network-operator-25.7.0",
+                "app_version": "v25.7.0",
+                "status": "deployed",
+            },
+        ],
+        "policies": [
+            {
+                "kind": "ClusterPolicy",
+                "metadata": {"name": "cluster-policy"},
+                "status": {"state": "ready"},
+            },
+            {
+                "kind": "NicClusterPolicy",
+                "metadata": {"name": "nic-cluster-policy"},
+                "status": {"state": "ready"},
+            },
+        ],
+    }
 
 
 def test_collect_snapshot_records_worker_nodeset_topology(
@@ -397,7 +573,7 @@ def test_soperator_onboarding_analyzer_offers_upgrade_for_older_release() -> Non
     assert report.source_version == "3.0.5"
     assert report.migration_profile_id == "v3-to-target"
     assert ONBOARDING_ACTION_UPGRADE_SOPERATOR in {action.id for action in report.actions}
-    assert ONBOARDING_ACTION_REMEDIATE_TARGET_GPU_STACK in {
+    assert ONBOARDING_ACTION_RECONCILE_TARGET_GPU_STACK in {
         action.id for action in report.actions if action.selected
     }
     assert ONBOARDING_ACTION_PLAN_COMPUTE_MIGRATION in {action.id for action in report.actions}
@@ -446,11 +622,92 @@ def test_soperator_onboarding_analyzer_plans_gpu_stack_remediation_without_manua
     )
 
     selected_action_ids = {action.id for action in report.actions if action.selected}
-    assert ONBOARDING_ACTION_REMEDIATE_TARGET_GPU_STACK in selected_action_ids
+    assert ONBOARDING_ACTION_RECONCILE_TARGET_GPU_STACK in selected_action_ids
     assert any(
-        finding.layer == "gpu-rdma" and finding.status == "remediation-planned"
+        finding.layer == "gpu-stack" and finding.status == "reconcile-planned"
         for finding in report.findings
     )
+    assert any(
+        finding.layer == "gpu-rdma" and finding.status == "validation-planned"
+        for finding in report.findings
+    )
+
+
+def test_soperator_onboarding_analyzer_verifies_healthy_live_gpu_stack() -> None:
+    snapshot = _snapshot(
+        release={
+            "name": "soperator",
+            "namespace": "soperator",
+            "chart": "soperator-4.0.1-ps.1",
+            "app_version": "4.0.1",
+            "status": "deployed",
+        }
+    )
+    gpu_group = snapshot["node_groups"]["h100"]  # type: ignore[index]
+    gpu_group["labels"].update(  # type: ignore[index,union-attr]
+        {
+            "nebius.com/drivers-preset": "cuda13.0",
+            "nebius.com/nvidia_driver_version": "580.126.09-1ubuntu1",
+            "nebius.com/cuda_version": "13.0.3-1",
+        }
+    )
+    snapshot["gpu_stack"] = {
+        "helm_releases": [
+            {
+                "name": "gpu-operator",
+                "namespace": "nvidia-gpu-operator",
+                "chart": "gpu-operator-v25.10.0",
+                "app_version": "v25.10.0",
+                "status": "deployed",
+            },
+            {
+                "name": "network-operator",
+                "namespace": "nvidia-network-operator",
+                "chart": "network-operator-25.7.0",
+                "app_version": "v25.7.0",
+                "status": "deployed",
+            },
+        ],
+        "policies": [
+            {
+                "kind": "ClusterPolicy",
+                "metadata": {"name": "cluster-policy"},
+                "status": {"state": "ready"},
+            },
+            {
+                "kind": "NicClusterPolicy",
+                "metadata": {"name": "nic-cluster-policy"},
+                "status": {"state": "ready"},
+            },
+        ],
+    }
+
+    report = analyze_soperator_onboarding_snapshot(
+        snapshot,
+        target_ref="cluster1",
+        pinned_chart_version="4.0.1-ps.1",
+        pinned_app_version="4.0.1",
+    )
+
+    gpu_stack = next(finding for finding in report.findings if finding.layer == "gpu-stack")
+    assert gpu_stack.status == "verified"
+    assert gpu_stack.severity == "info"
+    assert "not a failure signal" in gpu_stack.message
+    assert gpu_stack.evidence is not None
+    assert gpu_stack.evidence["gpu_stack_verified"] is True
+    assert gpu_stack.evidence["gpu_allocatable_node_groups"] == ["h100"]
+    assert gpu_stack.evidence["rdma_allocatable_node_groups"] == ["h100"]
+    assert gpu_stack.evidence["driver_presets"] == ["cuda13.0"]
+    assert gpu_stack.evidence["cluster_policy_ready"] is True
+    assert gpu_stack.evidence["nic_cluster_policy_ready"] is True
+    assert gpu_stack.evidence["gpu_operator_release"]["chart"] == "gpu-operator-v25.10.0"
+    assert (
+        gpu_stack.evidence["network_operator_release"]["chart"]
+        == "network-operator-25.7.0"
+    )
+    assert ONBOARDING_ACTION_RECONCILE_TARGET_GPU_STACK in {
+        action.id for action in report.actions if action.selected
+    }
 
 
 def test_soperator_onboarding_modes_make_compute_only_plan_consistent() -> None:
@@ -510,7 +767,7 @@ def test_soperator_onboarding_analyzer_reuses_target_compatible_legacy_layout() 
     assert report.migration_profile_id == "legacy-v1-to-target"
     assert ONBOARDING_ACTION_UPGRADE_SOPERATOR in selected_action_ids
     assert ONBOARDING_ACTION_UPGRADE_EXTERNAL_NODE_TEMPLATE in selected_action_ids
-    assert ONBOARDING_ACTION_REMEDIATE_TARGET_GPU_STACK in selected_action_ids
+    assert ONBOARDING_ACTION_RECONCILE_TARGET_GPU_STACK in selected_action_ids
     assert ONBOARDING_ACTION_CREATE_ALIGNED_SFS not in selected_action_ids
     assert ONBOARDING_ACTION_PLAN_DATA_MIGRATION not in selected_action_ids
     assert ONBOARDING_ACTION_PLAN_COMPUTE_MIGRATION not in selected_action_ids
@@ -541,6 +798,95 @@ def test_soperator_onboarding_analyzer_reuses_target_compatible_legacy_layout() 
         phase for phase in report.migration_plan if phase.id == "final-control-plane-cutover"
     )
     assert final_phase.title == "Final Soperator chart cutover"
+
+
+def test_soperator_onboarding_skips_external_node_template_when_provider_inventory_matches() -> None:
+    report = analyze_soperator_onboarding_snapshot(
+        _with_provider_node_template_inventory(_target_compatible_legacy_snapshot()),
+        target_ref="cluster1",
+        pinned_chart_version="4.0.1-ps.1",
+        pinned_app_version="4.0.1",
+    )
+
+    selected_action_ids = {action.id for action in report.actions if action.selected}
+    assert report.state == "existing-soperator-supported"
+    assert ONBOARDING_ACTION_UPGRADE_SOPERATOR in selected_action_ids
+    assert ONBOARDING_ACTION_UPGRADE_EXTERNAL_NODE_TEMPLATE not in selected_action_ids
+    assert "external-node-template-upgrade" not in [
+        phase.id for phase in report.migration_plan
+    ]
+    finding = next(
+        finding
+        for finding in report.findings
+        if finding.layer == "mk8s-node-template"
+        and finding.status == "target-compatible"
+    )
+    assert finding.evidence is not None
+    assert finding.evidence["matched_node_group_count"] == 6
+
+
+def test_soperator_onboarding_keeps_external_node_template_when_provider_inventory_is_partial() -> None:
+    snapshot = _with_provider_node_template_inventory(
+        _target_compatible_legacy_snapshot(),
+        stale_group="worker-cpu",
+        stale_gpu_preset="cuda12.4",
+    )
+
+    report = analyze_soperator_onboarding_snapshot(
+        snapshot,
+        target_ref="cluster1",
+        pinned_chart_version="4.0.1-ps.1",
+        pinned_app_version="4.0.1",
+    )
+
+    selected_action_ids = {action.id for action in report.actions if action.selected}
+    assert ONBOARDING_ACTION_UPGRADE_EXTERNAL_NODE_TEMPLATE in selected_action_ids
+    assert "external-node-template-upgrade" in [
+        phase.id for phase in report.migration_plan
+    ]
+    finding = next(
+        finding
+        for finding in report.findings
+        if finding.layer == "mk8s-node-template"
+        and finding.status == "remediation-planned"
+    )
+    assert finding.evidence is not None
+    remaining = finding.evidence["remaining_node_groups"]
+    assert remaining[0]["node_group"] == "worker-cpu"
+    assert "CPU node group still has GPU driver preset cuda12.4" in remaining[0]["reasons"]
+
+
+def test_soperator_onboarding_keeps_external_node_template_when_provider_collection_errors() -> None:
+    snapshot = _with_provider_node_template_inventory(_target_compatible_legacy_snapshot())
+    snapshot["provider_collection_errors"] = [
+        {
+            "command": "nebius mk8s cluster/node-group inventory",
+            "message": "partial provider inventory",
+        }
+    ]
+
+    report = analyze_soperator_onboarding_snapshot(
+        snapshot,
+        target_ref="cluster1",
+        pinned_chart_version="4.0.1-ps.1",
+        pinned_app_version="4.0.1",
+    )
+
+    selected_action_ids = {action.id for action in report.actions if action.selected}
+    assert ONBOARDING_ACTION_UPGRADE_EXTERNAL_NODE_TEMPLATE in selected_action_ids
+    finding = next(
+        finding
+        for finding in report.findings
+        if finding.layer == "mk8s-node-template"
+        and finding.status == "remediation-planned"
+    )
+    assert finding.evidence is not None
+    assert finding.evidence["provider_collection_errors"] == [
+        {
+            "command": "nebius mk8s cluster/node-group inventory",
+            "message": "partial provider inventory",
+        }
+    ]
 
 
 def test_soperator_onboarding_modes_follow_analyzer_for_compatible_layout() -> None:
@@ -633,6 +979,134 @@ def test_soperator_onboarding_report_from_config_respects_selected_modes() -> No
     assert "storage" not in approval_action["title"].lower()
 
 
+def test_soperator_onboarding_report_from_config_honors_accepted_action_contract() -> None:
+    payload = _onboarding_payload()
+    target = payload["deploy"]["targets"][0]  # type: ignore[index]
+    onboarding = target["soperator_onboarding"]  # type: ignore[index]
+    onboarding.update(  # type: ignore[union-attr]
+        {
+            "state": "existing-soperator-target",
+            "storage_mode": ONBOARDING_STORAGE_MODE_KEEP_EXISTING,
+            "compute_mode": ONBOARDING_COMPUTE_MODE_KEEP_EXISTING,
+            "actions": [
+                ONBOARDING_ACTION_RECONCILE_TARGET_GPU_STACK,
+                ONBOARDING_ACTION_ADOPT_SOPERATOR,
+            ],
+            "source_version": "4.0.1",
+            "target_version": "4.0.1-ps.1",
+            "migration_profile_id": "v4-to-target",
+        }
+    )
+    onboarding["analysis_fingerprint"] = soperator_onboarding_fingerprint(  # type: ignore[index]
+        payload,
+        target_ref="cluster1",
+    )
+
+    report = build_soperator_onboarding_report_from_config(
+        payload,
+        target_ref="cluster1",
+        pinned_chart_version="4.0.1-ps.1",
+        pinned_app_version="4.0.1",
+    )
+
+    selected_actions = [
+        action["id"] for action in report["actions"] if action.get("selected") is True
+    ]
+    assert selected_actions == [
+        ONBOARDING_ACTION_RECONCILE_TARGET_GPU_STACK,
+        ONBOARDING_ACTION_ADOPT_SOPERATOR,
+    ]
+    assert report["state"] == "existing-soperator-target"
+    assert report["source_version"] == "4.0.1"
+    assert report["target_version"] == "4.0.1-ps.1"
+    assert report["migration_profile_id"] == "v4-to-target"
+    assert report["migration_plan"] == []
+    assert not any(action["id"] == ONBOARDING_ACTION_UPGRADE_SOPERATOR for action in report["actions"])
+    assert not any(
+        action["id"] == ONBOARDING_ACTION_UPGRADE_EXTERNAL_NODE_TEMPLATE
+        for action in report["actions"]
+    )
+
+
+def test_onboarding_report_writer_prefers_matching_source_discovery_report(tmp_path) -> None:
+    payload = _onboarding_payload()
+    target = payload["deploy"]["targets"][0]  # type: ignore[index]
+    onboarding = target["soperator_onboarding"]  # type: ignore[index]
+    onboarding.update(  # type: ignore[union-attr]
+        {
+            "state": "existing-soperator-target",
+            "storage_mode": ONBOARDING_STORAGE_MODE_KEEP_EXISTING,
+            "compute_mode": ONBOARDING_COMPUTE_MODE_KEEP_EXISTING,
+            "actions": [
+                ONBOARDING_ACTION_RECONCILE_TARGET_GPU_STACK,
+                ONBOARDING_ACTION_ADOPT_SOPERATOR,
+            ],
+            "source_version": "4.0.1",
+            "target_version": "4.0.1-ps.1",
+            "migration_profile_id": "v4-to-target",
+        }
+    )
+    onboarding["analysis_fingerprint"] = soperator_onboarding_fingerprint(  # type: ignore[index]
+        payload,
+        target_ref="cluster1",
+    )
+    source_report = {
+        "report": {
+            "schema": "nebius-cxcli-soperator-onboarding/v2",
+            "target_ref": "cluster1",
+            "analyzed_at": "2026-06-09T00:00:00Z",
+            "state": "existing-soperator-target",
+            "fingerprint": "live-fingerprint",
+            "findings": [
+                {
+                    "layer": "gpu-stack",
+                    "status": "verified",
+                    "severity": "info",
+                    "message": "Live GPU stack evidence is healthy.",
+                    "action_id": ONBOARDING_ACTION_RECONCILE_TARGET_GPU_STACK,
+                }
+            ],
+            "actions": [
+                {
+                    "id": ONBOARDING_ACTION_RECONCILE_TARGET_GPU_STACK,
+                    "title": "Reconcile target MK8s GPU stack and deploy-time validations",
+                    "layer": "gpu-stack",
+                    "required": True,
+                    "selected": True,
+                    "disruptive": False,
+                    "reason": "Live target GPU stack is healthy and remains selected.",
+                },
+                {
+                    "id": ONBOARDING_ACTION_ADOPT_SOPERATOR,
+                    "title": "Adopt compatible existing Soperator release",
+                    "layer": "soperator",
+                    "required": False,
+                    "selected": True,
+                    "disruptive": False,
+                    "reason": "Existing target release can be adopted.",
+                },
+            ],
+            "source_version": "4.0.1",
+            "target_version": "4.0.1-ps.1",
+            "migration_profile_id": "v4-to-target",
+            "remediation": [],
+            "migration_plan": [],
+        }
+    }
+    (tmp_path / SOURCE_SOPERATOR_DISCOVERY_REPORT_NAME).write_text(
+        json.dumps(source_report),
+        encoding="utf-8",
+    )
+
+    written = write_soperator_onboarding_reports(payload, tmp_path / "generated")
+
+    report = json.loads(written[0].read_text(encoding="utf-8"))
+    assert report["findings"][0]["status"] == "verified"
+    assert report["actions"][0]["id"] == ONBOARDING_ACTION_RECONCILE_TARGET_GPU_STACK
+    assert report["actions"][1]["id"] == ONBOARDING_ACTION_ADOPT_SOPERATOR
+    assert report["migration_plan"] == []
+
+
 def test_soperator_onboarding_analyzer_accepts_official_helm_soperator_chart_identity() -> None:
     report = analyze_soperator_onboarding_snapshot(
         _snapshot(
@@ -716,6 +1190,46 @@ def test_soperator_onboarding_analyzer_accepts_exact_target_release() -> None:
     assert report.migration_profile_id == "v4-to-target"
     assert not report.migration_plan
     assert any(finding.status == "target-version" for finding in report.findings)
+
+
+def test_soperator_onboarding_analyzer_ignores_shadowed_stale_source_record() -> None:
+    snapshot = _snapshot()
+    snapshot["helm_releases"] = [
+        {
+            "name": "soperator",
+            "namespace": "soperator",
+            "chart": "soperator-4.0.1-ps.1",
+            "app_version": "4.0.1",
+            "revision": "11",
+            "status": "deployed",
+        },
+        {
+            "name": "soperator",
+            "namespace": "soperator",
+            "chart": "helm-slurm-cluster-2.0.5",
+            "app_version": "2.0.5",
+            "revision": "1",
+            "status": "deployed",
+        },
+    ]
+    snapshot["crds"] = ["slurmclusters.slurm.nebius.ai"]
+    snapshot["namespaces"] = ["soperator"]
+
+    report = analyze_soperator_onboarding_snapshot(
+        snapshot,
+        target_ref="cluster1",
+        pinned_chart_version="4.0.1-ps.1",
+        pinned_app_version="4.0.1",
+    )
+
+    assert report.state == "existing-soperator-target"
+    assert report.source_version == "4.0.1"
+    assert report.migration_profile_id == "v4-to-target"
+    assert any(
+        finding.status == "stale-source-release" and finding.severity == "info"
+        for finding in report.findings
+    )
+    assert not any(finding.status == "source-version-required" for finding in report.findings)
 
 
 @pytest.mark.parametrize("live_chart", ["soperator-4.0.1", "soperator-4.0.1-ps.0"])
@@ -1092,7 +1606,7 @@ def _onboarding_payload() -> dict[str, object]:
                         "actions": [
                             ONBOARDING_ACTION_INSTALL_SOPERATOR,
                             ONBOARDING_ACTION_CREATE_ALIGNED_SFS,
-                            ONBOARDING_ACTION_REMEDIATE_TARGET_GPU_STACK,
+                            ONBOARDING_ACTION_RECONCILE_TARGET_GPU_STACK,
                         ],
                     },
                 }
@@ -1185,6 +1699,21 @@ def test_onboarding_acceptance_refuses_unknown_analysis_even_with_current_finger
         validate_soperator_onboarding_acceptance(payload, target_ref="cluster1")
 
 
+def test_onboarding_acceptance_rejects_unsupported_action_even_with_current_fingerprint() -> None:
+    payload = _onboarding_payload()
+    target = payload["deploy"]["targets"][0]  # type: ignore[index]
+    onboarding = target["soperator_onboarding"]  # type: ignore[index]
+    onboarding["actions"] = ["remediate-target-gpu-stack"]
+    onboarding["analysis_fingerprint"] = soperator_onboarding_fingerprint(
+        payload,
+        target_ref="cluster1",
+    )
+
+    assert not soperator_onboarding_is_accepted(payload, target_ref="cluster1")
+    with pytest.raises(ValueError, match="unsupported .*remediate-target-gpu-stack"):
+        validate_soperator_onboarding_acceptance(payload, target_ref="cluster1")
+
+
 def test_onboarding_fingerprint_allows_day2_soperator_chart_pin_changes() -> None:
     payload = _onboarding_payload()
     original = soperator_onboarding_fingerprint(payload, target_ref="cluster1")
@@ -1253,6 +1782,46 @@ def test_onboarding_fingerprint_ignores_ephemeral_helm_release_metadata() -> Non
 
 def test_runtime_validation_accepts_external_soperator_target_without_mk8s_infra() -> None:
     validate_runtime_payload(_onboarding_payload())
+
+
+def test_runtime_validation_accepts_soperator_worker_rollout_config() -> None:
+    payload = _onboarding_payload()
+    target = payload["deploy"]["targets"][0]  # type: ignore[index]
+    onboarding = target["soperator_onboarding"]  # type: ignore[index]
+    onboarding["node_template_upgrade"] = {  # type: ignore[index]
+        "rollout": {
+            "strategy": "safe-surge",
+            "worker_wave_percent": 1,
+            "max_parallel_worker_groups": 10,
+            "worker_group_strategy": {
+                "max_surge_count": 2,
+                "max_unavailable_count": 0,
+                "drain_timeout": "30m",
+            },
+        }
+    }
+    onboarding["analysis_fingerprint"] = soperator_onboarding_fingerprint(  # type: ignore[index]
+        payload,
+        target_ref="cluster1",
+    )
+
+    validate_runtime_payload(payload)
+
+
+def test_runtime_validation_rejects_soperator_worker_rollout_conflicting_budget() -> None:
+    payload = _onboarding_payload()
+    target = payload["deploy"]["targets"][0]  # type: ignore[index]
+    onboarding = target["soperator_onboarding"]  # type: ignore[index]
+    onboarding["node_template_upgrade"] = {  # type: ignore[index]
+        "rollout": {
+            "strategy": "safe-surge",
+            "worker_wave_groups": 1,
+            "worker_wave_percent": 1,
+        }
+    }
+
+    with pytest.raises(ValueError, match="must set only one"):
+        validate_runtime_payload(payload)
 
 
 def test_onboarding_report_writer_persists_target_report(tmp_path) -> None:

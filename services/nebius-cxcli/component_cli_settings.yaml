@@ -946,10 +946,14 @@ components:
                         enabled: true
                         storage:
                           size: 128Gi
-                          storageClassName: slurm-local-pv
+                          storageClassName: compute-csi-default-sc
                           volumeClaimTemplate:
                             accessModes:
-                              - ReadWriteMany
+                              - ReadWriteOnce
+                            resources:
+                              requests:
+                                storage: 128Gi
+                            storageClassName: compute-csi-default-sc
                       slurmConfig:
                         accountingStorageTRES: CPU,Mem,Node,VMem
                   volume:
@@ -1460,10 +1464,14 @@ components:
                         enabled: true
                         storage:
                           size: 128Gi
-                          storageClassName: slurm-local-pv
+                          storageClassName: compute-csi-default-sc
                           volumeClaimTemplate:
                             accessModes:
-                              - ReadWriteMany
+                              - ReadWriteOnce
+                            resources:
+                              requests:
+                                storage: 128Gi
+                            storageClassName: compute-csi-default-sc
                   volume:
                     accounting:
                       enabled: true
@@ -2047,10 +2055,14 @@ components:
                         enabled: true
                         storage:
                           size: 128Gi
-                          storageClassName: slurm-local-pv
+                          storageClassName: compute-csi-default-sc
                           volumeClaimTemplate:
                             accessModes:
-                              - ReadWriteMany
+                              - ReadWriteOnce
+                            resources:
+                              requests:
+                                storage: 128Gi
+                            storageClassName: compute-csi-default-sc
                   volume:
                     accounting:
                       enabled: true

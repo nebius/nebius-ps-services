@@ -4,6 +4,8 @@ All notable changes to this chart are tracked here.
 
 ## [Unreleased]
 
+## [soperator-chart-v4.0.1-ps.1] - 2026-06-11
+
 - Made the upstream sync `--report` changed-file summary use readable status
   labels such as `modified` and `new` instead of raw Git short-status codes.
 - Fixed upstream sync Helm validation on clean GitHub runners by having
@@ -418,3 +420,4 @@ All notable changes to this chart are tracked here.
 - Raised the default 8-GPU worker resources to `64` CPU, `512Gi` memory, and
   `50Gi` ephemeral storage, and aligned GPU examples and Slurm topology with
   that production-oriented default.
+

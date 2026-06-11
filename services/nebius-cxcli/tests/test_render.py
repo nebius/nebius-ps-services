@@ -1232,8 +1232,12 @@ def test_render_local_soperator_chart_source_writes_static_manifest(tmp_path: Pa
     assert slurm_cluster["spec"]["slurmNodes"]["accounting"]["mariadbOperator"]["enabled"] is True
     assert slurm_cluster["spec"]["slurmNodes"]["accounting"]["mariadbOperator"]["storage"] == {
         "size": "128Gi",
-        "storageClassName": "slurm-local-pv",
-        "volumeClaimTemplate": {"accessModes": ["ReadWriteMany"]},
+        "storageClassName": "compute-csi-default-sc",
+        "volumeClaimTemplate": {
+            "accessModes": ["ReadWriteOnce"],
+            "resources": {"requests": {"storage": "128Gi"}},
+            "storageClassName": "compute-csi-default-sc",
+        },
     }
     assert slurm_cluster["spec"]["sConfigController"]["runAsUid"] == 0
     assert slurm_cluster["spec"]["sConfigController"]["runAsGid"] == 0

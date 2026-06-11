@@ -13,8 +13,12 @@ from typing import Any
 from urllib.parse import parse_qsl, quote, urlencode, urljoin, urlparse, urlunparse
 
 from .component_instances import component_instance_id, component_instance_label, component_type_id
-from .component_sources import component_output_root_name, load_component_sources
-from .component_wiring import resolved_component_row
+from .component_sources import (
+    component_input_binding_ref,
+    component_output_root_name,
+    load_component_sources,
+)
+from .component_wiring import resolved_component_row, row_input_bindings
 from .components import ComponentEntry, component_entries, component_lookup
 from .deploy_targets import enabled_cluster_target_refs
 from .deploy_validation_report import (
@@ -391,6 +395,22 @@ def _component_status_report_line(entry: ComponentEntry, row: Mapping[str, Any])
     return f"  - Resource: `{status.kind}`"
 
 
+def _component_binding_report_line(
+    entry: ComponentEntry,
+    row: Mapping[str, Any],
+    *,
+    field_label: str,
+) -> str:
+    bindings = (*entry.input_bindings, *row_input_bindings(row, field_label=field_label))
+    if not bindings:
+        return ""
+    formatted = [
+        f"`{binding.target_path} <- {component_input_binding_ref(binding)}`"
+        for binding in bindings
+    ]
+    return f"  - Bindings: {', '.join(formatted)}"
+
+
 def _infra_component_report_markdown_lines(config: Any) -> list[str]:
     payload_data = to_plain_data(config)
     if not isinstance(payload_data, dict):
@@ -413,6 +433,13 @@ def _infra_component_report_markdown_lines(config: Any) -> list[str]:
             status_line = _component_status_report_line(entry, row)
             if status_line:
                 lines.append(status_line)
+            binding_line = _component_binding_report_line(
+                entry,
+                row,
+                field_label=f"infra component '{label}'",
+            )
+            if binding_line:
+                lines.append(binding_line)
             if input_pairs:
                 lines.append(f"  - Inputs: {_format_report_pairs(input_pairs)}")
     if not rendered:
@@ -1241,7 +1268,6 @@ def _build_payload(config: Any, paths: ProjectPaths) -> dict[str, dict]:
             "enabled": _rows_enabled(infra_rows.get(entry.id, [])),
         }
         for entry in component_entries("infra")
-        if entry.status is not None
     ]
     app_component_statuses = [
         {

@@ -14,6 +14,7 @@ from typing import Any
 
 from .component_instances import component_instance_id, component_type_id
 from .config_loader import dump_yaml
+from .duration_utils import parse_go_duration_seconds
 from .mk8s_node_groups import Mk8sNodeGroup, iter_node_groups
 
 MK8S_COMPONENT_ID = "mk8s"
@@ -33,7 +34,6 @@ MIN_ROLLOUT_WAIT_SECONDS = 3600
 ROLLOUT_WAIT_SECONDS_PER_NODE = 600
 ALLOW_UNAVAILABLE_DRAIN_TIMEOUT_SECONDS = 1800
 FORCE_DELETE_DRAIN_TIMEOUT_SECONDS = 600
-GO_DURATION_RE = re.compile(r"(?P<value>[0-9]+)(?P<unit>ns|us|µs|ms|s|m|h)")
 PDB_BLOCKER_KIND = "pdb-blocker"
 PREFLIGHT_INSPECTION_FAILED_KIND = "preflight-inspection-failed"
 UNMANAGED_POD_KIND = "unmanaged-pod"
@@ -362,38 +362,6 @@ def validate_disruption_policy(value: str) -> str:
         allowed = "|".join(sorted(DISRUPTION_POLICIES))
         raise ValueError(f"--disruption-policy must be one of {allowed}.")
     return policy
-
-
-def parse_go_duration_seconds(value: str) -> int:
-    """Parse the Go-style duration subset used by cxcli upgrade flags."""
-
-    raw = _text(value)
-    if not raw:
-        raise ValueError("Duration must not be empty.")
-    position = 0
-    total_ns = 0
-    unit_ns = {
-        "ns": 1,
-        "us": 1_000,
-        "µs": 1_000,
-        "ms": 1_000_000,
-        "s": 1_000_000_000,
-        "m": 60 * 1_000_000_000,
-        "h": 60 * 60 * 1_000_000_000,
-    }
-    for match in GO_DURATION_RE.finditer(raw):
-        if match.start() != position:
-            raise ValueError(
-                f"Invalid Go-style duration '{value}'. Use values such as 10m, 30m, or 1h."
-            )
-        total_ns += int(match.group("value")) * unit_ns[match.group("unit")]
-        position = match.end()
-    if position != len(raw) or total_ns <= 0:
-        raise ValueError(
-            f"Invalid Go-style duration '{value}'. Use values such as 10m, 30m, or 1h."
-        )
-    seconds = total_ns // 1_000_000_000
-    return max(1, seconds) if total_ns else 0
 
 
 def _format_duration(seconds: int | None) -> str:

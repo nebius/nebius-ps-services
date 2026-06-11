@@ -6,6 +6,120 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Added MK8s VPC subnet capacity guidance and validation. The wizard now warns
+  when a selected explicit subnet CIDR cannot fit the entered node count or
+  autoscaling maximum, and `validate` fails live or planned explicit subnets
+  that do not provide enough `/24` Pod allocation blocks plus rolling-update
+  headroom, including planned VPC subnet bindings on explicit node-group subnet
+  overrides. The message also clarifies that
+  `inputs.cluster.kube_network.service_cidrs` is Service ClusterIP space, not
+  Pod IP space.
+- Fixed VPC networking preflight and provider-option metadata for existing
+  explicit subnets created from prefix allocation requests such as `cidr: /16`;
+  cxcli now uses the resolved live subnet CIDR instead of treating the prefix
+  request as a malformed pool CIDR.
+- Fixed generated deploy reports so the standalone `infra:vpc` component appears
+  in the infra component status list and consuming infra rows show their
+  row-level planned VPC network/subnet bindings.
+- Improved Soperator-owned Slurm NCCL validation. The Soperator validation now
+  replaces the old one-rank smoke with one Slurm-owned
+  `mpirun /usr/bin/all_reduce_perf_mpi` benchmark that uses two idle GPU Slurm
+  nodes when available and otherwise uses the only idle multi-GPU Slurm node,
+  parses the 2G/4G/8G large-message `busbw` rows, records
+  `avg_large_message_bus_bandwidth_gbps` plus per-size bandwidths in the JSON
+  check, and includes that value in deploy/migration summaries when Kubernetes
+  NCCL is skipped because Soperator workers already own the Ready GPUs.
+  Single-GPU-only Slurm clusters report the Slurm NCCL benchmark as skipped.
+- Improved external Soperator migration completion handoff. After a fully
+  completed `ext-soperator migrate --execute`, cxcli now performs a live
+  post-migration discovery refresh and rewrites `config.yaml` plus
+  `source-soperator-cluster-discovery-report.json` into the same deploy-owned
+  onboarding shape that a rerun of `ext-soperator onboard` would produce, while
+  leaving pending or still-migration-owned plans blocked from normal deploy.
+- Improved external Soperator deploy validation and live cleanup. Local
+  post-Flux apply now prunes stale target-instance `SlurmCluster`, `NodeSet`,
+  and `NodeConfigurator` custom resources instead of only stale
+  `NodeConfigurator` records, removes legacy source-family ActiveChecks
+  CronJobs/jobs/pods that can keep recreating pending v1/v2 check pods after
+  adoption, retires profile-derived old source-family Helm release records such
+  as `flux-system-soperator-fluxcd-*` and `soperator-fluxcd-values`, and
+  required Soperator smoke validation now reports active old source Flux
+  HelmReleases and pending Soperator pods as explicit evidence before the
+  downstream Slurm checks fail. Source Flux cleanup now treats already-deleted
+  HelmRelease and Kustomization records as idempotent cleanup success during
+  reruns.
+- Fixed external Soperator adoption accounting database defaults. Adopted
+  chart-managed MariaDB now defaults to `compute-csi-default-sc` with
+  `ReadWriteOnce` storage, and onboarding/migration reuse a discovered live
+  MariaDB PVC shape when one exists instead of rendering the Slurm shared
+  filesystem storage class for the database PVC.
+- Fixed external Soperator adoption for live clusters whose existing
+  `SlurmCluster` is named `mk8s` while the cxcli target id is different.
+  Soperator onboarding now preserves the discovered live cluster name in adopt
+  mode instead of materializing a duplicate target-named `SlurmCluster`, which
+  could leave new target NodeSets pending and fail deploy-time Soperator smoke
+  validation. Adopted worker NodeSet GPU resources are now normalized from
+  Kubernetes `nvidia.com/gpu` quantities into integer Soperator `gpu` chart
+  values.
+- Fixed `ext-soperator onboard` source-version prompting when discovery finds
+  both a compatible Soperator release version and another Soperator-like Helm
+  release with noncanonical identity; interactive onboarding now asks the
+  operator to confirm the source version instead of leaving a
+  `source-version-required` finding in the final summary. If the compatible
+  release is already the pinned target and the other same-name record is an
+  older source-family Helm chart, onboarding now records it as informational
+  stale evidence in the saved report instead of prompting for a source version
+  or printing it as selected onboarding work.
+- Fixed external Soperator migration stale Helm cleanup for same-name source
+  records left behind after target takeover. The post-migration Helm check now
+  retires stale source-family records before validation hold and target
+  readiness lookup, and deletes only the stale Helm storage revision,
+  preserving the current target release revision.
+- Improved `ext-soperator onboard` rerun idempotency for failed or partially
+  completed external Soperator migrations. Nebius `--cluster-id` onboarding now
+  enriches source discovery with control-plane and node-group template
+  inventory by node group, including Kubernetes version, node OS image, and GPU
+  driver preset, and omits `upgrade-external-node-template` only when that
+  provider evidence proves every discovered group is already aligned.
+- Tightened external Soperator onboarding guidance and deploy safety. Onboarding
+  and render hints now explain whether the next path is `render` then `deploy`
+  or `render` then `ext-soperator migrate`, including cases where storage and
+  compute are kept but Soperator or external node-template migration work
+  remains, and the interactive storage/compute mode prompts now tell operators
+  to choose the aligned SFS/node-group options when they are unsure because
+  cxcli can keep compatible existing layouts automatically. `deploy` now
+  refuses selected migration-required external Soperator targets before
+  Terraform/Flux preflight, checks the source `config.yaml` as a fail-closed
+  guard for older rendered bundles, and prints the required migrate
+  dry-run/execute commands.
+- Improved `ext-soperator migrate --dry-run` output by color-highlighting
+  topic labels, required-action statuses, migration phases, executor contracts,
+  and execution mode in interactive terminals.
+- Changed `ext-soperator migrate` to fail fast when the accepted onboarding
+  action set has no migration-owned work; deploy-owned remediation such as
+  target GPU stack alignment now reports the render/deploy route instead of a
+  no-op migration plan.
+- Improved approved `ext-soperator migrate --execute` progress reporting with
+  an interactive spinner, richer MK8s node-group status, bounded down/upgrading
+  node details, named Slurm worker state summaries, and color-highlighted
+  degraded/down states; every status line now includes the phase id,
+  human-readable phase label, and overall phase health before component
+  details.
+- Changed external Soperator worker node-template rollout to default to
+  `safe-surge`: service-role groups still use serial zero-surge updates, while
+  worker groups run in bounded safe-surge waves with configurable
+  `max_surge_count`, `max_unavailable_count`, and `drain_timeout` per active
+  worker group after quota/capacity, worker-node health, and Slurm queue
+  preflights pass. `ext-soperator onboard` and `ext-soperator migrate` accept
+  explicit worker-rollout strategy, wave-budget, and per-group strategy
+  overrides, and checkpoint the effective rollout settings for resume safety.
+- Hardened upgrade resume behavior for long MK8s rollouts. Accepted
+  `ext-soperator migrate --execute` node-group update timeouts now reconcile
+  live state, checkpoint still-rolling external node-template updates as
+  pending, and resume without duplicate Nebius update calls; Terraform-managed
+  MK8s `upgrade` reruns that only wait for an already-requested rollout now
+  still perform the final rendered apply needed to restore temporary
+  `allow-unavailable` or `force-delete` node-group strategies.
 - Added final MK8s readiness checks for `upgrade k8s-version`,
   `upgrade node-template`, MK8s `upgrade os-image`, node-layer upgrades, and
   `ext-soperator migrate --execute`; commands now re-read live control-plane
@@ -17,12 +131,19 @@ All notable changes to this project are tracked here. This changelog follows
   no node-template action was selected.
 - Added post-action Helm readiness checks for `upgrade helm-chart` and
   `ext-soperator migrate --execute`; Soperator migration now verifies the
-  target chart workloads, suspends old source-family Flux HelmRelease and
-  Kustomization desired state, prunes old operational Soperator resources,
-  preserves shared/storage resources, and removes stale source-family Helm
-  release records before reporting completion. Managed Helm chart upgrades now
-  require the generated target handoff before running live readiness
-  verification.
+  target chart workloads, suspends old source-family Flux Kustomization desired
+  state, deletes suspended old source-family Flux HelmRelease records, prunes
+  old operational Soperator resources, preserves shared/storage resources, and
+  removes stale source-family Helm release records before reporting completion.
+  Managed Helm chart upgrades now require the generated target handoff before
+  running live readiness verification.
+- Fixed external Soperator migration takeover for profiled legacy v1 and v2
+  releases. Migration profiles now declare source admission webhooks to delete
+  and source controller deployments to scale down before target compute
+  reconciliation, preventing old source controllers or stale source webhooks
+  from racing or blocking the pinned target chart over `NodeSet`, `SlurmCluster`,
+  and worker `StatefulSet` objects while leaving storage/shared resources for
+  the normal retirement phase.
 - Fixed `ext-soperator migrate --help` so the rendered epilog includes the
   completed remediation/upgrade/cutover rerun recheck contract.
 - Changed the generated report artifact contract from `generated/inventory/` to
@@ -35,21 +156,28 @@ All notable changes to this project are tracked here. This changelog follows
   preserved NodeSet for Slurm CPU/socket/core/thread topology, strips
   source-era chart-owned worker mounts, normalizes target operator affinity to
   Slurm role labels, and resumes Slurm nodes left drained after cutover.
-- Fixed external Soperator GPU-stack remediation so direct
+- Fixed external Soperator GPU-stack reconciliation so direct
   `ext-soperator migrate --execute` Helm upgrades also apply catalog-owned
   post-render patches such as the Network Operator `NicClusterPolicy`
   `rdma/shared_device` overlay. Reruns now verify those live post-rendered
   fields before considering `target-gpu-stack-remediation` complete.
+- Improved `ext-soperator onboard` GPU-stack discovery on reruns. Onboarding
+  now inspects live GPU/Network Operator Helm releases, NVIDIA ClusterPolicy
+  readiness, scheduler-visible GPU/RDMA resources, and Nebius driver labels so
+  healthy clusters report `gpu-stack: verified` instead of implying that every
+  GPU target needs active remediation.
 - Improved required Soperator/Slurm smoke validation: the one-task `srun`
   smoke job now prefers an idle non-GPU partition when available, while Slurm
   node status treats `inval` as unhealthy so invalid GPU workers remain a
   visible pending validation gate. When Slurm exposes an idle or mixed GPU
   partition, the smoke report now also runs Slurm-side one-GPU visibility and
-  one-rank NCCL checks through `srun`.
+  a Slurm NCCL benchmark that uses two idle GPU Slurm nodes when available or
+  one idle multi-GPU Slurm node when it is the only GPU node.
 - Fixed `deploy-report.md` Soperator GPU validation summaries so Kubernetes
   GPU Visibility and NCCL scheduler skips caused by Soperator worker pod GPU
   reservations lead with the same target's passed Slurm-side GPU visibility or
-  NCCL smoke result, while raw detail JSON keeps the Kubernetes skip evidence.
+  NCCL benchmark result, while raw detail JSON keeps the Kubernetes skip
+  evidence.
 - Changed local `deploy` for managed Soperator targets to stage app
   reconciliation: cxcli now applies platform/GPU operator Flux resources and
   runs MK8s GPU stack, GPU Visibility, and NCCL validations before applying the
@@ -69,8 +197,10 @@ All notable changes to this project are tracked here. This changelog follows
   checkpoint said the phase had completed.
 - Changed `ext-soperator migrate --execute` to own onboarded external MK8s
   control-plane and node-template upgrades through direct Nebius updates:
-  control plane first, node groups one at a time with temporary zero-surge
-  strategy, original strategy restore, and no extra preserved-worker quota.
+  control plane first, service-role node groups one at a time with temporary
+  zero-surge strategy, worker node groups in safe-surge waves by default,
+  original strategy restore, and spare-worker quota preflight for the active
+  wave.
 - Fixed external node-template upgrade execution for legacy layouts by clearing
   stale GPU driver presets from CPU node groups before Kubernetes/OS rollout
   and by checkpointing temporary quiesce/restore of one-node
@@ -112,7 +242,9 @@ All notable changes to this project are tracked here. This changelog follows
 - Changed `ext-soperator migrate --execute` validation hold to run the
   target-scoped `deploy.targets[].validations.mk8s_gpu.*` checks for the
   onboarded external target, including operator readiness, GPU Visibility, and
-  NCCL when enabled, and refresh `generated/reports/deploy-report.md`.
+  NCCL when enabled. The MK8s GPU rollup is written to
+  `generated/reports/migrate-report.md`; `generated/reports/deploy-report.md`
+  is refreshed as a secondary deploy-compatible summary.
 - Added required Soperator/Slurm smoke validation for enabled Soperator
   targets. `deploy` now records a `soperator_cluster_smoke` JSON report and
   includes it in `deploy-report.md`; `ext-soperator migrate --execute` runs
@@ -132,8 +264,8 @@ All notable changes to this project are tracked here. This changelog follows
   targets.
 - Aligned `ext-soperator --help`, `ext-soperator onboard --help`, and
   `ext-soperator migrate --help` examples with the complete external-cluster
-  sequence, including the no-deploy-before-migration warning and zero-surge
-  external node-template update contract.
+  sequence, including the no-deploy-before-migration warning and external
+  node-template update contract.
 - Clarified `ext-soperator` help text so `--target` is explicitly the cxcli
   target id from `deploy.targets[].instance_id`, install/adopt-only targets
   point to target-scoped render/deploy and `deploy-report.md`, and onboarding
@@ -141,9 +273,9 @@ All notable changes to this project are tracked here. This changelog follows
   source-validation intent.
 - Changed Soperator onboarding GPU/RDMA findings from an operator-owned placeholder
   action into target remediation: GPU-enabled external targets now record
-  `remediate-target-gpu-stack`, add the target-scoped GPU Operator and
+  `reconcile-target-gpu-stack`, add the target-scoped GPU Operator and
   Network Operator when GPU-cluster/RDMA inventory is present, persist MK8s GPU
-  deploy-time validation defaults, show the target GPU remediation in
+  deploy-time validation defaults, show the target GPU reconciliation in
   `ext-soperator migrate --dry-run`, and execute it as a checkpointed
   `target-gpu-stack-remediation` phase before Soperator compute/cutover work.
 - Renamed Soperator migration execution stop points to pending phases and
@@ -202,13 +334,13 @@ All notable changes to this project are tracked here. This changelog follows
   SlurmCluster reconciliation as best-effort degradation signals.
 - Added a strict Soperator migration quota preflight for approved `--execute`
   runs. The executor now checks net-new aligned SFS storage and net-new
-  service-role node groups before any SFS, node-group, or Helm mutation, while
-  preserved worker node groups do not require parallel worker quota, and fails
+  service-role node groups before any SFS, node-group, or Helm mutation, counts
+  safe-surge preserved worker capacity for the active worker wave, and fails
   fast on confirmed shortages, unresolved limits, coverage gaps, or quota lookup
-  errors. External node-group template mutations now use a temporary zero-surge
-  strategy (`max_surge=0`, `max_unavailable=1`, `drain_timeout=30m`) and restore
-  the original strategy afterward, so preserved workers require neither
-  parallel nor surge worker quota.
+  errors. External service-role template mutations use temporary zero-surge
+  (`max_surge=0`, `max_unavailable=1`, `drain_timeout=30m`) and restore the
+  original strategy afterward; worker template mutations now default to
+  safe-surge unless explicitly overridden.
 - Consolidated README Soperator command guidance into a visible
   `Soperator Commands` section covering managed create/deploy, external
   onboarding, migration flags, storage/compute migration modes, safety rules,
@@ -225,8 +357,8 @@ All notable changes to this project are tracked here. This changelog follows
 - Updated Soperator migration compute remediation to reuse existing
   service-role node groups discovered by role name or
   `slurm.nebius.ai/nodeset` / `slurm.nebius.ai/nodeset-name` labels, while
-  preserving worker node groups in place and using external zero-surge
-  node-group updates for migration-owned template remediation.
+  preserving worker node groups in place and using migration-owned external
+  node-group updates for template remediation.
 - Added a final `Next step: nebius-cxcli deploy <config.yaml>` helper line to
   successful `render` command output, while suppressing that hint for internal
   rerenders used by upgrade flows.

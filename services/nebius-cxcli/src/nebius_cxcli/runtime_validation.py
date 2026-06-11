@@ -31,6 +31,7 @@ from .deploy_targets import (
     EXTERNAL_TARGET_OWNERSHIP,
     deploy_target_is_external_mk8s,
 )
+from .duration_utils import parse_go_duration_seconds
 from .mk8s_gpu import mk8s_gpu_dependency_issues
 from .mysterybox_eso import mysterybox_eso_dependency_issues
 from .observability import observability_dependency_issues
@@ -57,6 +58,7 @@ _FOLDED_SOPERATOR_CHILD_APP_IDS = frozenset(
     }
 )
 _FOLDED_SOPERATOR_DEPENDENCY_APP_IDS = frozenset({"k8up"})
+_SOPERATOR_WORKER_ROLLOUT_STRATEGIES = frozenset({"safe-surge", "zero-surge"})
 
 
 def _get_path(payload: Mapping[str, Any], dotted_path: str, default: Any = None) -> Any:
@@ -68,6 +70,129 @@ def _as_text(value: Any) -> str:
     if value is None:
         return ""
     return str(value).strip()
+
+
+def _positive_int_for_validation(value: Any, field_label: str) -> None:
+    if value is None or value == "":
+        return
+    if isinstance(value, bool):
+        raise ValueError(f"{field_label} must be a positive integer")
+    try:
+        parsed = int(_as_text(value))
+    except ValueError as exc:
+        raise ValueError(f"{field_label} must be a positive integer") from exc
+    if parsed <= 0:
+        raise ValueError(f"{field_label} must be a positive integer")
+
+
+def _non_negative_int_for_validation(value: Any, field_label: str) -> int | None:
+    if value is None or value == "":
+        return None
+    if isinstance(value, bool):
+        raise ValueError(f"{field_label} must be a non-negative integer")
+    try:
+        parsed = int(_as_text(value))
+    except ValueError as exc:
+        raise ValueError(f"{field_label} must be a non-negative integer") from exc
+    if parsed < 0:
+        raise ValueError(f"{field_label} must be a non-negative integer")
+    return parsed
+
+
+def _drain_timeout_for_validation(value: Any, field_label: str) -> None:
+    if value is None or value == "":
+        return
+    raw = _as_text(value).lower()
+    if raw == "none":
+        return
+    if re.fullmatch(r"[0-9]+", raw):
+        raise ValueError(
+            f"{field_label} must be 'none' or an explicit Go-style duration "
+            "(for example 30s, 30m, or 1h)"
+        )
+    try:
+        parse_go_duration_seconds(raw)
+    except ValueError as exc:
+        raise ValueError(
+            f"{field_label} must be 'none' or an explicit Go-style duration "
+            "(for example 30s, 30m, or 1h)"
+        ) from exc
+
+
+def _validate_soperator_onboarding_rollout(onboarding: Mapping[str, Any], field_label: str) -> None:
+    node_template = onboarding.get("node_template_upgrade")
+    if node_template is None:
+        return
+    if not isinstance(node_template, Mapping):
+        raise ValueError(f"{field_label}.node_template_upgrade must be a mapping")
+    rollout = node_template.get("rollout")
+    if rollout is None:
+        return
+    if not isinstance(rollout, Mapping):
+        raise ValueError(f"{field_label}.node_template_upgrade.rollout must be a mapping")
+    strategy = normalize_component_token(rollout.get("strategy")) or "safe-surge"
+    if strategy not in _SOPERATOR_WORKER_ROLLOUT_STRATEGIES:
+        raise ValueError(
+            f"{field_label}.node_template_upgrade.rollout.strategy must be one of: "
+            + ", ".join(sorted(_SOPERATOR_WORKER_ROLLOUT_STRATEGIES))
+        )
+    legacy_keys = (
+        "max_global_unavailable_worker_nodes",
+        "max_global_unavailable_worker_percent",
+    )
+    for legacy_key in legacy_keys:
+        if rollout.get(legacy_key) is not None and _as_text(rollout.get(legacy_key)) != "":
+            raise ValueError(
+                f"{field_label}.node_template_upgrade.rollout.{legacy_key} is unsupported; "
+                "use worker_wave_groups or worker_wave_percent"
+            )
+    groups_key = "worker_wave_groups"
+    percent_key = "worker_wave_percent"
+    groups_present = rollout.get(groups_key) is not None and _as_text(rollout.get(groups_key)) != ""
+    percent_present = (
+        rollout.get(percent_key) is not None and _as_text(rollout.get(percent_key)) != ""
+    )
+    if groups_present and percent_present:
+        raise ValueError(
+            f"{field_label}.node_template_upgrade.rollout must set only one of "
+            f"{groups_key} or {percent_key}"
+        )
+    _positive_int_for_validation(
+        rollout.get(groups_key),
+        f"{field_label}.node_template_upgrade.rollout.{groups_key}",
+    )
+    _positive_int_for_validation(
+        rollout.get(percent_key),
+        f"{field_label}.node_template_upgrade.rollout.{percent_key}",
+    )
+    _positive_int_for_validation(
+        rollout.get("max_parallel_worker_groups"),
+        f"{field_label}.node_template_upgrade.rollout.max_parallel_worker_groups",
+    )
+    worker_strategy = rollout.get("worker_group_strategy")
+    if worker_strategy is None:
+        return
+    if not isinstance(worker_strategy, Mapping):
+        raise ValueError(
+            f"{field_label}.node_template_upgrade.rollout.worker_group_strategy must be a mapping"
+        )
+    max_surge = _non_negative_int_for_validation(
+        worker_strategy.get("max_surge_count"),
+        f"{field_label}.node_template_upgrade.rollout.worker_group_strategy.max_surge_count",
+    )
+    max_unavailable = _non_negative_int_for_validation(
+        worker_strategy.get("max_unavailable_count"),
+        f"{field_label}.node_template_upgrade.rollout.worker_group_strategy.max_unavailable_count",
+    )
+    if max_surge == 0 and max_unavailable == 0:
+        raise ValueError(
+            f"{field_label}.node_template_upgrade.rollout.worker_group_strategy must keep "
+            "at least one of max_surge_count or max_unavailable_count greater than zero"
+        )
+    _drain_timeout_for_validation(
+        worker_strategy.get("drain_timeout"),
+        f"{field_label}.node_template_upgrade.rollout.worker_group_strategy.drain_timeout",
+    )
 
 
 def _resolve_mapping_segment(node: Mapping[str, Any], segment: str) -> Any:
@@ -462,6 +587,11 @@ def _validate_deploy(payload: Mapping[str, Any]) -> None:
                 if onboarding is not None and not isinstance(onboarding, Mapping):
                     raise ValueError(
                         f"deploy.targets[{index}].soperator_onboarding must be a mapping"
+                    )
+                if isinstance(onboarding, Mapping):
+                    _validate_soperator_onboarding_rollout(
+                        onboarding,
+                        f"deploy.targets[{index}].soperator_onboarding",
                     )
             _validate_observability(
                 raw_target.get("observability"),

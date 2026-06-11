@@ -152,8 +152,8 @@ def _soperator_owned_gpu_summary(
         check_name = "Slurm GPU visibility test"
         lead = "Soperator-owned Slurm GPU visibility passed"
     elif item.kind == "mk8s_nccl":
-        check_name = "Slurm NCCL smoke test"
-        lead = "Soperator-owned Slurm NCCL smoke passed"
+        check_name = "Slurm NCCL benchmark"
+        lead = "Soperator-owned Slurm NCCL benchmark passed"
     else:
         return ""
     for check in soperator.checks:
