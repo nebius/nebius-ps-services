@@ -2285,20 +2285,50 @@ def test_source_flux_cleanup_treats_missing_patch_targets_as_idempotent() -> Non
         del input_text, timeout_seconds
         args = tuple(command)
         calls.append((args, check))
-        if (
-            args[:3] == ("kubectl", "--context", "external-context")
-            and "get" in args
-            and "helmreleases.helm.toolkit.fluxcd.io" in args
+        if args == (
+            "kubectl",
+            "--context",
+            "external-context",
+            "get",
+            "helmreleases.helm.toolkit.fluxcd.io",
+            "-A",
+            "-o",
+            "json",
+            "--request-timeout=20s",
         ):
             return SoperatorMigrationCommandResult(args, 0, json.dumps(payload), "")
-        if "patch" in args:
+        if (
+            len(args) >= 8
+            and args[:6]
+            == (
+                "kubectl",
+                "--context",
+                "external-context",
+                "-n",
+                "flux-system",
+                "patch",
+            )
+            and args[6]
+            in {
+                "helmrelease.helm.toolkit.fluxcd.io",
+                "kustomization.kustomize.toolkit.fluxcd.io",
+            }
+        ):
             return SoperatorMigrationCommandResult(
                 args,
                 1,
                 "",
                 'Error from server (NotFound): helmreleases.helm.toolkit.fluxcd.io "missing" not found',
             )
-        if "delete" in args:
+        if len(args) >= 8 and args[:7] == (
+            "kubectl",
+            "--context",
+            "external-context",
+            "-n",
+            "flux-system",
+            "delete",
+            "helmrelease.helm.toolkit.fluxcd.io",
+        ):
             return SoperatorMigrationCommandResult(args, 0, "", "")
         raise AssertionError(args)
 
