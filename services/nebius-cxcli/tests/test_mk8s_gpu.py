@@ -193,7 +193,7 @@ def _external_h100_sxm_payload() -> dict[str, Any]:
                     "soperator_onboarding": {
                         "accepted": True,
                         "state": "existing-soperator-supported",
-                        "actions": ["remediate-target-gpu-stack"],
+                        "actions": ["reconcile-target-gpu-stack"],
                     },
                 }
             ]

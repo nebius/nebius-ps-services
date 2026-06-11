@@ -38,9 +38,34 @@ ONBOARDING_ACTION_CONFIGURE_STORAGE = "configure-soperator-storage"
 ONBOARDING_ACTION_CREATE_ALIGNED_SFS = "create-aligned-sfs"
 ONBOARDING_ACTION_PLAN_DATA_MIGRATION = "plan-soperator-data-migration"
 ONBOARDING_ACTION_PLAN_COMPUTE_MIGRATION = "plan-soperator-compute-migration"
-ONBOARDING_ACTION_REMEDIATE_TARGET_GPU_STACK = "remediate-target-gpu-stack"
+ONBOARDING_ACTION_RECONCILE_TARGET_GPU_STACK = "reconcile-target-gpu-stack"
 ONBOARDING_ACTION_UPGRADE_EXTERNAL_NODE_TEMPLATE = "upgrade-external-node-template"
 ONBOARDING_ACTION_ENABLE_TOPOLOGY = "enable-slurm-topology"
+ONBOARDING_ACTION_IDS = frozenset(
+    {
+        ONBOARDING_ACTION_INSTALL_SOPERATOR,
+        ONBOARDING_ACTION_ADOPT_SOPERATOR,
+        ONBOARDING_ACTION_UPGRADE_SOPERATOR,
+        ONBOARDING_ACTION_APPROVE_MIGRATION,
+        ONBOARDING_ACTION_CONFIGURE_STORAGE,
+        ONBOARDING_ACTION_CREATE_ALIGNED_SFS,
+        ONBOARDING_ACTION_PLAN_DATA_MIGRATION,
+        ONBOARDING_ACTION_PLAN_COMPUTE_MIGRATION,
+        ONBOARDING_ACTION_RECONCILE_TARGET_GPU_STACK,
+        ONBOARDING_ACTION_UPGRADE_EXTERNAL_NODE_TEMPLATE,
+        ONBOARDING_ACTION_ENABLE_TOPOLOGY,
+    }
+)
+ONBOARDING_MIGRATION_ACTION_IDS = frozenset(
+    {
+        ONBOARDING_ACTION_UPGRADE_SOPERATOR,
+        ONBOARDING_ACTION_APPROVE_MIGRATION,
+        ONBOARDING_ACTION_CREATE_ALIGNED_SFS,
+        ONBOARDING_ACTION_PLAN_DATA_MIGRATION,
+        ONBOARDING_ACTION_PLAN_COMPUTE_MIGRATION,
+        ONBOARDING_ACTION_UPGRADE_EXTERNAL_NODE_TEMPLATE,
+    }
+)
 ONBOARDING_EXTERNAL_NODE_TEMPLATE_TARGET_K8S_VERSION = "1.33"
 ONBOARDING_EXTERNAL_NODE_TEMPLATE_TARGET_OS = "ubuntu24.04"
 ONBOARDING_EXTERNAL_NODE_TEMPLATE_TARGET_GPU_STACK_PRESET = "cuda13.0"
@@ -88,6 +113,8 @@ SOPERATOR_COMPATIBLE_CONTROLLER_RELEASE_NAMES = frozenset({"soperator-controller
 SOPERATOR_COMPATIBLE_CHART_IDENTITIES = frozenset(
     {"soperator", "helm-soperator", "slurm-operator"}
 )
+SOPERATOR_HELM_DISCOVERY_NAMESPACES = ("soperator", "soperator-system", "flux-system")
+GPU_STACK_HELM_DISCOVERY_NAMESPACES = ("nvidia-gpu-operator", "nvidia-network-operator")
 _EPHEMERAL_HELM_RELEASE_KEYS = frozenset(
     {"description", "last_deployed", "revision", "status", "updated"}
 )
@@ -342,6 +369,8 @@ def soperator_onboarding_is_accepted(
         return False
     if not _onboarding_compute_mode_is_valid(onboarding):
         return False
+    if _unsupported_onboarding_actions(onboarding):
+        return False
     recorded = str(onboarding.get("analysis_fingerprint", "") or "").strip()
     if not recorded:
         return False
@@ -397,6 +426,15 @@ def validate_soperator_onboarding_acceptance(
                 "Soperator-aligned compute migration. Rerun Soperator onboarding or choose "
                 "create-aligned-node-groups."
             )
+        unsupported_actions = _unsupported_onboarding_actions(onboarding)
+        if unsupported_actions:
+            formatted = ", ".join(unsupported_actions)
+            raise ValueError(
+                f"apps:soperator target '{target}' has unsupported "
+                f"deploy.targets[].soperator_onboarding.actions value(s): {formatted}. "
+                "Rerun `nebius-cxcli ext-soperator onboard` so the accepted config "
+                "uses the current Soperator onboarding action contract."
+            )
     raise ValueError(
         f"apps:soperator target '{target}' uses onboard-existing-cluster but does not have "
         "a current accepted deploy.targets[].soperator_onboarding analysis. Rerun the "
@@ -444,6 +482,22 @@ def _onboarding_compute_mode_is_valid(onboarding: Mapping[str, Any]) -> bool:
     if not required_compute_mode:
         return True
     return configured_compute_mode == required_compute_mode
+
+
+def _unsupported_onboarding_actions(onboarding: Mapping[str, Any]) -> tuple[str, ...]:
+    actions = onboarding.get("actions", [])
+    if not isinstance(actions, list):
+        return ()
+    return tuple(
+        sorted(
+            {
+                action_id
+                for action in actions
+                if (action_id := str(action or "").strip())
+                and action_id not in ONBOARDING_ACTION_IDS
+            }
+        )
+    )
 
 
 def _report_has_finding(
@@ -745,6 +799,20 @@ def _soperator_migration_profile_version_candidates(row: Mapping[str, Any]) -> s
     return {candidate for candidate in normalized if candidate}
 
 
+def soperator_migration_profile_group(profile_id: str) -> Mapping[str, Any]:
+    profile_key = str(profile_id or "").strip()
+    if not profile_key:
+        return {}
+    payload = _load_soperator_migration_profile_data()
+    profile_groups = payload.get("profile_groups") if isinstance(payload, Mapping) else None
+    if not isinstance(profile_groups, Mapping):
+        return {}
+    profile_group = profile_groups.get(profile_key)
+    if not isinstance(profile_group, Mapping):
+        return {}
+    return dict(profile_group)
+
+
 def soperator_migration_profile_for_version(version: str) -> Mapping[str, Any] | None:
     normalized = normalize_soperator_release_version(version)
     if not normalized:
@@ -765,7 +833,7 @@ def soperator_migration_profile_for_version(version: str) -> Mapping[str, Any] |
             profile_group = profile_groups.get(profile_id)
             if isinstance(profile_group, Mapping):
                 result["profile_group"] = dict(profile_group)
-                for key in ("requires_aligned_sfs", "compatibility_axes"):
+                for key in ("requires_aligned_sfs", "compatibility_axes", "execution_contract"):
                     if key in profile_group and key not in result:
                         result[key] = to_plain_data(profile_group[key])
             return result
@@ -832,7 +900,7 @@ def _default_soperator_migration_plan(
     include_data_migration: bool,
     include_compute_migration: bool = True,
     include_soperator_upgrade: bool = False,
-    include_target_gpu_remediation: bool = False,
+    include_target_gpu_reconciliation: bool = False,
     include_external_node_template_upgrade: bool = False,
 ) -> tuple[SoperatorMigrationPhase, ...]:
     phases = [
@@ -858,23 +926,24 @@ def _default_soperator_migration_plan(
                 "external-node-template-upgrade",
                 "Upgrade external MK8s control plane and node templates",
                 progress_label=(
-                    "External MK8s Upgrade: control plane first, node groups one at a time"
+                    "External MK8s Upgrade: control plane first, worker groups in safe waves"
                 ),
                 requires_customer_approval=True,
                 notes=(
                     "Run direct Nebius cluster and node-group updates; do not call Terraform.",
                     "Upgrade the control plane first, one Kubernetes minor at a time when needed.",
-                    "Upgrade source node groups with a temporary zero-surge strategy and restore "
-                    "their original strategy after each group.",
+                    "Upgrade service-role source node groups with a temporary zero-surge strategy.",
+                    "Upgrade worker source node groups with safe-surge waves by default and restore "
+                    "each group's original strategy.",
                 ),
             )
         )
-    if include_target_gpu_remediation:
+    if include_target_gpu_reconciliation:
         phases.append(
             _migration_phase(
                 "target-gpu-stack-remediation",
-                "Remediate target MK8s GPU operator stack",
-                progress_label="Remediating target GPU operator stack...",
+                "Reconcile target MK8s GPU operator stack",
+                progress_label="Reconciling target GPU operator stack...",
                 requires_customer_approval=True,
                 notes=(
                     "Apply the target-scoped GPU Operator app row.",
@@ -919,8 +988,8 @@ def _default_soperator_migration_plan(
             rolling_notes = (
                 "Create or reuse service-role node groups without duplicating worker capacity.",
                 "Map worker NodeSets to detected existing worker node groups.",
-                "Apply migration-owned template changes with zero-surge "
-                "Nebius node-group updates.",
+                "Apply migration-owned template changes with serial zero-surge service-role "
+                "updates and safe-surge worker waves by default.",
             )
         else:
             rolling_title = "Soperator chart upgrade with existing compute layout"
@@ -1053,7 +1122,7 @@ def soperator_onboarding_report_for_modes(
     if report.migration_plan:
         selected_ids = {action.id for action in filtered_actions if action.selected}
         migration_plan = _default_soperator_migration_plan(
-            include_target_gpu_remediation=ONBOARDING_ACTION_REMEDIATE_TARGET_GPU_STACK
+            include_target_gpu_reconciliation=ONBOARDING_ACTION_RECONCILE_TARGET_GPU_STACK
             in selected_ids,
             include_external_node_template_upgrade=(
                 ONBOARDING_ACTION_UPGRADE_EXTERNAL_NODE_TEMPLATE in selected_ids
@@ -1139,6 +1208,190 @@ def _dedupe_soperator_actions(
     return tuple(deduped)
 
 
+def _onboarding_action_ids(onboarding: Mapping[str, Any]) -> tuple[str, ...]:
+    actions = onboarding.get("actions", [])
+    if not isinstance(actions, list):
+        return ()
+    ids: list[str] = []
+    seen: set[str] = set()
+    for action in actions:
+        action_id = str(action or "").strip()
+        if not action_id or action_id in seen:
+            continue
+        ids.append(action_id)
+        seen.add(action_id)
+    return tuple(ids)
+
+
+def _configured_soperator_action(
+    action_id: str,
+    *,
+    selected_ids: set[str],
+    analyzed_actions: Mapping[str, SoperatorOnboardingAction],
+) -> SoperatorOnboardingAction | None:
+    analyzed = analyzed_actions.get(action_id)
+    if analyzed is not None:
+        return replace(analyzed, selected=True)
+    include_data_migration = bool(
+        selected_ids
+        & {
+            ONBOARDING_ACTION_CREATE_ALIGNED_SFS,
+            ONBOARDING_ACTION_PLAN_DATA_MIGRATION,
+        }
+    )
+    include_compute_migration = ONBOARDING_ACTION_PLAN_COMPUTE_MIGRATION in selected_ids
+    include_soperator_upgrade = ONBOARDING_ACTION_UPGRADE_SOPERATOR in selected_ids
+    templates = {
+        ONBOARDING_ACTION_INSTALL_SOPERATOR: SoperatorOnboardingAction(
+            id=ONBOARDING_ACTION_INSTALL_SOPERATOR,
+            title="Install Soperator and required dependencies",
+            layer="soperator",
+            required=True,
+            selected=True,
+            reason="Required because no Soperator was detected on the selected MK8s target.",
+        ),
+        ONBOARDING_ACTION_ADOPT_SOPERATOR: SoperatorOnboardingAction(
+            id=ONBOARDING_ACTION_ADOPT_SOPERATOR,
+            title="Adopt compatible existing Soperator release",
+            layer="soperator",
+            selected=True,
+            reason="Existing resources must be adopted cautiously before cxcli manages them.",
+        ),
+        ONBOARDING_ACTION_UPGRADE_SOPERATOR: SoperatorOnboardingAction(
+            id=ONBOARDING_ACTION_UPGRADE_SOPERATOR,
+            title="Upgrade Soperator to the cxcli-pinned version",
+            layer="versions",
+            selected=True,
+            reason="Upgrades are allowed when live version is older and profiled.",
+        ),
+        ONBOARDING_ACTION_APPROVE_MIGRATION: SoperatorOnboardingAction(
+            id=ONBOARDING_ACTION_APPROVE_MIGRATION,
+            title=_migration_approval_action_title(
+                include_data_migration=include_data_migration,
+                include_compute_migration=include_compute_migration,
+                include_soperator_upgrade=include_soperator_upgrade,
+            ),
+            layer="migration",
+            selected=True,
+            disruptive=True,
+            reason="Migration changes require customer approval before execution.",
+        ),
+        ONBOARDING_ACTION_CONFIGURE_STORAGE: SoperatorOnboardingAction(
+            id=ONBOARDING_ACTION_CONFIGURE_STORAGE,
+            title="Configure Soperator storage",
+            layer="storage-sfs",
+            selected=True,
+            disruptive=True,
+            reason="Storage must match the target Soperator layout before onboarding.",
+        ),
+        ONBOARDING_ACTION_CREATE_ALIGNED_SFS: SoperatorOnboardingAction(
+            id=ONBOARDING_ACTION_CREATE_ALIGNED_SFS,
+            title="Create aligned SFS filesystems before storage cutover",
+            layer="storage-sfs",
+            selected=True,
+            disruptive=True,
+            reason="Detected storage is not compatible with the target Soperator layout.",
+        ),
+        ONBOARDING_ACTION_PLAN_DATA_MIGRATION: SoperatorOnboardingAction(
+            id=ONBOARDING_ACTION_PLAN_DATA_MIGRATION,
+            title="Plan online bulk sync and final delta storage migration",
+            layer="storage-sfs",
+            selected=True,
+            disruptive=True,
+            reason="Storage data must be migrated without losing ownership or metadata.",
+        ),
+        ONBOARDING_ACTION_PLAN_COMPUTE_MIGRATION: SoperatorOnboardingAction(
+            id=ONBOARDING_ACTION_PLAN_COMPUTE_MIGRATION,
+            title="Plan in-place compute remediation without duplicating workers",
+            layer="role-mapping",
+            selected=True,
+            disruptive=True,
+            reason=(
+                "Service-role layout changes need guarded remediation; worker node groups "
+                "stay in place while external node-template upgrades run through the "
+                "migration executor."
+            ),
+        ),
+        ONBOARDING_ACTION_RECONCILE_TARGET_GPU_STACK: SoperatorOnboardingAction(
+            id=ONBOARDING_ACTION_RECONCILE_TARGET_GPU_STACK,
+            title="Reconcile target MK8s GPU stack and deploy-time validations",
+            layer="gpu-stack",
+            required=True,
+            selected=True,
+            reason=(
+                "GPU workers require cxcli-owned GPU/RDMA operator desired state and "
+                "deploy-time validation reports on the target cluster; this can adopt an "
+                "already healthy live stack."
+            ),
+        ),
+        ONBOARDING_ACTION_UPGRADE_EXTERNAL_NODE_TEMPLATE: SoperatorOnboardingAction(
+            id=ONBOARDING_ACTION_UPGRADE_EXTERNAL_NODE_TEMPLATE,
+            title="Upgrade external MK8s control plane and node templates",
+            layer="mk8s-node-template",
+            selected=True,
+            disruptive=True,
+            reason=(
+                "External Soperator targets are not Terraform-owned, so cxcli must align "
+                "Kubernetes version, node OS image, and Nebius GPU driver preset through "
+                "direct Nebius updates during migration."
+            ),
+        ),
+        ONBOARDING_ACTION_ENABLE_TOPOLOGY: SoperatorOnboardingAction(
+            id=ONBOARDING_ACTION_ENABLE_TOPOLOGY,
+            title="Enable Slurm topology profile after operator confirmation",
+            layer="topology",
+            selected=True,
+            reason="Topology remains opt-in for onboarded clusters.",
+        ),
+    }
+    return templates.get(action_id)
+
+
+def _configured_soperator_actions(
+    action_ids: Sequence[str],
+    *,
+    analyzed_actions: Sequence[SoperatorOnboardingAction],
+) -> tuple[SoperatorOnboardingAction, ...]:
+    analyzed_by_id = {action.id: action for action in analyzed_actions}
+    selected_ids = set(action_ids)
+    return _dedupe_soperator_actions(
+        tuple(
+            action
+            for action_id in action_ids
+            if (
+                action := _configured_soperator_action(
+                    action_id,
+                    selected_ids=selected_ids,
+                    analyzed_actions=analyzed_by_id,
+                )
+            )
+            is not None
+        )
+    )
+
+
+def _migration_plan_for_action_ids(action_ids: Sequence[str]) -> tuple[SoperatorMigrationPhase, ...]:
+    selected_ids = set(action_ids)
+    if not selected_ids & ONBOARDING_MIGRATION_ACTION_IDS:
+        return ()
+    return _default_soperator_migration_plan(
+        include_target_gpu_reconciliation=ONBOARDING_ACTION_RECONCILE_TARGET_GPU_STACK
+        in selected_ids,
+        include_external_node_template_upgrade=(
+            ONBOARDING_ACTION_UPGRADE_EXTERNAL_NODE_TEMPLATE in selected_ids
+        ),
+        include_soperator_upgrade=ONBOARDING_ACTION_UPGRADE_SOPERATOR in selected_ids,
+        include_data_migration=bool(
+            selected_ids
+            & {
+                ONBOARDING_ACTION_CREATE_ALIGNED_SFS,
+                ONBOARDING_ACTION_PLAN_DATA_MIGRATION,
+            }
+        ),
+        include_compute_migration=ONBOARDING_ACTION_PLAN_COMPUTE_MIGRATION in selected_ids,
+    )
+
+
 def _release_chart_identity(release: Mapping[str, Any]) -> str:
     explicit = str(release.get("chart_name", "") or "").strip()
     if explicit:
@@ -1178,6 +1431,10 @@ def _release_name(release: Mapping[str, Any]) -> str:
     return str(release.get("name", "") or "").strip().lower()
 
 
+def _release_status(release: Mapping[str, Any]) -> str:
+    return str(release.get("status", "") or "").strip().lower()
+
+
 def _is_soperator_release_candidate(release: Mapping[str, Any]) -> bool:
     release_name = _release_name(release)
     return (
@@ -1199,6 +1456,28 @@ def _is_compatible_soperator_release(release: Mapping[str, Any]) -> bool:
     if release_name in SOPERATOR_COMPATIBLE_CONTROLLER_RELEASE_NAMES:
         return namespace == "soperator-system" and chart_identity == "helm-soperator"
     return False
+
+
+def _release_identity_key(release: Mapping[str, Any]) -> tuple[str, str]:
+    return (_release_namespace(release).lower(), _release_name(release))
+
+
+def _is_shadowed_stale_source_release(
+    release: Mapping[str, Any],
+    *,
+    compatible_release: Mapping[str, Any] | None,
+    target_version: str,
+) -> bool:
+    if compatible_release is None:
+        return False
+    if _release_identity_key(release) != _release_identity_key(compatible_release):
+        return False
+    target = normalize_soperator_release_version(target_version)
+    compatible_version = _release_detected_version(compatible_release)
+    stale_version = _release_detected_version(release)
+    if not target or compatible_version != target or not stale_version:
+        return False
+    return compare_chart_versions(stale_version, target) == "older"
 
 
 def _node_groups_with_topology_labels(node_groups: Mapping[str, Any]) -> set[str]:
@@ -1227,6 +1506,436 @@ def _node_groups_with_rdma(node_groups: Mapping[str, Any]) -> set[str]:
         if any(str(resource).startswith("rdma/") for resource in resources):
             groups.add(key)
     return groups
+
+
+def _node_groups_with_allocatable_gpu(node_groups: Mapping[str, Any]) -> set[str]:
+    groups: set[str] = set()
+    for raw_key, raw_group in node_groups.items():
+        key = normalize_component_token(raw_key)
+        if not key or not isinstance(raw_group, Mapping):
+            continue
+        resources = raw_group.get("allocatable")
+        if not isinstance(resources, Mapping):
+            continue
+        if any(
+            str(resource).startswith("nvidia.com/gpu") and str(value) not in {"", "0"}
+            for resource, value in resources.items()
+        ):
+            groups.add(key)
+    return groups
+
+
+def _node_group_label_values(
+    node_groups: Mapping[str, Any],
+    groups: set[str],
+    label_key: str,
+) -> tuple[str, ...]:
+    values: set[str] = set()
+    for raw_key, raw_group in node_groups.items():
+        key = normalize_component_token(raw_key)
+        if key not in groups or not isinstance(raw_group, Mapping):
+            continue
+        labels = raw_group.get("labels")
+        if not isinstance(labels, Mapping):
+            continue
+        value = str(labels.get(label_key, "") or "").strip()
+        if value:
+            values.add(value)
+    return tuple(sorted(values))
+
+
+def _gpu_stack_snapshot(snapshot: Mapping[str, Any]) -> Mapping[str, Any]:
+    value = snapshot.get("gpu_stack")
+    return value if isinstance(value, Mapping) else {}
+
+
+def _deployed_gpu_stack_release(
+    releases: Sequence[Mapping[str, Any]],
+    *,
+    release_name: str,
+) -> Mapping[str, Any] | None:
+    normalized = release_name.strip().lower()
+    for release in releases:
+        if _release_name(release) != normalized:
+            continue
+        if _release_status(release) != "deployed":
+            continue
+        return release
+    return None
+
+
+def _helm_release_summary(release: Mapping[str, Any] | None) -> dict[str, str]:
+    if release is None:
+        return {}
+    return {
+        "name": str(release.get("name", "") or "").strip(),
+        "namespace": str(release.get("namespace", "") or "").strip(),
+        "chart": str(release.get("chart", "") or "").strip(),
+        "app_version": str(release.get("app_version", "") or "").strip(),
+        "status": str(release.get("status", "") or "").strip(),
+    }
+
+
+def _policy_resource_name(resource: Mapping[str, Any]) -> str:
+    metadata = resource.get("metadata")
+    if isinstance(metadata, Mapping):
+        name = str(metadata.get("name", "") or "").strip()
+        if name:
+            return name
+    return str(resource.get("name", "") or "").strip()
+
+
+def _policy_resource_kind(resource: Mapping[str, Any]) -> str:
+    return str(resource.get("kind", "") or "").strip().lower()
+
+
+def _policy_resource_ready(resource: Mapping[str, Any]) -> bool:
+    status = resource.get("status")
+    if not isinstance(status, Mapping):
+        return False
+    state = str(status.get("state", "") or "").strip().lower()
+    if state in {"ready", "reconciled"}:
+        return True
+    conditions = status.get("conditions")
+    if not isinstance(conditions, Sequence) or isinstance(conditions, (str, bytes, bytearray)):
+        return False
+    for condition in conditions:
+        if not isinstance(condition, Mapping):
+            continue
+        condition_type = str(condition.get("type", "") or "").strip().lower()
+        condition_status = str(condition.get("status", "") or "").strip().lower()
+        if condition_type == "ready" and condition_status == "true":
+            return True
+    return False
+
+
+def _gpu_stack_policy_ready(
+    policies: Sequence[Mapping[str, Any]],
+    *,
+    kind: str,
+    name: str,
+) -> bool:
+    normalized_kind = kind.strip().lower()
+    normalized_name = name.strip().lower()
+    for policy in policies:
+        policy_kind = _policy_resource_kind(policy)
+        policy_name = _policy_resource_name(policy).lower()
+        if normalized_kind not in policy_kind or policy_name != normalized_name:
+            continue
+        if _policy_resource_ready(policy):
+            return True
+    return False
+
+
+def _gpu_stack_discovery_evidence(
+    *,
+    snapshot: Mapping[str, Any],
+    node_groups: Mapping[str, Any],
+    gpu_groups: set[str],
+    rdma_groups: set[str],
+) -> dict[str, Any]:
+    gpu_stack = _gpu_stack_snapshot(snapshot)
+    releases = _sequence_of_mappings(gpu_stack.get("helm_releases"))
+    policies = _sequence_of_mappings(gpu_stack.get("policies"))
+    gpu_operator = _deployed_gpu_stack_release(releases, release_name="gpu-operator")
+    network_operator = _deployed_gpu_stack_release(releases, release_name="network-operator")
+    allocatable_gpu_groups = _node_groups_with_allocatable_gpu(node_groups)
+    evidence: dict[str, Any] = {
+        "gpu_node_groups": sorted(gpu_groups),
+        "gpu_allocatable_node_groups": sorted(allocatable_gpu_groups),
+        "rdma_allocatable_node_groups": sorted(rdma_groups),
+        "driver_presets": list(
+            _node_group_label_values(node_groups, gpu_groups, "nebius.com/drivers-preset")
+        ),
+        "nvidia_driver_versions": list(
+            _node_group_label_values(node_groups, gpu_groups, "nebius.com/nvidia_driver_version")
+        ),
+        "cuda_versions": list(
+            _node_group_label_values(node_groups, gpu_groups, "nebius.com/cuda_version")
+        ),
+    }
+    gpu_operator_summary = _helm_release_summary(gpu_operator)
+    if gpu_operator_summary:
+        evidence["gpu_operator_release"] = gpu_operator_summary
+    network_operator_summary = _helm_release_summary(network_operator)
+    if network_operator_summary:
+        evidence["network_operator_release"] = network_operator_summary
+    cluster_policy_ready = _gpu_stack_policy_ready(
+        policies,
+        kind="clusterpolicy",
+        name="cluster-policy",
+    )
+    nic_cluster_policy_ready = _gpu_stack_policy_ready(
+        policies,
+        kind="nicclusterpolicy",
+        name="nic-cluster-policy",
+    )
+    if cluster_policy_ready:
+        evidence["cluster_policy_ready"] = True
+    if nic_cluster_policy_ready:
+        evidence["nic_cluster_policy_ready"] = True
+    evidence["live_evidence_available"] = bool(releases or policies)
+    evidence["gpu_stack_verified"] = bool(
+        gpu_operator is not None
+        and cluster_policy_ready
+        and gpu_groups
+        and gpu_groups.issubset(allocatable_gpu_groups)
+        and (
+            not rdma_groups
+            or (network_operator is not None and nic_cluster_policy_ready)
+        )
+    )
+    return evidence
+
+
+def _k8s_minor_text(value: Any) -> str:
+    raw = str(value or "").strip().lstrip("v")
+    match = re.match(r"^(?P<major>[0-9]+)\.(?P<minor>[0-9]+)", raw)
+    if match is None:
+        return raw
+    return f"{match.group('major')}.{match.group('minor')}"
+
+
+def _k8s_minor_matches(value: Any, target: str) -> bool:
+    current = _k8s_minor_text(value)
+    target_minor = _k8s_minor_text(target)
+    return bool(current and target_minor and current == target_minor)
+
+
+def _mapping_text(value: Mapping[str, Any], *keys: str) -> str:
+    for key in keys:
+        text = str(value.get(key, "") or "").strip()
+        if text:
+            return text
+    return ""
+
+
+def _provider_mk8s_cluster(snapshot: Mapping[str, Any]) -> Mapping[str, Any]:
+    provider = snapshot.get("provider")
+    if not isinstance(provider, Mapping):
+        return {}
+    cluster = provider.get("mk8s_cluster")
+    return cluster if isinstance(cluster, Mapping) else {}
+
+
+def _provider_control_plane_version(snapshot: Mapping[str, Any]) -> str:
+    cluster = _provider_mk8s_cluster(snapshot)
+    return _mapping_text(
+        cluster,
+        "control_plane_version",
+        "controlPlaneVersion",
+        "k8s_version",
+        "kubernetes_version",
+        "version",
+    )
+
+
+def _provider_node_template(raw_group: Mapping[str, Any]) -> Mapping[str, Any]:
+    template = raw_group.get("node_template")
+    if isinstance(template, Mapping):
+        return template
+    provider = raw_group.get("provider")
+    if isinstance(provider, Mapping):
+        template = provider.get("node_template")
+        if isinstance(template, Mapping):
+            return template
+    return {}
+
+
+def _provider_node_group_id(raw_group: Mapping[str, Any]) -> str:
+    for key in ("node_group_id", "id"):
+        text = str(raw_group.get(key, "") or "").strip()
+        if text:
+            return text
+    provider = raw_group.get("provider")
+    if isinstance(provider, Mapping):
+        for key in ("node_group_id", "id"):
+            text = str(provider.get(key, "") or "").strip()
+            if text:
+                return text
+    labels: dict[str, Any] = {}
+    for field in ("labels", "node_labels"):
+        raw_labels = raw_group.get(field)
+        if isinstance(raw_labels, Mapping):
+            labels.update(raw_labels)
+    for label_key in ("nebius.com/node-group-id", "yandex.cloud/node-group-id"):
+        text = str(labels.get(label_key, "") or "").strip()
+        if text:
+            return text
+    return ""
+
+
+def _provider_node_group_name(raw_group: Mapping[str, Any]) -> str:
+    for key in ("node_group_name", "name"):
+        text = str(raw_group.get(key, "") or "").strip()
+        if text:
+            return text
+    provider = raw_group.get("provider")
+    if isinstance(provider, Mapping):
+        for key in ("node_group_name", "name"):
+            text = str(provider.get(key, "") or "").strip()
+            if text:
+                return text
+    return ""
+
+
+def _provider_template_k8s_version(template: Mapping[str, Any]) -> str:
+    return _mapping_text(
+        template,
+        "k8s_version",
+        "kubernetes_version",
+        "version",
+        "target_k8s_version",
+    )
+
+
+def _provider_template_os(template: Mapping[str, Any]) -> str:
+    raw_os = template.get("os")
+    if isinstance(raw_os, Mapping):
+        return _mapping_text(raw_os, "name", "id", "value")
+    return str(raw_os or template.get("target_os", "") or "").strip()
+
+
+def _provider_template_gpu_stack_preset(template: Mapping[str, Any]) -> str:
+    gpu_settings = template.get("gpu_settings")
+    if not isinstance(gpu_settings, Mapping):
+        gpu_settings = template.get("gpuSettings")
+    if isinstance(gpu_settings, Mapping):
+        text = _mapping_text(gpu_settings, "drivers_preset", "driversPreset")
+        if text:
+            return text
+    return _mapping_text(
+        template,
+        "gpu_stack_preset",
+        "drivers_preset",
+        "driversPreset",
+        "target_gpu_stack_preset",
+    )
+
+
+def _node_template_inventory_analysis(
+    *,
+    snapshot: Mapping[str, Any],
+    node_groups: Mapping[str, Any],
+    gpu_groups: set[str],
+) -> dict[str, Any]:
+    target_k8s = ONBOARDING_EXTERNAL_NODE_TEMPLATE_TARGET_K8S_VERSION
+    target_os = ONBOARDING_EXTERNAL_NODE_TEMPLATE_TARGET_OS
+    target_gpu = ONBOARDING_EXTERNAL_NODE_TEMPLATE_TARGET_GPU_STACK_PRESET
+    control_plane_version = _provider_control_plane_version(snapshot)
+    provider_collection_errors = _sequence_of_mappings(
+        snapshot.get("provider_collection_errors")
+    )
+    control_plane_matches = (
+        _k8s_minor_matches(control_plane_version, target_k8s)
+        if control_plane_version
+        else False
+    )
+    matched: list[dict[str, Any]] = []
+    remaining: list[dict[str, Any]] = []
+    unknown: list[dict[str, Any]] = []
+    provider_templates = 0
+    for raw_group_name, raw_group in sorted(node_groups.items()):
+        group_name = normalize_component_token(raw_group_name)
+        if not group_name or not isinstance(raw_group, Mapping):
+            continue
+        node_group_id = _provider_node_group_id(raw_group)
+        node_group_name = _provider_node_group_name(raw_group)
+        template = _provider_node_template(raw_group)
+        if not template:
+            unknown.append(
+                {
+                    "node_group": group_name,
+                    "node_group_id": node_group_id,
+                    "node_group_name": node_group_name,
+                    "reason": "provider node-template inventory missing",
+                }
+            )
+            continue
+        provider_templates += 1
+        current_k8s = _provider_template_k8s_version(template)
+        current_os = _provider_template_os(template)
+        current_gpu = _provider_template_gpu_stack_preset(template)
+        expected_gpu = target_gpu if group_name in gpu_groups else ""
+        reasons: list[str] = []
+        if not _k8s_minor_matches(current_k8s, target_k8s):
+            reasons.append(
+                f"Kubernetes {current_k8s or 'unknown'} != target {target_k8s}"
+            )
+        if current_os != target_os:
+            reasons.append(f"OS {current_os or 'unknown'} != target {target_os}")
+        if group_name in gpu_groups:
+            if current_gpu != target_gpu:
+                reasons.append(
+                    f"GPU driver preset {current_gpu or 'driverless'} != target {target_gpu}"
+                )
+        elif current_gpu:
+            reasons.append(f"CPU node group still has GPU driver preset {current_gpu}")
+        row = {
+            "node_group": group_name,
+            "node_group_id": node_group_id,
+            "node_group_name": node_group_name,
+            "current_k8s_version": current_k8s,
+            "current_os": current_os,
+            "current_gpu_stack_preset": current_gpu,
+            "target_k8s_version": target_k8s,
+            "target_os": target_os,
+            "target_gpu_stack_preset": expected_gpu,
+        }
+        if reasons:
+            row["reasons"] = reasons
+            remaining.append(row)
+        else:
+            matched.append(row)
+    provider_available = bool(control_plane_version or provider_templates)
+    control_plane = {
+        "current_k8s_version": control_plane_version,
+        "target_k8s_version": target_k8s,
+        "matches": control_plane_matches,
+    }
+    return {
+        "provider_inventory_available": provider_available,
+        "complete": bool(
+            provider_available
+            and control_plane_matches
+            and not provider_collection_errors
+            and not remaining
+            and not unknown
+            and provider_templates
+        ),
+        "control_plane": control_plane,
+        "matched_node_groups": matched,
+        "remaining_node_groups": remaining,
+        "unknown_node_groups": unknown,
+        "target_k8s_version": target_k8s,
+        "target_os": target_os,
+        "target_gpu_stack_preset": target_gpu,
+        "provider_collection_errors": [dict(item) for item in provider_collection_errors],
+    }
+
+
+def _node_template_inventory_finding_evidence(analysis: Mapping[str, Any]) -> dict[str, Any]:
+    matched = _sequence_of_mappings(analysis.get("matched_node_groups"))
+    remaining = _sequence_of_mappings(analysis.get("remaining_node_groups"))
+    unknown = _sequence_of_mappings(analysis.get("unknown_node_groups"))
+    return {
+        "control_plane": analysis.get("control_plane", {}),
+        "target_k8s_version": analysis.get("target_k8s_version", ""),
+        "target_os": analysis.get("target_os", ""),
+        "target_gpu_stack_preset": analysis.get("target_gpu_stack_preset", ""),
+        "matched_node_group_count": len(matched),
+        "matched_node_groups": [
+            str(item.get("node_group", "") or "").strip()
+            for item in matched[:20]
+            if str(item.get("node_group", "") or "").strip()
+        ],
+        "remaining_node_groups": [dict(item) for item in remaining[:50]],
+        "unknown_node_groups": [dict(item) for item in unknown[:50]],
+        "provider_collection_errors": [
+            dict(item)
+            for item in _sequence_of_mappings(analysis.get("provider_collection_errors"))
+        ],
+    }
 
 
 def analyze_soperator_onboarding_snapshot(
@@ -1258,7 +1967,13 @@ def analyze_soperator_onboarding_snapshot(
     topology_groups = _node_groups_with_topology_labels(node_groups)
     role_evidence = _node_group_role_evidence(node_groups)
     compute_layout_compatible = _compute_layout_target_compatible(node_groups)
+    node_template_inventory = _node_template_inventory_analysis(
+        snapshot=snapshot,
+        node_groups=node_groups,
+        gpu_groups=gpu_groups,
+    )
     manual_source_version = normalize_soperator_release_version(source_version_override)
+    target_version = normalize_soperator_release_version(pinned_chart_version or pinned_app_version)
 
     findings: list[SoperatorOnboardingFinding] = []
     actions: list[SoperatorOnboardingAction] = []
@@ -1377,31 +2092,60 @@ def analyze_soperator_onboarding_snapshot(
             )
         )
     else:
+        gpu_stack_evidence = _gpu_stack_discovery_evidence(
+            snapshot=snapshot,
+            node_groups=node_groups,
+            gpu_groups=gpu_groups,
+            rdma_groups=rdma_groups,
+        )
+        if gpu_stack_evidence.get("gpu_stack_verified"):
+            gpu_stack_status = "verified"
+            gpu_stack_severity = "info"
+            gpu_stack_message = (
+                "Live GPU stack evidence is healthy for the discovered GPU node groups; "
+                "cxcli will keep the target GPU stack selected for adoption/reconciliation "
+                "and deploy-time GPU readiness, GPU Visibility, and NCCL validations. "
+                "This is not a failure signal."
+            )
+        elif gpu_stack_evidence.get("live_evidence_available"):
+            gpu_stack_status = "reconcile-planned"
+            gpu_stack_severity = "required"
+            gpu_stack_message = (
+                "GPU node groups were discovered, but live GPU-stack evidence is incomplete "
+                "or not fully healthy in the onboarding snapshot; cxcli will reconcile the "
+                "target GPU Operator, Network Operator when GPU-cluster/RDMA-capable, and "
+                "deploy-time GPU readiness, GPU Visibility, and NCCL validations."
+            )
+        else:
+            gpu_stack_status = "reconcile-planned"
+            gpu_stack_severity = "required"
+            gpu_stack_message = (
+                "GPU node groups were discovered; cxcli will manage the target GPU stack as "
+                "desired state, including GPU Operator, Network Operator when the target is "
+                "GPU-cluster/RDMA-capable, and deploy-time GPU readiness, GPU Visibility, "
+                "and NCCL validations. This does not mean the current stack is broken."
+            )
         findings.append(
             SoperatorOnboardingFinding(
                 layer="gpu-stack",
-                status="planned",
-                severity="required",
-                message=(
-                    "GPU node groups were discovered; target remediation will apply the "
-                    "standard cxcli MK8s GPU stack, including GPU Operator, Network Operator "
-                    "when the target is GPU-cluster/RDMA-capable, and deploy-time GPU "
-                    "readiness, GPU Visibility, and NCCL validations."
-                ),
-                action_id=ONBOARDING_ACTION_REMEDIATE_TARGET_GPU_STACK,
-                evidence={"gpu_node_groups": sorted(gpu_groups)},
+                status=gpu_stack_status,
+                severity=gpu_stack_severity,
+                message=gpu_stack_message,
+                action_id=ONBOARDING_ACTION_RECONCILE_TARGET_GPU_STACK,
+                evidence=gpu_stack_evidence,
             )
         )
         actions.append(
             SoperatorOnboardingAction(
-                id=ONBOARDING_ACTION_REMEDIATE_TARGET_GPU_STACK,
-                title="Remediate target MK8s GPU stack and deploy-time validations",
+                id=ONBOARDING_ACTION_RECONCILE_TARGET_GPU_STACK,
+                title="Reconcile target MK8s GPU stack and deploy-time validations",
                 layer="gpu-stack",
                 required=True,
                 selected=True,
                 reason=(
-                    "GPU workers require the standard cxcli GPU/RDMA operator policy and "
-                    "deploy-time GPU validation reports on the target cluster."
+                    "GPU workers require cxcli-owned GPU/RDMA operator desired state and "
+                    "deploy-time validation reports on the target cluster; this can adopt an "
+                    "already healthy live stack."
                 ),
             )
         )
@@ -1409,15 +2153,16 @@ def analyze_soperator_onboarding_snapshot(
         findings.append(
             SoperatorOnboardingFinding(
                 layer="gpu-rdma",
-                status="remediation-planned",
+                status="validation-planned",
                 severity="required",
                 message=(
                     "GPU node groups were discovered, but no scheduler-visible RDMA resources "
-                    "were found in node allocatable data. cxcli will remediate the target "
-                    "GPU/RDMA operator stack when the target is GPU-cluster/RDMA-capable, then "
-                    "verify scheduler-visible GPU/RDMA readiness and NCCL at deploy time."
+                    "were found in node allocatable data. If the target is "
+                    "GPU-cluster/RDMA-capable, cxcli will reconcile Network Operator/RDMA "
+                    "policy and verify scheduler-visible GPU/RDMA readiness and NCCL at "
+                    "deploy time; for Ethernet-only GPU shapes this is not a failure by itself."
                 ),
-                action_id=ONBOARDING_ACTION_REMEDIATE_TARGET_GPU_STACK,
+                action_id=ONBOARDING_ACTION_RECONCILE_TARGET_GPU_STACK,
             )
         )
 
@@ -1548,14 +2293,36 @@ def analyze_soperator_onboarding_snapshot(
             )
         )
 
+    incompatible_releases = tuple(
+        release for release in soperator_candidates if not _is_compatible_soperator_release(release)
+    )
+    shadowed_stale_releases = tuple(
+        release
+        for release in incompatible_releases
+        if _is_shadowed_stale_source_release(
+            release,
+            compatible_release=soperator_release,
+            target_version=target_version,
+        )
+    )
     incompatible_release = next(
-        (
-            release
-            for release in soperator_candidates
-            if not _is_compatible_soperator_release(release)
-        ),
+        (release for release in incompatible_releases if release not in shadowed_stale_releases),
         None,
     )
+    if shadowed_stale_releases:
+        findings.append(
+            SoperatorOnboardingFinding(
+                layer="soperator",
+                status="stale-source-release",
+                severity="info",
+                message=(
+                    "Canonical target Soperator Helm release is already deployed; older "
+                    "same-release source-family Helm record(s) are recorded as stale cleanup "
+                    "evidence and are not selected onboarding work."
+                ),
+                evidence={"releases": [dict(release) for release in shadowed_stale_releases]},
+            )
+        )
 
     manual_source_version_applies = bool(
         manual_source_version and (has_soperator_crds or incompatible_release is not None)
@@ -1647,7 +2414,6 @@ def analyze_soperator_onboarding_snapshot(
     source_version = detected_source_version or (
         manual_source_version if manual_source_version_applies else ""
     )
-    target_version = normalize_soperator_release_version(pinned_chart_version or pinned_app_version)
     migration_profile: Mapping[str, Any] | None = None
     migration_profile_id = ""
     remediation: tuple[SoperatorRemediationItem, ...] = ()
@@ -1716,13 +2482,16 @@ def analyze_soperator_onboarding_snapshot(
                     storage_present=storage_present,
                     target_version=pinned_chart_version or target_version,
                 )
+                external_node_template_required = not bool(
+                    node_template_inventory.get("complete")
+                )
                 migration_plan = _default_soperator_migration_plan(
-                    include_target_gpu_remediation=any(
-                        action.id == ONBOARDING_ACTION_REMEDIATE_TARGET_GPU_STACK
+                    include_target_gpu_reconciliation=any(
+                        action.id == ONBOARDING_ACTION_RECONCILE_TARGET_GPU_STACK
                         and action.selected
                         for action in actions
                     ),
-                    include_external_node_template_upgrade=True,
+                    include_external_node_template_upgrade=external_node_template_required,
                     include_soperator_upgrade=True,
                     include_data_migration=any(
                         item.classification == "data-sensitive" for item in remediation
@@ -1763,28 +2532,64 @@ def analyze_soperator_onboarding_snapshot(
                         reason="Migration changes require customer approval before execution.",
                     )
                 )
-                findings.append(
-                    SoperatorOnboardingFinding(
-                        layer="mk8s-node-template",
-                        status="remediation-planned",
-                        severity="required",
-                        message=(
-                            "External MK8s control plane and node templates will be upgraded "
-                            "during migration through direct Nebius updates because the target "
-                            "is not Terraform-owned by cxcli."
-                        ),
-                        action_id=ONBOARDING_ACTION_UPGRADE_EXTERNAL_NODE_TEMPLATE,
-                        evidence={
-                            "target_k8s_version": (
-                                ONBOARDING_EXTERNAL_NODE_TEMPLATE_TARGET_K8S_VERSION
-                            ),
-                            "target_os": ONBOARDING_EXTERNAL_NODE_TEMPLATE_TARGET_OS,
-                            "target_gpu_stack_preset": (
-                                ONBOARDING_EXTERNAL_NODE_TEMPLATE_TARGET_GPU_STACK_PRESET
-                            ),
-                        },
+                if external_node_template_required:
+                    provider_inventory_available = bool(
+                        node_template_inventory.get("provider_inventory_available")
                     )
-                )
+                    findings.append(
+                        SoperatorOnboardingFinding(
+                            layer="mk8s-node-template",
+                            status="remediation-planned",
+                            severity="required",
+                            message=(
+                                "External MK8s control plane and node templates will be "
+                                "upgraded during migration through direct Nebius updates "
+                                "because the target is not Terraform-owned by cxcli."
+                                if provider_inventory_available
+                                else (
+                                    "External MK8s control plane and node-template provider "
+                                    "inventory was not available during onboarding; cxcli will "
+                                    "verify and align the external node templates during "
+                                    "migration before it manages Soperator."
+                                )
+                            ),
+                            action_id=ONBOARDING_ACTION_UPGRADE_EXTERNAL_NODE_TEMPLATE,
+                            evidence=_node_template_inventory_finding_evidence(
+                                node_template_inventory
+                            ),
+                        )
+                    )
+                    actions.append(
+                        SoperatorOnboardingAction(
+                            id=ONBOARDING_ACTION_UPGRADE_EXTERNAL_NODE_TEMPLATE,
+                            title="Upgrade external MK8s control plane and node templates",
+                            layer="mk8s-node-template",
+                            selected=True,
+                            disruptive=True,
+                            reason=(
+                                "External Soperator targets are not Terraform-owned, so cxcli "
+                                "must align Kubernetes version, node OS image, and Nebius GPU "
+                                "driver preset through direct Nebius updates during migration."
+                            ),
+                        )
+                    )
+                else:
+                    findings.append(
+                        SoperatorOnboardingFinding(
+                            layer="mk8s-node-template",
+                            status="target-compatible",
+                            severity="info",
+                            message=(
+                                "External MK8s control plane and discovered node-group "
+                                "templates already match the target Kubernetes version, node "
+                                "OS image, and GPU driver preset requirements. cxcli will "
+                                "skip external node-template remediation unless live state drifts."
+                            ),
+                            evidence=_node_template_inventory_finding_evidence(
+                                node_template_inventory
+                            ),
+                        )
+                    )
                 if any(item.classification == "data-sensitive" for item in remediation):
                     actions.extend(
                         [
@@ -1809,20 +2614,6 @@ def analyze_soperator_onboarding_snapshot(
                             ),
                         ]
                     )
-                actions.append(
-                    SoperatorOnboardingAction(
-                        id=ONBOARDING_ACTION_UPGRADE_EXTERNAL_NODE_TEMPLATE,
-                        title="Upgrade external MK8s control plane and node templates",
-                        layer="mk8s-node-template",
-                        selected=True,
-                        disruptive=True,
-                        reason=(
-                            "External Soperator targets are not Terraform-owned, so cxcli "
-                            "must align Kubernetes version, node OS image, and Nebius GPU "
-                            "driver preset through direct Nebius updates during migration."
-                        ),
-                    )
-                )
                 if not compute_layout_compatible:
                     actions.append(
                         SoperatorOnboardingAction(
@@ -1952,6 +2743,82 @@ def target_snapshot_from_config(
     }
 
 
+def _source_report_selected_action_ids(report: Mapping[str, Any]) -> tuple[str, ...]:
+    actions = report.get("actions", [])
+    if not isinstance(actions, list):
+        return ()
+    ids: list[str] = []
+    for action in actions:
+        if not isinstance(action, Mapping) or action.get("selected") is not True:
+            continue
+        action_id = str(action.get("id", "") or "").strip()
+        if action_id:
+            ids.append(action_id)
+    return tuple(ids)
+
+
+def _matching_source_discovery_report(
+    *,
+    source_report_path: Path | None,
+    target_ref: str,
+    onboarding: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    if source_report_path is None or not source_report_path.exists():
+        return None
+    try:
+        payload = json.loads(source_report_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, Mapping):
+        return None
+    report = payload.get("report")
+    if not isinstance(report, Mapping):
+        return None
+    if normalize_component_token(report.get("target_ref")) != normalize_component_token(target_ref):
+        return None
+    action_ids = _onboarding_action_ids(onboarding)
+    if _source_report_selected_action_ids(report) != action_ids:
+        return None
+    for key in ("state", "source_version", "target_version", "migration_profile_id"):
+        expected = str(onboarding.get(key, "") or "").strip()
+        actual = str(report.get(key, "") or "").strip()
+        if expected and actual != expected:
+            return None
+    return copy.deepcopy(dict(report))
+
+
+def _report_with_accepted_onboarding_contract(
+    report: SoperatorOnboardingReport,
+    onboarding: Mapping[str, Any],
+) -> SoperatorOnboardingReport:
+    collection_errors = onboarding.get("collection_errors")
+    if isinstance(collection_errors, list) and collection_errors:
+        return report
+    action_ids = _onboarding_action_ids(onboarding)
+    if not action_ids:
+        return report
+    selected_action_ids = set(action_ids)
+    selected_actions = _configured_soperator_actions(action_ids, analyzed_actions=report.actions)
+    filtered_findings = tuple(
+        finding
+        for finding in report.findings
+        if not finding.action_id or finding.action_id in selected_action_ids
+    )
+    return replace(
+        report,
+        state=str(onboarding.get("state", "") or "").strip() or report.state,
+        actions=selected_actions,
+        findings=filtered_findings,
+        source_version=str(onboarding.get("source_version", "") or "").strip()
+        or report.source_version,
+        target_version=str(onboarding.get("target_version", "") or "").strip()
+        or report.target_version,
+        migration_profile_id=str(onboarding.get("migration_profile_id", "") or "").strip()
+        or report.migration_profile_id,
+        migration_plan=_migration_plan_for_action_ids(action_ids),
+    )
+
+
 def soperator_onboarding_target_refs(payload_or_config: Any) -> tuple[str, ...]:
     payload = to_plain_data(payload_or_config)
     apps = payload.get("apps") if isinstance(payload, Mapping) else None
@@ -1978,7 +2845,22 @@ def build_soperator_onboarding_report_from_config(
     target_ref: str,
     pinned_chart_version: str = "",
     pinned_app_version: str = "",
+    source_report_path: Path | None = None,
 ) -> dict[str, Any]:
+    target = soperator_onboarding_target(payload_or_config, target_ref=target_ref)
+    onboarding = target.get("soperator_onboarding") if isinstance(target, Mapping) else {}
+    if isinstance(onboarding, Mapping):
+        source_report = _matching_source_discovery_report(
+            source_report_path=source_report_path,
+            target_ref=target_ref,
+            onboarding=onboarding,
+        )
+        if source_report is not None:
+            source_report["accepted_fingerprint"] = soperator_onboarding_fingerprint(
+                payload_or_config,
+                target_ref=target_ref,
+            )
+            return source_report
     snapshot = target_snapshot_from_config(payload_or_config, target_ref=target_ref)
     app_row = soperator_onboarding_app_row(payload_or_config, target_ref=target_ref)
     if not pinned_chart_version and isinstance(app_row, Mapping):
@@ -1989,8 +2871,6 @@ def build_soperator_onboarding_report_from_config(
         pinned_chart_version=pinned_chart_version,
         pinned_app_version=pinned_app_version,
     )
-    target = soperator_onboarding_target(payload_or_config, target_ref=target_ref)
-    onboarding = target.get("soperator_onboarding") if isinstance(target, Mapping) else {}
     if isinstance(onboarding, Mapping):
         storage_mode = str(onboarding.get("storage_mode", "") or "").strip()
         compute_mode = str(onboarding.get("compute_mode", "") or "").strip()
@@ -2000,6 +2880,8 @@ def build_soperator_onboarding_report_from_config(
                 storage_mode=storage_mode or ONBOARDING_STORAGE_MODE_KEEP_EXISTING,
                 compute_mode=compute_mode or ONBOARDING_COMPUTE_MODE_KEEP_EXISTING,
             )
+        if onboarding.get("accepted") is True:
+            report = _report_with_accepted_onboarding_contract(report, onboarding)
     report_payload = report.to_dict()
     report_payload["accepted_fingerprint"] = soperator_onboarding_fingerprint(
         payload_or_config,
@@ -2023,6 +2905,7 @@ def write_soperator_onboarding_reports(
             target_ref=target_ref,
             pinned_chart_version=pinned_chart_version,
             pinned_app_version=pinned_app_version,
+            source_report_path=generated_dir.parent / SOURCE_SOPERATOR_DISCOVERY_REPORT_NAME,
         )
         path = reports_dir / f"soperator-onboarding-{target_ref}.json"
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -2182,10 +3065,39 @@ def collect_kubectl_soperator_snapshot(
             errors=collection_errors,
             extra_env=extra_env,
         )
-    helm_releases = _helm_json(
-        ["helm", "--kube-context", context, "list", "-A", "-o", "json"],
+    helm_releases = []
+    for namespace in SOPERATOR_HELM_DISCOVERY_NAMESPACES:
+        namespace_releases = _helm_json(
+            ["helm", "--kube-context", context, "list", "-n", namespace, "-o", "json"],
+            timeout,
+            errors=collection_errors,
+            extra_env=extra_env,
+        )
+        if isinstance(namespace_releases, list):
+            helm_releases.extend(namespace_releases)
+    gpu_stack_helm_releases = []
+    for namespace in GPU_STACK_HELM_DISCOVERY_NAMESPACES:
+        namespace_releases = _helm_json(
+            ["helm", "--kube-context", context, "list", "-n", namespace, "-o", "json"],
+            timeout,
+            errors=None,
+            extra_env=extra_env,
+        )
+        if isinstance(namespace_releases, list):
+            gpu_stack_helm_releases.extend(namespace_releases)
+    gpu_stack_policies = _kubectl_json(
+        [
+            "kubectl",
+            "--context",
+            context,
+            "get",
+            "clusterpolicy,nicclusterpolicy",
+            "-A",
+            "-o",
+            "json",
+        ],
         timeout,
-        errors=collection_errors,
+        errors=None,
         extra_env=extra_env,
     )
     worker_topology_by_nodeset = _collect_worker_topology_by_nodeset(
@@ -2278,6 +3190,14 @@ def collect_kubectl_soperator_snapshot(
             workloads.get("items", []) if isinstance(workloads, Mapping) else []
         ),
         "worker_topology_by_nodeset": worker_topology_by_nodeset,
+        "gpu_stack": {
+            "helm_releases": gpu_stack_helm_releases,
+            "policies": (
+                gpu_stack_policies.get("items", [])
+                if isinstance(gpu_stack_policies, Mapping)
+                else []
+            ),
+        },
         "collection_errors": collection_errors,
     }
 

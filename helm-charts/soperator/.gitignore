@@ -47,3 +47,4 @@ __pycache__/
 # Helm packaging artifacts
 /*.tgz
 /charts/*.tgz
+/tmpcharts-*/

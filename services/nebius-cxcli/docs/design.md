@@ -358,7 +358,7 @@ Bundled MK8s GPU policy is split deliberately between component source data, cxc
 - The bundled NVIDIA path intentionally does not ship a generic built-in "health checker" workload. NVIDIA's own docs separate fast install verification and sample workload validation from ongoing DCGM-based telemetry and deeper DCGM diagnostics. In cxcli, that means deploy-time checks stay focused on operator readiness, bounded CUDA visibility, and optional NCCL, while long-running telemetry/alerting remains the responsibility of DCGM Exporter / Prometheus / Grafana and deeper diagnostics remain explicit administrator workflows rather than something every `deploy` reruns. See: [About the NVIDIA GPU Operator](https://docs.nvidia.com/datacenter/cloud-native/gpu-operator/24.9/index.html), [GPU Operator Getting Started](https://docs.nvidia.com/datacenter/cloud-native/gpu-operator/23.9.0/getting-started.html), [NVIDIA GPU Telemetry](https://docs.nvidia.com/datacenter/cloud-native/gpu-telemetry/latest/index.html), [DCGM Diagnostics](https://docs.nvidia.com/datacenter/dcgm/latest/user-guide/dcgm-diagnostics.html), and [NVIDIA Network Operator readiness](https://docs.nvidia.com/networking/display/kubernetes2610/life-cycle-management.html).
 - That split still assumes DCGM Exporter itself stays enabled on the GPU Operator release. For GPU-enabled MK8s, DCGM Exporter must stay enabled in GPU Operator. Omitting `nvidia-gpu-operator.values.dcgmExporter.enabled` is valid because the bundled GPU Operator chart defaults it to enabled; explicitly setting it to `false` is rejected. Scraping and pushing those metrics to Nebius Monitoring happens only when the MK8s observability metrics path is enabled. Prometheus scrape wiring remains a chart-level concern under `values.dcgmExporter.serviceMonitor.*`, not a built-in `deploy` validation toggle, and should only be enabled when the target cluster has a Prometheus-operator-compatible observability stack. For the Nebius Observability Agent path, the settings catalog declares the DCGM exporter as an app metric target with `discovery.kind: prometheus_annotations`, so the agent discovers the GPU Operator service through its documented `prometheus.io/scrape=true` service endpoint path instead of through a duplicate `config.metrics.additionalTargets` scrape job. Live testing on the Nebius driverful-image path (`gpu_stack_source: nebius_image`) showed an important nuance: NVIDIA's `dcgmExporter.enabled=true` keeps the source configured in `ClusterPolicy`, but the chart's default NFD worker affinity can leave Nebius driverful GPU nodes without the NFD-owned `nvidia.com/gpu.present=true` label, and those same nodes can carry `nvidia.com/gpu.deploy.operands=false`. The bundled GPU Operator rule therefore pins NFD workers to Nebius GPU nodes only on `nebius_image` targets where Network Operator is not present; GPU-cluster / InfiniBand targets keep Network Operator as the single NFD owner. The DCGM metric target's `managed_gpu_node_policy.{labels,selector,stack_sources}` owns only the Nebius-specific operand labels. Those operand labels are Nebius-specific scheduling policy, not an NVIDIA chart default. When observability and Kubernetes metrics are enabled, cxcli materializes that policy into `inputs.node_groups[*].node_labels`, enabling only the DCGM exporter and validator operands while explicitly keeping GPU Operator device-plugin/GFD disabled so the Nebius-managed device-plugin path is not duplicated. During `deploy`, cxcli also reconciles the same settings-owned operand labels onto existing live GPU Node objects matching the catalog-owned selector because MK8s node-group label updates may not back-propagate to already-running nodes.
 - Observability architecture, endpoint guidance, project config shape, and onboarding workflow are documented in [Observability](#observability).
-- The three built-in validations are intentionally layered to avoid semantic overlap. `operator_readiness` is the cheapest prerequisite gate: policy objects plus scheduler-visible GPUs on Ready nodes. `gpu_visibility` is the bounded single-node data-path smoke test that proves a real CUDA workload can execute. `nccl` is the optional multi-node communication and bandwidth validation: Socket/TCPIP on Ethernet-only shapes, RDMA on GPU-cluster / InfiniBand shapes. The ordering is deliberate so common operator/runtime failures stop before the expensive NCCL phase, while NCCL remains the only bundled check that says anything about distributed GPU communication quality. For cxcli-managed Soperator targets, local `deploy` stages app reconciliation by applying the platform/GPU operator Flux resources first, running the MK8s GPU stack, GPU Visibility, and NCCL validations, then applying the full Soperator bundle. Workload validations still use scheduler-free GPUs and record a skipped report rather than failing when existing workloads or already-running Soperator workers reserve every GPU on every Ready GPU node; NCCL also treats a transient `MPIJob` preemption as the same skip condition when those workload pods claim all GPUs while the NCCL launcher is starting. For Soperator targets, the required Soperator smoke validation covers the Slurm-owned GPU path separately by running one-GPU `nvidia-smi -L` and one-rank `all_reduce_perf` checks through `srun` when Slurm exposes an idle or mixed GPU partition.
+- The three built-in validations are intentionally layered to avoid semantic overlap. `operator_readiness` is the cheapest prerequisite gate: policy objects plus scheduler-visible GPUs on Ready nodes. `gpu_visibility` is the bounded single-node data-path smoke test that proves a real CUDA workload can execute. `nccl` is the optional multi-node communication and bandwidth validation: Socket/TCPIP on Ethernet-only shapes, RDMA on GPU-cluster / InfiniBand shapes. The ordering is deliberate so common operator/runtime failures stop before the expensive NCCL phase, while NCCL remains the only bundled check that says anything about distributed GPU communication quality. For cxcli-managed Soperator targets, local `deploy` stages app reconciliation by applying the platform/GPU operator Flux resources first, running the MK8s GPU stack, GPU Visibility, and NCCL validations, then applying the full Soperator bundle. Workload validations still use scheduler-free GPUs and record a skipped report rather than failing when existing workloads or already-running Soperator workers reserve every GPU on every Ready GPU node; NCCL also treats a transient `MPIJob` preemption as the same skip condition when those workload pods claim all GPUs while the NCCL launcher is starting. For Soperator targets, the required Soperator smoke validation covers the Slurm-owned GPU path separately by running one-GPU `nvidia-smi -L` through a login-pod `srun` script when Slurm exposes an idle or mixed GPU partition, and by running one Slurm-owned `mpirun /usr/bin/all_reduce_perf_mpi` benchmark that uses two idle GPU Slurm nodes when available and otherwise uses the only idle multi-GPU Slurm node. That Slurm benchmark is not the transient Kubernetes `nccl-test` Helm/MPIJob path; it records the average large-message `busbw` across the 2G, 4G, and 8G rows and is skipped only when Slurm cannot provide at least two GPU ranks.
 - Soperator targets use the same cxcli-owned MK8s GPU validation prompts as
   other GPU-enabled MK8s targets: `operator_readiness`, `gpu_visibility`, and
   `nccl` are prompted in the create/component wizard and persisted under
@@ -376,8 +376,11 @@ Bundled MK8s GPU policy is split deliberately between component source data, cxc
   validation. It waits for the `soperator-manager` rollout, verifies the
   target `SlurmCluster` is `Available`, checks Slurm CLI access from a login
   pod with `sinfo` and `squeue`, and runs a one-task synchronous `srun` job
-  that prefers an idle non-GPU partition when one exists. Slurm nodes reported
-  as `inval` remain an unhealthy validation gate.
+  that prefers an idle non-GPU partition when one exists. When a GPU partition
+  is available, it also runs a one-GPU Slurm visibility check and a Slurm NCCL
+  benchmark that prefers two idle GPU Slurm nodes and falls back to the only
+  idle multi-GPU Slurm node when there is just one GPU node.
+  Slurm nodes reported as `inval` remain an unhealthy validation gate.
   The goal is a quick post-install/post-migration proof that Soperator
   reconciliation, Slurm login access, worker visibility, queue access, and a
   minimal Slurm job path are all functioning before the run is reported
@@ -794,7 +797,11 @@ operator to choose a version from the committed migration profiles or enter one
 manually, while non-interactive runs can pass `--source-version <version>`.
 That selected version is validated against
 `soperator_migration_profiles.yaml` before cxcli records the source version and
-profile id. It also has two independent layer choices: storage mode is
+profile id. If a canonical pinned-target `soperator` release is already
+present, older same-name source-family Helm records are treated as stale
+discovery evidence in the saved report and do not trigger the source-version
+recovery prompt or selected onboarding work. It also has two independent layer
+choices: storage mode is
 `keep-existing-storage` or
 `create-aligned-sfs`, and compute mode is `keep-existing-compute` or
 `create-aligned-node-groups`. Discovery recommends aligned SFS when jail,
@@ -823,7 +830,11 @@ fall back to compact profile worker topology. Chart-owned worker image tags
 remain target chart defaults instead of being copied from the adopted source
 NodeSets. Adopted Soperator values also set Pyxis to optional and clear the
 importer path so a legacy or incompatible Pyxis importer option cannot prevent
-`slurmd` from starting during chart takeover. When an existing
+`slurmd` from starting during chart takeover. Chart-managed MariaDB adoption
+defaults to `compute-csi-default-sc` with `ReadWriteOnce` storage, and a
+discovered live MariaDB PVC overrides that default with its storage class,
+access mode, and largest observed size so the accounting database is not
+rendered onto the shared Slurm filesystem. When an existing
 Soperator release is adopted, onboarding preserves the live `SlurmCluster`
 resource name in `values.clusterName` so target deploy and smoke validation
 continue to address the adopted cluster. The
@@ -832,9 +843,10 @@ profile worker NodeSets mapped to the detected existing worker node groups.
 Worker node groups stay in place. External Kubernetes minor, node OS image, and
 Nebius-image GPU-stack upgrades selected by onboarding are migration-owned
 external work because the target is not Terraform-owned. The executor upgrades
-the MK8s control plane first, then updates node groups one group at a time with
-direct Nebius node-group updates and the zero-surge strategy contract rather
-than a parallel worker migration. CPU node groups that still carry a legacy GPU
+the MK8s control plane first, then updates service-role node groups one group
+at a time with direct Nebius node-group updates and temporary zero-surge, while
+worker groups default to safe-surge waves after spare-capacity, worker-health,
+and Slurm queue preflights pass. CPU node groups that still carry a legacy GPU
 driver preset are reset to the CPU-supported empty preset during that rollout.
 One-node controller, login, and accounting node groups temporarily quiesce the
 matching Soperator workloads before their node-group update and restore them
@@ -856,28 +868,57 @@ workflow is explicit: run
 the external Nebius MK8s target in `config.yaml`, run the read-only analysis,
 inspect the discovery report and Soperator app/remediation/migration plan plus
 role mapping, then validate and render the accepted target. If the accepted
-report says no migration work is required, plain `deploy <config.yaml>`
+report says no migration-owned work is required, plain `deploy <config.yaml>`
 reconciles the generated desired state across every target; `deploy --target
 <target-id>` is only a narrowing selector for a deliberate one-target local run.
-If the accepted onboarding report says migration work is required, skip normal
-deploy and continue with
+If the accepted onboarding report says migration-owned work is required, skip
+normal deploy and continue with
 `nebius-cxcli ext-soperator migrate <config.yaml> --target <target> --dry-run` to
-inspect the explicit compute/storage migration phases and target remediation
-actions. When the discovery snapshot contains GPU workers, onboarding records
-`remediate-target-gpu-stack` and writes the same target-scoped MK8s GPU policy
+inspect the explicit migration-owned actions. In interactive terminals, the
+dry-run plan highlights the target/source topics, storage/compute modes,
+required-action statuses, migration phases, executor contracts, and execution
+mode so operators can scan the plan before accepting live work. The route
+is driven by
+`deploy.targets[].soperator_onboarding.actions`, not by storage and compute
+modes alone: a target that resolved to `keep-existing-storage` and
+`keep-existing-compute` can still require migration for Soperator chart upgrade
+or external MK8s control-plane/node-template upgrade. `deploy` refuses selected
+migration-required external Soperator onboarding targets before Terraform/Flux
+preflight because deploy only applies rendered desired state; the guard checks
+both the rendered manifest runtime config and the current source config so older
+bundles fail closed while migration-owned actions remain selected.
+`ext-soperator migrate --execute` owns the ad hoc Nebius API calls,
+checkpointing, validation hold, and source retirement phases. Use migrate for
+reruns/resume while those actions remain selected. After a full successful
+`ext-soperator migrate --execute`, cxcli refreshes the source config from live
+post-migration discovery when it can, so migration-owned actions are no longer
+selected and future normal reconciliation can use render/deploy. If that refresh
+is skipped, rerun `ext-soperator onboard`, rerender, then deploy only for normal
+rendered reconciliation if needed.
+
+When the discovery snapshot contains GPU workers, onboarding records
+`reconcile-target-gpu-stack` and writes the same target-scoped MK8s GPU policy
 used by new GPU clusters: GPU Operator for GPU targets, Network Operator when
 the target inventory is GPU-cluster/RDMA-capable, and deploy-time GPU stack,
-GPU Visibility, and NCCL validations. Missing scheduler-visible `rdma/*`
-resources in the source inventory are therefore saved as target remediation
-evidence, not as an operator-owned manual unblocking step. Target GPU stack
-remediation alone is not migration work; if no upgrade, storage, compute, or
-external node-template migration action is selected, normal render/deploy
-applies it as desired state. On Soperator clusters whose worker pods own all
+GPU Visibility, and NCCL validations. On reruns, onboarding inspects the live
+GPU Operator and Network Operator Helm releases, NVIDIA ClusterPolicy and
+NicClusterPolicy readiness, scheduler-visible GPU/RDMA resources, and Nebius
+driver labels. Healthy evidence is reported as `gpu-stack: verified`; the
+selected action then means cxcli adopts/reconciles desired state and keeps
+deploy-time validation reports, not that remediation is missing. Missing
+scheduler-visible `rdma/*` resources in the source inventory are saved as
+`gpu-rdma: validation-planned` evidence for Network Operator/RDMA
+reconciliation when the target is RDMA-capable, not as an operator-owned manual
+unblocking step. Target GPU stack reconciliation alone is not migration work;
+if no upgrade, storage, compute, or external node-template migration action is
+selected, normal render/deploy applies it as desired state and
+`ext-soperator migrate` fails fast with the render/deploy route. On Soperator
+clusters whose worker pods own all
 Kubernetes GPUs, those Kubernetes workload validations may report a scheduler
 skip, while the required Soperator smoke report still records Slurm-side GPU
-visibility and one-rank NCCL checks when a GPU partition is available. In that
-ownership model, `deploy-report.md` promotes the passed Slurm-side GPU
-visibility or NCCL smoke result into the matching human validation summary,
+visibility and a Slurm NCCL benchmark when a GPU partition has enough idle GPU
+ranks available. In that ownership model, `deploy-report.md` promotes the
+passed Slurm-side GPU visibility or NCCL benchmark result into the matching human validation summary,
 while the raw Kubernetes detail JSON keeps the scheduler skip. The
 migration command is the separate execution
 surface for live orchestration. `--execute` validates the accepted onboarding
@@ -886,16 +927,17 @@ analysis, reads
 release and full discovery fingerprint before the first mutation, writes a
 local `.nebius-cxcli/soperator-migrations/` timeout-guarded checkpoint, and
 advances supported external MK8s control-plane/node-template, target GPU stack
-remediation when paired with migration work, storage, copy, compute, cutover,
-validation, and retirement phases in order.
+reconciliation phase when paired with migration work, storage,
+copy, compute, cutover, validation, and retirement phases in order.
 Passing
 `--approve` records customer approval. The executor then auto-detects source
 worker node groups from live Nebius MK8s node-group names and Kubernetes
 `slurm.nebius.ai/nodeset` worker labels, such as `worker-gpu` and `worker-cpu`,
 and records the resolved groups in the checkpoint. The
-executor upgrades the external MK8s control plane first, updates node groups
-one group at a time with zero-surge strategy restore, clears stale GPU driver
-presets from CPU node groups, temporarily quiesces one-node
+executor upgrades the external MK8s control plane first, updates service-role
+node groups serially with zero-surge strategy restore, updates worker node
+groups in bounded safe-surge waves by default, clears stale GPU driver presets
+from CPU node groups, temporarily quiesces one-node
 controller/login/accounting workloads for their active rollout, applies
 target-scoped GPU Operator and Network Operator app rows plus the same
 catalog-owned post-render patches that Flux would apply,
@@ -908,13 +950,18 @@ reconciliation, runs the target-scoped
 `deploy.targets[].validations.mk8s_gpu.*` checks configured in `config.yaml`,
 including operator readiness, GPU Visibility, and NCCL when enabled, runs the
 required Soperator/Slurm smoke validation with a one-task `srun` job that
-prefers an idle non-GPU partition when one exists, refreshes
-`generated/reports/deploy-report.md` for MK8s GPU checks, writes
-`generated/reports/migrate-report.md`, and checkpoints pending gates instead
+prefers an idle non-GPU partition when one exists plus the same Slurm NCCL
+benchmark using two GPU nodes when available or one multi-GPU node when it is
+the only GPU node, writes
+`generated/reports/migrate-report.md` with MK8s GPU and Soperator/Slurm
+validation rollups, refreshes `generated/reports/deploy-report.md` as a
+secondary deploy-compatible MK8s GPU summary, and checkpoints pending gates instead
 of retiring old resources early. During chart takeover it suspends legacy Flux HelmReleases
 that match the old Soperator release, applies Soperator CRDs with server-side
-conflict resolution, and retries bounded admission-webhook startup races while
-the target controller/webhook becomes ready. That checkpoint is local operational state and is ignored by
+conflict resolution, retries bounded admission-webhook startup races while the
+target controller/webhook becomes ready, and removes legacy source-family
+ActiveChecks CronJobs/jobs/pods before target Slurm custom resources are
+applied. That checkpoint is local operational state and is ignored by
 cxcli-managed deployments `.gitignore` files. `ext-soperator onboard` is therefore
 discovery-only and does not create SFS filesystems, attach storage, drain
 nodes, run data sync jobs, or mutate Helm/Soperator resources. After a
@@ -926,9 +973,15 @@ migrations can resume without redoing completed safe work or retiring old
 storage and compute early. Reruns are action-idempotent: the accepted
 `deploy.targets[].soperator_onboarding.actions` list defines the desired work,
 and `ext-soperator migrate --execute` rechecks completed action phases against
-live state before skipping them. External node-template upgrade checks the live
-MK8s control plane and node-group templates, including Kubernetes version, node
-OS image, and Nebius `drivers_preset` / CUDA stack where applicable; target GPU
+live state before skipping them. Rerunning `ext-soperator onboard` remains
+read-only, but it refreshes the source report with provider template evidence
+and removes `upgrade-external-node-template` only when the live control plane
+and every discovered node-group template already match the target Kubernetes
+version, node OS image, and Nebius GPU `drivers_preset` / CUDA stack where
+applicable. Missing, partial, or errored provider evidence remains conservative
+and keeps the migration-owned action selected. External node-template upgrade
+checks the live MK8s control plane and node-group templates, including Kubernetes
+version, node OS image, and Nebius `drivers_preset` / CUDA stack where applicable; target GPU
 stack remediation checks selected GPU/Network Operator Helm releases;
 aligned-SFS checks verify filesystems and node-group attachments; and final
 cutover checks the target SlurmCluster/NodeSet state. Preserved worker NodeSet
@@ -941,21 +994,42 @@ external MK8s control plane and discovered Nebius node-group provider readiness,
 repeats the final MK8s node-template check when that action was accepted,
 verifies the target Soperator Helm release and rendered workloads, then fails
 if stale old source-family Soperator Helm releases or active old source Flux
-HelmReleases still remain after automatic retirement. Automatic retirement
-suspends old Flux HelmRelease/Kustomization desired state, prunes old
-operational Soperator resources, removes stale Helm release records, and
-preserves shared/storage/custom resources. Data-copy and infrastructure
-retirement remain checkpoint-gated because rerunning them can affect customer
-data or teardown.
-The executor-owned live status surface is
-phase-aware rather than a generic spinner: storage phases emit `Soperator
-migration status` with aligned SFS/PVC copy progress plus MK8s and Slurm
-continuity signals, while compute and cutover phases emit MK8s node
-readiness, Slurm login/queue/node-state health, and Soperator SlurmCluster
-reconciliation. The checkpoint records compact status snapshots at phase start,
-phase end, and pending gates. These status lines describe best-effort service
-continuity and degradation during migration; they do not promise that downtime
-cannot occur. Existing projects can pass `config.yaml`
+HelmReleases still remain after automatic retirement. That automatic retirement
+runs before validation hold and again before completion: it suspends old Flux
+Kustomization desired state, deletes suspended old source Flux HelmRelease
+records, prunes old operational Soperator resources, removes stale Helm release
+records, and preserves shared/storage/custom resources. The stale source Helm
+release family is derived from `soperator_migration_profiles.yaml`, including
+the old upstream `soperator-fluxcd` fan-out releases such as
+`flux-system-soperator-fluxcd-*` and `soperator-fluxcd-values`; the current
+target `soperator/soperator` release remains protected by target chart identity.
+Deploy-time Soperator smoke validation also reports active old source Flux
+HelmReleases and Pending Soperator pods as first-class failed checks, so an
+operator sees the live blocker before the later Slurm CLI checks cascade.
+Same-name source records left behind
+after target takeover are retired by stale Helm storage revision before target
+readiness lookup so the current target release record stays intact. Data-copy
+and infrastructure retirement remain checkpoint-gated because rerunning them can
+affect customer data or teardown.
+If an accepted Nebius node-group update times out while the provider rollout is
+still settling, the executor re-reads the node group, stores
+`waiting-rollout` on the external-node-template checkpoint when readiness is
+not complete, and resumes from live state on the next identical execute
+command instead of submitting a duplicate update.
+The executor-owned live status surface uses an interactive spinner backed by
+phase-aware status snapshots: storage phases emit `Soperator migration status`
+with the elapsed time, canonical phase id, human-readable phase label, and
+overall phase health before component details. Storage phases then show aligned
+SFS/PVC copy progress plus MK8s and Slurm continuity signals, while compute and
+cutover phases emit MK8s node-group readiness, bounded problem-node details such
+as `node-upgrading (down)`, Slurm worker names/states, queue health, and
+Soperator SlurmCluster reconciliation. Down or upgrading nodes are highlighted
+in terminal output, and large clusters stay compact by showing only bounded
+problem-node details with `+N more` suffixes. The checkpoint records compact
+status snapshots at phase start, phase end, and pending gates. These status
+lines describe best-effort service continuity and degradation
+during migration; they do not promise that downtime cannot occur. Existing
+projects can pass `config.yaml`
 or the project directory containing it. Deployments-root onboarding resolves
 the tenant/project folder from identity inputs; if that resolved project
 already has `config.yaml`, the interactive flow warns after tenant/project selection
@@ -1029,6 +1103,19 @@ scheduling, and normalizes current Nodes toward the target key during cutover.
 Worker roles continue to map to the preserved detected worker node groups.
 Live discovery still verifies the concrete node labels and node-group inventory
 before migration mutates the cluster.
+Profile groups also own execution-time takeover differences between release
+families. For legacy v1 and v2 source clusters, cxcli suspends old Flux desired
+state, deletes the source Soperator admission webhooks declared by the profile,
+and scales down the source Soperator controller deployment declared by the
+profile before target compute reconciliation, so the old controller cannot keep
+patching `NodeSet` or worker `StatefulSet` objects and stale source webhooks
+cannot reject target `NodeSet` or `SlurmCluster` updates while the pinned target
+chart takes over. Shared storage, custom config, and other source-family
+resources are left for the later retirement phase unless the profile and
+executor mark them safe to prune. The later retirement phase also uses the
+release profiles to identify old source-family Helm chart records that were
+rendered by upstream `soperator-fluxcd` rather than declared as dependencies of
+the pinned cxcli-owned target chart.
 The target profile schema is release-scoped and component-scoped:
 
 - release identity: upstream tag, chart version, app version, image tags, and
@@ -1057,13 +1144,35 @@ aligned service-role node groups, keep detected worker node groups as the
 worker capacity source, and apply migration-owned external node-group template
 changes, including Kubernetes version, node OS image, Nebius-image GPU stack,
 and aligned SFS filesystem attachments, through direct Nebius node-group
-updates with a temporary zero-surge strategy (`max_surge=0`,
-`max_unavailable=1`, `drain_timeout=30m`). cxcli snapshots each node group's
-original strategy, rolls one active node group at a time, restores the original
-strategy, clears invalid GPU driver presets from CPU templates when legacy
-groups carry them, quiesces and restores one-node controller/login/accounting
-workloads for the active service-role rollout, and does not create parallel or
-surge worker capacity.
+updates. cxcli snapshots each node group's original strategy, keeps
+service-role groups conservative and serial with temporary zero-surge
+(`max_surge=0`, `max_unavailable=1`, `drain_timeout=30m`), and updates worker
+groups with safe-surge by default (`max_surge=1`, `max_unavailable=0`,
+`drain_timeout=30m`) in bounded waves. The rollout config exposes worker-wave
+parallelism across worker groups plus the per-group Nebius strategy
+(`max_surge_count`, `max_unavailable_count`, and `drain_timeout`). Users can set
+`drain_timeout: none` to wait indefinitely instead of allowing provider drain
+fallback after a finite timeout. It clears invalid GPU driver presets from CPU
+templates when legacy groups carry them, quiesces and restores one-node
+controller/login/accounting workloads for the active service-role rollout, and
+requires spare worker surge capacity unless the operator explicitly chooses the
+zero-surge fallback.
+
+The persisted rollout shape is:
+
+```yaml
+node_template_upgrade:
+  rollout:
+    strategy: safe-surge
+    worker_wave_percent: 1
+    # worker_wave_groups: 10
+    # max_parallel_worker_groups: 10
+    worker_group_strategy:
+      max_surge_count: 1
+      max_unavailable_count: 0
+      drain_timeout: 30m
+```
+
 Incompatible storage axes require an aligned-SFS plan: create and dual-attach
 target SFS filesystems, keep old storage active, run online bulk sync, run a
 final delta during a controlled Slurm quiet window, then cut storage references
@@ -1077,9 +1186,12 @@ Approved execution also runs a strict net-new quota preflight before the first
 mutation. The preflight counts aligned SFS filesystems that do not already
 exist as spare storage required during copy, and counts target service-role
 node groups that do not already exist as net-new compute capacity. Existing
-worker node groups are preserved in place with zero-surge migration-owned
-template remediation, are not counted as parallel or surge worker capacity, and
-may have available capacity reduced by one node in the active group during
+worker node groups are preserved in place; safe-surge worker template
+remediation counts `max_surge_count` temporary surge node(s) per worker group
+in the active wave, checks the required spare quota and GPU capacity, requires
+all selected worker nodes to start Ready and schedulable, and requires the Slurm
+queue to be empty before mutation. The explicit zero-surge
+fallback skips surge worker quota but can reduce active worker capacity during
 rollout.
 Confirmed quota shortages, unresolved live limits, coverage gaps, or quota
 lookup failures stop the migration before SFS creation, service-role node-group
@@ -2659,8 +2771,10 @@ The command boundary is intentional:
   `nebius-cxcli ext-soperator onboard <config.yaml-or-deployments-root>` resolves
   the selected project, lists existing Nebius MK8s clusters, registers one
   chosen cluster as an external target with its `cluster_id`, reads that
-  target's `deploy.targets[].inventory.node_groups` inventory, and records
-  independent storage and compute mode choices. `keep-existing-compute`
+  target's `deploy.targets[].inventory.node_groups` inventory, refreshes
+  Nebius control-plane and node-group template state by node group when
+  `--cluster-id` access is available, and records independent storage and
+  compute mode choices. `keep-existing-compute`
   preserves the discovered node groups and target-scoped
   `values.nodeGroupMapping.*` choices. `create-aligned-node-groups` creates or
   reuses profile-aligned service-role node groups and maps profile worker
@@ -2670,9 +2784,11 @@ The command boundary is intentional:
   not create parallel worker node groups; migration-owned external node-group
   template changes, including Kubernetes version, node OS image, Nebius-image
   GPU stack, and aligned SFS filesystem attachments, use direct Nebius
-  node-group updates with a temporary zero-surge strategy (`max_surge=0`,
-  `max_unavailable=1`, `drain_timeout=30m`) and restore each node group's
-  original strategy after the active rollout. Render/deploy refuse
+  node-group updates. Service-role groups use serial temporary zero-surge,
+  while worker groups default to safe-surge waves with one temporary
+  replacement node per active worker group after quota/capacity, worker-health,
+  and Slurm queue preflights pass. cxcli restores each node group's original
+  strategy after the active rollout. Render/deploy refuse
   onboarding mode until
   the target has a current accepted `deploy.targets[].soperator_onboarding`
   analysis fingerprint. Actions that only install or adopt apps are the safe path.
@@ -3211,7 +3327,7 @@ Modules that expose collection/object inputs, such as `mysterybox.secrets`, `ssh
   - Prints that upgrade stages are per control-plane hop and per node group, not per node. Large node groups therefore increase provider rollout/watch time, not the number of cxcli render stages.
   - `--dry-run` resolves the live cluster through the SDK, prints the live plan plus a wrapped repeat dry-run command, and exits without changing `config.yaml`, `generated/`, Terraform backend state, or live Nebius resources.
   - Non-dry runs use the SDK for live discovery, compatibility checks, generated handoff, progress/error watching, and final rollout verification. Terraform remains the reconciler that changes cluster and node-group version fields. Before success, a final MK8s readiness check re-reads the live control plane and selected node groups to verify the requested Kubernetes version has settled, and it requires provider node-group status rather than accepting matching spec fields alone.
-  - Non-dry runs wait for node groups to finish provider rollout and can resume that wait after partial live progress. If live resources are already at the target version but source config is stale, cxcli still syncs the desired-state files through Terraform plan/apply.
+  - Non-dry runs wait for node groups to finish provider rollout and can resume that wait after partial live progress. If live resources are already at the target version but source config is stale, cxcli still syncs the desired-state files through Terraform plan/apply. If a rerun only needs to wait for an already-requested rollout after a temporary `allow-unavailable` or `force-delete` strategy was staged, cxcli still performs a final rendered apply after the rollout settles so the configured node-group strategy is restored.
   - Kubernetes preflight inspection failures block non-dry runs for every disruption policy, including `force-delete`, so unknown cluster state cannot be treated as a known PDB or drain blocker.
   - After GPU node groups settle, enabled target-scoped deploy validations such as GPU stack readiness, GPU Visibility, and NCCL are the post-upgrade GPU canary phase.
   - De-duplicates repeated deploy-validation advisory text within the upgrade run while still validating every rendered stage.

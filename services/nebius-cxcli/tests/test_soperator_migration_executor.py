@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -56,7 +57,7 @@ def _source_worker_nodeset(name: str, *, gpu: bool) -> dict[str, object]:
         "ephemeralStorage": "387Gi",
     }
     if gpu:
-        slurmd_resources["nvidia.com/gpu"] = 8
+        slurmd_resources["nvidia.com/gpu"] = "8"
     return {
         "apiVersion": "slurm.nebius.ai/v1alpha1",
         "kind": "NodeSet",
@@ -208,7 +209,7 @@ def _payload(*, include_role_mapping: bool = False) -> dict[str, object]:
                         "compute_mode": "create-aligned-node-groups",
                         "actions": [
                             "adopt-soperator",
-                            "remediate-target-gpu-stack",
+                            "reconcile-target-gpu-stack",
                             "upgrade-soperator",
                             "approve-soperator-migration",
                             "create-aligned-sfs",
@@ -293,6 +294,8 @@ class _FakeCommandRunner:
         helm_storage_secrets: list[dict[str, object]] | None = None,
         worker_topology_by_nodeset: dict[str, dict[str, int]] | None = None,
         slurm_resource_names: list[str] | None = None,
+        slurm_queue_output: str = "",
+        slurm_queue_returncode: int = 0,
         cluster: dict[str, object] | None = None,
     ) -> None:
         self.calls: list[tuple[tuple[str, ...], str | None]] = []
@@ -441,6 +444,8 @@ spec:
                 "nodeset.slurm.nebius.ai/worker",
             ]
         )
+        self.slurm_queue_output = slurm_queue_output
+        self.slurm_queue_returncode = slurm_queue_returncode
         self.file_update_payloads: list[dict[str, object]] = []
 
     def _upsert_helm_release(
@@ -465,7 +470,12 @@ spec:
                 return
         self.helm_releases.append(replacement)
 
-    def _remove_helm_release_if_storage_is_gone(self, *, release_name: str) -> None:
+    def _remove_helm_release_if_storage_is_gone(
+        self,
+        *,
+        release_name: str,
+        revision: str = "",
+    ) -> None:
         def _metadata_labels(secret: dict[str, object]) -> dict[str, object]:
             metadata = secret.get("metadata")
             if not isinstance(metadata, dict):
@@ -473,15 +483,27 @@ spec:
             labels = metadata.get("labels")
             return labels if isinstance(labels, dict) else {}
 
+        def _secret_matches(secret: dict[str, object]) -> bool:
+            labels = _metadata_labels(secret)
+            if str(labels.get("name", "")) != release_name:
+                return False
+            return not revision or str(labels.get("version", "")) == revision
+
         if any(
-            str(_metadata_labels(secret).get("name", "")) == release_name
-            for secret in self.helm_storage_secrets
+            _secret_matches(secret) for secret in self.helm_storage_secrets
         ):
             return
         self.helm_releases = [
             release
             for release in self.helm_releases
-            if str(release.get("name", "") or "") != release_name
+            if not (
+                str(release.get("name", "") or "") == release_name
+                and (
+                    not revision
+                    or not str(release.get("revision", "") or "")
+                    or str(release.get("revision", "") or "") == revision
+                )
+            )
         ]
 
     def _delete_live_kubernetes_resource(
@@ -826,7 +848,7 @@ spec:
             and command[:3] == ("kubectl", "--context", "external-context")
             and command[3] == "get"
             and "-o" in command
-            and command[-1] == "json"
+            and command[command.index("-o") + 1] == "json"
         ):
             resource_type = command[4]
             if resource_type in self.live_kubernetes_resources:
@@ -837,6 +859,36 @@ spec:
                     "",
                 )
         if (
+            len(command) >= 10
+            and command[:3] == ("kubectl", "--context", "external-context")
+            and command[3] == "-n"
+            and command[5] == "scale"
+            and command[6] == "deployment"
+            and "--replicas=0" in command
+        ):
+            namespace = command[4]
+            name = command[7]
+            for item in self.live_kubernetes_resources.get("deployment", []):
+                metadata = item.get("metadata")
+                if not isinstance(metadata, dict):
+                    continue
+                if (
+                    str(metadata.get("namespace", "") or "") == namespace
+                    and str(metadata.get("name", "") or "") == name
+                ):
+                    spec = item.setdefault("spec", {})
+                    if not isinstance(spec, dict):
+                        spec = {}
+                        item["spec"] = spec
+                    spec["replicas"] = 0
+                    status = item.setdefault("status", {})
+                    if not isinstance(status, dict):
+                        status = {}
+                        item["status"] = status
+                    status["availableReplicas"] = 0
+                    status["readyReplicas"] = 0
+            return SoperatorMigrationCommandResult(command, 0, "{}", "")
+        if (
             len(command) >= 8
             and command[:3] == ("kubectl", "--context", "external-context")
             and command[3] == "-n"
@@ -844,7 +896,7 @@ spec:
         ):
             namespace = command[4]
             secret_name = command[7]
-            release_names: set[str] = set()
+            release_revisions: set[tuple[str, str]] = set()
             for secret in self.helm_storage_secrets:
                 metadata = secret.get("metadata")
                 if not isinstance(metadata, dict):
@@ -856,7 +908,12 @@ spec:
                     str(metadata.get("namespace", "") or "") == namespace
                     and str(metadata.get("name", "") or "") == secret_name
                 ):
-                    release_names.add(str(labels.get("name", "") or ""))
+                    release_revisions.add(
+                        (
+                            str(labels.get("name", "") or ""),
+                            str(labels.get("version", "") or ""),
+                        )
+                    )
             self.helm_storage_secrets = [
                 secret
                 for secret in self.helm_storage_secrets
@@ -866,8 +923,11 @@ spec:
                     and str(secret["metadata"].get("name", "") or "") == secret_name
                 )
             ]
-            for release_name in release_names:
-                self._remove_helm_release_if_storage_is_gone(release_name=release_name)
+            for release_name, revision in release_revisions:
+                self._remove_helm_release_if_storage_is_gone(
+                    release_name=release_name,
+                    revision=revision,
+                )
             return SoperatorMigrationCommandResult(command, 0, "{}", "")
         if (
             len(command) >= 8
@@ -885,6 +945,25 @@ spec:
                 namespace = ""
                 resource_type = command[4]
                 name = command[5]
+            if resource_type in {
+                "helmrelease",
+                "helmreleases",
+                "helmrelease.helm.toolkit.fluxcd.io",
+                "helmreleases.helm.toolkit.fluxcd.io",
+            }:
+                self.live_flux_helmreleases = [
+                    item
+                    for item in self.live_flux_helmreleases
+                    if not (
+                        isinstance(item.get("metadata"), dict)
+                        and str(item["metadata"].get("name", "") or "") == name
+                        and (
+                            not namespace
+                            or str(item["metadata"].get("namespace", "") or "") == namespace
+                        )
+                    )
+                ]
+                return SoperatorMigrationCommandResult(command, 0, "{}", "")
             self._delete_live_kubernetes_resource(
                 resource_type=resource_type,
                 namespace=namespace,
@@ -1139,7 +1218,12 @@ spec:
                     )
                 return SoperatorMigrationCommandResult(command, 0, "idle\nallocated\n", "")
             if command[8:10] == ("squeue", "-h"):
-                return SoperatorMigrationCommandResult(command, 0, "", "")
+                return SoperatorMigrationCommandResult(
+                    command,
+                    self.slurm_queue_returncode,
+                    self.slurm_queue_output,
+                    "" if self.slurm_queue_returncode == 0 else "squeue failed",
+                )
             if command[8:10] == ("bash", "-lc") and "cxcli-soperator-smoke" in command[10]:
                 return SoperatorMigrationCommandResult(
                     command,
@@ -1404,10 +1488,143 @@ def test_quota_preflight_does_not_count_preserved_worker_groups(
     assert "gpu-pool" not in planned_groups
     assert "worker" not in " ".join(planned_groups)
     assert (
-        "Quota preflight worker node groups: preserved in place with zero-surge "
-        "migration-owned template remediation, no parallel or surge worker quota required "
-        "(gpu-pool); capacity may be reduced by one node in the active group during rollout."
+        "Quota preflight worker node groups: compute migration preserves existing "
+        "worker groups in place (gpu-pool); external node-template safe-surge spare "
+        "capacity is checked separately when that action is selected."
     ) in lines
+
+
+def test_worker_safe_surge_quota_preflight_counts_active_wave(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    snapshot = _snapshot_with_compute_source()
+    payload = _payload(include_role_mapping=True)
+    onboarding = payload["deploy"]["targets"][0]["soperator_onboarding"]  # type: ignore[index]
+    assert isinstance(onboarding, dict)
+    rollout = migration.resolve_external_node_template_rollout(onboarding)
+    recorded_inputs: list[dict[str, object]] = []
+
+    def _record_quota_inputs(**kwargs: object):
+        inputs = kwargs.get("inputs")
+        assert isinstance(inputs, dict)
+        recorded_inputs.append(inputs)
+        return (), ()
+
+    monkeypatch.setattr(migration, "estimate_mk8s_quota_requirements", _record_quota_inputs)
+
+    requirements, gaps, lines = migration._worker_surge_node_group_quota_requirements(
+        payload=payload,
+        target_ref="external-cluster",
+        source_report=_source_report(snapshot),
+        worker_node_groups=("gpu-pool",),
+        command_runner=_FakeCommandRunner(),
+        rollout=rollout,
+    )
+
+    assert requirements == []
+    assert gaps == []
+    assert recorded_inputs
+    planned_groups = recorded_inputs[0]["node_groups"]
+    assert isinstance(planned_groups, dict)
+    assert set(planned_groups) == {"external-cluster-gpu-pool-safe-surge"}
+    assert planned_groups["external-cluster-gpu-pool-safe-surge"]["node_count"] == 1
+    assert any("requires 1 temporary surge node(s) per group" in line for line in lines)
+
+
+def test_external_node_template_rollout_config_validation_and_cli_precedence() -> None:
+    onboarding = _payload()["deploy"]["targets"][0]["soperator_onboarding"]  # type: ignore[index]
+    assert isinstance(onboarding, dict)
+
+    default_rollout = migration.resolve_external_node_template_rollout(onboarding)
+    assert default_rollout.to_manifest_dict() == {
+        "strategy": "safe-surge",
+        "worker_wave_percent": 1,
+        "worker_group_strategy": {
+            "max_surge_count": 1,
+            "max_unavailable_count": 0,
+            "drain_timeout": "30m",
+        },
+    }
+
+    onboarding["node_template_upgrade"] = {
+        "rollout": {
+            "strategy": "zero-surge",
+            "worker_wave_groups": 2,
+        }
+    }
+    zero_surge = migration.resolve_external_node_template_rollout(onboarding)
+    assert zero_surge.to_manifest_dict() == {
+        "strategy": "zero-surge",
+        "worker_wave_groups": 2,
+        "worker_group_strategy": {
+            "max_surge_count": 1,
+            "max_unavailable_count": 0,
+            "drain_timeout": "30m",
+        },
+    }
+
+    override = migration.resolve_external_node_template_rollout(
+        onboarding,
+        strategy="safe-surge",
+        worker_wave_percent=5,
+        max_parallel_worker_groups=3,
+        strategy_max_surge_count=2,
+        strategy_max_unavailable_count=1,
+        strategy_drain_timeout="45m",
+    )
+    assert override.to_manifest_dict() == {
+        "strategy": "safe-surge",
+        "worker_wave_percent": 5,
+        "max_parallel_worker_groups": 3,
+        "worker_group_strategy": {
+            "max_surge_count": 2,
+            "max_unavailable_count": 1,
+            "drain_timeout": "45m",
+        },
+    }
+
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        migration.resolve_external_node_template_rollout(
+            onboarding,
+            worker_wave_groups=1,
+            worker_wave_percent=1,
+        )
+
+    onboarding["node_template_upgrade"] = {
+        "rollout": {
+            "worker_wave_groups": 1,
+            "worker_wave_percent": 1,
+        }
+    }
+    with pytest.raises(ValueError, match="must set only one"):
+        migration.resolve_external_node_template_rollout(onboarding)
+
+    onboarding["node_template_upgrade"] = {
+        "rollout": {
+            "max_global_unavailable_worker_percent": 1,
+        }
+    }
+    with pytest.raises(ValueError, match="unsupported"):
+        migration.resolve_external_node_template_rollout(onboarding)
+
+    onboarding["node_template_upgrade"] = {
+        "rollout": {
+            "worker_group_strategy": {
+                "max_surge_count": 0,
+                "max_unavailable_count": 0,
+            }
+        }
+    }
+    with pytest.raises(ValueError, match="at least one"):
+        migration.resolve_external_node_template_rollout(onboarding)
+
+    onboarding["node_template_upgrade"] = {
+        "rollout": {
+            "worker_group_strategy": {"drain_timeout": "30"},
+        }
+    }
+    with pytest.raises(ValueError, match="explicit Go-style duration"):
+        migration.resolve_external_node_template_rollout(onboarding)
 
 
 def test_sfs_attachment_uses_zero_surge_strategy_and_restores_original() -> None:
@@ -1793,12 +2010,21 @@ def test_execute_retires_stale_source_soperator_helm_releases_after_target_ready
     assert "soperator/slurm-cluster-storage" in output
     assert "Suspended old Flux HelmRelease desired state" in output
     assert "flux-system/soperator-fluxcd" in output
+    assert "Deleted old Flux HelmRelease desired state records" in output
     assert "Suspended old Flux Kustomization desired state: flux-system/flux-system." in output
     assert "Pruned 2 old source operational resource(s)." in output
     assert "Preserved shared/storage/custom resources for source release(s): slurm-cluster-storage." in (
         output
     )
     assert "Deleted 2 stale Helm storage record(s)." in output
+    helm_list_calls = [
+        call[0] for call in runner.calls if call[0] and call[0][0] == "helm" and "list" in call[0]
+    ]
+    assert helm_list_calls
+    assert all("-A" not in call for call in helm_list_calls)
+    assert {
+        call[call.index("-n") + 1] for call in helm_list_calls if "-n" in call
+    } >= {"soperator", "soperator-system", "flux-system"}
 
     remaining_release_names = {str(release.get("name", "") or "") for release in runner.helm_releases}
     assert "soperator-controller" not in remaining_release_names
@@ -1807,10 +2033,7 @@ def test_execute_retires_stale_source_soperator_helm_releases_after_target_ready
     assert runner.live_kubernetes_resources["service"] == []
     assert runner.live_kubernetes_resources["persistentvolumeclaim"]
     assert runner.live_kubernetes_resources["nodeset"]
-    assert all(
-        item.get("spec", {}).get("suspend") is True
-        for item in runner.live_flux_helmreleases
-    )
+    assert runner.live_flux_helmreleases == []
     assert any(
         call[0][:7]
         == (
@@ -1832,6 +2055,283 @@ def test_execute_retires_stale_source_soperator_helm_releases_after_target_ready
     ]
     assert not any("persistentvolumeclaim" in command for command in deleted_resources)
     assert not any("nodeset" in command for command in deleted_resources)
+
+
+def test_completed_helm_state_retires_same_name_stale_source_before_readiness() -> None:
+    runner = _FakeCommandRunner(
+        helm_releases=[
+            {
+                "name": "soperator",
+                "namespace": "soperator",
+                "chart": "soperator-4.0.1-ps.1",
+                "app_version": "4.0.1",
+                "status": "deployed",
+                "revision": "11",
+            },
+            {
+                "name": "soperator",
+                "namespace": "soperator",
+                "chart": "helm-slurm-cluster-2.0.5",
+                "app_version": "2.0.5",
+                "status": "deployed",
+                "revision": "1",
+            },
+        ]
+    )
+
+    lines = migration._verify_completed_soperator_migration_helm_state(
+        command_runner=runner,
+        kube_context="external-context",
+        target_version="4.0.1-ps.1",
+    )
+
+    assert any("Retired stale source Soperator Helm release records" in line for line in lines)
+    assert any("Deleted 1 stale Helm storage record(s)." in line for line in lines)
+    assert [
+        {
+            "name": release.get("name"),
+            "chart": release.get("chart"),
+            "revision": release.get("revision"),
+        }
+        for release in runner.helm_releases
+    ] == [
+        {
+            "name": "soperator",
+            "chart": "soperator-4.0.1-ps.1",
+            "revision": "11",
+        }
+    ]
+    assert all(
+        str(((secret.get("metadata") or {}).get("labels") or {}).get("version", "")) != "1"
+        for secret in runner.helm_storage_secrets
+    )
+
+
+def test_completed_helm_state_deletes_suspended_source_flux_records() -> None:
+    runner = _FakeCommandRunner(
+        helm_releases=[
+            {
+                "name": "soperator",
+                "namespace": "soperator",
+                "chart": "soperator-4.0.1-ps.1",
+                "app_version": "4.0.1",
+                "status": "deployed",
+                "revision": "11",
+            },
+            {
+                "name": "flux-system-soperator-fluxcd-mariadb-operator-crds",
+                "namespace": "flux-system",
+                "chart": "mariadb-operator-crds-25.10.2",
+                "app_version": "0.0.0",
+                "status": "deployed",
+                "revision": "1",
+            },
+            {
+                "name": "flux-system-soperator-fluxcd-ns",
+                "namespace": "flux-system",
+                "chart": "raw-2.0.0",
+                "app_version": "1.0.0",
+                "status": "deployed",
+                "revision": "1",
+            },
+            {
+                "name": "soperator-fluxcd-values",
+                "namespace": "flux-system",
+                "chart": "raw-2.0.0",
+                "app_version": "1.0.0",
+                "status": "deployed",
+                "revision": "1",
+            },
+            {
+                "name": "flux-system-soperator-fluxcd-soperator",
+                "namespace": "flux-system",
+                "chart": "helm-soperator-4.0.1",
+                "app_version": "4.0.1",
+                "status": "deployed",
+                "revision": "1",
+            },
+            {
+                "name": "soperator-kruise",
+                "namespace": "soperator",
+                "chart": "kruise-1.8.0",
+                "app_version": "1.8.0",
+                "status": "deployed",
+                "revision": "1",
+            },
+        ],
+        live_flux_helmreleases=[
+            {
+                "metadata": {
+                    "name": "flux-system-soperator-fluxcd-slurm-cluster",
+                    "namespace": "flux-system",
+                },
+                "spec": {
+                    "suspend": True,
+                    "releaseName": "soperator",
+                    "targetNamespace": "soperator",
+                    "chart": {"spec": {"chart": "helm-slurm-cluster", "version": "2.0.5"}},
+                },
+            },
+            {
+                "metadata": {
+                    "name": "flux-system-soperator-fluxcd-mariadb-operator-crds",
+                    "namespace": "flux-system",
+                },
+                "spec": {
+                    "suspend": True,
+                    "chart": {"spec": {"chart": "mariadb-operator-crds", "version": "25.10.2"}},
+                },
+            },
+            {
+                "metadata": {
+                    "name": "soperator-fluxcd-values",
+                    "namespace": "flux-system",
+                },
+                "spec": {
+                    "suspend": True,
+                    "chart": {"spec": {"chart": "raw", "version": "2.0.0"}},
+                },
+            },
+            {
+                "metadata": {"name": "other-team", "namespace": "flux-system"},
+                "spec": {
+                    "suspend": True,
+                    "chart": {"spec": {"chart": "unrelated", "version": "1.0.0"}},
+                },
+            },
+        ],
+    )
+
+    lines = migration._verify_completed_soperator_migration_helm_state(
+        command_runner=runner,
+        kube_context="external-context",
+        target_version="4.0.1-ps.1",
+    )
+
+    assert any("Retired stale source Soperator Helm release records" in line for line in lines)
+    assert any("Deleted 4 stale Helm storage record(s)." in line for line in lines)
+    assert any("Deleted old Flux HelmRelease desired state records" in line for line in lines)
+    assert [
+        (str(item["metadata"]["namespace"]), str(item["metadata"]["name"]))
+        for item in runner.live_flux_helmreleases
+    ] == [("flux-system", "other-team")]
+    assert [
+        (str(release.get("namespace")), str(release.get("name")))
+        for release in runner.helm_releases
+    ] == [("soperator", "soperator"), ("soperator", "soperator-kruise")]
+    delete_calls = [
+        call[0]
+        for call in runner.calls
+        if call[0][:7]
+        == (
+            "kubectl",
+            "--context",
+            "external-context",
+            "-n",
+            "flux-system",
+            "delete",
+            "helmrelease.helm.toolkit.fluxcd.io",
+        )
+    ]
+    assert {call[7] for call in delete_calls} == {
+        "flux-system-soperator-fluxcd-slurm-cluster",
+        "flux-system-soperator-fluxcd-mariadb-operator-crds",
+        "soperator-fluxcd-values",
+    }
+    patch_calls = [
+        call[0]
+        for call in runner.calls
+        if call[0][:7]
+        == (
+            "kubectl",
+            "--context",
+            "external-context",
+            "-n",
+            "flux-system",
+            "patch",
+            "helmrelease.helm.toolkit.fluxcd.io",
+        )
+    ]
+    assert patch_calls == []
+
+
+def test_source_flux_cleanup_treats_missing_patch_targets_as_idempotent() -> None:
+    flux_helmrelease = {
+        "metadata": {
+            "name": "flux-system-soperator-fluxcd-slurm-cluster",
+            "namespace": "flux-system",
+            "labels": {
+                "kustomize.toolkit.fluxcd.io/name": "soperator-fluxcd",
+                "kustomize.toolkit.fluxcd.io/namespace": "flux-system",
+            },
+        },
+        "spec": {
+            "suspend": False,
+            "releaseName": "soperator",
+            "targetNamespace": "soperator",
+            "chart": {"spec": {"chart": "helm-slurm-cluster", "version": "2.0.5"}},
+        },
+    }
+    payload = {"items": [flux_helmrelease]}
+    calls: list[tuple[tuple[str, ...], bool]] = []
+
+    def runner(
+        command: tuple[str, ...] | list[str],
+        *,
+        input_text: str | None = None,
+        timeout_seconds: int = 300,
+        check: bool = True,
+    ) -> SoperatorMigrationCommandResult:
+        del input_text, timeout_seconds
+        args = tuple(command)
+        calls.append((args, check))
+        if (
+            args[:3] == ("kubectl", "--context", "external-context")
+            and "get" in args
+            and "helmreleases.helm.toolkit.fluxcd.io" in args
+        ):
+            return SoperatorMigrationCommandResult(args, 0, json.dumps(payload), "")
+        if "patch" in args:
+            return SoperatorMigrationCommandResult(
+                args,
+                1,
+                "",
+                'Error from server (NotFound): helmreleases.helm.toolkit.fluxcd.io "missing" not found',
+            )
+        if "delete" in args:
+            return SoperatorMigrationCommandResult(args, 0, "", "")
+        raise AssertionError(args)
+
+    suspended, suspended_kustomizations = migration._suspend_source_flux_helmreleases(
+        command_runner=runner,
+        kube_context="external-context",
+        stale_releases=(),
+        target_version="4.0.1-ps.1",
+    )
+    deleted = migration._delete_source_flux_helmreleases(
+        command_runner=runner,
+        kube_context="external-context",
+        stale_releases=(),
+        target_version="4.0.1-ps.1",
+    )
+
+    assert suspended == ()
+    assert suspended_kustomizations == ()
+    assert deleted == ("flux-system/flux-system-soperator-fluxcd-slurm-cluster",)
+    patch_calls = [call for call in calls if "patch" in call[0]]
+    assert len(patch_calls) == 3
+    assert all(check is False for _, check in patch_calls)
+
+
+def test_profile_backed_source_selectors_cover_related_old_soperator_charts() -> None:
+    assert migration._source_chart_matches_profile("helm-soperator-activechecks-2.0.5")  # noqa: SLF001
+    assert migration._source_chart_matches_profile("helm-soperator-fluxcd-bootstrap-3.0.5")  # noqa: SLF001
+    assert migration._source_chart_matches_profile("helm-nfs-server-4.0.1")  # noqa: SLF001
+    assert migration._source_release_name_matches_profile(  # noqa: SLF001
+        "flux-system-soperator-fluxcd-mariadb-operator-crds"
+    )
+    assert migration._source_release_name_matches_profile("soperator-fluxcd-values")  # noqa: SLF001
+    assert not migration._source_chart_matches_profile("soperator-4.0.1-ps.1")  # noqa: SLF001
 
 
 def test_execute_retries_completed_gpu_stack_action_when_live_release_is_missing(
@@ -1931,7 +2431,7 @@ def test_target_gpu_stack_remediation_unsatisfied_when_post_render_patch_missing
         is False
     )
     assert any(
-        call[0]
+        call[0][:8]
         == (
             "kubectl",
             "--context",
@@ -1942,6 +2442,7 @@ def test_target_gpu_stack_remediation_unsatisfied_when_post_render_patch_missing
             "-o",
             "json",
         )
+        and "--request-timeout=20s" in call[0]
         for call in runner.calls
     )
 
@@ -2106,13 +2607,23 @@ def test_execute_runs_configured_mk8s_gpu_validations_during_validation_hold(
         "KUBECTL_CONTEXT": "external-context",
         "HELM_KUBECONTEXT": "external-context",
     }
-    assert "validation-and-rollback-hold: Starting validation 1/3" in "\n".join(result.lines)
+    result_text = "\n".join(result.lines)
+    assert "validation-and-rollback-hold: Starting validation 1/3" in result_text
+    assert (
+        "validation-and-rollback-hold: Migrate report will include the MK8s GPU "
+        "validation rollup."
+    ) in result_text
+    assert (
+        "validation-and-rollback-hold: Deploy-compatible validation report refreshed:"
+        in result_text
+    )
     reports_dir = tmp_path / "generated" / "reports"
     assert (reports_dir / "external-cluster-nccl-test-report.json").exists()
     assert "## Validations" in (reports_dir / "deploy-report.md").read_text(encoding="utf-8")
     migrate_report = (reports_dir / "migrate-report.md").read_text(encoding="utf-8")
     assert "## Migration Steps" in migrate_report
     assert "Soperator and Slurm smoke" in migrate_report
+    assert "### MK8s GPU" in migrate_report
     assert "soperator-cluster-validation-report-external-cluster.json" in migrate_report
     assert "`external-cluster-gpu-stack-readiness-report.json`: `PASS`" in migrate_report
     assert "`external-cluster-gpu-visibility-report.json`: `PASS`" in migrate_report
@@ -2253,13 +2764,31 @@ def test_external_node_template_quiesces_one_node_service_roles(
                     },
                 },
                 "status": _ready_node_group_status(version="1.32", nodes=2),
+                },
+            ],
+            live_nodes=[
+                {
+                    "metadata": {
+                        "name": "gpu-node-a",
+                        "labels": {"nebius.com/node-group": "worker-gpu-0"},
+                    },
+                    "spec": {},
+                    "status": {"conditions": [{"type": "Ready", "status": "True"}]},
+                },
+                {
+                    "metadata": {
+                        "name": "gpu-node-b",
+                        "labels": {"nebius.com/node-group": "worker-gpu-0"},
+                    },
+                    "spec": {},
+                    "status": {"conditions": [{"type": "Ready", "status": "True"}]},
+                },
+            ],
+            cluster={
+                "metadata": {"id": "cluster-123", "name": "external-cluster"},
+                "spec": {"control_plane": {"version": "1.32"}},
             },
-        ],
-        cluster={
-            "metadata": {"id": "cluster-123", "name": "external-cluster"},
-            "spec": {"control_plane": {"version": "1.32"}},
-        },
-    )
+        )
 
     result = execute_soperator_migration(
         config_path=tmp_path / "config.yaml",
@@ -2346,7 +2875,7 @@ def test_external_node_template_quiesces_one_node_service_roles(
     )
 
 
-def test_execute_upgrades_external_node_template_with_zero_surge_strategy(
+def test_execute_upgrades_external_node_template_with_safe_surge_strategy(
     tmp_path: Path,
 ) -> None:
     config_path = tmp_path / "config.yaml"
@@ -2384,19 +2913,26 @@ def test_execute_upgrades_external_node_template_with_zero_surge_strategy(
         update_command[update_command.index("--template-gpu-settings-drivers-preset") + 1]
         == "cuda13.0"
     )
-    assert update_command[update_command.index("--strategy-max-surge-count") + 1] == "0"
-    assert update_command[update_command.index("--strategy-max-unavailable-count") + 1] == "1"
+    assert update_command[update_command.index("--strategy-max-surge-count") + 1] == "1"
+    assert update_command[update_command.index("--strategy-max-unavailable-count") + 1] == "0"
     assert update_command[update_command.index("--strategy-drain-timeout") + 1] == "30m"
-    restore_commands = [
+    node_template_update_index = next(
+        index
+        for index, call in enumerate(runner.calls)
+        if call[0] == update_command
+    )
+    restore_commands_after_node_template = [
         call[0]
-        for call in runner.calls
+        for call in runner.calls[node_template_update_index + 1 :]
         if call[0][:4] == ("nebius", "mk8s", "node-group", "update")
         and call[0][4] == "nodegroup-gpu-pool"
         and "--version" not in call[0]
         and "--template-filesystems" not in call[0]
+        and call[0][call[0].index("--timeout") + 1]
+        == update_command[update_command.index("--timeout") + 1]
     ]
-    assert restore_commands
-    restore_command = restore_commands[0]
+    assert restore_commands_after_node_template
+    restore_command = restore_commands_after_node_template[0]
     assert restore_command[restore_command.index("--strategy-max-surge-count") + 1] == "1"
     assert restore_command[restore_command.index("--strategy-max-unavailable-count") + 1] == "0"
     assert restore_command[restore_command.index("--strategy-drain-timeout") + 1] == "0s"
@@ -2407,11 +2943,495 @@ def test_execute_upgrades_external_node_template_with_zero_surge_strategy(
         )
     )
     phase = checkpoint["phase_state"]["external-node-template-upgrade"]
+    assert checkpoint["external_node_template_rollout"] == {
+        "strategy": "safe-surge",
+        "worker_wave_percent": 1,
+        "worker_group_strategy": {
+            "max_surge_count": 1,
+            "max_unavailable_count": 0,
+            "drain_timeout": "30m",
+        },
+    }
     assert phase["control_plane"]["hops"]["1.33"]["status"] == "completed"
+    assert phase["node_groups"]["gpu-pool"]["strategy"] == "safe-surge"
     assert phase["node_groups"]["gpu-pool"]["strategy_restored"] is True
+    assert phase["worker_waves"] == [["gpu-pool"]]
     assert any(
         line.startswith("post-migration-mk8s-check: External MK8s node-template verified")
         for line in result.lines
+    )
+
+
+class _TimeoutAfterAcceptedNodeTemplateUpdateRunner(_FakeCommandRunner):
+    def __init__(self, *, leave_rollout_in_progress: bool = False) -> None:
+        super().__init__(
+            existing_node_groups=[
+                {
+                    "metadata": {
+                        "id": "nodegroup-gpu-pool",
+                        "name": "gpu-pool",
+                        "parent_id": "cluster-123",
+                    },
+                    "spec": {
+                        "version": "1.32",
+                        "strategy": {
+                            "max_surge": {"count": 2},
+                            "max_unavailable": {"count": 0},
+                            "drain_timeout": "10m",
+                        },
+                        "template": {
+                            "metadata": {"labels": {"nebius.com/node-group": "gpu-pool"}},
+                            "resources": {
+                                "platform": "gpu-h100-sxm",
+                                "preset": "8gpu-128vcpu-1600gb",
+                            },
+                            "boot_disk": {"type": "NETWORK_SSD", "size_gibibytes": "256"},
+                            "gpu_settings": {"drivers_preset": "cuda12.8"},
+                            "os": "ubuntu22.04",
+                            "network_interfaces": [{"subnet_id": "subnet-123"}],
+                            "filesystems": [],
+                        },
+                    },
+                    "status": _ready_node_group_status(version="1.32", nodes=2),
+                }
+            ]
+        )
+        self.leave_rollout_in_progress = leave_rollout_in_progress
+        self.timed_out = False
+
+    def __call__(
+        self,
+        args,
+        *,
+        input_text: str | None = None,
+        timeout_seconds: int = 300,
+        check: bool = True,
+    ) -> SoperatorMigrationCommandResult:
+        command = tuple(str(item) for item in args)
+        if (
+            command[:4] == ("nebius", "mk8s", "node-group", "update")
+            and command[4] == "nodegroup-gpu-pool"
+            and "--version" in command
+            and not self.timed_out
+        ):
+            super().__call__(
+                command,
+                input_text=input_text,
+                timeout_seconds=timeout_seconds,
+                check=check,
+            )
+            if self.leave_rollout_in_progress:
+                for node_group in self.existing_node_groups:
+                    metadata = node_group.get("metadata")
+                    if isinstance(metadata, dict) and metadata.get("id") == "nodegroup-gpu-pool":
+                        node_group["status"] = {
+                            "version": "1.32",
+                            "ready_node_count": 1,
+                            "target_node_count": 2,
+                            "node_count": 3,
+                            "outdated_node_count": 1,
+                            "reconciling": True,
+                        }
+            self.timed_out = True
+            raise subprocess.TimeoutExpired(list(command), timeout_seconds)
+        return super().__call__(
+            command,
+            input_text=input_text,
+            timeout_seconds=timeout_seconds,
+            check=check,
+        )
+
+
+def test_execute_external_node_template_reconciles_accepted_timeout_when_ready(
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "config.yaml"
+    runner = _TimeoutAfterAcceptedNodeTemplateUpdateRunner()
+
+    result = execute_soperator_migration(
+        config_path=config_path,
+        target_ref="external-cluster",
+        payload=_payload(),
+        source_report=_source_report(),
+        snapshot_collector=lambda *, kube_context: _snapshot(),
+        approved=True,
+        command_runner=runner,
+    )
+
+    assert result.pending_phase == "none"
+    node_template_updates = [
+        call[0]
+        for call in runner.calls
+        if call[0][:4] == ("nebius", "mk8s", "node-group", "update")
+        and call[0][4] == "nodegroup-gpu-pool"
+        and "--version" in call[0]
+    ]
+    assert len(node_template_updates) == 1
+    assert any(
+        line.startswith("post-migration-mk8s-check: External MK8s node-template verified")
+        for line in result.lines
+    )
+
+
+def test_execute_external_node_template_resume_waiting_rollout_without_duplicate_update(
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "config.yaml"
+    runner = _TimeoutAfterAcceptedNodeTemplateUpdateRunner(leave_rollout_in_progress=True)
+
+    result = execute_soperator_migration(
+        config_path=config_path,
+        target_ref="external-cluster",
+        payload=_payload(),
+        source_report=_source_report(),
+        snapshot_collector=lambda *, kube_context: _snapshot(),
+        approved=True,
+        command_runner=runner,
+    )
+
+    assert result.pending_phase == "external-node-template-upgrade"
+    checkpoint = json.loads(
+        soperator_migration_checkpoint_path(config_path, "external-cluster").read_text(
+            encoding="utf-8"
+        )
+    )
+    group_state = checkpoint["phase_state"]["external-node-template-upgrade"]["node_groups"][
+        "gpu-pool"
+    ]
+    assert group_state["status"] == "waiting-rollout"
+    assert group_state["original_strategy_args"] == [
+        "--strategy-max-surge-count",
+        "2",
+        "--strategy-max-unavailable-count",
+        "0",
+        "--strategy-drain-timeout",
+        "10m",
+    ]
+    assert "rollout is still in progress" in group_state["pending_reason"]
+
+    for node_group in runner.existing_node_groups:
+        metadata = node_group.get("metadata")
+        if isinstance(metadata, dict) and metadata.get("id") == "nodegroup-gpu-pool":
+            node_group["status"] = _ready_node_group_status(version="1.33", nodes=2)
+
+    resumed = execute_soperator_migration(
+        config_path=config_path,
+        target_ref="external-cluster",
+        payload=_payload(),
+        source_report=_source_report(),
+        snapshot_collector=lambda *, kube_context: _snapshot(),
+        approved=True,
+        command_runner=runner,
+    )
+
+    node_template_updates = [
+        call[0]
+        for call in runner.calls
+        if call[0][:4] == ("nebius", "mk8s", "node-group", "update")
+        and call[0][4] == "nodegroup-gpu-pool"
+        and "--version" in call[0]
+    ]
+    assert len(node_template_updates) == 1
+    strategy_restores = [
+        call[0]
+        for call in runner.calls
+        if call[0][:4] == ("nebius", "mk8s", "node-group", "update")
+        and call[0][4] == "nodegroup-gpu-pool"
+        and "--version" not in call[0]
+        and "--strategy-max-surge-count" in call[0]
+    ]
+    assert strategy_restores[-1][strategy_restores[-1].index("--strategy-max-surge-count") + 1] == "2"
+    assert (
+        strategy_restores[-1][
+            strategy_restores[-1].index("--strategy-max-unavailable-count") + 1
+        ]
+        == "0"
+    )
+    assert strategy_restores[-1][strategy_restores[-1].index("--strategy-drain-timeout") + 1] == (
+        "10m"
+    )
+    assert resumed.pending_phase == "none"
+    assert any(
+        "External node-template rollout completed after resume: gpu-pool; "
+        "original strategy restored." in line
+        for line in resumed.lines
+    )
+    checkpoint = json.loads(
+        soperator_migration_checkpoint_path(config_path, "external-cluster").read_text(
+            encoding="utf-8"
+        )
+    )
+    group_state = checkpoint["phase_state"]["external-node-template-upgrade"]["node_groups"][
+        "gpu-pool"
+    ]
+    assert group_state["status"] == "completed"
+    assert group_state["strategy_restored"] is True
+
+
+def test_execute_external_node_template_allows_zero_surge_worker_fallback(
+    tmp_path: Path,
+) -> None:
+    runner = _FakeCommandRunner()
+
+    execute_soperator_migration(
+        config_path=tmp_path / "config.yaml",
+        target_ref="external-cluster",
+        payload=_payload(),
+        source_report=_source_report(),
+        snapshot_collector=lambda *, kube_context: _snapshot(),
+        approved=True,
+        command_runner=runner,
+        worker_rollout_strategy="zero-surge",
+    )
+
+    node_template_updates = [
+        call[0]
+        for call in runner.calls
+        if call[0][:4] == ("nebius", "mk8s", "node-group", "update")
+        and call[0][4] == "nodegroup-gpu-pool"
+        and "--version" in call[0]
+    ]
+    assert node_template_updates
+    update_command = node_template_updates[0]
+    assert update_command[update_command.index("--strategy-max-surge-count") + 1] == "0"
+    assert update_command[update_command.index("--strategy-max-unavailable-count") + 1] == "1"
+    assert update_command[update_command.index("--strategy-drain-timeout") + 1] == "30m"
+
+
+def test_execute_rejects_changed_worker_rollout_settings_after_checkpoint(
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "config.yaml"
+
+    execute_soperator_migration(
+        config_path=config_path,
+        target_ref="external-cluster",
+        payload=_payload(),
+        source_report=_source_report(),
+        snapshot_collector=lambda *, kube_context: _snapshot(),
+        approved=True,
+        command_runner=_FakeCommandRunner(),
+    )
+
+    with pytest.raises(RuntimeError, match="different external node-template rollout settings"):
+        execute_soperator_migration(
+            config_path=config_path,
+            target_ref="external-cluster",
+            payload=_payload(),
+            source_report=_source_report(),
+            snapshot_collector=lambda *, kube_context: _snapshot(),
+            approved=True,
+            command_runner=_FakeCommandRunner(),
+            worker_rollout_strategy="zero-surge",
+        )
+
+
+def test_execute_external_node_template_blocks_unhealthy_worker_before_mutation(
+    tmp_path: Path,
+) -> None:
+    runner = _FakeCommandRunner(
+        live_nodes=[
+            {
+                "metadata": {
+                    "name": "node-a",
+                    "labels": {"nebius.com/node-group": "gpu-pool"},
+                },
+                "spec": {},
+                "status": {"conditions": [{"type": "Ready", "status": "False"}]},
+            }
+        ]
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="selected worker node group\\(s\\) have no Ready schedulable nodes",
+    ):
+        execute_soperator_migration(
+            config_path=tmp_path / "config.yaml",
+            target_ref="external-cluster",
+            payload=_payload(),
+            source_report=_source_report(),
+            snapshot_collector=lambda *, kube_context: _snapshot(),
+            approved=True,
+            command_runner=runner,
+        )
+
+    assert not any(
+        call[0][:4] == ("nebius", "mk8s", "node-group", "update")
+        and "--version" in call[0]
+        for call in runner.calls
+    )
+
+
+def test_execute_external_node_template_groups_worker_preflight_by_matched_source_group(
+    tmp_path: Path,
+) -> None:
+    runner = _FakeCommandRunner(
+        live_nodes=[
+            {
+                "metadata": {
+                    "name": "node-a",
+                    "labels": {"nebius.com/node-group-id": "nodegroup-gpu-pool"},
+                },
+                "spec": {},
+                "status": {"conditions": [{"type": "Ready", "status": "False"}]},
+            }
+        ]
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="selected worker node group\\(s\\) have no Ready schedulable nodes: gpu-pool",
+    ):
+        execute_soperator_migration(
+            config_path=tmp_path / "config.yaml",
+            target_ref="external-cluster",
+            payload=_payload(),
+            source_report=_source_report(),
+            snapshot_collector=lambda *, kube_context: _snapshot(),
+            approved=True,
+            command_runner=runner,
+        )
+
+    assert not any(
+        call[0][:4] == ("nebius", "mk8s", "node-group", "update")
+        and "--version" in call[0]
+        for call in runner.calls
+    )
+
+
+def test_worker_preflight_prefers_specific_group_identity_over_generic_nodeset() -> None:
+    worker_groups = [
+        (
+            "nodegroup-gpu",
+            {
+                "node_group_id": "nodegroup-gpu",
+                "node_group_name": "worker-gpu-0",
+                "labels": {
+                    "nebius.com/node-group-id": "nodegroup-gpu",
+                    "nebius.com/node-group": "worker-gpu-0",
+                    "slurm.nebius.ai/nodeset": "worker",
+                    "slurm.nebius.ai/nodeset-name": "worker-gpu",
+                },
+            },
+        ),
+        (
+            "nodegroup-cpu",
+            {
+                "node_group_id": "nodegroup-cpu",
+                "node_group_name": "worker-cpu-0",
+                "labels": {
+                    "nebius.com/node-group-id": "nodegroup-cpu",
+                    "nebius.com/node-group": "worker-cpu-0",
+                    "slurm.nebius.ai/nodeset": "worker",
+                    "slurm.nebius.ai/nodeset-name": "worker-cpu",
+                },
+            },
+        ),
+    ]
+    nodes = [
+        {
+            "metadata": {
+                "name": "computeinstance-cpu",
+                "labels": {
+                    "nebius.com/node-group-id": "nodegroup-cpu",
+                    "slurm.nebius.ai/nodeset": "worker",
+                    "slurm.nebius.ai/nodeset-name": "worker-cpu",
+                },
+            }
+        },
+        {
+            "metadata": {
+                "name": "computeinstance-gpu",
+                "labels": {
+                    "nebius.com/node-group-id": "nodegroup-gpu",
+                    "slurm.nebius.ai/nodeset": "worker",
+                    "slurm.nebius.ai/nodeset-name": "worker-gpu",
+                },
+            }
+        },
+    ]
+
+    grouped = migration._worker_nodes_by_source_group(  # noqa: SLF001
+        nodes=nodes,
+        worker_groups=worker_groups,
+    )
+
+    assert [item["metadata"]["name"] for item in grouped["nodegroup-gpu"]] == [
+        "computeinstance-gpu"
+    ]
+    assert [item["metadata"]["name"] for item in grouped["nodegroup-cpu"]] == [
+        "computeinstance-cpu"
+    ]
+
+
+def test_execute_external_node_template_wave_budget_does_not_allow_degraded_workers(
+    tmp_path: Path,
+) -> None:
+    runner = _FakeCommandRunner(
+        live_nodes=[
+            {
+                "metadata": {
+                    "name": "node-a",
+                    "labels": {"nebius.com/node-group-id": "nodegroup-gpu-pool"},
+                },
+                "spec": {},
+                "status": {"conditions": [{"type": "Ready", "status": "True"}]},
+            },
+            {
+                "metadata": {
+                    "name": "node-b",
+                    "labels": {"nebius.com/node-group-id": "nodegroup-gpu-pool"},
+                },
+                "spec": {"unschedulable": True},
+                "status": {"conditions": [{"type": "Ready", "status": "True"}]},
+            },
+        ]
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="selected worker nodes must start Ready and schedulable",
+    ):
+        execute_soperator_migration(
+            config_path=tmp_path / "config.yaml",
+            target_ref="external-cluster",
+            payload=_payload(),
+            source_report=_source_report(),
+            snapshot_collector=lambda *, kube_context: _snapshot(),
+            approved=True,
+            command_runner=runner,
+            worker_wave_groups=2,
+        )
+
+    assert not any(
+        call[0][:4] == ("nebius", "mk8s", "node-group", "update")
+        and "--version" in call[0]
+        for call in runner.calls
+    )
+
+
+def test_execute_external_node_template_blocks_nonempty_slurm_queue_before_mutation(
+    tmp_path: Path,
+) -> None:
+    snapshot = _snapshot_with_compute_source()
+    runner = _FakeCommandRunner(slurm_queue_output="RUNNING\nPENDING\n")
+
+    with pytest.raises(RuntimeError, match="Slurm queue is not empty"):
+        execute_soperator_migration(
+            config_path=tmp_path / "config.yaml",
+            target_ref="external-cluster",
+            payload=_payload(include_role_mapping=True),
+            source_report=_source_report(snapshot),
+            snapshot_collector=lambda *, kube_context: snapshot,
+            approved=True,
+            command_runner=runner,
+        )
+
+    assert not any(
+        call[0][:4] == ("nebius", "mk8s", "node-group", "update")
+        and "--version" in call[0]
+        for call in runner.calls
     )
 
 
@@ -2723,38 +3743,45 @@ def test_execute_auto_selects_console_worker_node_group_names_from_live_inventor
         ],
         live_nodes=[
             {
-                "metadata": {
-                    "name": "gpu-node-a",
-                    "labels": {
-                        "nebius.com/node-group-id": "nodegroup-worker-gpu",
-                        "node.kubernetes.io/instance-type": "gpu-h100-sxm",
+                    "metadata": {
+                        "name": "gpu-node-a",
+                        "labels": {
+                            "nebius.com/node-group-id": "nodegroup-worker-gpu",
+                            "node.kubernetes.io/instance-type": "gpu-h100-sxm",
+                        },
+                    },
+                    "status": {
+                        "conditions": [{"type": "Ready", "status": "True"}],
+                        "capacity": {"cpu": "128"},
+                        "allocatable": {"cpu": "127900m", "nvidia.com/gpu": "8"},
                     },
                 },
-                "status": {
-                    "capacity": {"cpu": "128"},
-                    "allocatable": {"cpu": "127900m", "nvidia.com/gpu": "8"},
-                },
-            },
             {
                 "metadata": {
                     "name": "cpu-worker-a",
                     "labels": {
-                        "nebius.com/node-group-id": "nodegroup-worker-cpu",
-                        "node.kubernetes.io/instance-type": "cpu-d3",
+                            "nebius.com/node-group-id": "nodegroup-worker-cpu",
+                            "node.kubernetes.io/instance-type": "cpu-d3",
+                        },
+                    },
+                    "status": {
+                        "conditions": [{"type": "Ready", "status": "True"}],
+                        "allocatable": {"cpu": "16"},
                     },
                 },
-                "status": {"allocatable": {"cpu": "16"}},
-            },
-            {
-                "metadata": {
-                    "name": "system-a",
+                {
+                    "metadata": {
+                        "name": "system-a",
                     "labels": {
                         "nebius.com/node-group-id": "nodegroup-system",
-                        "node.kubernetes.io/instance-type": "cpu-d3",
+                            "node.kubernetes.io/instance-type": "cpu-d3",
+                        },
+                    },
+                    "status": {
+                        "conditions": [{"type": "Ready", "status": "True"}],
+                        "allocatable": {"cpu": "8"},
                     },
                 },
-                "status": {"allocatable": {"cpu": "8"}},
-            },
         ],
         live_pods=[
             {
@@ -2772,6 +3799,26 @@ def test_execute_auto_selects_console_worker_node_group_names_from_live_inventor
                 "status": {"phase": "Running"},
             },
         ],
+        live_nodesets={
+            "worker-cpu": {
+                "metadata": {
+                    "name": "worker-cpu",
+                    "namespace": "soperator",
+                    "annotations": {"meta.helm.sh/release-name": "soperator-nodesets"},
+                },
+                "spec": {"replicas": 2},
+                "status": {"phase": "Ready", "replicas": 2},
+            },
+            "worker-gpu": {
+                "metadata": {
+                    "name": "worker-gpu",
+                    "namespace": "soperator",
+                    "annotations": {"meta.helm.sh/release-name": "soperator-nodesets"},
+                },
+                "spec": {"replicas": 2},
+                "status": {"phase": "Ready", "replicas": 2},
+            },
+        },
         worker_topology_by_nodeset={
             "worker-gpu": {
                 "cpus": 128,
@@ -2821,6 +3868,30 @@ def test_execute_auto_selects_console_worker_node_group_names_from_live_inventor
         for call in runner.calls
         if call[0][0] == "helm" and "upgrade" in call[0] and call[0][5] == "soperator"
     )
+    helm_upgrade_index = next(
+        index
+        for index, call in enumerate(runner.calls)
+        if call[0] == soperator_helm_upgrade[0]
+    )
+    legacy_nodeset_deletes = [
+        (index, call[0])
+        for index, call in enumerate(runner.calls)
+        if call[0][:7]
+        == (
+            "kubectl",
+            "--context",
+            "external-context",
+            "-n",
+            "soperator",
+            "delete",
+            "nodeset",
+        )
+    ]
+    assert {call[7] for _index, call in legacy_nodeset_deletes} == {
+        "worker-cpu",
+        "worker-gpu",
+    }
+    assert all(index < helm_upgrade_index for index, _call in legacy_nodeset_deletes)
     assert soperator_helm_upgrade[1] is not None
     helm_values = json.loads(soperator_helm_upgrade[1])
     system_terms = [
@@ -2902,6 +3973,565 @@ def test_execute_auto_selects_console_worker_node_group_names_from_live_inventor
     assert not any(
         call[0][:4] == ("nebius", "mk8s", "node-group", "create") for call in runner.calls
     )
+
+
+def test_reconcile_target_node_storage_labels_labels_exact_nodes() -> None:
+    runner = _FakeCommandRunner(
+        live_nodes=[
+            {
+                "metadata": {
+                    "name": "accounting-node-a",
+                    "labels": {"slurm.nebius.ai/nodeset-name": "accounting"},
+                }
+            },
+            {
+                "metadata": {
+                    "name": "worker-node-a",
+                    "labels": {"slurm.nebius.ai/nodeset": "worker"},
+                }
+            },
+            {
+                "metadata": {
+                    "name": "unrelated-node-a",
+                    "labels": {"slurm.nebius.ai/nodeset-name": "not-soperator"},
+                }
+            },
+        ]
+    )
+
+    migration._reconcile_target_node_storage_labels(  # noqa: SLF001
+        command_runner=runner,
+        kube_context="external-context",
+    )
+
+    label_commands = [
+        call[0]
+        for call in runner.calls
+        if call[0][:5] == ("kubectl", "--context", "external-context", "label", "node")
+    ]
+    assert (
+        "kubectl",
+        "--context",
+        "external-context",
+        "label",
+        "node",
+        "accounting-node-a",
+        "slurm.nebius.ai/nodeset-name=accounting",
+        "nebius.com/node-group=cpu",
+        "--overwrite",
+        "--request-timeout=20s",
+    ) in label_commands
+    assert not any("worker-node-a" in command for command in label_commands)
+    assert not any(
+        call[0][:5] == ("kubectl", "--context", "external-context", "label", "nodes")
+        for call in runner.calls
+    )
+
+
+def test_reconcile_target_node_storage_labels_restores_specific_worker_labels() -> None:
+    snapshot = _snapshot()
+    snapshot["node_groups"] = {
+        "worker-cpu-0": {
+            "gpu": False,
+            "node_count": 1,
+            "labels": {
+                "nebius.com/node-group": "worker-cpu-0",
+                "nebius.com/node-group-id": "nodegroup-worker-cpu",
+                "slurm.nebius.ai/nodeset": "worker",
+                "slurm.nebius.ai/nodeset-name": "worker-cpu",
+                "slurm.nebius.ai/workload": "cpu",
+            },
+            "nodes": ["worker-cpu-node"],
+        },
+        "worker-gpu-0": {
+            "gpu": True,
+            "node_count": 1,
+            "labels": {
+                "nebius.com/node-group": "worker-gpu-0",
+                "nebius.com/node-group-id": "nodegroup-worker-gpu",
+                "slurm.nebius.ai/nodeset": "worker",
+                "slurm.nebius.ai/nodeset-name": "worker-gpu",
+                "slurm.nebius.ai/workload": "gpu",
+            },
+            "allocatable": {"nvidia.com/gpu": "8"},
+            "nodes": ["worker-gpu-node"],
+        },
+    }
+    runner = _FakeCommandRunner(
+        live_nodes=[
+            {
+                "metadata": {
+                    "name": "worker-cpu-node",
+                    "labels": {
+                        "nebius.com/node-group": "gpu",
+                        "nebius.com/node-group-id": "nodegroup-worker-cpu",
+                        "slurm.nebius.ai/nodeset": "worker",
+                        "slurm.nebius.ai/nodeset-name": "worker",
+                    },
+                }
+            },
+            {
+                "metadata": {
+                    "name": "worker-gpu-node",
+                    "labels": {
+                        "nebius.com/node-group": "gpu",
+                        "nebius.com/node-group-id": "nodegroup-worker-gpu",
+                        "slurm.nebius.ai/nodeset": "worker",
+                        "slurm.nebius.ai/nodeset-name": "worker",
+                    },
+                }
+            },
+        ]
+    )
+
+    migration._reconcile_target_node_storage_labels(  # noqa: SLF001
+        command_runner=runner,
+        kube_context="external-context",
+        source_report=_source_report(snapshot),
+        worker_node_groups=("worker-gpu-0", "worker-cpu-0"),
+    )
+
+    label_commands = [
+        call[0]
+        for call in runner.calls
+        if call[0][:5] == ("kubectl", "--context", "external-context", "label", "node")
+    ]
+    assert (
+        "kubectl",
+        "--context",
+        "external-context",
+        "label",
+        "node",
+        "worker-cpu-node",
+        "slurm.nebius.ai/nodeset-name=worker-cpu",
+        "nebius.com/node-group=worker-cpu-0",
+        "--overwrite",
+        "--request-timeout=20s",
+    ) in label_commands
+    assert (
+        "kubectl",
+        "--context",
+        "external-context",
+        "label",
+        "node",
+        "worker-gpu-node",
+        "slurm.nebius.ai/nodeset-name=worker-gpu",
+        "nebius.com/node-group=worker-gpu-0",
+        "--overwrite",
+        "--request-timeout=20s",
+    ) in label_commands
+    assert "unrelated-node-a" not in {
+        command[5] for command in label_commands if len(command) > 5
+    }
+
+
+def test_source_worker_nodeset_values_defaults_worker_proc_mount() -> None:
+    nodeset = _source_worker_nodeset("worker-cpu", gpu=False)
+    spec = nodeset["spec"]
+    assert isinstance(spec, dict)
+    slurmd = spec["slurmd"]
+    munge = spec["munge"]
+    assert isinstance(slurmd, dict)
+    assert isinstance(munge, dict)
+    slurmd["security"] = {"appArmorProfile": "unconfined", "limitsConfig": ""}
+    munge["security"] = {
+        "appArmorProfile": "unconfined",
+        "limitsConfig": "",
+        "procMount": "",
+    }
+    snapshot = _snapshot()
+    snapshot["soperator_resources"] = [nodeset]
+
+    values = migration._source_worker_nodeset_values(_source_report(snapshot))  # noqa: SLF001
+
+    assert values[0]["slurmd"]["security"]["procMount"] == "Default"
+    assert values[0]["munge"]["security"]["procMount"] == "Default"
+
+
+def test_live_source_slurmcluster_present_treats_timeout_as_absent() -> None:
+    class _TimeoutSlurmClustersRunner(_FakeCommandRunner):
+        def __call__(
+            self,
+            args,
+            *,
+            input_text: str | None = None,
+            timeout_seconds: int = 300,
+            check: bool = True,
+        ) -> SoperatorMigrationCommandResult:
+            command = tuple(str(item) for item in args)
+            if command[:8] == (
+                "kubectl",
+                "--context",
+                "external-context",
+                "-n",
+                "soperator",
+                "get",
+                "slurmclusters",
+                "-o",
+            ):
+                raise subprocess.TimeoutExpired(list(command), timeout_seconds)
+            return super().__call__(
+                command,
+                input_text=input_text,
+                timeout_seconds=timeout_seconds,
+                check=check,
+            )
+
+    snapshot = _snapshot_with_compute_source()
+    snapshot["soperator_resources"] = [
+        {
+            "apiVersion": "slurm.nebius.ai/v1",
+            "kind": "SlurmCluster",
+            "metadata": {"name": "source-soperator", "namespace": "soperator"},
+        }
+    ]
+
+    assert not migration._live_source_slurmcluster_present(  # noqa: SLF001
+        command_runner=_TimeoutSlurmClustersRunner(),
+        kube_context="external-context",
+        source_report=_source_report(snapshot),
+        target_ref="external-cluster",
+    )
+
+
+def test_suspend_legacy_flux_helmreleases_treats_timeout_as_skip() -> None:
+    class _TimeoutLegacyFluxRunner(_FakeCommandRunner):
+        def __call__(
+            self,
+            args,
+            *,
+            input_text: str | None = None,
+            timeout_seconds: int = 300,
+            check: bool = True,
+        ) -> SoperatorMigrationCommandResult:
+            command = tuple(str(item) for item in args)
+            self.calls.append((command, input_text))
+            if command[:8] == (
+                "kubectl",
+                "--context",
+                "external-context",
+                "-n",
+                "flux-system",
+                "get",
+                "helmreleases",
+                "-o",
+            ):
+                raise subprocess.TimeoutExpired(list(command), timeout_seconds)
+            return super().__call__(
+                command,
+                input_text=input_text,
+                timeout_seconds=timeout_seconds,
+                check=check,
+            )
+
+    runner = _TimeoutLegacyFluxRunner()
+
+    lines = migration._suspend_legacy_flux_helmreleases(  # noqa: SLF001
+        command_runner=runner,
+        kube_context="external-context",
+        phase={},
+    )
+
+    assert lines == [
+        "Skipped legacy Flux HelmRelease suspension because the Kubernetes API "
+        "did not answer within 30s."
+    ]
+    assert runner.calls[0][0][-1] == "--request-timeout=20s"
+
+
+def test_scale_down_legacy_soperator_controller_deployments() -> None:
+    runner = _FakeCommandRunner(
+        live_kubernetes_resources={
+            "deployment": [
+                {
+                    "metadata": {
+                        "name": "soperator-controller-manager",
+                        "namespace": "soperator-system",
+                        "labels": {
+                            "helm.sh/chart": "helm-soperator-2.0.5",
+                            "app.kubernetes.io/version": "2.0.5",
+                        },
+                        "annotations": {
+                            "meta.helm.sh/release-name": "soperator-controller",
+                        },
+                    },
+                    "spec": {"replicas": 1},
+                    "status": {"availableReplicas": 1, "readyReplicas": 1},
+                },
+                {
+                    "metadata": {
+                        "name": "soperator-manager",
+                        "namespace": "soperator",
+                        "labels": {
+                            "helm.sh/chart": "soperator-4.0.1-ps.1",
+                            "app.kubernetes.io/version": "4.0.1",
+                        },
+                        "annotations": {"meta.helm.sh/release-name": "soperator"},
+                    },
+                    "spec": {"replicas": 1},
+                    "status": {"availableReplicas": 1, "readyReplicas": 1},
+                },
+            ],
+            "mutatingwebhookconfiguration": [
+                {
+                    "metadata": {
+                        "name": "soperator-controller-mutating-webhook-configuration"
+                    }
+                },
+                {"metadata": {"name": "soperator-mutating-webhook-configuration"}},
+            ],
+            "validatingwebhookconfiguration": [
+                {
+                    "metadata": {
+                        "name": "soperator-controller-validating-webhook-configuration"
+                    }
+                },
+                {"metadata": {"name": "soperator-validating-webhook-configuration"}},
+            ],
+        }
+    )
+    phase: dict[str, object] = {}
+
+    changed, lines = migration._scale_down_legacy_soperator_controllers(  # noqa: SLF001
+        command_runner=runner,
+        kube_context="external-context",
+        phase=phase,
+        target_version="4.0.1-ps.1",
+        profile_group=migration.soperator_migration_profile_group("v2-to-target"),
+    )
+
+    assert changed is True
+    assert lines == [
+        "Deleted old source Soperator admission webhooks before target takeover: "
+        "MutatingWebhookConfiguration/soperator-controller-mutating-webhook-configuration, "
+        "ValidatingWebhookConfiguration/soperator-controller-validating-webhook-configuration.",
+        "Scaled down old source Soperator controller deployments before target "
+        "takeover: soperator-system/soperator-controller-manager."
+    ]
+    assert phase["deleted_source_controller_admission_webhooks"] == [
+        "MutatingWebhookConfiguration/soperator-controller-mutating-webhook-configuration",
+        "ValidatingWebhookConfiguration/soperator-controller-validating-webhook-configuration",
+    ]
+    assert phase["scaled_source_controller_deployments"] == [
+        "soperator-system/soperator-controller-manager"
+    ]
+    deployments = runner.live_kubernetes_resources["deployment"]
+    source = deployments[0]
+    target = deployments[1]
+    assert source["spec"]["replicas"] == 0
+    assert source["status"]["availableReplicas"] == 0
+    assert target["spec"]["replicas"] == 1
+    assert runner.live_kubernetes_resources["mutatingwebhookconfiguration"] == [
+        {"metadata": {"name": "soperator-mutating-webhook-configuration"}}
+    ]
+    assert runner.live_kubernetes_resources["validatingwebhookconfiguration"] == [
+        {"metadata": {"name": "soperator-validating-webhook-configuration"}}
+    ]
+
+
+def test_scale_down_legacy_v1_soperator_controller_identities() -> None:
+    runner = _FakeCommandRunner(
+        live_kubernetes_resources={
+            "deployment": [
+                {
+                    "metadata": {
+                        "name": "soperator-controller-manager",
+                        "namespace": "soperator-system",
+                        "labels": {
+                            "helm.sh/chart": "helm-soperator-1.23.3",
+                            "app.kubernetes.io/version": "1.23.3",
+                        },
+                        "annotations": {
+                            "meta.helm.sh/release-name": "soperator-controller",
+                        },
+                    },
+                    "spec": {"replicas": 1},
+                    "status": {"availableReplicas": 1, "readyReplicas": 1},
+                },
+                {
+                    "metadata": {
+                        "name": "slurm-operator-controller-manager",
+                        "namespace": "soperator",
+                        "labels": {
+                            "helm.sh/chart": "slurm-operator-1.14.1",
+                            "app.kubernetes.io/version": "1.14.1",
+                        },
+                        "annotations": {"meta.helm.sh/release-name": "slurm-operator"},
+                    },
+                    "spec": {"replicas": 1},
+                    "status": {"availableReplicas": 1, "readyReplicas": 1},
+                },
+            ],
+            "mutatingwebhookconfiguration": [
+                {
+                    "metadata": {
+                        "name": "soperator-controller-mutating-webhook-configuration"
+                    }
+                },
+                {"metadata": {"name": "slurm-operator-mutating-webhook-configuration"}},
+            ],
+            "validatingwebhookconfiguration": [
+                {
+                    "metadata": {
+                        "name": "soperator-controller-validating-webhook-configuration"
+                    }
+                },
+                {"metadata": {"name": "slurm-operator-validating-webhook-configuration"}},
+            ],
+        }
+    )
+    phase: dict[str, object] = {}
+
+    changed, lines = migration._scale_down_legacy_soperator_controllers(  # noqa: SLF001
+        command_runner=runner,
+        kube_context="external-context",
+        phase=phase,
+        target_version="4.0.1-ps.1",
+        profile_group=migration.soperator_migration_profile_group("legacy-v1-to-target"),
+    )
+
+    assert changed is True
+    assert lines == [
+        "Deleted old source Soperator admission webhooks before target takeover: "
+        "MutatingWebhookConfiguration/soperator-controller-mutating-webhook-configuration, "
+        "ValidatingWebhookConfiguration/soperator-controller-validating-webhook-configuration, "
+        "MutatingWebhookConfiguration/slurm-operator-mutating-webhook-configuration, "
+        "ValidatingWebhookConfiguration/slurm-operator-validating-webhook-configuration.",
+        "Scaled down old source Soperator controller deployments before target "
+        "takeover: soperator-system/soperator-controller-manager, "
+        "soperator/slurm-operator-controller-manager."
+    ]
+    assert phase["scaled_source_controller_deployments"] == [
+        "soperator-system/soperator-controller-manager",
+        "soperator/slurm-operator-controller-manager",
+    ]
+    assert phase["deleted_source_controller_admission_webhooks"] == [
+        "MutatingWebhookConfiguration/soperator-controller-mutating-webhook-configuration",
+        "ValidatingWebhookConfiguration/soperator-controller-validating-webhook-configuration",
+        "MutatingWebhookConfiguration/slurm-operator-mutating-webhook-configuration",
+        "ValidatingWebhookConfiguration/slurm-operator-validating-webhook-configuration",
+    ]
+    for deployment in runner.live_kubernetes_resources["deployment"]:
+        assert deployment["spec"]["replicas"] == 0
+        assert deployment["status"]["availableReplicas"] == 0
+    assert runner.live_kubernetes_resources["mutatingwebhookconfiguration"] == []
+    assert runner.live_kubernetes_resources["validatingwebhookconfiguration"] == []
+
+
+def test_kubectl_json_or_empty_treats_timeout_as_empty() -> None:
+    class _TimeoutJsonRunner(_FakeCommandRunner):
+        def __call__(
+            self,
+            args,
+            *,
+            input_text: str | None = None,
+            timeout_seconds: int = 300,
+            check: bool = True,
+        ) -> SoperatorMigrationCommandResult:
+            command = tuple(str(item) for item in args)
+            self.calls.append((command, input_text))
+            raise subprocess.TimeoutExpired(list(command), timeout_seconds)
+
+    runner = _TimeoutJsonRunner()
+
+    payload = migration._kubectl_json_or_empty(  # noqa: SLF001
+        command_runner=runner,
+        command=[
+            "kubectl",
+            "--context",
+            "external-context",
+            "get",
+            "helmreleases.helm.toolkit.fluxcd.io",
+            "-A",
+            "-o",
+            "json",
+        ],
+        description="kubectl get HelmRelease",
+    )
+
+    assert payload == {}
+    assert runner.calls[0][0][-1] == "--request-timeout=20s"
+
+
+def test_running_worker_pod_for_nodeset_treats_timeout_as_absent() -> None:
+    class _TimeoutWorkerPodRunner(_FakeCommandRunner):
+        def __call__(
+            self,
+            args,
+            *,
+            input_text: str | None = None,
+            timeout_seconds: int = 300,
+            check: bool = True,
+        ) -> SoperatorMigrationCommandResult:
+            command = tuple(str(item) for item in args)
+            self.calls.append((command, input_text))
+            if command[:7] == (
+                "kubectl",
+                "--context",
+                "external-context",
+                "-n",
+                "soperator",
+                "get",
+                "pods",
+            ):
+                raise subprocess.TimeoutExpired(list(command), timeout_seconds)
+            return super().__call__(
+                command,
+                input_text=input_text,
+                timeout_seconds=timeout_seconds,
+                check=check,
+            )
+
+    runner = _TimeoutWorkerPodRunner()
+
+    pod_name = migration._running_worker_pod_for_nodeset(  # noqa: SLF001
+        command_runner=runner,
+        kube_context="external-context",
+        nodeset_name="worker-cpu",
+    )
+
+    assert pod_name == ""
+    assert runner.calls[0][0][-1] == "--request-timeout=20s"
+
+
+def test_login_pod_name_treats_timeout_as_absent() -> None:
+    class _TimeoutLoginPodRunner(_FakeCommandRunner):
+        def __call__(
+            self,
+            args,
+            *,
+            input_text: str | None = None,
+            timeout_seconds: int = 300,
+            check: bool = True,
+        ) -> SoperatorMigrationCommandResult:
+            command = tuple(str(item) for item in args)
+            self.calls.append((command, input_text))
+            if command[:7] == (
+                "kubectl",
+                "--context",
+                "external-context",
+                "-n",
+                "soperator",
+                "get",
+                "pods",
+            ):
+                raise subprocess.TimeoutExpired(list(command), timeout_seconds)
+            return super().__call__(
+                command,
+                input_text=input_text,
+                timeout_seconds=timeout_seconds,
+                check=check,
+            )
+
+    runner = _TimeoutLoginPodRunner()
+
+    pod_name = migration._login_pod_name(  # noqa: SLF001
+        command_runner=runner,
+        kube_context="external-context",
+    )
+
+    assert pod_name == ""
+    assert runner.calls[0][0][-1] == "--request-timeout=20s"
 
 
 def test_final_cutover_reconcile_checks_preserved_worker_node_config() -> None:
@@ -3053,7 +4683,7 @@ def test_final_cutover_reconcile_checks_preserved_worker_node_config() -> None:
     )
 
 
-def test_execute_pends_gpu_remediation_when_target_app_rows_are_missing(
+def test_execute_pends_gpu_reconciliation_when_target_app_rows_are_missing(
     tmp_path: Path,
 ) -> None:
     payload = _payload()
@@ -3085,7 +4715,7 @@ def test_execute_pends_gpu_remediation_when_target_app_rows_are_missing(
     assert checkpoint["pending_phase"] == "target-gpu-stack-remediation"
 
 
-def test_execute_runs_gpu_remediation_when_report_has_no_migration_plan(
+def test_execute_runs_gpu_reconciliation_when_report_has_no_migration_plan(
     tmp_path: Path,
 ) -> None:
     payload = _payload()
@@ -3093,7 +4723,7 @@ def test_execute_runs_gpu_remediation_when_report_has_no_migration_plan(
     assert isinstance(target, dict)
     onboarding = target["soperator_onboarding"]
     assert isinstance(onboarding, dict)
-    onboarding["actions"] = ["remediate-target-gpu-stack"]
+    onboarding["actions"] = ["reconcile-target-gpu-stack"]
     onboarding["storage_mode"] = "keep-existing-storage"
     onboarding["compute_mode"] = "keep-existing-compute"
     source_report = _source_report()
@@ -3150,6 +4780,7 @@ def test_execute_emits_phase_aware_status_for_storage_and_compute(tmp_path: Path
     assert result.pending_phase == "none"
     assert any(
         "phase create-aligned-sfs" in message
+        and "[Aligned SFS creation]" in message
         and "Storage" in message
         and "MK8s" in message
         and "Slurm" in message
@@ -3157,13 +4788,16 @@ def test_execute_emits_phase_aware_status_for_storage_and_compute(tmp_path: Path
     )
     assert any(
         "phase rolling-compute-migration" in message
+        and "[Rolling compute migration]" in message
         and "MK8s" in message
         and "Slurm" in message
         and "Storage" not in message
         for message in messages
     )
     assert any(
-        "phase final-control-plane-cutover" in message and "Soperator" in message
+        "phase final-control-plane-cutover" in message
+        and "[Final control-plane cutover]" in message
+        and "Soperator" in message
         for message in messages
     )
 
@@ -3180,10 +4814,72 @@ def test_execute_emits_phase_aware_status_for_storage_and_compute(tmp_path: Path
         if event["phase"] == "rolling-compute-migration" and event["point"] == "phase-start"
     )
     assert {signal["name"] for signal in rolling_status["signals"]} == {
-        "MK8s",
-        "Slurm",
+        "MK8s Node Groups",
+        "Slurm Workers",
         "Soperator",
     }
+
+
+def test_mk8s_status_reports_node_groups_and_upgrading_down_nodes() -> None:
+    runner = _FakeCommandRunner(
+        live_nodes=[
+            {
+                "metadata": {
+                    "name": "gpu-node-a",
+                    "labels": {"nebius.com/node-group": "gpu-pool"},
+                },
+                "spec": {},
+                "status": {"conditions": [{"type": "Ready", "status": "False"}]},
+            },
+            {
+                "metadata": {
+                    "name": "login-node-a",
+                    "labels": {"nebius.com/node-group": "login-pool"},
+                },
+                "spec": {},
+                "status": {"conditions": [{"type": "Ready", "status": "True"}]},
+            },
+        ]
+    )
+    checkpoint = {
+        "phase_state": {
+            "external-node-template-upgrade": {
+                "node_groups": {
+                    "gpu-pool": {
+                        "status": "updating",
+                        "node_group_name": "gpu-pool",
+                        "node_group_id": "nodegroup-gpu-pool",
+                    }
+                }
+            }
+        }
+    }
+
+    signal = migration._collect_mk8s_status(
+        command_runner=runner,
+        kube_context="external-context",
+        checkpoint=checkpoint,
+        phase_id="external-node-template-upgrade",
+    )
+
+    assert signal.name == "MK8s Node Groups"
+    assert signal.state == "degraded"
+    assert "nodes 1/2 Ready" in signal.summary
+    assert "node groups gpu-pool:0/1 Ready, login-pool:1/1 Ready" in signal.summary
+    assert "problem nodes gpu-node-a:node-upgrading (down)" in signal.summary
+
+
+def test_slurm_status_reports_named_worker_states() -> None:
+    signal = migration._collect_slurm_status(
+        command_runner=_FakeCommandRunner(),
+        kube_context="external-context",
+    )
+
+    assert signal.name == "Slurm Workers"
+    assert signal.state == "draining"
+    assert "workers drained=1, idle=1" in signal.summary
+    assert "problem workers worker-gpu-[0-1]:drained" in signal.summary
+    assert "queue empty" in signal.summary
 
 
 def test_status_scope_matches_planned_migration_layers() -> None:
@@ -3625,6 +5321,10 @@ def test_execute_migrates_compute_when_slurm_resources_exist(tmp_path: Path) -> 
     helm_upgrade = next(call for call in helm_upgrades if call[0][5] == "soperator")
     assert helm_upgrade[1] is not None
     assert "--force-conflicts" in helm_upgrade[0]
+    assert "--take-ownership" in helm_upgrade[0]
+    assert "--no-hooks" in helm_upgrade[0]
+    assert "--timeout" in helm_upgrade[0]
+    assert helm_upgrade[0][helm_upgrade[0].index("--timeout") + 1] == "2m"
     assert "--wait" not in helm_upgrade[0]
     crd_applies = [
         call
@@ -3660,7 +5360,11 @@ def test_execute_migrates_compute_when_slurm_resources_exist(tmp_path: Path) -> 
     }
     mariadb_storage = helm_values["slurmNodes"]["accounting"]["mariadbOperator"]["storage"]
     assert mariadb_storage["size"] == "128Gi"
-    assert mariadb_storage["volumeClaimTemplate"]["accessModes"] == ["ReadWriteMany"]
+    assert mariadb_storage["storageClassName"] == "compute-csi-default-sc"
+    assert mariadb_storage["volumeClaimTemplate"]["accessModes"] == ["ReadWriteOnce"]
+    assert (
+        mariadb_storage["volumeClaimTemplate"]["storageClassName"] == "compute-csi-default-sc"
+    )
     worker_nodeset = next(item for item in helm_values["nodesets"] if item["name"] == "worker")
     assert worker_nodeset["replicas"] == 2
     assert "image" not in worker_nodeset["slurmd"]
@@ -3791,9 +5495,15 @@ def test_execute_migrates_compute_when_slurm_resources_exist(tmp_path: Path) -> 
         and any("app.kubernetes.io/instance!=external-cluster" in part for part in call[0])
         for call in runner.calls
     )
-    assert any(
+    label_node_commands = [
+        call[0]
+        for call in runner.calls
+        if call[0][:5] == ("kubectl", "--context", "external-context", "label", "node")
+    ]
+    assert label_node_commands
+    assert any("nebius.com/node-group=cpu" in command for command in label_node_commands)
+    assert not any(
         call[0][:5] == ("kubectl", "--context", "external-context", "label", "nodes")
-        and "nebius.com/node-group=cpu" in call[0]
         for call in runner.calls
     )
     assert not any(
@@ -3840,6 +5550,11 @@ def test_execute_recovers_partial_cutover_without_login_pod(tmp_path: Path) -> N
     snapshot["soperator_resources"] = [
         {
             "apiVersion": "slurm.nebius.ai/v1",
+            "kind": "SlurmCluster",
+            "metadata": {"name": "source-soperator", "namespace": "soperator"},
+        },
+        {
+            "apiVersion": "slurm.nebius.ai/v1",
             "kind": "NodeSet",
             "metadata": {"name": "worker", "namespace": "soperator"},
         }
@@ -3876,6 +5591,27 @@ def test_execute_recovers_partial_cutover_without_login_pod(tmp_path: Path) -> N
         call[0][0] == "helm" and "upgrade" in call[0] and call[0][5] == "soperator"
         for call in runner.calls
     )
+
+
+def test_execution_lock_replaces_dead_pid_lock(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    lock_path = tmp_path / "checkpoint.lock"
+    lock_path.write_text('{"pid": 12345, "created_at": "2026-06-09T00:00:00Z"}\n')
+
+    def _fake_kill(pid: int, signal: int) -> None:
+        assert pid == 12345
+        assert signal == 0
+        raise ProcessLookupError
+
+    monkeypatch.setattr(migration.os, "kill", _fake_kill)
+
+    with migration.SoperatorMigrationExecutionLock(lock_path):
+        payload = json.loads(lock_path.read_text(encoding="utf-8"))
+        assert payload["pid"] == migration.os.getpid()
+
+    assert not lock_path.exists()
 
 
 def test_execute_blocks_incompatible_existing_target_node_group(tmp_path: Path) -> None:
@@ -4258,6 +5994,7 @@ def test_execute_adopts_existing_helm_owned_resource_conflict(tmp_path: Path) ->
             "priorityclass/soperator-worker-high-priority",
             "app.kubernetes.io/managed-by=Helm",
             "--overwrite",
+            "--request-timeout=20s",
         ),
         None,
     ) in runner.calls
@@ -4271,6 +6008,7 @@ def test_execute_adopts_existing_helm_owned_resource_conflict(tmp_path: Path) ->
             "meta.helm.sh/release-name=soperator",
             "meta.helm.sh/release-namespace=soperator",
             "--overwrite",
+            "--request-timeout=20s",
         ),
         None,
     ) in runner.calls
@@ -4491,6 +6229,24 @@ def test_execute_rejects_changed_live_source_fingerprint(tmp_path: Path) -> None
         tmp_path / "config.yaml",
         "external-cluster",
     ).exists()
+
+
+def test_execute_allows_provider_only_node_group_label_drift(tmp_path: Path) -> None:
+    live_snapshot = _snapshot()
+    gpu_pool = live_snapshot["node_groups"]["gpu-pool"]  # type: ignore[index]
+    labels = gpu_pool["labels"]  # type: ignore[index]
+    labels.pop("nebius.com/node-group")  # type: ignore[attr-defined]
+
+    result = execute_soperator_migration(
+        config_path=tmp_path / "config.yaml",
+        target_ref="external-cluster",
+        payload=_payload(),
+        source_report=_source_report(),
+        snapshot_collector=lambda *, kube_context: live_snapshot,
+    )
+
+    assert result.live_source_version == "3.0.5"
+    assert result.pending_phase == "customer-approval"
 
 
 def test_execute_allows_volatile_live_source_status_drift(tmp_path: Path) -> None:

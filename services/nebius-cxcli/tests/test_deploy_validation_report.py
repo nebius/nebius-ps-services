@@ -405,9 +405,13 @@ def test_build_deploy_validation_report_uses_soperator_owned_gpu_smoke_for_skips
                         "summary": "one-GPU Slurm allocation reported NVIDIA GPUs on partition gpu.",
                     },
                     {
-                        "name": "Slurm NCCL smoke test",
+                        "name": "Slurm NCCL benchmark",
                         "passed": True,
-                        "summary": "one-rank NCCL all_reduce_perf smoke completed on partition gpu.",
+                        "summary": (
+                            "two-node NCCL all_reduce_perf benchmark completed on partition gpu "
+                            "with 16 rank(s) across 2 node(s) (8 GPU(s) per node); "
+                            "average bus bandwidth 580.2 Gbps across 2G, 4G, 8G message sizes."
+                        ),
                     },
                 ],
             }
@@ -426,8 +430,10 @@ def test_build_deploy_validation_report_uses_soperator_owned_gpu_smoke_for_skips
         "reserve all Ready GPU nodes."
     ) in summary_lines
     assert (
-        "  PASS NCCL test (mk8s): Soperator-owned Slurm NCCL smoke passed: "
-        "one-rank NCCL all_reduce_perf smoke completed on partition gpu. "
+        "  PASS NCCL test (mk8s): Soperator-owned Slurm NCCL benchmark passed: "
+        "two-node NCCL all_reduce_perf benchmark completed on partition gpu "
+        "with 16 rank(s) across 2 node(s) (8 GPU(s) per node); "
+        "average bus bandwidth 580.2 Gbps across 2G, 4G, 8G message sizes. "
         "The Kubernetes workload check was not scheduled because Soperator worker pods "
         "reserve all Ready GPU nodes."
     ) in summary_lines
@@ -436,7 +442,8 @@ def test_build_deploy_validation_report_uses_soperator_owned_gpu_smoke_for_skips
     assert "### NCCL test (mk8s)" in markdown
     assert "Summary: Skipped: all Ready GPU nodes" not in markdown
     assert "Soperator-owned Slurm GPU visibility passed" in markdown
-    assert "Soperator-owned Slurm NCCL smoke passed" in markdown
+    assert "Soperator-owned Slurm NCCL benchmark passed" in markdown
+    assert "average bus bandwidth **580.2** Gbps" in markdown
 
 
 def test_build_deploy_validation_report_formats_rdma_dmabuf_summary(tmp_path: Path) -> None:

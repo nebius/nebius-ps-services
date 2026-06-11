@@ -19,6 +19,7 @@ from typer.testing import CliRunner
 import nebius_cxcli.cli as cli
 import nebius_cxcli.component_sources as component_sources
 import nebius_cxcli.flux_ops as flux_ops
+import nebius_cxcli.soperator_migration as soperator_migration
 from nebius_cxcli.cluster_handoffs import Handoff
 from nebius_cxcli.component_sources import (
     ComponentOutput,
@@ -1070,6 +1071,210 @@ def test_upgrade_node_template_node_group_stages_only_selected_group(
         ("control-plane", "cluster-1:1.33"),
         ("node-template", "cluster-1:ng-gpu:1.33:ubuntu24.04:cuda13.0:3600"),
         ("sdk-close", ""),
+    ]
+
+
+def test_upgrade_node_template_resume_waits_and_restores_strategy_after_timeout(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    paths = _fake_paths(tmp_path)
+    paths.infra_dir.mkdir(parents=True)
+    paths.flux_dir.mkdir(parents=True)
+    paths.reports_dir.mkdir(parents=True)
+    paths.config_path.write_text(
+        yaml.safe_dump(
+            {
+                "infra": {
+                    "components": [
+                        {
+                            "id": "mk8s",
+                            "instance_id": "mk8s",
+                            "enabled": True,
+                            "inputs": {
+                                "cluster": {
+                                    "cluster_name": "mk8s-live",
+                                    "k8s_version": "1.33",
+                                },
+                                "node_groups": {
+                                    "system": {
+                                        "version": "1.33",
+                                        "platform": "cpu-platform",
+                                        "preset": "cpu-4-16",
+                                        "os": "ubuntu24.04",
+                                    },
+                                },
+                            },
+                        }
+                    ]
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    generated_config = SimpleNamespace(
+        client_info=SimpleNamespace(
+            client_name="test-client",
+            nebius=SimpleNamespace(project_id="project-1"),
+        )
+    )
+    manifest = {"deploy": {"targets": [_mk8s_target(paths)]}}
+    calls: list[object] = []
+    live_status = {
+        "value": SimpleNamespace(
+            version="1.33",
+            ready_node_count=0,
+            target_node_count=1,
+            node_count=2,
+            outdated_node_count=1,
+            reconciling=True,
+        )
+    }
+
+    class FakeSdk:
+        def sync_close(self) -> None:
+            calls.append("sdk-close")
+
+    class FakeExecutor:
+        def __init__(self, sdk: object) -> None:
+            assert isinstance(sdk, FakeSdk)
+
+        def get_cluster_by_name(self, *, project_id: str, name: str) -> SimpleNamespace:
+            assert (project_id, name) == ("project-1", "mk8s-live")
+            return SimpleNamespace(
+                metadata=SimpleNamespace(id="cluster-1", name=name, resource_version=1),
+                spec=SimpleNamespace(control_plane=SimpleNamespace(version="1.33")),
+            )
+
+        def get_cluster(self, cluster_id: str) -> SimpleNamespace:
+            assert cluster_id == "cluster-1"
+            return SimpleNamespace(
+                metadata=SimpleNamespace(id="cluster-1", name="mk8s-live", resource_version=1),
+                spec=SimpleNamespace(control_plane=SimpleNamespace(version="1.33")),
+            )
+
+        def control_plane_versions(self) -> tuple[str, ...]:
+            return ("1.33",)
+
+        def list_node_groups(self, cluster_id: str) -> tuple[SimpleNamespace, ...]:
+            assert cluster_id == "cluster-1"
+            return (
+                SimpleNamespace(
+                    metadata=SimpleNamespace(
+                        id="ng-system",
+                        name="mk8s-live-system",
+                        resource_version=1,
+                    ),
+                    spec=SimpleNamespace(
+                        version="1.33",
+                        template=SimpleNamespace(
+                            os="ubuntu24.04",
+                            resources=SimpleNamespace(
+                                platform="cpu-platform",
+                                preset="cpu-4-16",
+                            ),
+                            gpu_settings=SimpleNamespace(drivers_preset=""),
+                        ),
+                    ),
+                    status=live_status["value"],
+                ),
+            )
+
+        def compatibility_choices(self, *, target_version: str, platform: str):
+            assert target_version == "1.33"
+            return (SimpleNamespace(platform=platform, os="ubuntu24.04", drivers_preset=""),)
+
+        def wait_node_group_node_template(
+            self,
+            *,
+            cluster_id: str,
+            node_group_id: str,
+            version: str,
+            os: str,
+            drivers_preset: str | None,
+            timeout_seconds: int,
+        ) -> None:
+            live_status["value"] = _mk8s_ready_status(version=version)
+            calls.append(
+                (
+                    "wait-node-template",
+                    f"{cluster_id}:{node_group_id}:{version}:{os}:{drivers_preset}:{timeout_seconds}",
+                )
+            )
+
+    def _current_state() -> dict[str, str]:
+        payload = yaml.safe_load(paths.config_path.read_text(encoding="utf-8"))
+        group = payload["infra"]["components"][0]["inputs"]["node_groups"]["system"]
+        return {
+            "version": group["version"],
+            "os": group["os"],
+        }
+
+    monkeypatch.setattr(
+        cli, "_load_deploy_context_readonly", lambda _path: (generated_config, paths, manifest)
+    )
+    monkeypatch.setattr(
+        cli, "_load_deploy_context", lambda _path: (generated_config, paths, manifest)
+    )
+    monkeypatch.setattr(
+        cli,
+        "_resolve_managed_mk8s_upgrade_target",
+        lambda _manifest, *, target_instance_id: {
+            "component_id": "mk8s",
+            "target_ref": target_instance_id,
+            "access": "external",
+            "cluster_id_output_name": "cluster_id",
+        },
+    )
+    monkeypatch.setattr(
+        cli,
+        "_managed_mk8s_target_with_cluster_id",
+        lambda target, *, cluster_id: {**target, "cluster_id": cluster_id},
+    )
+    monkeypatch.setattr(cli, "init_nebius_sdk", lambda **_kwargs: FakeSdk())
+    monkeypatch.setattr(cli, "Mk8sKubernetesVersionExecutor", FakeExecutor)
+    monkeypatch.setattr(cli, "_prepare_cluster_handoff_kube_env", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(cli, "collect_kubernetes_preflight_findings", lambda *, kube_env: ())
+    monkeypatch.setattr(
+        cli,
+        "_run_generated_bundle_validation",
+        lambda *_args, **kwargs: calls.append(("validate", kwargs["title"])) or {},
+    )
+    monkeypatch.setattr(
+        cli, "render_command", lambda *_args, **_kwargs: calls.append(("render", _current_state()))
+    )
+    monkeypatch.setattr(cli, "_manifest_status_watchers", lambda _manifest: [])
+    monkeypatch.setattr(cli, "_enabled_status_watcher_specs", lambda _config: [])
+    monkeypatch.setattr(
+        cli, "terraform_plan", lambda *_args, **_kwargs: calls.append(("plan", _current_state()))
+    )
+    monkeypatch.setattr(
+        cli,
+        "_run_terraform_apply_with_status",
+        lambda *_args, **_kwargs: calls.append(("apply", _current_state())),
+    )
+    monkeypatch.setattr(cli, "_manifest_deploy_validations", lambda _manifest: [])
+
+    with cli.console.capture() as capture:
+        cli.upgrade_node_template_command(
+            paths.config_path,
+            "infra:mk8s@mk8s",
+            to_version="1.33",
+            to_os="ubuntu24.04",
+            disruption_policy="allow-unavailable",
+            dry_run=False,
+        )
+    flat_output = " ".join(_plain_output(capture.get()).split())
+
+    assert "1 strategy-restore stage" in flat_output
+    assert calls == [
+        ("validate", "Node-template upgrade preflight"),
+        ("wait-node-template", "cluster-1:ng-system:1.33:ubuntu24.04:None:3600"),
+        ("render", {"version": "1.33", "os": "ubuntu24.04"}),
+        ("validate", "Validate rendered stage 1/1: node-group strategy restore"),
+        ("plan", {"version": "1.33", "os": "ubuntu24.04"}),
+        ("apply", {"version": "1.33", "os": "ubuntu24.04"}),
+        "sdk-close",
     ]
 
 
@@ -2472,6 +2677,187 @@ def test_upgrade_cpu_preset_apply_updates_source_and_waits_for_node_layer_rollou
         ("plan", "cpu-8-32"),
         ("apply", "cpu-8-32"),
         ("wait-layer", "cluster-1:ng-system:preset:cpu-8-32:3600"),
+        "sdk-close",
+    ]
+
+
+def test_upgrade_cpu_preset_resume_waits_and_restores_strategy_after_timeout(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    paths = _fake_paths(tmp_path)
+    paths.infra_dir.mkdir(parents=True)
+    paths.flux_dir.mkdir(parents=True)
+    paths.reports_dir.mkdir(parents=True)
+    paths.config_path.write_text(
+        yaml.safe_dump(
+            {
+                "infra": {
+                    "components": [
+                        {
+                            "id": "mk8s",
+                            "instance_id": "mk8s",
+                            "enabled": True,
+                            "inputs": {
+                                "cluster": {
+                                    "cluster_name": "mk8s-live",
+                                    "k8s_version": "1.33",
+                                },
+                                "node_groups": {
+                                    "system": {
+                                        "platform": "cpu-platform",
+                                        "preset": "cpu-8-32",
+                                        "os": "ubuntu24.04",
+                                    },
+                                },
+                            },
+                        }
+                    ]
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    generated_config = SimpleNamespace(
+        client_info=SimpleNamespace(
+            client_name="test-client",
+            nebius=SimpleNamespace(project_id="project-1"),
+        )
+    )
+    manifest = {"deploy": {"targets": [_mk8s_target(paths)]}}
+    calls: list[object] = []
+    live_status = {
+        "value": SimpleNamespace(
+            version="1.33",
+            ready_node_count=0,
+            target_node_count=1,
+            node_count=2,
+            outdated_node_count=1,
+            reconciling=True,
+        )
+    }
+
+    class FakeSdk:
+        def sync_close(self) -> None:
+            calls.append("sdk-close")
+
+    class FakeExecutor:
+        def __init__(self, sdk: object) -> None:
+            assert isinstance(sdk, FakeSdk)
+
+        def get_cluster_by_name(self, *, project_id: str, name: str) -> SimpleNamespace:
+            assert (project_id, name) == ("project-1", "mk8s-live")
+            return SimpleNamespace(
+                metadata=SimpleNamespace(id="cluster-1", name=name, resource_version=1),
+                spec=SimpleNamespace(control_plane=SimpleNamespace(version="1.33")),
+            )
+
+        def get_cluster(self, cluster_id: str) -> SimpleNamespace:
+            assert cluster_id == "cluster-1"
+            return SimpleNamespace(
+                metadata=SimpleNamespace(id="cluster-1", name="mk8s-live", resource_version=1),
+                spec=SimpleNamespace(control_plane=SimpleNamespace(version="1.33")),
+            )
+
+        def list_node_groups(self, cluster_id: str) -> tuple[SimpleNamespace, ...]:
+            assert cluster_id == "cluster-1"
+            return (
+                _mk8s_os_live_node_group(
+                    id="ng-system",
+                    name="mk8s-live-system",
+                    os="ubuntu24.04",
+                    preset="cpu-8-32",
+                    status=live_status["value"],
+                ),
+            )
+
+        def compatibility_choices(self, *, target_version: str, platform: str):
+            raise AssertionError("CPU preset upgrade should not query MK8s compatibility matrix")
+
+        def wait_node_group_layer(
+            self,
+            *,
+            cluster_id: str,
+            node_group_id: str,
+            field: str,
+            value: str,
+            timeout_seconds: int,
+        ) -> None:
+            live_status["value"] = _mk8s_ready_status(version="1.33")
+            calls.append(
+                (
+                    "wait-layer",
+                    f"{cluster_id}:{node_group_id}:{field}:{value}:{timeout_seconds}",
+                )
+            )
+
+    def _current_preset() -> str:
+        payload = yaml.safe_load(paths.config_path.read_text(encoding="utf-8"))
+        return payload["infra"]["components"][0]["inputs"]["node_groups"]["system"]["preset"]
+
+    monkeypatch.setattr(
+        cli, "_load_deploy_context_readonly", lambda _path: (generated_config, paths, manifest)
+    )
+    monkeypatch.setattr(
+        cli, "_load_deploy_context", lambda _path: (generated_config, paths, manifest)
+    )
+    monkeypatch.setattr(
+        cli,
+        "_resolve_managed_mk8s_upgrade_target",
+        lambda _manifest, *, target_instance_id: {
+            "component_id": "mk8s",
+            "target_ref": target_instance_id,
+            "access": "external",
+            "cluster_id_output_name": "cluster_id",
+        },
+    )
+    monkeypatch.setattr(
+        cli,
+        "_managed_mk8s_target_with_cluster_id",
+        lambda target, *, cluster_id: {**target, "cluster_id": cluster_id},
+    )
+    monkeypatch.setattr(cli, "init_nebius_sdk", lambda **_kwargs: FakeSdk())
+    monkeypatch.setattr(cli, "Mk8sKubernetesVersionExecutor", FakeExecutor)
+    monkeypatch.setattr(cli, "_prepare_cluster_handoff_kube_env", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(cli, "collect_kubernetes_preflight_findings", lambda *, kube_env: ())
+    monkeypatch.setattr(
+        cli,
+        "_run_generated_bundle_validation",
+        lambda *_args, **kwargs: calls.append(("validate", kwargs["title"])) or {},
+    )
+    monkeypatch.setattr(
+        cli, "render_command", lambda *_args, **_kwargs: calls.append(("render", _current_preset()))
+    )
+    monkeypatch.setattr(cli, "_manifest_status_watchers", lambda _manifest: [])
+    monkeypatch.setattr(cli, "_enabled_status_watcher_specs", lambda _config: [])
+    monkeypatch.setattr(
+        cli, "terraform_plan", lambda *_args, **_kwargs: calls.append(("plan", _current_preset()))
+    )
+    monkeypatch.setattr(
+        cli,
+        "_run_terraform_apply_with_status",
+        lambda *_args, **_kwargs: calls.append(("apply", _current_preset())),
+    )
+
+    with cli.console.capture() as capture:
+        cli.upgrade_cpu_preset_command(
+            paths.config_path,
+            "infra:mk8s@mk8s",
+            to_preset="cpu-8-32",
+            disruption_policy="allow-unavailable",
+        )
+    output = _plain_output(capture.get())
+    flat_output = " ".join(output.split())
+
+    assert "waiting for the in-progress node-group rollout to finish" in flat_output
+    assert "1 strategy-restore stage" in flat_output
+    assert calls == [
+        ("validate", "CPU preset upgrade preflight"),
+        ("wait-layer", "cluster-1:ng-system:preset:cpu-8-32:3600"),
+        ("render", "cpu-8-32"),
+        ("validate", "Validate rendered stage 1/1: node-group strategy restore"),
+        ("plan", "cpu-8-32"),
+        ("apply", "cpu-8-32"),
         "sdk-close",
     ]
 
@@ -5759,7 +6145,7 @@ def test_render_command_points_migration_required_soperator_to_migrate(
     assert f"Next step: `nebius-cxcli deploy {config_arg}`" not in normalized_output
 
 
-def test_render_command_points_gpu_remediation_only_soperator_to_deploy(
+def test_render_command_points_gpu_reconciliation_only_soperator_to_deploy(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -5791,7 +6177,7 @@ def test_render_command_points_gpu_remediation_only_soperator_to_deploy(
                     "kind": "external-mk8s",
                     "soperator_onboarding": {
                         "accepted": True,
-                        "actions": ["remediate-target-gpu-stack", "adopt-soperator"],
+                        "actions": ["reconcile-target-gpu-stack", "adopt-soperator"],
                     },
                 }
             ]
@@ -11480,7 +11866,7 @@ def test_apply_post_flux_manifest_orders_crds_webhook_resources_before_custom_re
 
     cli._apply_post_flux_manifest(manifest_path, env={})
 
-    assert len(calls) == 7
+    assert len(calls) == 9
     assert calls[0][:5] == ("kubectl", "apply", "--server-side", "--force-conflicts", "-f")
     assert calls[0][5].endswith("post-flux-soperator-crds.yaml")
     assert calls[1] == (
@@ -11510,10 +11896,31 @@ def test_apply_post_flux_manifest_orders_crds_webhook_resources_before_custom_re
         "--timeout=120s",
         "endpoints/soperator-webhook-service",
     )
-    assert calls[5][:5] == ("kubectl", "apply", "--server-side", "--force-conflicts", "-f")
-    assert calls[5][5].endswith("post-flux-soperator-custom-resources-10.yaml")
-    assert calls[6][:5] == ("kubectl", "apply", "--server-side", "--force-conflicts", "-f")
-    assert calls[6][5].endswith("post-flux-soperator-custom-resources-30.yaml")
+    assert calls[5] == (
+        "kubectl",
+        "-n",
+        "soperator",
+        "delete",
+        "cronjob.batch/run-extensive-check-on-reservations",
+        "cronjob.batch/extensive-check",
+        "--ignore-not-found=true",
+        "--wait=false",
+    )
+    assert calls[6] == (
+        "kubectl",
+        "-n",
+        "soperator",
+        "delete",
+        "job.batch,pod",
+        "-l",
+        "app.kubernetes.io/component=soperatorchecks",
+        "--ignore-not-found=true",
+        "--wait=false",
+    )
+    assert calls[7][:5] == ("kubectl", "apply", "--server-side", "--force-conflicts", "-f")
+    assert calls[7][5].endswith("post-flux-soperator-custom-resources-10.yaml")
+    assert calls[8][:5] == ("kubectl", "apply", "--server-side", "--force-conflicts", "-f")
+    assert calls[8][5].endswith("post-flux-soperator-custom-resources-30.yaml")
     assert applied_kinds == [
         ["CustomResourceDefinition"],
         ["Deployment", "MutatingWebhookConfiguration"],
@@ -11610,13 +12017,20 @@ def test_apply_post_flux_manifest_deletes_hook_resources_before_creation(
         ["SlurmCluster"],
         ["ConfigMap", "Job"],
     ]
-    assert calls[2][:4] == ("kubectl", "delete", "-f", calls[2][3])
-    assert calls[2][4:] == (
+    hook_delete_call = next(call for call in calls if call[:3] == ("kubectl", "delete", "-f"))
+    assert hook_delete_call[:4] == ("kubectl", "delete", "-f", hook_delete_call[3])
+    assert hook_delete_call[4:] == (
         "--ignore-not-found=true",
         "--wait=true",
         "--timeout=120s",
     )
-    assert calls[4] == (
+    hook_wait_call = next(
+        call
+        for call in calls
+        if call[:4] == ("kubectl", "-n", "soperator", "wait")
+        and "job/cluster1-qos-reconcile" in call
+    )
+    assert hook_wait_call == (
         "kubectl",
         "-n",
         "soperator",
@@ -11683,7 +12097,7 @@ def test_apply_post_flux_manifest_replaces_priority_classes_when_value_changes(
     assert calls[-1][:5] == ("kubectl", "apply", "--server-side", "--force-conflicts", "-f")
 
 
-def test_apply_post_flux_manifest_deletes_stale_nodeconfigurators(
+def test_apply_post_flux_manifest_deletes_stale_soperator_custom_resources(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     manifest_path = tmp_path / "post-flux-soperator.yaml"
@@ -11695,6 +12109,26 @@ def test_apply_post_flux_manifest_deletes_stale_nodeconfigurators(
                     "kind": "NodeConfigurator",
                     "metadata": {
                         "name": "cluster1",
+                        "namespace": "soperator",
+                        "labels": {"app.kubernetes.io/instance": "soperator"},
+                    },
+                    "spec": {},
+                },
+                {
+                    "apiVersion": "slurm.nebius.ai/v1alpha1",
+                    "kind": "SlurmCluster",
+                    "metadata": {
+                        "name": "cluster1",
+                        "namespace": "soperator",
+                        "labels": {"app.kubernetes.io/instance": "soperator"},
+                    },
+                    "spec": {},
+                },
+                {
+                    "apiVersion": "slurm.nebius.ai/v1alpha1",
+                    "kind": "NodeSet",
+                    "metadata": {
+                        "name": "worker-cpu",
                         "namespace": "soperator",
                         "labels": {"app.kubernetes.io/instance": "soperator"},
                     },
@@ -11729,6 +12163,49 @@ def test_apply_post_flux_manifest_deletes_stale_nodeconfigurators(
                     }
                 ),
             )
+        if cmd[:5] == [
+            "kubectl",
+            "-n",
+            "soperator",
+            "get",
+            "slurmclusters.slurm.nebius.ai",
+        ]:
+            return SimpleNamespace(
+                returncode=0,
+                stderr="",
+                stdout=json.dumps(
+                    {
+                        "items": [
+                            {"metadata": {"name": "cluster1", "namespace": "soperator"}},
+                            {
+                                "metadata": {
+                                    "name": "legacy-cluster",
+                                    "namespace": "soperator",
+                                }
+                            },
+                        ]
+                    }
+                ),
+            )
+        if cmd[:5] == [
+            "kubectl",
+            "-n",
+            "soperator",
+            "get",
+            "nodesets.slurm.nebius.ai",
+        ]:
+            return SimpleNamespace(
+                returncode=0,
+                stderr="",
+                stdout=json.dumps(
+                    {
+                        "items": [
+                            {"metadata": {"name": "worker-cpu", "namespace": "soperator"}},
+                            {"metadata": {"name": "worker-gpu-old", "namespace": "soperator"}},
+                        ]
+                    }
+                ),
+            )
         return SimpleNamespace(returncode=0, stderr="", stdout="")
 
     monkeypatch.setattr(cli.subprocess, "run", _fake_run)
@@ -11742,6 +12219,26 @@ def test_apply_post_flux_manifest_deletes_stale_nodeconfigurators(
         "delete",
         "nodeconfigurators.slurm.nebius.ai",
         "soperator",
+        "--ignore-not-found=true",
+        "--wait=false",
+    ) in calls
+    assert (
+        "kubectl",
+        "-n",
+        "soperator",
+        "delete",
+        "slurmclusters.slurm.nebius.ai",
+        "legacy-cluster",
+        "--ignore-not-found=true",
+        "--wait=false",
+    ) in calls
+    assert (
+        "kubectl",
+        "-n",
+        "soperator",
+        "delete",
+        "nodesets.slurm.nebius.ai",
+        "worker-gpu-old",
         "--ignore-not-found=true",
         "--wait=false",
     ) in calls
@@ -16328,7 +16825,7 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "Manage existing external Nebius MK8s clusters for Soperator" in (
         normalized_soperator_help
     )
-    assert "migrate is only for accepted onboarding plans that contain migration actions" in (
+    assert "migrate is only for accepted onboarding plans that contain migration-owned actions" in (
         normalized_soperator_help
     )
     assert "using its Nebius --cluster-id" in normalized_soperator_help
@@ -16336,14 +16833,14 @@ def test_command_help_usage_labels_positional_target_types() -> None:
         normalized_soperator_help
     )
     assert (
-        "If the accepted onboarding report says no migration work is required, run deploy <config.yaml>"
+        "If the accepted onboarding report says no migration-owned work is required, run deploy <config.yaml>"
         in normalized_soperator_help
     )
     assert "Use deploy --target <target-id> only to narrow one run" in (
         normalized_soperator_help
     )
     assert "deploy-report.md plus deploy-time validations" in normalized_soperator_help
-    assert "If migration work is required, do not deploy first" in normalized_soperator_help
+    assert "If migration-owned work is required, do not deploy first" in normalized_soperator_help
     assert "ext-soperator migrate --dry-run" in normalized_soperator_help
     assert "ext-soperator migrate --execute --approve" in normalized_soperator_help
     assert "Managed chart-only Soperator upgrades use upgrade helm-chart" in (
@@ -16404,16 +16901,26 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "--target-id external-cluster" in normalized_soperator_onboard_help
     assert "--storage-mode keep-existing-storage" in normalized_soperator_onboard_help
     assert "--compute-mode keep-existing-compute" in normalized_soperator_onboard_help
+    assert "--worker-rollout-strategy" in normalized_soperator_onboard_help
+    assert "--worker-wave-groups" in normalized_soperator_onboard_help
+    assert "--worker-wave-percent" in normalized_soperator_onboard_help
+    assert "--max-parallel-worker-groups" in normalized_soperator_onboard_help
+    assert "--strategy-max-surge-count" in normalized_soperator_onboard_help
+    assert "--strategy-max-unavailable-count" in normalized_soperator_onboard_help
+    assert "--strategy-drain-timeout" in normalized_soperator_onboard_help
     assert "--source-version 1.23.3" not in normalized_soperator_onboard_help
     assert "nebius-cxcli validate <config.yaml>" in normalized_soperator_onboard_help
     assert "nebius-cxcli render <config.yaml>" in normalized_soperator_onboard_help
+    assert "reruns refresh read-only source discovery and Nebius provider node-template inventory by node group" in (
+        normalized_soperator_onboard_help
+    )
     assert "--cluster-id selects the Nebius MK8s cluster to adopt" in (
         normalized_soperator_onboard_help
     )
     assert "--target-id is only the optional cxcli logical target id" in (
         normalized_soperator_onboard_help
     )
-    assert "For install/adopt-only targets with no migration actions" in (
+    assert "For install/adopt-only targets with no migration-owned actions" in (
         normalized_soperator_onboard_help
     )
     assert "run nebius-cxcli deploy <config.yaml> to reconcile the generated desired state" in (
@@ -16458,7 +16965,7 @@ def test_command_help_usage_labels_positional_target_types() -> None:
         normalized_soperator_migrate_help
     )
     assert "validates the accepted onboarding analysis" in normalized_soperator_migrate_help
-    assert "If the accepted onboarding report has no migration actions" in (
+    assert "If the accepted onboarding report has no migration-owned actions" in (
         normalized_soperator_migrate_help
     )
     assert "run render and deploy <config.yaml> instead" in (
@@ -16471,32 +16978,59 @@ def test_command_help_usage_labels_positional_target_types() -> None:
         "advances supported external MK8s control-plane/node-template, target GPU stack, "
         "storage, copy, compute, cutover, validation"
     ) in normalized_soperator_migrate_help
-    assert "net-new aligned SFS and net-new service-role node-group quota" in (
+    assert "net-new aligned SFS, net-new service-role node-group quota" in (
         normalized_soperator_migrate_help
     )
-    assert "source node groups one group at a time with zero-surge node-group updates" in (
+    assert "--worker-rollout-strategy" in normalized_soperator_migrate_help
+    assert "--worker-wave-groups" in normalized_soperator_migrate_help
+    assert "--worker-wave-percent" in normalized_soperator_migrate_help
+    assert "--max-parallel-worker-groups" in normalized_soperator_migrate_help
+    assert "--strategy-max-surge-count" in normalized_soperator_migrate_help
+    assert "--strategy-max-unavailable-count" in normalized_soperator_migrate_help
+    assert "--strategy-drain-timeout" in normalized_soperator_migrate_help
+    assert "--max-global-unavailable-worker-nodes" not in normalized_soperator_migrate_help
+    assert "--max-global-unavailable-worker-percent" not in normalized_soperator_migrate_help
+    assert "safe-surge worker wave spare capacity" in normalized_soperator_migrate_help
+    assert "selected worker nodes to start Ready and schedulable" in (
+        normalized_soperator_migrate_help
+    )
+    assert "service-role source node groups one group at a time with zero-surge node-group updates" in (
         normalized_soperator_migrate_help
     )
     assert "attaches them to discovered Nebius node groups" in normalized_soperator_migrate_help
     assert "max_surge=0, max_unavailable=1, drain_timeout=30m" in (
         normalized_soperator_migrate_help
     )
+    assert "configured safe-surge rollout by default" in normalized_soperator_migrate_help
+    assert "max_surge=1, max_unavailable=0, drain_timeout=30m" in (
+        normalized_soperator_migrate_help
+    )
     assert "applies target GPU stack app rows" in normalized_soperator_migrate_help
     assert "creates or reuses aligned SFS filesystems" in normalized_soperator_migrate_help
     assert "Soperator/Slurm smoke validation" in normalized_soperator_migrate_help
     assert "one-task srun job" in normalized_soperator_migrate_help
+    assert "Slurm NCCL benchmark using two idle GPU Slurm nodes" in normalized_soperator_migrate_help
+    assert "only idle multi-GPU Slurm node" in normalized_soperator_migrate_help
     assert "migrate-report.md" in normalized_soperator_migrate_help
-    assert "prints phase-aware Soperator migration status" in normalized_soperator_migrate_help
+    assert "shows an interactive progress spinner and phase-aware Soperator migration status" in (
+        normalized_soperator_migrate_help
+    )
+    assert "with phase ids, labels, overall health, and component summaries" in (
+        normalized_soperator_migrate_help
+    )
     assert "rechecks completed selected remediation/upgrade/cutover actions" in (
         normalized_soperator_migrate_help
     )
     assert "retries them if they drift" in normalized_soperator_migrate_help
     assert "repeats the final MK8s readiness check" in normalized_soperator_migrate_help
     assert "verifies the target Helm release workloads" in normalized_soperator_migrate_help
-    assert (
-        "retires old source-family Flux HelmRelease/Kustomization desired state and Helm "
-        "release records"
-    ) in (
+    assert "suspends old source-family Flux Kustomization desired state" in (
+        normalized_soperator_migrate_help
+    )
+    assert "deletes suspended old source-family Flux HelmRelease records" in (
+        normalized_soperator_migrate_help
+    )
+    assert "retires stale profile-derived source-family Helm release records" in (
         normalized_soperator_migrate_help
     )
     assert "preserving shared/storage resources" in normalized_soperator_migrate_help
@@ -18561,8 +19095,12 @@ def test_soperator_selection_seeds_required_infra_and_defaults() -> None:
     assert soperator_values["slurmNodes"]["accounting"]["mariadbOperator"]["enabled"] is True
     assert soperator_values["slurmNodes"]["accounting"]["mariadbOperator"]["storage"] == {
         "size": "128Gi",
-        "storageClassName": "slurm-local-pv",
-        "volumeClaimTemplate": {"accessModes": ["ReadWriteMany"]},
+        "storageClassName": "compute-csi-default-sc",
+        "volumeClaimTemplate": {
+            "accessModes": ["ReadWriteOnce"],
+            "resources": {"requests": {"storage": "128Gi"}},
+            "storageClassName": "compute-csi-default-sc",
+        },
     }
     assert soperator_values["slurmNodes"]["login"]["sshRootPublicKeys"] == []
     assert soperator_values["sfs"]["filesystems"]["jail"]["mount_tag"] == "jail"
@@ -19825,6 +20363,322 @@ def test_soperator_onboarding_maps_external_mk8s_node_groups_without_creating_ro
             "operator": "In",
             "values": ["cpu-a", "cpu-b"],
         }
+    ]
+
+
+@pytest.mark.parametrize(
+    ("actions", "expected_cluster_name"),
+    [
+        (["adopt-soperator"], "mk8s"),
+        (["install-soperator"], "cluster1"),
+    ],
+)
+def test_soperator_onboarding_preserves_live_mk8s_cluster_name_only_for_adoption(
+    actions: list[str],
+    expected_cluster_name: str,
+) -> None:
+    payload = {
+        "deploy": {
+            "targets": [
+                {
+                    "instance_id": "cluster1",
+                    "kind": "external-mk8s",
+                    "ownership": "external",
+                    "access": "external",
+                    "kube_context": "nebius-cluster1-mk8scluster-123-external",
+                    "inventory": {
+                        "node_groups": {
+                            "h100": {
+                                "node_count": 1,
+                                "gpu": True,
+                                "platform": "gpu-h100-sxm",
+                                "preset": "8gpu-128vcpu-1600gb",
+                                "labels": {
+                                    "nebius.com/node-group": "h100",
+                                    "nebius.com/resource-preset": "8gpu-128vcpu-1600gb",
+                                },
+                                "allocatable": {"nvidia.com/gpu": "8"},
+                            }
+                        }
+                    },
+                    "soperator_onboarding": {
+                        "accepted": True,
+                        "analysis_fingerprint": "",
+                        "state": "existing-soperator-target",
+                        "actions": actions,
+                    },
+                }
+            ]
+        },
+        "infra": {"components": []},
+        "apps": {
+            "charts": [
+                {
+                    "id": "soperator",
+                    "instance_id": "cluster1",
+                    "enabled": True,
+                    "install_mode": "onboard-existing-cluster",
+                    "values": {
+                        "clusterName": "mk8s",
+                        "nodeGroupMapping": {"worker": ["h100"]},
+                    },
+                }
+            ]
+        },
+    }
+    cli._refresh_soperator_onboarding_fingerprints(payload)
+
+    assert cli._materialize_soperator_component_defaults(payload) is True
+
+    assert payload["apps"]["charts"][0]["values"]["clusterName"] == expected_cluster_name
+
+
+def test_soperator_onboarding_prefers_established_slurmcluster_over_pending_duplicate() -> None:
+    snapshot = {
+        "soperator_resources": [
+            {
+                "kind": "SlurmCluster",
+                "metadata": {
+                    "name": "mk8s",
+                    "creationTimestamp": "2026-06-09T17:38:17Z",
+                },
+                "spec": {
+                    "partitionConfiguration": {
+                        "partitions": [
+                            {"name": "gpu", "nodeSetRefs": ["worker-gpu"]},
+                            {"name": "cpu", "nodeSetRefs": ["worker-cpu"]},
+                        ]
+                    }
+                },
+                "status": {
+                    "phase": "Not available",
+                    "readyLogin": 1,
+                    "readySConfigController": 1,
+                },
+            },
+            {
+                "kind": "SlurmCluster",
+                "metadata": {
+                    "name": "cluster1",
+                    "creationTimestamp": "2026-06-10T00:51:57Z",
+                },
+                "spec": {
+                    "partitionConfiguration": {
+                        "partitions": [
+                            {
+                                "name": "gpu",
+                                "nodeSetRefs": ["worker-gpu-mk8snodegroup-1"],
+                            },
+                            {"name": "cpu", "nodeSetRefs": ["worker-cpu"]},
+                        ]
+                    }
+                },
+                "status": {"phase": "Pending"},
+            },
+            {"kind": "NodeSet", "metadata": {"name": "worker-cpu"}, "status": {"phase": "Ready"}},
+            {"kind": "NodeSet", "metadata": {"name": "worker-gpu"}, "status": {"phase": "Ready"}},
+            {
+                "kind": "NodeSet",
+                "metadata": {"name": "worker-gpu-mk8snodegroup-1"},
+                "status": {"phase": "Pending"},
+            },
+        ]
+    }
+
+    assert cli._soperator_onboarding_live_slurm_cluster_name(snapshot) == "mk8s"
+
+
+def test_soperator_onboarding_preserves_adopted_worker_nodesets_with_partition_refs() -> None:
+    payload = {
+        "deploy": {
+            "targets": [
+                {
+                    "instance_id": "cluster1",
+                    "kind": "external-mk8s",
+                    "ownership": "external",
+                    "access": "external",
+                    "kube_context": "nebius-cluster1-mk8scluster-123-external",
+                    "inventory": {
+                        "node_groups": {
+                            "cpu-a": {
+                                "node_count": 1,
+                                "gpu": False,
+                                "labels": {"nebius.com/node-group": "cpu-a"},
+                            },
+                            "gpu-a": {
+                                "node_count": 1,
+                                "gpu": True,
+                                "platform": "gpu-h100-sxm",
+                                "preset": "8gpu-128vcpu-1600gb",
+                                "labels": {"nebius.com/node-group": "gpu-a"},
+                                "allocatable": {"nvidia.com/gpu": "8"},
+                            },
+                            "gpu-b": {
+                                "node_count": 1,
+                                "gpu": True,
+                                "platform": "gpu-h100-sxm",
+                                "preset": "8gpu-128vcpu-1600gb",
+                                "labels": {"nebius.com/node-group": "gpu-b"},
+                                "allocatable": {"nvidia.com/gpu": "8"},
+                            },
+                        }
+                    },
+                    "soperator_onboarding": {
+                        "accepted": True,
+                        "analysis_fingerprint": "",
+                        "state": "existing-soperator-target",
+                        "actions": ["adopt-soperator"],
+                    },
+                }
+            ]
+        },
+        "infra": {"components": []},
+        "apps": {
+            "charts": [
+                {
+                    "id": "soperator",
+                    "instance_id": "cluster1",
+                    "enabled": True,
+                    "install_mode": "onboard-existing-cluster",
+                    "values": {
+                        "clusterName": "mk8s",
+                        "nodeGroupMapping": {
+                            "system": ["cpu-a"],
+                            "controller": ["cpu-a"],
+                            "login": ["cpu-a"],
+                            "accounting": ["cpu-a"],
+                            "worker": ["gpu-a", "gpu-b"],
+                        },
+                        "nodesets": [
+                            {
+                                "name": "worker-cpu",
+                                "gpu": {"enabled": False},
+                                "slurmd": {"resources": {"cpu": "500m", "memory": "1024Mi"}},
+                            },
+                            {
+                                "name": "worker-gpu",
+                                "gpu": {"enabled": True},
+                                "slurmd": {
+                                    "resources": {"cpu": "500m", "memory": "1024Mi", "gpu": 8}
+                                },
+                            },
+                        ],
+                        "partitionConfiguration": {
+                            "partitions": [
+                                {"name": "gpu", "nodeSetRefs": ["worker-gpu"]},
+                                {"name": "cpu", "nodeSetRefs": ["worker-cpu"]},
+                            ]
+                        },
+                    },
+                }
+            ]
+        },
+    }
+    cli._refresh_soperator_onboarding_fingerprints(payload)
+
+    assert cli._materialize_soperator_component_defaults(payload) is True
+
+    values = payload["apps"]["charts"][0]["values"]
+    assert values["clusterName"] == "mk8s"
+    assert [item["name"] for item in values["nodesets"]] == ["worker-cpu", "worker-gpu"]
+    assert values["partitionConfiguration"]["partitions"] == [
+        {"name": "gpu", "nodeSetRefs": ["worker-gpu"]},
+        {"name": "cpu", "nodeSetRefs": ["worker-cpu"]},
+    ]
+
+
+def test_soperator_source_worker_nodesets_ignore_pending_duplicate_partition_refs() -> None:
+    source_report = {
+        "snapshot": {
+            "node_groups": {},
+            "soperator_resources": [
+                {
+                    "kind": "SlurmCluster",
+                    "metadata": {
+                        "name": "mk8s",
+                        "creationTimestamp": "2026-06-09T17:38:17Z",
+                    },
+                    "spec": {
+                        "partitionConfiguration": {
+                            "partitions": [
+                                {"name": "gpu", "nodeSetRefs": ["worker-gpu"]},
+                                {"name": "cpu", "nodeSetRefs": ["worker-cpu"]},
+                            ]
+                        }
+                    },
+                    "status": {
+                        "phase": "Not available",
+                        "readyLogin": 1,
+                        "readySConfigController": 1,
+                    },
+                },
+                {
+                    "kind": "SlurmCluster",
+                    "metadata": {
+                        "name": "cluster1",
+                        "creationTimestamp": "2026-06-10T00:51:57Z",
+                    },
+                    "spec": {
+                        "partitionConfiguration": {
+                            "partitions": [
+                                {
+                                    "name": "gpu",
+                                    "nodeSetRefs": [
+                                        "worker-gpu-mk8snodegroup-a",
+                                        "worker-gpu-mk8snodegroup-b",
+                                    ],
+                                },
+                                {"name": "cpu", "nodeSetRefs": ["worker-cpu"]},
+                            ]
+                        }
+                    },
+                    "status": {"phase": "Pending"},
+                },
+                {
+                    "kind": "NodeSet",
+                    "metadata": {"name": "worker-cpu"},
+                    "spec": {
+                        "gpu": {"enabled": False},
+                        "slurmd": {"resources": {"cpu": "500m", "memory": "1024Mi"}},
+                    },
+                    "status": {"phase": "Ready"},
+                },
+                {
+                    "kind": "NodeSet",
+                    "metadata": {"name": "worker-gpu"},
+                    "spec": {
+                        "gpu": {"enabled": True},
+                        "slurmd": {"resources": {"cpu": "500m", "memory": "1024Mi"}},
+                    },
+                    "status": {"phase": "Ready"},
+                },
+                {
+                    "kind": "NodeSet",
+                    "metadata": {"name": "worker-gpu-mk8snodegroup-a"},
+                    "spec": {"gpu": {"enabled": True}},
+                    "status": {"phase": "Pending"},
+                },
+                {
+                    "kind": "NodeSet",
+                    "metadata": {"name": "worker-gpu-mk8snodegroup-b"},
+                    "spec": {"gpu": {"enabled": True}},
+                    "status": {"phase": "Pending"},
+                },
+            ],
+        },
+        "report": {"state": "existing-soperator-target"},
+    }
+
+    nodesets = soperator_migration._source_worker_nodeset_values(source_report)
+    partition_config = soperator_migration._source_worker_partition_configuration(
+        source_report,
+        worker_names=tuple(item["name"] for item in nodesets),
+    )
+
+    assert [item["name"] for item in nodesets] == ["worker-cpu", "worker-gpu"]
+    assert partition_config["partitions"] == [
+        {"name": "gpu", "nodeSetRefs": ["worker-gpu"]},
+        {"name": "cpu", "nodeSetRefs": ["worker-cpu"]},
     ]
 
 

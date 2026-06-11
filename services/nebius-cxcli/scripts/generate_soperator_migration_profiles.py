@@ -414,6 +414,57 @@ def _node_label_layout(*, source_role_label_keys: Sequence[str], action: str) ->
     }
 
 
+def _source_controller_quiesce_contract(
+    *,
+    include_slurm_operator: bool,
+) -> dict[str, Any]:
+    admission_webhooks: list[dict[str, str]] = [
+        {
+            "kind": "MutatingWebhookConfiguration",
+            "name": "soperator-controller-mutating-webhook-configuration",
+        },
+        {
+            "kind": "ValidatingWebhookConfiguration",
+            "name": "soperator-controller-validating-webhook-configuration",
+        },
+    ]
+    deployments: list[dict[str, str]] = [
+        {
+            "namespace": "soperator-system",
+            "name": "soperator-controller-manager",
+            "release_name": "soperator-controller",
+            "chart_prefix": "helm-soperator",
+        },
+    ]
+    if include_slurm_operator:
+        admission_webhooks.extend(
+            [
+                {
+                    "kind": "MutatingWebhookConfiguration",
+                    "name": "slurm-operator-mutating-webhook-configuration",
+                },
+                {
+                    "kind": "ValidatingWebhookConfiguration",
+                    "name": "slurm-operator-validating-webhook-configuration",
+                },
+            ]
+        )
+        deployments.append(
+            {
+                "namespace": "soperator",
+                "release_name": "slurm-operator",
+                "chart_prefix": "slurm-operator",
+            }
+        )
+    return {
+        "source_controller_quiesce": {
+            "required_before_target_compute_reconcile": True,
+            "admission_webhooks": admission_webhooks,
+            "deployments": deployments,
+        }
+    }
+
+
 def _profile_payload(
     releases: list[dict[str, Any]],
     *,
@@ -490,6 +541,9 @@ def _profile_payload(
                         "ActiveChecks",
                     ],
                 },
+                "execution_contract": _source_controller_quiesce_contract(
+                    include_slurm_operator=True
+                ),
             },
             "v2-to-target": {
                 "title": "Soperator 2.x to pinned target",
@@ -516,6 +570,9 @@ def _profile_payload(
                         "ActiveChecks",
                     ],
                 },
+                "execution_contract": _source_controller_quiesce_contract(
+                    include_slurm_operator=False
+                ),
             },
             "v3-to-target": {
                 "title": "Soperator 3.x to pinned target",

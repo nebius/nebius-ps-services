@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shlex
 import subprocess
 from collections.abc import Callable, Mapping, Sequence
@@ -21,6 +22,13 @@ SOPERATOR_NAMESPACE = "soperator"
 _SMOKE_MARKER = "cxcli-soperator-srun-ok"
 _GPU_VISIBILITY_MARKER = "cxcli-soperator-gpu-visibility-ok"
 _NCCL_MARKER = "cxcli-soperator-nccl-ok"
+_NCCL_SKIP_MARKER = "cxcli-soperator-nccl-skipped:"
+_NCCL_RUN_RE = re.compile(
+    r"cxcli-soperator-nccl-ok\s+mode=(?P<mode>\S+)\s+partition=(?P<partition>\S+)\s+"
+    r"nodes=(?P<nodes>[0-9]+)\s+gpus_per_node=(?P<gpus_per_node>[0-9]+)\s+"
+    r"ranks=(?P<ranks>[0-9]+)"
+)
+_NCCL_LARGE_MESSAGE_BYTES = (2 * 1024**3, 4 * 1024**3, 8 * 1024**3)
 
 
 def _smoke_script(*, partition: str = "") -> str:
@@ -51,15 +59,113 @@ def _gpu_visibility_script(*, partition: str) -> str:
 
 
 def _nccl_script(*, partition: str) -> str:
-    partition_arg = f" --partition={shlex.quote(partition)}" if partition else ""
+    partition_value = shlex.quote(partition)
     return "\n".join(
         [
             "set -euo pipefail",
-            "srun --job-name=cxcli-soperator-nccl"
-            f"{partition_arg} --nodes=1 --ntasks=1 --gres=gpu:1 "
-            "--time=00:03:00 --immediate=60 "
-            "bash -lc 'set -euo pipefail; echo cxcli-soperator-nccl-ok; "
-            "/usr/bin/all_reduce_perf -b 8 -e 8 -f 2 -g 1'",
+            f"partition={partition_value}",
+            'sinfo_output="$(sinfo -N -h -p "$partition" -o "%N|%t|%G" || true)"',
+            "total_gpu_nodes=()",
+            "idle_gpu_nodes=()",
+            'while IFS="|" read -r node state gres; do',
+            '  [[ -n "${node:-}" ]] || continue',
+            '  if [[ "${gres:-}" =~ gpu:([0-9]+) ]]; then',
+            '    gpu_count="${BASH_REMATCH[1]}"',
+            '    total_gpu_nodes+=("$node|$gpu_count")',
+            '    state_lower="$(printf "%s" "${state:-}" | tr "[:upper:]" "[:lower:]")"',
+            '    if [[ "$state_lower" == idle* ]]; then',
+            '      idle_gpu_nodes+=("$node|$gpu_count")',
+            "    fi",
+            "  fi",
+            'done <<< "$sinfo_output"',
+            "target_nodes=0",
+            "benchmark_mode=",
+            'if (( ${#total_gpu_nodes[@]} == 0 )); then',
+            '  echo "cxcli-soperator-nccl-skipped: full Slurm NCCL benchmark requires '
+            'at least one GPU node on partition $partition; found 0 GPU node(s)."',
+            "  exit 0",
+            "fi",
+            'if (( ${#total_gpu_nodes[@]} >= 2 )); then',
+            "  target_nodes=2",
+            '  benchmark_mode="multi-node"',
+            '  if (( ${#idle_gpu_nodes[@]} < target_nodes )); then',
+            '    echo "cxcli-soperator-nccl-skipped: full Slurm NCCL benchmark requires '
+            '2 idle GPU nodes on partition $partition; found ${#idle_gpu_nodes[@]} idle '
+            'GPU node(s), ${#total_gpu_nodes[@]} total GPU node(s)."',
+            "    exit 0",
+            "  fi",
+            "else",
+            "  target_nodes=1",
+            '  benchmark_mode="single-node-multi-gpu"',
+            '  if (( ${#idle_gpu_nodes[@]} < target_nodes )); then',
+            '    echo "cxcli-soperator-nccl-skipped: full Slurm NCCL benchmark requires '
+            'the only GPU node on partition $partition to be idle; found '
+            '${#idle_gpu_nodes[@]} idle GPU node(s), ${#total_gpu_nodes[@]} total GPU node(s)."',
+            "    exit 0",
+            "  fi",
+            "fi",
+            "selected=()",
+            "gpus_per_node=999999",
+            "for entry in \"${idle_gpu_nodes[@]:0:$target_nodes}\"; do",
+            '  node="${entry%%|*}"',
+            '  gpu_count="${entry##*|}"',
+            '  selected+=("$node")',
+            "  if (( gpu_count < gpus_per_node )); then",
+            '    gpus_per_node="$gpu_count"',
+            "  fi",
+            "done",
+            "if (( gpus_per_node < 1 || gpus_per_node == 999999 )); then",
+            '  echo "cxcli-soperator-nccl-skipped: full Slurm NCCL benchmark could not '
+            'resolve GPU count for selected nodes on partition $partition."',
+            "  exit 0",
+            "fi",
+            'if (( target_nodes == 1 && gpus_per_node < 2 )); then',
+            '  echo "cxcli-soperator-nccl-skipped: full Slurm NCCL benchmark requires '
+            'at least 2 GPUs on the only GPU node in partition $partition; found '
+            '$gpus_per_node GPU(s)."',
+            "  exit 0",
+            "fi",
+            'node_list="$(IFS=,; echo "${selected[*]}")"',
+            "ranks=$((target_nodes * gpus_per_node))",
+            "cpus_per_task=$((gpus_per_node * 4))",
+            'export CXCLI_NCCL_MODE="$benchmark_mode"',
+            'export CXCLI_NCCL_PARTITION="$partition"',
+            'export CXCLI_NCCL_NODES="$target_nodes"',
+            'export CXCLI_NCCL_GPUS_PER_NODE="$gpus_per_node"',
+            'export CXCLI_NCCL_RANKS="$ranks"',
+            "runner_script=$(cat <<'CXCLI_NCCL_RUNNER'",
+            "set -euo pipefail",
+            'if [[ "${SLURM_PROCID:-0}" != "0" ]]; then',
+            "  exit 0",
+            "fi",
+            'echo "cxcli-soperator-nccl-ok mode=${CXCLI_NCCL_MODE} '
+            'partition=${CXCLI_NCCL_PARTITION} nodes=${CXCLI_NCCL_NODES} '
+            'gpus_per_node=${CXCLI_NCCL_GPUS_PER_NODE} ranks=${CXCLI_NCCL_RANKS}"',
+            "export PATH=/usr/mpi/gcc/openmpi-4.1.7a1/bin:$PATH",
+            "export OMPI_ALLOW_RUN_AS_ROOT=1",
+            "export OMPI_ALLOW_RUN_AS_ROOT_CONFIRM=1",
+            "command -v mpirun",
+            "command -v /usr/bin/all_reduce_perf_mpi",
+            'hostfile="$(mktemp)"',
+            'trap \'rm -f "$hostfile"\' EXIT',
+            'scontrol show hostnames "$SLURM_JOB_NODELIST" '
+            '| awk -v slots="$CXCLI_NCCL_GPUS_PER_NODE" '
+            '\'{print $1 " slots=" slots}\' > "$hostfile"',
+            'echo "cxcli-soperator-nccl-hostfile"',
+            'cat "$hostfile"',
+            "mpirun --allow-run-as-root --hostfile \"$hostfile\" "
+            "-np \"$CXCLI_NCCL_RANKS\" -N \"$CXCLI_NCCL_GPUS_PER_NODE\" --bind-to none "
+            "--oversubscribe -mca coll ^hcoll "
+            "/usr/bin/all_reduce_perf_mpi -b 512M -e 8G -f 2 -g 1",
+            "CXCLI_NCCL_RUNNER",
+            ")",
+            "srun --job-name=cxcli-soperator-nccl "
+            "--partition=\"$partition\" --nodelist=\"$node_list\" "
+            "--nodes=\"$target_nodes\" --ntasks=\"$target_nodes\" "
+            "--ntasks-per-node=1 --gpus-per-node=\"$gpus_per_node\" "
+            "--cpus-per-task=\"$cpus_per_task\" --mem=0 --time=00:30:00 "
+            "--exclusive --immediate=60 --kill-on-bad-exit=1 "
+            'bash -lc "$runner_script"',
         ]
     )
 
@@ -109,6 +215,59 @@ def _compact_output(value: str, *, limit: int = 2000) -> str:
     return text[: limit - 20].rstrip() + "\n... output truncated ..."
 
 
+def _format_gib_label(size_bytes: int) -> str:
+    return f"{size_bytes // 1024**3}G"
+
+
+def _nccl_large_message_bus_bandwidth_gbps(output: str) -> tuple[float | None, dict[str, float]]:
+    values: dict[str, float] = {}
+    wanted = set(_NCCL_LARGE_MESSAGE_BYTES)
+    for line in (output or "").splitlines():
+        parts = line.split()
+        if len(parts) < 12 or not parts[0].isdigit():
+            continue
+        try:
+            size_bytes = int(parts[0])
+        except ValueError:
+            continue
+        if size_bytes not in wanted:
+            continue
+        bus_values: list[float] = []
+        for index in (7, 11):
+            try:
+                bus_values.append(float(parts[index]))
+            except (IndexError, ValueError):
+                continue
+        if not bus_values:
+            continue
+        values[_format_gib_label(size_bytes)] = max(bus_values)
+    if {key for key in values} != {_format_gib_label(size) for size in wanted}:
+        return None, {}
+    average = sum(values.values()) / len(values)
+    return average, values
+
+
+def _nccl_run_metadata(output: str) -> dict[str, Any]:
+    match = _NCCL_RUN_RE.search(output or "")
+    if match is None:
+        return {}
+    metadata: dict[str, Any] = {
+        "mode": match.group("mode"),
+        "partition": match.group("partition"),
+    }
+    for key in ("nodes", "gpus_per_node", "ranks"):
+        metadata[key] = int(match.group(key))
+    return metadata
+
+
+def _nccl_skip_summary(output: str) -> str:
+    for line in (output or "").splitlines():
+        text = line.strip()
+        if text.startswith(_NCCL_SKIP_MARKER):
+            return text.removeprefix(_NCCL_SKIP_MARKER).strip()
+    return "full Slurm NCCL benchmark was skipped."
+
+
 def _default_command_runner(
     args: Sequence[str],
     *,
@@ -152,6 +311,10 @@ def _soperator_cluster_name(row: Mapping[str, Any], *, target_ref: str) -> str:
     return cluster_name or target_ref
 
 
+def _soperator_chart_version(row: Mapping[str, Any]) -> str:
+    return str(row.get("version", "") or row.get("chart_version", "") or "").strip()
+
+
 def soperator_cluster_validation_specs(payload_or_config: Any) -> list[dict[str, Any]]:
     payload = to_plain_data(payload_or_config)
     if not isinstance(payload, Mapping):
@@ -188,6 +351,7 @@ def soperator_cluster_validation_specs(payload_or_config: Any) -> list[dict[str,
                 "target_ref": target_ref,
                 "namespace": SOPERATOR_NAMESPACE,
                 "cluster_name": _soperator_cluster_name(row, target_ref=target_ref),
+                "target_version": _soperator_chart_version(row),
                 "kube_context": target_context_by_ref.get(target_ref, ""),
                 "report_file": _validation_report_file(target_ref),
                 "required": True,
@@ -286,6 +450,7 @@ def _append_check(
     command: Sequence[str] | None = None,
     stdout: str = "",
     stderr: str = "",
+    extra: Mapping[str, Any] | None = None,
 ) -> None:
     item: dict[str, Any] = {
         "name": name,
@@ -293,6 +458,8 @@ def _append_check(
         "passed": status == "passed",
         "summary": summary,
     }
+    if extra:
+        item.update(dict(extra))
     if command:
         item["command"] = _command_text(command)
     if stdout:
@@ -337,6 +504,145 @@ def _check_rollout(
             stdout=result.stdout,
             stderr=result.stderr,
         )
+
+
+def _flux_helmrelease_chart_text(item: Mapping[str, Any]) -> str:
+    spec = _as_mapping(item.get("spec"))
+    chart_spec = _as_mapping(_as_mapping(spec.get("chart")).get("spec"))
+    status = _as_mapping(item.get("status"))
+    history = _as_sequence(status.get("history"))
+    history_item = _as_mapping(history[0]) if history else {}
+    parts = (
+        spec.get("releaseName"),
+        spec.get("targetNamespace"),
+        chart_spec.get("chart"),
+        chart_spec.get("version"),
+        history_item.get("chartName"),
+        history_item.get("chartVersion"),
+        history_item.get("appVersion"),
+    )
+    return " ".join(str(part) for part in parts if str(part or "").strip()).lower()
+
+
+def _old_source_flux_helmrelease_name(name: str) -> bool:
+    text = str(name or "").strip()
+    return text in {"soperator-fluxcd", "flux-system-soperator-fluxcd"} or text.startswith(
+        ("flux-system-soperator-fluxcd-", "soperator-fluxcd-")
+    )
+
+
+def _active_old_source_flux_helmrelease(item: Mapping[str, Any], *, target_version: str) -> bool:
+    metadata = _as_mapping(item.get("metadata"))
+    spec = _as_mapping(item.get("spec"))
+    if spec.get("suspend") is True:
+        return False
+    name = str(metadata.get("name", "") or "").strip()
+    if _old_source_flux_helmrelease_name(name):
+        return True
+    chart_text = _flux_helmrelease_chart_text(item)
+    if target_version and target_version.lower() in chart_text:
+        return False
+    return any(token in chart_text for token in ("soperator", "slurm-cluster", "nodeset"))
+
+
+def _check_old_source_flux_desired_state(
+    runner: SoperatorValidationCommandRunner,
+    spec: Mapping[str, Any],
+    checks: list[dict[str, Any]],
+) -> None:
+    target_version = str(spec.get("target_version", "") or "").strip()
+    command = _kubectl_args(spec, "get", "helmreleases.helm.toolkit.fluxcd.io", "-A", "-o", "json")
+    result = runner(command, timeout_seconds=120, check=False)
+    if result.returncode != 0:
+        detail = _command_detail(result).lower()
+        if "the server doesn't have a resource type" in detail or "not found" in detail:
+            return
+        return
+    try:
+        payload = json.loads(result.stdout or "{}")
+    except json.JSONDecodeError:
+        return
+    active: list[str] = []
+    for item in _as_sequence(payload.get("items")):
+        if not isinstance(item, Mapping):
+            continue
+        if not _active_old_source_flux_helmrelease(item, target_version=target_version):
+            continue
+        metadata = _as_mapping(item.get("metadata"))
+        namespace = str(metadata.get("namespace", "") or "").strip()
+        name = str(metadata.get("name", "") or "").strip()
+        if namespace and name:
+            active.append(f"{namespace}/{name}")
+    if not active:
+        return
+    shown = ", ".join(active[:8])
+    if len(active) > 8:
+        shown += f", +{len(active) - 8} more"
+    _append_check(
+        checks,
+        name="Old source Flux desired state",
+        status="failed",
+        summary=(
+            "active old source-family Flux HelmRelease records are still present: "
+            f"{shown}. Suspend or remove the old source desired state before validating "
+            "the adopted target Soperator release."
+        ),
+        command=command,
+    )
+
+
+def _pending_pod_scheduling_message(item: Mapping[str, Any]) -> str:
+    status = _as_mapping(item.get("status"))
+    for condition in _as_sequence(status.get("conditions")):
+        if not isinstance(condition, Mapping):
+            continue
+        if str(condition.get("type", "") or "").strip() != "PodScheduled":
+            continue
+        message = str(condition.get("message", "") or "").strip()
+        if message:
+            return message
+    return str(status.get("message", "") or "").strip()
+
+
+def _check_soperator_pod_scheduling(
+    runner: SoperatorValidationCommandRunner,
+    spec: Mapping[str, Any],
+    checks: list[dict[str, Any]],
+) -> None:
+    namespace = str(spec.get("namespace", "") or SOPERATOR_NAMESPACE).strip()
+    command = _kubectl_args(spec, "-n", namespace, "get", "pods", "-o", "json")
+    result = runner(command, timeout_seconds=120, check=False)
+    if result.returncode != 0:
+        return
+    try:
+        payload = json.loads(result.stdout or "{}")
+    except json.JSONDecodeError:
+        return
+    pending: list[str] = []
+    for item in _as_sequence(payload.get("items")):
+        if not isinstance(item, Mapping):
+            continue
+        phase = str(_as_mapping(item.get("status")).get("phase", "") or "").strip()
+        if phase != "Pending":
+            continue
+        metadata = _as_mapping(item.get("metadata"))
+        name = str(metadata.get("name", "") or "").strip()
+        if not name:
+            continue
+        message = _pending_pod_scheduling_message(item)
+        pending.append(f"{name}: {message or 'Pending'}")
+    if not pending:
+        return
+    shown = "; ".join(pending[:5])
+    if len(pending) > 5:
+        shown += f"; +{len(pending) - 5} more"
+    _append_check(
+        checks,
+        name="Soperator pod scheduling",
+        status="failed",
+        summary="pending Soperator pod(s) block Slurm readiness: " + shown,
+        command=command,
+    )
 
 
 def _check_slurmcluster(
@@ -613,7 +919,7 @@ def _check_slurm_gpu_visibility(
         )
 
 
-def _check_slurm_nccl_smoke(
+def _check_slurm_nccl_benchmark(
     runner: SoperatorValidationCommandRunner,
     spec: Mapping[str, Any],
     checks: list[dict[str, Any]],
@@ -625,25 +931,73 @@ def _check_slurm_nccl_smoke(
         runner,
         spec,
         ("bash", "-lc", _nccl_script(partition=partition)),
-        timeout_seconds=420,
+        timeout_seconds=2400,
     )
-    if result.returncode == 0 and _NCCL_MARKER in result.stdout and "Avg bus bandwidth" in result.stdout:
+    output = "\n".join(part for part in (result.stdout, result.stderr) if part)
+    if result.returncode == 0 and _NCCL_SKIP_MARKER in output:
+        summary = _nccl_skip_summary(output)
         _append_check(
             checks,
-            name="Slurm NCCL smoke test",
-            status="passed",
-            summary=f"one-rank NCCL all_reduce_perf smoke completed on partition {partition}.",
+            name="Slurm NCCL benchmark",
+            status="skipped",
+            summary=f"Skipped: {summary}",
             command=result.args,
             stdout=result.stdout,
+            stderr=result.stderr,
+            extra={"skipped": True, "skip_reason": summary},
+        )
+        return
+    avg_bus_bandwidth, large_message_bus_bandwidth = _nccl_large_message_bus_bandwidth_gbps(
+        output
+    )
+    metadata = _nccl_run_metadata(output)
+    if result.returncode == 0 and _NCCL_MARKER in output and avg_bus_bandwidth is not None:
+        nodes = metadata.get("nodes", 2)
+        ranks = metadata.get("ranks", 0)
+        gpus_per_node = metadata.get("gpus_per_node", 0)
+        benchmark_mode = str(metadata.get("mode") or "")
+        bandwidth_sizes = ", ".join(large_message_bus_bandwidth) or "large"
+        if nodes > 1:
+            benchmark_summary = (
+                f"two-node NCCL all_reduce_perf benchmark completed on partition {partition} "
+                f"with {ranks} rank(s) across {nodes} node(s)"
+                f"{f' ({gpus_per_node} GPU(s) per node)' if gpus_per_node else ''}; "
+            )
+        else:
+            benchmark_summary = (
+                f"single-node multi-GPU NCCL all_reduce_perf benchmark completed on "
+                f"partition {partition} with {ranks} rank(s) on 1 node"
+                f"{f' ({gpus_per_node} GPU(s) on the node)' if gpus_per_node else ''}; "
+            )
+        _append_check(
+            checks,
+            name="Slurm NCCL benchmark",
+            status="passed",
+            summary=(
+                benchmark_summary
+                + f"average bus bandwidth {avg_bus_bandwidth:.1f} Gbps across "
+                f"{bandwidth_sizes} message sizes."
+            ),
+            command=result.args,
+            stdout=result.stdout,
+            stderr=result.stderr,
+            extra={
+                "avg_large_message_bus_bandwidth_gbps": avg_bus_bandwidth,
+                "large_message_bus_bandwidth_gbps": large_message_bus_bandwidth,
+                "multi_node_benchmark": nodes > 1,
+                "single_node_multi_gpu_benchmark": nodes == 1,
+                "benchmark_mode": benchmark_mode,
+                **metadata,
+            },
         )
     else:
         _append_check(
             checks,
-            name="Slurm NCCL smoke test",
+            name="Slurm NCCL benchmark",
             status="failed",
             summary=(
-                "one-rank NCCL all_reduce_perf smoke failed or did not report "
-                f"bandwidth output on partition {partition}."
+                "NCCL all_reduce_perf benchmark failed or did not report "
+                f"large-message bandwidth output on partition {partition}."
             ),
             command=result.args,
             stdout=result.stdout,
@@ -678,12 +1032,14 @@ def run_soperator_cluster_validations(
         checks: list[dict[str, Any]] = []
         try:
             _check_rollout(runner, spec, checks)
+            _check_old_source_flux_desired_state(runner, spec, checks)
+            _check_soperator_pod_scheduling(runner, spec, checks)
             _check_slurmcluster(runner, spec, checks)
             _check_slurm_status(runner, spec, checks)
             _check_slurm_queue(runner, spec, checks)
             _check_srun_smoke(runner, spec, checks)
             _check_slurm_gpu_visibility(runner, spec, checks)
-            _check_slurm_nccl_smoke(runner, spec, checks)
+            _check_slurm_nccl_benchmark(runner, spec, checks)
         except Exception as exc:
             _append_check(
                 checks,
@@ -692,6 +1048,14 @@ def run_soperator_cluster_validations(
                 summary=str(exc),
             )
         failed = [item for item in checks if item.get("status") == "failed"]
+        passed = [item for item in checks if item.get("status") == "passed"]
+        skipped = [item for item in checks if item.get("status") == "skipped"]
+        if checks:
+            summary = f"{len(passed)}/{len(checks)} Soperator/Slurm checks passed."
+            if skipped:
+                summary += f" {len(skipped)} skipped."
+        else:
+            summary = "No Soperator/Slurm checks were run."
         report = {
             "schema": SOPERATOR_CLUSTER_VALIDATION_SCHEMA,
             "kind": SOPERATOR_CLUSTER_VALIDATION_KIND,
@@ -700,11 +1064,7 @@ def run_soperator_cluster_validations(
             "name": str(spec.get("name", "") or "Soperator cluster smoke test"),
             "status": "failed" if failed else "passed",
             "passed": not failed,
-            "summary": (
-                f"{len(checks) - len(failed)}/{len(checks)} Soperator/Slurm checks passed."
-                if checks
-                else "No Soperator/Slurm checks were run."
-            ),
+            "summary": summary,
             "checks": checks,
         }
         report_path = reports_dir / str(

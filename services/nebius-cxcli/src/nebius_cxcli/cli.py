@@ -401,9 +401,16 @@ from .soperator_child_charts import (
     soperator_child_chart_warnings,
 )
 from .soperator_migration import (
+    SOPERATOR_WORKER_ROLLOUT_DEFAULT_WAVE_PERCENT,
+    SOPERATOR_WORKER_ROLLOUT_STRATEGY_SAFE_SURGE,
+    SOPERATOR_WORKER_ROLLOUT_STRATEGY_ZERO_SURGE,
+    SoperatorMigrationCommandResult,
+    _external_node_template_rollout_plan_lines,
+    _retire_stale_source_soperator_helm_releases,
     _source_worker_nodeset_values,
     _source_worker_partition_configuration,
     execute_soperator_migration,
+    resolve_external_node_template_rollout,
 )
 from .soperator_onboarding import (
     ONBOARDING_ACCEPTABLE_STATES,
@@ -412,7 +419,7 @@ from .soperator_onboarding import (
     ONBOARDING_ACTION_CREATE_ALIGNED_SFS,
     ONBOARDING_ACTION_PLAN_COMPUTE_MIGRATION,
     ONBOARDING_ACTION_PLAN_DATA_MIGRATION,
-    ONBOARDING_ACTION_REMEDIATE_TARGET_GPU_STACK,
+    ONBOARDING_ACTION_RECONCILE_TARGET_GPU_STACK,
     ONBOARDING_ACTION_UPGRADE_EXTERNAL_NODE_TEMPLATE,
     ONBOARDING_ACTION_UPGRADE_SOPERATOR,
     ONBOARDING_COMPUTE_MODE_CREATE_ALIGNED_NODE_GROUPS,
@@ -1216,6 +1223,7 @@ _BENIGN_KUBECTL_OUTPUT_MARKERS = (
     "missing the kubectl.kubernetes.io/last-applied-configuration annotation",
     "The missing annotation will be patched automatically.",
     "Warning: v1 Endpoints is deprecated",
+    "No resources found",
     "reflector.go:",
     "context canceled",
 )
@@ -1429,17 +1437,17 @@ ext_soperator_app = typer.Typer(
         "Manage existing external Nebius MK8s clusters for Soperator. "
         "onboard registers/adopts one cluster into config.yaml without "
         "Terraform-owning it. migrate is only for accepted onboarding plans "
-        "that contain migration actions."
+        "that contain migration-owned actions."
     ),
     epilog=(
         "Workflow: run ext-soperator onboard for an external Nebius MK8s cluster, "
         "using its Nebius --cluster-id, then run validate and render. Onboarding "
         "stores a cxcli target id in deploy.targets[].instance_id; by default it is "
         "derived from the live MK8s cluster name, or it can be set with --target-id. "
-        "If the accepted onboarding report says no migration work is required, run "
-        "deploy <config.yaml>; this reconciles every generated target and produces "
+        "If the accepted onboarding report says no migration-owned work is required, "
+        "run deploy <config.yaml>; this reconciles every generated target and produces "
         "deploy-report.md plus deploy-time validations. Use deploy --target <target-id> "
-        "only to narrow one run. If migration work is required, "
+        "only to narrow one run. If migration-owned work is required, "
         "do not deploy first; run ext-soperator migrate --dry-run, then ext-soperator migrate "
         "--execute --approve. Managed chart-only Soperator upgrades use upgrade "
         "helm-chart; external MK8s control-plane and node-template upgrades "
@@ -2857,6 +2865,57 @@ def _print_upgrade_plan_lines(lines: Sequence[str]) -> None:
         console.print(line)
 
 
+def _upgrade_strategy_restore_after_wait(
+    *,
+    temporary_strategy: Mapping[str, Any] | None,
+    rollout_incomplete: bool,
+    source_sync_required: bool,
+) -> bool:
+    return bool(temporary_strategy is not None and rollout_incomplete and not source_sync_required)
+
+
+def _upgrade_planned_stage_count(
+    *,
+    control_plane_stage_count: int = 0,
+    node_group_stage_count: int,
+    source_sync_required: bool,
+    strategy_restore_after_wait: bool,
+    temporary_strategy: Mapping[str, Any] | None,
+) -> tuple[int, list[str]]:
+    planned_stage_count = control_plane_stage_count + node_group_stage_count
+    extra_stage_summaries: list[str] = []
+    if planned_stage_count == 0 and source_sync_required:
+        planned_stage_count = 1
+        extra_stage_summaries.append("1 source-sync stage")
+    elif planned_stage_count == 0 and strategy_restore_after_wait:
+        planned_stage_count = 1
+        extra_stage_summaries.append("1 strategy-restore stage")
+    elif temporary_strategy is not None and node_group_stage_count:
+        planned_stage_count += 1
+        extra_stage_summaries.append("1 strategy-restore stage")
+    return planned_stage_count, extra_stage_summaries
+
+
+def _upgrade_strategy_restore_required(
+    *,
+    strategy_restore_after_wait: bool,
+    waited_for_existing_rollout: bool,
+    stage_applied: bool,
+) -> bool:
+    return bool(strategy_restore_after_wait and waited_for_existing_rollout and not stage_applied)
+
+
+def _upgrade_final_stage_title(
+    *,
+    strategy_restored: bool,
+    strategy_restore_required: bool,
+    source_sync_title: str,
+) -> str:
+    if strategy_restored or strategy_restore_required:
+        return "node-group strategy restore"
+    return source_sync_title
+
+
 def _run_vm_os_image_upgrade(
     *,
     config_path: Path,
@@ -3281,20 +3340,24 @@ def upgrade_k8s_version_command(
                 instance_id=target.instance_id,
             )
             temporary_strategy = terraform_node_group_strategy_for_policy(policy, resolved_timeout)
+            strategy_restore_after_wait = _upgrade_strategy_restore_after_wait(
+                temporary_strategy=temporary_strategy,
+                rollout_incomplete=plan.rollout_incomplete,
+                source_sync_required=source_sync_required,
+            )
             node_group_stage_count = sum(
                 1
                 for planned_group in plan.node_groups
                 if planned_group.source is not None
                 and current_group_versions.get(planned_group.source.key) != normalized_to_version
             )
-            planned_stage_count = len(plan.hops) + node_group_stage_count
-            extra_stage_summaries: list[str] = []
-            if planned_stage_count == 0 and source_sync_required:
-                planned_stage_count = 1
-                extra_stage_summaries.append("1 source-sync stage")
-            elif temporary_strategy is not None and node_group_stage_count:
-                planned_stage_count += 1
-                extra_stage_summaries.append("1 strategy-restore stage")
+            planned_stage_count, extra_stage_summaries = _upgrade_planned_stage_count(
+                control_plane_stage_count=len(plan.hops),
+                node_group_stage_count=node_group_stage_count,
+                source_sync_required=source_sync_required,
+                strategy_restore_after_wait=strategy_restore_after_wait,
+                temporary_strategy=temporary_strategy,
+            )
             if planned_stage_count:
                 stage_summaries = [
                     f"{len(plan.hops)} control-plane stage(s)",
@@ -3308,6 +3371,7 @@ def upgrade_k8s_version_command(
                 )
             stage_number = 0
             stage_applied = False
+            waited_for_existing_rollout = False
 
             def _stage_strategy(active_group_key: str | None = None) -> bool:
                 if temporary_strategy is None:
@@ -3424,6 +3488,7 @@ def upgrade_k8s_version_command(
                                 plan=plan,
                                 planned_group=planned_group,
                             )
+                            waited_for_existing_rollout = True
                         desired_group_versions[group_key] = normalized_to_version
                         continue
                     desired_group_versions[group_key] = normalized_to_version
@@ -3452,15 +3517,21 @@ def upgrade_k8s_version_command(
                         node_group_versions=final_group_versions,
                     )
                 strategy_restored = _stage_strategy(None)
+                strategy_restore_required = _upgrade_strategy_restore_required(
+                    strategy_restore_after_wait=strategy_restore_after_wait,
+                    waited_for_existing_rollout=waited_for_existing_rollout,
+                    stage_applied=stage_applied,
+                )
                 if (
                     final_versions_changed
                     or strategy_restored
+                    or strategy_restore_required
                     or (source_sync_required and not stage_applied)
                 ):
-                    stage_title = (
-                        "node-group strategy restore"
-                        if strategy_restored
-                        else f"source version sync to Kubernetes {normalized_to_version}"
+                    stage_title = _upgrade_final_stage_title(
+                        strategy_restored=strategy_restored,
+                        strategy_restore_required=strategy_restore_required,
+                        source_sync_title=f"source version sync to Kubernetes {normalized_to_version}",
                     )
                     generated_config, paths, manifest = _render_validate_apply_stage(stage_title)
             except Exception:
@@ -3804,28 +3875,40 @@ def upgrade_node_template_command(
                 instance_id=target.instance_id,
             )
             temporary_strategy = terraform_node_group_strategy_for_policy(policy, resolved_timeout)
+            strategy_restore_after_wait = _upgrade_strategy_restore_after_wait(
+                temporary_strategy=temporary_strategy,
+                rollout_incomplete=plan.rollout_incomplete,
+                source_sync_required=source_sync_required,
+            )
+
+            def _node_template_request_needed(planned_group: Any) -> bool:
+                target_drivers_preset = node_template_target_drivers_preset(
+                    planned_group,
+                    target_gpu_stack_preset=target_gpu_stack_preset,
+                )
+                live_driver_matches = (
+                    target_drivers_preset is None
+                    or planned_group.drivers_preset == target_drivers_preset
+                )
+                return (
+                    parse_k8s_version(planned_group.version).minor_text
+                    != normalized_to_version
+                    or planned_group.os != target_os
+                    or not live_driver_matches
+                )
+
             node_group_stage_count = sum(
                 1
                 for planned_group in plan.node_groups
-                if planned_group.source is not None
-                and not node_group_node_template_rollout_complete(
-                    planned_group.raw,
-                    version=normalized_to_version,
-                    os=target_os,
-                    drivers_preset=node_template_target_drivers_preset(
-                        planned_group,
-                        target_gpu_stack_preset=target_gpu_stack_preset,
-                    ),
-                )
+                if planned_group.source is not None and _node_template_request_needed(planned_group)
             )
-            planned_stage_count = len(plan.hops) + node_group_stage_count
-            extra_stage_summaries: list[str] = []
-            if planned_stage_count == 0 and source_sync_required:
-                planned_stage_count = 1
-                extra_stage_summaries.append("1 source-sync stage")
-            elif temporary_strategy is not None and node_group_stage_count:
-                planned_stage_count += 1
-                extra_stage_summaries.append("1 strategy-restore stage")
+            planned_stage_count, extra_stage_summaries = _upgrade_planned_stage_count(
+                control_plane_stage_count=len(plan.hops),
+                node_group_stage_count=node_group_stage_count,
+                source_sync_required=source_sync_required,
+                strategy_restore_after_wait=strategy_restore_after_wait,
+                temporary_strategy=temporary_strategy,
+            )
             if planned_stage_count:
                 stage_summaries = [
                     f"{len(plan.hops)} control-plane stage(s)",
@@ -3839,6 +3922,7 @@ def upgrade_node_template_command(
                 )
             stage_number = 0
             stage_applied = False
+            waited_for_existing_rollout = False
 
             def _stage_strategy(active_group_key: str | None = None) -> bool:
                 if temporary_strategy is None:
@@ -3961,20 +4045,13 @@ def upgrade_node_template_command(
                         drivers_preset=target_drivers_preset,
                     ):
                         continue
-                    live_driver_matches = (
-                        target_drivers_preset is None
-                        or planned_group.drivers_preset == target_drivers_preset
-                    )
-                    if (
-                        parse_k8s_version(planned_group.version).minor_text == normalized_to_version
-                        and planned_group.os == target_os
-                        and live_driver_matches
-                    ):
+                    if not _node_template_request_needed(planned_group):
                         wait_for_node_template_rollout(
                             executor=executor,
                             plan=plan,
                             planned_group=planned_group,
                         )
+                        waited_for_existing_rollout = True
                         continue
                     update_source_node_template(
                         source_payload,
@@ -4006,15 +4083,21 @@ def upgrade_node_template_command(
                     node_group_versions=final_group_versions,
                 )
                 strategy_restored = _stage_strategy(None)
+                strategy_restore_required = _upgrade_strategy_restore_required(
+                    strategy_restore_after_wait=strategy_restore_after_wait,
+                    waited_for_existing_rollout=waited_for_existing_rollout,
+                    stage_applied=stage_applied,
+                )
                 if (
                     final_changed
                     or strategy_restored
+                    or strategy_restore_required
                     or (source_sync_required and not stage_applied)
                 ):
-                    stage_title = (
-                        "node-group strategy restore"
-                        if strategy_restored
-                        else "source node-template sync"
+                    stage_title = _upgrade_final_stage_title(
+                        strategy_restored=strategy_restored,
+                        strategy_restore_required=strategy_restore_required,
+                        source_sync_title="source node-template sync",
                     )
                     generated_config, paths, manifest = _render_validate_apply_stage(stage_title)
             except Exception:
@@ -4365,17 +4448,20 @@ def upgrade_os_image_command(
                 policy,
                 resolved_timeout,
             )
+            strategy_restore_after_wait = _upgrade_strategy_restore_after_wait(
+                temporary_strategy=temporary_strategy,
+                rollout_incomplete=plan.rollout_incomplete,
+                source_sync_required=source_sync_required,
+            )
             node_group_stage_count = sum(
                 1 for planned_group in plan.node_groups if planned_group.os != target_os
             )
-            planned_stage_count = node_group_stage_count
-            extra_stage_summaries: list[str] = []
-            if planned_stage_count == 0 and source_sync_required:
-                planned_stage_count = 1
-                extra_stage_summaries.append("1 source-sync stage")
-            elif temporary_strategy is not None and node_group_stage_count:
-                planned_stage_count += 1
-                extra_stage_summaries.append("1 strategy-restore stage")
+            planned_stage_count, extra_stage_summaries = _upgrade_planned_stage_count(
+                node_group_stage_count=node_group_stage_count,
+                source_sync_required=source_sync_required,
+                strategy_restore_after_wait=strategy_restore_after_wait,
+                temporary_strategy=temporary_strategy,
+            )
             if planned_stage_count:
                 stage_summaries = [
                     f"{node_group_stage_count} node-group stage(s)",
@@ -4389,6 +4475,7 @@ def upgrade_os_image_command(
                 )
             stage_number = 0
             stage_applied = False
+            waited_for_existing_rollout = False
 
             def _stage_strategy(active_group_key: str | None = None) -> bool:
                 if temporary_strategy is None:
@@ -4493,6 +4580,7 @@ def upgrade_os_image_command(
                                 plan=plan,
                                 planned_group=planned_group,
                             )
+                            waited_for_existing_rollout = True
                         continue
                     update_source_node_group_os(
                         source_payload,
@@ -4517,15 +4605,21 @@ def upgrade_os_image_command(
                     node_group_keys=source_group_keys,
                 )
                 strategy_restored = _stage_strategy(None)
+                strategy_restore_required = _upgrade_strategy_restore_required(
+                    strategy_restore_after_wait=strategy_restore_after_wait,
+                    waited_for_existing_rollout=waited_for_existing_rollout,
+                    stage_applied=stage_applied,
+                )
                 if (
                     final_os_changed
                     or strategy_restored
+                    or strategy_restore_required
                     or (source_sync_required and not stage_applied)
                 ):
-                    stage_title = (
-                        "node-group strategy restore"
-                        if strategy_restored
-                        else f"source OS image sync to {target_os}"
+                    stage_title = _upgrade_final_stage_title(
+                        strategy_restored=strategy_restored,
+                        strategy_restore_required=strategy_restore_required,
+                        source_sync_title=f"source OS image sync to {target_os}",
                     )
                     generated_config, paths, manifest = _render_validate_apply_stage(stage_title)
             except Exception:
@@ -4801,6 +4895,11 @@ def _run_mk8s_node_layer_upgrade_command(
                 request.disruption_policy,
                 request.drain_timeout,
             )
+            strategy_restore_after_wait = _upgrade_strategy_restore_after_wait(
+                temporary_strategy=temporary_strategy,
+                rollout_incomplete=plan.rollout_incomplete,
+                source_sync_required=source_sync_required,
+            )
             node_group_stage_count = sum(
                 1
                 for planned_group in plan.node_groups
@@ -4810,14 +4909,12 @@ def _run_mk8s_node_layer_upgrade_command(
                     != request.target_value
                 )
             )
-            planned_stage_count = node_group_stage_count
-            extra_stage_summaries: list[str] = []
-            if planned_stage_count == 0 and source_sync_required:
-                planned_stage_count = 1
-                extra_stage_summaries.append("1 source-sync stage")
-            elif temporary_strategy is not None and node_group_stage_count:
-                planned_stage_count += 1
-                extra_stage_summaries.append("1 strategy-restore stage")
+            planned_stage_count, extra_stage_summaries = _upgrade_planned_stage_count(
+                node_group_stage_count=node_group_stage_count,
+                source_sync_required=source_sync_required,
+                strategy_restore_after_wait=strategy_restore_after_wait,
+                temporary_strategy=temporary_strategy,
+            )
             if planned_stage_count:
                 stage_summaries = [
                     f"{node_group_stage_count} node-group stage(s)",
@@ -4830,6 +4927,7 @@ def _run_mk8s_node_layer_upgrade_command(
                 )
             stage_number = 0
             stage_applied = False
+            waited_for_existing_rollout = False
 
             def _stage_strategy(active_group_key: str | None = None) -> bool:
                 if temporary_strategy is None:
@@ -4939,6 +5037,7 @@ def _run_mk8s_node_layer_upgrade_command(
                             plan=plan,
                             planned_group=planned_group,
                         )
+                        waited_for_existing_rollout = True
                         continue
                     update_source_node_group_field(
                         source_payload,
@@ -4966,15 +5065,21 @@ def _run_mk8s_node_layer_upgrade_command(
                     node_group_keys=source_group_keys,
                 )
                 strategy_restored = _stage_strategy(None)
+                strategy_restore_required = _upgrade_strategy_restore_required(
+                    strategy_restore_after_wait=strategy_restore_after_wait,
+                    waited_for_existing_rollout=waited_for_existing_rollout,
+                    stage_applied=stage_applied,
+                )
                 if (
                     final_changed
                     or strategy_restored
+                    or strategy_restore_required
                     or (source_sync_required and not stage_applied)
                 ):
-                    stage_title = (
-                        "node-group strategy restore"
-                        if strategy_restored
-                        else f"source {spec.target_label} sync to {request.target_value}"
+                    stage_title = _upgrade_final_stage_title(
+                        strategy_restored=strategy_restored,
+                        strategy_restore_required=strategy_restore_required,
+                        source_sync_title=f"source {spec.target_label} sync to {request.target_value}",
                     )
                     generated_config, paths, manifest = _render_validate_apply_stage(stage_title)
             except Exception:
@@ -6182,14 +6287,106 @@ def _config_cli_arg(config_path: Path) -> str:
     return shlex.quote(str(config_path.resolve()))
 
 
+def _soperator_migration_reason_labels(onboarding: Mapping[str, Any]) -> tuple[str, ...]:
+    flags = _soperator_migration_action_flags(onboarding)
+    reasons: list[str] = []
+    if flags["soperator_upgrade_required"]:
+        reasons.append("Soperator chart upgrade")
+    if flags["external_node_template_upgrade_required"]:
+        reasons.append("external MK8s control-plane/node-template upgrade via Nebius API")
+    if flags["storage_migration_required"]:
+        reasons.append("aligned SFS/data migration")
+    if flags["compute_migration_required"]:
+        reasons.append("Soperator compute layout migration")
+    if flags["target_gpu_reconciliation_required"] and flags["migration_required"]:
+        reasons.append("target GPU/RDMA stack remediation selected with migration work")
+    return tuple(reasons)
+
+
+def _soperator_migration_reason_text(onboarding: Mapping[str, Any]) -> str:
+    return "; ".join(_soperator_migration_reason_labels(onboarding)) or "migration-owned action"
+
+
+def _soperator_storage_compute_route_note(onboarding: Mapping[str, Any]) -> str:
+    storage_mode = (
+        str(onboarding.get("storage_mode", "") or _SOPERATOR_ONBOARDING_DEFAULT_STORAGE_MODE)
+        .strip()
+        .lower()
+    )
+    compute_mode = (
+        str(onboarding.get("compute_mode", "") or _SOPERATOR_ONBOARDING_DEFAULT_COMPUTE_MODE)
+        .strip()
+        .lower()
+    )
+    if (
+        storage_mode == ONBOARDING_STORAGE_MODE_KEEP_EXISTING
+        and compute_mode == ONBOARDING_COMPUTE_MODE_KEEP_EXISTING
+    ):
+        return (
+            "Existing storage and compute layout were accepted; migrate will not create "
+            "aligned SFS filesystems or replacement compute node groups unless those "
+            "actions are present."
+        )
+    if storage_mode == ONBOARDING_STORAGE_MODE_KEEP_EXISTING:
+        return (
+            "Existing storage was accepted; migrate will not create aligned SFS "
+            "filesystems unless a storage migration action is present."
+        )
+    if compute_mode == ONBOARDING_COMPUTE_MODE_KEEP_EXISTING:
+        return (
+            "Existing compute layout was accepted; migrate will not create replacement "
+            "compute node groups unless a compute migration action is present."
+        )
+    return ""
+
+
+def _soperator_route_guidance_lines(
+    *,
+    onboarding: Mapping[str, Any],
+    migration_required: bool,
+) -> tuple[str, ...]:
+    if migration_required:
+        lines = [
+            "Route: render -> ext-soperator migrate, not render -> deploy.",
+            "Reason: accepted onboarding actions require "
+            + _soperator_migration_reason_text(onboarding)
+            + ".",
+            (
+                "deploy only reconciles the rendered Terraform/Flux desired state; "
+                "migrate performs the required ad hoc Nebius API and guarded "
+                "Soperator migration phases."
+            ),
+        ]
+        mode_note = _soperator_storage_compute_route_note(onboarding)
+        if mode_note:
+            lines.append(mode_note)
+        return tuple(lines)
+
+    if ONBOARDING_ACTION_RECONCILE_TARGET_GPU_STACK in {
+        str(action or "").strip() for action in onboarding.get("actions", []) or ()
+    }:
+        return (
+            "Route: render -> deploy.",
+            (
+                "Reason: only target GPU/RDMA reconciliation is selected; without a "
+                "Soperator upgrade, external node-template upgrade, storage migration, "
+                "or compute migration, deploy can apply that rendered desired state."
+            ),
+        )
+    return (
+        "Route: render -> deploy.",
+        "Reason: no migration-owned Soperator onboarding actions are selected.",
+    )
+
+
 def _print_render_deploy_hint(config_path: Path) -> None:
     config_arg = _config_cli_arg(config_path)
     try:
         payload = _load_config_payload(config_path)
     except Exception:
         payload = {}
-    migration_targets: list[str] = []
-    install_targets: list[str] = []
+    migration_targets: list[tuple[str, Mapping[str, Any]]] = []
+    install_targets: list[tuple[str, Mapping[str, Any]]] = []
     if isinstance(payload, Mapping):
         for target_ref in soperator_onboarding_target_refs(payload):
             target = soperator_onboarding_target(payload, target_ref=target_ref)
@@ -6197,12 +6394,18 @@ def _print_render_deploy_hint(config_path: Path) -> None:
             if not isinstance(onboarding, Mapping):
                 continue
             if _soperator_migration_action_flags(onboarding)["migration_required"]:
-                migration_targets.append(target_ref)
+                migration_targets.append((target_ref, onboarding))
             else:
-                install_targets.append(target_ref)
+                install_targets.append((target_ref, onboarding))
     if migration_targets:
         if len(migration_targets) == 1:
-            target_arg = shlex.quote(migration_targets[0])
+            target_ref, onboarding = migration_targets[0]
+            target_arg = shlex.quote(target_ref)
+            for line in _soperator_route_guidance_lines(
+                onboarding=onboarding,
+                migration_required=True,
+            ):
+                console.print(line, soft_wrap=True)
             console.print(
                 "Next step: "
                 f"`nebius-cxcli ext-soperator migrate {config_arg} --target {target_arg} --dry-run`",
@@ -6215,10 +6418,22 @@ def _print_render_deploy_hint(config_path: Path) -> None:
                 soft_wrap=True,
             )
         else:
+            console.print("Route: render -> ext-soperator migrate, not render -> deploy.")
+            for target_ref, onboarding in migration_targets:
+                console.print(
+                    f"Soperator target {target_ref}: "
+                    + _soperator_migration_reason_text(onboarding),
+                    soft_wrap=True,
+                )
             console.print(
                 "Next step: run `nebius-cxcli ext-soperator migrate "
                 f"{config_arg} --target <target> --dry-run` for each migration-required "
-                "Soperator target: " + ", ".join(migration_targets),
+                "Soperator target: " + ", ".join(target for target, _ in migration_targets),
+                soft_wrap=True,
+            )
+            console.print(
+                "Then, after accepting each dry-run plan, run `nebius-cxcli ext-soperator migrate "
+                f"{config_arg} --target <target> --execute --approve` for that target.",
                 soft_wrap=True,
             )
         console.print(
@@ -6227,11 +6442,20 @@ def _print_render_deploy_hint(config_path: Path) -> None:
         )
         return
     if install_targets:
+        if len(install_targets) == 1:
+            target_ref, onboarding = install_targets[0]
+            for line in _soperator_route_guidance_lines(
+                onboarding=onboarding,
+                migration_required=False,
+            ):
+                console.print(line, soft_wrap=True)
+        else:
+            console.print("Route: render -> deploy.")
         console.print(f"Next step: `nebius-cxcli deploy {config_arg}`", soft_wrap=True)
         console.print(
             "Use `--target <target-id>` only when you intentionally want to narrow this "
             "run to one generated target. Install/adopt-only Soperator targets: "
-            + ", ".join(install_targets),
+            + ", ".join(target for target, _ in install_targets),
             soft_wrap=True,
         )
         return
@@ -6285,9 +6509,16 @@ def _print_soperator_onboard_next_steps(
     *,
     target_ref: str,
     migration_required: bool,
+    onboarding: Mapping[str, Any],
 ) -> None:
     config_arg = _config_cli_arg(config_path)
     target_arg = shlex.quote(normalize_component_token(target_ref) or target_ref)
+    console.print("Soperator onboarding route:")
+    for line in _soperator_route_guidance_lines(
+        onboarding=onboarding,
+        migration_required=migration_required,
+    ):
+        console.print(f"  {line}", soft_wrap=True)
     console.print("Next steps:")
     commands: list[tuple[str, str]] = [
         (f"nebius-cxcli validate {config_arg}", ""),
@@ -8222,8 +8453,6 @@ def _validate_soperator_source_version(value: object) -> str:
 
 
 def _soperator_onboarding_report_needs_source_version(report: Any) -> bool:
-    if _non_empty_text(getattr(report, "source_version", "")):
-        return False
     for finding in getattr(report, "findings", ()) or ():
         if str(getattr(finding, "status", "") or "").strip() == "source-version-required":
             return True
@@ -8252,11 +8481,20 @@ def _prompt_manual_soperator_source_version() -> str:
 def _prompt_soperator_onboarding_source_version(report: Any) -> str:
     if not _soperator_onboarding_report_needs_source_version(report):
         return ""
-    console.print(
-        "[dim]Soperator CRDs were detected, but cxcli could not detect a compatible "
-        "Helm release version. Select the source Soperator version so cxcli can match "
-        "a committed migration profile.[/dim]"
-    )
+    source_version = _non_empty_text(getattr(report, "source_version", ""))
+    if source_version:
+        console.print(
+            f"[dim]Detected Soperator version {source_version}, but cxcli also found "
+            "a Soperator-like Helm release with noncanonical identity. Confirm the "
+            "source Soperator version so cxcli can match a committed migration profile "
+            "before managing the release.[/dim]"
+        )
+    else:
+        console.print(
+            "[dim]Soperator CRDs were detected, but cxcli could not detect a compatible "
+            "Helm release version. Select the source Soperator version so cxcli can match "
+            "a committed migration profile.[/dim]"
+        )
     field = "deploy.targets[].soperator_onboarding.source_version"
     with _soperator_onboarding_status("Loading Soperator migration profile versions..."):
         choices = _soperator_source_version_choices()
@@ -8390,7 +8628,10 @@ def _print_soperator_onboarding_report_summary(report: Any) -> None:
     if migration_profile_id:
         console.print(f"[dim]Migration profile: {migration_profile_id}[/dim]")
     for finding in report.findings:
-        if finding.severity in {"required", "recommended"}:
+        print_info_finding = (
+            finding.layer == "gpu-stack" and finding.status == "verified"
+        )
+        if finding.severity in {"required", "recommended"} or print_info_finding:
             console.print(f"[dim]- {finding.layer}: {finding.status} - {finding.message}[/dim]")
     if getattr(report, "migration_plan", ()):
         console.print(
@@ -8398,7 +8639,15 @@ def _print_soperator_onboarding_report_summary(report: Any) -> None:
             + ", ".join(phase.id for phase in report.migration_plan)
             + "[/dim]"
         )
-    selected_actions = [action.id for action in report.actions if action.selected]
+    selected_actions = [
+        (
+            f"{action.title} ({action.id})"
+            if str(action.title or "").strip()
+            else str(action.id or "").strip()
+        )
+        for action in report.actions
+        if action.selected and str(action.id or "").strip()
+    ]
     if selected_actions:
         console.print("[dim]Selected onboarding actions: " + ", ".join(selected_actions) + "[/dim]")
 
@@ -8427,6 +8676,231 @@ def _soperator_onboarding_compute_mode_choices(default: str) -> list[OptionChoic
         OptionChoice(value=value, label=labels[value], recommended=value == default)
         for value in _SOPERATOR_ONBOARDING_COMPUTE_MODES
     ]
+
+
+def _print_soperator_onboarding_mode_choice_guidance() -> None:
+    console.print(
+        "[dim]If you are not sure, choose the Create aligned SFS and node-groups "
+        "options. cxcli will keep existing storage or compute automatically when "
+        "the live cluster already satisfies the target Soperator layout.[/dim]"
+    )
+
+
+def _soperator_rollout_strategy_choices(default: str) -> list[OptionChoice]:
+    labels = {
+        SOPERATOR_WORKER_ROLLOUT_STRATEGY_SAFE_SURGE: (
+            "safe-surge  (use temporary surge nodes for worker updates)"
+        ),
+        SOPERATOR_WORKER_ROLLOUT_STRATEGY_ZERO_SURGE: (
+            "zero-surge  (avoid extra worker quota; reduce active capacity)"
+        ),
+    }
+    return [
+        OptionChoice(value=value, label=labels[value], recommended=value == default)
+        for value in (
+            SOPERATOR_WORKER_ROLLOUT_STRATEGY_SAFE_SURGE,
+            SOPERATOR_WORKER_ROLLOUT_STRATEGY_ZERO_SURGE,
+        )
+    ]
+
+
+def _soperator_rollout_wave_mode_choices(default: str) -> list[OptionChoice]:
+    return [
+        OptionChoice(
+            value="percent",
+            label="percent  (percentage of worker groups per wave)",
+            recommended=default == "percent",
+        ),
+        OptionChoice(
+            value="groups",
+            label="groups  (fixed worker groups per wave)",
+            recommended=default == "groups",
+        ),
+    ]
+
+
+def _prompt_soperator_rollout_value(
+    path_label: str,
+    current: object,
+    *,
+    validator: Callable[[object], dict[str, Any]],
+    choices: list[OptionChoice] | None = None,
+    type_hint: str | None = None,
+    required: bool = True,
+    unset_on_skip: bool = False,
+) -> object:
+    while True:
+        value, should_stop = _prompt_scalar_override(
+            path_label,
+            current,
+            choices=choices,
+            type_hint=type_hint,
+            required=required,
+            unset_on_skip=unset_on_skip,
+        )
+        if should_stop:
+            raise _WizardQuitRequested
+        if _wizard_backtrack_requested(value):
+            return current
+        try:
+            validator(value)
+        except ValueError as exc:
+            console.print(f"{error_markup('Invalid value')}. {exc}")
+            current = value
+            continue
+        return value
+
+
+def _prompt_soperator_onboarding_rollout_manifest(
+    target_row: Mapping[str, Any],
+) -> dict[str, Any]:
+    onboarding = target_row.get("soperator_onboarding")
+    if not isinstance(onboarding, Mapping):
+        return _soperator_rollout_manifest_from_options()
+    current = resolve_external_node_template_rollout(onboarding)
+    console.print(
+        "[dim]Configure external worker node-template rollout. safe-surge requires "
+        "spare quota for the configured surge nodes; finite drain_timeout can delete "
+        "a node after the timeout if eviction is still blocked. Use none to wait "
+        "indefinitely for drain completion.[/dim]"
+    )
+    strategy = str(
+        _prompt_soperator_rollout_value(
+            "deploy.targets[].soperator_onboarding.node_template_upgrade.rollout.strategy",
+            current.strategy,
+            validator=lambda value: _soperator_rollout_manifest_from_options(
+                onboarding, worker_rollout_strategy=str(value or "")
+            ),
+            choices=_soperator_rollout_strategy_choices(current.strategy),
+            type_hint="string",
+            required=True,
+        )
+    )
+    wave_mode_default = "groups" if current.worker_wave_groups is not None else "percent"
+    wave_mode = str(
+        _prompt_soperator_rollout_value(
+            "deploy.targets[].soperator_onboarding.node_template_upgrade.rollout.wave_budget",
+            wave_mode_default,
+            validator=lambda value: (
+                {"value": value}
+                if str(value or "") in {"percent", "groups"}
+                else (_ for _ in ()).throw(ValueError("choose percent or groups"))
+            ),
+            choices=_soperator_rollout_wave_mode_choices(wave_mode_default),
+            type_hint="string",
+            required=True,
+        )
+    )
+    worker_wave_groups: int | None = None
+    worker_wave_percent: int | None = None
+    if wave_mode == "groups":
+        default_groups = current.worker_wave_groups or 1
+        worker_wave_groups = int(
+            _prompt_soperator_rollout_value(
+                "deploy.targets[].soperator_onboarding.node_template_upgrade.rollout.worker_wave_groups",
+                default_groups,
+                validator=lambda value: _soperator_rollout_manifest_from_options(
+                    onboarding,
+                    worker_rollout_strategy=strategy,
+                    worker_wave_groups=int(value),
+                    worker_wave_percent=None,
+                ),
+                type_hint="integer",
+                required=True,
+            )
+        )
+    else:
+        default_percent = current.worker_wave_percent or SOPERATOR_WORKER_ROLLOUT_DEFAULT_WAVE_PERCENT
+        worker_wave_percent = int(
+            _prompt_soperator_rollout_value(
+                "deploy.targets[].soperator_onboarding.node_template_upgrade.rollout.worker_wave_percent",
+                default_percent,
+                validator=lambda value: _soperator_rollout_manifest_from_options(
+                    onboarding,
+                    worker_rollout_strategy=strategy,
+                    worker_wave_groups=None,
+                    worker_wave_percent=int(value),
+                ),
+                type_hint="integer",
+                required=True,
+            )
+        )
+    max_parallel_raw = _prompt_soperator_rollout_value(
+        "deploy.targets[].soperator_onboarding.node_template_upgrade.rollout.max_parallel_worker_groups",
+        current.max_parallel_worker_groups,
+        validator=lambda value: _soperator_rollout_manifest_from_options(
+            onboarding,
+            worker_rollout_strategy=strategy,
+            worker_wave_groups=worker_wave_groups,
+            worker_wave_percent=worker_wave_percent,
+            max_parallel_worker_groups=None if value in {None, ""} else int(value),
+        ),
+        type_hint="integer",
+        required=False,
+        unset_on_skip=True,
+    )
+    max_parallel = None if max_parallel_raw in {None, ""} else int(max_parallel_raw)
+    max_surge = int(
+        _prompt_soperator_rollout_value(
+            "deploy.targets[].soperator_onboarding.node_template_upgrade.rollout.worker_group_strategy.max_surge_count",
+            current.strategy_max_surge_count,
+            validator=lambda value: _soperator_rollout_manifest_from_options(
+                onboarding,
+                worker_rollout_strategy=strategy,
+                worker_wave_groups=worker_wave_groups,
+                worker_wave_percent=worker_wave_percent,
+                max_parallel_worker_groups=max_parallel,
+                strategy_max_surge_count=int(value),
+            ),
+            type_hint="integer",
+            required=True,
+        )
+    )
+    max_unavailable = int(
+        _prompt_soperator_rollout_value(
+            "deploy.targets[].soperator_onboarding.node_template_upgrade.rollout.worker_group_strategy.max_unavailable_count",
+            current.strategy_max_unavailable_count,
+            validator=lambda value: _soperator_rollout_manifest_from_options(
+                onboarding,
+                worker_rollout_strategy=strategy,
+                worker_wave_groups=worker_wave_groups,
+                worker_wave_percent=worker_wave_percent,
+                max_parallel_worker_groups=max_parallel,
+                strategy_max_surge_count=max_surge,
+                strategy_max_unavailable_count=int(value),
+            ),
+            type_hint="integer",
+            required=True,
+        )
+    )
+    drain_timeout = str(
+        _prompt_soperator_rollout_value(
+            "deploy.targets[].soperator_onboarding.node_template_upgrade.rollout.worker_group_strategy.drain_timeout",
+            current.strategy_drain_timeout,
+            validator=lambda value: _soperator_rollout_manifest_from_options(
+                onboarding,
+                worker_rollout_strategy=strategy,
+                worker_wave_groups=worker_wave_groups,
+                worker_wave_percent=worker_wave_percent,
+                max_parallel_worker_groups=max_parallel,
+                strategy_max_surge_count=max_surge,
+                strategy_max_unavailable_count=max_unavailable,
+                strategy_drain_timeout=str(value or ""),
+            ),
+            type_hint="string",
+            required=True,
+        )
+    )
+    return _soperator_rollout_manifest_from_options(
+        onboarding,
+        worker_rollout_strategy=strategy,
+        worker_wave_groups=worker_wave_groups,
+        worker_wave_percent=worker_wave_percent,
+        max_parallel_worker_groups=max_parallel,
+        strategy_max_surge_count=max_surge,
+        strategy_max_unavailable_count=max_unavailable,
+        strategy_drain_timeout=drain_timeout,
+    )
 
 
 def _soperator_onboarding_required_storage_mode_for_report(report: Any) -> str:
@@ -8466,6 +8940,80 @@ def _validate_soperator_onboarding_storage_mode_for_report(
     return normalized_storage_mode
 
 
+def _soperator_rollout_manifest_from_options(
+    onboarding: Mapping[str, Any] | None = None,
+    *,
+    worker_rollout_strategy: str | None = None,
+    worker_wave_groups: int | None = None,
+    worker_wave_percent: int | None = None,
+    max_parallel_worker_groups: int | None = None,
+    strategy_max_surge_count: int | None = None,
+    strategy_max_unavailable_count: int | None = None,
+    strategy_drain_timeout: str | None = None,
+) -> dict[str, Any]:
+    return resolve_external_node_template_rollout(
+        onboarding or {},
+        strategy=worker_rollout_strategy,
+        worker_wave_groups=worker_wave_groups,
+        worker_wave_percent=worker_wave_percent,
+        max_parallel_worker_groups=max_parallel_worker_groups,
+        strategy_max_surge_count=strategy_max_surge_count,
+        strategy_max_unavailable_count=strategy_max_unavailable_count,
+        strategy_drain_timeout=strategy_drain_timeout,
+    ).to_manifest_dict()
+
+
+def _soperator_target_row_requires_external_node_template_rollout(
+    target_row: Mapping[str, Any],
+) -> bool:
+    onboarding = target_row.get("soperator_onboarding")
+    if not isinstance(onboarding, Mapping):
+        return False
+    actions = onboarding.get("actions")
+    if not isinstance(actions, Sequence) or isinstance(actions, (str, bytes, bytearray)):
+        return False
+    return ONBOARDING_ACTION_UPGRADE_EXTERNAL_NODE_TEMPLATE in {
+        str(action or "").strip() for action in actions
+    }
+
+
+def _apply_soperator_rollout_manifest_to_target_row(
+    target_row: dict[str, Any],
+    rollout_manifest: Mapping[str, Any],
+) -> None:
+    onboarding = target_row.get("soperator_onboarding")
+    if not isinstance(onboarding, dict):
+        return
+    node_template = onboarding.setdefault("node_template_upgrade", {})
+    if not isinstance(node_template, dict):
+        return
+    node_template["rollout"] = copy.deepcopy(dict(rollout_manifest))
+
+
+def _soperator_rollout_options_provided(
+    *,
+    worker_rollout_strategy: str | None = None,
+    worker_wave_groups: int | None = None,
+    worker_wave_percent: int | None = None,
+    max_parallel_worker_groups: int | None = None,
+    strategy_max_surge_count: int | None = None,
+    strategy_max_unavailable_count: int | None = None,
+    strategy_drain_timeout: str | None = None,
+) -> bool:
+    return any(
+        value is not None
+        for value in (
+            worker_rollout_strategy,
+            worker_wave_groups,
+            worker_wave_percent,
+            max_parallel_worker_groups,
+            strategy_max_surge_count,
+            strategy_max_unavailable_count,
+            strategy_drain_timeout,
+        )
+    )
+
+
 def _soperator_onboarding_target_defaults(
     target_ref: str,
     *,
@@ -8477,6 +9025,7 @@ def _soperator_onboarding_target_defaults(
     snapshot: Mapping[str, Any] | None = None,
     pinned_chart_version: str = "",
     pinned_app_version: str = "",
+    rollout_manifest: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     normalized_target = normalize_component_token(target_ref) or "mk8s"
     if snapshot is None:
@@ -8543,6 +9092,11 @@ def _soperator_onboarding_target_defaults(
             "target_k8s_version": ONBOARDING_EXTERNAL_NODE_TEMPLATE_TARGET_K8S_VERSION,
             "target_os": ONBOARDING_EXTERNAL_NODE_TEMPLATE_TARGET_OS,
             "target_gpu_stack_preset": ONBOARDING_EXTERNAL_NODE_TEMPLATE_TARGET_GPU_STACK_PRESET,
+            "rollout": copy.deepcopy(
+                dict(rollout_manifest)
+                if rollout_manifest is not None
+                else _soperator_rollout_manifest_from_options()
+            ),
         }
     context = _non_empty_text(kube_context)
     if context:
@@ -8741,21 +9295,61 @@ def _soperator_onboarding_live_name_override(snapshot: Mapping[str, Any]) -> str
 
 
 def _soperator_onboarding_live_slurm_cluster_name(snapshot: Mapping[str, Any]) -> str:
-    clusters: list[tuple[str, str]] = []
+    clusters: list[Mapping[str, Any]] = []
+    ready_nodesets: set[str] = set()
     for resource in _soperator_onboarding_sequence_of_mappings(
         snapshot.get("soperator_resources")
     ):
-        if _non_empty_text(resource.get("kind")) != "SlurmCluster":
+        kind = _non_empty_text(resource.get("kind"))
+        if kind == "NodeSet":
+            name = normalize_component_token(_soperator_onboarding_resource_name(resource))
+            phase = _non_empty_text(_mapping_path_value(resource, "status.phase"))
+            status = _non_empty_text(_mapping_path_value(resource, "status.status"))
+            if name and (phase == "Ready" or status == "Ready"):
+                ready_nodesets.add(name)
+            continue
+        if kind != "SlurmCluster":
             continue
         name = _soperator_onboarding_resource_name(resource)
         if not name:
             continue
         phase = _non_empty_text(_mapping_path_value(resource, "status.phase"))
-        clusters.append((name, phase))
         if phase == "Available":
             return name
+        clusters.append(resource)
     if len(clusters) == 1:
-        return clusters[0][0]
+        return _soperator_onboarding_resource_name(clusters[0])
+    scored_clusters: list[tuple[int, str, str]] = []
+    for resource in clusters:
+        name = _soperator_onboarding_resource_name(resource)
+        if not name:
+            continue
+        refs: set[str] = set()
+        partitions = _mapping_path_value(resource, "spec.partitionConfiguration.partitions")
+        if isinstance(partitions, Sequence) and not isinstance(partitions, (str, bytes, bytearray)):
+            for partition in partitions:
+                if not isinstance(partition, Mapping):
+                    continue
+                for raw_ref in _soperator_string_list(partition.get("nodeSetRefs")):
+                    refs.add(normalize_component_token(raw_ref))
+        matched_ready_refs = len(refs & ready_nodesets)
+        ready_login = 1 if _non_empty_text(_mapping_path_value(resource, "status.readyLogin")) else 0
+        ready_sconfig = (
+            1
+            if _non_empty_text(_mapping_path_value(resource, "status.readySConfigController"))
+            else 0
+        )
+        score = matched_ready_refs * 10 + ready_login + ready_sconfig
+        if score <= 0:
+            continue
+        created_at = _non_empty_text(_mapping_path_value(resource, "metadata.creationTimestamp"))
+        scored_clusters.append((score, created_at, name))
+    if scored_clusters:
+        _score, _created_at, selected_name = sorted(
+            scored_clusters,
+            key=lambda item: (-item[0], item[1] or "9999"),
+        )[0]
+        return selected_name
     return ""
 
 
@@ -8841,14 +9435,69 @@ def _soperator_onboarding_live_node_group_mapping(
     return mapping
 
 
-def _soperator_onboarding_accounting_mariadb_storage(size: str) -> dict[str, Any]:
+_SOPERATOR_MARIADB_DEFAULT_STORAGE_CLASS = "compute-csi-default-sc"
+
+
+def _soperator_onboarding_mariadb_storage_from_snapshot(
+    snapshot: Mapping[str, Any],
+) -> tuple[str, str, list[str]]:
+    candidates: list[tuple[int, str, str, list[str]]] = []
+    for pvc in _soperator_onboarding_sequence_of_mappings(snapshot.get("pvcs")):
+        name = _soperator_onboarding_resource_name(pvc)
+        if not name.startswith("storage-") or not name.endswith("-acct-db-0"):
+            continue
+        namespace = _soperator_onboarding_resource_namespace(pvc)
+        if namespace and namespace != "soperator":
+            continue
+        storage_class = _non_empty_text(_mapping_path_value(pvc, "spec.storageClassName"))
+        raw_access_modes = _mapping_path_value(pvc, "spec.accessModes")
+        access_modes = (
+            [
+                _non_empty_text(mode)
+                for mode in raw_access_modes
+                if _non_empty_text(mode)
+            ]
+            if isinstance(raw_access_modes, list)
+            else []
+        )
+        request_size = _non_empty_text(
+            _mapping_path_value(pvc, "spec.resources.requests.storage")
+        )
+        status_size = _non_empty_text(_mapping_path_value(pvc, "status.capacity.storage"))
+        size = _soperator_onboarding_larger_storage_size(request_size, status_size)
+        phase = _non_empty_text(_mapping_path_value(pvc, "status.phase"))
+        priority = 0
+        if storage_class == "slurm-local-pv":
+            priority += 10
+        if phase and phase != "Bound":
+            priority += 5
+        candidates.append((priority, size, storage_class, access_modes))
+    if not candidates:
+        return "", "", []
+    _priority, size, storage_class, access_modes = sorted(candidates, key=lambda item: item[0])[0]
+    return size, storage_class, access_modes
+
+
+def _soperator_onboarding_accounting_mariadb_storage(
+    size: str,
+    *,
+    storage_class_name: str = "",
+    access_modes: Sequence[str] = (),
+) -> dict[str, Any]:
+    normalized_size = _non_empty_text(size) or "128Gi"
+    normalized_storage_class = (
+        _non_empty_text(storage_class_name) or _SOPERATOR_MARIADB_DEFAULT_STORAGE_CLASS
+    )
+    normalized_access_modes = [
+        _non_empty_text(mode) for mode in access_modes if _non_empty_text(mode)
+    ] or ["ReadWriteOnce"]
     return {
-        "size": size,
-        "storageClassName": "slurm-local-pv",
+        "size": normalized_size,
+        "storageClassName": normalized_storage_class,
         "volumeClaimTemplate": {
-            "accessModes": ["ReadWriteMany"],
-            "resources": {"requests": {"storage": size}},
-            "storageClassName": "slurm-local-pv",
+            "accessModes": normalized_access_modes,
+            "resources": {"requests": {"storage": normalized_size}},
+            "storageClassName": normalized_storage_class,
         },
     }
 
@@ -8937,15 +9586,23 @@ def _soperator_onboarding_adoption_values_from_target_row(
     if storage:
         values["storage"] = storage
 
+    mariadb_size, mariadb_storage_class, mariadb_access_modes = (
+        _soperator_onboarding_mariadb_storage_from_snapshot(snapshot)
+    )
     accounting_size = _soperator_onboarding_larger_storage_size(
         _soperator_onboarding_live_pvc_size(snapshot, "accounting-pvc"),
         _soperator_onboarding_live_pv_size(snapshot, "accounting-pv"),
+        mariadb_size,
     )
     if accounting_size:
         values.setdefault("slurmNodes", {}).setdefault("accounting", {}).setdefault(
             "mariadbOperator",
             {},
-        )["storage"] = _soperator_onboarding_accounting_mariadb_storage(accounting_size)
+        )["storage"] = _soperator_onboarding_accounting_mariadb_storage(
+            accounting_size,
+            storage_class_name=mariadb_storage_class,
+            access_modes=mariadb_access_modes,
+        )
 
     return values
 
@@ -9026,6 +9683,238 @@ def _project_mk8s_cluster_choices(
     )
 
 
+def _sdk_field(value: Any, key: str) -> Any:
+    if isinstance(value, Mapping):
+        return value.get(key)
+    return getattr(value, key, None)
+
+
+def _sdk_first_text(value: Any, *keys: str) -> str:
+    for key in keys:
+        text = _non_empty_text(_sdk_field(value, key))
+        if text:
+            return text
+    return ""
+
+
+def _sdk_resource_text(value: Any) -> str:
+    if isinstance(value, Mapping):
+        return _sdk_first_text(value, "name", "id", "value")
+    text = _sdk_first_text(value, "name", "id", "value")
+    if text:
+        return text
+    return _non_empty_text(value)
+
+
+def _sdk_mk8s_cluster_template_snapshot(raw_cluster: Any, *, cluster_id: str) -> dict[str, Any]:
+    metadata = _sdk_field(raw_cluster, "metadata")
+    spec = _sdk_field(raw_cluster, "spec")
+    control_plane = _sdk_field(spec, "control_plane") or _sdk_field(spec, "controlPlane")
+    return {
+        "id": _sdk_first_text(metadata, "id") or cluster_id,
+        "name": _sdk_first_text(metadata, "name"),
+        "control_plane_version": _sdk_first_text(control_plane, "version")
+        or _sdk_first_text(spec, "version"),
+    }
+
+
+def _sdk_mk8s_node_group_template_snapshot(raw_group: Any) -> dict[str, Any]:
+    metadata = _sdk_field(raw_group, "metadata")
+    spec = _sdk_field(raw_group, "spec")
+    template = _sdk_field(spec, "template")
+    resources = _sdk_field(template, "resources")
+    gpu_settings = _sdk_field(template, "gpu_settings") or _sdk_field(template, "gpuSettings")
+    node_group_id = _sdk_first_text(metadata, "id")
+    node_group_name = _sdk_first_text(metadata, "name") or node_group_id
+    platform = _sdk_first_text(resources, "platform", "platform_id", "platformId")
+    node_template = {
+        "k8s_version": _sdk_first_text(spec, "version"),
+        "os": _sdk_resource_text(_sdk_field(template, "os")),
+        "platform": platform,
+        "preset": _sdk_first_text(resources, "preset"),
+        "gpu_stack_preset": _sdk_first_text(
+            gpu_settings,
+            "drivers_preset",
+            "driversPreset",
+        ),
+    }
+    return {
+        "node_group_id": node_group_id,
+        "node_group_name": node_group_name,
+        "provider": {
+            "node_group_id": node_group_id,
+            "node_group_name": node_group_name,
+            "node_template": node_template,
+        },
+        "labels": {
+            "nebius.com/node-group-id": node_group_id,
+            "nebius.com/node-group": node_group_name,
+        },
+        "selector": {
+            "key": "nebius.com/node-group-id",
+            "operator": "In",
+            "values": [node_group_id],
+        }
+        if node_group_id
+        else {},
+        "gpu": normalize_component_token(platform).startswith("gpu"),
+        "node_count": 0,
+    }
+
+
+def _list_provider_mk8s_node_group_template_snapshots(
+    *,
+    sdk: Any,
+    cluster_id: str,
+) -> tuple[dict[str, Any], ...]:
+    from nebius.api.nebius.mk8s.v1 import ListNodeGroupsRequest, NodeGroupServiceClient
+
+    client = NodeGroupServiceClient(sdk)
+    items: list[dict[str, Any]] = []
+    page_token = ""
+    while True:
+        response = client.list(
+            ListNodeGroupsRequest(parent_id=cluster_id, page_token=page_token or None)
+        ).wait()
+        items.extend(
+            _sdk_mk8s_node_group_template_snapshot(item)
+            for item in getattr(response, "items", []) or []
+        )
+        page_token = _non_empty_text(getattr(response, "next_page_token", None))
+        if not page_token:
+            return tuple(items)
+
+
+def _collect_provider_mk8s_template_snapshot(
+    payload: Mapping[str, Any],
+    *,
+    cluster_id: str,
+) -> dict[str, Any]:
+    from nebius.api.nebius.mk8s.v1 import ClusterServiceClient, GetClusterRequest
+
+    _client_name, _tenant_id, project_id, _region_id, _email = _identity_values_from_payload(
+        payload
+    )
+    sdk = init_nebius_sdk(
+        parent_id=project_id or None,
+        context="Soperator onboarding MK8s node-template inventory",
+    )
+    try:
+        cluster = ClusterServiceClient(sdk).get(GetClusterRequest(id=cluster_id)).wait()
+        node_groups = _list_provider_mk8s_node_group_template_snapshots(
+            sdk=sdk,
+            cluster_id=cluster_id,
+        )
+    finally:
+        with suppress(Exception):
+            sdk.sync_close()
+    return {
+        "mk8s_cluster": _sdk_mk8s_cluster_template_snapshot(
+            cluster,
+            cluster_id=cluster_id,
+        ),
+        "node_groups": {
+            (
+                normalize_component_token(item.get("node_group_id"))
+                or normalize_component_token(item.get("node_group_name"))
+            ): item
+            for item in node_groups
+            if normalize_component_token(item.get("node_group_id"))
+            or normalize_component_token(item.get("node_group_name"))
+        },
+    }
+
+
+def _snapshot_node_group_aliases(group_key: str, raw_group: Mapping[str, Any]) -> set[str]:
+    aliases = {normalize_component_token(group_key)}
+    for key in ("node_group_id", "id", "node_group_name", "name"):
+        aliases.add(normalize_component_token(raw_group.get(key)))
+    provider = raw_group.get("provider")
+    if isinstance(provider, Mapping):
+        for key in ("node_group_id", "id", "node_group_name", "name"):
+            aliases.add(normalize_component_token(provider.get(key)))
+    for labels_field in ("labels", "node_labels"):
+        labels = raw_group.get(labels_field)
+        if isinstance(labels, Mapping):
+            for label_key in (
+                "nebius.com/node-group-id",
+                "yandex.cloud/node-group-id",
+                "nebius.com/node-group",
+                "node.kubernetes.io/instance-type",
+            ):
+                aliases.add(normalize_component_token(labels.get(label_key)))
+    selector = raw_group.get("selector")
+    values = selector.get("values") if isinstance(selector, Mapping) else None
+    if isinstance(values, Sequence) and not isinstance(values, (str, bytes, bytearray)):
+        aliases.update(normalize_component_token(value) for value in values)
+    return {alias for alias in aliases if alias}
+
+
+def _merge_provider_mk8s_template_snapshot(
+    snapshot: Mapping[str, Any],
+    provider_snapshot: Mapping[str, Any],
+) -> dict[str, Any]:
+    merged = copy.deepcopy(to_plain_data(snapshot))
+    provider = merged.setdefault("provider", {})
+    if not isinstance(provider, dict):
+        provider = {}
+        merged["provider"] = provider
+    cluster = provider_snapshot.get("mk8s_cluster")
+    if isinstance(cluster, Mapping):
+        provider["mk8s_cluster"] = copy.deepcopy(to_plain_data(cluster))
+    node_groups = merged.setdefault("node_groups", {})
+    if not isinstance(node_groups, dict):
+        node_groups = {}
+        merged["node_groups"] = node_groups
+    used_keys = {normalize_component_token(key) for key in node_groups}
+    provider_groups = provider_snapshot.get("node_groups")
+    if not isinstance(provider_groups, Mapping):
+        return merged
+    for _provider_key, provider_group in provider_groups.items():
+        if not isinstance(provider_group, Mapping):
+            continue
+        provider_aliases = _snapshot_node_group_aliases("", provider_group)
+        matched_key = ""
+        for raw_key, raw_group in node_groups.items():
+            if not isinstance(raw_group, Mapping):
+                continue
+            if provider_aliases & _snapshot_node_group_aliases(str(raw_key), raw_group):
+                matched_key = str(raw_key)
+                break
+        if not matched_key:
+            candidate = (
+                normalize_component_token(provider_group.get("node_group_name"))
+                or normalize_component_token(provider_group.get("node_group_id"))
+                or "node-group"
+            )
+            matched_key = candidate
+            suffix = 2
+            while normalize_component_token(matched_key) in used_keys:
+                matched_key = f"{candidate}-{suffix}"
+                suffix += 1
+        used_keys.add(normalize_component_token(matched_key))
+        current = node_groups.get(matched_key)
+        if not isinstance(current, dict):
+            current = {}
+            node_groups[matched_key] = current
+        current.setdefault("node_count", provider_group.get("node_count", 0))
+        current.setdefault("gpu", provider_group.get("gpu", False))
+        for key in ("node_group_id", "node_group_name", "selector"):
+            value = provider_group.get(key)
+            if value not in (None, "", {}, []):
+                current[key] = copy.deepcopy(to_plain_data(value))
+        labels = current.setdefault("labels", {})
+        provider_labels = provider_group.get("labels")
+        if isinstance(labels, dict) and isinstance(provider_labels, Mapping):
+            for key, value in provider_labels.items():
+                if value not in (None, ""):
+                    labels.setdefault(str(key), str(value))
+        provider_details = provider_group.get("provider")
+        if isinstance(provider_details, Mapping):
+            current["provider"] = copy.deepcopy(to_plain_data(provider_details))
+    return merged
+
+
 def _prompt_project_mk8s_cluster_choice(
     *,
     project_id: str,
@@ -9081,6 +9970,20 @@ def _collect_soperator_snapshot_for_nebius_mk8s_cluster(
             kube_context=spec.context_name,
             extra_env={"KUBECONFIG": str(kubeconfig_path)},
         )
+    try:
+        provider_snapshot = _collect_provider_mk8s_template_snapshot(
+            payload,
+            cluster_id=cluster_id,
+        )
+    except Exception as exc:
+        snapshot.setdefault("provider_collection_errors", []).append(
+            {
+                "command": "nebius mk8s cluster/node-group inventory",
+                "message": str(exc),
+            }
+        )
+    else:
+        snapshot = _merge_provider_mk8s_template_snapshot(snapshot, provider_snapshot)
     return snapshot, spec.context_name
 
 
@@ -9092,9 +9995,25 @@ def _prompt_soperator_onboarding_target_row(
     storage_mode: str | None = None,
     compute_mode: str | None = None,
     source_version: str | None = None,
+    worker_rollout_strategy: str | None = None,
+    worker_wave_groups: int | None = None,
+    worker_wave_percent: int | None = None,
+    max_parallel_worker_groups: int | None = None,
+    strategy_max_surge_count: int | None = None,
+    strategy_max_unavailable_count: int | None = None,
+    strategy_drain_timeout: str | None = None,
 ) -> dict[str, Any]:
     explicit_storage_mode = storage_mode is not None
     explicit_compute_mode = compute_mode is not None
+    explicit_rollout_options = _soperator_rollout_options_provided(
+        worker_rollout_strategy=worker_rollout_strategy,
+        worker_wave_groups=worker_wave_groups,
+        worker_wave_percent=worker_wave_percent,
+        max_parallel_worker_groups=max_parallel_worker_groups,
+        strategy_max_surge_count=strategy_max_surge_count,
+        strategy_max_unavailable_count=strategy_max_unavailable_count,
+        strategy_drain_timeout=strategy_drain_timeout,
+    )
     normalized_storage_mode = _normalize_soperator_onboarding_storage_mode(storage_mode)
     normalized_compute_mode = _normalize_soperator_onboarding_compute_mode(compute_mode)
     resolved_project_id = _non_empty_text(project_id)
@@ -9147,6 +10066,8 @@ def _prompt_soperator_onboarding_target_row(
     )
     _print_soperator_onboarding_report_summary(report)
     required_storage_mode = _soperator_onboarding_required_storage_mode_for_report(report)
+    if not explicit_storage_mode or not explicit_compute_mode:
+        _print_soperator_onboarding_mode_choice_guidance()
     if not explicit_storage_mode:
         storage_mode, should_stop = _prompt_scalar_override(
             "deploy.targets[].soperator_onboarding.storage_mode",
@@ -9190,7 +10111,24 @@ def _prompt_soperator_onboarding_target_row(
         snapshot=snapshot,
         pinned_chart_version=chart_version,
         pinned_app_version=app_version,
+        rollout_manifest=_soperator_rollout_manifest_from_options(
+            worker_rollout_strategy=worker_rollout_strategy,
+            worker_wave_groups=worker_wave_groups,
+            worker_wave_percent=worker_wave_percent,
+            max_parallel_worker_groups=max_parallel_worker_groups,
+            strategy_max_surge_count=strategy_max_surge_count,
+            strategy_max_unavailable_count=strategy_max_unavailable_count,
+            strategy_drain_timeout=strategy_drain_timeout,
+        ),
     )
+    if (
+        _soperator_target_row_requires_external_node_template_rollout(target_row)
+        and not explicit_rollout_options
+    ):
+        _apply_soperator_rollout_manifest_to_target_row(
+            target_row,
+            _prompt_soperator_onboarding_rollout_manifest(target_row),
+        )
     return target_row
 
 
@@ -9263,6 +10201,13 @@ def _soperator_onboarding_target_row_from_options(
     compute_mode: str | None = None,
     source_version: str | None = None,
     interactive: bool = False,
+    worker_rollout_strategy: str | None = None,
+    worker_wave_groups: int | None = None,
+    worker_wave_percent: int | None = None,
+    max_parallel_worker_groups: int | None = None,
+    strategy_max_surge_count: int | None = None,
+    strategy_max_unavailable_count: int | None = None,
+    strategy_drain_timeout: str | None = None,
 ) -> dict[str, Any]:
     explicit_storage_mode = storage_mode is not None
     explicit_compute_mode = compute_mode is not None
@@ -9345,6 +10290,15 @@ def _soperator_onboarding_target_row_from_options(
         snapshot=snapshot,
         pinned_chart_version=chart_version,
         pinned_app_version=app_version,
+        rollout_manifest=_soperator_rollout_manifest_from_options(
+            worker_rollout_strategy=worker_rollout_strategy,
+            worker_wave_groups=worker_wave_groups,
+            worker_wave_percent=worker_wave_percent,
+            max_parallel_worker_groups=max_parallel_worker_groups,
+            strategy_max_surge_count=strategy_max_surge_count,
+            strategy_max_unavailable_count=strategy_max_unavailable_count,
+            strategy_drain_timeout=strategy_drain_timeout,
+        ),
     )
     return target_row
 
@@ -9504,7 +10458,7 @@ def _apply_soperator_onboarding_to_payload(
     )
     if gpu_app_selection.issues:
         raise RuntimeError(
-            "Soperator onboarding target GPU remediation is incomplete:\n  - "
+            "Soperator onboarding target GPU reconciliation is incomplete:\n  - "
             + "\n  - ".join(gpu_app_selection.issues)
         )
     if ensure_mk8s_gpu_app_rows(payload, app_entries=app_entries):
@@ -10095,6 +11049,31 @@ def _soperator_onboarding_storage_mode_by_target(payload: Mapping[str, Any]) -> 
             )
         if storage_mode in _SOPERATOR_ONBOARDING_STORAGE_MODES:
             result[target_ref] = storage_mode
+    return result
+
+
+def _soperator_onboarding_action_ids_by_target(payload: Mapping[str, Any]) -> dict[str, set[str]]:
+    deploy = payload.get("deploy")
+    targets = deploy.get("targets") if isinstance(deploy, Mapping) else None
+    if not isinstance(targets, list):
+        return {}
+    result: dict[str, set[str]] = {}
+    for row in targets:
+        if not isinstance(row, Mapping) or not deploy_target_is_external_mk8s(row):
+            continue
+        target_ref = normalize_component_token(row.get(INSTANCE_ID_FIELD))
+        if not target_ref:
+            continue
+        onboarding = row.get("soperator_onboarding")
+        actions = onboarding.get("actions") if isinstance(onboarding, Mapping) else None
+        if not isinstance(actions, Sequence) or isinstance(actions, (str, bytes, bytearray)):
+            result[target_ref] = set()
+            continue
+        result[target_ref] = {
+            action_id
+            for raw_action in actions
+            if (action_id := _non_empty_text(raw_action))
+        }
     return result
 
 
@@ -11867,12 +12846,46 @@ def _soperator_nodeset_templates(
     return templates
 
 
+def _soperator_preserve_onboarded_worker_nodesets(
+    *,
+    values: Mapping[str, Any],
+    install_mode: str,
+) -> bool:
+    if install_mode != _SOPERATOR_INSTALL_MODE_ONBOARD_EXISTING_CLUSTER:
+        return False
+    nodesets = values.get("nodesets")
+    if not isinstance(nodesets, list):
+        return False
+    worker_names = {
+        _non_empty_text(item.get("name"))
+        for item in nodesets
+        if isinstance(item, Mapping)
+        if _non_empty_text(item.get("name")).startswith("worker")
+    }
+    if not worker_names:
+        return False
+    partition_config = values.get("partitionConfiguration")
+    partitions = (
+        partition_config.get("partitions") if isinstance(partition_config, Mapping) else None
+    )
+    if not isinstance(partitions, Sequence) or isinstance(partitions, (str, bytes, bytearray)):
+        return False
+    refs = {
+        normalize_component_token(ref)
+        for partition in partitions
+        if isinstance(partition, Mapping)
+        for ref in _soperator_string_list(partition.get("nodeSetRefs"))
+    }
+    return bool(refs and refs <= worker_names)
+
+
 def _materialize_soperator_mapping_chart_values(
     *,
     values: dict[str, Any],
     profile: Mapping[str, Any],
     inputs: Mapping[str, Any],
     install_mode: str,
+    preserve_existing_worker_nodesets: bool = False,
 ) -> None:
     mapping = _soperator_values_node_group_mapping(values)
     role_mapping = _soperator_profile_role_mapping(profile)
@@ -11904,12 +12917,15 @@ def _materialize_soperator_mapping_chart_values(
     generated_nodesets: list[dict[str, Any]] = []
     nodeset_ref_replacements: dict[str, list[str]] = {}
     storage_groups: dict[str, list[str]] = {}
+    preserve_onboarded_worker_nodesets = preserve_existing_worker_nodesets
 
     def _generate_nodesets_from_template(
         *,
         template_name: str,
         group_keys: Sequence[str],
     ) -> None:
+        if preserve_onboarded_worker_nodesets and template_name.startswith("worker"):
+            return
         template = template_nodesets.get(template_name)
         if not isinstance(template, Mapping):
             return
@@ -12015,6 +13031,8 @@ def _materialize_soperator_mapping_chart_values(
             template_name = _non_empty_text(raw_role_config.get("nodeset_template"))
             template_names = [template_name] if template_name else []
         for template_name in template_names:
+            if preserve_onboarded_worker_nodesets and role_name == "worker":
+                continue
             _generate_nodesets_from_template(template_name=template_name, group_keys=group_keys)
 
     worker_role_config = role_mapping.get("worker")
@@ -12031,6 +13049,8 @@ def _materialize_soperator_mapping_chart_values(
         for filesystem_key in worker_filesystem_keys:
             storage_groups.setdefault(filesystem_key, [])
             storage_groups[filesystem_key].extend(group_keys)
+        if preserve_onboarded_worker_nodesets:
+            continue
         _generate_nodesets_from_template(template_name=template_name, group_keys=group_keys)
 
     for filesystem_key, group_keys in storage_groups.items():
@@ -12583,6 +13603,7 @@ def _materialize_soperator_component_defaults(payload: dict[str, Any]) -> bool:
     profile_by_target = _soperator_profile_by_target(payload)
     install_mode_by_target = _soperator_install_mode_by_target(payload)
     onboarding_storage_mode_by_target = _soperator_onboarding_storage_mode_by_target(payload)
+    onboarding_action_ids_by_target = _soperator_onboarding_action_ids_by_target(payload)
 
     infra_rows = _scope_rows(payload, scope="infra")
     apps_rows = _scope_rows(payload, scope="apps")
@@ -12701,18 +13722,31 @@ def _materialize_soperator_component_defaults(payload: dict[str, Any]) -> bool:
                 _profile_mapping(profile_by_target.get(target_ref, {}), "chart"),
                 "values",
             )
+            install_mode = install_mode_by_target.get(
+                target_ref,
+                _default_soperator_install_mode(),
+            )
+            preserve_adopted_worker_nodesets = (
+                install_mode == _SOPERATOR_INSTALL_MODE_ONBOARD_EXISTING_CLUSTER
+                and ONBOARDING_ACTION_ADOPT_SOPERATOR
+                in onboarding_action_ids_by_target.get(target_ref, set())
+                and _soperator_preserve_onboarded_worker_nodesets(
+                    values=values,
+                    install_mode=install_mode,
+                )
+            )
             chart_profile_for_merge = chart_profile
             if (
-                install_mode_by_target.get(
-                    target_ref,
-                    _default_soperator_install_mode(),
-                )
-                == _SOPERATOR_INSTALL_MODE_ONBOARD_EXISTING_CLUSTER
+                install_mode == _SOPERATOR_INSTALL_MODE_ONBOARD_EXISTING_CLUSTER
                 and isinstance(values.get("nodesets"), list)
                 and "nodesets" in chart_profile
             ):
                 chart_profile_for_merge = dict(chart_profile)
                 chart_profile_for_merge.pop("nodesets", None)
+            if preserve_adopted_worker_nodesets and "partitionConfiguration" in chart_profile:
+                if chart_profile_for_merge is chart_profile:
+                    chart_profile_for_merge = dict(chart_profile)
+                chart_profile_for_merge.pop("partitionConfiguration", None)
             _merge_soperator_profile_values(
                 values,
                 chart_profile_for_merge,
@@ -12723,28 +13757,20 @@ def _materialize_soperator_component_defaults(payload: dict[str, Any]) -> bool:
                 values,
                 _soperator_profile_install_mode_chart_values(
                     profile_by_target.get(target_ref, {}),
-                    install_mode=install_mode_by_target.get(
-                        target_ref,
-                        _default_soperator_install_mode(),
-                    ),
+                    install_mode=install_mode,
                 ),
             )
-            _merge_missing_soperator_profile_partitions(values, chart_profile)
-            _materialize_soperator_partition_profile(
-                values=values,
-                profile=profile_by_target.get(target_ref, {}),
-                install_mode=install_mode_by_target.get(
-                    target_ref,
-                    _default_soperator_install_mode(),
-                ),
-            )
+            if not preserve_adopted_worker_nodesets:
+                _merge_missing_soperator_profile_partitions(values, chart_profile)
+                _materialize_soperator_partition_profile(
+                    values=values,
+                    profile=profile_by_target.get(target_ref, {}),
+                    install_mode=install_mode,
+                )
             _materialize_soperator_topology_profile(
                 values=values,
                 profile=profile_by_target.get(target_ref, {}),
-                install_mode=install_mode_by_target.get(
-                    target_ref,
-                    _default_soperator_install_mode(),
-                ),
+                install_mode=install_mode,
             )
             _materialize_soperator_dcgm_exporter_values(
                 values=values,
@@ -12753,27 +13779,32 @@ def _materialize_soperator_component_defaults(payload: dict[str, Any]) -> bool:
             _materialize_soperator_onboarding_storage_mode(
                 values=values,
                 inputs=mk8s_inputs_by_target.get(target_ref, {}),
-                install_mode=install_mode_by_target.get(
-                    target_ref,
-                    _default_soperator_install_mode(),
-                ),
+                install_mode=install_mode,
                 storage_mode=onboarding_storage_mode_by_target.get(target_ref, ""),
             )
             _materialize_soperator_mapping_chart_values(
                 values=values,
                 profile=profile_by_target.get(target_ref, {}),
                 inputs=mk8s_inputs_by_target.get(target_ref, {}),
-                install_mode=install_mode_by_target.get(
-                    target_ref,
-                    _default_soperator_install_mode(),
-                ),
+                install_mode=install_mode,
+                preserve_existing_worker_nodesets=preserve_adopted_worker_nodesets,
             )
             _materialize_soperator_guided_sssd_values(values)
             _soperator_extend_nodeconfigurator_tolerations_from_nodesets(values)
             _remove_internal_activechecks_partition(values)
             current_cluster_name = str(values.get("clusterName", "") or "").strip()
+            install_mode = install_mode_by_target.get(
+                target_ref,
+                _default_soperator_install_mode(),
+            )
+            preserve_adopted_live_cluster_name = (
+                install_mode == _SOPERATOR_INSTALL_MODE_ONBOARD_EXISTING_CLUSTER
+                and ONBOARDING_ACTION_ADOPT_SOPERATOR
+                in onboarding_action_ids_by_target.get(target_ref, set())
+            )
             if not current_cluster_name or (
                 current_cluster_name == "mk8s" and target_ref != "mk8s"
+                and not preserve_adopted_live_cluster_name
             ):
                 values["clusterName"] = target_ref
             slurm_nodes = values.setdefault("slurmNodes", {})
@@ -28807,15 +29838,26 @@ def _metadata_labels(doc: Mapping[str, Any]) -> Mapping[str, Any]:
     return labels if isinstance(labels, Mapping) else {}
 
 
-def _delete_stale_nodeconfigurators(
+_POST_FLUX_STALE_CUSTOM_RESOURCE_TYPES: Mapping[str, str] = {
+    "SlurmCluster": "slurmclusters.slurm.nebius.ai",
+    "NodeConfigurator": "nodeconfigurators.slurm.nebius.ai",
+    "NodeSet": "nodesets.slurm.nebius.ai",
+    "NodeSetPowerState": "nodesetpowerstates.slurm.nebius.ai",
+    "JailedConfig": "jailedconfigs.slurm.nebius.ai",
+}
+
+
+def _delete_stale_soperator_custom_resources(
     docs: Sequence[Mapping[str, Any]],
     *,
     env: Mapping[str, str],
 ) -> None:
-    desired_by_scope: dict[tuple[str, str], set[str]] = {}
+    desired_by_scope: dict[tuple[str, str, str], set[str]] = {}
     deleted_stale = False
     for doc in docs:
-        if doc.get("kind") != "NodeConfigurator":
+        kind = _as_nonempty_str(doc.get("kind"))
+        resource_type = _POST_FLUX_STALE_CUSTOM_RESOURCE_TYPES.get(kind)
+        if not resource_type:
             continue
         api_version = _as_nonempty_str(doc.get("apiVersion"))
         if api_version not in {"slurm.nebius.ai/v1alpha1", "slurm.nebius.ai/v1"}:
@@ -28827,15 +29869,16 @@ def _delete_stale_nodeconfigurators(
         instance = _as_nonempty_str(_metadata_labels(doc).get("app.kubernetes.io/instance"))
         if not instance:
             continue
-        desired_by_scope.setdefault((namespace or "default", instance), set()).add(name)
-    for (namespace, instance), desired_names in sorted(desired_by_scope.items()):
+        desired_by_scope.setdefault((namespace or "default", instance, kind), set()).add(name)
+    for (namespace, instance, kind), desired_names in sorted(desired_by_scope.items()):
+        resource_type = _POST_FLUX_STALE_CUSTOM_RESOURCE_TYPES[kind]
         completed = subprocess.run(
             [
                 "kubectl",
                 "-n",
                 namespace,
                 "get",
-                "nodeconfigurators.slurm.nebius.ai",
+                resource_type,
                 "-l",
                 f"app.kubernetes.io/instance={instance}",
                 "-o",
@@ -28865,7 +29908,7 @@ def _delete_stale_nodeconfigurators(
             if existing_name in desired_names:
                 continue
             console.print(
-                f"Deleting stale NodeConfigurator {namespace}/{existing_name} "
+                f"Deleting stale {kind} {namespace}/{existing_name} "
                 f"for Helm instance {instance}."
             )
             _run_post_flux_kubectl(
@@ -28874,7 +29917,7 @@ def _delete_stale_nodeconfigurators(
                     "-n",
                     namespace,
                     "delete",
-                    "nodeconfigurators.slurm.nebius.ai",
+                    resource_type,
                     existing_name,
                     "--ignore-not-found=true",
                     "--wait=false",
@@ -28885,7 +29928,12 @@ def _delete_stale_nodeconfigurators(
             deleted_stale = True
     if not deleted_stale:
         return
-    for (namespace, _instance), desired_names in sorted(desired_by_scope.items()):
+    nodeconfigurator_scopes = [
+        (namespace, desired_names)
+        for (namespace, _instance, kind), desired_names in sorted(desired_by_scope.items())
+        if kind == "NodeConfigurator"
+    ]
+    for namespace, desired_names in nodeconfigurator_scopes:
         for desired_name in sorted(desired_names):
             _run_post_flux_kubectl(
                 [
@@ -28905,6 +29953,61 @@ def _delete_stale_nodeconfigurators(
                 env=env,
                 timeout=120,
             )
+
+
+def _soperator_custom_resource_namespaces(docs: Sequence[Mapping[str, Any]]) -> tuple[str, ...]:
+    namespaces: set[str] = set()
+    for doc in docs:
+        if _as_nonempty_str(doc.get("apiVersion")) not in {
+            "slurm.nebius.ai/v1alpha1",
+            "slurm.nebius.ai/v1",
+        }:
+            continue
+        if _as_nonempty_str(doc.get("kind")) != "SlurmCluster":
+            continue
+        name_namespace = _metadata_name_namespace(doc)
+        if name_namespace is None:
+            continue
+        _name, namespace = name_namespace
+        namespaces.add(namespace or "soperator")
+    return tuple(sorted(namespaces))
+
+
+def _delete_stale_soperator_activecheck_workloads(
+    docs: Sequence[Mapping[str, Any]],
+    *,
+    env: Mapping[str, str],
+) -> None:
+    for namespace in _soperator_custom_resource_namespaces(docs):
+        _run_post_flux_kubectl(
+            [
+                "kubectl",
+                "-n",
+                namespace,
+                "delete",
+                "cronjob.batch/run-extensive-check-on-reservations",
+                "cronjob.batch/extensive-check",
+                "--ignore-not-found=true",
+                "--wait=false",
+            ],
+            env=env,
+            timeout=120,
+        )
+        _run_post_flux_kubectl(
+            [
+                "kubectl",
+                "-n",
+                namespace,
+                "delete",
+                "job.batch,pod",
+                "-l",
+                "app.kubernetes.io/component=soperatorchecks",
+                "--ignore-not-found=true",
+                "--wait=false",
+            ],
+            env=env,
+            timeout=120,
+        )
 
 
 def _post_flux_webhook_service_refs(
@@ -29052,7 +30155,8 @@ def _apply_post_flux_manifest(manifest_path: Path, *, env: Mapping[str, str]) ->
             _wait_for_post_flux_deployments(base_resource_docs, env=env)
             _wait_for_post_flux_webhook_services(base_resource_docs, env=env)
         if custom_resource_docs:
-            _delete_stale_nodeconfigurators(custom_resource_docs, env=env)
+            _delete_stale_soperator_custom_resources(custom_resource_docs, env=env)
+            _delete_stale_soperator_activecheck_workloads(custom_resource_docs, env=env)
             custom_docs_by_priority: dict[int, list[Mapping[str, Any]]] = {}
             for doc in custom_resource_docs:
                 custom_docs_by_priority.setdefault(
@@ -29780,6 +30884,289 @@ class DeployRunSummary:
     gitops_bootstrap_commands: tuple[str, ...] = ()
 
 
+def _soperator_deploy_migration_blockers_from_config(
+    config: Any,
+    selected_targets: Sequence[Mapping[str, Any]],
+) -> tuple[tuple[str, Mapping[str, Any]], ...]:
+    selected_refs = {
+        normalize_component_token(target.get(TARGET_REF_FIELD) or target.get("target_ref"))
+        for target in selected_targets
+    }
+    selected_refs = {target_ref for target_ref in selected_refs if target_ref}
+    if not selected_refs:
+        return ()
+    blockers: list[tuple[str, Mapping[str, Any]]] = []
+    for target_ref in soperator_onboarding_target_refs(config):
+        normalized_target_ref = normalize_component_token(target_ref)
+        if normalized_target_ref not in selected_refs:
+            continue
+        target = soperator_onboarding_target(config, target_ref=normalized_target_ref)
+        onboarding = target.get("soperator_onboarding") if isinstance(target, Mapping) else {}
+        if not isinstance(onboarding, Mapping):
+            continue
+        if _soperator_migration_action_flags(onboarding)["migration_required"]:
+            blockers.append((normalized_target_ref, onboarding))
+    return tuple(blockers)
+
+
+def _soperator_deploy_migration_blockers(
+    config: Any,
+    selected_targets: Sequence[Mapping[str, Any]],
+    *,
+    source_config_path: Path | None = None,
+) -> tuple[tuple[str, Mapping[str, Any]], ...]:
+    blockers = list(
+        _soperator_deploy_migration_blockers_from_config(config, selected_targets)
+    )
+    seen_target_refs = {target_ref for target_ref, _onboarding in blockers}
+    if source_config_path is None:
+        return tuple(blockers)
+    try:
+        source_payload = _load_config_payload(source_config_path)
+    except Exception:
+        return tuple(blockers)
+    for target_ref, onboarding in _soperator_deploy_migration_blockers_from_config(
+        source_payload,
+        selected_targets,
+    ):
+        if target_ref in seen_target_refs:
+            continue
+        seen_target_refs.add(target_ref)
+        blockers.append((target_ref, onboarding))
+    return tuple(blockers)
+
+
+def _raise_if_deploy_would_bypass_soperator_migration(
+    config: Any,
+    *,
+    config_path: Path,
+    selected_targets: Sequence[Mapping[str, Any]],
+) -> None:
+    blockers = _soperator_deploy_migration_blockers(
+        config,
+        selected_targets,
+        source_config_path=config_path,
+    )
+    if not blockers:
+        return
+    config_arg = _config_cli_arg(config_path)
+    target_list = ", ".join(target_ref for target_ref, _onboarding in blockers)
+    lines = [
+        (
+            "Deploy is blocked for migration-required external Soperator onboarding "
+            f"target(s): {target_list}."
+        ),
+        (
+            "Run `nebius-cxcli render` first if config.yaml changed, then use "
+            "`ext-soperator migrate`; deploy only applies the rendered Terraform/Flux "
+            "desired state and cannot perform the required ad hoc Nebius API migration "
+            "phases."
+        ),
+    ]
+    for target_ref, onboarding in blockers:
+        target_arg = shlex.quote(target_ref)
+        lines.extend(
+            [
+                f"- {target_ref}: " + _soperator_migration_reason_text(onboarding),
+                (
+                    "  `nebius-cxcli ext-soperator migrate "
+                    f"{config_arg} --target {target_arg} --dry-run`"
+                ),
+                (
+                    "  `nebius-cxcli ext-soperator migrate "
+                    f"{config_arg} --target {target_arg} --execute --approve` "
+                    "(after the dry run is accepted)"
+                ),
+            ]
+        )
+    lines.append(
+        "Use migrate for reruns/resume while these actions remain selected. A "
+        "fully completed `ext-soperator migrate --execute` refreshes config.yaml "
+        "from live post-migration discovery when possible; if refresh was skipped, "
+        "rerun `ext-soperator onboard`, rerun render, then deploy only for normal "
+        "rendered reconciliation if needed."
+    )
+    raise RuntimeError("\n".join(lines))
+
+
+def _soperator_chart_version_for_target(config: Any, *, target_ref: str) -> str:
+    payload = to_plain_data(config)
+    if not isinstance(payload, Mapping):
+        return ""
+    charts = (payload.get("apps") if isinstance(payload.get("apps"), Mapping) else {}).get(
+        "charts"
+    )
+    normalized_target_ref = normalize_component_token(target_ref)
+    if not isinstance(charts, list) or not normalized_target_ref:
+        return ""
+    for row in charts:
+        if not isinstance(row, Mapping):
+            continue
+        if str(row.get("id", "") or "").strip() != "soperator":
+            continue
+        if row.get("enabled") is False:
+            continue
+        row_target_ref = normalize_component_token(row.get("instance_id") or row.get("target_ref"))
+        if row_target_ref != normalized_target_ref:
+            continue
+        return str(row.get("version", "") or row.get("chart_version", "") or "").strip()
+    return ""
+
+
+def _deploy_owned_soperator_adoption_cleanup_targets(
+    config: Any,
+    selected_targets: Sequence[Mapping[str, Any]],
+    *,
+    target_ref: str | None = None,
+) -> tuple[tuple[str, str], ...]:
+    selected_refs = {
+        normalize_component_token(target.get(TARGET_REF_FIELD) or target.get("target_ref"))
+        for target in selected_targets
+    }
+    selected_refs = {ref for ref in selected_refs if ref}
+    requested_ref = normalize_component_token(target_ref)
+    cleanup_targets: list[tuple[str, str]] = []
+    for onboarding_target_ref in soperator_onboarding_target_refs(config):
+        normalized_target_ref = normalize_component_token(onboarding_target_ref)
+        if not normalized_target_ref:
+            continue
+        if requested_ref and normalized_target_ref != requested_ref:
+            continue
+        if selected_refs and normalized_target_ref not in selected_refs:
+            continue
+        target = soperator_onboarding_target(config, target_ref=normalized_target_ref)
+        onboarding = target.get("soperator_onboarding") if isinstance(target, Mapping) else {}
+        if not isinstance(onboarding, Mapping):
+            continue
+        actions = {
+            str(action or "").strip()
+            for action in onboarding.get("actions", []) or []
+            if str(action or "").strip()
+        }
+        if ONBOARDING_ACTION_ADOPT_SOPERATOR not in actions:
+            continue
+        if _soperator_migration_action_flags(onboarding)["migration_required"]:
+            continue
+        target_version = str(onboarding.get("target_version", "") or "").strip()
+        if not target_version:
+            target_version = _soperator_chart_version_for_target(
+                config,
+                target_ref=normalized_target_ref,
+            )
+        cleanup_targets.append((normalized_target_ref, target_version))
+    return tuple(cleanup_targets)
+
+
+def _soperator_cleanup_kube_context(
+    config: Any,
+    *,
+    target_ref: str,
+    extra_env: Mapping[str, str] | None,
+) -> str:
+    env_context = str((extra_env or {}).get(GRAFANA_TARGET_KUBE_CONTEXT_ENV, "") or "").strip()
+    if env_context:
+        return env_context
+    target = soperator_onboarding_target(config, target_ref=target_ref)
+    if isinstance(target, Mapping):
+        config_context = str(target.get("kube_context", "") or "").strip()
+        if config_context:
+            return config_context
+    completed = subprocess.run(
+        ["kubectl", "config", "current-context"],
+        env=_post_flux_subprocess_env(extra_env or {}),
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    if completed.returncode == 0:
+        return str(completed.stdout or "").strip()
+    return ""
+
+
+def _deploy_soperator_cleanup_command_runner(
+    extra_env: Mapping[str, str] | None,
+) -> Callable[..., SoperatorMigrationCommandResult]:
+    env = _post_flux_subprocess_env(extra_env or {})
+
+    def _run(
+        args: Sequence[str],
+        *,
+        input_text: str | None = None,
+        timeout_seconds: int = 300,
+        check: bool = True,
+    ) -> SoperatorMigrationCommandResult:
+        completed = subprocess.run(
+            [str(part) for part in args],
+            input=input_text,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+        )
+        result = SoperatorMigrationCommandResult(
+            args=tuple(str(part) for part in args),
+            returncode=int(completed.returncode),
+            stdout=completed.stdout or "",
+            stderr=completed.stderr or "",
+        )
+        if check and result.returncode != 0:
+            detail = _first_non_empty_line(result.stderr or result.stdout or "")
+            command = " ".join(shlex.quote(part) for part in result.args)
+            raise RuntimeError(
+                "Failed to retire old source Soperator desired state during deploy"
+                + (f": {detail}" if detail else "")
+                + f"\nCommand: {command}"
+            )
+        return result
+
+    return _run
+
+
+def _retire_deploy_owned_soperator_source_state(
+    config: Any,
+    *,
+    selected_targets: Sequence[Mapping[str, Any]],
+    target_ref: str | None = None,
+    extra_env: Mapping[str, str] | None,
+) -> None:
+    cleanup_targets = _deploy_owned_soperator_adoption_cleanup_targets(
+        config,
+        selected_targets,
+        target_ref=target_ref,
+    )
+    if not cleanup_targets:
+        return
+    if not shutil.which("kubectl"):
+        raise RuntimeError(
+            "kubectl is required to retire old source Soperator desired state during deploy"
+        )
+    command_runner = _deploy_soperator_cleanup_command_runner(extra_env)
+    for cleanup_target_ref, target_version in cleanup_targets:
+        if not target_version:
+            raise RuntimeError(
+                "Cannot retire old source Soperator desired state during deploy for "
+                f"{cleanup_target_ref}: target Soperator version is missing. Rerun "
+                "`nebius-cxcli ext-soperator onboard`, then `nebius-cxcli render`."
+            )
+        kube_context = _soperator_cleanup_kube_context(
+            config,
+            target_ref=cleanup_target_ref,
+            extra_env=extra_env,
+        )
+        if not kube_context:
+            raise RuntimeError(
+                "Cannot retire old source Soperator desired state during deploy for "
+                f"{cleanup_target_ref}: no Kubernetes context is available."
+            )
+        lines = _retire_stale_source_soperator_helm_releases(
+            command_runner=command_runner,
+            kube_context=kube_context,
+            target_version=target_version,
+        )
+        for line in lines:
+            console.print(line)
+
+
 def _deploy_generated_artifacts(
     config: Any,
     paths: ProjectPaths,
@@ -29807,6 +31194,11 @@ def _deploy_generated_artifacts(
         manifest,
         requested_target_ref=requested_target_ref,
         all_targets=all_targets,
+    )
+    _raise_if_deploy_would_bypass_soperator_migration(
+        config,
+        config_path=paths.config_path,
+        selected_targets=selected_targets,
     )
     mysterybox_payload_env = _run_deploy_preflight(
         config,
@@ -29975,7 +31367,19 @@ def _deploy_generated_artifacts(
                         except Exception as exc:
                             validation_error = exc
                             break
+                    _retire_deploy_owned_soperator_source_state(
+                        config,
+                        selected_targets=selected_targets,
+                        target_ref=target_ref,
+                        extra_env=kube_env,
+                    )
                     _apply_rendered_flux(target_paths, extra_env=kube_env)
+                    _retire_deploy_owned_soperator_source_state(
+                        config,
+                        selected_targets=selected_targets,
+                        target_ref=target_ref,
+                        extra_env=kube_env,
+                    )
                     grafana_statuses.extend(
                         _collect_grafana_status_after_flux(
                             config,
@@ -30020,7 +31424,17 @@ def _deploy_generated_artifacts(
                 externally_managed_secret_keys=_mysterybox_eso_rendered_secret_keys(paths),
             )
             _ensure_soperator_backup_runtime_before_flux(config, extra_env=None)
+            _retire_deploy_owned_soperator_source_state(
+                config,
+                selected_targets=selected_targets,
+                extra_env=None,
+            )
             _apply_rendered_flux(paths, extra_env=None)
+            _retire_deploy_owned_soperator_source_state(
+                config,
+                selected_targets=selected_targets,
+                extra_env=None,
+            )
             grafana_statuses.extend(_collect_grafana_status_after_flux(config, extra_env=None))
             bootstrap_command = _warn_if_flux_gitops_not_bootstrapped(
                 config,
@@ -34256,8 +35670,11 @@ def component_add_command(
         "the optional cxcli logical target id saved as deploy.targets[].instance_id; "
         "when omitted, cxcli derives it from the live cluster name. "
         f"The command updates config.yaml and writes {SOURCE_SOPERATOR_DISCOVERY_REPORT_NAME}; "
+        "reruns refresh read-only source discovery and Nebius provider node-template "
+        "inventory by node group before deciding whether external node-template "
+        "migration is still needed; "
         "next run: nebius-cxcli validate <config.yaml>; nebius-cxcli render "
-        "<config.yaml>. For install/adopt-only targets with no migration actions, "
+        "<config.yaml>. For install/adopt-only targets with no migration-owned actions, "
         "run nebius-cxcli deploy <config.yaml> to reconcile the generated desired "
         "state and produce deploy-report.md; use deploy --target <target-id> only "
         "to narrow a run. For migration-required targets, "
@@ -34389,6 +35806,73 @@ def soperator_onboard_command(
             ),
         ),
     ] = None,
+    worker_rollout_strategy: Annotated[
+        str | None,
+        typer.Option(
+            "--worker-rollout-strategy",
+            help=(
+                "External worker node-template rollout strategy to persist in config.yaml: "
+                "safe-surge or zero-surge."
+            ),
+        ),
+    ] = None,
+    worker_wave_groups: Annotated[
+        int | None,
+        typer.Option(
+            "--worker-wave-groups",
+            help=(
+                "Worker rollout wave budget as a fixed number of worker groups. "
+                "Mutually exclusive with --worker-wave-percent."
+            ),
+        ),
+    ] = None,
+    worker_wave_percent: Annotated[
+        int | None,
+        typer.Option(
+            "--worker-wave-percent",
+            help=(
+                "Worker rollout wave budget as a percentage of worker groups, rounded "
+                "up to at least one. Mutually exclusive with --worker-wave-groups."
+            ),
+        ),
+    ] = None,
+    max_parallel_worker_groups: Annotated[
+        int | None,
+        typer.Option(
+            "--max-parallel-worker-groups",
+            help="Maximum worker node groups to update in one worker rollout wave.",
+        ),
+    ] = None,
+    strategy_max_surge_count: Annotated[
+        int | None,
+        typer.Option(
+            "--strategy-max-surge-count",
+            help=(
+                "Nebius node-group strategy max_surge count for each active worker group. "
+                "Default: 1."
+            ),
+        ),
+    ] = None,
+    strategy_max_unavailable_count: Annotated[
+        int | None,
+        typer.Option(
+            "--strategy-max-unavailable-count",
+            help=(
+                "Nebius node-group strategy max_unavailable count for each active worker "
+                "group. Default: 0."
+            ),
+        ),
+    ] = None,
+    strategy_drain_timeout: Annotated[
+        str | None,
+        typer.Option(
+            "--strategy-drain-timeout",
+            help=(
+                "Nebius node-group strategy drain timeout for each active worker group: "
+                "none or an explicit Go-style duration such as 30m. Default: 30m."
+            ),
+        ),
+    ] = None,
     validate_sources: Annotated[
         bool,
         typer.Option(
@@ -34447,6 +35931,13 @@ def soperator_onboard_command(
                     provider_lookup=provider_lookup,
                     source_version=source_version_opt,
                     compute_mode=compute_mode_opt,
+                    worker_rollout_strategy=worker_rollout_strategy,
+                    worker_wave_groups=worker_wave_groups,
+                    worker_wave_percent=worker_wave_percent,
+                    max_parallel_worker_groups=max_parallel_worker_groups,
+                    strategy_max_surge_count=strategy_max_surge_count,
+                    strategy_max_unavailable_count=strategy_max_unavailable_count,
+                    strategy_drain_timeout=strategy_drain_timeout,
                 )
             else:
                 target_row = _prompt_soperator_onboarding_target_row(
@@ -34456,6 +35947,13 @@ def soperator_onboard_command(
                     storage_mode=storage_mode_opt,
                     compute_mode=compute_mode_opt,
                     source_version=source_version_opt,
+                    worker_rollout_strategy=worker_rollout_strategy,
+                    worker_wave_groups=worker_wave_groups,
+                    worker_wave_percent=worker_wave_percent,
+                    max_parallel_worker_groups=max_parallel_worker_groups,
+                    strategy_max_surge_count=strategy_max_surge_count,
+                    strategy_max_unavailable_count=strategy_max_unavailable_count,
+                    strategy_drain_timeout=strategy_drain_timeout,
                 )
         else:
             target_row = _soperator_onboarding_target_row_from_options(
@@ -34468,6 +35966,13 @@ def soperator_onboard_command(
                 compute_mode=compute_mode_opt,
                 source_version=source_version_opt,
                 interactive=interactive_mode,
+                worker_rollout_strategy=worker_rollout_strategy,
+                worker_wave_groups=worker_wave_groups,
+                worker_wave_percent=worker_wave_percent,
+                max_parallel_worker_groups=max_parallel_worker_groups,
+                strategy_max_surge_count=strategy_max_surge_count,
+                strategy_max_unavailable_count=strategy_max_unavailable_count,
+                strategy_drain_timeout=strategy_drain_timeout,
             )
 
         source_report_path = _write_soperator_source_discovery_report_from_target_row(
@@ -34542,6 +36047,7 @@ def soperator_onboard_command(
             config_path,
             target_ref=target_ref,
             migration_required=_soperator_migration_action_flags(onboarding)["migration_required"],
+            onboarding=onboarding,
         )
     except typer.Exit:
         raise
@@ -34573,12 +36079,19 @@ _SOPERATOR_MIGRATION_EXECUTOR_CONTRACT_LINES = (
     "External node-template contract: onboarded external targets are not "
     "Terraform-owned, so --execute uses direct Nebius updates for Kubernetes "
     "version, node OS image, and Nebius GPU driver preset. Control plane is "
-    "upgraded first; node groups are then updated one group at a time with "
-    "temporary zero-surge strategy (max_surge=0, max_unavailable=1, "
-    "drain_timeout=30m) and original strategy restore.",
-    "Worker node-template quota contract: preserved worker node groups stay in "
-    "place and do not require extra worker quota; active group capacity may be "
-    "reduced by one node during rollout.",
+    "upgraded first; service-role node groups are then updated one group at a "
+    "time with temporary zero-surge strategy (max_surge=0, max_unavailable=1, "
+    "drain_timeout=30m), while worker node groups use safe-surge by default "
+    "(max_surge=1, max_unavailable=0, drain_timeout=30m) in bounded "
+    "parallel waves. Set worker_group_strategy.drain_timeout to none to wait "
+    "indefinitely instead of allowing provider drain fallback. cxcli restores "
+    "each node group's original strategy.",
+    "Worker node-template quota contract: safe-surge preserved worker groups "
+    "require max_surge_count temporary surge node(s) for each worker group in "
+    "the active wave; cxcli checks the required spare quota and GPU capacity "
+    "and requires selected worker nodes to start Ready and schedulable before "
+    "mutation. Operators can explicitly select zero-surge to avoid surge worker "
+    "quota at the cost of temporary active-group capacity reduction.",
     "Status contract: approved --execute prints phase-aware Soperator "
     "migration status; target remediation phases report MK8s health, storage "
     "phases report SFS/PVC progress and continuity, while compute and cutover "
@@ -34587,10 +36100,12 @@ _SOPERATOR_MIGRATION_EXECUTOR_CONTRACT_LINES = (
     "deploy.targets[].validations.mk8s_gpu.* checks from config.yaml, including "
     "operator readiness, GPU Visibility, and NCCL when enabled; it also runs "
     "the required Soperator/Slurm smoke validation, including SlurmCluster "
-    "availability, Slurm CLI access, and a one-task srun job. Validation JSON "
-    "details are written under generated/reports/, MK8s GPU checks refresh "
-    "deploy-report.md, and migrate writes migrate-report.md with phase, "
-    "validation, and event summaries.",
+    "availability, Slurm CLI access, a one-task srun job, and a Slurm NCCL "
+    "benchmark using two idle GPU Slurm nodes when available or the only idle "
+    "multi-GPU Slurm node otherwise. Validation JSON "
+    "details are written under generated/reports/, migrate-report.md includes "
+    "the Soperator/Slurm and MK8s GPU validation rollups, and deploy-report.md "
+    "is refreshed as a secondary deploy-compatible MK8s GPU summary.",
     "Failure handling contract: mutating phases watch Nebius, Kubernetes, "
     "Soperator, and Slurm signals; complete only when prerequisites are absent "
     "or satisfied; and checkpoint pending gates before approval or retirement.",
@@ -34600,11 +36115,169 @@ _SOPERATOR_MIGRATION_EXECUTOR_CONTRACT_LINES = (
     "actions against live state and retries them if they drift.",
     "Completion contract: before reporting success, --execute repeats the final "
     "MK8s readiness check for accepted external node-template work, verifies the "
-    "target Helm release workloads, retires old source-family Flux "
-    "HelmRelease/Kustomization desired state and Helm release records, preserves "
-    "shared/storage resources, and fails only if stale source-family releases "
-    "remain afterward.",
+    "target Helm release workloads, suspends old source-family Flux "
+    "Kustomization desired state, deletes suspended old source-family Flux "
+    "HelmRelease records, retires stale profile-derived source-family Helm "
+    "release records, preserves shared/storage resources, and fails only if "
+    "stale source-family releases remain afterward.",
 )
+_SOPERATOR_MIGRATION_PLAN_TOPIC_STYLES = {
+    "Soperator migration target": "bold cyan",
+    "Config": "cyan",
+    "Source discovery report": "cyan",
+    "Onboarding state": "bold blue",
+    "Source version": "blue",
+    "Target version": "blue",
+    "Storage mode": "bold magenta",
+    "Compute mode": "bold magenta",
+    "Migration required": "bold yellow",
+    "Storage migration required": "yellow",
+    "Compute migration required": "yellow",
+    "Soperator upgrade required": "yellow",
+    "External node-template upgrade required": "yellow",
+    "Target GPU stack reconciliation required": "yellow",
+    "Worker rollout strategy": "bold cyan",
+    "Worker wave parallelism": "bold cyan",
+    "Worker per-group strategy": "bold cyan",
+    "Worker spare capacity required": "bold yellow",
+    "Worker drain timeout": "yellow",
+    "Service-role rollout": "cyan",
+    "Planned worker waves": "cyan",
+    "Migration phases": "bold magenta",
+    "Live executor contract": "bold blue",
+    "External node-template contract": "bold blue",
+    "Worker node-template quota contract": "bold blue",
+    "Status contract": "bold blue",
+    "Validation contract": "bold blue",
+    "Failure handling contract": "bold blue",
+    "Resume contract": "bold blue",
+    "Completion contract": "bold blue",
+    "Execution mode": "bold green",
+}
+_SOPERATOR_MIGRATION_REQUIRED_TOPICS = frozenset(
+    {
+        "Migration required",
+        "Storage migration required",
+        "Compute migration required",
+        "Soperator upgrade required",
+        "External node-template upgrade required",
+        "Target GPU stack reconciliation required",
+    }
+)
+
+
+def _rich_markup(text: str, style: str) -> str:
+    return f"[{style}]{escape(text)}[/{style}]"
+
+
+def _style_soperator_migration_status_value(value: str) -> str:
+    status = value.strip()
+    if not status:
+        return escape(value)
+    prefix = value[: len(value) - len(value.lstrip())]
+    suffix = value[len(prefix) + len(status) :]
+    normalized = status.rstrip(".").lower()
+    style = {
+        "yes": "bold yellow",
+        "no": "green",
+        "dry-run; no cluster changes were made": "bold green",
+        "execute": "bold yellow",
+        "complete": "green",
+        "planned": "yellow",
+        "pending": "bold yellow",
+        "failed": "bold red",
+        "skipped": "dim",
+    }.get(normalized)
+    if not style:
+        return escape(value)
+    return f"{escape(prefix)}{_rich_markup(status, style)}{escape(suffix)}"
+
+
+def _style_soperator_migration_phase_detail(rest: str) -> str:
+    prefix = rest[: len(rest) - len(rest.lstrip())]
+    remainder = rest[len(prefix) :]
+    if not remainder:
+        return escape(rest)
+    status, separator, detail = remainder.partition(" ")
+    return (
+        escape(prefix)
+        + _style_soperator_migration_status_value(status)
+        + escape(separator + detail)
+    )
+
+
+def _style_soperator_migration_plan_line(line: str) -> str:
+    phase_label, phase_separator, phase_rest = line.partition(":")
+    if line.startswith("- ") and phase_separator:
+        return (
+            _rich_markup(phase_label, "cyan")
+            + escape(phase_separator)
+            + _style_soperator_migration_phase_detail(phase_rest)
+        )
+
+    label, separator, rest = line.partition(":")
+    style = _SOPERATOR_MIGRATION_PLAN_TOPIC_STYLES.get(label)
+    if not separator or style is None:
+        return escape(line)
+    styled_rest = (
+        _style_soperator_migration_status_value(rest)
+        if label in _SOPERATOR_MIGRATION_REQUIRED_TOPICS or label == "Execution mode"
+        else escape(rest)
+    )
+    return _rich_markup(label + separator, style) + styled_rest
+
+
+def _style_soperator_migration_status_message(message: str) -> str:
+    styled = escape(message)
+    replacements = (
+        ("Soperator migration status", "[bold cyan]Soperator migration status[/bold cyan]"),
+        ("MK8s Node Groups", "[bold white]MK8s Node Groups[/bold white]"),
+        ("Slurm Workers", "[bold white]Slurm Workers[/bold white]"),
+        ("Soperator degraded", "Soperator [bold yellow]degraded[/bold yellow]"),
+        ("Soperator down", "Soperator [bold red]down[/bold red]"),
+        ("(degraded):", "([bold yellow]degraded[/bold yellow]):"),
+        ("(down):", "([bold red]down[/bold red]):"),
+        ("(draining):", "([bold yellow]draining[/bold yellow]):"),
+        ("(unknown):", "([yellow]unknown[/yellow]):"),
+        ("(serving):", "([green]serving[/green]):"),
+        ("node-upgrading (down)", "[bold red]node-upgrading (down)[/bold red]"),
+        ("NotReady (down)", "[bold red]NotReady (down)[/bold red]"),
+        ("down (down)", "[bold red]down (down)[/bold red]"),
+        ("unknown (down)", "[bold red]unknown (down)[/bold red]"),
+        ("invalid (down)", "[bold red]invalid (down)[/bold red]"),
+        ("fail (down)", "[bold red]fail (down)[/bold red]"),
+        ("failing (down)", "[bold red]failing (down)[/bold red]"),
+        ("node-upgrading (cordoned)", "[bold yellow]node-upgrading (cordoned)[/bold yellow]"),
+        ("degraded:", "[bold yellow]degraded:[/bold yellow]"),
+        ("down:", "[bold red]down:[/bold red]"),
+        ("draining:", "[bold yellow]draining:[/bold yellow]"),
+        ("unknown:", "[yellow]unknown:[/yellow]"),
+        ("serving:", "[green]serving:[/green]"),
+    )
+    for old, new in replacements:
+        styled = styled.replace(old, new)
+    return styled
+
+
+@contextmanager
+def _soperator_migration_status_emitter() -> Iterator[Callable[[str], None]]:
+    initial_message = (
+        "[cyan]Preparing Soperator migration execute: verifying live source, "
+        "checkpoint, quota, and migration plan...[/cyan]"
+    )
+    if getattr(console, "is_terminal", False) and hasattr(console, "status"):
+        with console.status(initial_message, spinner="dots") as status:
+
+            def _emit_interactive(message: str) -> None:
+                status.update(_style_soperator_migration_status_message(message))
+
+            yield _emit_interactive
+        return
+
+    def _emit_log(message: str) -> None:
+        console.print(_style_soperator_migration_status_message(message), soft_wrap=True)
+
+    yield _emit_log
 
 
 def _resolve_soperator_migration_target_ref(
@@ -34689,11 +36362,47 @@ def _soperator_migration_action_flags(onboarding: Mapping[str, Any]) -> dict[str
         ),
         "compute_migration_required": ONBOARDING_ACTION_PLAN_COMPUTE_MIGRATION in actions,
         "soperator_upgrade_required": ONBOARDING_ACTION_UPGRADE_SOPERATOR in actions,
-        "target_gpu_remediation_required": ONBOARDING_ACTION_REMEDIATE_TARGET_GPU_STACK in actions,
+        "target_gpu_reconciliation_required": (
+            ONBOARDING_ACTION_RECONCILE_TARGET_GPU_STACK in actions
+        ),
         "external_node_template_upgrade_required": (
             ONBOARDING_ACTION_UPGRADE_EXTERNAL_NODE_TEMPLATE in actions
         ),
     }
+
+
+def _require_soperator_migration_actions(
+    *,
+    config_path: Path,
+    target_ref: str,
+    onboarding: Mapping[str, Any],
+) -> None:
+    if _soperator_migration_action_flags(onboarding)["migration_required"]:
+        return
+    selected_actions = sorted(
+        {
+            str(action or "").strip()
+            for action in onboarding.get("actions", []) or []
+            if str(action or "").strip()
+        }
+    )
+    selected_detail = (
+        " Selected onboarding actions are deploy-owned for this command: "
+        + ", ".join(selected_actions)
+        + "."
+        if selected_actions
+        else " No onboarding actions are selected."
+    )
+    raise RuntimeError(
+        f"Soperator target '{target_ref}' has no migration-owned onboarding actions. "
+        "`ext-soperator migrate` is only for accepted onboarding plans that contain "
+        "storage migration, compute migration, Soperator upgrade, or external "
+        f"MK8s node-template upgrade actions.{selected_detail} Run "
+        f"`nebius-cxcli validate {config_path}`, `nebius-cxcli render {config_path}`, "
+        f"then `nebius-cxcli deploy {config_path}` to reconcile deploy-owned work. "
+        f"Use `nebius-cxcli deploy {config_path} --target {target_ref}` only to narrow "
+        "one deliberate run."
+    )
 
 
 def _soperator_migration_output_phases(
@@ -34745,7 +36454,7 @@ def _soperator_migration_output_phases(
         output_phases.insert(insert_at, external_node_template_phase)
     if (
         output_phases
-        and flags["target_gpu_remediation_required"]
+        and flags["target_gpu_reconciliation_required"]
         and not any(
             str(phase.get("id", "") or "").strip() == _SOPERATOR_TARGET_GPU_STACK_PHASE_ID
             for phase in output_phases
@@ -34753,7 +36462,7 @@ def _soperator_migration_output_phases(
     ):
         target_gpu_phase = {
             "id": _SOPERATOR_TARGET_GPU_STACK_PHASE_ID,
-            "title": "Remediate target MK8s GPU operator stack",
+            "title": "Reconcile target MK8s GPU operator stack",
             "status": "planned",
             "requires_customer_approval": True,
         }
@@ -34806,6 +36515,13 @@ def _format_soperator_migration_plan_lines(
     payload: Mapping[str, Any],
     source_report: Mapping[str, Any],
     dry_run: bool,
+    worker_rollout_strategy: str | None = None,
+    worker_wave_groups: int | None = None,
+    worker_wave_percent: int | None = None,
+    max_parallel_worker_groups: int | None = None,
+    strategy_max_surge_count: int | None = None,
+    strategy_max_unavailable_count: int | None = None,
+    strategy_drain_timeout: str | None = None,
 ) -> list[str]:
     target = soperator_onboarding_target(payload, target_ref=target_ref)
     onboarding = target.get("soperator_onboarding") if isinstance(target, Mapping) else {}
@@ -34837,9 +36553,26 @@ def _format_soperator_migration_plan_lines(
         "Soperator upgrade required: " + ("yes" if flags["soperator_upgrade_required"] else "no"),
         "External node-template upgrade required: "
         + ("yes" if flags["external_node_template_upgrade_required"] else "no"),
-        "Target GPU stack remediation required: "
-        + ("yes" if flags["target_gpu_remediation_required"] else "no"),
+        "Target GPU stack reconciliation required: "
+        + ("yes" if flags["target_gpu_reconciliation_required"] else "no"),
     ]
+    if flags["external_node_template_upgrade_required"]:
+        rollout = resolve_external_node_template_rollout(
+            onboarding,
+            strategy=worker_rollout_strategy,
+            worker_wave_groups=worker_wave_groups,
+            worker_wave_percent=worker_wave_percent,
+            max_parallel_worker_groups=max_parallel_worker_groups,
+            strategy_max_surge_count=strategy_max_surge_count,
+            strategy_max_unavailable_count=strategy_max_unavailable_count,
+            strategy_drain_timeout=strategy_drain_timeout,
+        )
+        lines.extend(
+            _external_node_template_rollout_plan_lines(
+                rollout=rollout,
+                source_report=source_report,
+            )
+        )
     if phases:
         lines.append("Migration phases:")
         for raw_phase in phases:
@@ -34915,6 +36648,170 @@ def _soperator_migration_execute_payload(
             yield execution_payload
 
 
+def _soperator_post_migration_provider_snapshot(
+    source_report: Mapping[str, Any],
+) -> dict[str, Any]:
+    snapshot = source_report.get("snapshot")
+    if not isinstance(snapshot, Mapping):
+        return {}
+    provider = snapshot.get("provider")
+    provider_snapshot: dict[str, Any] = {}
+    if isinstance(provider, Mapping) and isinstance(provider.get("mk8s_cluster"), Mapping):
+        provider_snapshot["mk8s_cluster"] = copy.deepcopy(
+            to_plain_data(provider["mk8s_cluster"])
+        )
+    node_groups = snapshot.get("node_groups")
+    if not isinstance(node_groups, Mapping):
+        return provider_snapshot
+    provider_groups: dict[str, Any] = {}
+    for raw_key, raw_group in node_groups.items():
+        if not isinstance(raw_group, Mapping):
+            continue
+        provider_details = raw_group.get("provider")
+        if not isinstance(provider_details, Mapping):
+            continue
+        group_key = normalize_component_token(raw_key)
+        node_group_id = (
+            _non_empty_text(provider_details.get("node_group_id"))
+            or _non_empty_text(raw_group.get("node_group_id"))
+            or group_key
+        )
+        node_group_name = (
+            _non_empty_text(provider_details.get("node_group_name"))
+            or _non_empty_text(raw_group.get("node_group_name"))
+            or group_key
+        )
+        provider_group: dict[str, Any] = {
+            "node_group_id": node_group_id,
+            "node_group_name": node_group_name,
+            "provider": copy.deepcopy(to_plain_data(provider_details)),
+            "gpu": bool(raw_group.get("gpu", False)),
+            "node_count": raw_group.get("node_count", 0),
+        }
+        for key in ("labels", "selector"):
+            value = raw_group.get(key)
+            if isinstance(value, Mapping):
+                provider_group[key] = copy.deepcopy(to_plain_data(value))
+        provider_groups[group_key or node_group_id or node_group_name] = provider_group
+    if provider_groups:
+        provider_snapshot["node_groups"] = provider_groups
+    return provider_snapshot
+
+
+def _refresh_soperator_onboarding_after_completed_migration(
+    *,
+    config_path: Path,
+    payload: Mapping[str, Any],
+    execution_payload: Mapping[str, Any],
+    source_report: Mapping[str, Any],
+    target_ref: str,
+) -> tuple[str, ...]:
+    source_target = soperator_onboarding_target(payload, target_ref=target_ref)
+    execution_target = soperator_onboarding_target(execution_payload, target_ref=target_ref)
+    if not isinstance(source_target, Mapping):
+        return (
+            "Post-migration config refresh skipped: source config no longer contains "
+            f"Soperator target '{target_ref}'. Rerun `ext-soperator onboard` before "
+            "render/deploy reconciliation.",
+        )
+    if not isinstance(execution_target, Mapping):
+        execution_target = source_target
+
+    cluster_id = _non_empty_text(source_target.get("cluster_id"))
+    access = _non_empty_text(source_target.get("access")) or "external"
+    persisted_context = _non_empty_text(source_target.get("kube_context"))
+    collection_context = _non_empty_text(execution_target.get("kube_context")) or persisted_context
+    try:
+        if cluster_id:
+            snapshot, _generated_context = _collect_soperator_snapshot_for_nebius_mk8s_cluster(
+                payload,
+                cluster_id=cluster_id,
+                access=access,
+            )
+        else:
+            if not collection_context:
+                return (
+                    "Post-migration config refresh skipped: no kube_context or cluster_id is "
+                    f"available for Soperator target '{target_ref}'. Rerun "
+                    "`ext-soperator onboard` before render/deploy reconciliation.",
+                )
+            snapshot = collect_kubectl_soperator_snapshot(kube_context=collection_context)
+            provider_snapshot = _soperator_post_migration_provider_snapshot(source_report)
+            if provider_snapshot:
+                snapshot = _merge_provider_mk8s_template_snapshot(snapshot, provider_snapshot)
+    except Exception as exc:
+        return (
+            "Post-migration config refresh skipped: live rediscovery failed: "
+            f"{exc}. Rerun `ext-soperator onboard` before render/deploy reconciliation.",
+        )
+
+    chart_version, app_version = _soperator_catalog_pinned_versions()
+    target_row = _soperator_onboarding_target_defaults(
+        target_ref,
+        kube_context=persisted_context,
+        cluster_id=cluster_id,
+        snapshot=snapshot,
+        pinned_chart_version=chart_version,
+        pinned_app_version=app_version,
+    )
+    target_row["access"] = access
+    onboarding = target_row.get("soperator_onboarding")
+    if not isinstance(onboarding, Mapping):
+        return (
+            "Post-migration config refresh skipped: live rediscovery did not produce "
+            "Soperator onboarding details. Rerun `ext-soperator onboard` before "
+            "render/deploy reconciliation.",
+        )
+    if _soperator_migration_action_flags(onboarding)["migration_required"]:
+        actions = ", ".join(
+            str(action or "").strip()
+            for action in onboarding.get("actions", []) or []
+            if str(action or "").strip()
+        )
+        return (
+            "Post-migration config refresh skipped: live rediscovery still reports "
+            f"migration-owned action(s): {actions or 'unknown'}. Keep using "
+            "`ext-soperator migrate` for resume/rerun or rerun `ext-soperator onboard` "
+            "after verifying the live cluster.",
+        )
+
+    next_payload = copy.deepcopy(to_plain_data(payload))
+    target_ref, _target_added, _app_added, _dependency_labels = (
+        _apply_soperator_onboarding_to_payload(
+            next_payload,
+            target_row=target_row,
+            app_entries=component_entries("apps"),
+        )
+    )
+    adoption_values = _soperator_onboarding_adoption_values_from_target_row(target_row)
+    _prune_redundant_app_chart_default_values(
+        payload=next_payload,
+        app_entries=component_entries("apps"),
+    )
+    _merge_soperator_onboarding_adoption_values_for_target(
+        next_payload,
+        target_ref=target_ref,
+        adoption_values=adoption_values,
+    )
+    _refresh_soperator_onboarding_fingerprints(next_payload)
+    wrote_config = _write_runtime_payload_config(config_path, next_payload)
+    source_report_path = _write_soperator_source_discovery_report_from_target_row(
+        config_path=config_path,
+        target_row=target_row,
+    )
+    lines = [
+        (
+            "Post-migration config refresh: "
+            + ("updated" if wrote_config else "already up to date")
+            + f" {config_path} from live discovery; future reconciliation should use "
+            "render -> deploy unless onboarding is rerun and selects new migration work."
+        )
+    ]
+    if source_report_path is not None:
+        lines.append(f"Post-migration source discovery report: {source_report_path}")
+    return tuple(lines)
+
+
 @ext_soperator_app.command(
     "migrate",
     short_help="Plan or execute accepted external Soperator migration actions.",
@@ -34927,32 +36824,43 @@ def _soperator_migration_execute_payload(
         "display name. The command reads "
         f"{SOURCE_SOPERATOR_DISCOVERY_REPORT_NAME}, validates the accepted onboarding "
         "analysis, and prints the target remediation and compute/storage migration plan. "
-        "If the accepted onboarding report has no migration actions, run render and "
+        "If the accepted onboarding report has no migration-owned actions, run render and "
         "deploy <config.yaml> instead; deploy writes deploy-report.md and runs "
         "deploy-time validations. Use deploy --target <target-id> only to narrow one run. "
         "--execute verifies the source release and discovery fingerprint before mutation, "
         "checkpoints the live run, "
         "records explicit approval when --approve is passed, auto-detects source worker "
         "node groups from live Nebius node-group names and Slurm worker labels, checks "
-        "net-new aligned SFS and net-new service-role node-group quota before approved "
-        "mutations, upgrades the external MK8s control plane first, then updates "
-        "source node groups one group at a time with zero-surge node-group "
-        "updates (max_surge=0, max_unavailable=1, drain_timeout=30m) and "
-        "restores the original strategy, applies target GPU stack app rows when "
+        "net-new aligned SFS, net-new service-role node-group quota, and safe-surge "
+        "worker wave spare capacity, requires selected worker nodes to start Ready "
+        "and schedulable, and requires an empty Slurm queue before approved "
+        "mutations, upgrades the external "
+        "MK8s control plane first, then updates service-role source node groups one "
+        "group at a time with zero-surge node-group updates (max_surge=0, "
+        "max_unavailable=1, drain_timeout=30m), updates worker groups with the "
+        "configured safe-surge rollout by default (max_surge=1, max_unavailable=0, "
+        "drain_timeout=30m), restores the original strategy, applies target GPU stack app rows when "
         "selected, creates or reuses aligned SFS filesystems, attaches them to "
         "discovered Nebius node groups, runs data-copy jobs when old and target PVC "
-        "pairs exist, prints phase-aware Soperator migration status while approved "
-        "phases run, validates Soperator reconciliation, runs configured "
+        "pairs exist, shows an interactive progress spinner and phase-aware "
+        "Soperator migration status with phase ids, labels, overall health, "
+        "and component summaries while approved phases run, validates Soperator "
+        "reconciliation, runs configured "
         "deploy.targets[].validations.mk8s_gpu.* checks, runs the required "
-        "Soperator/Slurm smoke validation with a one-task srun job, refreshes "
-        "deploy-report.md for MK8s GPU checks, writes migrate-report.md, and "
+        "Soperator/Slurm smoke validation with a one-task srun job and a "
+        "Slurm NCCL benchmark using two idle GPU Slurm nodes when available "
+        "or the only idle multi-GPU Slurm node otherwise, writes "
+        "migrate-report.md with the MK8s GPU and Soperator/Slurm validation "
+        "rollups, refreshes deploy-report.md as a secondary deploy-compatible "
+        "MK8s GPU summary, and "
         "rechecks completed selected remediation/upgrade/cutover actions "
         "against live state, retries them if they drift, repeats the final MK8s "
         "readiness check for accepted external node-template work, verifies the "
-        "target Helm release workloads, retires old source-family Flux "
-        "HelmRelease/Kustomization desired state and Helm release records while "
-        "preserving shared/storage resources, and checkpoints pending gates "
-        "instead of retiring old infrastructure early."
+        "target Helm release workloads, suspends old source-family Flux "
+        "Kustomization desired state, deletes suspended old source-family Flux "
+        "HelmRelease records, retires stale profile-derived source-family Helm "
+        "release records while preserving shared/storage resources, and checkpoints "
+        "pending gates instead of retiring old infrastructure early."
     ),
 )
 def soperator_migrate_command(
@@ -34995,6 +36903,81 @@ def soperator_migrate_command(
             ),
         ),
     ] = False,
+    worker_rollout_strategy: Annotated[
+        str | None,
+        typer.Option(
+            "--worker-rollout-strategy",
+            help=(
+                "External node-template worker rollout strategy. Use safe-surge "
+                "for the default no-unavailable worker update with temporary surge "
+                "capacity, or zero-surge to update one worker group at a time with "
+                "possible temporary capacity reduction."
+            ),
+        ),
+    ] = None,
+    worker_wave_groups: Annotated[
+        int | None,
+        typer.Option(
+            "--worker-wave-groups",
+            help=(
+                "Worker rollout wave budget as a fixed number of worker groups. "
+                "Mutually exclusive with --worker-wave-percent and overrides config.yaml."
+            ),
+        ),
+    ] = None,
+    worker_wave_percent: Annotated[
+        int | None,
+        typer.Option(
+            "--worker-wave-percent",
+            help=(
+                "Worker rollout wave budget as a percentage of worker groups, rounded "
+                "up to at least one. Mutually exclusive with --worker-wave-groups and "
+                "overrides config.yaml."
+            ),
+        ),
+    ] = None,
+    max_parallel_worker_groups: Annotated[
+        int | None,
+        typer.Option(
+            "--max-parallel-worker-groups",
+            help=(
+                "Maximum worker node groups to update in one safe-surge wave. "
+                "Overrides deploy.targets[].soperator_onboarding.node_template_upgrade."
+                "rollout.max_parallel_worker_groups for this run."
+            ),
+        ),
+    ] = None,
+    strategy_max_surge_count: Annotated[
+        int | None,
+        typer.Option(
+            "--strategy-max-surge-count",
+            help=(
+                "Nebius node-group strategy max_surge count for each active worker group. "
+                "Default comes from config.yaml, or 1."
+            ),
+        ),
+    ] = None,
+    strategy_max_unavailable_count: Annotated[
+        int | None,
+        typer.Option(
+            "--strategy-max-unavailable-count",
+            help=(
+                "Nebius node-group strategy max_unavailable count for each active worker "
+                "group. Default comes from config.yaml, or 0."
+            ),
+        ),
+    ] = None,
+    strategy_drain_timeout: Annotated[
+        str | None,
+        typer.Option(
+            "--strategy-drain-timeout",
+            help=(
+                "Nebius node-group strategy drain timeout for each active worker group: "
+                "none or an explicit Go-style duration such as 30m. Default comes from "
+                "config.yaml, or 30m."
+            ),
+        ),
+    ] = None,
 ) -> None:
     """Plan or execute accepted external Soperator migration actions."""
     try:
@@ -35008,18 +36991,38 @@ def soperator_migrate_command(
             config_path=config_path,
             target_ref=target_ref,
         )
+        target = soperator_onboarding_target(payload, target_ref=target_ref)
+        onboarding = target.get("soperator_onboarding") if isinstance(target, Mapping) else {}
+        if not isinstance(onboarding, Mapping):
+            onboarding = {}
+        _require_soperator_migration_actions(
+            config_path=config_path,
+            target_ref=target_ref,
+            onboarding=onboarding,
+        )
         for line in _format_soperator_migration_plan_lines(
             config_path=config_path,
             target_ref=target_ref,
             payload=payload,
             source_report=source_report,
             dry_run=dry_run,
+            worker_rollout_strategy=worker_rollout_strategy,
+            worker_wave_groups=worker_wave_groups,
+            worker_wave_percent=worker_wave_percent,
+            max_parallel_worker_groups=max_parallel_worker_groups,
+            strategy_max_surge_count=strategy_max_surge_count,
+            strategy_max_unavailable_count=strategy_max_unavailable_count,
+            strategy_drain_timeout=strategy_drain_timeout,
         ):
-            console.print(line, soft_wrap=True)
+            console.print(_style_soperator_migration_plan_line(line), soft_wrap=True)
         if not dry_run:
-            with _soperator_migration_execute_payload(
-                payload, target_ref=target_ref
-            ) as execution_payload:
+            post_migration_config_lines: tuple[str, ...] = ()
+            with (
+                _soperator_migration_status_emitter() as emit_status,
+                _soperator_migration_execute_payload(
+                    payload, target_ref=target_ref
+                ) as execution_payload,
+            ):
                 execution_result = execute_soperator_migration(
                     config_path=config_path,
                     target_ref=target_ref,
@@ -35027,9 +37030,28 @@ def soperator_migrate_command(
                     source_report=source_report,
                     snapshot_collector=collect_kubectl_soperator_snapshot,
                     approved=approve,
-                    status_callback=lambda message: console.print(escape(message), soft_wrap=True),
+                    status_callback=emit_status,
+                    worker_rollout_strategy=worker_rollout_strategy,
+                    worker_wave_groups=worker_wave_groups,
+                    worker_wave_percent=worker_wave_percent,
+                    max_parallel_worker_groups=max_parallel_worker_groups,
+                    strategy_max_surge_count=strategy_max_surge_count,
+                    strategy_max_unavailable_count=strategy_max_unavailable_count,
+                    strategy_drain_timeout=strategy_drain_timeout,
                 )
+                if execution_result.pending_phase == "none":
+                    post_migration_config_lines = (
+                        _refresh_soperator_onboarding_after_completed_migration(
+                            config_path=config_path,
+                            payload=payload,
+                            execution_payload=execution_payload,
+                            source_report=source_report,
+                            target_ref=target_ref,
+                        )
+                    )
             for line in execution_result.lines:
+                console.print(line, soft_wrap=True)
+            for line in post_migration_config_lines:
                 console.print(line, soft_wrap=True)
     except typer.Exit:
         raise
@@ -37841,6 +39863,9 @@ def mk8s_token_command(
         "(skips a single MK8s GPU validation kind; repeatable; --skip-validations skips all); "
         "nebius-cxcli deploy ./deployments/tenant/project/config.yaml --no-auto-auth-bootstrap "
         "(fails on missing service-account credentials instead of refreshing them). "
+        "For external Soperator onboarding targets with migration-owned actions, deploy "
+        "fails before Terraform/Flux work and prints the required ext-soperator migrate "
+        "dry-run/execute commands, because migrate owns ad hoc Nebius API migration phases. "
         "When qosConfiguration.enabled=true the Soperator chart runs a post-install Helm hook Job "
         "(kubectl exec into the accounting pod) that reconciles sacctmgr "
         "accounts/QOS/associations."
@@ -37909,7 +39934,10 @@ def deploy_command(
     Deploy resolves the sibling `generated/` directory and still uses
     `generated/nebius-cxcli-manifest.json` as the authoritative deploy
     contract so source-config changes after render do not silently alter
-    the deployed bundle. Before Terraform apply it runs a generated-bundle
+    the deployed bundle. The external Soperator onboarding safety guard checks
+    both the generated runtime config and the current source config.yaml so
+    older or stale rendered bundles fail closed when migration-owned actions are
+    still selected. Before Terraform apply it runs a generated-bundle
     deploy preflight covering strict readiness checks, VPC networking preflight,
     live Nebius quota/capacity validation, Terraform validation, and rendered
     Flux manifest validation when apps are enabled. For bundled MK8s reruns,
@@ -37921,6 +39949,16 @@ def deploy_command(
     generated bundle onto live infrastructure and workloads. When a built-in
     cluster handoff such as MK8s is enabled, deploy also refreshes local
     kubeconfig access for that cluster even if no app charts are configured.
+    For external Soperator onboarding targets whose accepted action list
+    contains migration-owned work such as Soperator upgrade, external
+    control-plane/node-template upgrade, storage migration, or compute
+    migration, deploy refuses before preflight and directs the operator to
+    `ext-soperator migrate`; deploy cannot perform those ad hoc Nebius API
+    migration phases. Use migrate for reruns/resume while those actions remain
+    selected. A fully completed `ext-soperator migrate --execute` refreshes
+    config.yaml from live post-migration discovery when possible; if refresh was
+    skipped, rerun `ext-soperator onboard`, rerender, and deploy only for normal
+    rendered reconciliation if needed.
     When more than one built-in cluster target is present, deploy reconciles
     every target by default. Use `--target <target-id>` to narrow Flux/app work
     and deploy-time validations to one target, or `--all-targets` to spell out
