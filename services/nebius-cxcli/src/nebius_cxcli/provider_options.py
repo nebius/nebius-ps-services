@@ -289,6 +289,16 @@ def _cidr_texts(values: object) -> tuple[str, ...]:
     return tuple(cidr for cidr in (_cidr_text(item) for item in list(values or [])) if cidr)
 
 
+def _resolved_explicit_subnet_cidrs(
+    *,
+    spec_cidrs: tuple[str, ...],
+    status_cidrs: tuple[str, ...],
+) -> tuple[str, ...]:
+    if any(cidr.startswith("/") for cidr in spec_cidrs):
+        return tuple(cidr for cidr in status_cidrs if cidr and not cidr.startswith("/"))
+    return spec_cidrs or status_cidrs
+
+
 def _arg_texts(value: object) -> tuple[str, ...]:
     if value is None:
         return ()
@@ -2162,8 +2172,14 @@ class ProviderOptionLookup:
             if not subnet_id:
                 continue
             name = _as_str(getattr(metadata, "name", None))
-            cidrs = list(getattr(status, "ipv4_private_cidrs", [])) if status is not None else []
-            cidr_suffix = f" ({', '.join(str(cidr) for cidr in cidrs)})" if cidrs else ""
+            status_private_cidrs = tuple(
+                str(cidr).strip()
+                for cidr in (list(getattr(status, "ipv4_private_cidrs", [])) if status is not None else [])
+                if str(cidr).strip()
+            )
+            cidr_suffix = (
+                f" ({', '.join(status_private_cidrs)})" if status_private_cidrs else ""
+            )
             label = f"{subnet_id}  ({name}){cidr_suffix}" if name else f"{subnet_id}{cidr_suffix}"
             private_pools = getattr(spec, "ipv4_private_pools", None)
             use_network_private_pools = (
@@ -2181,8 +2197,9 @@ class ProviderOptionLookup:
                     )
                     if cidr
                 )
-                explicit_private_cidrs = spec_private_cidrs or tuple(
-                    str(cidr).strip() for cidr in cidrs if str(cidr).strip()
+                explicit_private_cidrs = _resolved_explicit_subnet_cidrs(
+                    spec_cidrs=spec_private_cidrs,
+                    status_cidrs=status_private_cidrs,
                 )
             options.append(
                 OptionChoice(

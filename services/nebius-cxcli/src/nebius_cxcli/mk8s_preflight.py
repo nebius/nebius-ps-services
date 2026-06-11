@@ -31,6 +31,7 @@ from .mk8s_node_groups import (
     cluster_service_cidrs,
     cluster_subnet_id,
     gpu_node_groups,
+    iter_node_groups,
 )
 from .provider_options import _provider_request_kwargs
 from .runtime_config import to_plain_data
@@ -398,6 +399,10 @@ def _binding_ref(binding: Any) -> str:
     return ref
 
 
+def _mk8s_node_group_subnet_target_path(group_key: str) -> str:
+    return f"inputs.node_groups.{group_key}.subnet_id"
+
+
 def _enabled_vpc_rows(payload: Mapping[str, Any]) -> dict[str, Mapping[str, Any]]:
     infra = payload.get("infra")
     components = infra.get("components") if isinstance(infra, Mapping) else None
@@ -642,26 +647,134 @@ def _service_cidr_prefix_lengths(raw_value: Any) -> tuple[int, ...]:
     return tuple(prefixes)
 
 
+_MK8S_POD_ALLOCATION_PREFIX = 24
+_MK8S_ROLLING_UPDATE_NODE_HEADROOM = 1
+
+
+@dataclass(frozen=True)
+class _Mk8sSubnetCapacity:
+    cidrs: tuple[str, ...]
+    available_pod_blocks: int
+
+
+@dataclass(frozen=True)
+class _Mk8sSubnetDemand:
+    node_count: int
+    required_pod_blocks: int
+    group_labels: tuple[str, ...]
+
+
+def _mk8s_required_pod_blocks_for_node_count(node_count: int) -> int:
+    if node_count <= 0:
+        return 0
+    return node_count + _MK8S_ROLLING_UPDATE_NODE_HEADROOM
+
+
+def _mk8s_pod_blocks_for_cidr(cidr: str) -> int:
+    network = ipaddress.ip_network(cidr, strict=False)
+    if network.version != 4:
+        raise ValueError(f"{cidr!r} is not an IPv4 CIDR")
+    if network.prefixlen > _MK8S_POD_ALLOCATION_PREFIX:
+        return 0
+    return 1 << (_MK8S_POD_ALLOCATION_PREFIX - network.prefixlen)
+
+
+def _mk8s_subnet_capacity_from_cidrs(
+    cidrs: Collection[str],
+    *,
+    component_label: str,
+    subnet_label: str,
+) -> _Mk8sSubnetCapacity:
+    normalized = tuple(_as_text(cidr) for cidr in cidrs if _as_text(cidr))
+    available = 0
+    for cidr in normalized:
+        try:
+            available += _mk8s_pod_blocks_for_cidr(cidr)
+        except ValueError as exc:
+            raise RuntimeError(
+                "VPC networking preflight failed: "
+                f"component '{component_label}' subnet {subnet_label} "
+                f"returned malformed pool CIDR {cidr!r}."
+            ) from exc
+    return _Mk8sSubnetCapacity(cidrs=normalized, available_pod_blocks=available)
+
+
+def _mk8s_suggested_subnet_prefix(required_pod_blocks: int) -> int | None:
+    if required_pod_blocks <= 0:
+        return None
+    extra_bits = (required_pod_blocks - 1).bit_length()
+    return max(0, _MK8S_POD_ALLOCATION_PREFIX - extra_bits)
+
+
+def mk8s_node_subnet_capacity_guidance(
+    *,
+    node_count: int,
+    subnet_cidrs: Collection[str],
+) -> str | None:
+    """Return prompt guidance when known subnet CIDRs cannot fit a node count."""
+    required_blocks = _mk8s_required_pod_blocks_for_node_count(node_count)
+    if required_blocks <= 0:
+        return None
+    try:
+        capacity = _mk8s_subnet_capacity_from_cidrs(
+            subnet_cidrs,
+            component_label="prompt",
+            subnet_label="selected subnet",
+        )
+    except RuntimeError:
+        return None
+    if not capacity.cidrs or capacity.available_pod_blocks >= required_blocks:
+        return None
+    suggested_prefix = _mk8s_suggested_subnet_prefix(required_blocks)
+    suggestion = (
+        f"Use at least a /{suggested_prefix} equivalent private subnet range"
+        if suggested_prefix is not None
+        else "Use a larger private subnet range"
+    )
+    return (
+        f"{node_count} node(s) need {required_blocks} /24 Pod allocation block(s) "
+        "for Nebius MK8s, including one rolling-update node of headroom; selected "
+        f"subnet CIDR(s) {', '.join(capacity.cidrs)} provide "
+        f"{capacity.available_pod_blocks}. {suggestion}, or split node groups "
+        "across larger subnets. Kubernetes service_cidrs are separate Service "
+        "ClusterIP space and do not provide Pod IPs."
+    )
+
+
 def _subnet_pool_cidrs(subnet: Any) -> tuple[str, ...]:
     spec = getattr(subnet, "spec", None)
     ipv4_private_pools = getattr(spec, "ipv4_private_pools", None)
+    if bool(getattr(ipv4_private_pools, "use_network_pools", False)):
+        return ()
     pools = list(getattr(ipv4_private_pools, "pools", []) or [])
     cidrs: list[str] = []
+    has_prefix_only_cidr = False
     for pool in pools:
         for cidr in list(getattr(pool, "cidrs", []) or []):
             value = _as_text(getattr(cidr, "cidr", None)) or _as_text(cidr)
             if value:
+                if value.startswith("/"):
+                    has_prefix_only_cidr = True
                 cidrs.append(value)
+    status = getattr(subnet, "status", None)
+    status_cidrs = tuple(
+        value
+        for cidr in list(getattr(status, "ipv4_private_cidrs", []) or [])
+        if (value := (_as_text(getattr(cidr, "cidr", None)) or _as_text(cidr)))
+        and not value.startswith("/")
+    )
+    if has_prefix_only_cidr:
+        return status_cidrs
+    if not cidrs:
+        return status_cidrs
     return tuple(cidrs)
 
 
-def _planned_cluster_subnet_pool_cidrs(
+def _planned_vpc_binding_pool_cidrs(
     *,
     payload: Mapping[str, Any],
-    raw_row: Mapping[str, Any],
+    subnet_binding: Any,
 ) -> tuple[str, ...]:
-    bindings = _row_bindings_by_target(raw_row)
-    subnet_binding = bindings.get("inputs.cluster.subnet_id")
     if subnet_binding is None or subnet_binding.source_component_id != "vpc":
         return ()
     if subnet_binding.source_output_name != "subnets" or not subnet_binding.key:
@@ -674,6 +787,31 @@ def _planned_cluster_subnet_pool_cidrs(
     if not isinstance(cidrs, (list, tuple)):
         return ()
     return tuple(_as_text(cidr) for cidr in cidrs if _as_text(cidr))
+
+
+def _planned_subnet_pool_cidrs(
+    *,
+    payload: Mapping[str, Any],
+    raw_row: Mapping[str, Any],
+    target_path: str,
+) -> tuple[str, ...]:
+    bindings = _row_bindings_by_target(raw_row)
+    return _planned_vpc_binding_pool_cidrs(
+        payload=payload,
+        subnet_binding=bindings.get(target_path),
+    )
+
+
+def _planned_cluster_subnet_pool_cidrs(
+    *,
+    payload: Mapping[str, Any],
+    raw_row: Mapping[str, Any],
+) -> tuple[str, ...]:
+    return _planned_subnet_pool_cidrs(
+        payload=payload,
+        raw_row=raw_row,
+        target_path="inputs.cluster.subnet_id",
+    )
 
 
 def _validate_service_prefix_against_pool_cidr(
@@ -704,6 +842,215 @@ def _validate_service_prefix_against_pool_cidr(
             "single-pool subnet can stall cluster provisioning before any node groups are created. "
             'Use a smaller service CIDR such as ["/20"] or choose a larger subnet.'
         )
+
+
+def _node_group_capacity_node_count(group: Any) -> int | None:
+    autoscaling_max = getattr(group, "autoscaling_max_node_count", None)
+    if autoscaling_max is not None:
+        return autoscaling_max
+    return getattr(group, "node_count", None)
+
+
+def _node_group_primary_subnet_id(
+    *,
+    inputs: Mapping[str, Any],
+    raw_group: Mapping[str, Any],
+) -> str:
+    network_interfaces = raw_group.get("network_interfaces")
+    if isinstance(network_interfaces, list) and network_interfaces:
+        first_interface = network_interfaces[0]
+        if isinstance(first_interface, Mapping):
+            return _as_text(first_interface.get("subnet_id"))
+    return _as_text(raw_group.get("subnet_id")) or cluster_subnet_id(inputs)
+
+
+def _mk8s_subnet_demands(
+    inputs: Mapping[str, Any],
+    *,
+    bindings_by_target: Mapping[str, Any] | None = None,
+) -> dict[str, _Mk8sSubnetDemand]:
+    raw_groups = inputs.get("node_groups")
+    if not isinstance(raw_groups, Mapping):
+        return {}
+
+    bindings_by_target = bindings_by_target or {}
+    node_counts_by_subnet: dict[str, int] = {}
+    required_blocks_by_subnet: dict[str, int] = {}
+    group_labels_by_subnet: dict[str, list[str]] = {}
+    for group in iter_node_groups(inputs):
+        raw_group = raw_groups.get(group.key)
+        if not isinstance(raw_group, Mapping):
+            continue
+        if bindings_by_target.get(_mk8s_node_group_subnet_target_path(group.key)) is not None:
+            continue
+        node_count = _node_group_capacity_node_count(group)
+        if node_count is None or node_count <= 0:
+            continue
+        subnet_id = _node_group_primary_subnet_id(inputs=inputs, raw_group=raw_group)
+        if not subnet_id:
+            continue
+        required_blocks = _mk8s_required_pod_blocks_for_node_count(node_count)
+        if required_blocks <= 0:
+            continue
+        node_counts_by_subnet[subnet_id] = node_counts_by_subnet.get(subnet_id, 0) + node_count
+        required_blocks_by_subnet[subnet_id] = (
+            required_blocks_by_subnet.get(subnet_id, 0) + required_blocks
+        )
+        group_labels_by_subnet.setdefault(subnet_id, []).append(
+            f"{group.key}={node_count}"
+            + (" max" if group.autoscaling_max_node_count is not None else "")
+        )
+
+    return {
+        subnet_id: _Mk8sSubnetDemand(
+            node_count=node_counts_by_subnet[subnet_id],
+            required_pod_blocks=required_blocks,
+            group_labels=tuple(group_labels_by_subnet.get(subnet_id, ())),
+        )
+        for subnet_id, required_blocks in required_blocks_by_subnet.items()
+    }
+
+
+def _mk8s_cluster_default_subnet_demand(
+    inputs: Mapping[str, Any],
+    *,
+    bindings_by_target: Mapping[str, Any] | None = None,
+) -> _Mk8sSubnetDemand | None:
+    raw_groups = inputs.get("node_groups")
+    if not isinstance(raw_groups, Mapping):
+        return None
+
+    bindings_by_target = bindings_by_target or {}
+    total_nodes = 0
+    required_blocks = 0
+    group_labels: list[str] = []
+    for group in iter_node_groups(inputs):
+        raw_group = raw_groups.get(group.key)
+        if not isinstance(raw_group, Mapping):
+            continue
+        if bindings_by_target.get(_mk8s_node_group_subnet_target_path(group.key)) is not None:
+            continue
+        if _as_text(raw_group.get("subnet_id")):
+            continue
+        if raw_group.get("network_interfaces") is not None:
+            continue
+        node_count = _node_group_capacity_node_count(group)
+        if node_count is None or node_count <= 0:
+            continue
+        total_nodes += node_count
+        required_blocks += _mk8s_required_pod_blocks_for_node_count(node_count)
+        group_labels.append(
+            f"{group.key}={node_count}"
+            + (" max" if group.autoscaling_max_node_count is not None else "")
+        )
+
+    if required_blocks <= 0:
+        return None
+    return _Mk8sSubnetDemand(
+        node_count=total_nodes,
+        required_pod_blocks=required_blocks,
+        group_labels=tuple(group_labels),
+    )
+
+
+def _planned_mk8s_node_group_subnet_demands(
+    *,
+    payload: Mapping[str, Any],
+    inputs: Mapping[str, Any],
+    bindings_by_target: Mapping[str, Any],
+) -> tuple[tuple[str, tuple[str, ...], _Mk8sSubnetDemand], ...]:
+    raw_groups = inputs.get("node_groups")
+    if not isinstance(raw_groups, Mapping):
+        return ()
+
+    grouped: dict[str, dict[str, Any]] = {}
+    for group in iter_node_groups(inputs):
+        raw_group = raw_groups.get(group.key)
+        if not isinstance(raw_group, Mapping):
+            continue
+        if _as_text(raw_group.get("subnet_id")) or raw_group.get("network_interfaces") is not None:
+            continue
+        subnet_binding = bindings_by_target.get(_mk8s_node_group_subnet_target_path(group.key))
+        if subnet_binding is None:
+            continue
+        pool_cidrs = _planned_vpc_binding_pool_cidrs(
+            payload=payload,
+            subnet_binding=subnet_binding,
+        )
+        if not pool_cidrs:
+            continue
+        node_count = _node_group_capacity_node_count(group)
+        if node_count is None or node_count <= 0:
+            continue
+        required_blocks = _mk8s_required_pod_blocks_for_node_count(node_count)
+        if required_blocks <= 0:
+            continue
+        subnet_label = _binding_ref(subnet_binding)
+        demand_state = grouped.setdefault(
+            subnet_label,
+            {
+                "cidrs": pool_cidrs,
+                "node_count": 0,
+                "required_blocks": 0,
+                "group_labels": [],
+            },
+        )
+        demand_state["node_count"] += node_count
+        demand_state["required_blocks"] += required_blocks
+        demand_state["group_labels"].append(
+            f"{group.key}={node_count}"
+            + (" max" if group.autoscaling_max_node_count is not None else "")
+        )
+
+    return tuple(
+        (
+            subnet_label,
+            tuple(state["cidrs"]),
+            _Mk8sSubnetDemand(
+                node_count=int(state["node_count"]),
+                required_pod_blocks=int(state["required_blocks"]),
+                group_labels=tuple(state["group_labels"]),
+            ),
+        )
+        for subnet_label, state in grouped.items()
+    )
+
+
+def _validate_mk8s_subnet_capacity(
+    *,
+    component_label: str,
+    subnet_label: str,
+    pool_cidrs: Collection[str],
+    demand: _Mk8sSubnetDemand,
+) -> None:
+    capacity = _mk8s_subnet_capacity_from_cidrs(
+        pool_cidrs,
+        component_label=component_label,
+        subnet_label=subnet_label,
+    )
+    if not capacity.cidrs:
+        return
+    if capacity.available_pod_blocks >= demand.required_pod_blocks:
+        return
+    suggested_prefix = _mk8s_suggested_subnet_prefix(demand.required_pod_blocks)
+    suggestion = (
+        f"Use at least a /{suggested_prefix} equivalent private subnet range"
+        if suggested_prefix is not None
+        else "Use a larger private subnet range"
+    )
+    groups_text = ", ".join(demand.group_labels)
+    raise RuntimeError(
+        "VPC networking preflight failed: "
+        f"component '{component_label}' node groups on subnet {subnet_label} "
+        f"request {demand.node_count} node(s)"
+        f"{f' ({groups_text})' if groups_text else ''} and need "
+        f"{demand.required_pod_blocks} /24 Pod allocation block(s), including one "
+        "rolling-update node of headroom per node group. Subnet CIDR(s) "
+        f"{', '.join(capacity.cidrs)} provide {capacity.available_pod_blocks}. "
+        f"{suggestion}, or split node groups across larger subnets. "
+        "inputs.cluster.kube_network.service_cidrs allocates Kubernetes Service "
+        "ClusterIP space, not Pod IPs."
+    )
 
 
 def _component_project_id(
@@ -749,6 +1096,21 @@ def _validate_planned_vpc_bindings(payload: Mapping[str, Any]) -> None:
         subnet_target = _binding_target(component_id, "subnet_id")
         network_binding = bindings.get(network_target)
         subnet_binding = bindings.get(subnet_target)
+        node_group_subnet_bindings: list[tuple[str, Any]] = []
+        if component_id == "mk8s":
+            node_groups = inputs.get("node_groups")
+            if isinstance(node_groups, Mapping):
+                for group_key, group in node_groups.items():
+                    if not isinstance(group, Mapping) or not bool(group.get("enabled", True)):
+                        continue
+                    target_path = _mk8s_node_group_subnet_target_path(str(group_key))
+                    group_subnet_binding = bindings.get(target_path)
+                    if (
+                        group_subnet_binding is not None
+                        and group_subnet_binding.source_component_id == "vpc"
+                        and group_subnet_binding.source_output_name == "subnets"
+                    ):
+                        node_group_subnet_bindings.append((target_path, group_subnet_binding))
         for target_path, binding in bindings.items():
             if binding.source_component_id != "vpc":
                 continue
@@ -810,6 +1172,35 @@ def _validate_planned_vpc_bindings(payload: Mapping[str, Any]) -> None:
                     f"is created under network {existing_id or '(new)'}, "
                     f"not selected network {selected_network_id}."
                 )
+
+        for target_path, group_subnet_binding in node_group_subnet_bindings:
+            if (
+                network_binding is not None
+                and network_binding.source_instance_id != group_subnet_binding.source_instance_id
+            ):
+                raise RuntimeError(
+                    "VPC networking preflight failed: "
+                    f"component '{component_label}' subnet binding {_binding_ref(group_subnet_binding)} "
+                    f"for {target_path} does not belong to network binding "
+                    f"{_binding_ref(network_binding)}."
+                )
+            if network_binding is None:
+                selected_network_id = _as_text(read_component_path(raw_row, network_target))
+                vpc_row = vpc_rows.get(group_subnet_binding.source_instance_id or "")
+                vpc_network = read_component_path(vpc_row or {}, "inputs.network")
+                existing_id = (
+                    _as_text(vpc_network.get("existing_id"))
+                    if isinstance(vpc_network, Mapping)
+                    else ""
+                )
+                if selected_network_id and existing_id != selected_network_id:
+                    raise RuntimeError(
+                        "VPC networking preflight failed: "
+                        f"component '{component_label}' subnet binding "
+                        f"{_binding_ref(group_subnet_binding)} for {target_path} "
+                        f"is created under network {existing_id or '(new)'}, "
+                        f"not selected network {selected_network_id}."
+                    )
 
 
 def _validate_vpc_hierarchy(payload: Mapping[str, Any]) -> None:
@@ -897,23 +1288,44 @@ def validate_vpc_networking_preflight(config: Any) -> None:
         return
     _validate_vpc_hierarchy(payload)
     sdk = None
+    subnet_client = None
+    subnet_pool_cidrs_by_id: dict[str, tuple[str, ...]] = {}
+
+    def _live_subnet_pool_cidrs(component: _Mk8sResolvedComponent, subnet_id: str) -> tuple[str, ...]:
+        nonlocal sdk, subnet_client
+        if subnet_id in subnet_pool_cidrs_by_id:
+            return subnet_pool_cidrs_by_id[subnet_id]
+        if sdk is None:
+            sdk = init_nebius_sdk(
+                parent_id=component.project_id or None, context="VPC networking preflight"
+            )
+        if subnet_client is None:
+            subnet_client = SubnetServiceClient(sdk)
+        subnet = subnet_client.get(GetSubnetRequest(id=subnet_id)).wait()
+        pool_cidrs = _subnet_pool_cidrs(subnet)
+        subnet_pool_cidrs_by_id[subnet_id] = pool_cidrs
+        return pool_cidrs
+
     try:
         for component in _resolved_mk8s_components(payload):
             inputs = component.inputs
             subnet_id = cluster_subnet_id(inputs)
+            bindings_by_target = _row_bindings_by_target(component.raw_row)
+            subnet_demands = _mk8s_subnet_demands(
+                inputs,
+                bindings_by_target=bindings_by_target,
+            )
 
             service_cidrs = list(cluster_service_cidrs(inputs)) or ["/16"]
             service_prefixes = _service_cidr_prefix_lengths(service_cidrs)
-            if not service_prefixes:
-                continue
-            service_prefix = service_prefixes[0]
+            service_prefix = service_prefixes[0] if service_prefixes else None
 
             if not subnet_id:
                 planned_pool_cidrs = _planned_cluster_subnet_pool_cidrs(
                     payload=payload,
                     raw_row=component.raw_row,
                 )
-                if len(planned_pool_cidrs) == 1:
+                if service_prefix is not None and len(planned_pool_cidrs) == 1:
                     _validate_service_prefix_against_pool_cidr(
                         component_label=component.component_label,
                         service_cidrs=service_cidrs,
@@ -921,25 +1333,50 @@ def validate_vpc_networking_preflight(config: Any) -> None:
                         pool_cidr=planned_pool_cidrs[0],
                         subnet_label="planned VPC subnet",
                     )
-                continue
-
-            if sdk is None:
-                sdk = init_nebius_sdk(
-                    parent_id=component.project_id or None, context="VPC networking preflight"
+                planned_demand = _mk8s_cluster_default_subnet_demand(
+                    inputs,
+                    bindings_by_target=bindings_by_target,
                 )
-            subnet_client = SubnetServiceClient(sdk)
-            subnet = subnet_client.get(GetSubnetRequest(id=subnet_id)).wait()
-            pool_cidrs = _subnet_pool_cidrs(subnet)
-            if len(pool_cidrs) != 1:
-                continue
+                if planned_demand is not None and planned_pool_cidrs:
+                    _validate_mk8s_subnet_capacity(
+                        component_label=component.component_label,
+                        subnet_label="planned VPC subnet",
+                        pool_cidrs=planned_pool_cidrs,
+                        demand=planned_demand,
+                    )
+            elif service_prefix is not None:
+                pool_cidrs = _live_subnet_pool_cidrs(component, subnet_id)
+                if len(pool_cidrs) == 1:
+                    _validate_service_prefix_against_pool_cidr(
+                        component_label=component.component_label,
+                        service_cidrs=service_cidrs,
+                        service_prefix=service_prefix,
+                        pool_cidr=pool_cidrs[0],
+                        subnet_label=subnet_id,
+                    )
 
-            _validate_service_prefix_against_pool_cidr(
-                component_label=component.component_label,
-                service_cidrs=service_cidrs,
-                service_prefix=service_prefix,
-                pool_cidr=pool_cidrs[0],
-                subnet_label=subnet_id,
-            )
+            for demand_subnet_id, demand in subnet_demands.items():
+                pool_cidrs = _live_subnet_pool_cidrs(component, demand_subnet_id)
+                if not pool_cidrs:
+                    continue
+                _validate_mk8s_subnet_capacity(
+                    component_label=component.component_label,
+                    subnet_label=demand_subnet_id,
+                    pool_cidrs=pool_cidrs,
+                    demand=demand,
+                )
+
+            for subnet_label, pool_cidrs, demand in _planned_mk8s_node_group_subnet_demands(
+                payload=payload,
+                inputs=inputs,
+                bindings_by_target=bindings_by_target,
+            ):
+                _validate_mk8s_subnet_capacity(
+                    component_label=component.component_label,
+                    subnet_label=subnet_label,
+                    pool_cidrs=pool_cidrs,
+                    demand=demand,
+                )
     finally:
         if sdk is not None:
             with suppress(Exception):
@@ -1026,6 +1463,7 @@ def validate_mk8s_resource_name_preflight(
 __all__ = [
     "has_mk8s_gpu_stack_compatibility_preflight_targets",
     "has_mk8s_resource_name_preflight_targets",
+    "mk8s_node_subnet_capacity_guidance",
     "validate_mk8s_gpu_stack_compatibility_preflight",
     "validate_mk8s_resource_name_preflight",
     "validate_vpc_networking_preflight",

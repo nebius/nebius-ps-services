@@ -6,6 +6,21 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Added MK8s VPC subnet capacity guidance and validation. The wizard now warns
+  when a selected explicit subnet CIDR cannot fit the entered node count or
+  autoscaling maximum, and `validate` fails live or planned explicit subnets
+  that do not provide enough `/24` Pod allocation blocks plus rolling-update
+  headroom, including planned VPC subnet bindings on explicit node-group subnet
+  overrides. The message also clarifies that
+  `inputs.cluster.kube_network.service_cidrs` is Service ClusterIP space, not
+  Pod IP space.
+- Fixed VPC networking preflight and provider-option metadata for existing
+  explicit subnets created from prefix allocation requests such as `cidr: /16`;
+  cxcli now uses the resolved live subnet CIDR instead of treating the prefix
+  request as a malformed pool CIDR.
+- Fixed generated deploy reports so the standalone `infra:vpc` component appears
+  in the infra component status list and consuming infra rows show their
+  row-level planned VPC network/subnet bindings.
 - Improved Soperator-owned Slurm NCCL validation. The Soperator validation now
   replaces the old one-rank smoke with one Slurm-owned
   `mpirun /usr/bin/all_reduce_perf_mpi` benchmark that uses two idle GPU Slurm

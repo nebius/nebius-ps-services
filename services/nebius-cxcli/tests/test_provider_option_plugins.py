@@ -993,6 +993,39 @@ def test_project_subnets_uses_status_cidrs_for_explicit_subnet_when_spec_cidrs_m
     assert resolved[0].metadata["use_network_private_pools"] is False
 
 
+def test_project_subnets_uses_status_cidrs_for_prefix_allocated_explicit_subnet(
+    monkeypatch,
+) -> None:
+    _install_fake_vpc_module(
+        monkeypatch,
+        subnets=[
+            {
+                "id": "vpcsubnet-explicit-prefix",
+                "name": "explicit-prefix",
+                "network_id": "vpcnetwork-default",
+                "ipv4_private_cidrs": ["172.21.0.0/16"],
+                "explicit_private_cidrs": ["/16"],
+            },
+        ],
+    )
+
+    lookup = ProviderOptionLookup()
+    monkeypatch.setattr(lookup, "_sdk_or_none", lambda: object())
+
+    resolved = lookup.resolve(
+        provider="project_subnets",
+        args={"network_id": "vpcnetwork-default"},
+        payload={"client_info": {"nebius": {"project_id": "project-123"}}},
+        field_path="infra.components[0].inputs.subnets",
+    )
+
+    assert resolved[0].label == (
+        "vpcsubnet-explicit-prefix  (explicit-prefix) (172.21.0.0/16)"
+    )
+    assert resolved[0].metadata["private_cidrs"] == ("172.21.0.0/16",)
+    assert resolved[0].metadata["use_network_private_pools"] is False
+
+
 def test_project_private_allocations_lists_live_private_cidrs_filtered_by_resource(
     monkeypatch,
 ) -> None:

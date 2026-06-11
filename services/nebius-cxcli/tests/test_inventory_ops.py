@@ -6,7 +6,9 @@ from pathlib import Path
 import pytest
 import yaml
 
+import nebius_cxcli.component_sources as component_sources
 import nebius_cxcli.inventory_ops as inventory_ops
+from nebius_cxcli.component_sources import ComponentOutput, reset_component_sources_cache
 from nebius_cxcli.components import component_entries, reset_component_entry_cache
 from nebius_cxcli.config_loader import load_config
 from nebius_cxcli.config_template import starter_config_yaml
@@ -133,6 +135,28 @@ def _enable_mk8s_observability(payload: dict, *, target_ref: str = "mk8s") -> No
     observability["enabled"] = True
 
 
+def _install_vpc_output_discovery(monkeypatch: pytest.MonkeyPatch) -> None:
+    def _discover_outputs(source: str) -> tuple[ComponentOutput, ...]:
+        if "modules/vpc" in str(source):
+            return (
+                ComponentOutput(
+                    name="network_id",
+                    kind="terraform_output",
+                    source_path="network_id",
+                ),
+                ComponentOutput(
+                    name="subnets",
+                    kind="terraform_output",
+                    source_path="subnets",
+                ),
+            )
+        return ()
+
+    monkeypatch.setattr(component_sources, "_discover_terraform_outputs", _discover_outputs)
+    reset_component_sources_cache()
+    reset_component_entry_cache()
+
+
 def test_write_inventory_handles_dynamic_component_model(tmp_path: Path) -> None:
     reset_component_entry_cache()
     config_path = _project_config_path(tmp_path)
@@ -195,6 +219,102 @@ def test_write_inventory_handles_dynamic_component_model(tmp_path: Path) -> None
     assert "- n8n: `enabled`; hostname `n8n.example.com`" in markdown
     headings = _markdown_headings(markdown)
     assert len(headings) == len(set(headings))
+
+
+def test_write_inventory_lists_vpc_and_consumer_bindings(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_vpc_output_discovery(monkeypatch)
+    config_path = _project_config_path(tmp_path)
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+
+    payload = _starter_payload(selected_infra={"mk8s", "vm", "vpc"}, selected_apps=set())
+    vpc = _infra_component_row(payload, "vpc")
+    vpc["instance_id"] = "worker-vpc"
+    vpc["inputs"] = {
+        "parent_id": "project-456",
+        "network": {
+            "name": "worker-network",
+            "ipv4_private_cidrs": ["172.16.0.0/12"],
+        },
+        "subnets": {
+            "worker": {
+                "name": "worker-subnet",
+                "use_network_private_pools": False,
+                "ipv4_private_cidrs": ["172.16.0.0/16"],
+            }
+        },
+    }
+    mk8s = _infra_component_row(payload, "mk8s")
+    mk8s["inputs"] = {
+        "cluster": {
+            "parent_id": "project-456",
+            "cluster_name": "mk8s",
+            "public_endpoint": True,
+        }
+    }
+    mk8s["bindings"] = {
+        "inputs.cluster.network_id": {
+            "source_component": "vpc",
+            "source_instance": "worker-vpc",
+            "source_output": "network_id",
+        },
+        "inputs.cluster.subnet_id": {
+            "source_component": "vpc",
+            "source_instance": "worker-vpc",
+            "source_output": "subnets",
+            "key": "worker",
+            "attribute": "id",
+        },
+    }
+    vm = _infra_component_row(payload, "vm")
+    vm["instance_id"] = "worker"
+    vm["inputs"] = {
+        "parent_id": "project-456",
+        "name": "worker",
+        "platform": "cpu-d3",
+        "preset": "4vcpu-16gb",
+        "source_image_family": "ubuntu24.04",
+        "ssh_user_name": "ubuntu",
+        "ssh_public_key": _VALID_ED25519_PUBLIC_KEY,
+    }
+    vm["bindings"] = {
+        "inputs.network_id": {
+            "source_component": "vpc",
+            "source_instance": "worker-vpc",
+            "source_output": "network_id",
+        },
+        "inputs.subnet_id": {
+            "source_component": "vpc",
+            "source_instance": "worker-vpc",
+            "source_output": "subnets",
+            "key": "worker",
+            "attribute": "id",
+        },
+    }
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    config = load_config(config_path)
+    paths = resolve_project_paths(config_path)
+    validate_path_alignment(config, paths)
+
+    artifacts = write_inventory(config, paths)
+    markdown = artifacts.markdown.read_text(encoding="utf-8")
+
+    assert "- `vpc` (VPC network and optional subnets): `enabled`" in markdown
+    assert "- `vpc@worker-vpc` (VPC network and optional subnets)" in markdown
+    assert "  - Group: `Network`" in markdown
+    assert "`network.name=worker-network`" in markdown
+    assert "`subnets.worker=3 key(s)`" in markdown
+    assert (
+        "  - Bindings: `inputs.cluster.network_id <- vpc@worker-vpc.network_id`, "
+        "`inputs.cluster.subnet_id <- vpc@worker-vpc.subnets.worker.id`"
+    ) in markdown
+    assert (
+        "  - Bindings: `inputs.network_id <- vpc@worker-vpc.network_id`, "
+        "`inputs.subnet_id <- vpc@worker-vpc.subnets.worker.id`"
+    ) in markdown
 
 
 def test_write_inventory_lists_selected_security_and_platform_components(

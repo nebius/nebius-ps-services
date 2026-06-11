@@ -771,6 +771,17 @@ That shorthand expands to the equivalent wiring for the built-in MK8s flow, incl
 - each node group's `platform` and `preset` from the MK8s compatibility lookup intersected with the selected project's live compute-platform inventory
 - each node group's `boot_disk` materialized from live/provider-backed choices and shared disk policy
 - `inputs.node_groups.system` is the concrete default CPU baseline node group for a plain MK8s target. `system` is just the node-group role/name in the generated config; it is not the Soperator app. Its `node_count` or `autoscaling` fields are the actual scale controls. The plain MK8s node-group loop asks whether autoscaling is enabled for each concrete group and keeps it disabled by default; when enabled, the loop writes `autoscaling.min_node_count` and `max_node_count` instead of `node_count`.
+- `inputs.cluster.kube_network.service_cidrs` is Kubernetes Service ClusterIP
+  space, not Pod IP space. cxcli keeps the `["/20"]` default for Services.
+  Nebius allocates one `/24` Pod block and one `/32` internal node IP per node
+  group node; default rolling updates also need one extra node of subnet
+  capacity per node group. The wizard warns immediately when the selected
+  cluster subnet has known explicit CIDRs that cannot fit the entered
+  `node_count` or autoscaling `max_node_count`, and `validate` fails the same
+  condition for live or planned explicit subnets, including explicit
+  node-group subnet bindings. For example, a `/16` subnet provides 256 `/24`
+  Pod blocks, while a 1000-node group needs 1001 blocks and therefore at least
+  a `/14` equivalent private subnet range.
 - `inputs.node_group_defaults.*` is a profile helper surface, not a bundled MK8s Terraform module input and not a scale control. cxcli keeps it for profile materialization such as Soperator `production-cluster`, where helper defaults are copied into real typed `inputs.node_groups` and `inputs.gpu_clusters`; plain MK8s-only create, component-add, and normalized runtime config suppress or prune those helper fields. CPU-only Soperator profiles skip and prune the inactive `inputs.node_group_defaults.gpu.*` helper scope during the wizard and runtime config normalization, so GPU fabric and stack fields are not offered or retained unless the selected profile actually creates GPU node groups. Soperator profile boot-disk defaults merge into concrete node groups and keep cxcli's computed `size_gibibytes` values so generated Terraform always carries both boot-disk type and size.
 - In profile-owned GPU flows, `inputs.node_group_defaults.gpu.infiniband_fabric` is prompted only after the GPU preset, and only when the exact selected platform/preset's live Nebius metadata says `allow_gpu_clustering=true`; setting that field creates the profile-owned `inputs.gpu_clusters` entry used by GPU node groups
 - In plain MK8s GPU node-group loops, reservation IDs are offered from tenant Capacity Block Groups filtered by the selected region, platform, and GPU-cluster fabric when a fabric is selected.
@@ -1588,7 +1599,14 @@ Wizard field behavior:
   the VPC row first so the planned network and subnet choices are available to
   the consuming component in the same `create` or `component add` run. During
   `render`, those row-level `inputs.*` bindings become direct Terraform module
-  arguments such as `network_id` and `subnet_id` on the consuming module.
+  arguments such as `network_id` and `subnet_id` on the consuming module. The
+  generated deploy report lists enabled `infra:vpc` rows as standard infra
+  components and shows row-level bindings from consuming modules to planned VPC
+  network and subnet outputs.
+- Existing explicit subnets created from prefix allocation requests such as
+  `cidr: /16` are treated by their resolved live subnet CIDR in provider choices
+  and VPC networking preflight; inherited network-pool subnets still stay
+  non-owning for subnet CIDR automation.
 - Wizard VPC choices use the mental model “choose an existing resource, or
   choose a resource this config will create”: live project networks/subnets are
   listed beside enabled planned `infra:vpc` rows, and planned subnet choices are

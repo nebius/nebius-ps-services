@@ -254,6 +254,7 @@ from .mk8s_node_groups import (
 from .mk8s_preflight import (
     has_mk8s_gpu_stack_compatibility_preflight_targets,
     has_mk8s_resource_name_preflight_targets,
+    mk8s_node_subnet_capacity_guidance,
     validate_mk8s_gpu_stack_compatibility_preflight,
     validate_mk8s_resource_name_preflight,
     validate_vpc_networking_preflight,
@@ -15666,6 +15667,7 @@ def _planned_subnet_choices_for_vpc(
                     "component": "vpc",
                     "instance_id": instance_id,
                     "subnet_key": key,
+                    "private_cidrs": tuple(cidrs),
                 },
             )
         )
@@ -20625,6 +20627,79 @@ def _run_component_field_wizard(
                 return recommendation.disk_type, recommendation.size_gib
             return "NETWORK_SSD", 128
 
+        def _choice_private_cidrs(choice: OptionChoice | None) -> tuple[str, ...]:
+            if choice is None:
+                return ()
+            raw_cidrs = choice.metadata.get("private_cidrs") or choice.metadata.get("cidrs")
+            if isinstance(raw_cidrs, str):
+                return (raw_cidrs.strip(),) if raw_cidrs.strip() else ()
+            if not isinstance(raw_cidrs, Sequence):
+                return ()
+            return tuple(str(cidr).strip() for cidr in raw_cidrs if str(cidr).strip())
+
+        def _planned_vpc_subnet_cidrs(value: str) -> tuple[str, ...]:
+            try:
+                binding_ref = _parse_planned_vpc_ref(
+                    value,
+                    option_name="planned subnet choice",
+                    field_name="subnet_id",
+                )
+            except RuntimeError:
+                return ()
+            if binding_ref.key is None:
+                return ()
+            for _row, instance_id, inputs in _planned_vpc_rows(payload):
+                if instance_id != binding_ref.source_instance:
+                    continue
+                subnet = read_component_path(inputs, f"subnets.{binding_ref.key}")
+                if not isinstance(subnet, Mapping):
+                    return ()
+                raw_cidrs = subnet.get("ipv4_private_cidrs")
+                if not isinstance(raw_cidrs, Sequence) or isinstance(raw_cidrs, str):
+                    return ()
+                return tuple(str(cidr).strip() for cidr in raw_cidrs if str(cidr).strip())
+            return ()
+
+        def _selected_cluster_subnet_cidrs() -> tuple[str, ...]:
+            subnet_label = f"{component_path_label}.inputs.cluster.subnet_id"
+            subnet_id = _non_empty_text(_read_payload_field(payload, subnet_label))
+            if not subnet_id:
+                return ()
+            if subnet_id.startswith(_PLANNED_BINDING_TOKEN_PREFIX):
+                return _planned_vpc_subnet_cidrs(subnet_id)
+
+            network_id = _non_empty_text(
+                _read_payload_field(payload, f"{component_path_label}.inputs.cluster.network_id")
+            )
+            subnet_choices = _mk8s_provider_choices(
+                provider="project_subnets",
+                args={"network_id": network_id} if network_id else {},
+                field_path=subnet_label,
+            )
+            return _choice_private_cidrs(_choice_by_value(subnet_choices, subnet_id))
+
+        def _maybe_print_node_subnet_capacity_guidance(
+            *,
+            group_prefix: str,
+            node_count: int,
+        ) -> None:
+            cidrs = _selected_cluster_subnet_cidrs()
+            if not cidrs:
+                return
+            guidance = mk8s_node_subnet_capacity_guidance(
+                node_count=node_count,
+                subnet_cidrs=cidrs,
+            )
+            if not guidance:
+                return
+            guidance_key = f"{group_prefix}.subnet_capacity:{node_count}:{','.join(cidrs)}"
+            if guidance_key in emitted_guidance:
+                return
+            console.print(
+                f"{warning_markup('MK8s subnet capacity warning')}: {escape(guidance)}"
+            )
+            emitted_guidance.add(guidance_key)
+
         def _restart_group_creation(group_key: str) -> None:
             nonlocal pending_group_key
             node_groups.pop(group_key, None)
@@ -20716,6 +20791,10 @@ def _run_component_field_wizard(
                     "min_node_count": int(min_count),
                     "max_node_count": int(max_count),
                 }
+                _maybe_print_node_subnet_capacity_guidance(
+                    group_prefix=group_prefix,
+                    node_count=int(max_count),
+                )
             else:
                 node_count, status = _prompt_loop_value(
                     f"{group_prefix}.node_count",
@@ -20729,6 +20808,10 @@ def _run_component_field_wizard(
                     _restart_group_creation(group_key)
                     continue
                 group["node_count"] = int(node_count)
+                _maybe_print_node_subnet_capacity_guidance(
+                    group_prefix=group_prefix,
+                    node_count=int(node_count),
+                )
 
             resource, status = _prompt_loop_value(
                 f"{group_prefix}.resource",
