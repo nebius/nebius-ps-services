@@ -11,6 +11,9 @@ project folder.
 - Helm chart publication validation now lints charts with subcharts after
   resolving chart dependencies and can run chart-specific strict lint and
   smoke render combinations.
+- Helm chart publication now seeds a temporary Helm repository config from
+  remote `Chart.yaml` dependencies before building locked dependencies on
+  clean runners.
 - Removed the obsolete Soperator in-cluster NFS child chart from Soperator
   upstream-sync and Helm publish validation surfaces.
 - Reorganized the root README and changelog around monorepo ownership: root

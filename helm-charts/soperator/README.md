@@ -391,7 +391,9 @@ Release flow:
    `.github/workflows/helm-chart-publish.yml`.
 
 The shared publish workflow reads `.github/helm-chart-publish.json` to map the
-`soperator-chart` tag prefix to this chart.
+`soperator-chart` tag prefix to this chart. It seeds a temporary Helm repository
+config from this chart's remote dependencies before rebuilding `Chart.lock`
+dependencies on clean GitHub runners.
 
 The workflow publishes the package to a Nebius OCI registry path shaped like:
 
