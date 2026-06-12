@@ -4,6 +4,8 @@ All notable changes to this chart are tracked here.
 
 ## [Unreleased]
 
+## [soperator-chart-v4.0.2-ps.1] - 2026-06-12
+
 - Bumped Soperator upstream release to 4.0.2 and Helm chart package to
   4.0.2-ps.1.
 - Made the upstream sync workflow and `publish-helm.sh --prep` seed a fallback
