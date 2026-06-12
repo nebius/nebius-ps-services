@@ -2,12 +2,12 @@ apiVersion: v2
 name: soperator
 description: Self-managed Nebius Soperator deployment for MK8s clusters
 type: application
-version: 4.0.1-ps.1
-appVersion: "4.0.1"
+version: 4.0.2-ps.1
+appVersion: "4.0.2"
 kubeVersion: ">=1.29.0-0"
 annotations:
-  soperator.nebius.com/upstream-release: "4.0.1"
-  soperator.nebius.com/upstream-commit: "cc7f4e8157b76a323ffafc2a792981edf3cd808b"
+  soperator.nebius.com/upstream-release: "4.0.2"
+  soperator.nebius.com/upstream-commit: "7f1c4e817cab67e7b5d563bc11db2bff8c661189"
 dependencies:
   - name: kruise
     version: 1.8.0
@@ -18,19 +18,19 @@ dependencies:
     repository: https://helm.mariadb.com/mariadb-operator
     condition: mariadb-operator.installOperator
   - name: soperator-checks
-    version: 4.0.1-ps.1
+    version: 4.0.2-ps.1
     repository: file://../soperator-checks
     condition: soperator-checks.enabled
   - name: soperator-activechecks
-    version: 4.0.1-ps.1
+    version: 4.0.2-ps.1
     repository: file://../soperator-activechecks
     condition: soperator-activechecks.enabled
   - name: soperator-notifier
-    version: 4.0.1-ps.1
+    version: 4.0.2-ps.1
     repository: file://../soperator-notifier
     condition: soperator-notifier.enabled
   - name: soperator-backup-config
-    version: 4.0.1-ps.1
+    version: 4.0.2-ps.1
     repository: file://../soperator-backup-config
     condition: soperator-backup-config.enabled
   - name: k8up
@@ -38,7 +38,7 @@ dependencies:
     repository: https://k8up-io.github.io/k8up
     condition: soperator-backup-config.enabled
   - name: soperator-dcgm-exporter
-    version: 4.0.1-ps.1
+    version: 4.0.2-ps.1
     repository: file://../soperator-dcgm-exporter
     condition: soperator-dcgm-exporter.enabled
 home: https://docs.nebius.com/slurm-soperator/
