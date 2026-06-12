@@ -44,6 +44,28 @@ _NEBIUS_CPU_ONLY_AFFINITY = {
     }
 }
 
+def _required[T](value: T | None) -> T:
+    assert value is not None
+    return value
+
+
+def _repo_root() -> Path:
+    return Path(__file__).resolve().parents[1]
+
+
+def _repo_component_sources_payload() -> dict:
+    payload = yaml.safe_load((_repo_root() / "component_sources.yaml").read_text(encoding="utf-8"))
+    assert isinstance(payload, dict)
+    return payload
+
+
+def _repo_component_cli_settings_payload() -> dict:
+    payload = yaml.safe_load(
+        (_repo_root() / "component_cli_settings.yaml").read_text(encoding="utf-8")
+    )
+    assert isinstance(payload, dict)
+    return payload
+
 
 def _reset_sources_state() -> None:
     set_component_sources_file_override(None)
@@ -111,15 +133,17 @@ def _write_sources_file(
     module_name: str,
     local_source: str | None = None,
 ) -> None:
+    expected_cli = _repo_component_cli_settings_payload()["cli"]
     _write_catalog_file(
         path,
         {
             "cli": {
                 "flux": {
-                    "version": "v2.8.0",
+                    "version": expected_cli["flux"]["version"],
+                    "release_timeout": expected_cli["flux"]["release_timeout"],
                 },
                 "terraform": {
-                    "version": "1.15.5",
+                    "version": expected_cli["terraform"]["version"],
                 },
             },
             "components": {
@@ -234,9 +258,9 @@ def _portable_chart_source(*, repo: str, chart: str, version: str = "") -> dict[
 
 def test_bundled_catalog_exposes_soperator_and_nfs_local_sources() -> None:
     sources = load_component_sources(source_profile=SourceProfile.LOCAL)
-    catalog_path = Path(__file__).parents[1] / "component_sources.yaml"
-    catalog = yaml.safe_load(catalog_path.read_text(encoding="utf-8"))
-    raw_soperator = catalog["components"]["apps"]["soperator"]
+    catalog = _repo_component_sources_payload()
+    raw_apps = catalog["components"]["apps"]
+    raw_soperator = raw_apps["soperator"]
     assert raw_soperator["wizard_profile"] == "soperator"
     assert "wizard" not in raw_soperator
 
@@ -244,78 +268,81 @@ def test_bundled_catalog_exposes_soperator_and_nfs_local_sources() -> None:
     assert vpc.local_source is not None
     assert vpc.local_source.endswith("platform-infra/modules/vpc")
     assert vpc.description == "VPC network and optional subnets"
-    assert vpc.wizard_fields["inputs.network.existing_id"]["options"] == {
+    vpc_wizard_fields = _required(vpc.wizard_fields)
+    assert vpc_wizard_fields["inputs.network.existing_id"]["options"] == {
         "from": "project_networks",
         "auto_select_single": False,
         "skip_prompt_if_no_choices": True,
     }
-    network_type_hint = vpc.wizard_fields["inputs.network"]["type_hint"]
+    network_type_hint = vpc_wizard_fields["inputs.network"]["type_hint"]
     assert "ipv4_private_cidrs" in network_type_hint
     assert "ipv4_private_pool_ids" in network_type_hint
     assert "ipv4_private_source_pool_id" in network_type_hint
     assert "ipv4_public_pool_ids" in network_type_hint
-    assert vpc.wizard_fields["inputs.network.ipv4_private_cidrs"]["prompt"] is False
-    assert vpc.wizard_fields["inputs.network.ipv4_private_pool_ids"]["options"]["from"] == (
+    assert vpc_wizard_fields["inputs.network.ipv4_private_cidrs"]["prompt"] is False
+    assert vpc_wizard_fields["inputs.network.ipv4_private_pool_ids"]["options"]["from"] == (
         "project_private_pools"
     )
-    assert vpc.wizard_fields["inputs.network.ipv4_private_source_pool_id"]["options"]["from"] == (
+    assert vpc_wizard_fields["inputs.network.ipv4_private_source_pool_id"]["options"]["from"] == (
         "project_private_pools"
     )
-    assert vpc.wizard_fields["inputs.subnets"]["prompt"] is False
-    assert "prompt_complex" not in vpc.wizard_fields["inputs.subnets"]
+    assert vpc_wizard_fields["inputs.subnets"]["prompt"] is False
+    assert "prompt_complex" not in vpc_wizard_fields["inputs.subnets"]
 
     nfs = next(module for module in sources.tf_modules if module.module == "nfs")
     assert nfs.local_source is not None
     assert nfs.local_source.endswith("platform-infra/modules/nfs")
     assert nfs.description == "VM-based NFS bridge (non-HA)"
-    assert nfs.wizard_fields["inputs.subnet_id"]["options"] == {
+    nfs_wizard_fields = _required(nfs.wizard_fields)
+    assert nfs_wizard_fields["inputs.subnet_id"]["options"] == {
         "from": "project_subnets",
         "args": {"network_id_path": "inputs.network_id"},
         "auto_select_single": True,
     }
-    assert nfs.wizard_fields["inputs.network_id"]["options"] == {
+    assert nfs_wizard_fields["inputs.network_id"]["options"] == {
         "from": "project_networks",
         "auto_select_single": True,
     }
-    assert nfs.wizard_fields["inputs.network_id"]["required"] is True
+    assert nfs_wizard_fields["inputs.network_id"]["required"] is True
 
     nccl_chart = next(chart for chart in sources.helm_charts if chart.name == "nccl-test")
     assert nccl_chart.usage.lifecycle == "transient"
     assert nccl_chart.usage.config_ref == "deploy.targets[].validations.mk8s_gpu.nccl"
-    assert nfs.wizard_fields["inputs.platform"]["options"] == {
+    assert nfs_wizard_fields["inputs.platform"]["options"] == {
         "from": "compute_platforms",
     }
-    assert nfs.wizard_fields["inputs.preset"]["options"] == {
+    assert nfs_wizard_fields["inputs.preset"]["options"] == {
         "from": "compute_platform_presets",
         "args": {"platform_path": "inputs.platform"},
     }
-    assert nfs.wizard_fields["inputs.boot_disk_type"] == {
+    assert nfs_wizard_fields["inputs.boot_disk_type"] == {
         "options": {
             "from": "compute_boot_disk_types",
             "auto_select_first": True,
         }
     }
-    assert nfs.wizard_fields["inputs.data_disk_enabled"]["write_default_to_config"] is True
-    assert nfs.wizard_fields["inputs.data_disk_type"] == {
+    assert nfs_wizard_fields["inputs.data_disk_enabled"]["write_default_to_config"] is True
+    assert nfs_wizard_fields["inputs.data_disk_type"] == {
         "options": {
             "from": "compute_boot_disk_types",
             "auto_select_first": True,
         },
         "write_default_to_config": True,
     }
-    assert nfs.wizard_fields["inputs.data_disk_size_gib"]["write_default_to_config"] is True
+    assert nfs_wizard_fields["inputs.data_disk_size_gib"]["write_default_to_config"] is True
 
     sfs = next(module for module in sources.tf_modules if module.module == "sfs")
-    assert sfs.status is not None
-    assert sfs.status.kind == "nebius.compute.filesystem"
-    assert sfs.status.name_input == "name"
-    assert sfs.status.name_inputs == ("filesystems", "name")
-    assert sfs.wizard_fields["inputs.filesystems"] == {"prompt": False}
-    assert sfs.wizard_fields["inputs.parent_id"] == {
+    sfs_status = _required(sfs.status)
+    assert sfs_status.kind == "nebius.compute.filesystem"
+    assert sfs_status.name_input == "name"
+    assert sfs_status.name_inputs == ("filesystems", "name")
+    sfs_wizard_fields = _required(sfs.wizard_fields)
+    assert sfs_wizard_fields["inputs.filesystems"] == {"prompt": False}
+    assert sfs_wizard_fields["inputs.parent_id"] == {
         "prompt": False,
         "type_hint": "string",
     }
-    assert sfs.wizard_fields["inputs.type"]["sources"] == [
+    assert sfs_wizard_fields["inputs.type"]["sources"] == [
         {
             "source": "static",
             "values": [
@@ -338,56 +365,55 @@ def test_bundled_catalog_exposes_soperator_and_nfs_local_sources() -> None:
             ],
         }
     ]
-    assert sfs.wizard_fields["inputs.type"]["default"] == "NETWORK_SSD"
-    assert sfs.wizard_fields["inputs.type"]["write_default_to_config"] is True
-    assert sfs.wizard_fields["inputs.block_size_kib"] == {
+    assert sfs_wizard_fields["inputs.type"]["default"] == "NETWORK_SSD"
+    assert sfs_wizard_fields["inputs.type"]["write_default_to_config"] is True
+    assert sfs_wizard_fields["inputs.block_size_kib"] == {
         "default": 4,
         "write_default_to_config": True,
         "type_hint": "number",
     }
-    assert sfs.wizard_fields["inputs.mount_tag"] == {
+    assert sfs_wizard_fields["inputs.mount_tag"] == {
         "type_hint": "string",
     }
-    assert sfs.wizard_fields["inputs.name"] == {
+    assert sfs_wizard_fields["inputs.name"] == {
         "default": "sfs",
         "write_default_to_config": True,
         "type_hint": "string",
     }
-    assert sfs.wizard_fields["inputs.size_gib"] == {
+    assert sfs_wizard_fields["inputs.size_gib"] == {
         "default": 1024,
         "write_default_to_config": True,
         "type_hint": "number",
     }
-    assert sfs.wizard_fields["inputs.forbid_deletion"] == {
+    assert sfs_wizard_fields["inputs.forbid_deletion"] == {
         "default": False,
         "write_default_to_config": True,
         "type_hint": "bool",
     }
-    assert sfs.wizard_fields["inputs.filesystems.jail.name"] == {
+    assert sfs_wizard_fields["inputs.filesystems.jail.name"] == {
         "type_hint": "string",
     }
-    assert sfs.wizard_fields["inputs.filesystems.jail.size_gib"] == {
+    assert sfs_wizard_fields["inputs.filesystems.jail.size_gib"] == {
         "type_hint": "number",
     }
-    assert sfs.wizard_fields["inputs.filesystems.jail.block_size_kib"] == {
+    assert sfs_wizard_fields["inputs.filesystems.jail.block_size_kib"] == {
         "type_hint": "number",
     }
-    assert sfs.wizard_fields["inputs.filesystems.jail.mount_tag"] == {
+    assert sfs_wizard_fields["inputs.filesystems.jail.mount_tag"] == {
         "type_hint": "string",
     }
-    assert sfs.wizard_fields["inputs.filesystems.jail.forbid_deletion"] == {
+    assert sfs_wizard_fields["inputs.filesystems.jail.forbid_deletion"] == {
         "type_hint": "bool",
     }
 
     nfs_csi = next(chart for chart in sources.helm_charts if chart.name == "csi-driver-nfs")
-    assert (
-        nfs_csi.repo
-        == "https://raw.githubusercontent.com/kubernetes-csi/csi-driver-nfs/master/charts"
-    )
-    assert nfs_csi.chart_name == "csi-driver-nfs"
-    assert nfs_csi.version == "4.13.2"
-    assert nfs_csi.namespace == "kube-system"
-    assert nfs_csi.release_name == "csi-driver-nfs"
+    raw_nfs_csi = raw_apps["csi-driver-nfs"]
+    raw_nfs_csi_source = raw_nfs_csi["source"]["portable"]
+    assert nfs_csi.repo == raw_nfs_csi_source["repo"]
+    assert nfs_csi.chart_name == raw_nfs_csi_source["chart"]
+    assert nfs_csi.version == raw_nfs_csi_source["version"]
+    assert nfs_csi.namespace == raw_nfs_csi["release"]["namespace"]
+    assert nfs_csi.release_name == raw_nfs_csi["release"]["name"]
     nfs_csi_defaults = {default.target_path: default.value for default in nfs_csi.defaults}
     assert nfs_csi_defaults["values.storageClass.name"] == "nfs-rwx-retain"
     assert (
@@ -396,20 +422,23 @@ def test_bundled_catalog_exposes_soperator_and_nfs_local_sources() -> None:
     )
 
     soperator = next(chart for chart in sources.helm_charts if chart.name == "soperator")
-    assert soperator.source.path is not None
-    assert soperator.source.path.endswith("helm-charts/soperator")
-    assert soperator.version == "4.0.1-ps.1"
-    assert soperator.local_source.version == "4.0.1-ps.1"
-    assert soperator.portable_source.version == "4.0.1-ps.1"
-    assert soperator.namespace == "soperator"
-    assert soperator.release_name == "soperator"
-    assert soperator.release_timeout == "90m"
+    raw_soperator_source = raw_soperator["source"]
+    raw_soperator_portable = raw_soperator_source["portable"]
+    soperator_source_path = _required(soperator.source.path)
+    assert soperator_source_path.endswith("helm-charts/soperator")
+    assert soperator.version == raw_soperator_portable["version"]
+    assert soperator.local_source.version == raw_soperator_portable["version"]
+    assert soperator.portable_source.version == raw_soperator_portable["version"]
+    assert soperator.portable_source.repo == raw_soperator_portable["repo"]
+    assert soperator.namespace == raw_soperator["release"]["namespace"]
+    assert soperator.release_name == raw_soperator["release"]["name"]
+    assert soperator.release_timeout == raw_soperator["release"]["timeout"]
     assert soperator.release_install_after == ()
-    assert soperator.wizard_fields is not None
-    assert soperator.wizard_fields["namespace"] == {"prompt": False}
-    assert soperator.wizard_fields["release-name"] == {"prompt": False}
-    assert soperator.wizard_fields["values"] == {"prompt": False}
-    assert soperator.wizard_fields["install_mode"] == {
+    soperator_wizard_fields = _required(soperator.wizard_fields)
+    assert soperator_wizard_fields["namespace"] == {"prompt": False}
+    assert soperator_wizard_fields["release-name"] == {"prompt": False}
+    assert soperator_wizard_fields["values"] == {"prompt": False}
+    assert soperator_wizard_fields["install_mode"] == {
         "default": "production-cluster",
         "write_default_to_config": True,
         "type_hint": "string",
@@ -427,68 +456,68 @@ def test_bundled_catalog_exposes_soperator_and_nfs_local_sources() -> None:
             }
         ],
     }
-    assert soperator.wizard_fields["profile"]["default"] == "nebius-gpu-v1"
-    assert soperator.wizard_fields["profile"]["write_default_to_config"] is True
-    assert soperator.wizard_fields["profile"]["options"] == {"from": "soperator_nodesets_profiles"}
-    assert soperator.wizard_fields["values.partitionProfile"]["default"] == "shape-default"
-    assert soperator.wizard_fields["values.partitionProfile"]["write_default_to_config"] is True
-    assert soperator.wizard_fields["values.partitionProfile"]["options"] == {
+    assert soperator_wizard_fields["profile"]["default"] == "nebius-gpu-v1"
+    assert soperator_wizard_fields["profile"]["write_default_to_config"] is True
+    assert soperator_wizard_fields["profile"]["options"] == {"from": "soperator_nodesets_profiles"}
+    assert soperator_wizard_fields["values.partitionProfile"]["default"] == "shape-default"
+    assert soperator_wizard_fields["values.partitionProfile"]["write_default_to_config"] is True
+    assert soperator_wizard_fields["values.partitionProfile"]["options"] == {
         "from": "soperator_partition_profiles",
         "args": {"default": "shape-default"},
     }
-    assert soperator.wizard_fields["values.topologyProfile"]["default"] == "disabled"
-    assert soperator.wizard_fields["values.topologyProfile"]["write_default_to_config"] is True
-    assert soperator.wizard_fields["values.topologyProfile"]["options"] == {
+    assert soperator_wizard_fields["values.topologyProfile"]["default"] == "disabled"
+    assert soperator_wizard_fields["values.topologyProfile"]["write_default_to_config"] is True
+    assert soperator_wizard_fields["values.topologyProfile"]["options"] == {
         "from": "soperator_topology_profiles",
         "args": {"default": "disabled"},
     }
-    assert soperator.wizard_fields["values.soperator-activechecks.enabled"] == {
+    assert soperator_wizard_fields["values.soperator-activechecks.enabled"] == {
         "default": False,
         "write_default_to_config": True,
         "type_hint": "bool",
     }
-    assert soperator.wizard_fields["values.soperator-activechecks.waitForChecks.enabled"] == {
+    assert soperator_wizard_fields["values.soperator-activechecks.waitForChecks.enabled"] == {
         "default": False,
         "write_default_to_config": True,
         "type_hint": "bool",
     }
-    assert soperator.wizard_fields["values.soperator-checks.enabled"] == {
+    assert soperator_wizard_fields["values.soperator-checks.enabled"] == {
         "default": False,
         "write_default_to_config": True,
         "type_hint": "bool",
     }
-    assert soperator.wizard_fields["values.soperator-dcgm-exporter.enabled"] == {
+    assert soperator_wizard_fields["values.soperator-dcgm-exporter.enabled"] == {
         "default": False,
         "write_default_to_config": True,
         "type_hint": "bool",
     }
-    assert soperator.wizard_fields["values.qosConfiguration.enabled"] == {
+    assert soperator_wizard_fields["values.qosConfiguration.enabled"] == {
         "default": False,
         "write_default_to_config": True,
         "type_hint": "bool",
     }
-    assert "values.rebooter.enabled" not in soperator.wizard_fields
-    assert soperator.wizard_fields["values.sssd.enabled"] == {
+    assert "values.rebooter.enabled" not in soperator_wizard_fields
+    assert soperator_wizard_fields["values.sssd.enabled"] == {
         "default": False,
         "write_default_to_config": True,
         "type_hint": "bool",
     }
-    assert "values.nodesets[0].sssd.enabled" not in soperator.wizard_fields
-    assert "values.slurmNodes.sssd.enabled" not in soperator.wizard_fields
-    assert soperator.wizard_fields["values.nodeGroupMapping.worker"]["type_hint"] == "list(string)"
-    assert soperator.wizard_fields["values.nodeGroupMapping.worker"]["default_from"] == {
+    assert "values.nodesets[0].sssd.enabled" not in soperator_wizard_fields
+    assert "values.slurmNodes.sssd.enabled" not in soperator_wizard_fields
+    assert soperator_wizard_fields["values.nodeGroupMapping.worker"]["type_hint"] == "list(string)"
+    assert soperator_wizard_fields["values.nodeGroupMapping.worker"]["default_from"] == {
         "from": "soperator_node_groups",
         "args": {"role": "worker"},
     }
-    assert soperator.wizard_fields["values.nodeGroupMapping.controller"]["options"] == {
+    assert soperator_wizard_fields["values.nodeGroupMapping.controller"]["options"] == {
         "from": "soperator_node_groups",
         "args": {"role": "controller"},
     }
     assert (
-        soperator.wizard_fields["values.soperator-notifier.slack.webhookSource"]["default"]
+        soperator_wizard_fields["values.soperator-notifier.slack.webhookSource"]["default"]
         == "deploy-time"
     )
-    assert soperator.wizard_fields["values.soperator-notifier.slack.webhookSource"]["sources"] == [
+    assert soperator_wizard_fields["values.soperator-notifier.slack.webhookSource"]["sources"] == [
         {
             "source": "static",
             "values": [
@@ -504,7 +533,7 @@ def test_bundled_catalog_exposes_soperator_and_nfs_local_sources() -> None:
         }
     ]
     assert (
-        soperator.wizard_fields["values.soperator-backup-config.secret.name"]["default"]
+        soperator_wizard_fields["values.soperator-backup-config.secret.name"]["default"]
         == "jail-backup"
     )
     assert soperator.mk8s_gpu.install_after == (
@@ -925,15 +954,17 @@ def test_load_component_sources_reads_tf_modules_and_helm_entries(
 ) -> None:
     monkeypatch.chdir(tmp_path)
     sources_file = tmp_path / "component-sources.yaml"
+    expected_cli = _repo_component_cli_settings_payload()["cli"]
     _write_catalog_file(
         sources_file,
         _catalog(
             cli={
                 "flux": {
-                    "version": "v2.8.0",
+                    "version": expected_cli["flux"]["version"],
+                    "release_timeout": expected_cli["flux"]["release_timeout"],
                 },
                 "terraform": {
-                    "version": "1.15.5",
+                    "version": expected_cli["terraform"]["version"],
                 },
             },
             shared={
@@ -1004,9 +1035,9 @@ def test_load_component_sources_reads_tf_modules_and_helm_entries(
     reset_component_sources_cache()
 
     loaded = load_component_sources()
-    assert loaded.cli.flux.version == "v2.8.0"
-    assert loaded.cli.flux.release_timeout == "5m"
-    assert loaded.cli.terraform.version == "1.15.5"
+    assert loaded.cli.flux.version == expected_cli["flux"]["version"]
+    assert loaded.cli.flux.release_timeout == expected_cli["flux"]["release_timeout"]
+    assert loaded.cli.terraform.version == expected_cli["terraform"]["version"]
     assert loaded.tf_modules[0].module == "wireguard-gw"
     assert (
         loaded.tf_modules[0].source
@@ -1042,10 +1073,10 @@ def test_load_component_sources_reads_tf_modules_and_helm_entries(
     assert output_by_name["cluster_id"].kind == "terraform_output"
     assert output_by_name["cluster_id"].source_path == "cluster_id"
     assert loaded.tf_modules[0].handoff is None
-    assert loaded.tf_modules[0].status is not None
-    assert loaded.tf_modules[0].status.kind == "nebius.compute.instance"
-    assert loaded.tf_modules[0].status.parent_input == "parent_id"
-    assert loaded.tf_modules[0].status.name_input == "name"
+    loaded_module_status = _required(loaded.tf_modules[0].status)
+    assert loaded_module_status.kind == "nebius.compute.instance"
+    assert loaded_module_status.parent_input == "parent_id"
+    assert loaded_module_status.name_input == "name"
 
     assert loaded.helm_charts[0].name == "gateway-helm"
     assert loaded.helm_charts[0].chart_name == "gateway-helm"
@@ -1061,15 +1092,16 @@ def test_load_component_sources_reads_tf_modules_and_helm_entries(
 
 def test_app_release_timeout_inherits_global_flux_default(tmp_path: Path) -> None:
     sources_file = tmp_path / "component-sources.yaml"
+    expected_cli = _repo_component_cli_settings_payload()["cli"]
     _write_catalog_file(
         sources_file,
         _catalog(
             cli={
                 "flux": {
-                    "version": "v2.8.0",
+                    "version": expected_cli["flux"]["version"],
                     "release_timeout": "15m",
                 },
-                "terraform": {"version": "1.15.5"},
+                "terraform": {"version": expected_cli["terraform"]["version"]},
             },
             apps={
                 "demo-app": {
@@ -1118,10 +1150,10 @@ def test_load_component_sources_adds_builtin_mk8s_handoff(tmp_path: Path) -> Non
     assert output_by_name["cluster_id"].kind == "terraform_output"
     assert output_by_name["cluster_id"].source_path == "cluster_id"
     assert loaded.tf_modules[0].validation_profile == "mk8s_cluster"
-    assert loaded.tf_modules[0].handoff is not None
-    assert loaded.tf_modules[0].handoff.cluster_id_output_name == "cluster_id"
-    assert loaded.tf_modules[0].handoff.access_kind == "input"
-    assert loaded.tf_modules[0].handoff.access_source_path == "inputs.cluster.public_endpoint"
+    handoff = _required(loaded.tf_modules[0].handoff)
+    assert handoff.cluster_id_output_name == "cluster_id"
+    assert handoff.access_kind == "input"
+    assert handoff.access_source_path == "inputs.cluster.public_endpoint"
 
 
 def test_load_component_sources_rejects_public_validation_field(tmp_path: Path) -> None:
@@ -1151,12 +1183,13 @@ def test_load_component_sources_rejects_cli_settings_inside_source_catalog(
     tmp_path: Path,
 ) -> None:
     sources_file = tmp_path / "component_sources.yaml"
+    expected_cli = _repo_component_cli_settings_payload()["cli"]
     sources_file.write_text(
         yaml.safe_dump(
             {
                 "cli": {
                     "flux": {
-                        "version": "v2.8.0",
+                        "version": expected_cli["flux"]["version"],
                     }
                 },
                 "observability": {
@@ -1473,22 +1506,23 @@ def test_load_component_sources_expands_app_wizard_profile(tmp_path: Path) -> No
 
     loaded = load_component_sources(explicit=sources_file)
     chart = loaded.helm_charts[0]
+    chart_wizard_fields = _required(chart.wizard_fields)
 
-    assert chart.wizard_fields["install_mode"]["default"] == "production-cluster"
-    assert chart.wizard_fields["profile"]["options"] == {"from": "soperator_nodesets_profiles"}
-    assert chart.wizard_fields["values.partitionProfile"]["options"] == {
+    assert chart_wizard_fields["install_mode"]["default"] == "production-cluster"
+    assert chart_wizard_fields["profile"]["options"] == {"from": "soperator_nodesets_profiles"}
+    assert chart_wizard_fields["values.partitionProfile"]["options"] == {
         "from": "soperator_partition_profiles",
         "args": {"default": "shape-default"},
     }
-    assert chart.wizard_fields["values.topologyProfile"]["options"] == {
+    assert chart_wizard_fields["values.topologyProfile"]["options"] == {
         "from": "soperator_topology_profiles",
         "args": {"default": "disabled"},
     }
-    assert chart.wizard_fields["values.nodeGroupMapping.worker"]["default_from"] == {
+    assert chart_wizard_fields["values.nodeGroupMapping.worker"]["default_from"] == {
         "from": "soperator_node_groups",
         "args": {"role": "worker"},
     }
-    assert chart.wizard_fields["values.soperator-activechecks.enabled"] == {
+    assert chart_wizard_fields["values.soperator-activechecks.enabled"] == {
         "default": False,
         "write_default_to_config": True,
         "type_hint": "bool",
@@ -2514,10 +2548,10 @@ def test_bundled_object_storage_declares_bucket_status_watcher() -> None:
     object_storage = next(item for item in loaded.tf_modules if item.module == "object-storage")
 
     assert object_storage.validation_profile == ""
-    assert object_storage.status is not None
-    assert object_storage.status.kind == "nebius.storage.bucket"
-    assert object_storage.status.parent_input == "parent_id"
-    assert object_storage.status.name_input == "name"
+    object_storage_status = _required(object_storage.status)
+    assert object_storage_status.kind == "nebius.storage.bucket"
+    assert object_storage_status.parent_input == "parent_id"
+    assert object_storage_status.name_input == "name"
     assert [bucket.name for bucket in object_storage.observability.service_metrics] == [
         "sp_storage"
     ]
@@ -2530,10 +2564,10 @@ def test_bundled_mysterybox_declares_secret_status_watcher() -> None:
     )
     mysterybox = next(item for item in loaded.tf_modules if item.module == "mysterybox")
 
-    assert mysterybox.status is not None
-    assert mysterybox.status.kind == "nebius.mysterybox.secret"
-    assert mysterybox.status.parent_input == "parent_id"
-    assert mysterybox.status.name_input == "secrets"
+    mysterybox_status = _required(mysterybox.status)
+    assert mysterybox_status.kind == "nebius.mysterybox.secret"
+    assert mysterybox_status.parent_input == "parent_id"
+    assert mysterybox_status.name_input == "secrets"
 
 
 def test_bundled_vm_like_modules_declare_compute_instance_status_watchers() -> None:
@@ -2545,20 +2579,20 @@ def test_bundled_vm_like_modules_declare_compute_instance_status_watchers() -> N
     ssh = next(item for item in loaded.tf_modules if item.module == "ssh-jumphost")
 
     assert vm.validation_profile == "vm_instance"
-    assert vm.status is not None
-    assert vm.status.kind == "nebius.compute.instance"
-    assert vm.status.parent_input == "parent_id"
-    assert vm.status.name_input == "name"
+    vm_status = _required(vm.status)
+    assert vm_status.kind == "nebius.compute.instance"
+    assert vm_status.parent_input == "parent_id"
+    assert vm_status.name_input == "name"
 
-    assert wireguard.status is not None
-    assert wireguard.status.kind == "nebius.compute.instance"
-    assert wireguard.status.parent_input == "parent_id"
-    assert wireguard.status.name_input == "name"
+    wireguard_status = _required(wireguard.status)
+    assert wireguard_status.kind == "nebius.compute.instance"
+    assert wireguard_status.parent_input == "parent_id"
+    assert wireguard_status.name_input == "name"
 
-    assert ssh.status is not None
-    assert ssh.status.kind == "nebius.compute.instance"
-    assert ssh.status.parent_input == "parent_id"
-    assert ssh.status.name_input == "name"
+    ssh_status = _required(ssh.status)
+    assert ssh_status.kind == "nebius.compute.instance"
+    assert ssh_status.parent_input == "parent_id"
+    assert ssh_status.name_input == "name"
 
 
 def test_bundled_wireguard_gw_declares_runtime_defaults_in_catalog() -> None:
@@ -2796,67 +2830,68 @@ def test_bundled_mk8s_declares_optional_wizard_field_override() -> None:
         "-x",
         "NCCL_DMABUF_ENABLE=1",
     )
-    assert mk8s.wizard_fields["inputs.cluster"]["prompt"] is False
-    assert mk8s.wizard_fields["inputs.cluster.parent_id"] == {
+    mk8s_wizard_fields = _required(mk8s.wizard_fields)
+    assert mk8s_wizard_fields["inputs.cluster"]["prompt"] is False
+    assert mk8s_wizard_fields["inputs.cluster.parent_id"] == {
         "prompt": False,
         "type_hint": "string",
     }
-    assert mk8s.wizard_fields["inputs.cluster.cluster_name"] == {
+    assert mk8s_wizard_fields["inputs.cluster.cluster_name"] == {
         "required": True,
         "type_hint": "string",
     }
-    assert mk8s.wizard_fields["inputs.cluster.network_id"]["options"] == {
+    assert mk8s_wizard_fields["inputs.cluster.network_id"]["options"] == {
         "from": "project_networks",
         "auto_select_single": True,
     }
-    assert mk8s.wizard_fields["inputs.cluster.network_id"]["required"] is True
-    assert mk8s.wizard_fields["inputs.cluster.subnet_id"]["options"] == {
+    assert mk8s_wizard_fields["inputs.cluster.network_id"]["required"] is True
+    assert mk8s_wizard_fields["inputs.cluster.subnet_id"]["options"] == {
         "from": "project_subnets",
         "args": {"network_id_path": "inputs.cluster.network_id"},
         "auto_select_single": True,
     }
-    assert mk8s.wizard_fields["inputs.cluster.subnet_id"]["required"] is True
-    assert mk8s.wizard_fields["inputs.cluster.k8s_version"]["options"] == {
+    assert mk8s_wizard_fields["inputs.cluster.subnet_id"]["required"] is True
+    assert mk8s_wizard_fields["inputs.cluster.k8s_version"]["options"] == {
         "from": "mk8s_control_plane_versions",
         "auto_select_first": True,
     }
-    assert mk8s.wizard_fields["inputs.cluster.k8s_version"]["required"] is True
-    assert mk8s.wizard_fields["inputs.cluster.public_endpoint"] == {
+    assert mk8s_wizard_fields["inputs.cluster.k8s_version"]["required"] is True
+    assert mk8s_wizard_fields["inputs.cluster.public_endpoint"] == {
         "default": True,
         "write_default_to_config": True,
         "type_hint": "bool",
     }
-    assert mk8s.wizard_fields["inputs.node_group_defaults.gpu.platform"]["options"] == {
+    assert mk8s_wizard_fields["inputs.node_group_defaults.gpu.platform"]["options"] == {
         "from": "mk8s_compatible_platforms",
         "args": {"platform_prefix": "gpu-"},
     }
-    assert mk8s.wizard_fields["inputs.node_groups"]["prompt"] is False
-    assert mk8s.wizard_fields["inputs.node_groups.system.node_count"] == {
+    assert mk8s_wizard_fields["inputs.node_groups"]["prompt"] is False
+    assert mk8s_wizard_fields["inputs.node_groups.system.node_count"] == {
         "default": 2,
         "write_default_to_config": True,
         "required": True,
         "type_hint": "number",
     }
-    assert mk8s.wizard_fields["inputs.node_groups.system.platform"]["options"] == {
+    assert mk8s_wizard_fields["inputs.node_groups.system.platform"]["options"] == {
         "from": "mk8s_compatible_platforms",
         "args": {"platform_prefix": "cpu-"},
     }
-    assert mk8s.wizard_fields["inputs.node_groups.system.preset"]["options"] == {
+    assert mk8s_wizard_fields["inputs.node_groups.system.preset"]["options"] == {
         "from": "compute_platform_presets",
         "args": {"platform_path": "inputs.node_groups.system.platform"},
     }
-    assert mk8s.wizard_fields["inputs.gpu_clusters"]["prompt"] is False
+    assert mk8s_wizard_fields["inputs.gpu_clusters"]["prompt"] is False
     assert (
-        mk8s.wizard_fields["inputs.node_group_defaults.gpu.gpu_stack_source"]["default"]
+        mk8s_wizard_fields["inputs.node_group_defaults.gpu.gpu_stack_source"]["default"]
         == "nebius_image"
     )
     assert (
-        mk8s.wizard_fields["inputs.node_group_defaults.gpu.gpu_stack_source"][
+        mk8s_wizard_fields["inputs.node_group_defaults.gpu.gpu_stack_source"][
             "write_default_to_config"
         ]
         is True
     )
-    assert mk8s.wizard_fields["inputs.node_group_defaults.gpu.infiniband_fabric"] == {
+    assert mk8s_wizard_fields["inputs.node_group_defaults.gpu.infiniband_fabric"] == {
         "options": {
             "from": "mk8s_infiniband_fabrics",
             "args": {
@@ -2867,7 +2902,7 @@ def test_bundled_mk8s_declares_optional_wizard_field_override() -> None:
             "skip_prompt_if_no_choices": True,
         }
     }
-    assert mk8s.wizard_fields["inputs.soperator.worker_total_nodes"] == {
+    assert mk8s_wizard_fields["inputs.soperator.worker_total_nodes"] == {
         "default": 1,
         "write_default_to_config": True,
         "type_hint": "number",
@@ -2878,31 +2913,31 @@ def test_bundled_mk8s_declares_optional_wizard_field_override() -> None:
         "login_node_count",
         "accounting_node_count",
     ):
-        assert mk8s.wizard_fields[f"inputs.soperator.{field}"] == {
+        assert mk8s_wizard_fields[f"inputs.soperator.{field}"] == {
             "default": 1,
             "write_default_to_config": True,
             "type_hint": "number",
         }
     for role in ("system", "controller", "login", "accounting", "worker"):
-        assert mk8s.wizard_fields[f"inputs.soperator.{role}_autoscaling.enabled"] == {
+        assert mk8s_wizard_fields[f"inputs.soperator.{role}_autoscaling.enabled"] == {
             "default": False,
             "write_default_to_config": True,
             "type_hint": "bool",
         }
-        assert mk8s.wizard_fields[f"inputs.soperator.{role}_autoscaling.min_node_count"] == {
+        assert mk8s_wizard_fields[f"inputs.soperator.{role}_autoscaling.min_node_count"] == {
             "default": 1,
             "write_default_to_config": True,
             "type_hint": "number",
         }
-        assert mk8s.wizard_fields[f"inputs.soperator.{role}_autoscaling.max_node_count"] == {
+        assert mk8s_wizard_fields[f"inputs.soperator.{role}_autoscaling.max_node_count"] == {
             "default": 1,
             "write_default_to_config": True,
             "type_hint": "number",
         }
-    assert "inputs.gpu_enabled" not in mk8s.wizard_fields
-    assert "inputs.gpu_node_groups" not in mk8s.wizard_fields
-    assert "inputs.mk8s_gpu_node_group_overrides" not in mk8s.wizard_fields
-    assert mk8s.wizard_fields[
+    assert "inputs.gpu_enabled" not in mk8s_wizard_fields
+    assert "inputs.gpu_node_groups" not in mk8s_wizard_fields
+    assert "inputs.mk8s_gpu_node_group_overrides" not in mk8s_wizard_fields
+    assert mk8s_wizard_fields[
         "deploy.targets[].validations.mk8s_gpu.operator_readiness.enabled"
     ] == {
         "default": True,
@@ -2910,20 +2945,22 @@ def test_bundled_mk8s_declares_optional_wizard_field_override() -> None:
         "required": True,
         "type_hint": "bool",
     }
-    assert mk8s.wizard_fields["deploy.targets[].validations.mk8s_gpu.gpu_visibility.max_nodes"] == {
+    assert mk8s_wizard_fields[
+        "deploy.targets[].validations.mk8s_gpu.gpu_visibility.max_nodes"
+    ] == {
         "default": 3,
         "write_default_to_config": True,
         "type_hint": "number",
     }
-    assert mk8s.wizard_fields["deploy.targets[].validations.mk8s_gpu.nccl.max_nodes"] == {
+    assert mk8s_wizard_fields["deploy.targets[].validations.mk8s_gpu.nccl.max_nodes"] == {
         "default": 8,
         "write_default_to_config": True,
         "type_hint": "number",
     }
-    assert mk8s.wizard_fields["deploy.targets[].observability.kubernetes.logs.enabled"] == {
+    assert mk8s_wizard_fields["deploy.targets[].observability.kubernetes.logs.enabled"] == {
         "default": True,
     }
-    assert mk8s.wizard_fields["deploy.targets[].secrets.mysterybox.enabled"] == {
+    assert mk8s_wizard_fields["deploy.targets[].secrets.mysterybox.enabled"] == {
         "default": True,
         "write_default_to_config": True,
     }
@@ -3650,12 +3687,13 @@ def test_load_component_sources_rejects_unsupported_config_bindings_field(
 ) -> None:
     monkeypatch.chdir(tmp_path)
     sources_file = tmp_path / "component_sources.yaml"
+    expected_cli = _repo_component_cli_settings_payload()["cli"]
     _write_catalog_file(
         sources_file,
         _catalog(
             cli={
                 "flux": {
-                    "version": "v2.8.0",
+                    "version": expected_cli["flux"]["version"],
                 }
             },
             infra={

@@ -3,7 +3,9 @@ from __future__ import annotations
 import json
 import re
 import subprocess
+from collections.abc import Sequence
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -20,7 +22,7 @@ from nebius_cxcli.soperator_onboarding import (
 )
 
 
-def _snapshot(version: str = "3.0.5") -> dict[str, object]:
+def _snapshot(version: str = "3.0.5") -> dict[str, Any]:
     return {
         "node_groups": {
             "gpu-pool": {
@@ -50,8 +52,8 @@ def _snapshot(version: str = "3.0.5") -> dict[str, object]:
     }
 
 
-def _source_worker_nodeset(name: str, *, gpu: bool) -> dict[str, object]:
-    slurmd_resources: dict[str, object] = {
+def _source_worker_nodeset(name: str, *, gpu: bool) -> dict[str, Any]:
+    slurmd_resources: dict[str, Any] = {
         "cpu": "127000m" if gpu else "15000m",
         "memory": "1438Gi" if gpu else "55Gi",
         "ephemeralStorage": "387Gi",
@@ -115,7 +117,7 @@ def _source_worker_nodeset(name: str, *, gpu: bool) -> dict[str, object]:
     }
 
 
-def _source_report(snapshot: dict[str, object] | None = None) -> dict[str, object]:
+def _source_report(snapshot: dict[str, Any] | None = None) -> dict[str, Any]:
     snapshot = snapshot or _snapshot()
     report = analyze_soperator_onboarding_snapshot(
         snapshot,
@@ -131,7 +133,7 @@ def _source_report(snapshot: dict[str, object] | None = None) -> dict[str, objec
     }
 
 
-def _ready_node_group_status(version: str = "1.31", *, nodes: int = 1) -> dict[str, object]:
+def _ready_node_group_status(version: str = "1.31", *, nodes: int = 1) -> dict[str, Any]:
     return {
         "version": version,
         "ready_node_count": nodes,
@@ -142,8 +144,8 @@ def _ready_node_group_status(version: str = "1.31", *, nodes: int = 1) -> dict[s
     }
 
 
-def _payload(*, include_role_mapping: bool = False) -> dict[str, object]:
-    values: dict[str, object] = {}
+def _payload(*, include_role_mapping: bool = False) -> dict[str, Any]:
+    values: dict[str, Any] = {}
     if include_role_mapping:
         values["nodeGroupMapping"] = {
             "system": ["cpu-pool"],
@@ -152,7 +154,7 @@ def _payload(*, include_role_mapping: bool = False) -> dict[str, object]:
             "accounting": ["cpu-pool"],
             "worker": ["gpu-pool"],
         }
-    payload: dict[str, object] = {
+    payload: dict[str, Any] = {
         "client_info": {
             "nebius": {
                 "tenant_id": "tenant-123",
@@ -233,7 +235,7 @@ def _payload(*, include_role_mapping: bool = False) -> dict[str, object]:
     return payload
 
 
-def _add_external_gpu_cluster_inventory(payload: dict[str, object]) -> None:
+def _add_external_gpu_cluster_inventory(payload: dict[str, Any]) -> None:
     target = payload["deploy"]["targets"][0]  # type: ignore[index]
     assert isinstance(target, dict)
     target["inventory"] = {
@@ -276,27 +278,27 @@ class _FakeCommandRunner:
     def __init__(
         self,
         *,
-        existing_filesystems: dict[str, dict[str, object]] | None = None,
+        existing_filesystems: dict[str, dict[str, Any]] | None = None,
         helm_errors: list[str] | None = None,
-        helm_history: list[dict[str, object]] | None = None,
-        existing_node_groups: list[dict[str, object]] | None = None,
-        live_nodes: list[dict[str, object]] | None = None,
-        live_pods: list[dict[str, object]] | None = None,
-        live_pvcs: list[dict[str, object]] | None = None,
-        live_slurmclusters: list[dict[str, object]] | None = None,
-        live_nodesets: dict[str, dict[str, object]] | None = None,
-        live_flux_helmreleases: list[dict[str, object]] | None = None,
+        helm_history: list[dict[str, Any]] | None = None,
+        existing_node_groups: list[dict[str, Any]] | None = None,
+        live_nodes: list[dict[str, Any]] | None = None,
+        live_pods: list[dict[str, Any]] | None = None,
+        live_pvcs: list[dict[str, Any]] | None = None,
+        live_slurmclusters: list[dict[str, Any]] | None = None,
+        live_nodesets: dict[str, dict[str, Any]] | None = None,
+        live_flux_helmreleases: list[dict[str, Any]] | None = None,
         helm_statuses: dict[tuple[str, str], str] | None = None,
-        helm_releases: list[dict[str, object]] | None = None,
+        helm_releases: list[dict[str, Any]] | None = None,
         helm_manifests: dict[tuple[str, str], str] | None = None,
-        live_workloads: dict[tuple[str, str, str], dict[str, object]] | None = None,
-        live_kubernetes_resources: dict[str, list[dict[str, object]]] | None = None,
-        helm_storage_secrets: list[dict[str, object]] | None = None,
+        live_workloads: dict[tuple[str, str, str], dict[str, Any]] | None = None,
+        live_kubernetes_resources: dict[str, list[dict[str, Any]]] | None = None,
+        helm_storage_secrets: list[dict[str, Any]] | None = None,
         worker_topology_by_nodeset: dict[str, dict[str, int]] | None = None,
         slurm_resource_names: list[str] | None = None,
         slurm_queue_output: str = "",
         slurm_queue_returncode: int = 0,
-        cluster: dict[str, object] | None = None,
+        cluster: dict[str, Any] | None = None,
     ) -> None:
         self.calls: list[tuple[tuple[str, ...], str | None]] = []
         self.existing_filesystems = existing_filesystems or {}
@@ -446,7 +448,7 @@ spec:
         )
         self.slurm_queue_output = slurm_queue_output
         self.slurm_queue_returncode = slurm_queue_returncode
-        self.file_update_payloads: list[dict[str, object]] = []
+        self.file_update_payloads: list[dict[str, Any]] = []
 
     def _upsert_helm_release(
         self,
@@ -476,14 +478,14 @@ spec:
         release_name: str,
         revision: str = "",
     ) -> None:
-        def _metadata_labels(secret: dict[str, object]) -> dict[str, object]:
+        def _metadata_labels(secret: dict[str, Any]) -> dict[str, Any]:
             metadata = secret.get("metadata")
             if not isinstance(metadata, dict):
                 return {}
             labels = metadata.get("labels")
             return labels if isinstance(labels, dict) else {}
 
-        def _secret_matches(secret: dict[str, object]) -> bool:
+        def _secret_matches(secret: dict[str, Any]) -> bool:
             labels = _metadata_labels(secret)
             if str(labels.get("name", "")) != release_name:
                 return False
@@ -514,7 +516,7 @@ spec:
         namespace: str = "",
     ) -> None:
         resources = self.live_kubernetes_resources.get(resource_type, [])
-        kept: list[dict[str, object]] = []
+        kept: list[dict[str, Any]] = []
         for item in resources:
             metadata = item.get("metadata")
             if not isinstance(metadata, dict):
@@ -529,14 +531,14 @@ spec:
 
     def __call__(
         self,
-        args,
+        args: Sequence[str],
         *,
         input_text: str | None = None,
         timeout_seconds: int = 300,
         check: bool = True,
     ) -> SoperatorMigrationCommandResult:
         del timeout_seconds
-        command = tuple(str(item) for item in args)
+        command: Any = tuple(str(item) for item in args)
         self.calls.append((command, input_text))
         if command[:4] == ("nebius", "compute", "filesystem", "get-by-name"):
             name = command[command.index("--name") + 1]
@@ -1010,7 +1012,7 @@ spec:
             kind = kind_by_resource.get(resource)
             workload = self.live_workloads.get((kind or "", namespace, name))
             if workload is not None:
-                payload = dict(workload)
+                payload: dict[str, Any] = dict(workload)
                 payload.setdefault("kind", kind)
                 payload.setdefault("metadata", {})
                 if isinstance(payload["metadata"], dict):
@@ -1250,7 +1252,7 @@ spec:
         return SoperatorMigrationCommandResult(command, 0, "{}", "")
 
 
-def _target_node_group(role: str, *, missing_role_label: bool = False) -> dict[str, object]:
+def _target_node_group(role: str, *, missing_role_label: bool = False) -> dict[str, Any]:
     labels: dict[str, str] = {} if missing_role_label else {"slurm.nebius.ai/nodeset-name": role}
     if role != "worker":
         labels["nebius.com/gpu"] = "false"
@@ -1306,7 +1308,7 @@ def _legacy_service_node_group(
     *,
     fixed_node_count: int = 1,
     preset: str = "4vcpu-16gb",
-) -> dict[str, object]:
+) -> dict[str, Any]:
     labels = {
         "slurm.nebius.ai/nodeset": role,
         "slurm.nebius.ai/workload": "cpu",
@@ -1340,7 +1342,7 @@ def _legacy_service_node_group(
     }
 
 
-def _snapshot_with_compute_source() -> dict[str, object]:
+def _snapshot_with_compute_source() -> dict[str, Any]:
     snapshot = _snapshot()
     node_groups = snapshot["node_groups"]
     assert isinstance(node_groups, dict)
@@ -1456,7 +1458,7 @@ def test_quota_preflight_does_not_count_preserved_worker_groups(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     snapshot = _snapshot_with_compute_source()
-    recorded_inputs: list[dict[str, object]] = []
+    recorded_inputs: list[dict[str, Any]] = []
 
     def _record_quota_inputs(**kwargs: object):
         inputs = kwargs.get("inputs")
@@ -1502,7 +1504,7 @@ def test_worker_safe_surge_quota_preflight_counts_active_wave(
     onboarding = payload["deploy"]["targets"][0]["soperator_onboarding"]  # type: ignore[index]
     assert isinstance(onboarding, dict)
     rollout = migration.resolve_external_node_template_rollout(onboarding)
-    recorded_inputs: list[dict[str, object]] = []
+    recorded_inputs: list[dict[str, Any]] = []
 
     def _record_quota_inputs(**kwargs: object):
         inputs = kwargs.get("inputs")
@@ -2276,16 +2278,16 @@ def test_source_flux_cleanup_treats_missing_patch_targets_as_idempotent() -> Non
     calls: list[tuple[tuple[str, ...], bool]] = []
 
     def runner(
-        command: tuple[str, ...] | list[str],
+        args: Sequence[str],
         *,
         input_text: str | None = None,
         timeout_seconds: int = 300,
         check: bool = True,
     ) -> SoperatorMigrationCommandResult:
         del input_text, timeout_seconds
-        args = tuple(command)
-        calls.append((args, check))
-        if args == (
+        command = tuple(args)
+        calls.append((command, check))
+        if command == (
             "kubectl",
             "--context",
             "external-context",
@@ -2296,10 +2298,10 @@ def test_source_flux_cleanup_treats_missing_patch_targets_as_idempotent() -> Non
             "json",
             "--request-timeout=20s",
         ):
-            return SoperatorMigrationCommandResult(args, 0, json.dumps(payload), "")
+            return SoperatorMigrationCommandResult(command, 0, json.dumps(payload), "")
         if (
-            len(args) >= 8
-            and args[:6]
+            len(command) >= 8
+            and command[:6]
             == (
                 "kubectl",
                 "--context",
@@ -2308,19 +2310,19 @@ def test_source_flux_cleanup_treats_missing_patch_targets_as_idempotent() -> Non
                 "flux-system",
                 "patch",
             )
-            and args[6]
+            and command[6]
             in {
                 "helmrelease.helm.toolkit.fluxcd.io",
                 "kustomization.kustomize.toolkit.fluxcd.io",
             }
         ):
             return SoperatorMigrationCommandResult(
-                args,
+                command,
                 1,
                 "",
                 'Error from server (NotFound): helmreleases.helm.toolkit.fluxcd.io "missing" not found',
             )
-        if len(args) >= 8 and args[:7] == (
+        if len(command) >= 8 and command[:7] == (
             "kubectl",
             "--context",
             "external-context",
@@ -2329,8 +2331,8 @@ def test_source_flux_cleanup_treats_missing_patch_targets_as_idempotent() -> Non
             "delete",
             "helmrelease.helm.toolkit.fluxcd.io",
         ):
-            return SoperatorMigrationCommandResult(args, 0, "", "")
-        raise AssertionError(args)
+            return SoperatorMigrationCommandResult(command, 0, "", "")
+        raise AssertionError(command)
 
     suspended, suspended_kustomizations = migration._suspend_source_flux_helmreleases(
         command_runner=runner,
@@ -2411,7 +2413,7 @@ def test_target_gpu_stack_remediation_applies_catalog_post_render_patches() -> N
     payload = _payload()
     _add_external_gpu_cluster_inventory(payload)
     runner = _FakeCommandRunner()
-    checkpoint: dict[str, object] = {}
+    checkpoint: dict[str, Any] = {}
 
     mutated, lines = migration._execute_target_gpu_stack_remediation_phase(
         checkpoint=checkpoint,
@@ -2576,13 +2578,13 @@ def test_execute_runs_configured_mk8s_gpu_validations_during_validation_hold(
             "report_file": "other-nccl-test-report.json",
         },
     ]
-    calls: list[dict[str, object]] = []
+    calls: list[dict[str, Any]] = []
 
-    def _fake_specs(_payload: object) -> list[dict[str, object]]:
+    def _fake_specs(_payload: object) -> list[dict[str, Any]]:
         return [dict(item) for item in specs]
 
     def _fake_run(
-        validations: list[dict[str, object]],
+        validations: list[dict[str, Any]],
         *,
         reports_dir: Path,
         extra_env: dict[str, str] | None,
@@ -4320,7 +4322,7 @@ def test_scale_down_legacy_soperator_controller_deployments() -> None:
             ],
         }
     )
-    phase: dict[str, object] = {}
+    phase: dict[str, Any] = {}
 
     changed, lines = migration._scale_down_legacy_soperator_controllers(  # noqa: SLF001
         command_runner=runner,
@@ -4410,7 +4412,7 @@ def test_scale_down_legacy_v1_soperator_controller_identities() -> None:
             ],
         }
     )
-    phase: dict[str, object] = {}
+    phase: dict[str, Any] = {}
 
     changed, lines = migration._scale_down_legacy_soperator_controllers(  # noqa: SLF001
         command_runner=runner,

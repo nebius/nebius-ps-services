@@ -6,6 +6,8 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Changed the bundled Soperator portable app source to the published Nebius OCI
+  chart at version `4.0.1-ps.2`.
 - Added MK8s VPC subnet capacity guidance and validation. The wizard now warns
   when a selected explicit subnet CIDR cannot fit the entered node count or
   autoscaling maximum, and `validate` fails live or planned explicit subnets

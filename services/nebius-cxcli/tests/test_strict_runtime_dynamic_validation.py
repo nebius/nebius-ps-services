@@ -943,16 +943,19 @@ def test_validate_enabled_chart_sources_uses_catalog_chart_name_for_oci_repo(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     payload = _starter_payload(selected_infra={"mk8s"}, selected_apps=set())
+    network_operator = next(
+        entry for entry in component_entries("apps") if entry.id == "nvidia-network-operator"
+    )
     payload["apps"]["charts"] = [
         {
             "id": "nvidia-network-operator",
             "instance_id": "mk8s",
             "enabled": True,
             "group": "platform",
-            "repo": "oci://cr.eu-north1.nebius.cloud/marketplace/nebius/nvidia-network-operator/chart/network-operator",
-            "version": "25.7.0",
-            "namespace": "nvidia-network-operator",
-            "release-name": "network-operator",
+            "repo": network_operator.source,
+            "version": network_operator.version,
+            "namespace": network_operator.default_namespace,
+            "release-name": network_operator.default_release_name,
             "values": {},
         }
     ]
@@ -981,7 +984,7 @@ def test_validate_enabled_chart_sources_uses_catalog_chart_name_for_oci_repo(
     issues = _validate_enabled_chart_sources(config, chart_meta_cache={})
     assert issues == []
     assert captured == {
-        "chart_name": "network-operator",
-        "chart_repo": "oci://cr.eu-north1.nebius.cloud/marketplace/nebius/nvidia-network-operator/chart/network-operator",
-        "chart_version": "25.7.0",
+        "chart_name": network_operator.chart_name,
+        "chart_repo": network_operator.source,
+        "chart_version": network_operator.version,
     }

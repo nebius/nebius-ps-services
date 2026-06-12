@@ -334,6 +334,9 @@ def test_starter_payload_names_target_bound_app_instances() -> None:
 
 
 def test_starter_payload_local_profile_uses_local_chart_and_portable_fallback() -> None:
+    infra_entries = component_entries("infra", source_profile=SourceProfile.LOCAL)
+    app_entries = component_entries("apps", source_profile=SourceProfile.LOCAL)
+    app_entry_by_id = {entry.id: entry for entry in app_entries}
     payload = yaml.safe_load(
         starter_config_yaml(
             client_name="client-a",
@@ -343,8 +346,8 @@ def test_starter_payload_local_profile_uses_local_chart_and_portable_fallback() 
             email="ops@example.com",
             selected_infra={"mk8s"},
             selected_apps={"cert-manager", "soperator"},
-            infra_entries=component_entries("infra", source_profile=SourceProfile.LOCAL),
-            app_entries=component_entries("apps", source_profile=SourceProfile.LOCAL),
+            infra_entries=infra_entries,
+            app_entries=app_entries,
         )
     )
     assert isinstance(payload, dict)
@@ -356,10 +359,10 @@ def test_starter_payload_local_profile_uses_local_chart_and_portable_fallback() 
 
     assert soperator["enabled"] is True
     assert soperator["repo"] == ""
-    assert soperator["version"] == "4.0.1-ps.1"
+    assert soperator["version"] == app_entry_by_id["soperator"].version
     assert cert_manager["enabled"] is True
-    assert cert_manager["repo"] == "oci://quay.io/jetstack/charts/cert-manager"
-    assert cert_manager["version"] == "v1.19.2"
+    assert cert_manager["repo"] == app_entry_by_id["cert-manager"].source
+    assert cert_manager["version"] == app_entry_by_id["cert-manager"].version
 
 
 def test_create_writes_runtime_shape_with_selected_components(tmp_path: Path) -> None:

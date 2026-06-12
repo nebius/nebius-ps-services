@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import json
 import subprocess
+from collections.abc import Iterator
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 import yaml
@@ -17,14 +19,14 @@ from nebius_cxcli.grafana_dashboard_export import (
 
 
 @pytest.fixture(autouse=True)
-def _reset_sources_cache() -> None:
+def _reset_sources_cache() -> Iterator[None]:
     reset_component_sources_cache()
     yield
     reset_component_sources_cache()
 
 
 def _write_grafana_catalog(path: Path, *, gnet_folder: str = "") -> None:
-    dashboard_defaults: dict[str, object] = {}
+    dashboard_defaults: dict[str, Any] = {}
     if gnet_folder:
         dashboard_defaults[gnet_folder] = {
             "service-dashboard": {
@@ -304,7 +306,10 @@ def test_datasource_selection_and_rewrite_uses_catalog_uid_and_type() -> None:
     ]
 
     selected = grafana_export.select_catalog_datasource(dashboard, datasources)
-    rewritten = grafana_export.rewrite_dashboard_datasources(dashboard, selected)
+    rewritten = cast(
+        dict[str, Any],
+        grafana_export.rewrite_dashboard_datasources(dashboard, selected),
+    )
 
     assert selected.name == "Nebius Logs"
     assert rewritten["panels"][0]["datasource"] == {"type": "grafana", "uid": "-- Grafana --"}

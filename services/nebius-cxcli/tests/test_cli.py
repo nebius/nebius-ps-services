@@ -4,6 +4,7 @@ import json
 import re
 import shlex
 import subprocess
+from collections.abc import Iterator
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -17,6 +18,7 @@ import nebius_cxcli.deploy_targets as deploy_targets_module
 import nebius_cxcli.soperator_migration as soperator_migration_module
 import nebius_cxcli.templates as templates_module
 from nebius_cxcli.cli import _load_context, _load_runtime_context, app
+from nebius_cxcli.cluster_handoffs import Handoff
 from nebius_cxcli.component_instances import component_instance_id
 from nebius_cxcli.component_sources import (
     ComponentOutput,
@@ -25,8 +27,14 @@ from nebius_cxcli.component_sources import (
     set_component_sources_file_override,
     set_component_sources_profile_override,
 )
-from nebius_cxcli.components import ComponentEntry, component_entries, reset_component_entry_cache
+from nebius_cxcli.components import (
+    ComponentEntry,
+    ComponentScope,
+    component_entries,
+    reset_component_entry_cache,
+)
 from nebius_cxcli.email_settings import EmailSettings
+from nebius_cxcli.provider_options import ProviderOptionLookup
 from nebius_cxcli.quota_checks import QuotaCheck, QuotaReport
 from nebius_cxcli.runtime_config import to_plain_data
 from nebius_cxcli.runtime_validation import validate_dynamic_payload_structure
@@ -51,6 +59,11 @@ def _portable_chart_source(*, repo: str, chart: str, version: str = "") -> dict[
     if version:
         portable["version"] = version
     return {"portable": portable}
+
+
+def _soperator_test_chart_version() -> str:
+    chart_version, _app_version = cli_module._soperator_catalog_pinned_versions()
+    return chart_version
 
 
 def _empty_quota_report() -> cli_module.QuotaReport:
@@ -373,7 +386,7 @@ def test_network_command_is_not_available() -> None:
 
 
 @pytest.fixture(autouse=True)
-def _reset_runtime_state(monkeypatch: pytest.MonkeyPatch) -> None:
+def _reset_runtime_state(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     monkeypatch.delenv("NEBIUS_CXCLI_COMPONENT_SOURCES_FILE", raising=False)
     monkeypatch.delenv("NEBIUS_CXCLI_COMPONENT_SOURCES_PROFILE", raising=False)
     monkeypatch.setattr(
@@ -850,7 +863,7 @@ def _post_migration_soperator_snapshot() -> dict[str, object]:
             {
                 "name": "soperator",
                 "namespace": "soperator",
-                "chart": "soperator-4.0.1-ps.1",
+                "chart": f"soperator-{_soperator_test_chart_version()}",
                 "app_version": "4.0.1",
                 "status": "deployed",
             }
@@ -1289,7 +1302,7 @@ spec:
         chart: str,
         app_version: str,
     ) -> None:
-        replacement = {
+        replacement: dict[str, object] = {
             "name": release_name,
             "namespace": namespace,
             "chart": chart,
@@ -2149,7 +2162,7 @@ def test_noninteractive_auto_selects_single_planned_vpc_choice(
         payload=payload,
         selected_infra={"worker"},
         infra_entries=component_entries("infra"),
-        provider_lookup=SimpleNamespace(),
+        provider_lookup=ProviderOptionLookup(),
     )
     cli_module._materialize_planned_vpc_binding_tokens(payload)
 
@@ -2234,13 +2247,6 @@ def test_component_field_wizard_configures_planned_vpc_before_mk8s_consumer(
     )
     phase_prompts: list[str] = []
 
-    class _ProviderLookup:
-        def resolve(self, **_kwargs):  # type: ignore[no-untyped-def]
-            return []
-
-        def last_error(self) -> None:
-            return None
-
     def _dynamic_choices(**kwargs):  # type: ignore[no-untyped-def]
         current_payload = kwargs["payload"]
         entry = kwargs["entry"]
@@ -2295,7 +2301,7 @@ def test_component_field_wizard_configures_planned_vpc_before_mk8s_consumer(
         selected_apps=set(),
         infra_entries=(mk8s_entry, vpc_entry),
         app_entries=(),
-        provider_lookup=_ProviderLookup(),
+        provider_lookup=ProviderOptionLookup(),
     )
 
     assert completed is True
@@ -2450,7 +2456,7 @@ def test_component_field_wizard_reports_skipped_component_phase(
         },
         "apps": {"charts": []},
     }
-    skipped_components: set[tuple[str, str, str]] = set()
+    skipped_components: set[tuple[ComponentScope, str, str]] = set()
 
     monkeypatch.setattr(cli_module, "_wizard_continue_phase", lambda *_args, **_kwargs: False)
 
@@ -6914,7 +6920,7 @@ def test_soperator_migrate_execute_refreshes_config_after_completed_migration(
             pending_phase="none",
             pending_reason="",
             live_source_version="4.0.1",
-            target_version="4.0.1-ps.1",
+            target_version=_soperator_test_chart_version(),
             mutation_performed=True,
             lines=("migration completed",),
         )
@@ -7166,7 +7172,7 @@ def test_soperator_onboard_target_match_hides_stale_source_release_from_summary(
                 {
                     "name": "soperator",
                     "namespace": "soperator",
-                    "chart": "soperator-4.0.1-ps.1",
+                    "chart": f"soperator-{_soperator_test_chart_version()}",
                     "app_version": "4.0.1",
                     "revision": "11",
                     "status": "deployed",
@@ -10896,7 +10902,11 @@ def test_component_add_interactive_mk8s_target_scopes_auto_enabled_apps(
             config_path="infra.components.mk8s",
             description="Managed Kubernetes",
             source="../../platform-infra/modules/mk8s",
-            handoff=object(),  # only presence is needed for target-ref discovery
+            handoff=Handoff(
+                cluster_id_output_name="cluster_id",
+                access_kind="input",
+                access_source_path="inputs.cluster.public_endpoint",
+            ),
             wizard_fields={
                 "deploy.targets[].observability.enabled": {"type_hint": "bool"},
                 "deploy.targets[].observability.kubernetes.logs.enabled": {"type_hint": "bool"},

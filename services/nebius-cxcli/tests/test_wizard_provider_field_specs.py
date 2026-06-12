@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any
+
 from nebius_cxcli.cli import (
     _provider_allowed_values_for_field,
     _provider_source_specs_for_field,
@@ -8,7 +10,7 @@ from nebius_cxcli.cli import (
     _wizard_field_provider_default_value,
 )
 from nebius_cxcli.components import ComponentEntry
-from nebius_cxcli.provider_options import OptionChoice, _payload_value
+from nebius_cxcli.provider_options import OptionChoice, ProviderOptionLookup, _payload_value
 
 
 def _infra_entry(
@@ -105,16 +107,16 @@ def test_provider_specs_return_empty_for_undeclared_field() -> None:
     assert specs == ()
 
 
-class _StubProviderLookup:
+class _StubProviderLookup(ProviderOptionLookup):
     def __init__(self) -> None:
-        self.calls: list[tuple[str, dict[str, str], str]] = []
+        self.calls: list[tuple[str, dict[str, Any], str]] = []
 
     def resolve(
         self,
         *,
         provider: str,
-        args: dict[str, str],
-        payload: dict[str, object],
+        args: dict[str, Any],
+        payload: dict[str, Any],
         field_path: str,
     ) -> list[OptionChoice]:
         self.calls.append((provider, args, field_path))
@@ -180,16 +182,16 @@ def test_dynamic_choices_reuse_provider_source_specs_for_filter_args() -> None:
         },
     )
 
-    class _FilterAwareLookup:
+    class _FilterAwareLookup(ProviderOptionLookup):
         def __init__(self) -> None:
-            self.calls: list[tuple[str, dict[str, str], str]] = []
+            self.calls: list[tuple[str, dict[str, Any], str]] = []
 
         def resolve(
             self,
             *,
             provider: str,
-            args: dict[str, str],
-            payload: dict[str, object],
+            args: dict[str, Any],
+            payload: dict[str, Any],
             field_path: str,
         ) -> list[OptionChoice]:
             _ = payload
@@ -226,13 +228,13 @@ def test_dynamic_vpc_choices_still_include_planned_networks() -> None:
         },
     )
 
-    class _NetworkLookup:
+    class _NetworkLookup(ProviderOptionLookup):
         def resolve(
             self,
             *,
             provider: str,
-            args: dict[str, str],
-            payload: dict[str, object],
+            args: dict[str, Any],
+            payload: dict[str, Any],
             field_path: str,
         ) -> list[OptionChoice]:
             _ = args, payload, field_path
@@ -319,13 +321,13 @@ def test_provider_allowed_values_reuse_filter_regex_from_wizard_metadata() -> No
         },
     )
 
-    class _FilterAwareLookup:
+    class _FilterAwareLookup(ProviderOptionLookup):
         def resolve(
             self,
             *,
             provider: str,
-            args: dict[str, str],
-            payload: dict[str, object],
+            args: dict[str, Any],
+            payload: dict[str, Any],
             field_path: str,
         ) -> list[OptionChoice]:
             _ = provider, payload, field_path
@@ -354,13 +356,13 @@ def test_provider_default_for_string_list_field_materializes_choice_values() -> 
         },
     )
 
-    class _DefaultLookup:
+    class _DefaultLookup(ProviderOptionLookup):
         def resolve(
             self,
             *,
             provider: str,
-            args: dict[str, str],
-            payload: dict[str, object],
+            args: dict[str, Any],
+            payload: dict[str, Any],
             field_path: str,
         ) -> list[OptionChoice]:
             assert provider == "operator_public_ip_cidr"

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from typing import Any
 from urllib.parse import parse_qs
 
 import pytest
@@ -12,7 +13,7 @@ def _notifier_payload(
     *,
     mode: str = "existing-webhook",
     webhook_source: str = "deploy-time",
-) -> dict[str, object]:
+) -> dict[str, Any]:
     return {
         "apps": {
             "charts": [
@@ -61,7 +62,7 @@ def test_soperator_notifier_specs_reject_webhook_url_in_values() -> None:
 
 
 def test_ensure_existing_webhook_creates_runtime_secret(monkeypatch: pytest.MonkeyPatch) -> None:
-    applied: list[dict[str, object]] = []
+    applied: list[dict[str, Any]] = []
     monkeypatch.setattr(slack_runtime, "_validate_victoriametrics_crds", lambda *, extra_env: None)
     monkeypatch.setattr(slack_runtime, "_ensure_namespace", lambda _namespace, *, extra_env: None)
     monkeypatch.setattr(
@@ -276,7 +277,7 @@ def test_ensure_existing_webhook_skips_secret_when_mysterybox_eso_manages_it(
 
 
 def test_ensure_oauth_webhook_creates_runtime_secret(monkeypatch: pytest.MonkeyPatch) -> None:
-    applied: list[dict[str, object]] = []
+    applied: list[dict[str, Any]] = []
     monkeypatch.setattr(slack_runtime, "_validate_victoriametrics_crds", lambda *, extra_env: None)
     monkeypatch.setattr(slack_runtime, "_ensure_namespace", lambda _namespace, *, extra_env: None)
     monkeypatch.setattr(
@@ -334,7 +335,7 @@ def test_build_slack_oauth_authorize_url_uses_incoming_webhook_scope() -> None:
 def test_exchange_slack_oauth_code_extracts_incoming_webhook(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    recorded: dict[str, object] = {}
+    recorded: dict[str, Any] = {}
 
     class Response:
         def __enter__(self) -> Response:

@@ -3,13 +3,14 @@ from __future__ import annotations
 import json
 import sys
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 import yaml
 
 import nebius_cxcli.cli as cli
 from nebius_cxcli.components import ComponentEntry
-from nebius_cxcli.provider_options import OptionChoice
+from nebius_cxcli.provider_options import OptionChoice, ProviderOptionLookup
 from nebius_cxcli.wizard_profiles import BUILTIN_WIZARD_PROFILES
 
 _VALID_ED25519_PUBLIC_KEY = (
@@ -53,7 +54,7 @@ def test_prompt_choice_override_tty_cancel_stops_wizard(
 
 def test_prompt_choice_override_tty_renders_only_selectable_values(monkeypatch) -> None:
     monkeypatch.setattr(cli, "_is_tty_session", lambda: True)
-    captured: dict[str, object] = {}
+    captured: dict[str, Any] = {}
 
     class _FakePrompt:
         def ask(self):
@@ -90,7 +91,7 @@ def test_prompt_choice_override_tty_renders_only_selectable_values(monkeypatch) 
 
 def test_vpc_existing_network_tty_skip_choice_creates_new_network(monkeypatch) -> None:
     monkeypatch.setattr(cli, "_is_tty_session", lambda: True)
-    captured: dict[str, object] = {}
+    captured: dict[str, Any] = {}
 
     class _FakePrompt:
         def ask(self):
@@ -131,7 +132,7 @@ def test_vpc_existing_network_tty_skip_choice_creates_new_network(monkeypatch) -
 
 def test_vpc_private_pool_tty_skip_choice_creates_pool_from_cidr(monkeypatch) -> None:
     monkeypatch.setattr(cli, "_is_tty_session", lambda: True)
-    captured: dict[str, object] = {}
+    captured: dict[str, Any] = {}
 
     class _FakePrompt:
         def ask(self):
@@ -235,7 +236,7 @@ def test_ssh_public_key_prompt_tty_includes_manual_choice(tmp_path, monkeypatch)
     (ssh_dir / "my_ssh_key.pub").write_text(_VALID_ED25519_PUBLIC_KEY + "\n", encoding="utf-8")
     monkeypatch.setenv("HOME", str(home_dir))
     monkeypatch.setattr(cli, "_is_tty_session", lambda: True)
-    captured: dict[str, object] = {}
+    captured: dict[str, Any] = {}
 
     class _FakePrompt:
         def ask(self):
@@ -602,7 +603,7 @@ def test_prompt_scalar_override_defaults_mysterybox_kubernetes_secret_name_to_dn
 
 def test_mysterybox_eso_version_policy_uses_tty_select(monkeypatch) -> None:
     monkeypatch.setattr(cli, "_is_tty_session", lambda: True)
-    captured: dict[str, object] = {}
+    captured: dict[str, Any] = {}
 
     class _FakePrompt:
         def ask(self):
@@ -630,7 +631,7 @@ def test_mysterybox_eso_version_policy_uses_tty_select(monkeypatch) -> None:
 
 def test_mysterybox_payload_type_uses_tty_select(monkeypatch) -> None:
     monkeypatch.setattr(cli, "_is_tty_session", lambda: True)
-    captured: dict[str, object] = {}
+    captured: dict[str, Any] = {}
 
     class _FakePrompt:
         def ask(self):
@@ -890,7 +891,7 @@ def test_prompt_component_with_checkboxes_tty_uses_key_navigation_without_contro
     monkeypatch,
 ) -> None:
     monkeypatch.setattr(cli, "_is_tty_session", lambda: True)
-    captured: dict[str, object] = {}
+    captured: dict[str, Any] = {}
 
     class _FakePrompt:
         def ask(self):
@@ -1153,7 +1154,7 @@ def test_component_field_wizard_guides_vpc_subnets_without_raw_yaml_prompt(
         "infra.components[0].inputs.subnets.add_another": "false",
     }
 
-    class _EmptyProviderLookup:
+    class _EmptyProviderLookup(ProviderOptionLookup):
         def resolve(self, **_kwargs):
             return []
 
@@ -1244,7 +1245,7 @@ def test_component_field_wizard_allows_vpc_network_without_subnets_when_live_net
     }
     provider_calls: list[str] = []
 
-    class _ProviderLookup:
+    class _ProviderLookup(ProviderOptionLookup):
         def resolve(self, **kwargs):
             field_path = str(kwargs.get("field_path", ""))
             provider_calls.append(field_path)
@@ -1332,7 +1333,7 @@ def test_component_field_wizard_existing_vpc_network_skips_network_name_and_retr
     captured: list[str] = []
     cidr_answers = ["not-a-cidr", "10.1.0.0/16"]
 
-    class _ProviderLookup:
+    class _ProviderLookup(ProviderOptionLookup):
         def resolve(self, **kwargs):
             if str(kwargs.get("field_path", "")).endswith(".inputs.network.existing_id"):
                 return [
@@ -1443,7 +1444,7 @@ def test_component_field_wizard_accepts_region_vpc_cidr_suggestion(
         "infra.components[0].inputs.subnets.add_another": "false",
     }
 
-    class _EmptyProviderLookup:
+    class _EmptyProviderLookup(ProviderOptionLookup):
         def resolve(self, **_kwargs):
             return []
 
@@ -1635,7 +1636,7 @@ def test_vpc_subnet_cidr_prompt_choices_skip_whole_parent_block_with_allocations
 
 def test_vpc_private_cidr_tty_custom_rejects_comma_separated_values(monkeypatch) -> None:
     monkeypatch.setattr(cli, "_is_tty_session", lambda: True)
-    captured: dict[str, object] = {}
+    captured: dict[str, Any] = {}
     messages: list[str] = []
     answers = ["172.16.30.0/24, 172.16.20.0/24", "172.16.30.0/24"]
 
@@ -1739,7 +1740,7 @@ def _patch_vpc_extension_sdk_bindings(
 def test_extend_existing_vpc_parent_private_cidrs_updates_attached_pool_cidrs(
     monkeypatch,
 ) -> None:
-    captured: dict[str, object] = {}
+    captured: dict[str, Any] = {}
     sync_waits: list[int | None] = []
 
     class _RequestResult:
@@ -1845,7 +1846,7 @@ def test_extend_existing_vpc_parent_private_cidrs_updates_attached_pool_cidrs(
 def test_extend_existing_vpc_parent_private_cidrs_updates_once_for_multiple_missing_cidrs(
     monkeypatch,
 ) -> None:
-    captured: dict[str, object] = {}
+    captured: dict[str, Any] = {}
     sync_waits: list[int | None] = []
 
     class _RequestResult:
@@ -1924,7 +1925,7 @@ def test_extend_existing_vpc_parent_private_cidrs_updates_once_for_multiple_miss
 def test_extend_existing_vpc_parent_private_cidrs_rejects_overlapping_parent(
     monkeypatch,
 ) -> None:
-    captured: dict[str, object] = {}
+    captured: dict[str, Any] = {}
 
     class _RequestResult:
         def __init__(self, value):
@@ -1989,7 +1990,7 @@ def test_extend_existing_vpc_parent_private_cidrs_rejects_overlapping_parent(
 def test_extend_existing_vpc_parent_private_cidrs_fails_without_attached_private_pool(
     monkeypatch,
 ) -> None:
-    captured: dict[str, object] = {}
+    captured: dict[str, Any] = {}
 
     class _RequestResult:
         def __init__(self, value):
@@ -2045,7 +2046,7 @@ def test_extend_existing_vpc_parent_private_cidrs_fails_without_attached_private
 def test_extend_existing_vpc_parent_private_cidrs_fails_when_attached_pool_unreadable(
     monkeypatch,
 ) -> None:
-    captured: dict[str, object] = {}
+    captured: dict[str, Any] = {}
 
     class _RequestResult:
         def __init__(self, value):
@@ -2107,7 +2108,7 @@ def test_extend_existing_vpc_parent_private_cidrs_fails_when_attached_pool_unrea
 def test_extend_existing_vpc_parent_private_cidrs_noops_when_pool_already_attached(
     monkeypatch,
 ) -> None:
-    captured: dict[str, object] = {}
+    captured: dict[str, Any] = {}
 
     class _RequestResult:
         def __init__(self, value):
@@ -2230,7 +2231,7 @@ def test_component_field_wizard_can_select_existing_private_pool_for_new_vpc(
         "infra.components[0].inputs.subnets.add": "false",
     }
 
-    class _PoolProviderLookup:
+    class _PoolProviderLookup(ProviderOptionLookup):
         def resolve(self, *, provider, **_kwargs):
             if provider == "project_private_pools":
                 return [
@@ -2318,7 +2319,7 @@ def test_component_field_wizard_extends_new_vpc_parent_cidrs_for_out_of_pool_sub
         "infra.components[0].inputs.subnets.add_another": "false",
     }
 
-    class _EmptyProviderLookup:
+    class _EmptyProviderLookup(ProviderOptionLookup):
         def resolve(self, **_kwargs):
             return []
 
@@ -2411,7 +2412,7 @@ def test_component_field_wizard_existing_private_pool_subnet_extends_new_vpc_par
         "infra.components[0].inputs.subnets.add_another": "false",
     }
 
-    class _PoolProviderLookup:
+    class _PoolProviderLookup(ProviderOptionLookup):
         def resolve(self, *, provider, **_kwargs):
             if provider == "project_private_pools":
                 return [
@@ -2499,7 +2500,7 @@ def test_component_field_wizard_existing_vpc_extends_parent_for_out_of_parent_su
     captured: list[str] = []
     extension_calls: list[dict[str, object]] = []
 
-    class _ProviderLookup:
+    class _ProviderLookup(ProviderOptionLookup):
         def resolve(self, *, provider, **_kwargs):
             if provider == "project_networks":
                 return [
@@ -2632,7 +2633,7 @@ def test_component_field_wizard_existing_vpc_failed_parent_extension_reprompts_f
     captured: list[str] = []
     cidr_answers = ["192.168.0.0/16", "10.1.0.0/16"]
 
-    class _ProviderLookup:
+    class _ProviderLookup(ProviderOptionLookup):
         def resolve(self, *, provider, **_kwargs):
             if provider == "project_networks":
                 return [
@@ -2733,7 +2734,7 @@ def test_component_field_wizard_existing_vpc_accepts_subnet_cidr_inside_default_
     )
     captured: list[str] = []
 
-    class _ProviderLookup:
+    class _ProviderLookup(ProviderOptionLookup):
         def resolve(self, *, provider, **_kwargs):
             if provider == "project_networks":
                 return [
@@ -2854,7 +2855,7 @@ def test_component_field_wizard_existing_vpc_avoids_live_private_allocations(
     )
     captured: list[str] = []
 
-    class _ProviderLookup:
+    class _ProviderLookup(ProviderOptionLookup):
         def resolve(self, *, provider, **kwargs):
             if provider == "project_networks":
                 return [
@@ -2982,7 +2983,7 @@ def test_component_field_wizard_existing_vpc_rejects_manual_cidr_over_live_priva
     captured: list[str] = []
     cidr_answers = ["10.1.0.0/16", "10.2.0.0/16"]
 
-    class _ProviderLookup:
+    class _ProviderLookup(ProviderOptionLookup):
         def resolve(self, *, provider, **kwargs):
             if provider == "project_networks":
                 return [
@@ -3110,7 +3111,7 @@ def test_component_field_wizard_existing_vpc_rejects_explicit_cidr_when_allocati
     captured: list[str] = []
     cidr_answers = ["1", "qq"]
 
-    class _ProviderLookup:
+    class _ProviderLookup(ProviderOptionLookup):
         def __init__(self):
             self._last_error = None
 
@@ -3228,7 +3229,7 @@ def test_component_field_wizard_existing_vpc_rejects_explicit_cidr_when_subnet_l
     captured: list[str] = []
     cidr_answers = ["10.0.0.0/16", "qq"]
 
-    class _ProviderLookup:
+    class _ProviderLookup(ProviderOptionLookup):
         def __init__(self):
             self._last_error = None
 
@@ -3334,7 +3335,7 @@ def test_component_field_wizard_subnet_custom_cidr_accepts_multiple_ranges(
     prompt_texts: list[str] = []
     cidr_answers = ["172.16.30.0/24, 172.16.20.0/24"]
 
-    class _ProviderLookup:
+    class _ProviderLookup(ProviderOptionLookup):
         def resolve(self, *, provider, **_kwargs):
             if provider == "project_networks":
                 return [
@@ -3434,7 +3435,7 @@ def test_component_field_wizard_retries_vpc_cidr_overlapping_default_pool(
     prompt_texts: list[str] = []
     cidr_answers = ["10.0.0.0/24", "1"]
 
-    class _EmptyProviderLookup:
+    class _EmptyProviderLookup(ProviderOptionLookup):
         def resolve(self, **_kwargs):
             return []
 
@@ -3518,7 +3519,7 @@ def test_component_field_wizard_retries_overlapping_vpc_cidr_values(
     prompt_texts: list[str] = []
     cidr_answers = ["172.16.0.0/13,172.16.0.0/12", "2"]
 
-    class _EmptyProviderLookup:
+    class _EmptyProviderLookup(ProviderOptionLookup):
         def resolve(self, **_kwargs):
             return []
 
@@ -3587,7 +3588,7 @@ def test_vpc_existing_network_choices_do_not_include_planned_vpc_self_reference(
         wizard_fields=BUILTIN_WIZARD_PROFILES["vpc"],
     )
 
-    class _ProviderLookup:
+    class _ProviderLookup(ProviderOptionLookup):
         def resolve(self, **kwargs):
             if str(kwargs.get("field_path", "")).endswith(".inputs.network.existing_id"):
                 return [OptionChoice(value="vpcnetwork-live", label="default network")]
@@ -3685,7 +3686,7 @@ def test_prompt_choice_override_optional_empty_prompt_mentions_blank_keeps_unset
     monkeypatch,
 ) -> None:
     monkeypatch.setattr(cli, "_is_tty_session", lambda: False)
-    captured: dict[str, object] = {}
+    captured: dict[str, Any] = {}
 
     def _fake_prompt(text: str, default=None):
         captured["text"] = text
@@ -3718,7 +3719,7 @@ def test_prompt_choice_override_non_tty_can_leave_auto_choice_unset(
     monkeypatch,
 ) -> None:
     monkeypatch.setattr(cli, "_is_tty_session", lambda: False)
-    captured: dict[str, object] = {}
+    captured: dict[str, Any] = {}
 
     def _fake_prompt(text: str, default=None):
         captured["text"] = text
@@ -3761,7 +3762,7 @@ def test_prompt_scalar_override_unset_on_skip_leaves_non_choice_scalars_unset(
     type_hint,
 ) -> None:
     monkeypatch.setattr(cli, "_is_tty_session", lambda: False)
-    captured: dict[str, object] = {}
+    captured: dict[str, Any] = {}
 
     def _fake_prompt(text: str, default=None):
         captured["text"] = text
@@ -3788,7 +3789,7 @@ def test_prompt_choice_override_tty_keeps_skip_for_optional_recommended_default(
     monkeypatch,
 ) -> None:
     monkeypatch.setattr(cli, "_is_tty_session", lambda: True)
-    captured: dict[str, object] = {}
+    captured: dict[str, Any] = {}
 
     class _FakePrompt:
         def ask(self):
@@ -3839,7 +3840,7 @@ def test_prompt_choice_override_tty_keeps_current_for_optional_existing_value(
     monkeypatch,
 ) -> None:
     monkeypatch.setattr(cli, "_is_tty_session", lambda: True)
-    captured: dict[str, object] = {}
+    captured: dict[str, Any] = {}
 
     class _FakePrompt:
         def ask(self):
@@ -3876,7 +3877,7 @@ def test_prompt_choice_override_tty_can_hide_skip_choice_for_semantic_none(
     monkeypatch,
 ) -> None:
     monkeypatch.setattr(cli, "_is_tty_session", lambda: True)
-    captured: dict[str, object] = {}
+    captured: dict[str, Any] = {}
 
     class _FakePrompt:
         def ask(self):
@@ -3918,7 +3919,7 @@ def test_prompt_choice_override_tty_can_leave_optional_auto_choice_unset(
     monkeypatch,
 ) -> None:
     monkeypatch.setattr(cli, "_is_tty_session", lambda: True)
-    captured: dict[str, object] = {}
+    captured: dict[str, Any] = {}
 
     class _FakePrompt:
         def ask(self):
@@ -3989,7 +3990,7 @@ def test_maybe_print_selected_gpu_preset_guidance_for_single_gpu_shape(monkeypat
     captured: list[str] = []
     monkeypatch.setattr(cli.console, "print", lambda message: captured.append(str(message)))
 
-    provider_lookup = SimpleNamespace(
+    provider_lookup: Any = SimpleNamespace(
         compute_platform_preset_resources=lambda **_kwargs: (16, 200, 1),
         compute_platform_preset_allows_gpu_clustering=lambda **_kwargs: False,
     )
@@ -4034,7 +4035,7 @@ def test_maybe_print_selected_gpu_preset_guidance_for_vm_single_gpu_shape(monkey
     captured: list[str] = []
     monkeypatch.setattr(cli.console, "print", lambda message: captured.append(str(message)))
 
-    provider_lookup = SimpleNamespace(
+    provider_lookup: Any = SimpleNamespace(
         compute_platform_preset_resources=lambda **_kwargs: (16, 200, 1),
         compute_platform_preset_allows_gpu_clustering=lambda **_kwargs: False,
     )
@@ -4123,7 +4124,7 @@ def test_maybe_clear_gpu_cluster_fabric_after_shape_change_for_vm(monkeypatch) -
     monkeypatch.setattr(cli.console, "print", lambda message: captured.append(str(message)))
     monkeypatch.setattr(cli, "_resolve_dynamic_field_choices", lambda **_kwargs: [])
 
-    provider_lookup = SimpleNamespace(last_error=lambda: None)
+    provider_lookup: Any = SimpleNamespace(last_error=lambda: None)
     payload = {
         "infra": {
             "components": [
@@ -4171,7 +4172,7 @@ def test_prompt_scalar_override_reprompts_blank_for_required_field(monkeypatch) 
 
 
 def test_prompt_scalar_override_uses_blank_default_for_empty_optional_map(monkeypatch) -> None:
-    captured: dict[str, object] = {}
+    captured: dict[str, Any] = {}
 
     def _fake_prompt(text: str, default=None):
         captured["text"] = text
@@ -4195,7 +4196,7 @@ def test_prompt_scalar_override_uses_blank_default_for_empty_optional_map(monkey
 
 
 def test_prompt_scalar_override_accepts_comma_list_for_string_sequences(monkeypatch) -> None:
-    captured: dict[str, object] = {}
+    captured: dict[str, Any] = {}
 
     def _fake_prompt(text: str, default=None):
         captured["text"] = text

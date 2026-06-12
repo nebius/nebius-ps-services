@@ -3,6 +3,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
+from typing import Any, cast
 
 import nebius_cxcli.provider_options as provider_options
 from nebius_cxcli.provider_options import OptionChoice, ProviderOptionLookup
@@ -32,7 +33,7 @@ def _install_module(monkeypatch, name: str, module: ModuleType) -> None:
         package_name = ".".join(parts[:index])
         package = sys.modules.get(package_name)
         if package is None:
-            package = ModuleType(package_name)
+            package = cast(Any, ModuleType(package_name))
             package.__path__ = []  # type: ignore[attr-defined]
             monkeypatch.setitem(sys.modules, package_name, package)
         if index > 1:
@@ -48,11 +49,11 @@ def _install_fake_mk8s_module(
     monkeypatch,
     *,
     compatible_platforms: list[str] | None = None,
-    compatibility_items: list[dict[str, object]] | None = None,
+    compatibility_items: list[dict[str, Any]] | None = None,
     compatibility_items_at_top_level: bool = False,
-    clusters: list[dict[str, object]] | None = None,
+    clusters: list[dict[str, Any]] | None = None,
 ) -> None:
-    mk8s_module = ModuleType("nebius.api.nebius.mk8s.v1")
+    mk8s_module = cast(Any, ModuleType("nebius.api.nebius.mk8s.v1"))
 
     class GetNodeGroupCompatibilityMatrixRequest:
         def __init__(self, *, cluster_kubernetes_version: str) -> None:
@@ -62,7 +63,7 @@ def _install_fake_mk8s_module(
         def __init__(self, sdk: object) -> None:
             self.sdk = sdk
 
-        def get_compatibility_matrix(self, request: object, **_kwargs: object) -> SimpleNamespace:
+        def get_compatibility_matrix(self, request: Any, **_kwargs: object) -> SimpleNamespace:
             _ = request
             if compatibility_items is not None:
                 items = [
@@ -100,7 +101,7 @@ def _install_fake_mk8s_module(
         def __init__(self, sdk: object) -> None:
             self.sdk = sdk
 
-        def list(self, request: object, **_kwargs: object) -> SimpleNamespace:
+        def list(self, request: Any, **_kwargs: object) -> SimpleNamespace:
             assert request.parent_id == "project-123"
             assert 1 <= request.page_size <= 999
             response = SimpleNamespace(
@@ -128,10 +129,10 @@ def _install_fake_compute_module(
     monkeypatch,
     *,
     platforms: list[tuple[str, str | None]],
-    presets_by_platform: dict[str, list[dict[str, object]]] | None = None,
-    public_images: list[dict[str, object]] | None = None,
+    presets_by_platform: dict[str, list[dict[str, Any]]] | None = None,
+    public_images: list[dict[str, Any]] | None = None,
 ) -> None:
-    common_module = ModuleType("nebius.api.nebius.common.v1")
+    common_module = cast(Any, ModuleType("nebius.api.nebius.common.v1"))
 
     class GetByNameRequest:
         def __init__(self, *, parent_id: str, name: str) -> None:
@@ -141,7 +142,7 @@ def _install_fake_compute_module(
     common_module.GetByNameRequest = GetByNameRequest
     _install_module(monkeypatch, "nebius.api.nebius.common.v1", common_module)
 
-    compute_module = ModuleType("nebius.api.nebius.compute.v1")
+    compute_module = cast(Any, ModuleType("nebius.api.nebius.compute.v1"))
 
     class ListPlatformsRequest:
         def __init__(self, *, parent_id: str, page_size: int, page_token: str) -> None:
@@ -159,7 +160,7 @@ def _install_fake_compute_module(
         def __init__(self, sdk: object) -> None:
             self.sdk = sdk
 
-        def list(self, request: object, **_kwargs: object) -> SimpleNamespace:
+        def list(self, request: Any, **_kwargs: object) -> SimpleNamespace:
             assert 1 <= request.page_size <= 999
             response = SimpleNamespace(
                 items=[
@@ -173,7 +174,7 @@ def _install_fake_compute_module(
             )
             return SimpleNamespace(wait=lambda: response)
 
-        def get_by_name(self, request: object, **_kwargs: object) -> SimpleNamespace:
+        def get_by_name(self, request: Any, **_kwargs: object) -> SimpleNamespace:
             platform_name = getattr(request, "name", "")
             presets = [
                 SimpleNamespace(
@@ -198,7 +199,7 @@ def _install_fake_compute_module(
         def __init__(self, sdk: object) -> None:
             self.sdk = sdk
 
-        def list_public(self, request: object, **_kwargs: object) -> SimpleNamespace:
+        def list_public(self, request: Any, **_kwargs: object) -> SimpleNamespace:
             assert 1 <= request.page_size <= 999
             response = SimpleNamespace(
                 items=[
@@ -231,12 +232,12 @@ def _install_fake_compute_module(
 def _install_fake_vpc_module(
     monkeypatch,
     *,
-    subnets: list[dict[str, object]],
-    networks: list[dict[str, object]] | None = None,
-    pools: list[dict[str, object]] | None = None,
-    allocations: list[dict[str, object]] | None = None,
+    subnets: list[dict[str, Any]],
+    networks: list[dict[str, Any]] | None = None,
+    pools: list[dict[str, Any]] | None = None,
+    allocations: list[dict[str, Any]] | None = None,
 ) -> None:
-    vpc_module = ModuleType("nebius.api.nebius.vpc.v1")
+    vpc_module = cast(Any, ModuleType("nebius.api.nebius.vpc.v1"))
 
     class ListNetworksRequest:
         def __init__(self, *, parent_id: str, page_size: int, page_token: str) -> None:
@@ -248,7 +249,7 @@ def _install_fake_vpc_module(
         def __init__(self, sdk: object) -> None:
             self.sdk = sdk
 
-        def list(self, request: object, **_kwargs: object) -> SimpleNamespace:
+        def list(self, request: Any, **_kwargs: object) -> SimpleNamespace:
             assert 1 <= request.page_size <= 999
             response = SimpleNamespace(
                 items=[
@@ -282,7 +283,7 @@ def _install_fake_vpc_module(
         def __init__(self, sdk: object) -> None:
             self.sdk = sdk
 
-        def list(self, request: object, **_kwargs: object) -> SimpleNamespace:
+        def list(self, request: Any, **_kwargs: object) -> SimpleNamespace:
             assert 1 <= request.page_size <= 999
             response = SimpleNamespace(
                 items=[
@@ -340,7 +341,7 @@ def _install_fake_vpc_module(
         def __init__(self, sdk: object) -> None:
             self.sdk = sdk
 
-        def list(self, request: object, **_kwargs: object) -> SimpleNamespace:
+        def list(self, request: Any, **_kwargs: object) -> SimpleNamespace:
             assert 1 <= request.page_size <= 999
             response = SimpleNamespace(
                 items=[
@@ -389,7 +390,7 @@ def _install_fake_vpc_module(
         def __init__(self, sdk: object) -> None:
             self.sdk = sdk
 
-        def list(self, request: object, **_kwargs: object) -> SimpleNamespace:
+        def list(self, request: Any, **_kwargs: object) -> SimpleNamespace:
             assert 1 <= request.page_size <= 999
             response = SimpleNamespace(
                 items=[
@@ -434,7 +435,7 @@ def _install_fake_vpc_module(
             )
             return SimpleNamespace(wait=lambda: response)
 
-        def get(self, request: object, **_kwargs: object) -> SimpleNamespace:
+        def get(self, request: Any, **_kwargs: object) -> SimpleNamespace:
             pool = next((item for item in (pools or []) if item.get("id") == request.id), None)
             if pool is None:
                 raise RuntimeError(f"pool not found: {request.id}")
@@ -478,9 +479,9 @@ def _install_fake_vpc_module(
 def _install_fake_filesystem_module(
     monkeypatch,
     *,
-    filesystems: list[dict[str, object]],
+    filesystems: list[dict[str, Any]],
 ) -> None:
-    compute_module = ModuleType("nebius.api.nebius.compute.v1")
+    compute_module = cast(Any, ModuleType("nebius.api.nebius.compute.v1"))
 
     class ListFilesystemsRequest:
         def __init__(self, *, parent_id: str, page_size: int, page_token: str) -> None:
@@ -492,7 +493,7 @@ def _install_fake_filesystem_module(
         def __init__(self, sdk: object) -> None:
             self.sdk = sdk
 
-        def list(self, request: object, **_kwargs: object) -> SimpleNamespace:
+        def list(self, request: Any, **_kwargs: object) -> SimpleNamespace:
             assert request.parent_id == "project-123"
             assert 1 <= request.page_size <= 999
             response = SimpleNamespace(
@@ -519,10 +520,10 @@ def _install_fake_filesystem_module(
 def _install_fake_capacity_module(
     monkeypatch,
     *,
-    resource_advice_items: list[dict[str, object]],
-    capacity_block_group_items: list[dict[str, object]] | None = None,
+    resource_advice_items: list[dict[str, Any]],
+    capacity_block_group_items: list[dict[str, Any]] | None = None,
 ) -> None:
-    capacity_module = ModuleType("nebius.api.nebius.capacity.v1")
+    capacity_module = cast(Any, ModuleType("nebius.api.nebius.capacity.v1"))
 
     class ListResourceAdviceRequest:
         def __init__(self, *, parent_id: str, page_size: int, page_token: str) -> None:
@@ -534,7 +535,7 @@ def _install_fake_capacity_module(
         def __init__(self, sdk: object) -> None:
             self.sdk = sdk
 
-        def list(self, request: object, **_kwargs: object) -> SimpleNamespace:
+        def list(self, request: Any, **_kwargs: object) -> SimpleNamespace:
             _ = request
             response = SimpleNamespace(
                 items=[
@@ -606,7 +607,7 @@ def _install_fake_capacity_module(
         def __init__(self, sdk: object) -> None:
             self.sdk = sdk
 
-        def list(self, request: object, **_kwargs: object) -> SimpleNamespace:
+        def list(self, request: Any, **_kwargs: object) -> SimpleNamespace:
             assert request.parent_id == "tenant-123"
             assert 1 <= request.page_size <= 200
             response = SimpleNamespace(

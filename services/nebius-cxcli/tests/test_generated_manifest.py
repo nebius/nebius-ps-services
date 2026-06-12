@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 import pytest
+import yaml
 
 from nebius_cxcli.deploy_targets import flux_target_dir
 from nebius_cxcli.generated_manifest import (
@@ -18,6 +19,14 @@ from nebius_cxcli.generated_manifest import (
     write_generated_manifest_to_path,
 )
 from nebius_cxcli.paths import ProjectPaths
+
+
+def _bundled_tool_versions() -> tuple[str, str]:
+    settings_path = Path(__file__).resolve().parents[1] / "component_cli_settings.yaml"
+    settings = yaml.safe_load(settings_path.read_text(encoding="utf-8"))
+    assert isinstance(settings, dict)
+    cli = settings["cli"]
+    return cli["flux"]["version"], cli["terraform"]["version"]
 
 
 def _project_paths(tmp_path: Path) -> ProjectPaths:
@@ -77,6 +86,7 @@ def _mk8s_target(paths: ProjectPaths, *, target_ref: str = "mk8s") -> dict[str, 
 
 def test_build_generated_manifest_uses_repo_relative_paths(tmp_path: Path) -> None:
     paths = _project_paths(tmp_path)
+    flux_version, terraform_version = _bundled_tool_versions()
     validations = [
         {
             "kind": "mk8s_gpu_visibility",
@@ -101,8 +111,8 @@ def test_build_generated_manifest_uses_repo_relative_paths(tmp_path: Path) -> No
         validations=validations,
         source_profile="portable",
         terraform_tfvars={"mk8s_cluster_name": "clust1"},
-        flux_version="v2.8.0",
-        terraform_version="1.15.5",
+        flux_version=flux_version,
+        terraform_version=terraform_version,
     )
 
     assert manifest["schema"] == GENERATED_MANIFEST_SCHEMA
@@ -121,8 +131,8 @@ def test_build_generated_manifest_uses_repo_relative_paths(tmp_path: Path) -> No
         "reports_dir": "deployments/tenant-name-example/project-name-example/generated/reports",
     }
     assert manifest["tools"] == {
-        "flux_version": "v2.8.0",
-        "terraform_version": "1.15.5",
+        "flux_version": flux_version,
+        "terraform_version": terraform_version,
     }
     assert manifest["deploy"]["targets"] == [
         {
@@ -196,6 +206,7 @@ def test_build_generated_manifest_rejects_target_missing_target_ref(
 
 def test_write_load_and_runtime_config_round_trip(tmp_path: Path) -> None:
     paths = _project_paths(tmp_path)
+    flux_version, terraform_version = _bundled_tool_versions()
 
     written_path = write_generated_manifest(
         config=_runtime_payload(),
@@ -203,8 +214,8 @@ def test_write_load_and_runtime_config_round_trip(tmp_path: Path) -> None:
         targets=[_mk8s_target(paths)],
         required_component_outputs=[{"component_id": "mk8s", "output_name": "cluster_id"}],
         terraform_tfvars={"mk8s_cluster_name": "clust1"},
-        flux_version="v2.8.0",
-        terraform_version="1.15.5",
+        flux_version=flux_version,
+        terraform_version=terraform_version,
     )
 
     assert written_path == manifest_path_for_generated_dir(paths.generated_dir)
@@ -219,14 +230,15 @@ def test_write_load_and_runtime_config_round_trip(tmp_path: Path) -> None:
     assert runtime_config.infra.components[0].inputs.cluster_name == "clust1"
     assert tfvars == {"mk8s_cluster_name": "clust1"}
     assert loaded["tools"] == {
-        "flux_version": "v2.8.0",
-        "terraform_version": "1.15.5",
+        "flux_version": flux_version,
+        "terraform_version": terraform_version,
     }
 
 
 def test_write_generated_manifest_to_path_uses_explicit_output_path(tmp_path: Path) -> None:
     paths = _project_paths(tmp_path)
     explicit_path = tmp_path / "staging" / GENERATED_MANIFEST_FILENAME
+    flux_version, terraform_version = _bundled_tool_versions()
 
     written_path = write_generated_manifest_to_path(
         explicit_path,
@@ -235,8 +247,8 @@ def test_write_generated_manifest_to_path_uses_explicit_output_path(tmp_path: Pa
         targets=[_mk8s_target(paths)],
         required_component_outputs=[{"component_id": "mk8s", "output_name": "cluster_id"}],
         terraform_tfvars={"mk8s_cluster_name": "clust1"},
-        flux_version="v2.8.0",
-        terraform_version="1.15.5",
+        flux_version=flux_version,
+        terraform_version=terraform_version,
     )
 
     assert written_path == explicit_path
@@ -247,6 +259,7 @@ def test_write_generated_manifest_to_path_uses_explicit_output_path(tmp_path: Pa
 
 def test_build_generated_manifest_includes_quota_report(tmp_path: Path) -> None:
     paths = _project_paths(tmp_path)
+    flux_version, terraform_version = _bundled_tool_versions()
 
     manifest = build_generated_manifest(
         config=_runtime_payload(),
@@ -282,8 +295,8 @@ def test_build_generated_manifest_includes_quota_report(tmp_path: Path) -> None:
             "errors": [],
         },
         terraform_tfvars={"mk8s_cluster_name": "clust1"},
-        flux_version="v2.8.0",
-        terraform_version="1.15.5",
+        flux_version=flux_version,
+        terraform_version=terraform_version,
     )
 
     assert manifest["quota"]["confirmed_insufficient"] is True

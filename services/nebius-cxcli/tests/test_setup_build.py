@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 from types import ModuleType
+from typing import Any
 
 import setuptools
 import yaml
@@ -34,7 +35,7 @@ def _write_catalog(
     app_portable_repo: str | None = None,
     app_local_path: str | None = None,
 ) -> None:
-    payload: dict[str, object] = {
+    payload: dict[str, Any] = {
         "components": {
             "infra": {
                 "mk8s": {
@@ -47,7 +48,7 @@ def _write_catalog(
         }
     }
     if app_portable_repo is not None or app_local_path is not None:
-        app_source: dict[str, object] = {}
+        app_source: dict[str, Any] = {}
         if app_portable_repo is not None:
             app_source["portable"] = {
                 "repo": app_portable_repo,
