@@ -1,7 +1,7 @@
 repository: "https://github.com/nebius/soperator"
-release: "4.0.1"
-tag: "4.0.1"
-commit: "cc7f4e8157b76a323ffafc2a792981edf3cd808b"
+release: "4.0.2"
+tag: "4.0.2"
+commit: "7f1c4e817cab67e7b5d563bc11db2bff8c661189"
 imports:
   scripts:
     - name: slurm-cluster slurm_scripts
@@ -396,15 +396,15 @@ imports:
     - name: custom ConfigMaps chart
       scope: logic
       upstream_path: helm/soperator-custom-configmaps
-      sha256: 39f33deac359ac98cdaefa985b4b9d73e22ac32b0e8855e9338e606b429af076
+      sha256: 9dbdfe53acbc4bfbe1bb87b4ae22aecab3d4fb537cd250b75ecd233e66127315
     - name: monitoring dashboards chart
       scope: logic
       upstream_path: helm/soperator-monitoring-dashboards
-      sha256: bc2dcbf8aed9ec4b5182ab8dc0e7809f1f21cf3f5095c4b7a66b22eeafe0ee6e
+      sha256: 2d5d78c0f31a8c4cd38b529c943863dc00dceb4d783c122f110e953ab52e93f3
     - name: storageclasses chart
       scope: logic
       upstream_path: helm/storageclasses
-      sha256: 6f1719056f009d6068087b6e9253983e2ce4dae2daa5e942c7ef223c3a929bb6
+      sha256: 6cbf13caaf099788718f7b9882f37000bb0bdb72a9cb42a4f45dcef683532eeb
 local_owned_paths:
   - helm-charts/soperator/.helmignore
   - helm-charts/soperator/CHANGELOG.md

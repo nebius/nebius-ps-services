@@ -87,6 +87,49 @@ jobs:
             echo "release=${release}"
           } >> "${GITHUB_OUTPUT}"
 
+          sync_changes="$(git status --porcelain --untracked-files=all)"
+          if [[ -n "${sync_changes}" ]]; then
+            chart_version="$(yq -r '.version' helm-charts/soperator/Chart.yaml)"
+            python3 - "${release}" "${chart_version}" helm-charts/soperator/CHANGELOG.md <<'PY'
+          import pathlib
+          import re
+          import sys
+
+          release, chart_version, changelog_path = sys.argv[1], sys.argv[2], sys.argv[3]
+          path = pathlib.Path(changelog_path)
+          text = path.read_text(encoding="utf-8")
+
+          header_re = re.compile(r"^## \[.+?\].*$", re.MULTILINE)
+          headers = list(header_re.finditer(text))
+          if not headers:
+              print("No CHANGELOG headers found", file=sys.stderr)
+              sys.exit(1)
+
+          unreleased_idx = None
+          for idx, header in enumerate(headers):
+              if header.group(0).strip() == "## [Unreleased]":
+                  unreleased_idx = idx
+                  break
+
+          if unreleased_idx is None:
+              print("Unable to locate Unreleased heading", file=sys.stderr)
+              sys.exit(1)
+
+          unreleased_header = headers[unreleased_idx]
+          section_end = headers[unreleased_idx + 1].start() if unreleased_idx + 1 < len(headers) else len(text)
+          unreleased_content = text[unreleased_header.end() : section_end]
+          if unreleased_content.strip():
+              sys.exit(0)
+
+          note = (
+              "\n\n"
+              f"- Bumped Soperator upstream release to {release} and Helm chart package to {chart_version}.\n"
+              "\n"
+          )
+          path.write_text(text[: unreleased_header.end()] + note + text[section_end:], encoding="utf-8")
+          PY
+          fi
+
           changed_files="$(git status --porcelain --untracked-files=all)"
           if [[ -z "${changed_files}" ]]; then
             echo "changed=false" >> "${GITHUB_OUTPUT}"

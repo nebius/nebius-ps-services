@@ -2577,6 +2577,10 @@ Release prep and publish are intentionally local and explicit:
    `.github/helm-chart-publish.json`, packages the chart, pushes it to Nebius
    OCI, verifies anonymous pull, and writes a publish manifest artifact.
 
+If `[Unreleased]` is empty, the scheduled upstream sync workflow and
+`publish-helm.sh --prep` seed a fallback chart-bump note before release prep
+moves the section into the dated release entry.
+
 Only the push path uses Nebius authentication. The post-publish pull check uses
 a fresh unauthenticated Helm registry config because published chart pulls are
 intended to be public.

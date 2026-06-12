@@ -224,6 +224,46 @@ if not "\n".join(content_lines).strip():
 PY
 }
 
+ensure_unreleased_changelog_note() {
+  local tag="$1"
+  local version="${tag##*-v}"
+
+  python3 - "${version}" "${CHART_NAME}" "${CHANGELOG_FILE}" <<'PY'
+import pathlib
+import re
+import sys
+
+version, chart_name, changelog_path = sys.argv[1], sys.argv[2], sys.argv[3]
+path = pathlib.Path(changelog_path)
+text = path.read_text(encoding="utf-8")
+
+header_re = re.compile(r"^## \[.+?\].*$", re.MULTILINE)
+headers = list(header_re.finditer(text))
+if not headers:
+    print("No CHANGELOG headers found", file=sys.stderr)
+    sys.exit(1)
+
+unreleased_idx = None
+for idx, header in enumerate(headers):
+    if header.group(0).strip() == "## [Unreleased]":
+        unreleased_idx = idx
+        break
+
+if unreleased_idx is None:
+    print("Unable to locate Unreleased heading", file=sys.stderr)
+    sys.exit(1)
+
+unreleased_header = headers[unreleased_idx]
+section_end = headers[unreleased_idx + 1].start() if unreleased_idx + 1 < len(headers) else len(text)
+unreleased_content = text[unreleased_header.end() : section_end]
+if unreleased_content.strip():
+    sys.exit(0)
+
+note = f"\n\n- Bumped {chart_name} Helm chart to {version}.\n\n"
+path.write_text(text[: unreleased_header.end()] + note + text[section_end:], encoding="utf-8")
+PY
+}
+
 update_changelog() {
   local tag="$1"
   local release_date=""
@@ -444,6 +484,7 @@ prep_release() {
   ensure_tag_absent "${tag}"
 
   log_note "Updating ${CHANGELOG_FILE} for ${tag}..."
+  ensure_unreleased_changelog_note "${tag}"
   update_changelog "${tag}"
   log_note "Updating ${CHART_FILE} version to ${version}..."
   update_chart_version "${version}"
