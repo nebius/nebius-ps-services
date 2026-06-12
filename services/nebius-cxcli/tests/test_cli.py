@@ -66,6 +66,11 @@ def _soperator_test_chart_version() -> str:
     return chart_version
 
 
+def _soperator_test_app_version() -> str:
+    _chart_version, app_version = cli_module._soperator_catalog_pinned_versions()
+    return app_version
+
+
 def _empty_quota_report() -> cli_module.QuotaReport:
     return cli_module.QuotaReport(
         tenant_id="tenant-123",
@@ -864,7 +869,7 @@ def _post_migration_soperator_snapshot() -> dict[str, object]:
                 "name": "soperator",
                 "namespace": "soperator",
                 "chart": f"soperator-{_soperator_test_chart_version()}",
-                "app_version": "4.0.1",
+                "app_version": _soperator_test_app_version(),
                 "status": "deployed",
             }
         ],
@@ -7173,7 +7178,7 @@ def test_soperator_onboard_target_match_hides_stale_source_release_from_summary(
                     "name": "soperator",
                     "namespace": "soperator",
                     "chart": f"soperator-{_soperator_test_chart_version()}",
-                    "app_version": "4.0.1",
+                    "app_version": _soperator_test_app_version(),
                     "revision": "11",
                     "status": "deployed",
                 },
@@ -7223,7 +7228,7 @@ def test_soperator_onboard_target_match_hides_stale_source_release_from_summary(
 
     assert result.exit_code == 0, result.output
     assert "Soperator onboarding state: Existing Soperator matches target" in result.output
-    assert "Detected Soperator version: 4.0.1" in result.output
+    assert "Detected Soperator version: 2.0.5" not in result.output
     assert "stale-source-release" not in result.output
     assert "gpu-stack: verified" in result.output
     assert "not a failure signal" in result.output

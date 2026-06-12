@@ -425,9 +425,14 @@ def test_bundled_catalog_exposes_soperator_and_nfs_local_sources() -> None:
     raw_soperator_source = raw_soperator["source"]
     raw_soperator_portable = raw_soperator_source["portable"]
     soperator_source_path = _required(soperator.source.path)
+    soperator_chart = yaml.safe_load(
+        (Path(soperator_source_path) / "Chart.yaml").read_text(encoding="utf-8")
+    )
+    assert isinstance(soperator_chart, dict)
+    soperator_local_version = str(soperator_chart["version"])
     assert soperator_source_path.endswith("helm-charts/soperator")
-    assert soperator.version == raw_soperator_portable["version"]
-    assert soperator.local_source.version == raw_soperator_portable["version"]
+    assert soperator.version == soperator_local_version
+    assert soperator.local_source.version == soperator_local_version
     assert soperator.portable_source.version == raw_soperator_portable["version"]
     assert soperator.portable_source.repo == raw_soperator_portable["repo"]
     assert soperator.namespace == raw_soperator["release"]["namespace"]
@@ -737,6 +742,16 @@ def test_soperator_parent_dependencies_match_folded_child_chart_family() -> None
     chart_yaml = yaml.safe_load(
         (repo_root / "helm-charts" / "soperator" / "Chart.yaml").read_text(encoding="utf-8")
     )
+    chart_lock = yaml.safe_load(
+        (repo_root / "helm-charts" / "soperator" / "Chart.lock").read_text(encoding="utf-8")
+    )
+    publish_catalog = json.loads(
+        (repo_root / ".github" / "helm-chart-publish.json").read_text(encoding="utf-8")
+    )
+    published_chart_dirs_by_name = {
+        str(entry.get("chartName")): str(entry.get("chartDir"))
+        for entry in publish_catalog.get("charts", [])
+    }
     parent_child_dependencies = {
         dependency["name"]
         for dependency in chart_yaml.get("dependencies", [])
@@ -753,6 +768,31 @@ def test_soperator_parent_dependencies_match_folded_child_chart_family() -> None
     dependencies_by_name = {
         str(dependency.get("name")): dependency for dependency in chart_yaml.get("dependencies", [])
     }
+    lock_dependencies_by_name = {
+        str(dependency.get("name")): dependency
+        for dependency in chart_lock.get("dependencies", [])
+    }
+    for dependency_name in sorted(parent_child_dependencies):
+        dependency = dependencies_by_name[dependency_name]
+        lock_dependency = lock_dependencies_by_name[dependency_name]
+        child_chart = yaml.safe_load(
+            (repo_root / "helm-charts" / dependency_name / "Chart.yaml").read_text(
+                encoding="utf-8"
+            )
+        )
+        expected_repository = f"file://../{dependency_name}"
+        assert dependency["version"] == str(child_chart["version"])
+        repository = str(dependency["repository"])
+        if repository.startswith("oci://"):
+            assert published_chart_dirs_by_name.get(dependency_name) == (
+                f"helm-charts/{dependency_name}"
+            )
+            assert not repository.rstrip("/").endswith(f"/{dependency_name}")
+        else:
+            assert repository == expected_repository
+        assert lock_dependency["version"] == dependency["version"]
+        assert lock_dependency["repository"] == dependency["repository"]
+
     assert dependencies_by_name["k8up"] == {
         "name": "k8up",
         "version": "4.9.0",

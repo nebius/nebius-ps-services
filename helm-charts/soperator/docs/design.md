@@ -667,7 +667,7 @@ spec:
   slurmd:
     image:
       repository: cr.eu-north1.nebius.cloud/soperator/worker_slurmd
-      tag: 3.0.5-slurm25.11.3
+      tag: 4.0.1-slurm25.11.3
     resources:
       cpu: "64"
       memory: 512Gi
@@ -696,7 +696,7 @@ spec:
   munge:
     image:
       repository: cr.eu-north1.nebius.cloud/soperator/munge
-      tag: 3.0.5-slurm25.11.3
+      tag: 4.0.1-slurm25.11.3
 
   nodeSelector:
     slurm.nebius.ai/nodeset-name: worker
@@ -862,7 +862,7 @@ In this chart it is used for:
 - optional rebooter helper.
 
 The bundled rebooter RBAC includes cluster-scoped pod watch access and a
-`pods/eviction` create grant, but the upstream 3.0.5 rebooter path drains by
+`pods/eviction` create grant, but the upstream rebooter path drains by
 marking the node unschedulable, adding a `NoExecute` taint, and then checking
 that non-DaemonSet pods without matching tolerations have left the node. When
 worker nodes are tainted, `rebooter.tolerations` must cover the same taints as
@@ -923,7 +923,7 @@ spec:
     evictionMethod: evict
     image:
       repository: cr.eu-north1.nebius.cloud/soperator/rebooter
-      tag: 3.0.5
+      tag: 4.0.1
 
   initContainers:
     - name: node-sysctl-params
@@ -2249,7 +2249,7 @@ node drain or undrain behavior.
 
 ### Memory Defaults
 
-The Soperator 3.0.5 CRD defaults `slurmConfig.defMemPerNode` to `0`. Slurm
+The Soperator 4.0.1 CRD defaults `slurmConfig.defMemPerNode` to `0`. Slurm
 does not allow `DefMemPerCPU` and `DefMemPerNode` together, so the chart fails
 rendering when `customSlurmConfig` contains `DefMemPerCPU`.
 
@@ -2557,12 +2557,19 @@ package suffix. `Chart.yaml.version` uses `<upstream>-ps.N`, while
 `upstream-soperator.lock.yaml`.
 
 ```yaml
-version: 3.0.5-ps.1
-appVersion: "3.0.5"
+version: X.Y.Z-ps.N
+appVersion: "X.Y.Z"
 ```
 
 The suffix lets this repository publish package respins without implying that
 Nebius Soperator itself released a different upstream version.
+
+The parent chart package version is independent from the Soperator-family child
+chart package versions. A parent-only chart respin can use a later `-ps.N`
+suffix than unchanged child dependencies. The required invariant is that each
+parent dependency pin matches the referenced child chart's own
+`Chart.yaml.version`, and `Chart.lock` matches the parent dependency repository
+and version exactly.
 
 Release prep and publish are intentionally local and explicit:
 
@@ -2585,6 +2592,12 @@ The workflow pushes to the OCI repository root, for example
 `oci://cr.<region>.nebius.cloud/<registry-short-id>/charts`. Helm derives the
 final `soperator` repository and `X.Y.Z-ps.N` tag from the packaged chart,
 matching the [Helm OCI registry contract](https://helm.sh/docs/topics/registries/#the-push-subcommand).
+
+Soperator-family child charts remain sibling `file://../...` dependencies until
+they have their own chart-publish catalog entries and the exact child versions
+are published and anonymously pullable from OCI. Only after that should the
+parent dependency repositories move to the OCI repository root, with dependency
+`name` and `version` selecting the exact child artifact.
 
 ## Upstream Release Contract
 
@@ -2610,14 +2623,14 @@ The lock records:
 Versioning uses two fields on purpose:
 
 ```yaml
-version: 3.0.5-ps.1
-appVersion: "3.0.5"
+version: X.Y.Z-ps.N
+appVersion: "X.Y.Z"
 ```
 
 `appVersion` is the upstream Soperator release and is derived from the lock by
-the sync script. `version` is this repository's Helm chart package version; full
-upstream sync sets it to `<upstream>-ps.1`, and explicit parent-chart package
-respins may use `<upstream>-ps.N`.
+the sync script. `version` is this repository's Helm chart package version; a
+new upstream release sync sets it to `<upstream>-ps.1`, while same-release sync
+preserves an explicit parent-chart package respin such as `<upstream>-ps.2`.
 
 The upstream-owned exact imports are:
 

@@ -1308,12 +1308,17 @@ def test_render_local_soperator_chart_source_writes_static_manifest(tmp_path: Pa
         if doc.get("kind") == "PodTemplate"
         and doc.get("metadata", {}).get("name") == "create-user-soperatorchecks"
     )
+    activechecks_values_path = (
+        _local_soperator_chart_path().parent / "soperator-activechecks" / "values.yaml"
+    )
+    activechecks_values = yaml.safe_load(activechecks_values_path.read_text(encoding="utf-8"))
+    expected_k8s_check_job_image = activechecks_values["images"]["k8sJob"]
     assert activechecks_pod_template["template"]["spec"]["hostUsers"] is True
     assert activechecks_pod_template["template"]["spec"]["restartPolicy"] == "Never"
     assert activechecks_pod_template["template"]["spec"]["containers"] == [
         {
             "name": "create-user-soperatorchecks",
-            "image": "cr.eu-north1.nebius.cloud/soperator/k8s_check_job:4.0.1-slurm25.11.3",
+            "image": expected_k8s_check_job_image,
         }
     ]
     activecheck = next(

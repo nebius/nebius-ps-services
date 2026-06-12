@@ -4,6 +4,14 @@ All notable changes to this chart are tracked here.
 
 ## [Unreleased]
 
+- Clarified that parent chart package respins may keep unchanged
+  Soperator-family child dependencies on their own package versions, and that
+  child dependency repositories should move to OCI only after the child chart
+  artifacts are registered, published, and pull-verified.
+- Preserved same-release parent chart package respins during upstream sync and
+  refreshed chart-facing version references for the current Soperator 4.0.1
+  baseline.
+
 ## [soperator-chart-v4.0.1-ps.2] - 2026-06-12
 
 - soperator helm chart release 4.0.1-ps.2

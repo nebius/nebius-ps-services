@@ -92,7 +92,7 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- define "validateSlurmMemoryConfig" -}}
 {{- $customSlurmConfig := default "" .Values.customSlurmConfig -}}
 {{- if regexMatch "(?im)^\\s*DefMemPerCPU\\s*=" $customSlurmConfig -}}
-  {{- fail "customSlurmConfig contains DefMemPerCPU, but Soperator 3.0.5 defaults slurmConfig.defMemPerNode=0 and Slurm treats DefMemPerCPU and DefMemPerNode as mutually exclusive. For GPU workers, use DefMemPerGPU with DefCpuPerGPU instead." -}}
+  {{- fail "customSlurmConfig contains DefMemPerCPU, but Soperator 4.0.1 defaults slurmConfig.defMemPerNode=0 and Slurm treats DefMemPerCPU and DefMemPerNode as mutually exclusive. For GPU workers, use DefMemPerGPU with DefCpuPerGPU instead." -}}
 {{- end -}}
 {{- end -}}
 
