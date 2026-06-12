@@ -667,7 +667,7 @@ spec:
   slurmd:
     image:
       repository: cr.eu-north1.nebius.cloud/soperator/worker_slurmd
-      tag: 4.0.1-slurm25.11.3
+      tag: 4.0.2-slurm25.11.3
     resources:
       cpu: "64"
       memory: 512Gi
@@ -696,7 +696,7 @@ spec:
   munge:
     image:
       repository: cr.eu-north1.nebius.cloud/soperator/munge
-      tag: 4.0.1-slurm25.11.3
+      tag: 4.0.2-slurm25.11.3
 
   nodeSelector:
     slurm.nebius.ai/nodeset-name: worker
@@ -923,7 +923,7 @@ spec:
     evictionMethod: evict
     image:
       repository: cr.eu-north1.nebius.cloud/soperator/rebooter
-      tag: 4.0.1
+      tag: 4.0.2
 
   initContainers:
     - name: node-sysctl-params
@@ -2249,7 +2249,7 @@ node drain or undrain behavior.
 
 ### Memory Defaults
 
-The Soperator 4.0.1 CRD defaults `slurmConfig.defMemPerNode` to `0`. Slurm
+The Soperator 4.0.2 CRD defaults `slurmConfig.defMemPerNode` to `0`. Slurm
 does not allow `DefMemPerCPU` and `DefMemPerNode` together, so the chart fails
 rendering when `customSlurmConfig` contains `DefMemPerCPU`.
 
@@ -2583,6 +2583,10 @@ Release prep and publish are intentionally local and explicit:
 5. The tag starts `.github/workflows/helm-chart-publish.yml`, which reads
    `.github/helm-chart-publish.json`, packages the chart, pushes it to Nebius
    OCI, verifies anonymous pull, and writes a publish manifest artifact.
+
+If `[Unreleased]` is empty, the scheduled upstream sync workflow and
+`publish-helm.sh --prep` seed a fallback chart-bump note before release prep
+moves the section into the dated release entry.
 
 Only the push path uses Nebius authentication. The post-publish pull check uses
 a fresh unauthenticated Helm registry config because published chart pulls are

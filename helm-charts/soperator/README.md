@@ -2,7 +2,7 @@
 
 Umbrella chart for self-managed Nebius Soperator on MK8s.
 
-This chart vendors the upstream Soperator 4.0.1 operator, CRDs, OpenKruise
+This chart vendors the upstream Soperator 4.0.2 operator, CRDs, OpenKruise
 dependency, MariaDB Operator dependency, SlurmCluster, NodeConfigurator,
 NodeSet, and SFS storage templates into one installable chart. It intentionally
 does not include upstream `soperator-fluxcd`; `nebius-cxcli` renders Flux.
@@ -396,6 +396,10 @@ Release flow:
 4. Run `./publish-helm.sh --publish X.Y.Z-ps.N` from `main`.
 5. The `soperator-chart-vX.Y.Z-ps.N` tag triggers
    `.github/workflows/helm-chart-publish.yml`.
+
+If `[Unreleased]` is empty, the scheduled upstream sync workflow and
+`publish-helm.sh --prep` seed a fallback chart-bump note before release prep
+moves the section into the dated release entry.
 
 The shared publish workflow reads `.github/helm-chart-publish.json` to map the
 `soperator-chart` tag prefix to this chart. It seeds a temporary Helm repository

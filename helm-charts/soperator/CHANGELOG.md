@@ -4,12 +4,17 @@ All notable changes to this chart are tracked here.
 
 ## [Unreleased]
 
+- Bumped Soperator upstream release to 4.0.2 and Helm chart package to
+  4.0.2-ps.1.
+- Made the upstream sync workflow and `publish-helm.sh --prep` seed a fallback
+  changelog note when `[Unreleased]` is empty, so automated upstream bumps do
+  not produce an empty release section.
 - Clarified that parent chart package respins may keep unchanged
   Soperator-family child dependencies on their own package versions, and that
   child dependency repositories should move to OCI only after the child chart
   artifacts are registered, published, and pull-verified.
 - Preserved same-release parent chart package respins during upstream sync and
-  refreshed chart-facing version references for the current Soperator 4.0.1
+  refreshed chart-facing version references for the current Soperator 4.0.2
   baseline.
 
 ## [soperator-chart-v4.0.1-ps.2] - 2026-06-12
