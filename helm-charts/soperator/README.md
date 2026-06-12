@@ -390,8 +390,14 @@ Release flow:
 5. The `soperator-chart-vX.Y.Z-ps.N` tag triggers
    `.github/workflows/helm-chart-publish.yml`.
 
+If `[Unreleased]` is empty, the scheduled upstream sync workflow and
+`publish-helm.sh --prep` seed a fallback chart-bump note before release prep
+moves the section into the dated release entry.
+
 The shared publish workflow reads `.github/helm-chart-publish.json` to map the
-`soperator-chart` tag prefix to this chart.
+`soperator-chart` tag prefix to this chart. It seeds a temporary Helm repository
+config from this chart's remote dependencies before rebuilding `Chart.lock`
+dependencies on clean GitHub runners.
 
 The workflow publishes the package to a Nebius OCI registry path shaped like:
 

@@ -224,6 +224,46 @@ if not "\n".join(content_lines).strip():
 PY
 }
 
+ensure_unreleased_changelog_note() {
+  local tag="$1"
+  local version="${tag##*-v}"
+
+  python3 - "${version}" "${CHART_NAME}" "${CHANGELOG_FILE}" <<'PY'
+import pathlib
+import re
+import sys
+
+version, chart_name, changelog_path = sys.argv[1], sys.argv[2], sys.argv[3]
+path = pathlib.Path(changelog_path)
+text = path.read_text(encoding="utf-8")
+
+header_re = re.compile(r"^## \[.+?\].*$", re.MULTILINE)
+headers = list(header_re.finditer(text))
+if not headers:
+    print("No CHANGELOG headers found", file=sys.stderr)
+    sys.exit(1)
+
+unreleased_idx = None
+for idx, header in enumerate(headers):
+    if header.group(0).strip() == "## [Unreleased]":
+        unreleased_idx = idx
+        break
+
+if unreleased_idx is None:
+    print("Unable to locate Unreleased heading", file=sys.stderr)
+    sys.exit(1)
+
+unreleased_header = headers[unreleased_idx]
+section_end = headers[unreleased_idx + 1].start() if unreleased_idx + 1 < len(headers) else len(text)
+unreleased_content = text[unreleased_header.end() : section_end]
+if unreleased_content.strip():
+    sys.exit(0)
+
+note = f"\n\n- Bumped {chart_name} Helm chart to {version}.\n\n"
+path.write_text(text[: unreleased_header.end()] + note + text[section_end:], encoding="utf-8")
+PY
+}
+
 update_changelog() {
   local tag="$1"
   local release_date=""
@@ -355,6 +395,46 @@ print(match.group(1).strip().strip("'\""), end="")
 PY
 }
 
+chart_dependency_remote_repositories() {
+  local chart_path="$1"
+  helm dependency list "${chart_path}" | awk '
+    NR == 1 { next }
+    $3 ~ /^https?:\/\// {
+      name = $1
+      gsub(/[^A-Za-z0-9_.-]/, "-", name)
+      if (name == "") {
+        name = "repo-" NR
+      }
+      if (!seen_url[$3]++) {
+        base = name
+        candidate = base
+        suffix = 2
+        while (seen_name[candidate]) {
+          candidate = base "-" suffix
+          suffix += 1
+        }
+        seen_name[candidate] = 1
+        print candidate "\t" $3
+      }
+    }
+  '
+}
+
+seed_chart_dependency_repositories() {
+  local chart_path="$1"
+  local repo_name repo_url seeded
+  seeded=0
+
+  while IFS=$'\t' read -r repo_name repo_url; do
+    [[ -n "${repo_name}" && -n "${repo_url}" ]] || continue
+    if [[ "${seeded}" -eq 0 ]]; then
+      log_note "Preparing temporary Helm repository config for remote chart dependencies..."
+      seeded=1
+    fi
+    helm repo add "${repo_name}" "${repo_url}" >/dev/null
+  done < <(chart_dependency_remote_repositories "${chart_path}")
+}
+
 ensure_chart_version_matches_tag() {
   local tag="$1"
   local expected_version="${tag##*-v}"
@@ -368,13 +448,25 @@ ensure_chart_version_matches_tag() {
 }
 
 validate_chart() {
-  if [[ -f "${CHART_DIR}/Chart.lock" ]]; then
-    log_note "Building locked Helm dependencies for ${CHART_DIR}..."
-    helm dependency build "${CHART_DIR}"
-  else
-    log_note "Updating Helm dependencies for ${CHART_DIR}..."
-    helm dependency update "${CHART_DIR}"
-  fi
+  local helm_dependency_state=""
+  helm_dependency_state="$(mktemp -d)"
+
+  (
+    trap 'rm -rf "${helm_dependency_state}"' EXIT
+    mkdir -p "${helm_dependency_state}/repository"
+    export HELM_REPOSITORY_CACHE="${helm_dependency_state}/repository"
+    export HELM_REPOSITORY_CONFIG="${helm_dependency_state}/repositories.yaml"
+    seed_chart_dependency_repositories "${CHART_DIR}"
+
+    if [[ -f "${CHART_DIR}/Chart.lock" ]]; then
+      log_note "Building locked Helm dependencies for ${CHART_DIR}..."
+      helm dependency build "${CHART_DIR}"
+    else
+      log_note "Updating Helm dependencies for ${CHART_DIR}..."
+      helm dependency update "${CHART_DIR}"
+    fi
+  )
+
   log_note "Running helm lint --strict --with-subcharts for ${CHART_DIR}..."
   helm lint --strict --with-subcharts "${CHART_DIR}"
   log_note "Rendering smoke template for ${CHART_DIR}..."
@@ -392,6 +484,7 @@ prep_release() {
   ensure_tag_absent "${tag}"
 
   log_note "Updating ${CHANGELOG_FILE} for ${tag}..."
+  ensure_unreleased_changelog_note "${tag}"
   update_changelog "${tag}"
   log_note "Updating ${CHART_FILE} version to ${version}..."
   update_chart_version "${version}"
