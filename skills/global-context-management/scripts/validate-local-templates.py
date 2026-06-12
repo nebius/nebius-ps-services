@@ -200,12 +200,25 @@ def assert_agent_delegation_context(context: str) -> None:
         raise AssertionError("wait_agent cleanup guidance missing")
     if "asynchronous subagent completion notifications" not in context:
         raise AssertionError("async subagent cleanup guidance missing")
+    assert_tool_search_discovery_guidance(context, "delegation context")
 
 
 def assert_no_default_agent_names(context: str) -> None:
     for name in ("repo_mapper", "test_strategist", "risk_reviewer"):
         if name in context:
             raise AssertionError(f"default agent name leaked into context: {name}")
+
+
+def assert_tool_search_discovery_guidance(context: str, label: str) -> None:
+    if "`tool_search` is available" not in context:
+        raise AssertionError(f"{label} tool_search discovery guard missing")
+    if (
+        "multi-agent/subagent tools" not in context
+        or "before reporting delegation unavailable" not in context
+    ):
+        raise AssertionError(
+            f"{label} deferred subagent tool discovery guidance missing"
+        )
 
 
 def expected_workspace_segment(root: Path) -> str:
@@ -403,6 +416,7 @@ def validate_direct_hooks(root: Path, codex_home: Path, home: Path) -> None:
         "additionalContext"
     ]
     assert_no_default_agent_names(session_context)
+    assert_tool_search_discovery_guidance(session_context, "SessionStart")
     state_file = extract_state_path(session_result.stdout)
     if not str(state_file).startswith(str(codex_home / "task-state") + os.sep):
         raise AssertionError(f"state file is outside CODEX_HOME: {state_file}")

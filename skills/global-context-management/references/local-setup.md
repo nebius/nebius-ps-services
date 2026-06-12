@@ -79,9 +79,10 @@ global file.
   threads when close controls are available and no follow-up is needed.
   With multiple subagents, close each completed handle as its terminal result
   arrives, then continue waiting on the remaining handles.
-- If subagent tools are not visible or the current instructions do not permit
-  delegation, continue with narrow local reads and state that delegation was
-  unavailable or not permitted.
+- If delegation is authorized and useful but subagent tools are not visible,
+  and `tool_search` is available, first search for multi-agent/subagent tools.
+  If subagents are still unavailable, denied, or not permitted, continue with
+  narrow local reads and state that delegation was unavailable or not permitted.
 ```
 
 ## Config Snippet
@@ -123,6 +124,9 @@ they do not count as user authorization, and they do not guarantee a separate
 user-visible control in every Codex surface. In runtimes that require explicit
 user authorization, the prompt must say to use or spawn subagents, use
 delegation, or run parallel agents.
+When delegation is authorized and useful but the active tool list does not show
+subagent controls, and `tool_search` is available, Codex should search for
+multi-agent/subagent tools before reporting delegation unavailable.
 
 Keep `max_threads = 4` as the conservative local thread budget. Do not spawn
 every configured read-only role by default: use `repo_mapper` and
@@ -213,6 +217,8 @@ If the probe does not spawn a subagent, check:
   entries.
 - The session was restarted after editing config.
 - The current Codex surface exposes multi-agent tools.
+- If multi-agent tools are not exposed directly, `tool_search` is available and
+  can discover deferred multi-agent/subagent tools.
 - The user prompt explicitly asks Codex to use or spawn subagents, use
   delegation, or run parallel agents.
 - The current user or developer instructions permit delegation for the task.
