@@ -4,6 +4,8 @@ All notable changes to this chart are tracked here.
 
 ## [Unreleased]
 
+## [soperator-chart-v4.0.1-ps.2] - 2026-06-12
+
 ## [soperator-chart-v4.0.1-ps.1] - 2026-06-11
 
 - Made the upstream sync `--report` changed-file summary use readable status
