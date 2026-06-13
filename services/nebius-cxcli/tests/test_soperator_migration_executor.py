@@ -4271,7 +4271,8 @@ def test_suspend_legacy_flux_helmreleases_treats_timeout_as_skip() -> None:
     assert runner.calls[0][0][-1] == "--request-timeout=20s"
 
 
-def test_scale_down_legacy_soperator_controller_deployments() -> None:
+@pytest.mark.parametrize("profile_id", ["v2-to-target", "v3-to-target"])
+def test_scale_down_legacy_soperator_controller_deployments(profile_id: str) -> None:
     runner = _FakeCommandRunner(
         live_kubernetes_resources={
             "deployment": [
@@ -4329,7 +4330,7 @@ def test_scale_down_legacy_soperator_controller_deployments() -> None:
         kube_context="external-context",
         phase=phase,
         target_version="4.0.1-ps.1",
-        profile_group=migration.soperator_migration_profile_group("v2-to-target"),
+        profile_group=migration.soperator_migration_profile_group(profile_id),
     )
 
     assert changed is True

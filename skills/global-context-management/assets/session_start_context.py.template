@@ -111,16 +111,16 @@ For non-trivial planning, implementation, debugging, refactoring, migration,
 architecture, review, testing, CI failure, or multi-file work, apply the
 `global-context-management` skill.
 
-Use bounded read-only subagents only when the user explicitly requests
-subagents, delegation, or parallel agents, or when a user-enabled local hook
-policy injects that request, the current runtime exposes subagent tools, and
-the current instructions permit delegation. When hook-assisted delegation is
-enabled, the prompt hook discovers configured read-only subagent roles from
-the local Codex config and requests them by configured name.
+Use bounded read-only subagents when delegation is authorized by the user
+prompt or by a user-enabled local hook policy, when they are useful, the
+current runtime exposes subagent tools, and the current instructions permit
+delegation. When hook-assisted delegation is enabled, the prompt hook
+discovers configured read-only subagent roles from the local Codex config and
+requests them by configured name.
 
-If delegation was not explicitly authorized by the prompt or local hook policy,
-or subagents are unavailable or not permitted, continue with narrow local reads
-and state that limitation.
+If delegation was not authorized by the prompt or local hook policy, or
+subagents are unavailable or not permitted, continue with narrow local reads and
+state that limitation.
 If delegation is authorized and useful but subagent controls are not visible,
 and `tool_search` is available, first search for multi-agent/subagent tools
 before reporting delegation unavailable.

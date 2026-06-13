@@ -130,6 +130,19 @@ profile_groups:
       - MariaDB
       - OpenKruise
       - ActiveChecks
+    execution_contract:
+      source_controller_quiesce:
+        required_before_target_compute_reconcile: true
+        admission_webhooks:
+        - kind: MutatingWebhookConfiguration
+          name: soperator-controller-mutating-webhook-configuration
+        - kind: ValidatingWebhookConfiguration
+          name: soperator-controller-validating-webhook-configuration
+        deployments:
+        - namespace: soperator-system
+          name: soperator-controller-manager
+          release_name: soperator-controller
+          chart_prefix: helm-soperator
   v4-to-target:
     title: Soperator 4.x to pinned target
     requires_aligned_sfs: false

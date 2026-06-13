@@ -271,6 +271,10 @@ def test_generator_profile_payload_records_scope_contracts_and_compatibility_axe
         deployment.get("release_name") != "slurm-operator"
         for deployment in v2_quiesce["deployments"]
     )
+    v3_quiesce = payload["profile_groups"]["v3-to-target"]["execution_contract"][
+        "source_controller_quiesce"
+    ]
+    assert v3_quiesce == v2_quiesce
     release = payload["releases"][1]
     assert release["chart_path"] == "helm/soperator"
     assert release["chart_name"] == "helm-soperator"

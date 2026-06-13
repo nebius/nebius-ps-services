@@ -7,7 +7,18 @@ All notable changes to this project are tracked here. This changelog follows
 ## [Unreleased]
 
 - Changed the bundled Soperator portable app source to the published Nebius OCI
-  chart at version `4.0.1-ps.2`.
+  chart at version `4.0.2-ps.1`.
+- Documented the Soperator day-2 chart source rule: `repo: ''` keeps static
+  local rendering, while an explicit parent OCI repo plus version uses the
+  published package before running `render` and `deploy`; Soperator OCI sources
+  still render into the static post-Flux manifest path to avoid Helm release
+  Secret size limits.
+- Retried transient Kubernetes API server `etcdserver: request timed out`
+  failures while applying post-Flux Soperator custom resources, so large static
+  Soperator upgrades can continue after a short API leader-change timeout.
+- Clarified the post-apply GitOps handoff: missing Flux bootstrap is now an
+  informational optional follow-up, because local direct apply is a supported
+  operating mode for customers that do not want continuous GitOps sync.
 - Added MK8s VPC subnet capacity guidance and validation. The wizard now warns
   when a selected explicit subnet CIDR cannot fit the entered node count or
   autoscaling maximum, and `validate` fails live or planned explicit subnets
@@ -38,6 +49,10 @@ All notable changes to this project are tracked here. This changelog follows
   `source-soperator-cluster-discovery-report.json` into the same deploy-owned
   onboarding shape that a rerun of `ext-soperator onboard` would produce, while
   leaving pending or still-migration-owned plans blocked from normal deploy.
+- Fixed the Soperator `v3-to-target` migration profile to quiesce the legacy
+  `helm-soperator` source controller before target compute reconciliation, so
+  external 3.x upgrades do not run competing source and target controllers
+  during worker rollout.
 - Improved external Soperator deploy validation and live cleanup. Local
   post-Flux apply now prunes stale target-instance `SlurmCluster`, `NodeSet`,
   and `NodeConfigurator` custom resources instead of only stale

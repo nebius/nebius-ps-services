@@ -4,7 +4,7 @@
 runtime setup for keeping long or complex coding sessions focused. It reduces
 context pollution by separating runtime policy, task-state persistence, and
 read-only exploration roles when the current Codex surface exposes them and
-the user explicitly authorizes delegation.
+delegation is authorized by the prompt or by a user-enabled local hook policy.
 
 ## Design Goal
 
@@ -38,9 +38,9 @@ global-context-management skill defines the task workflow
   v
 Main agent owns planning, edits, validation, and final answer
   |
-  +--> read-only repo_mapper, when explicitly authorized and useful
-  +--> read-only test_strategist, when explicitly authorized and useful
-  `--> read-only risk_reviewer, when explicitly authorized for risky work
+  +--> read-only repo_mapper, when authorized and useful
+  +--> read-only test_strategist, when authorized and useful
+  `--> read-only risk_reviewer, when authorized for risky work
 ```
 
 ### Hooks
@@ -108,8 +108,8 @@ Understand the task.
 Read current task state when continuity may matter.
 Update task state.
 Use targeted reads.
-Delegate bounded read-only exploration when explicitly authorized, available,
-and useful.
+Delegate bounded read-only exploration when authorization comes from the prompt
+or a user-enabled local hook policy, and delegation is available and useful.
 Plan the smallest coherent change.
 Edit in focused patches.
 Validate narrowly first.
@@ -123,9 +123,9 @@ skill is used. Detailed local setup lives in `references/local-setup.md`.
 ### Subagents
 
 Subagents are optional read-only helpers. They are useful when exploration is
-large enough that it would pollute the parent thread, the user explicitly asks
-for delegation if the runtime requires it, and the current Codex surface
-permits delegation.
+large enough that it would pollute the parent thread, delegation is authorized
+by the prompt or by a user-enabled local hook policy, and the current Codex
+surface permits delegation.
 
 - `repo_mapper`: maps relevant files, symbols, flows, and conventions.
 - `test_strategist`: finds focused tests, fixtures, and validation order.
@@ -150,15 +150,16 @@ Subagents are not a guaranteed visible button or separate UI in every surface.
 They depend on the `multi_agent` feature, current runtime tools, configured
 agent roles, and the active instruction policy. In current Codex surfaces,
 enabling `multi_agent` makes the tools available but does not by itself count
-as a user request to use them. When the runtime requires explicit user
-authorization, the prompt must say to use or spawn subagents, use delegation,
-or run parallel agents, or the user must deliberately enable a local hook
-policy that injects that request for complex prompts. If delegation is
-authorized and useful but subagent controls are not visible, and `tool_search`
-is available, the main agent should first search for multi-agent/subagent tools
-before reporting delegation unavailable. If a session still cannot spawn a
-subagent, the main agent should keep working with narrower reads and report
-that delegation was unavailable or not permitted.
+as a user request to use them. Current public Codex docs say Codex only spawns
+subagents when explicitly asked. In this workflow, that explicit request can
+come from the user prompt or from a user-enabled local hook policy that injects
+a delegation request for complex prompts, when the active runtime and
+instruction policy accept that hook context. If delegation is authorized and
+useful but subagent controls are not visible, and `tool_search` is available,
+the main agent should first search for multi-agent/subagent tools before
+reporting delegation unavailable. If a session still cannot spawn a subagent,
+the main agent should keep working with narrower reads and report that
+delegation was unavailable or not permitted.
 
 The optional hook policy lives only under `$CODEX_HOME`:
 
@@ -174,7 +175,10 @@ When that policy is present at
 discovers configured read-only agents from `$CODEX_HOME/config.toml` and the
 referenced files under `$CODEX_HOME`. It injects agent names only by default,
 not local paths. This is still best-effort model-visible guidance; hooks do
-not directly call the subagent tool.
+not directly call the subagent tool. When this policy context is present, the
+main agent should treat it as the local-policy delegation request for that turn
+and should not wait for another manual prompt phrase before using useful,
+available, and permitted read-only helpers.
 
 ### Parent/Subagent Lifecycle
 
@@ -201,8 +205,8 @@ What it can do is change future behavior:
 
 - keep task state in a durable file instead of re-explaining it in chat
 - keep raw logs and broad file listings out of the parent thread
-- delegate broad read-only mapping and validation planning when explicitly
-  authorized and available
+- delegate broad read-only mapping and validation planning when authorized by
+  the prompt or local hook policy, and available
 - require concise summaries from subagents
 - close completed subagent threads after their results are consolidated, when
   close controls are available
@@ -223,11 +227,11 @@ For a complex task, the intended flow is:
 2. Identify the objective, constraints, likely files, and validation path.
 3. Read existing task state when prior context may matter, then update it with
    the current plan.
-4. Use read-only subagents only when they reduce parent-thread noise, the user
-   explicitly authorized delegation when required, and the current runtime
-   permits delegation. Use `repo_mapper` and `test_strategist` early only when
-   useful and independent; close completed helpers after consolidation. Do not
-   spawn every configured role by default.
+4. Use read-only subagents only when they reduce parent-thread noise,
+   delegation is authorized by the prompt or local hook policy, and the current
+   runtime permits delegation. Use `repo_mapper` and `test_strategist` early
+   only when useful and independent; close completed helpers after
+   consolidation. Do not spawn every configured role by default.
 5. Implement the smallest coherent change in the main thread.
 6. Inspect the diff and run focused validation.
 7. Use `risk_reviewer` near the end only for non-trivial or risky changes.
@@ -253,7 +257,7 @@ The Skill does this:
 During the task:
   "Read useful prior task state, then follow the exact process."
 
-The subagents do this when explicitly authorized and available:
+The subagents do this when delegation is authorized and available:
 
 When asked by the main agent:
   "Inspect, summarize, and report.
@@ -273,10 +277,11 @@ inject model-visible context. The best-effort automatic behavior comes from the
 combination of global AGENTS routing, hook-injected context, skill metadata, and
 the skill body. Subagent use has an additional gate: the runtime must expose
 multi-agent tools, the active instructions must permit delegation for the task,
-and some Codex surfaces require the user prompt itself to explicitly ask for
-subagents, delegation, or parallel agents. A local hook policy can inject that
-explicit request for complex prompts, but it remains subject to the active
-runtime and instruction policy.
+and current public Codex docs say Codex only spawns subagents when explicitly
+asked. A prompt can explicitly ask for subagents, delegation, or parallel
+agents; a user-enabled local hook policy can also inject that explicit request
+for complex prompts. Either way, spawning remains subject to active runtime and
+instruction policy.
 
 ## File Responsibilities
 
@@ -308,9 +313,9 @@ existing nonempty `current.md` is preserved for the agent to read rather than
 overwritten or copied into hook context.
 
 Runtime subagent activation is also surface-dependent. Treat it as unverified
-until a fresh session can actually spawn a read-only helper after an explicit
-user request or local hook policy, or the UI/runtime shows the multi-agent
-tools are available but delegation is not permitted in that surface.
+until a fresh session can actually spawn a read-only helper after a prompt
+request or local hook policy, or the UI/runtime shows the multi-agent tools are
+available but delegation is not permitted in that surface.
 
 ## Enable And Trust Hooks
 
@@ -377,9 +382,9 @@ prompt receives an injected durable task-state path under:
 $CODEX_HOME/task-state/<workspace>-<hash>/<session-id>/current.md
 ```
 
-Then confirm a complex prompt either spawns a bounded read-only helper after
-an explicit request or local hook policy, or states why delegation is
-unavailable or not permitted. A useful non-mutating probe is:
+Then confirm a complex prompt either spawns a bounded read-only helper after a
+prompt request or local hook policy, or states why delegation is unavailable or
+not permitted. A useful non-mutating probe is:
 
 ```text
 Use $global-context-management. Explicitly spawn one read-only repo_mapper

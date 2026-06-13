@@ -252,6 +252,13 @@ def test_readme_upgrade_section_is_visible_and_consolidated() -> None:
     assert "Use `upgrade helm-chart` when cxcli already manages the Soperator app row" in (
         soperator
     )
+    assert "If the existing Soperator row uses `repo: ''`" in soperator
+    assert (
+        "oci://cr.eu-north1.nebius.cloud/e00th0mgv3zddz7468/charts/soperator"
+        in soperator
+    )
+    assert "published parent OCI package" in soperator
+    assert "static post-Flux manifest" in soperator
     assert "Use `ext-soperator onboard` plus `ext-soperator migrate` when the source cluster is not" in (
         soperator
     )
@@ -324,6 +331,9 @@ def test_readme_upgrade_section_is_visible_and_consolidated() -> None:
     assert (
         "upgrade helm-chart <config.yaml> apps:<chart>@<target> --to-version <chart-version>"
     ) in upgrade
+    assert "does not switch a row between local static rendering and an OCI/HTTP/Git chart source" in (
+        upgrade_flat
+    )
     assert "requires the selected generated target handoff" in upgrade
     assert "Node firmware is maintained by the Nebius hardware team" in upgrade_flat
     assert "not a customer upgrade responsibility" in upgrade_flat
@@ -935,6 +945,11 @@ def test_design_defines_soperator_profile_policy_model() -> None:
 
     assert "## Soperator" in design
     assert "`component_sources.yaml` keeps the app source" in design
+    assert "A non-empty `repo` is an explicit Helm source override in the config row" in (
+        design_flat
+    )
+    assert "changes only the row `version`" in design_flat
+    assert "Soperator is source-backed but not HelmRelease-backed" in design
     assert "`wizard_profile: soperator`" in design
     assert "`soperator_nodesets_profile` table stays in `component_cli_settings.yaml`" in design
     assert "NodeSet profile chooses the Slurm worker layout" in design
@@ -1298,6 +1313,7 @@ def test_design_supporting_commands_include_quota_request_and_flux_targets() -> 
         in supporting_flat
     )
     assert "upgrade helm-chart <config.yaml> apps:<chart>@<target> --to-version" in supporting_flat
+    assert "source-family change is the desired state" in supporting_flat
     assert "Node firmware is maintained by the Nebius hardware team" in supporting_flat
     assert "not a customer upgrade responsibility" in supporting_flat
     assert "- `ssh-jumphost <config.yaml>`" in supporting

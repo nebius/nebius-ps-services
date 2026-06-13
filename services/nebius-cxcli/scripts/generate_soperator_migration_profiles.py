@@ -599,6 +599,9 @@ def _profile_payload(
                         "ActiveChecks",
                     ],
                 },
+                "execution_contract": _source_controller_quiesce_contract(
+                    include_slurm_operator=False
+                ),
             },
             "v4-to-target": {
                 "title": "Soperator 4.x to pinned target",

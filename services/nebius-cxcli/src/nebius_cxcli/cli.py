@@ -1234,6 +1234,8 @@ _KUBECTL_TRANSIENT_FAILURE_MARKERS = (
     "connection reset by peer",
     "no endpoints available",
     "context deadline exceeded",
+    "etcdserver: request timed out",
+    "possibly due to previous leader failure",
 )
 _WIZARD_BACKTRACK = object()
 _WIZARD_DEFAULT_MISSING = object()
@@ -32277,26 +32279,28 @@ def _warn_if_flux_gitops_not_bootstrapped(
     if target_ref:
         command += f" --target {shlex.quote(target_ref)}"
     console.print(
-        f"{warning_markup('WARNING:', bold=True)} Flux GitOps bootstrap is not configured for this cluster yet. "
-        "Local apply succeeded, but the cluster will not continuously sync from the Git repository "
-        "until you bootstrap it."
+        "[yellow]NOTE:[/yellow] Flux GitOps bootstrap is not configured for this cluster. "
+        "Local direct apply succeeded; this is a supported operating mode when you do not want "
+        "continuous GitOps sync."
     )
     if print_command:
         console.print(
-            "The command below takes the local generated bundle path; the GitHub repository is inferred "
-            f"from GITHUB_REPOSITORY or the git origin under {paths.repo_root}."
+            "If this cluster should continuously sync from Git, the command below takes the local "
+            "generated bundle path; the GitHub repository is inferred from GITHUB_REPOSITORY or "
+            f"the git origin under {paths.repo_root}."
         )
     else:
         console.print(
-            "The GitOps command in the final Deployment summary takes the local generated bundle path; "
-            "the GitHub repository is inferred "
+            "If this cluster should continuously sync from Git, the GitOps command in the final "
+            "Deployment summary takes the local generated bundle path; the GitHub repository is inferred "
             f"from GITHUB_REPOSITORY or the git origin under {paths.repo_root}."
         )
     console.print(
-        "Commit and push the rendered generated/flux path before relying on continuous GitOps sync."
+        "Commit and push the rendered generated/flux path before relying on continuous GitOps sync; "
+        "skip this step when local direct apply is the intended workflow."
     )
     if print_command:
-        console.print("Run to enable GitOps sync:")
+        console.print("Optional command to enable GitOps sync:")
         console.print(command, style="cyan", no_wrap=True, overflow="ignore")
     return command
 

@@ -12312,6 +12312,43 @@ def test_run_post_flux_kubectl_retries_transient_webhook_failures(
     assert envs[0]["PATH"] == os.environ["PATH"]
 
 
+def test_run_post_flux_kubectl_retries_etcd_leader_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, ...]] = []
+    sleeps: list[float] = []
+
+    def _fake_run(cmd: list[str], **_kwargs: object) -> SimpleNamespace:
+        calls.append(tuple(cmd))
+        if len(calls) == 1:
+            return SimpleNamespace(
+                returncode=1,
+                stderr=(
+                    "Error from server: etcdserver: request timed out, "
+                    "possibly due to previous leader failure"
+                ),
+                stdout="",
+            )
+        return SimpleNamespace(returncode=0, stderr="", stdout="")
+
+    monkeypatch.setattr(cli.subprocess, "run", _fake_run)
+    monkeypatch.setattr(cli.time, "sleep", lambda seconds: sleeps.append(seconds))
+
+    cli._run_post_flux_kubectl(
+        ["kubectl", "apply", "--server-side", "--force-conflicts", "-f", "custom.yaml"],
+        env={"KUBECONFIG": "/tmp/kubeconfig"},
+        retries=1,
+        retry_delay_seconds=2.0,
+        retry_stderr_markers=cli._KUBECTL_TRANSIENT_FAILURE_MARKERS,
+    )
+
+    assert calls == [
+        ("kubectl", "apply", "--server-side", "--force-conflicts", "-f", "custom.yaml"),
+        ("kubectl", "apply", "--server-side", "--force-conflicts", "-f", "custom.yaml"),
+    ]
+    assert sleeps == [2.0]
+
+
 def test_apply_rendered_flux_prints_phase_lines_when_console_is_not_terminal(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -16172,10 +16209,14 @@ def test_warn_if_flux_gitops_not_bootstrapped_prints_guidance(
 
     assert len(messages) >= 3
     assert "Flux GitOps bootstrap is not configured" in messages[0]
+    assert "Local direct apply succeeded" in messages[0]
+    assert "supported operating mode" in messages[0]
+    assert "If this cluster should continuously sync from Git" in messages[1]
     assert "local generated bundle path" in messages[1]
     assert f"git origin under {fake_paths.repo_root}" in messages[1]
     assert "Commit and push the rendered generated/flux path" in messages[2]
-    assert "Run to enable GitOps sync:" in messages[3]
+    assert "skip this step when local direct apply is the intended workflow" in messages[2]
+    assert "Optional command to enable GitOps sync:" in messages[3]
     assert f"nebius-cxcli flux bootstrap {fake_paths.generated_dir}" == messages[4]
     assert command == f"nebius-cxcli flux bootstrap {fake_paths.generated_dir}"
 
@@ -16189,8 +16230,9 @@ def test_warn_if_flux_gitops_not_bootstrapped_prints_guidance(
 
     assert len(messages) == 3
     assert "Flux GitOps bootstrap is not configured" in messages[0]
+    assert "Local direct apply succeeded" in messages[0]
     assert "final Deployment summary" in messages[1]
-    assert "Run to enable GitOps sync:" not in "\n".join(messages)
+    assert "Optional command to enable GitOps sync:" not in "\n".join(messages)
     assert command == f"nebius-cxcli flux bootstrap {fake_paths.generated_dir}"
 
 

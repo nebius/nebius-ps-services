@@ -184,6 +184,10 @@ def assert_agent_delegation_context(context: str) -> None:
         raise AssertionError("agent config path leaked into context")
     if "Hook-assisted read-only subagent delegation is enabled" not in context:
         raise AssertionError("delegation policy context missing")
+    if "local-policy delegation request for this turn" not in context:
+        raise AssertionError("local-policy delegation request guidance missing")
+    if "another manual user request" not in context:
+        raise AssertionError("manual delegation prompt fallback guidance missing")
     if "explicitly use all discovered read-only roles" in context:
         raise AssertionError("over-broad all-role subagent guidance returned")
     if "Do not spawn every configured role by default" not in context:

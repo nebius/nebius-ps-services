@@ -49,6 +49,7 @@ from .mysterybox_eso import (
 from .nfs_csi import NFS_CSI_APP_ID, nfs_instance_id_for_target
 from .paths import ProjectPaths
 from .runtime_config import to_plain_data
+from .soperator_child_charts import SOPERATOR_APP_ID
 
 _CLUSTER_SCOPED_RENDER_KINDS = {
     ("", "Namespace"),
@@ -71,6 +72,7 @@ _CLUSTER_SCOPED_RENDER_KINDS = {
 }
 _CERT_MANAGER_CERTIFICATE_API_VERSION = "cert-manager.io/v1"
 _CERT_MANAGER_PRIVATE_KEY_ROTATION_POLICY = "Always"
+_SOPERATOR_STATIC_SOURCE_KIND = "static_helm_chart"
 
 
 def _ensure_parent(path: Path) -> None:
@@ -355,6 +357,14 @@ def _runtime_app_chart_name(
     if configured_chart_name:
         return configured_chart_name
     return entry_id
+
+
+def _requires_static_helm_render(*, entry_id: str, source_kind: str) -> bool:
+    # The Soperator umbrella chart is large enough that storing Helm release
+    # state in Kubernetes Secrets can exceed the 1 MiB object data limit.
+    # Static rendering keeps the exact selected chart source while preserving
+    # cxcli's established post-Flux apply model for Soperator resources.
+    return entry_id == SOPERATOR_APP_ID and source_kind == "helm_repository"
 
 
 def _file_slug(value: str) -> str:
@@ -763,7 +773,12 @@ def _configured_app_release_specs(
                     source_url = source["repo_url"]
                     source_ref = source.get("repo_ref", "")
                     source_repo_type = source.get("repo_type", "default")
-                if source_kind == "helm_repository" and not chart_version:
+                    if _requires_static_helm_render(
+                        entry_id=entry_id,
+                        source_kind=source_kind,
+                    ):
+                        source_kind = _SOPERATOR_STATIC_SOURCE_KIND
+                if source_kind in {"helm_repository", _SOPERATOR_STATIC_SOURCE_KIND} and not chart_version:
                     raise ValueError(
                         f"apps.charts[{entry_id}].version is required for enabled chart '{entry_id}'"
                     )
@@ -797,7 +812,9 @@ def _configured_app_release_specs(
                         "source_ref": source_ref,
                         "source_repo_type": source_repo_type,
                         "chart_ref": chart_ref,
-                        "chart_version": chart_version if source_kind == "helm_repository" else "",
+                        "chart_version": chart_version
+                        if source_kind in {"helm_repository", _SOPERATOR_STATIC_SOURCE_KIND}
+                        else "",
                         "interval": interval,
                         "timeout": release_timeout,
                         "values": chart_values,
@@ -1148,6 +1165,23 @@ def _render_flux_app_helm_releases(
                 ),
             )
             continue
+        if source_kind == _SOPERATOR_STATIC_SOURCE_KIND:
+            state.ensure_namespace(namespace)
+            rendered_chart_file_name = (
+                f"post-flux-helmrender-{_file_slug(scope)}-{_file_slug(release_name)}.yaml"
+            )
+            state.write_post_flux_raw(
+                Path(rendered_chart_file_name),
+                _render_remote_helm_chart_static(
+                    release_name=release_name,
+                    namespace=namespace,
+                    chart_ref=str(release["chart_ref"]),
+                    source_url=source_url,
+                    chart_version=str(release["chart_version"]),
+                    values=release["values"],
+                ),
+            )
+            continue
         if source_kind == "helm_repository":
             state.add_repository_doc(
                 repo_name=source_name,
@@ -1222,6 +1256,64 @@ def _render_local_helm_chart(
     rendered = result.stdout.strip()
     if not rendered:
         raise ValueError(f"local Helm chart render produced no manifests for {chart_path}")
+    return _inject_local_chart_namespace(rendered, namespace=namespace)
+
+
+def _remote_helm_template_chart_arg(*, source_url: str, chart_ref: str) -> str:
+    if _is_oci_repo(source_url):
+        repo = source_url.strip().rstrip("/")
+        repo_tail = repo.rsplit("/", maxsplit=1)[-1].strip().lower()
+        if repo_tail == chart_ref.strip().lower():
+            return repo
+        return f"{repo}/{chart_ref.strip()}"
+    return chart_ref
+
+
+def _render_remote_helm_chart_static(
+    *,
+    release_name: str,
+    namespace: str,
+    chart_ref: str,
+    source_url: str,
+    chart_version: str,
+    values: dict[str, Any],
+) -> str:
+    with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".yaml") as values_file:
+        yaml.safe_dump(values, values_file, sort_keys=False)
+        values_file.flush()
+        command = [
+            "helm",
+            "template",
+            release_name,
+            _remote_helm_template_chart_arg(source_url=source_url, chart_ref=chart_ref),
+            "--namespace",
+            namespace,
+            "--include-crds",
+            "--values",
+            values_file.name,
+        ]
+        if chart_version:
+            command.extend(["--version", chart_version])
+        if source_url and not _is_oci_repo(source_url):
+            command.extend(["--repo", source_url])
+        result = subprocess.run(
+            command,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=180,
+        )
+    if result.returncode != 0:
+        stderr = result.stderr.strip() or result.stdout.strip()
+        source_label = source_url.strip() or chart_ref
+        raise ValueError(
+            "remote Helm chart static render failed for "
+            f"{source_label}: {stderr or 'helm exited without diagnostic output'}"
+        )
+    rendered = result.stdout.strip()
+    if not rendered:
+        source_label = source_url.strip() or chart_ref
+        raise ValueError(f"remote Helm chart static render produced no manifests for {source_label}")
     return _inject_local_chart_namespace(rendered, namespace=namespace)
 
 

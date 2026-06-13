@@ -115,6 +115,10 @@ All notable changes to the reusable Codex skills are tracked here.
   configured read-only agents from `$CODEX_HOME/config.toml` and
   `$CODEX_HOME/agents` when a local `$CODEX_HOME/hooks/global_context_policy.json`
   policy enables it, while keeping public templates free of personal paths.
+- Clarified `global-context-management` and `config-codex` delegation guidance
+  so a prompt request and a user-enabled local hook policy request are both
+  treated as valid subagent authorization sources, while hooks still only
+  inject model-visible context and do not directly call subagent tools.
 - Clarified the read-only subagent lifecycle: the parent agent should ask
   helpers for concise final summaries, wait for results, consolidate them, and
   close completed subagent threads when close controls are available and no

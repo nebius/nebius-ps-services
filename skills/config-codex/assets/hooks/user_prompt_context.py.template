@@ -303,6 +303,9 @@ def subagent_context(home: Path) -> str:
     lines = [
         "",
         "Hook-assisted read-only subagent delegation is enabled by local policy.",
+        "This hook output is the local-policy delegation request for this turn;",
+        "do not wait for another manual user request before using useful,",
+        "available, and permitted read-only helpers.",
         "Configured read-only agent roles discovered from `$CODEX_HOME/config.toml`:",
     ]
     for agent in agents:
@@ -321,7 +324,7 @@ def subagent_context(home: Path) -> str:
         [
             "",
             "For complex tasks that touch many files or require noisy exploration,",
-            "use configured read-only roles only when they are useful, the current",
+            "use configured read-only roles when they are useful, the current",
             "runtime exposes subagent tools, and active instructions permit",
             "delegation. Do not spawn every configured role by default.",
         ]
@@ -393,14 +396,14 @@ decisions may matter.
 {task_state_context}
 Apply the `global-context-management` skill. Keep raw
 exploration output out of the parent context. Use configured read-only
-subagents for read-heavy exploration only when the user explicitly requests
-subagents, delegation, or parallel agents, or when a user-enabled local hook
-policy injects that request, the current runtime exposes subagent tools, and
-the current instructions permit delegation. If delegation was not explicitly
-authorized by the prompt or local hook policy, or subagents are unavailable or
-not permitted, continue with narrow local reads and state that limitation. Use
-read-only review agents before finalizing non-trivial code changes only when
-delegation is explicitly authorized, available, and permitted.
+subagents for read-heavy exploration when delegation is authorized by the user
+prompt or by a user-enabled local hook policy, when they are useful, the
+current runtime exposes subagent tools, and the current instructions permit
+delegation. If delegation was not authorized by the prompt or local hook
+policy, or subagents are unavailable or not permitted, continue with narrow
+local reads and state that limitation. Use read-only review agents before
+finalizing non-trivial code changes only when delegation is authorized,
+available, and permitted.
 {subagent_context(home)}"""
 
     print(
