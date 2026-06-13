@@ -2171,6 +2171,13 @@ For day-2 upgrades of a cxcli-managed Soperator deployment:
   `version` to the desired package version, then run `render` and `deploy`.
   cxcli still renders Soperator as a static post-Flux manifest so the chart
   source can be OCI without using Helm's in-cluster release Secret storage.
+  If `upgrade helm-chart --to-version` appears lower than the current
+  configured chart version, cxcli prints a production downgrade warning but
+  still allows the change for rollback or recovery. Helm chart downgrades are
+  not guaranteed safe; review chart release notes, CRDs/schema migrations,
+  application state, and backups first. Direct `config.yaml` edits followed by
+  `render` and `deploy` are treated as desired state and do not perform a live
+  version-order downgrade check.
 
 - Use `upgrade k8s-version` for Terraform-managed MK8s Kubernetes minor
   upgrades.
@@ -2184,6 +2191,10 @@ For day-2 upgrades of a cxcli-managed Soperator deployment:
 These `upgrade` commands are desired-state workflows. They run live discovery
 and safety checks, update `config.yaml`, rerender `generated/`, validate the
 bundle, and apply the relevant Terraform or Flux target when not in `--dry-run`.
+Kubernetes version downgrade targets are refused. Helm chart targets remain
+operator-controlled desired state: lower target versions are allowed with an
+explicit warning because they can be useful for recovery, but they are risky for
+production stateful workloads and CRD/schema changes.
 For MK8s targets, non-dry runs finish with a final MK8s readiness check that
 re-reads the live control plane and selected node groups, then verifies the
 expected Kubernetes version, node OS image, platform/preset layer, and Nebius
@@ -2885,6 +2896,11 @@ GPU preset changes, and target-scoped Helm chart version upgrades.
 - `--dry-run` performs live discovery and prints the plan plus a wrapped
   repeat dry-run command without changing `config.yaml`, `generated/`,
   Terraform backend state, or live Nebius resources.
+- Kubernetes version downgrade targets are refused by the structured MK8s
+  upgrade paths. Helm chart targets remain operator-controlled desired state:
+  lower target versions are allowed with an explicit warning because they can
+  be useful for rollback or recovery, but they are risky for production
+  stateful workloads and CRD/schema changes.
 - Upgrade layers stay separate except for `upgrade node-template`, which is the
   explicit non-interactive path for moving Kubernetes version, node-template OS,
   and Nebius-image GPU stack together so a selected node group rolls once.

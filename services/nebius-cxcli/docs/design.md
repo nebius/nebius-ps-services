@@ -3427,7 +3427,12 @@ Modules that expose collection/object inputs, such as `mysterybox.secrets`, `ssh
   apply, it requires the selected generated target handoff and then verifies
   the live Helm release plus rendered Deployment/StatefulSet/DaemonSet
   workloads. It carries `--dry-run` and interactive prompt/confirmation flags,
-  but no node-drain flags. It does not switch an app row from local static
+  but no node-drain flags. If the requested target version appears lower than
+  the current configured chart version, the plan prints a downgrade warning but
+  still allows the change for rollback or recovery. The warning is intentional:
+  Helm chart downgrades are operator-controlled desired state, not guaranteed
+  safe production rollbacks, especially when CRDs, schema migrations, or
+  application data changed. It does not switch an app row from local static
   rendering to OCI/HTTP/Git Helm source or back; when that source-family change
   is the desired state, make a manual edit of the row `repo` plus `version`,
   followed by `render` and `deploy` or `flux apply`. Soperator remains on the
@@ -3439,7 +3444,8 @@ Modules that expose collection/object inputs, such as `mysterybox.secrets`, `ssh
   repo and then run `render` plus `deploy`, `terraform apply`, or `flux apply`.
   The structured `upgrade` command is recommended for the covered day-2 changes
   because it adds live discovery, compatibility checks, preflight checks, staged
-  execution output, and repeat dry-run command generation. Node firmware is
+  execution output, downgrade warnings where cxcli can compare versions, and
+  repeat dry-run command generation. Node firmware is
   maintained by the Nebius hardware team and is not a customer upgrade
   responsibility.
   Rollback for high-risk GPU and production workloads should use blue/green or

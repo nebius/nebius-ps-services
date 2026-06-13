@@ -1769,6 +1769,11 @@ class _HelmChartUpgradePlan:
     def mutates(self) -> bool:
         return self.current_version != self.target_version
 
+    @property
+    def target_appears_lower(self) -> bool:
+        comparison = _compare_chart_versions(self.target_version, self.current_version)
+        return comparison is not None and comparison < 0
+
 
 _NODE_LAYER_UPGRADE_SPECS: dict[str, NodeLayerUpgradeSpec] = {
     "gpu-stack-preset": NodeLayerUpgradeSpec(
@@ -1930,6 +1935,44 @@ def _validate_helm_chart_version_value(value: str) -> str:
     if any(char.isspace() for char in raw):
         raise ValueError("--to-version must not contain whitespace.")
     return raw
+
+
+def _chart_version_numeric_key(value: str) -> tuple[tuple[int, ...], str, tuple[int, ...]] | None:
+    raw = _non_empty_text(value).lstrip("vV")
+    match = re.fullmatch(r"(?P<release>[0-9]+(?:\.[0-9]+)*)(?P<suffix>.*)", raw)
+    if not match:
+        return None
+    release = tuple(int(part) for part in match.group("release").split("."))
+    suffix = match.group("suffix")
+    suffix_label = re.sub(r"[0-9]+", "", suffix).lower()
+    suffix_numbers = tuple(int(part) for part in re.findall(r"[0-9]+", suffix))
+    return release, suffix_label, suffix_numbers
+
+
+def _compare_numeric_tuples(left: tuple[int, ...], right: tuple[int, ...]) -> int:
+    width = max(len(left), len(right))
+    padded_left = (*left, *(0 for _ in range(width - len(left))))
+    padded_right = (*right, *(0 for _ in range(width - len(right))))
+    if padded_left < padded_right:
+        return -1
+    if padded_left > padded_right:
+        return 1
+    return 0
+
+
+def _compare_chart_versions(left: str, right: str) -> int | None:
+    left_key = _chart_version_numeric_key(left)
+    right_key = _chart_version_numeric_key(right)
+    if left_key is None or right_key is None:
+        return None
+    left_release, left_suffix_label, left_suffix_numbers = left_key
+    right_release, right_suffix_label, right_suffix_numbers = right_key
+    release_comparison = _compare_numeric_tuples(left_release, right_release)
+    if release_comparison:
+        return release_comparison
+    if left_suffix_label != right_suffix_label:
+        return None
+    return _compare_numeric_tuples(left_suffix_numbers, right_suffix_numbers)
 
 
 def _prompt_upgrade_helm_chart_to_version_if_needed(
@@ -2747,6 +2790,22 @@ def _format_helm_chart_upgrade_plan(
         f"- release: {plan.release_name}",
         f"- chart version: {plan.current_version or 'unset'} -> {plan.target_version}",
     ]
+    if plan.current_version and plan.target_appears_lower:
+        lines.extend(
+            [
+                "- warnings:",
+                (
+                    "  - requested chart version appears lower than the current "
+                    "config version; cxcli will allow this for rollback or "
+                    "recovery, but Helm chart downgrades are not guaranteed safe."
+                ),
+                (
+                    "  - review the chart release notes, CRDs/schema migrations, "
+                    "application state, and backups before applying this change "
+                    "in production."
+                ),
+            ]
+        )
     if dry_run:
         if repeat_dry_run_command:
             lines.append("- repeat dry-run command:")

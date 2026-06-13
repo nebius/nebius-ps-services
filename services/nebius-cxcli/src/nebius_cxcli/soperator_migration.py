@@ -1961,6 +1961,34 @@ def _minor_version_at_least(current: str, target: str) -> bool:
     )
 
 
+def _external_node_template_k8s_downgrade_error(current: str, target: str) -> str:
+    if not current:
+        return ""
+    try:
+        current_version = parse_k8s_version(current)
+        target_version = parse_k8s_version(target)
+    except ValueError:
+        return ""
+    if (target_version.major, target_version.minor) >= (
+        current_version.major,
+        current_version.minor,
+    ):
+        return ""
+    return (
+        "external MK8s node-template downgrade is not supported: "
+        f"live control plane is {current_version.minor_text}, target is "
+        f"{target_version.minor_text}. Update "
+        "deploy.targets[].soperator_onboarding.node_template_upgrade.target_k8s_version "
+        "to the live or newer version, or use a blue/green replacement path."
+    )
+
+
+def _ensure_external_node_template_k8s_not_downgrade(current: str, target: str) -> None:
+    message = _external_node_template_k8s_downgrade_error(current, target)
+    if message:
+        raise RuntimeError(message)
+
+
 def _node_group_version(node_group: Mapping[str, Any]) -> str:
     return str(_mapping(node_group.get("spec")).get("version", "") or "").strip()
 
@@ -8390,6 +8418,7 @@ def _execute_external_node_template_upgrade_phase(
         )
     control_plane["current_version"] = current_version
     control_plane["target_version"] = target.k8s_version
+    _ensure_external_node_template_k8s_not_downgrade(current_version, target.k8s_version)
     hops = minor_version_hops(current_version, target.k8s_version)
     hop_state = control_plane.setdefault("hops", {})
     if not isinstance(hop_state, dict):
@@ -11438,7 +11467,10 @@ def _external_node_template_upgrade_satisfied(
     )
     cluster = _cluster_payload_by_id(command_runner=command_runner, cluster_id=cluster_id)
     current_version = _minor_version_text_or_empty(_cluster_control_plane_version(cluster))
-    if not current_version or not _minor_version_at_least(current_version, target.k8s_version):
+    if not current_version:
+        return False
+    _ensure_external_node_template_k8s_not_downgrade(current_version, target.k8s_version)
+    if not _minor_version_at_least(current_version, target.k8s_version):
         return False
     groups = _external_node_template_upgrade_groups(
         source_report=source_report,
@@ -11603,7 +11635,13 @@ def _verify_completed_soperator_migration_node_template_state(
 ) -> list[str]:
     onboarding = _target_onboarding(payload, target_ref)
     target = _external_node_template_target(onboarding)
-    if not current_version or not _minor_version_at_least(current_version, target.k8s_version):
+    downgrade_error = _external_node_template_k8s_downgrade_error(
+        current_version,
+        target.k8s_version,
+    )
+    if downgrade_error:
+        errors.append(downgrade_error)
+    elif not current_version or not _minor_version_at_least(current_version, target.k8s_version):
         errors.append(
             f"control plane reports Kubernetes {current_version or 'unknown'}, "
             f"expected at least {target.k8s_version}"

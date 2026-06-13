@@ -6,6 +6,12 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Added downgrade guardrails for day-2 upgrades. MK8s version downgrade targets
+  remain refused, external Soperator node-template rechecks now fail if the
+  accepted target is below the live control-plane version, and Helm chart
+  upgrade plans warn when the requested chart version appears lower than the
+  current configured version while still allowing operator-controlled rollback
+  or recovery.
 - Changed the bundled Soperator portable app source to the published Nebius OCI
   chart at version `4.0.2-ps.1`.
 - Documented the Soperator day-2 chart source rule: `repo: ''` keeps static

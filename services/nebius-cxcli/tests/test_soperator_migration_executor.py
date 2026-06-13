@@ -1629,6 +1629,35 @@ def test_external_node_template_rollout_config_validation_and_cli_precedence() -
         migration.resolve_external_node_template_rollout(onboarding)
 
 
+def test_external_node_template_completion_recheck_rejects_k8s_downgrade_target() -> None:
+    payload = _payload()
+    target = payload["deploy"]["targets"][0]  # type: ignore[index]
+    assert isinstance(target, dict)
+    onboarding = target["soperator_onboarding"]
+    assert isinstance(onboarding, dict)
+    onboarding["actions"] = ["upgrade-external-node-template"]
+    onboarding["node_template_upgrade"] = {
+        "target_k8s_version": "1.32",
+        "target_os": "ubuntu24.04",
+        "target_gpu_stack_preset": "cuda13.0",
+    }
+    runner = _FakeCommandRunner(
+        cluster={
+            "metadata": {"id": "cluster-123", "name": "external-cluster"},
+            "spec": {"control_plane": {"version": "1.33"}},
+        }
+    )
+
+    with pytest.raises(RuntimeError, match="downgrade is not supported"):
+        migration._external_node_template_upgrade_satisfied(
+            payload=payload,
+            source_report=_source_report(),
+            target_ref="external-cluster",
+            worker_node_groups=(),
+            command_runner=runner,
+        )
+
+
 def test_sfs_attachment_uses_zero_surge_strategy_and_restores_original() -> None:
     runner = _FakeCommandRunner(
         existing_node_groups=[

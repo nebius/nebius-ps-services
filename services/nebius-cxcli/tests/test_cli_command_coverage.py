@@ -3050,6 +3050,27 @@ def test_upgrade_helm_chart_apply_updates_source_and_runs_target_flux_apply(
     ]
 
 
+def test_format_helm_chart_upgrade_plan_warns_when_target_appears_lower() -> None:
+    plan = cli._HelmChartUpgradePlan(
+        target=cli._HelmChartUpgradeTarget(
+            selector="apps:soperator@mk8s",
+            chart_id="soperator",
+            target_ref="mk8s",
+        ),
+        instance_id="mk8s",
+        namespace="soperator",
+        release_name="soperator",
+        current_version="4.0.2-ps.1",
+        target_version="4.0.1-ps.2",
+    )
+
+    rendered = "\n".join(cli._format_helm_chart_upgrade_plan(plan, dry_run=True))
+
+    assert "- warnings:" in rendered
+    assert "requested chart version appears lower" in rendered
+    assert "Helm chart downgrades are not guaranteed safe" in rendered
+
+
 def test_upgrade_helm_chart_readiness_requires_generated_target(
     tmp_path: Path,
 ) -> None:

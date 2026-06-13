@@ -259,6 +259,8 @@ def test_readme_upgrade_section_is_visible_and_consolidated() -> None:
     )
     assert "published parent OCI package" in soperator
     assert "static post-Flux manifest" in soperator
+    assert "Helm chart downgrades are not guaranteed safe" in soperator_flat
+    assert "do not perform a live version-order downgrade check" in soperator_flat
     assert "Use `ext-soperator onboard` plus `ext-soperator migrate` when the source cluster is not" in (
         soperator
     )
@@ -288,6 +290,8 @@ def test_readme_upgrade_section_is_visible_and_consolidated() -> None:
     assert "final MK8s readiness check" in upgrade
     assert "requested Kubernetes version has settled" in upgrade
     assert "provider node-group status rather than accepting matching spec fields alone" in upgrade
+    assert "Kubernetes version downgrade targets are refused" in upgrade_flat
+    assert "lower target versions are allowed with an explicit warning" in upgrade_flat
     assert "Manual desired-state upgrades remain supported outside the `upgrade` command" in upgrade
     assert "Guided upgrade value prompts use the same reusable `OptionChoice` provider" in upgrade
     assert "live SDK-backed compatibility matrix" in upgrade
