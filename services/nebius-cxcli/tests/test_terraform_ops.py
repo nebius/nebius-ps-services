@@ -3,6 +3,7 @@ from __future__ import annotations
 import threading
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
@@ -215,7 +216,7 @@ def test_run_forwards_successful_stdout_and_stderr(monkeypatch, capsys) -> None:
 
 
 def test_terraform_init_can_disable_backend(tmp_path: Path, monkeypatch) -> None:
-    calls: list[tuple[str, object]] = []
+    calls: list[tuple[Any, ...]] = []
     infra_dir = tmp_path / "infra"
     infra_dir.mkdir(parents=True, exist_ok=True)
 
@@ -231,7 +232,7 @@ def test_terraform_init_can_disable_backend(tmp_path: Path, monkeypatch) -> None
 
 
 def test_terraform_validate_can_skip_init(monkeypatch) -> None:
-    calls: list[tuple[str, object]] = []
+    calls: list[tuple[Any, ...]] = []
 
     monkeypatch.setattr("nebius_cxcli.terraform_ops._require_terraform", lambda: "terraform")
     monkeypatch.setattr(
@@ -251,7 +252,7 @@ def test_terraform_validate_can_skip_init(monkeypatch) -> None:
 def test_terraform_output_raw_initializes_backend_by_default(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    calls: list[tuple[str, object]] = []
+    calls: list[tuple[Any, ...]] = []
     infra_dir = tmp_path / "infra"
     infra_dir.mkdir(parents=True, exist_ok=True)
     extra_env = {"TF_VAR_demo": "value"}
@@ -284,7 +285,7 @@ def test_terraform_output_raw_initializes_backend_by_default(
 def test_terraform_output_json_can_skip_init(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    calls: list[tuple[str, object]] = []
+    calls: list[tuple[Any, ...]] = []
     infra_dir = tmp_path / "infra"
     infra_dir.mkdir(parents=True, exist_ok=True)
 
@@ -312,7 +313,7 @@ def test_terraform_output_json_can_skip_init(
 
 
 def test_terraform_show_json_can_skip_init(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    calls: list[tuple[str, object]] = []
+    calls: list[tuple[Any, ...]] = []
     infra_dir = tmp_path / "infra"
     infra_dir.mkdir(parents=True, exist_ok=True)
 
@@ -374,7 +375,7 @@ def test_terraform_state_show_renders_named_address(monkeypatch) -> None:
 
 
 def test_terraform_plan_and_apply_can_skip_init(monkeypatch) -> None:
-    calls: list[tuple[str, object]] = []
+    calls: list[tuple[Any, ...]] = []
 
     monkeypatch.setattr("nebius_cxcli.terraform_ops._require_terraform", lambda: "terraform")
     monkeypatch.setattr(
@@ -396,7 +397,7 @@ def test_terraform_plan_and_apply_can_skip_init(monkeypatch) -> None:
 
 
 def test_terraform_plan_quiet_captures_output_without_printing(monkeypatch) -> None:
-    calls: list[tuple[str, object]] = []
+    calls: list[tuple[Any, ...]] = []
 
     monkeypatch.setattr("nebius_cxcli.terraform_ops._require_terraform", lambda: "terraform")
     monkeypatch.setattr(
@@ -482,7 +483,7 @@ def test_stream_json_events_aborts_early_when_abort_check_requests_it(
 
 
 def test_terraform_apply_passes_abort_check_to_streaming_runner(monkeypatch) -> None:
-    calls: dict[str, object] = {}
+    calls: dict[str, Any] = {}
 
     def abort_check() -> None:
         return None
@@ -535,7 +536,7 @@ def test_terraform_apply_passes_abort_check_to_streaming_runner(monkeypatch) -> 
 
 
 def test_terraform_destroy_passes_abort_check_to_streaming_runner(monkeypatch) -> None:
-    calls: dict[str, object] = {}
+    calls: dict[str, Any] = {}
 
     def abort_check() -> None:
         return None

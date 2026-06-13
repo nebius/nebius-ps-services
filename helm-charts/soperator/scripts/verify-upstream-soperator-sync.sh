@@ -558,6 +558,16 @@ def package_version(release)
   "#{release}-ps.1"
 end
 
+def parent_package_version(release, chart)
+  current_version = chart["version"].to_s
+  if chart["appVersion"].to_s == release &&
+      current_version.match?(/\A#{Regexp.escape(release)}-ps\.[1-9]\d*\z/)
+    return current_version
+  end
+
+  package_version(release)
+end
+
 def normalize_rel(path)
   path = path.to_s.sub(%r{\A\./}, "").sub(%r{/\z}, "")
   raise "empty path is not allowed" if path.empty?
@@ -724,7 +734,7 @@ def sync_parent_chart_metadata!(repo_root, release, commit)
   file = parent_chart_file(repo_root)
   chart = chart_yaml(file)
   annotations = chart.fetch("annotations", {})
-  expected_package_version = package_version(release)
+  expected_package_version = parent_package_version(release, chart)
   return if chart["appVersion"] == release &&
     chart["version"] == expected_package_version &&
     annotations["soperator.nebius.com/upstream-release"] == release &&

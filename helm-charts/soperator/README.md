@@ -2,7 +2,7 @@
 
 Umbrella chart for self-managed Nebius Soperator on MK8s.
 
-This chart vendors the upstream Soperator 3.0.5 operator, CRDs, OpenKruise
+This chart vendors the upstream Soperator 4.0.2 operator, CRDs, OpenKruise
 dependency, MariaDB Operator dependency, SlurmCluster, NodeConfigurator,
 NodeSet, and SFS storage templates into one installable chart. It intentionally
 does not include upstream `soperator-fluxcd`; `nebius-cxcli` renders Flux.
@@ -123,7 +123,7 @@ normal wizard does not prompt this raw host-maintenance gate; set it
 deliberately in Helm values or `config.yaml` only when Soperator-managed node
 maintenance is wanted. It is not
 a per-NodeSet switch, does not reboot nodes at install time, and does not create
-a reboot schedule by itself. The upstream 3.0.5 helper acts after `SlurmNodeDrain` or
+a reboot schedule by itself. The upstream helper acts after `SlurmNodeDrain` or
 `SlurmNodeReboot` is set on the Kubernetes Node and drains by cordoning the node
 plus adding a `NoExecute` taint. NodeConfigurator still renders a no-op
 `customContainer` by default so its host setup initContainers have a valid
@@ -377,9 +377,16 @@ release recorded in `upstream-soperator.lock.yaml`, while
 `Chart.yaml.version` uses `<upstream>-ps.N`.
 
 ```yaml
-version: 3.0.5-ps.1
-appVersion: "3.0.5"
+version: X.Y.Z-ps.N
+appVersion: "X.Y.Z"
 ```
+
+Parent chart package versions and Soperator-family child dependency versions
+are independent package coordinates. A parent-only respin can publish
+`soperator` as `<upstream>-ps.2` while continuing to depend on unchanged child
+charts at `<upstream>-ps.1`. The guardrail is that each child dependency in
+`Chart.yaml` must match that child chart's own `Chart.yaml.version`, and
+`Chart.lock` must match the dependency repository and version exactly.
 
 Release flow:
 
@@ -404,6 +411,15 @@ The workflow publishes the package to a Nebius OCI registry path shaped like:
 ```text
 oci://cr.<region>.nebius.cloud/<registry-short-id>/charts/soperator
 ```
+
+The parent chart currently consumes Soperator-family child charts from sibling
+`file://../...` chart directories. Do not switch those dependencies to OCI
+repository references until the child charts are registered in
+`.github/helm-chart-publish.json` and their exact versions have been published
+and verified as pullable. After that migration, the parent dependency
+`repository` values should use the OCI repository root such as
+`oci://cr.<region>.nebius.cloud/<registry-short-id>/charts`, while the
+dependency `name` and `version` select the exact child chart artifact.
 
 Configure the shared GitHub environment `nb-image-chart-publish` with the Nebius
 registry and service-account variable names used by image and chart publish

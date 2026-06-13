@@ -4,6 +4,7 @@ import logging
 import sys
 from pathlib import Path
 from types import ModuleType
+from typing import Any
 
 import pytest
 
@@ -137,7 +138,7 @@ def test_init_nebius_sdk_prefers_credentials_file(
     monkeypatch.delenv("NEBIUS_AUTH_PUBLIC_KEY_ID", raising=False)
     monkeypatch.delenv("NEBIUS_AUTH_PRIVATE_KEY_FILE", raising=False)
 
-    sdk = sdk_auth.init_nebius_sdk(parent_id="project-1", context="test")
+    sdk: Any = sdk_auth.init_nebius_sdk(parent_id="project-1", context="test")
 
     assert sdk.kwargs["credentials_file_name"] == credentials_file.resolve()
     assert sdk.kwargs["parent_id"] == "project-1"
@@ -155,7 +156,7 @@ def test_init_nebius_sdk_uses_service_account_key_when_set(
     monkeypatch.setenv("NEBIUS_AUTH_PUBLIC_KEY_ID", "pub-1")
     monkeypatch.setenv("NEBIUS_AUTH_PRIVATE_KEY_FILE", str(private_key_file))
 
-    sdk = sdk_auth.init_nebius_sdk(parent_id="project-1", context="test")
+    sdk: Any = sdk_auth.init_nebius_sdk(parent_id="project-1", context="test")
 
     assert sdk.kwargs["service_account_id"] == "sa-1"
     assert sdk.kwargs["service_account_public_key_id"] == "pub-1"
@@ -173,7 +174,7 @@ def test_init_nebius_sdk_uses_iam_token_env_when_set(
     monkeypatch.delenv("NEBIUS_AUTH_PRIVATE_KEY_FILE", raising=False)
     monkeypatch.setenv("NEBIUS_IAM_TOKEN", "iam-token-123")
 
-    sdk = sdk_auth.init_nebius_sdk(parent_id="project-1", context="test")
+    sdk: Any = sdk_auth.init_nebius_sdk(parent_id="project-1", context="test")
 
     assert sdk.kwargs["credentials"] == "iam-token-123"
     assert sdk.kwargs["parent_id"] == "project-1"
@@ -199,7 +200,7 @@ def test_init_nebius_sdk_fetches_iam_token_from_cli_when_needed(
         lambda *args, **kwargs: type("CP", (), {"stdout": "cli-token-456\n"})(),
     )
 
-    sdk = sdk_auth.init_nebius_sdk(parent_id="project-1", context="test")
+    sdk: Any = sdk_auth.init_nebius_sdk(parent_id="project-1", context="test")
 
     assert sdk.kwargs["credentials"] == "cli-token-456"
     assert sdk.kwargs["parent_id"] == "project-1"
@@ -248,7 +249,7 @@ def test_init_nebius_sdk_falls_back_to_sdk_config(
         lambda *args, **kwargs: (_ for _ in ()).throw(FileNotFoundError("nebius not found")),
     )
 
-    sdk = sdk_auth.init_nebius_sdk(
+    sdk: Any = sdk_auth.init_nebius_sdk(
         profile="dev",
         endpoint="api.example.invalid",
         parent_id="project-1",
@@ -277,7 +278,7 @@ def test_init_nebius_sdk_prefer_operator_auth_uses_sdk_config_before_service_acc
         lambda *args, **kwargs: pytest.fail("SDK config should be tried before CLI token"),
     )
 
-    sdk = sdk_auth.init_nebius_sdk(
+    sdk: Any = sdk_auth.init_nebius_sdk(
         parent_id="project-1",
         context="quota assessment",
         prefer_operator_auth=True,
@@ -308,7 +309,7 @@ def test_init_nebius_sdk_prefer_operator_auth_falls_back_to_service_account(
         lambda *args, **kwargs: (_ for _ in ()).throw(FileNotFoundError("nebius not found")),
     )
 
-    sdk = sdk_auth.init_nebius_sdk(
+    sdk: Any = sdk_auth.init_nebius_sdk(
         parent_id="project-1",
         context="quota assessment",
         prefer_operator_auth=True,
@@ -347,7 +348,7 @@ def test_init_nebius_sdk_prefer_operator_auth_uses_cli_token_before_service_acco
     )
 
     with caplog.at_level(logging.DEBUG, logger="nebius_cxcli.sdk_auth"):
-        sdk = sdk_auth.init_nebius_sdk(
+        sdk: Any = sdk_auth.init_nebius_sdk(
             parent_id="project-1",
             context="quota assessment",
             prefer_operator_auth=True,

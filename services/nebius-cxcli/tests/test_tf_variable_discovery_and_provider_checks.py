@@ -16,7 +16,7 @@ from nebius_cxcli.cli import (
 from nebius_cxcli.component_sources import ComponentDefault, StatusWatcher
 from nebius_cxcli.components import ComponentEntry
 from nebius_cxcli.compute_boot_disks import ComputeBootDiskRecommendationError
-from nebius_cxcli.provider_options import OptionChoice
+from nebius_cxcli.provider_options import OptionChoice, ProviderOptionLookup
 from nebius_cxcli.runtime_introspection import (
     ModuleVariable,
     canonical_local_module_source,
@@ -36,7 +36,7 @@ def _static_vpc_choices(provider: str) -> list[OptionChoice]:
     return []
 
 
-class _StaticVpcLookup:
+class _StaticVpcLookup(ProviderOptionLookup):
     def resolve(self, *, provider, args, payload, field_path):
         _ = args, payload, field_path
         return _static_vpc_choices(provider)
@@ -172,14 +172,16 @@ def test_mk8s_gpu_module_uses_explicit_stack_source_contract() -> None:
     repo_root = Path(__file__).resolve().parents[3]
     mk8s_dir = repo_root / "platform-infra" / "modules" / "mk8s"
     specs = {item.name: item for item in module_variables(str(mk8s_dir))}
+    node_groups_type_hint = specs["node_groups"].type_hint
+    assert node_groups_type_hint is not None
 
     assert specs["cluster"].required is True
     assert specs["node_groups"].required is True
-    assert "gpu_stack_source" in specs["node_groups"].type_hint
-    assert "gpu_stack_preset" in specs["node_groups"].type_hint
-    assert "strategy    = optional(any)" not in specs["node_groups"].type_hint
-    assert "strategy = optional(object({" in specs["node_groups"].type_hint
-    assert "max_unavailable" in specs["node_groups"].type_hint
+    assert "gpu_stack_source" in node_groups_type_hint
+    assert "gpu_stack_preset" in node_groups_type_hint
+    assert "strategy    = optional(any)" not in node_groups_type_hint
+    assert "strategy = optional(object({" in node_groups_type_hint
+    assert "max_unavailable" in node_groups_type_hint
     assert "gpu_stack_source" not in specs
     assert "cpu_nodes_os" not in specs
     assert "gpu_nodes_os" not in specs
@@ -804,7 +806,7 @@ def test_wizard_auto_enables_gpu_apps_after_plain_mk8s_gpu_node_group_loop(
 
     monkeypatch.setattr("nebius_cxcli.cli._prompt_scalar_override", _fake_prompt)
 
-    class _Lookup:
+    class _Lookup(ProviderOptionLookup):
         def resolve(self, *, provider, args, payload, field_path):
             _ = args, payload, field_path
             vpc_choices = _static_vpc_choices(provider)
@@ -1146,7 +1148,7 @@ def test_wizard_back_after_plain_mk8s_gpu_cluster_removes_orphan_fabric(
 
     monkeypatch.setattr("nebius_cxcli.cli._prompt_scalar_override", _fake_prompt)
 
-    class _Lookup:
+    class _Lookup(ProviderOptionLookup):
         def resolve(self, *, provider, args, payload, field_path):
             _ = args, payload, field_path
             vpc_choices = _static_vpc_choices(provider)
@@ -1301,7 +1303,7 @@ def test_wizard_plain_mk8s_boot_disk_policy_errors_are_not_hidden(
 
     monkeypatch.setattr("nebius_cxcli.cli._prompt_scalar_override", _fake_prompt)
 
-    class _Lookup:
+    class _Lookup(ProviderOptionLookup):
         def resolve(self, *, provider, args, payload, field_path):
             _ = args, payload, field_path
             vpc_choices = _static_vpc_choices(provider)
@@ -3941,7 +3943,7 @@ def test_wizard_auto_selects_single_provider_option_for_optional_field(
         prompted.append((path_label, current))
         return current, False
 
-    class _Lookup:
+    class _Lookup(ProviderOptionLookup):
         def resolve(self, *, provider, args, payload, field_path):
             _ = args, payload
             if provider == "mk8s_gpu_stack_presets" and field_path.endswith(".gpu_stack_preset"):
@@ -4012,7 +4014,7 @@ def test_materialize_singleton_provider_defaults_sets_missing_single_choice_fiel
         },
     )
 
-    class _Lookup:
+    class _Lookup(ProviderOptionLookup):
         def resolve(self, *, provider, args, payload, field_path):
             _ = args, payload
             if provider == "mk8s_gpu_stack_presets" and field_path.endswith(".gpu_stack_preset"):
@@ -4080,7 +4082,7 @@ def test_materialize_singleton_provider_defaults_sets_clusterable_gpu_preset() -
         },
     )
 
-    class _Lookup:
+    class _Lookup(ProviderOptionLookup):
         def resolve(self, *, provider, args, payload, field_path):
             _ = args, payload
             if provider == "compute_platform_presets" and field_path.endswith(".gpu_nodes_preset"):
@@ -4146,7 +4148,7 @@ def test_materialize_vm_image_defaults_sets_first_live_image_family() -> None:
         },
     )
 
-    class _Lookup:
+    class _Lookup(ProviderOptionLookup):
         def resolve(self, *, provider, args, payload, field_path):
             _ = args, payload
             if provider == "compute_public_image_families" and field_path.endswith(
@@ -5908,7 +5910,7 @@ def test_wizard_prompts_infiniband_after_clusterable_gpu_preset(
             return "us-central1-b", False
         return current, False
 
-    class _Lookup:
+    class _Lookup(ProviderOptionLookup):
         def resolve(self, *, provider, args, payload, field_path):
             _ = args, payload
             if provider == "compute_platform_presets" and field_path.endswith(".gpu_nodes_preset"):
@@ -6065,7 +6067,7 @@ def test_wizard_skips_infiniband_for_non_clusterable_gpu_preset(
             return "1gpu-20vcpu-224gb", False
         return current, False
 
-    class _Lookup:
+    class _Lookup(ProviderOptionLookup):
         def resolve(self, *, provider, args, payload, field_path):
             _ = args, payload
             if provider == "compute_platform_presets" and field_path.endswith(".gpu_nodes_preset"):
@@ -6194,7 +6196,7 @@ def test_wizard_clears_stale_infiniband_when_gpu_preset_loses_cluster_support(
             return "1gpu-20vcpu-224gb", False
         return current, False
 
-    class _Lookup:
+    class _Lookup(ProviderOptionLookup):
         def resolve(self, *, provider, args, payload, field_path):
             _ = args, payload
             if provider == "compute_platform_presets" and field_path.endswith(".preset"):

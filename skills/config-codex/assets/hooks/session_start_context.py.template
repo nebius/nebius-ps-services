@@ -121,6 +121,9 @@ the local Codex config and requests them by configured name.
 If delegation was not explicitly authorized by the prompt or local hook policy,
 or subagents are unavailable or not permitted, continue with narrow local reads
 and state that limitation.
+If delegation is authorized and useful but subagent controls are not visible,
+and `tool_search` is available, first search for multi-agent/subagent tools
+before reporting delegation unavailable.
 
 When subagents are used, ask them for concise final summaries, wait for their
 results, consolidate them in the parent thread, and close completed subagent

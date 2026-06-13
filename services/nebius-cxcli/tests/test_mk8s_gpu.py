@@ -862,6 +862,9 @@ def test_prune_inactive_mk8s_gpu_app_rows_removes_stale_operator_only_apps() -> 
 
 
 def test_prune_inactive_mk8s_gpu_app_rows_removes_stripped_soperator_policy_apps() -> None:
+    network_operator = next(
+        entry for entry in component_entries("apps") if entry.id == "nvidia-network-operator"
+    )
     payload = {
         "deploy": {"targets": [{"instance_id": "mk8s"}]},
         "infra": {
@@ -896,13 +899,10 @@ def test_prune_inactive_mk8s_gpu_app_rows_removes_stripped_soperator_policy_apps
                     "instance_id": "mk8s",
                     "enabled": True,
                     "group": "platform",
-                    "repo": (
-                        "oci://cr.eu-north1.nebius.cloud/marketplace/nebius/"
-                        "nvidia-network-operator/chart/network-operator"
-                    ),
-                    "version": "25.7.0",
-                    "namespace": "nvidia-network-operator",
-                    "release-name": "network-operator",
+                    "repo": network_operator.source,
+                    "version": network_operator.version,
+                    "namespace": network_operator.default_namespace,
+                    "release-name": network_operator.default_release_name,
                     "values": {},
                 },
             ]

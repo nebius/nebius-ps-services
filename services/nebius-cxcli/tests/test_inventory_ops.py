@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 
 import pytest
 import yaml
@@ -119,7 +120,7 @@ def _enable_mk8s_observability(payload: dict, *, target_ref: str = "mk8s") -> No
     assert isinstance(deploy, dict)
     targets = deploy.setdefault("targets", [{"instance_id": target_ref}])
     assert isinstance(targets, list)
-    target = next(
+    target: dict[str, Any] | None = next(
         (
             item
             for item in targets

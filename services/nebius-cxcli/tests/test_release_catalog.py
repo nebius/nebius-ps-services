@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import zipfile
 from pathlib import Path
+from typing import Any
 
 import pytest
 import yaml
@@ -21,8 +22,8 @@ def _catalog_payload(
     local_source: str | None = "../../platform-infra/modules/mk8s",
     chart_portable_repo: str | None = None,
     chart_local_path: str | None = None,
-) -> dict[str, object]:
-    payload: dict[str, object] = {
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
         "components": {
             "infra": {
                 "mk8s": {
@@ -35,7 +36,7 @@ def _catalog_payload(
         }
     }
     if chart_portable_repo is not None or chart_local_path is not None:
-        chart_source: dict[str, object] = {}
+        chart_source: dict[str, Any] = {}
         if chart_portable_repo is not None:
             chart_source["portable"] = {
                 "repo": chart_portable_repo,

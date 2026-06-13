@@ -324,7 +324,7 @@ populateJail:
   #    volumeSourceName: "jail-snapshot"
   overwrite: false
 slurmConfig:
-  # Soperator 3.0.5 defaults defMemPerNode to 0 in the CRD. Do not add
+  # Soperator 4.0.2 defaults defMemPerNode to 0 in the CRD. Do not add
   # DefMemPerCPU to customSlurmConfig; Slurm treats it as mutually exclusive
   # with DefMemPerNode. For GPU workers, prefer DefMemPerGPU with DefCpuPerGPU.
   defMemPerNode: 0
@@ -1140,7 +1140,7 @@ slurmScripts:
 # Soperator operator deployment and webhooks
 # ---------------------------------------------------------------------------
 
-# Soperator operator defaults imported from upstream 3.0.5. DCGM Exporter is
+# Soperator operator defaults imported from upstream 4.0.2. DCGM Exporter is
 # intentionally not deployed by this chart; nebius-cxcli manages DCGM through
 # NVIDIA GPU Operator for GPU MK8s targets.
 nameOverride: ""

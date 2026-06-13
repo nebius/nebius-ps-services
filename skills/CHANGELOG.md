@@ -90,6 +90,10 @@ All notable changes to the reusable Codex skills are tracked here.
   `max_threads = 4` budget: use `repo_mapper` and `test_strategist` early only
   when useful, close helpers after consolidation, and reserve `risk_reviewer`
   for near-final review of non-trivial or risky changes.
+- Clarified `global-context-management` subagent fallback guidance so, when
+  delegation is already authorized and useful but controls are not visible,
+  agents first use `tool_search` to look for deferred multi-agent/subagent tools
+  before reporting delegation unavailable.
 - Clarified the `global-context-management` and `config-codex` contracts so
   subagent delegation is described as runtime- and instruction-dependent,
   noisy parent-thread output is called out as the main context-growth risk, and

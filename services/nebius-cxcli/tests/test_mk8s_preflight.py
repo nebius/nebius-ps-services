@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
@@ -48,8 +49,8 @@ def _fake_subnet(
     )
 
 
-def _cpu_mk8s_inputs(*, service_cidrs: list[str] | None = None) -> dict:
-    cluster = {
+def _cpu_mk8s_inputs(*, service_cidrs: list[str] | None = None) -> dict[str, Any]:
+    cluster: dict[str, Any] = {
         "parent_id": "project-123",
         "cluster_name": "cluster-a",
         "network_id": "vpcnetwork-123",
@@ -70,7 +71,7 @@ def _cpu_mk8s_inputs(*, service_cidrs: list[str] | None = None) -> dict:
     }
 
 
-def _gpu_mk8s_inputs() -> dict:
+def _gpu_mk8s_inputs() -> dict[str, Any]:
     inputs = _cpu_mk8s_inputs()
     inputs["node_groups"]["worker"] = {
         "node_count": 1,
@@ -123,8 +124,8 @@ def _gpu_stack_config(*, stack_preset: str, os_value: str | None = "ubuntu24.04"
 def _patch_mk8s_gpu_stack_compatibility(
     monkeypatch: pytest.MonkeyPatch,
     *,
-    compatibility_items: list[dict[str, object]] | None = None,
-    compatibility_by_version: dict[str, list[dict[str, object]]] | None = None,
+    compatibility_items: list[dict[str, Any]] | None = None,
+    compatibility_by_version: dict[str, list[dict[str, Any]]] | None = None,
 ) -> list[str]:
     requested_versions: list[str] = []
 
@@ -132,7 +133,7 @@ def _patch_mk8s_gpu_stack_compatibility(
         def __init__(self, sdk: object) -> None:
             self.sdk = sdk
 
-        def get_compatibility_matrix(self, request: object, **kwargs: object) -> SimpleNamespace:
+        def get_compatibility_matrix(self, request: Any, **kwargs: Any) -> SimpleNamespace:
             requested_version = request.cluster_kubernetes_version
             requested_versions.append(requested_version)
             assert kwargs["timeout"] > 0

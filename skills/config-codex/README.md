@@ -191,6 +191,10 @@ who want hook-assisted delegation, a private local policy file can opt in to
 injecting that request for complex prompts without hardcoding agent names in
 the public repo:
 
+When delegation is authorized and useful but subagent controls are not visible,
+and `tool_search` is available, Codex should search for multi-agent/subagent
+tools before reporting delegation unavailable.
+
 ```json
 {
   "auto_read_only_subagents": true,
@@ -349,6 +353,10 @@ setup.
    activation, run a second probe whose prompt explicitly asks Codex to spawn a
    read-only helper, or enable the local hook policy and run a complex prompt
    that should discover configured read-only agents from `$CODEX_HOME`.
+
+   If subagent controls are not visible in an otherwise authorized probe, the
+   agent should use `tool_search` to look for deferred multi-agent/subagent
+   tools before reporting delegation unavailable.
 
    Direct hook unit probes against a live `$CODEX_HOME` with synthetic
    `session_id` values create scaffold-only task-state directories named after

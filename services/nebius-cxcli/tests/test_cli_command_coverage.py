@@ -10,7 +10,7 @@ from contextlib import ExitStack, contextmanager
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
-from typing import cast
+from typing import Any, cast
 
 import pytest
 import yaml
@@ -64,6 +64,19 @@ _RUNTIME_AUTH_ENV_KEYS = (
 )
 
 
+def _bundled_tool_versions() -> tuple[str, str]:
+    settings_path = Path(__file__).resolve().parents[1] / "component_cli_settings.yaml"
+    settings = yaml.safe_load(settings_path.read_text(encoding="utf-8"))
+    assert isinstance(settings, dict)
+    cli_settings = settings["cli"]
+    return cli_settings["flux"]["version"], cli_settings["terraform"]["version"]
+
+
+def _bundled_flux_install_manifest_url() -> str:
+    flux_version, _terraform_version = _bundled_tool_versions()
+    return f"https://github.com/fluxcd/flux2/releases/download/{flux_version}/install.yaml"
+
+
 def _mk8s_ready_status(version: str = "1.33", *, nodes: int = 1) -> SimpleNamespace:
     return SimpleNamespace(
         version=version,
@@ -85,8 +98,8 @@ def _empty_quota_report() -> cli.QuotaReport:
 
 
 def _config_with_enabled_mk8s(
-    *, charts: list[dict[str, object]] | None = None
-) -> dict[str, object]:
+    *, charts: list[dict[str, Any]] | None = None
+) -> dict[str, Any]:
     return {
         "client_info": {
             "client_name": "client-a",
@@ -436,7 +449,7 @@ def test_upgrade_k8s_version_runs_staged_terraform_plan_apply_not_sdk_updates(
         apply_stages.append(_current_stage_versions())
 
     def _record_validations(
-        validations: list[dict[str, object]],
+        validations: list[dict[str, Any]],
         *,
         reports_dir: Path,
         extra_env: dict[str, str] | None,
@@ -1708,7 +1721,7 @@ def _install_os_image_upgrade_fakes(
                 ("node-group-layer", f"{cluster_id}:{node_group_id}:{field}:{value}:{timeout_seconds}")
             )
 
-    def _record_validation(*_args: object, **kwargs: object) -> dict[str, object]:
+    def _record_validation(*_args: object, **kwargs: object) -> dict[str, Any]:
         validation_calls.append(str(kwargs.get("title", "")))
         return {}
 
@@ -1886,15 +1899,15 @@ def test_upgrade_os_image_config_only_guided_mk8s_dry_run_prompts_shared_options
             SimpleNamespace(platform="cpu-platform", os="ubuntu24.04", drivers_preset=""),
         ),
     )
-    provider_calls: list[tuple[str, dict[str, object], str]] = []
+    provider_calls: list[tuple[str, dict[str, Any], str]] = []
 
     class FakeProviderLookup:
         def resolve(
             self,
             *,
             provider: str,
-            args: dict[str, object],
-            payload: dict[str, object],
+            args: dict[str, Any],
+            payload: dict[str, Any],
             field_path: str,
         ) -> list[cli.OptionChoice]:
             del payload
@@ -1920,7 +1933,7 @@ def test_upgrade_os_image_config_only_guided_mk8s_dry_run_prompts_shared_options
         unset_on_skip: bool = False,
     ) -> tuple[object, bool]:
         del type_hint, required
-        answers: dict[str, object] = {
+        answers: dict[str, Any] = {
             "upgrade.os_image.target": "infra:mk8s@mk8s",
             "upgrade.os_image.node_group": "",
             "upgrade.os_image.to_os": "ubuntu24.04",
@@ -2075,15 +2088,15 @@ def test_upgrade_cpu_preset_config_only_guided_dry_run_prompts_shared_options(
         ),
         compatibility_choices=(),
     )
-    provider_calls: list[tuple[str, dict[str, object], str]] = []
+    provider_calls: list[tuple[str, dict[str, Any], str]] = []
 
     class FakeProviderLookup:
         def resolve(
             self,
             *,
             provider: str,
-            args: dict[str, object],
-            payload: dict[str, object],
+            args: dict[str, Any],
+            payload: dict[str, Any],
             field_path: str,
         ) -> list[cli.OptionChoice]:
             del payload
@@ -2109,7 +2122,7 @@ def test_upgrade_cpu_preset_config_only_guided_dry_run_prompts_shared_options(
         unset_on_skip: bool = False,
     ) -> tuple[object, bool]:
         del type_hint, required
-        answers: dict[str, object] = {
+        answers: dict[str, Any] = {
             "upgrade.cpu_preset.target": "infra:mk8s@mk8s",
             "upgrade.cpu_preset.node_group": "",
             "upgrade.cpu_preset.to_preset": "cpu-8-32",
@@ -2254,15 +2267,15 @@ def test_upgrade_gpu_stack_preset_config_only_guided_dry_run_prompts_gpu_stack_c
             ),
         ),
     )
-    provider_calls: list[tuple[str, dict[str, object], str]] = []
+    provider_calls: list[tuple[str, dict[str, Any], str]] = []
 
     class FakeProviderLookup:
         def resolve(
             self,
             *,
             provider: str,
-            args: dict[str, object],
-            payload: dict[str, object],
+            args: dict[str, Any],
+            payload: dict[str, Any],
             field_path: str,
         ) -> list[cli.OptionChoice]:
             del payload
@@ -2293,7 +2306,7 @@ def test_upgrade_gpu_stack_preset_config_only_guided_dry_run_prompts_gpu_stack_c
         unset_on_skip: bool = False,
     ) -> tuple[object, bool]:
         del type_hint, required
-        answers: dict[str, object] = {
+        answers: dict[str, Any] = {
             "upgrade.gpu_stack_preset.target": "infra:mk8s@mk8s",
             "upgrade.gpu_stack_preset.node_group": "",
             "upgrade.gpu_stack_preset.to_gpu_stack_preset": "cuda13.0",
@@ -2418,7 +2431,7 @@ def test_upgrade_platform_config_only_guided_dry_run_prompts_live_platform_choic
             SimpleNamespace(platform="cpu-d3", os="ubuntu24.04", drivers_preset=""),
         ),
     )
-    provider_calls: list[tuple[str, dict[str, object], str]] = []
+    provider_calls: list[tuple[str, dict[str, Any], str]] = []
     prompt_paths: list[str] = []
     rich_console = cli.Console(record=True, width=300)
 
@@ -2427,8 +2440,8 @@ def test_upgrade_platform_config_only_guided_dry_run_prompts_live_platform_choic
             self,
             *,
             provider: str,
-            args: dict[str, object],
-            payload: dict[str, object],
+            args: dict[str, Any],
+            payload: dict[str, Any],
             field_path: str,
         ) -> list[cli.OptionChoice]:
             del payload
@@ -2452,7 +2465,7 @@ def test_upgrade_platform_config_only_guided_dry_run_prompts_live_platform_choic
         unset_on_skip: bool = False,
     ) -> tuple[object, bool]:
         del type_hint, required
-        answers: dict[str, object] = {
+        answers: dict[str, Any] = {
             "upgrade.platform.target": "infra:mk8s@mk8s",
             "upgrade.platform.node_group": "",
             "upgrade.platform.to_platform": "cpu-d3",
@@ -2901,7 +2914,7 @@ def test_upgrade_helm_chart_config_only_guided_dry_run_prompts_target_and_versio
     )
     original_config = paths.config_path.read_text(encoding="utf-8")
     generated_config = SimpleNamespace()
-    manifest: dict[str, object] = {"deploy": {"targets": [_mk8s_target(paths)]}}
+    manifest: dict[str, Any] = {"deploy": {"targets": [_mk8s_target(paths)]}}
     prompt_paths: list[str] = []
     rich_console = cli.Console(record=True, width=300)
 
@@ -2915,7 +2928,7 @@ def test_upgrade_helm_chart_config_only_guided_dry_run_prompts_target_and_versio
         unset_on_skip: bool = False,
     ) -> tuple[object, bool]:
         del current, type_hint, required, unset_on_skip
-        answers: dict[str, object] = {
+        answers: dict[str, Any] = {
             "upgrade.helm_chart.target": "apps:soperator@mk8s",
             "upgrade.helm_chart.to_version": "0.26.0",
             "upgrade.helm_chart.dry_run": True,
@@ -2990,7 +3003,7 @@ def test_upgrade_helm_chart_apply_updates_source_and_runs_target_flux_apply(
         encoding="utf-8",
     )
     generated_config = SimpleNamespace()
-    manifest: dict[str, object] = {"deploy": {"targets": [_mk8s_target(paths)]}}
+    manifest: dict[str, Any] = {"deploy": {"targets": [_mk8s_target(paths)]}}
     calls: list[object] = []
 
     monkeypatch.setattr(
@@ -3107,7 +3120,7 @@ def test_upgrade_os_image_config_only_guided_vm_dry_run_prompts_target_and_image
             nebius=SimpleNamespace(project_id="project-1"),
         )
     )
-    manifest: dict[str, object] = {"deploy": {"targets": []}}
+    manifest: dict[str, Any] = {"deploy": {"targets": []}}
     prompt_paths: list[str] = []
     rich_console = cli.Console(record=True, width=300)
 
@@ -3121,7 +3134,7 @@ def test_upgrade_os_image_config_only_guided_vm_dry_run_prompts_target_and_image
         unset_on_skip: bool = False,
     ) -> tuple[object, bool]:
         del current, type_hint, required, unset_on_skip
-        answers: dict[str, object] = {
+        answers: dict[str, Any] = {
             "upgrade.os_image.target": "infra:vm@worker",
             "upgrade.os_image.to_os": "ubuntu24.04-driverless",
             "upgrade.os_image.dry_run": True,
@@ -3336,7 +3349,7 @@ def test_upgrade_os_image_vm_rejects_mk8s_only_options(
             nebius=SimpleNamespace(project_id="project-1"),
         )
     )
-    manifest: dict[str, object] = {"deploy": {"targets": []}}
+    manifest: dict[str, Any] = {"deploy": {"targets": []}}
 
     monkeypatch.setattr(
         cli,
@@ -3781,8 +3794,8 @@ def test_upgrade_os_image_runs_all_node_groups_in_order_and_restores_strategy(
         )
     )
     manifest = {"deploy": {"targets": []}}
-    stage_plans: list[dict[str, object]] = []
-    stage_applies: list[dict[str, object]] = []
+    stage_plans: list[dict[str, Any]] = []
+    stage_applies: list[dict[str, Any]] = []
 
     wait_calls, validation_calls = _install_os_image_upgrade_fakes(
         monkeypatch,
@@ -3810,7 +3823,7 @@ def test_upgrade_os_image_runs_all_node_groups_in_order_and_restores_strategy(
         ),
     )
 
-    def _stage_snapshot() -> dict[str, object]:
+    def _stage_snapshot() -> dict[str, Any]:
         payload = yaml.safe_load(paths.config_path.read_text(encoding="utf-8"))
         groups = payload["infra"]["components"][0]["inputs"]["node_groups"]
         return {
@@ -4308,7 +4321,7 @@ def test_upgrade_k8s_version_config_only_guided_dry_run_prompts_required_and_opt
         unset_on_skip: bool = False,
     ) -> tuple[object, bool]:
         del current, type_hint, required, unset_on_skip
-        answers: dict[str, object] = {
+        answers: dict[str, Any] = {
             "upgrade.k8s_version.target": "infra:mk8s@mk8s",
             "upgrade.k8s_version.to_version": "1.33",
             "upgrade.k8s_version.dry_run": True,
@@ -4500,7 +4513,7 @@ def test_upgrade_k8s_version_restores_temporary_strategy_after_failed_stage(
         )
     )
     manifest = {"deploy": {"targets": []}}
-    render_calls: list[dict[str, object]] = []
+    render_calls: list[dict[str, Any]] = []
 
     class FakeSdk:
         def sync_close(self) -> None:
@@ -4562,7 +4575,7 @@ def test_upgrade_k8s_version_restores_temporary_strategy_after_failed_stage(
         ) -> None:
             raise AssertionError("node-group wait should not run after failed apply")
 
-    def _current_payload() -> dict[str, object]:
+    def _current_payload() -> dict[str, Any]:
         payload = yaml.safe_load(paths.config_path.read_text(encoding="utf-8"))
         assert isinstance(payload, dict)
         return payload
@@ -4744,8 +4757,8 @@ def test_validate_command_runs_strict_checks_by_default(
 ) -> None:
     fake_paths = _fake_paths(tmp_path)
     strict_called: dict[str, bool] = {"called": False}
-    quota_called: dict[str, object] = {}
-    captured: dict[str, object] = {}
+    quota_called: dict[str, Any] = {}
+    captured: dict[str, Any] = {}
     monkeypatch.setattr(cli, "_load_context", lambda _path: ("cfg", fake_paths))
     monkeypatch.setattr(
         cli,
@@ -5031,7 +5044,7 @@ def test_validate_command_prints_mk8s_gpu_validation_warning(
 def test_validate_command_accepts_local_source_profile(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    captured: dict[str, object] = {}
+    captured: dict[str, Any] = {}
 
     monkeypatch.setattr(cli, "_load_context", lambda _path: (object(), object()))
     monkeypatch.setattr(
@@ -5088,7 +5101,7 @@ def test_quota_check_command_all_regions_reports_regional_availability(
 ) -> None:
     fake_paths = _fake_paths(tmp_path)
     monkeypatch.setattr(cli, "_load_context", lambda _path: ("cfg", fake_paths))
-    captured: dict[str, object] = {}
+    captured: dict[str, Any] = {}
 
     def _fake_assess(*_args, **kwargs):
         captured.update(kwargs)
@@ -5413,7 +5426,7 @@ def test_quota_request_discounts_existing_mk8s_state_for_day2_scale(
     manifest_path = cli.manifest_path_for_generated_dir(fake_paths.generated_dir)
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
     manifest_path.write_text("{}", encoding="utf-8")
-    captured: dict[str, object] = {}
+    captured: dict[str, Any] = {}
     live_report = QuotaReport(
         tenant_id="tenant-123",
         project_id="project-456",
@@ -5606,7 +5619,7 @@ def test_quota_request_command_submits_confirmed_shortages(
             ),
         ),
     )
-    submitted: dict[str, object] = {}
+    submitted: dict[str, Any] = {}
 
     monkeypatch.setattr(cli, "_load_context", lambda _path: (object(), _fake_paths(tmp_path)))
     monkeypatch.setattr(cli, "_warn_on_config_live_quota_issues", lambda *_args, **_kwargs: report)
@@ -5863,10 +5876,11 @@ def test_load_generated_context_exports_manifest_tool_versions(
 ) -> None:
     fake_paths = _fake_paths(tmp_path)
     fake_paths.infra_dir.mkdir(parents=True, exist_ok=True)
+    flux_version, terraform_version = _bundled_tool_versions()
     fake_manifest = {
         "tools": {
-            "flux_version": "v2.8.0",
-            "terraform_version": "1.15.5",
+            "flux_version": flux_version,
+            "terraform_version": terraform_version,
         },
         "render": {
             "terraform_tfvars": {
@@ -5890,8 +5904,8 @@ def test_load_generated_context_exports_manifest_tool_versions(
     assert config is runtime_config
     assert paths is fake_paths
     assert manifest is fake_manifest
-    assert os.environ[FLUX_VERSION_ENV] == "v2.8.0"
-    assert os.environ[TERRAFORM_VERSION_ENV] == "1.15.5"
+    assert os.environ[FLUX_VERSION_ENV] == flux_version
+    assert os.environ[TERRAFORM_VERSION_ENV] == terraform_version
     assert json.loads(
         (fake_paths.infra_dir / "terraform.auto.tfvars.json").read_text(encoding="utf-8")
     ) == {"mk8s_cluster_name": "clust1"}
@@ -5929,7 +5943,7 @@ def test_try_generate_terraform_lock_file_uses_backendless_init_and_cleans_workd
 ) -> None:
     fake_paths = _fake_paths(tmp_path)
     fake_paths.infra_dir.mkdir(parents=True, exist_ok=True)
-    captured: dict[str, object] = {}
+    captured: dict[str, Any] = {}
 
     def _fail_backend_ready(*_args: object, **_kwargs: object) -> None:
         raise AssertionError("render lock generation must not bootstrap backend auth")
@@ -5966,7 +5980,7 @@ def test_try_generate_terraform_lock_file_uses_backendless_init_and_cleans_workd
 
 def test_render_command_invokes_renderer(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     fake_paths = _fake_paths(tmp_path)
-    calls: dict[str, object] = {}
+    calls: dict[str, Any] = {}
 
     monkeypatch.setattr(cli, "_load_runtime_context", lambda _path: ("cfg", fake_paths))
     monkeypatch.setattr(
@@ -6240,7 +6254,7 @@ def test_render_command_persists_quota_report_and_warns(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fake_paths = _fake_paths(tmp_path)
-    captured: dict[str, object] = {}
+    captured: dict[str, Any] = {}
     report = QuotaReport(
         tenant_id="tenant-123",
         project_id="project-456",
@@ -6357,7 +6371,7 @@ def test_render_command_accepts_local_source_profile(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fake_paths = _fake_paths(tmp_path)
-    calls: dict[str, object] = {}
+    calls: dict[str, Any] = {}
 
     monkeypatch.setattr(cli, "_load_runtime_context", lambda _path: ("cfg", fake_paths))
     monkeypatch.setattr(cli, "_confirm_render_overwrite", lambda _paths, *, force: True)
@@ -6405,7 +6419,7 @@ def test_validate_generated_command_portable_checks_module_sources(
 ) -> None:
     fake_paths = _fake_paths(tmp_path)
     fake_paths.infra_dir.mkdir(parents=True, exist_ok=True)
-    captured: dict[str, object] = {}
+    captured: dict[str, Any] = {}
 
     monkeypatch.setattr(
         cli,
@@ -6594,7 +6608,7 @@ def test_validate_sources_command_accepts_positional_component_sources_path(
         helm_charts=[],
     )
     sources_file = tmp_path / "component_sources.yaml"
-    captured: dict[str, object] = {}
+    captured: dict[str, Any] = {}
 
     monkeypatch.setattr(
         cli,
@@ -6627,7 +6641,7 @@ def test_grafana_command_exports_selected_dashboard_json(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     output_dir = tmp_path / "dashboards"
-    captured: dict[str, object] = {}
+    captured: dict[str, Any] = {}
 
     monkeypatch.setattr(
         cli,
@@ -6708,7 +6722,7 @@ def test_grafana_command_api_export_with_attach_rewrites_and_attaches(
     output_dir = tmp_path / "dashboards"
     catalog_path = tmp_path / "component_sources.yaml"
     catalog_path.write_text("components:\n  apps: {}\n", encoding="utf-8")
-    captured: dict[str, object] = {"detail_uids": []}
+    captured: dict[str, Any] = {"detail_uids": []}
 
     monkeypatch.setattr(
         cli,
@@ -6744,7 +6758,7 @@ def test_grafana_command_api_export_with_attach_rewrites_and_attaches(
         _auth_candidates: object,
         *,
         dashboard_uid: str,
-    ) -> dict[str, object]:
+    ) -> dict[str, Any]:
         cast(list[str], captured["detail_uids"]).append(dashboard_uid)
         title = "Cluster" if dashboard_uid == "dashboard-one" else "Nodes"
         return {
@@ -6778,7 +6792,7 @@ def test_grafana_command_api_export_with_attach_rewrites_and_attaches(
         component_sources_path: Path,
         *,
         grafana_component_id: str,
-        exports: object,
+        exports: Any,
         overwrite: bool,
     ) -> None:
         captured["attach_path"] = component_sources_path
@@ -6892,7 +6906,7 @@ def test_prompt_grafana_folder_tty_sorts_choices_and_enables_prefix_jump(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(cli, "_is_tty_session", lambda: True)
-    captured: dict[str, object] = {}
+    captured: dict[str, Any] = {}
 
     def fake_select(*_args: object, **kwargs: object) -> str:
         captured.update(kwargs)
@@ -6931,7 +6945,7 @@ def test_prompt_grafana_dashboards_tty_sorts_choices_and_enables_prefix_jump(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(cli, "_is_tty_session", lambda: True)
-    captured: dict[str, object] = {}
+    captured: dict[str, Any] = {}
 
     def fake_checkbox(*_args: object, **kwargs: object) -> str:
         captured.update(kwargs)
@@ -7033,7 +7047,7 @@ def test_questionary_prefix_jump_keys_move_to_first_matching_choice() -> None:
 
 
 def test_collect_leaf_paths_skip_recursive_config_structures() -> None:
-    payload: dict[str, object] = {"name": "demo"}
+    payload: dict[str, Any] = {"name": "demo"}
     payload["self"] = payload
     values: list[object] = ["first"]
     values.append(values)
@@ -7045,7 +7059,7 @@ def test_collect_leaf_paths_skip_recursive_config_structures() -> None:
 def test_grafana_export_auth_candidates_suppress_bearer_warning_for_basic_auth(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    captured: dict[str, object] = {}
+    captured: dict[str, Any] = {}
 
     def fake_bearer_auth_candidates(**kwargs: object) -> list[object]:
         captured.update(kwargs)
@@ -7087,7 +7101,7 @@ def test_grafana_command_attaches_local_dashboard_json_without_api_calls(
     catalog_path = tmp_path / "component_sources.yaml"
     catalog_path.write_text("components:\n  apps: {}\n", encoding="utf-8")
     output_dir = tmp_path / "dashboards"
-    captured: dict[str, object] = {}
+    captured: dict[str, Any] = {}
 
     def fail_api_call(*_args: object, **_kwargs: object) -> object:
         raise AssertionError("local dashboard JSON mode must not call Grafana API helpers")
@@ -7123,7 +7137,7 @@ def test_grafana_command_attaches_local_dashboard_json_without_api_calls(
         component_sources_path: Path,
         *,
         grafana_component_id: str,
-        exports: object,
+        exports: Any,
         overwrite: bool,
     ) -> None:
         captured["attach_path"] = component_sources_path
@@ -7252,7 +7266,7 @@ def test_grafana_command_overwrite_applies_to_local_json_and_catalog_attach(
     existing.write_text('{"uid":"old"}\n', encoding="utf-8")
     catalog_path = tmp_path / "component_sources.yaml"
     catalog_path.write_text("components:\n  apps: {}\n", encoding="utf-8")
-    captured: dict[str, object] = {}
+    captured: dict[str, Any] = {}
 
     monkeypatch.setattr(
         cli,
@@ -7278,7 +7292,7 @@ def test_grafana_command_overwrite_applies_to_local_json_and_catalog_attach(
         _component_sources_path: Path,
         *,
         grafana_component_id: str,
-        exports: object,
+        exports: Any,
         overwrite: bool,
     ) -> None:
         captured["grafana_component_id"] = grafana_component_id
@@ -7381,7 +7395,7 @@ def test_validate_dashboards_command_reports_live_fit(
 ) -> None:
     config_path = tmp_path / "config.yaml"
     config_path.write_text("version: v1\n", encoding="utf-8")
-    captured: dict[str, object] = {}
+    captured: dict[str, Any] = {}
 
     class Result(SimpleNamespace):
         @property
@@ -7500,7 +7514,9 @@ def test_validate_dashboards_reads_target_contexts_from_deploy_report(tmp_path: 
         encoding="utf-8",
     )
 
-    metadata = cli._deploy_report_target_contexts(SimpleNamespace(reports_dir=reports_dir))
+    metadata = cli._deploy_report_target_contexts(
+        cast(ProjectPaths, SimpleNamespace(reports_dir=reports_dir))
+    )
 
     assert metadata == {
         "cluster1": {
@@ -7659,7 +7675,7 @@ def test_validate_dashboards_refuses_current_context_fallback_for_targeted_grafa
     with ExitStack() as stack, pytest.raises(RuntimeError) as excinfo:
         cli._grafana_dashboard_validation_target_envs(
             {},
-            paths,
+            cast(ProjectPaths, paths),
             target_ref="",
             stack=stack,
         )
@@ -7818,7 +7834,7 @@ def test_deploy_command_passes_auto_auth_flag(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fake_paths = _fake_paths(tmp_path)
-    captured: dict[str, object] = {}
+    captured: dict[str, Any] = {}
     manifest = {"schema": "nebius-cxcli-generated/v1"}
 
     monkeypatch.setattr(cli, "_load_deploy_context", lambda _path: ("cfg", fake_paths, manifest))
@@ -8107,7 +8123,7 @@ def test_deploy_command_passes_one_run_validation_skip_flags(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fake_paths = _fake_paths(tmp_path)
-    captured: dict[str, object] = {}
+    captured: dict[str, Any] = {}
     manifest = {"schema": "nebius-cxcli-generated/v1"}
 
     monkeypatch.setattr(cli, "_load_deploy_context", lambda _path: ("cfg", fake_paths, manifest))
@@ -8177,7 +8193,7 @@ def test_deploy_command_accepts_config_yaml_target(
 ) -> None:
     fake_paths = _fake_paths(tmp_path)
     manifest = {"schema": "nebius-cxcli-generated/v1"}
-    captured: dict[str, object] = {}
+    captured: dict[str, Any] = {}
 
     def _fake_load(target: Path) -> tuple[object, ProjectPaths, dict[str, str]]:
         captured["target"] = target
@@ -8224,7 +8240,7 @@ def test_destroy_command_passes_auto_auth_flag(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fake_paths = _fake_paths(tmp_path)
-    captured: dict[str, object] = {}
+    captured: dict[str, Any] = {}
     manifest = {"schema": "nebius-cxcli-generated/v1"}
 
     monkeypatch.setattr(cli, "_load_destroy_context", lambda _path: ("cfg", fake_paths, manifest))
@@ -8268,7 +8284,7 @@ def test_destroy_command_accepts_config_yaml_target(
 ) -> None:
     fake_paths = _fake_paths(tmp_path)
     manifest = {"schema": "nebius-cxcli-generated/v1"}
-    captured: dict[str, object] = {}
+    captured: dict[str, Any] = {}
 
     def _fake_load(target: Path) -> tuple[object, ProjectPaths, dict[str, str]]:
         captured["target"] = target
@@ -8311,7 +8327,7 @@ def test_destroy_command_confirmation_targets_infra_only_when_no_apps(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fake_paths = _fake_paths(tmp_path)
-    captured: dict[str, object] = {}
+    captured: dict[str, Any] = {}
     config = {"infra": {"components": [{"id": "mk8s", "enabled": True, "inputs": {}}]}}
     manifest = {"schema": "nebius-cxcli-generated/v1"}
 
@@ -8346,7 +8362,7 @@ def test_destroy_command_confirmation_deletes_apps_before_cluster_destroy(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fake_paths = _fake_paths(tmp_path)
-    captured: dict[str, object] = {}
+    captured: dict[str, Any] = {}
     config = {
         "infra": {"components": [{"id": "mk8s", "enabled": True, "inputs": {}}]},
         "apps": {"charts": [{"id": "gateway-helm", "enabled": True}]},
@@ -8390,7 +8406,7 @@ def test_destroy_command_confirmation_deletes_flux_first_for_external_cluster_ap
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fake_paths = _fake_paths(tmp_path)
-    captured: dict[str, object] = {}
+    captured: dict[str, Any] = {}
     config = {"apps": {"charts": [{"id": "gateway-helm", "enabled": True}]}}
     manifest = {
         "schema": "nebius-cxcli-generated/v1",
@@ -8430,7 +8446,7 @@ def test_run_deploy_preflight_runs_strict_quota_backend_terraform_and_flux_valid
     fake_paths = _fake_paths(tmp_path)
     fake_paths.infra_dir.mkdir(parents=True, exist_ok=True)
     config = _config_with_enabled_mk8s(charts=[{"id": "gateway-helm", "enabled": True}])
-    calls: list[tuple[object, ...]] = []
+    calls: list[tuple[Any, ...]] = []
 
     monkeypatch.setattr(
         cli,
@@ -8514,7 +8530,7 @@ def test_run_deploy_preflight_runs_mk8s_gpu_stack_compatibility_when_targeted(
     fake_paths = _fake_paths(tmp_path)
     fake_paths.infra_dir.mkdir(parents=True, exist_ok=True)
     config = _config_with_enabled_mk8s()
-    calls: list[tuple[object, ...]] = []
+    calls: list[tuple[Any, ...]] = []
 
     monkeypatch.setattr(
         cli,
@@ -8596,7 +8612,7 @@ def test_run_deploy_preflight_skips_flux_validation_when_no_apps_enabled(
     fake_paths = _fake_paths(tmp_path)
     fake_paths.infra_dir.mkdir(parents=True, exist_ok=True)
     config = _config_with_enabled_mk8s()
-    calls: list[tuple[object, ...]] = []
+    calls: list[tuple[Any, ...]] = []
 
     monkeypatch.setattr(
         cli,
@@ -8678,8 +8694,8 @@ def _mysterybox_first_deploy_config(
     instance_id: str = "mysterybox",
     module_name: str | None = None,
     version_id: str = "n/a",
-) -> dict[str, object]:
-    inputs: dict[str, object] = {
+) -> dict[str, Any]:
+    inputs: dict[str, Any] = {
         "parent_id": "project-123",
         "secrets": [
             {
@@ -8773,7 +8789,7 @@ def test_mysterybox_runtime_payload_values_prompt_collects_hidden_values(
 ) -> None:
     config = _mysterybox_first_deploy_config()
     answers = iter(["db-user", "db-password", "api-token"])
-    prompts: list[tuple[str, dict[str, object]]] = []
+    prompts: list[tuple[str, dict[str, Any]]] = []
 
     def _fake_prompt(prompt_text: str, **kwargs: object) -> str:
         prompts.append((prompt_text, kwargs))
@@ -8817,7 +8833,7 @@ def test_run_deploy_preflight_validates_mysterybox_payloads_before_live_checks(
     fake_paths = _fake_paths(tmp_path)
     fake_paths.infra_dir.mkdir(parents=True, exist_ok=True)
     config = _mysterybox_first_deploy_config()
-    calls: list[tuple[object, ...]] = []
+    calls: list[tuple[Any, ...]] = []
 
     monkeypatch.setattr(
         cli,
@@ -8851,7 +8867,7 @@ def test_run_deploy_preflight_prompts_for_mysterybox_values_before_progress(
     fake_paths.infra_dir.mkdir(parents=True, exist_ok=True)
     config = _mysterybox_first_deploy_config()
     payload_env = {"TF_VAR_mysterybox_payload_values": '{"secret2":{"MYKEY":"token"}}'}
-    events: list[object] = []
+    events: list[Any] = []
 
     class _FakeProgress:
         def __init__(self, *, title, phases):
@@ -9093,7 +9109,7 @@ def test_managed_mk8s_quota_requirements_from_terraform_state_maps_generated_mod
             ]
         }
     }
-    captured: dict[str, object] = {}
+    captured: dict[str, Any] = {}
     monkeypatch.setattr(
         cli, "terraform_state_list", lambda *_args, **_kwargs: ("module.cluster_main",)
     )
@@ -9210,7 +9226,7 @@ def test_validate_generated_mk8s_resource_name_preflight_skips_when_no_targets(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fake_paths = _fake_paths(tmp_path)
-    calls: list[tuple[object, ...]] = []
+    calls: list[tuple[Any, ...]] = []
     monkeypatch.setattr(
         cli,
         "terraform_state_list",
@@ -9262,7 +9278,7 @@ def test_validate_generated_mk8s_resource_name_preflight_passes_state_managed_na
             ]
         },
     }
-    captured: dict[str, object] = {}
+    captured: dict[str, Any] = {}
 
     monkeypatch.setattr(
         cli,
@@ -9322,7 +9338,7 @@ def test_deploy_generated_artifacts_validates_before_apply_and_prepares_kube_env
             "validations": [],
         }
     }
-    calls: list[tuple[object, ...]] = []
+    calls: list[tuple[Any, ...]] = []
 
     monkeypatch.setattr(
         cli,
@@ -9425,7 +9441,7 @@ def test_deploy_generated_artifacts_external_target_skips_terraform_apply(
             "validations": [],
         }
     }
-    calls: list[tuple[object, ...]] = []
+    calls: list[tuple[Any, ...]] = []
     messages: list[str] = []
 
     monkeypatch.setattr(
@@ -9502,7 +9518,7 @@ def test_deploy_generated_artifacts_recovers_mysterybox_versions_after_apply_fai
     fake_paths = _fake_paths(tmp_path)
     config = _config_with_enabled_mk8s()
     manifest = {"deploy": {"targets": [], "validations": []}}
-    calls: list[tuple[object, ...]] = []
+    calls: list[tuple[Any, ...]] = []
 
     monkeypatch.setattr(
         cli,
@@ -9553,7 +9569,7 @@ def test_collect_grafana_status_after_flux_waits_until_url_is_assigned(
     sleeps: list[float] = []
     printed: list[str] = []
 
-    def _fake_collect(*_args: object, **_kwargs: object) -> tuple[dict[str, object], ...]:
+    def _fake_collect(*_args: object, **_kwargs: object) -> tuple[dict[str, Any], ...]:
         attempts.append("attempt")
         if len(attempts) == 1:
             return ({"target_ref": "cluster2", "base_url": ""},)
@@ -9626,7 +9642,7 @@ def test_deploy_generated_artifacts_without_apps_still_prepares_kube_env(
             "validations": [],
         }
     }
-    calls: list[tuple[object, ...]] = []
+    calls: list[tuple[Any, ...]] = []
 
     monkeypatch.setattr(
         cli,
@@ -9723,7 +9739,7 @@ def test_deploy_generated_artifacts_with_multiple_handoffs_and_no_apps_refreshes
             "validations": [],
         }
     }
-    calls: list[tuple[object, ...]] = []
+    calls: list[tuple[Any, ...]] = []
 
     monkeypatch.setattr(
         cli,
@@ -9826,7 +9842,7 @@ def test_deploy_generated_artifacts_defaults_multi_target_apps_to_all_targets(
             "validations": [],
         }
     }
-    calls: list[tuple[object, ...]] = []
+    calls: list[tuple[Any, ...]] = []
 
     monkeypatch.setattr(
         cli,
@@ -9856,7 +9872,7 @@ def test_deploy_generated_artifacts_defaults_multi_target_apps_to_all_targets(
                     set_current_context,
                 )
             )
-            or {"KUBECONFIG": f"/tmp/{target['target_ref']}.kubeconfig"}
+            or {"KUBECONFIG": f"/tmp/{cast(Mapping[str, Any], target)['target_ref']}.kubeconfig"}
         ),
     )
     monkeypatch.setattr(cli, "_report_cluster_nodes_status", lambda *, extra_env, emit: None)
@@ -10035,7 +10051,7 @@ def test_deploy_generated_artifacts_runs_manifest_gpu_validations(
             ],
         }
     }
-    calls: list[tuple[object, ...]] = []
+    calls: list[tuple[Any, ...]] = []
 
     monkeypatch.setattr(cli, "_run_deploy_preflight", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(cli, "_run_terraform_apply_with_status", lambda *_args, **_kwargs: None)
@@ -10212,7 +10228,7 @@ def test_deploy_generated_artifacts_updates_validation_spinner_when_terminal(
     monkeypatch.setattr(cli, "_console_is_terminal", lambda: True)
 
     def _fake_run_mk8s_gpu_validations(
-        validations: list[dict[str, object]],
+        validations: list[dict[str, Any]],
         *,
         reports_dir: Path,
         extra_env: dict[str, str] | None,
@@ -10327,15 +10343,15 @@ def test_deploy_generated_artifacts_default_all_targets_reports_all_validations(
         cli,
         "_prepare_cluster_handoff_kube_env",
         lambda config, paths, *, stack, target=None, **_kwargs: {
-            "KUBECONFIG": f"/tmp/{target['target_ref']}.kubeconfig"
+            "KUBECONFIG": f"/tmp/{cast(Mapping[str, Any], target)['target_ref']}.kubeconfig"
         },
     )
     monkeypatch.setattr(cli, "_report_cluster_nodes_status", lambda *, extra_env, emit: None)
 
-    validation_calls: list[tuple[list[dict[str, object]], dict[str, str] | None]] = []
+    validation_calls: list[tuple[list[dict[str, Any]], dict[str, str] | None]] = []
 
     def _fake_run_mk8s_gpu_validations(
-        validations: list[dict[str, object]],
+        validations: list[dict[str, Any]],
         *,
         reports_dir: Path,
         extra_env: dict[str, str] | None,
@@ -10422,7 +10438,7 @@ def test_deploy_generated_artifacts_target_report_excludes_unselected_validation
     monkeypatch.setattr(cli, "_console_is_terminal", lambda: True)
 
     def _fake_run_mk8s_gpu_validations(
-        validations: list[dict[str, object]],
+        validations: list[dict[str, Any]],
         *,
         reports_dir: Path,
         extra_env: dict[str, str] | None,
@@ -10525,7 +10541,7 @@ def test_deploy_generated_artifacts_keeps_required_mysterybox_validation_when_sk
     )
 
     def _fake_run_mysterybox_eso_validations(
-        validations: list[dict[str, object]],
+        validations: list[dict[str, Any]],
         *,
         reports_dir: Path,
         extra_env: dict[str, str] | None,
@@ -10628,7 +10644,7 @@ def test_deploy_generated_artifacts_prints_validation_phase_lines_when_console_i
     monkeypatch.setattr(cli, "_console_is_terminal", lambda: False)
 
     def _fake_run_mk8s_gpu_validations(
-        _validations: list[dict[str, object]],
+        _validations: list[dict[str, Any]],
         *,
         reports_dir: Path,
         extra_env: dict[str, str] | None,
@@ -10729,7 +10745,7 @@ def test_deploy_generated_artifacts_writes_summary_even_when_validation_fails(
     monkeypatch.setattr(cli, "_console_is_terminal", lambda: True)
 
     def _fake_run_mk8s_gpu_validations(
-        _validations: list[dict[str, object]],
+        _validations: list[dict[str, Any]],
         *,
         reports_dir: Path,
         extra_env: dict[str, str] | None,
@@ -10864,7 +10880,7 @@ def test_destroy_generated_artifacts_destroys_flux_before_terraform(
             ]
         },
     }
-    calls: list[tuple[object, ...]] = []
+    calls: list[tuple[Any, ...]] = []
 
     monkeypatch.setattr(
         cli,
@@ -11164,7 +11180,7 @@ def test_delete_post_flux_manifest_removes_webhooks_before_namespaces(
         ),
         encoding="utf-8",
     )
-    calls: list[tuple[str, object]] = []
+    calls: list[tuple[Any, ...]] = []
 
     def _fake_run(cmd: list[str], *, env: Mapping[str, str], **_kwargs: object) -> None:
         manifest = Path(cmd[cmd.index("-f") + 1])
@@ -11204,7 +11220,7 @@ def test_destroy_generated_artifacts_external_target_skips_terraform_destroy(
         "schema": "nebius-cxcli-generated/v1",
         "deploy": {"targets": [_external_mk8s_target(fake_paths)]},
     }
-    calls: list[tuple[object, ...]] = []
+    calls: list[tuple[Any, ...]] = []
     messages: list[str] = []
 
     monkeypatch.setattr(
@@ -11274,7 +11290,7 @@ def test_destroy_generated_artifacts_stops_when_flux_teardown_fails(
         "apps": {"charts": [{"id": "gateway-helm", "enabled": True}]},
     }
     manifest = {"schema": "nebius-cxcli-generated/v1"}
-    captured: dict[str, object] = {}
+    captured: dict[str, Any] = {}
     messages: list[str] = []
 
     monkeypatch.setattr(cli, "_ensure_terraform_backend_ready", lambda *_args, **_kwargs: None)
@@ -11329,7 +11345,7 @@ def test_destroy_generated_artifacts_deletes_flux_before_handoff_cluster_is_dest
         "schema": "nebius-cxcli-generated/v1",
         "deploy": {"targets": [_mk8s_target(fake_paths)]},
     }
-    captured: dict[str, object] = {}
+    captured: dict[str, Any] = {}
     calls: list[str] = []
     messages: list[str] = []
 
@@ -11402,7 +11418,7 @@ def test_apply_rendered_flux_installs_flux_controllers_when_missing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fake_paths = _fake_paths(tmp_path)
-    calls: list[tuple[object, ...]] = []
+    calls: list[tuple[Any, ...]] = []
     cache_dirs: list[Path | None] = []
     status_start: list[tuple[str, str | None]] = []
     status_updates: list[str] = []
@@ -11429,7 +11445,7 @@ def test_apply_rendered_flux_installs_flux_controllers_when_missing(
         "install_flux_controllers",
         lambda *, extra_env=None: (
             calls.append(("install_flux", extra_env))
-            or "https://github.com/fluxcd/flux2/releases/download/v2.8.0/install.yaml"
+            or _bundled_flux_install_manifest_url()
         ),
     )
     monkeypatch.setattr(
@@ -11504,7 +11520,7 @@ def test_apply_rendered_flux_skips_flux_install_when_controllers_exist(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fake_paths = _fake_paths(tmp_path)
-    calls: list[tuple[object, ...]] = []
+    calls: list[tuple[Any, ...]] = []
     cache_dirs: list[Path | None] = []
     status_start: list[tuple[str, str | None]] = []
     status_updates: list[str] = []
@@ -11731,7 +11747,7 @@ def test_apply_rendered_flux_applies_post_flux_manifests_after_flux_ready(
         "apiVersion: v1\nkind: Namespace\nmetadata:\n  name: ns1\n",
         encoding="utf-8",
     )
-    calls: list[tuple[object, ...]] = []
+    calls: list[tuple[Any, ...]] = []
     status_updates: list[str] = []
 
     monkeypatch.setattr(cli, "flux_dir_has_rendered_resources", lambda _path: True)
@@ -12428,7 +12444,7 @@ def test_apply_rendered_flux_reinstalls_when_flux_crds_are_missing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fake_paths = _fake_paths(tmp_path)
-    calls: list[tuple[object, ...]] = []
+    calls: list[tuple[Any, ...]] = []
     fake_paths.flux_dir.mkdir(parents=True, exist_ok=True)
     monkeypatch.setattr(cli, "flux_dir_has_rendered_resources", lambda _path: True)
 
@@ -12452,7 +12468,7 @@ def test_apply_rendered_flux_reinstalls_when_flux_crds_are_missing(
         "install_flux_controllers",
         lambda *, extra_env=None: (
             calls.append(("install_flux", extra_env))
-            or "https://github.com/fluxcd/flux2/releases/download/v2.8.0/install.yaml"
+            or _bundled_flux_install_manifest_url()
         ),
     )
     monkeypatch.setattr(
@@ -12545,7 +12561,7 @@ def test_wait_for_rendered_flux_resources_waits_for_sources_before_releases(
     )
 
     flux_ops.wait_for_rendered_flux_resources(
-        SimpleNamespace(flux_dir=flux_dir),
+        cast(ProjectPaths, SimpleNamespace(flux_dir=flux_dir)),
         poll_interval_seconds=0.01,
     )
 
@@ -12610,7 +12626,7 @@ def test_wait_for_rendered_flux_resources_raises_with_guidance_on_failure(
         match="kubectl -n demo describe helmrelease\\.helm\\.toolkit\\.fluxcd\\.io/demo",
     ):
         flux_ops.wait_for_rendered_flux_resources(
-            SimpleNamespace(flux_dir=flux_dir),
+            cast(ProjectPaths, SimpleNamespace(flux_dir=flux_dir)),
             timeout_seconds=0,
         )
 
@@ -12690,7 +12706,7 @@ def test_wait_for_rendered_flux_resources_fails_fast_on_terminal_workload_failur
         match="One or more rendered Flux resources reached a terminal failure state",
     ):
         flux_ops.wait_for_rendered_flux_resources(
-            SimpleNamespace(flux_dir=flux_dir),
+            cast(ProjectPaths, SimpleNamespace(flux_dir=flux_dir)),
             timeout_seconds=600,
         )
 
@@ -12788,7 +12804,7 @@ def test_wait_for_rendered_flux_resources_waits_for_other_workloads_to_settle(
         match="One or more rendered Flux resources reached a terminal failure state",
     ):
         flux_ops.wait_for_rendered_flux_resources(
-            SimpleNamespace(flux_dir=flux_dir),
+            cast(ProjectPaths, SimpleNamespace(flux_dir=flux_dir)),
             timeout_seconds=600,
             poll_interval_seconds=0.01,
         )
@@ -12903,7 +12919,7 @@ def test_wait_for_rendered_flux_resources_emits_cluster_status_while_waiting(
     monkeypatch.setattr(flux_ops.time, "monotonic", lambda: next(monotonic_values))
 
     flux_ops.wait_for_rendered_flux_resources(
-        SimpleNamespace(flux_dir=flux_dir),
+        cast(ProjectPaths, SimpleNamespace(flux_dir=flux_dir)),
         emit=emissions.append,
         poll_interval_seconds=0.01,
         repeat_interval_seconds=0.01,
@@ -12985,7 +13001,7 @@ def test_wait_for_rendered_flux_resources_returns_when_only_sources_remain_pendi
     monkeypatch.setattr(flux_ops, "_kubectl_get_target", _fake_get_target)
 
     flux_ops.wait_for_rendered_flux_resources(
-        SimpleNamespace(flux_dir=flux_dir),
+        cast(ProjectPaths, SimpleNamespace(flux_dir=flux_dir)),
         emit=emissions.append,
         poll_interval_seconds=0.01,
     )
@@ -13059,7 +13075,7 @@ def test_wait_for_rendered_flux_resources_treats_kubectl_timeout_as_pending(
     monkeypatch.setattr(flux_ops.time, "sleep", lambda _seconds: None)
 
     flux_ops.wait_for_rendered_flux_resources(
-        SimpleNamespace(flux_dir=flux_dir),
+        cast(ProjectPaths, SimpleNamespace(flux_dir=flux_dir)),
         emit=emissions.append,
         poll_interval_seconds=0.01,
         repeat_interval_seconds=0.01,
@@ -13074,6 +13090,7 @@ def test_wait_for_rendered_flux_resources_treats_kubectl_timeout_as_pending(
 def test_flux_install_manifest_url_uses_default_pinned_release(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
+    flux_version, _terraform_version = _bundled_tool_versions()
     sources_file = tmp_path / "component_sources.yaml"
     sources_file.write_text(
         yaml.safe_dump(
@@ -13092,7 +13109,7 @@ def test_flux_install_manifest_url_uses_default_pinned_release(
             {
                 "cli": {
                     "flux": {
-                        "version": "v2.8.0",
+                        "version": flux_version,
                     }
                 },
             },
@@ -13103,17 +13120,14 @@ def test_flux_install_manifest_url_uses_default_pinned_release(
     monkeypatch.setenv("NEBIUS_CXCLI_COMPONENT_SOURCES_FILE", str(sources_file))
     set_component_sources_file_override(None)
     reset_component_sources_cache()
-    assert (
-        flux_ops.flux_install_manifest_url()
-        == "https://github.com/fluxcd/flux2/releases/download/v2.8.0/install.yaml"
-    )
+    assert flux_ops.flux_install_manifest_url() == _bundled_flux_install_manifest_url()
 
 
 def test_run_terraform_apply_with_status_wraps_apply_in_status_reporting(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fake_paths = _fake_paths(tmp_path)
-    calls: list[tuple[object, ...]] = []
+    calls: list[tuple[Any, ...]] = []
     reporter = SimpleNamespace(handle_terraform_event="callback")
 
     monkeypatch.setattr(cli, "_terraform_runtime_env", lambda _cfg: {"TF_VAR_DEMO": "1"})
@@ -13258,7 +13272,7 @@ def test_run_terraform_apply_with_status_can_skip_mk8s_preflight(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fake_paths = _fake_paths(tmp_path)
-    calls: list[tuple[object, ...]] = []
+    calls: list[tuple[Any, ...]] = []
     reporter = SimpleNamespace(handle_terraform_event="callback")
 
     monkeypatch.setattr(cli, "_terraform_runtime_env", lambda _cfg: {"TF_VAR_DEMO": "1"})
@@ -13295,7 +13309,7 @@ def test_run_terraform_apply_with_status_runs_mk8s_gpu_stack_preflight(
 ) -> None:
     fake_paths = _fake_paths(tmp_path)
     config = _config_with_enabled_mk8s()
-    calls: list[tuple[object, ...]] = []
+    calls: list[tuple[Any, ...]] = []
     reporter = SimpleNamespace(handle_terraform_event="callback")
 
     monkeypatch.setattr(cli, "_terraform_runtime_env", lambda _cfg: {"TF_VAR_DEMO": "1"})
@@ -13345,7 +13359,7 @@ def test_run_terraform_apply_with_status_passes_explicit_status_watchers(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fake_paths = _fake_paths(tmp_path)
-    calls: list[tuple[object, ...]] = []
+    calls: list[tuple[Any, ...]] = []
     reporter = SimpleNamespace(handle_terraform_event="callback")
     watchers = [
         {
@@ -13409,7 +13423,7 @@ def test_run_terraform_apply_with_status_passes_prompted_mysterybox_env(
 ) -> None:
     fake_paths = _fake_paths(tmp_path)
     config = _mysterybox_first_deploy_config()
-    calls: list[tuple[object, ...]] = []
+    calls: list[tuple[Any, ...]] = []
     reporter = SimpleNamespace(handle_terraform_event="callback")
     payload_values = json.dumps(
         {
@@ -13494,7 +13508,7 @@ def test_run_terraform_apply_with_status_passes_abort_check_when_reporter_suppor
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fake_paths = _fake_paths(tmp_path)
-    calls: list[tuple[str, object]] = []
+    calls: list[tuple[Any, ...]] = []
     reporter = SimpleNamespace(
         handle_terraform_event="callback",
         abort_reason=lambda: None,
@@ -13550,7 +13564,7 @@ def test_run_terraform_destroy_with_status_passes_abort_check_when_reporter_supp
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fake_paths = _fake_paths(tmp_path)
-    calls: list[tuple[str, object]] = []
+    calls: list[tuple[Any, ...]] = []
     reporter = SimpleNamespace(
         handle_terraform_event="callback",
         abort_reason=lambda: None,
@@ -13776,7 +13790,7 @@ def test_sync_mysterybox_primary_version_ids_updates_unset_config_values(
         ),
         encoding="utf-8",
     )
-    captured: dict[str, object] = {}
+    captured: dict[str, Any] = {}
     monkeypatch.setattr(cli, "_terraform_runtime_env", lambda config: {"TF_VAR_demo": "1"})
 
     def _fake_terraform_output_json(infra_dir, *, extra_env=None, initialize=True):
@@ -13916,7 +13930,7 @@ def test_terraform_plan_command_invokes_runtime_auth_and_plan(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fake_paths = _fake_paths(tmp_path)
-    captured: dict[str, object] = {}
+    captured: dict[str, Any] = {}
     manifest = {"schema": "nebius-cxcli-generated/v1"}
 
     monkeypatch.setattr(
@@ -14009,7 +14023,7 @@ def test_terraform_apply_command_invokes_runtime_auth_and_apply(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fake_paths = _fake_paths(tmp_path)
-    captured: dict[str, object] = {}
+    captured: dict[str, Any] = {}
     manifest = {"schema": "nebius-cxcli-generated/v1"}
 
     monkeypatch.setattr(
@@ -14090,7 +14104,7 @@ def test_terraform_destroy_command_invokes_runtime_auth_and_destroy(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fake_paths = _fake_paths(tmp_path)
-    captured: dict[str, object] = {}
+    captured: dict[str, Any] = {}
     manifest = {"schema": "nebius-cxcli-generated/v1"}
 
     monkeypatch.setattr(
@@ -14150,7 +14164,7 @@ def test_terraform_destroy_command_confirmation_targets_infra_dir(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fake_paths = _fake_paths(tmp_path)
-    captured: dict[str, object] = {}
+    captured: dict[str, Any] = {}
     manifest = {"schema": "nebius-cxcli-generated/v1"}
 
     monkeypatch.setattr(
@@ -14177,7 +14191,7 @@ def test_run_terraform_destroy_with_recovery_clears_stale_lock_and_retries(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fake_paths = _fake_paths(tmp_path)
-    calls: list[tuple[str, object]] = []
+    calls: list[tuple[Any, ...]] = []
     lock_info = SimpleNamespace(lock_id="lock-123", who="rezab@host")
 
     def _fake_destroy_with_status(
@@ -14245,7 +14259,7 @@ def test_run_terraform_destroy_with_recovery_deletes_stuck_mk8s_node_group_and_r
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fake_paths = _fake_paths(tmp_path)
-    calls: list[tuple[str, object]] = []
+    calls: list[tuple[Any, ...]] = []
 
     def _fake_destroy_with_status(
         config: object, paths: object, *, initialize: bool = True, status_watchers=None
@@ -14388,7 +14402,7 @@ def test_flux_bootstrap_command_invokes_flux_ops(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fake_paths = _fake_paths(tmp_path)
-    captured: dict[str, object] = {}
+    captured: dict[str, Any] = {}
     manifest = {"schema": "nebius-cxcli-generated/v1", "deploy": {}}
 
     monkeypatch.setattr(
@@ -14459,7 +14473,7 @@ def test_ensure_flux_uses_managed_flux_binary_when_missing_from_path(
     monkeypatch.setenv("GITHUB_REPOSITORY", "owner/repo")
     monkeypatch.setenv("GITHUB_REF_NAME", "main")
 
-    calls: list[tuple[object, ...]] = []
+    calls: list[tuple[Any, ...]] = []
 
     monkeypatch.setattr(flux_ops, "_require_binary", lambda _name: None)
     monkeypatch.setattr(flux_ops, "wait_for_flux_namespace_ready", lambda *, extra_env=None: None)
@@ -14477,7 +14491,7 @@ def test_ensure_flux_uses_managed_flux_binary_when_missing_from_path(
         lambda cmd, **kwargs: calls.append((tuple(cmd), kwargs)),
     )
 
-    result = flux_ops.ensure_flux(fake_paths)
+    result = flux_ops.ensure_flux(cast(ProjectPaths, fake_paths))
 
     assert result == "reconciled"
     assert calls == [
@@ -14503,7 +14517,7 @@ def test_ensure_flux_bootstrap_falls_back_to_git_origin_repo_slug(
     monkeypatch.delenv("GITHUB_REPOSITORY", raising=False)
     monkeypatch.setenv("GITHUB_REF_NAME", "main")
 
-    calls: list[tuple[object, ...]] = []
+    calls: list[tuple[Any, ...]] = []
 
     monkeypatch.setattr(flux_ops, "_require_binary", lambda _name: None)
     monkeypatch.setattr(flux_ops, "wait_for_flux_namespace_ready", lambda *, extra_env=None: None)
@@ -14527,7 +14541,7 @@ def test_ensure_flux_bootstrap_falls_back_to_git_origin_repo_slug(
         lambda cmd, **kwargs: calls.append((tuple(cmd), kwargs)),
     )
 
-    result = flux_ops.ensure_flux(fake_paths)
+    result = flux_ops.ensure_flux(cast(ProjectPaths, fake_paths))
 
     assert result == "bootstrapped"
     assert calls[0] == (("install_flux",), {"extra_env": None})
@@ -14558,7 +14572,7 @@ def test_ensure_flux_bootstraps_when_controllers_exist_but_bootstrap_resources_d
     monkeypatch.setenv("GITHUB_REPOSITORY", "owner/repo")
     monkeypatch.setenv("GITHUB_REF_NAME", "main")
 
-    calls: list[tuple[object, ...]] = []
+    calls: list[tuple[Any, ...]] = []
 
     monkeypatch.setattr(flux_ops, "_require_binary", lambda _name: None)
     monkeypatch.setattr(flux_ops, "wait_for_flux_namespace_ready", lambda *, extra_env=None: None)
@@ -14576,7 +14590,7 @@ def test_ensure_flux_bootstraps_when_controllers_exist_but_bootstrap_resources_d
         lambda cmd, **kwargs: calls.append((tuple(cmd), kwargs)),
     )
 
-    result = flux_ops.ensure_flux(fake_paths)
+    result = flux_ops.ensure_flux(cast(ProjectPaths, fake_paths))
 
     assert result == "bootstrapped"
     assert calls == [
@@ -14613,7 +14627,7 @@ def test_ensure_flux_reinstalls_when_crds_are_missing_then_reconciles(
     )
     fake_paths.flux_dir.mkdir(parents=True, exist_ok=True)
 
-    calls: list[tuple[object, ...]] = []
+    calls: list[tuple[Any, ...]] = []
 
     monkeypatch.setattr(flux_ops, "_require_binary", lambda _name: None)
     monkeypatch.setattr(flux_ops, "wait_for_flux_namespace_ready", lambda *, extra_env=None: None)
@@ -14636,7 +14650,7 @@ def test_ensure_flux_reinstalls_when_crds_are_missing_then_reconciles(
         lambda cmd, **kwargs: calls.append((tuple(cmd), kwargs)),
     )
 
-    result = flux_ops.ensure_flux(fake_paths)
+    result = flux_ops.ensure_flux(cast(ProjectPaths, fake_paths))
 
     assert result == "reconciled"
     assert calls[0] == (("install_flux",), {"extra_env": None})
@@ -14705,7 +14719,7 @@ def test_wait_for_flux_namespace_ready_fails_with_targeted_guidance(
 def test_install_flux_controllers_waits_for_namespace_before_apply(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    calls: list[tuple[str, object]] = []
+    calls: list[tuple[Any, ...]] = []
 
     monkeypatch.setattr(flux_ops, "_require_binary", lambda _name: None)
     monkeypatch.setattr(
@@ -14736,7 +14750,7 @@ def test_install_flux_controllers_waits_for_namespace_before_apply(
 
     manifest_url = flux_ops.install_flux_controllers(extra_env={"KUBECONFIG": "/tmp/kubeconfig"})
 
-    assert manifest_url == "https://github.com/fluxcd/flux2/releases/download/v2.8.0/install.yaml"
+    assert manifest_url == _bundled_flux_install_manifest_url()
     assert calls[0] == ("wait_namespace", {"KUBECONFIG": "/tmp/kubeconfig"})
     assert calls[1] == ("wait_crds_clear", {"KUBECONFIG": "/tmp/kubeconfig"})
     assert calls[2] == (
@@ -14756,7 +14770,7 @@ def test_prepare_cluster_handoff_kube_env_writes_exec_kubeconfig_and_persists_lo
             nebius=SimpleNamespace(project_id="project-456"),
         )
     )
-    captured: dict[str, object] = {}
+    captured: dict[str, Any] = {}
     spec = cli._Mk8sKubeconfigSpec(
         cluster_entry_name="cluster-entry",
         user_entry_name="user-entry",
@@ -14854,7 +14868,7 @@ def test_prepare_cluster_handoff_kube_env_loads_runtime_auth_cache_when_env_miss
             nebius=SimpleNamespace(project_id="project-456"),
         )
     )
-    captured: dict[str, object] = {}
+    captured: dict[str, Any] = {}
     spec = cli._Mk8sKubeconfigSpec(
         cluster_entry_name="cluster-entry",
         user_entry_name="user-entry",
@@ -14929,7 +14943,7 @@ def test_prepare_cluster_handoff_kube_env_skips_local_persist_when_disabled(
             nebius=SimpleNamespace(project_id="project-456"),
         )
     )
-    captured: dict[str, object] = {}
+    captured: dict[str, Any] = {}
     spec = cli._Mk8sKubeconfigSpec(
         cluster_entry_name="cluster-entry",
         user_entry_name="user-entry",
@@ -15453,7 +15467,7 @@ def test_persist_cluster_handoff_kubeconfig_replaces_duplicate_named_entries(
 def test_mk8s_token_command_emits_exec_credential_from_sdk(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    captured: dict[str, object] = {}
+    captured: dict[str, Any] = {}
 
     class _FakeSDK:
         def get_token_sync(self, *, timeout):  # type: ignore[no-untyped-def]
@@ -15649,7 +15663,7 @@ def test_flux_bootstrap_command_uses_cluster_handoff_when_config_declares_it(
         ),
         encoding="utf-8",
     )
-    captured: dict[str, object] = {}
+    captured: dict[str, Any] = {}
 
     monkeypatch.setattr(
         cli, "_load_generated_flux_context", lambda _path: (fake_config, fake_paths, manifest)
@@ -15798,7 +15812,7 @@ def test_flux_apply_command_applies_rendered_flux_with_cluster_handoff(
         ),
         encoding="utf-8",
     )
-    captured: dict[str, object] = {}
+    captured: dict[str, Any] = {}
 
     monkeypatch.setattr(
         cli, "_load_generated_flux_context", lambda _path: (fake_config, fake_paths, manifest)
@@ -15931,7 +15945,7 @@ def test_flux_apply_command_all_targets_persists_contexts_without_switching_curr
             ]
         },
     }
-    captured: dict[str, object] = {
+    captured: dict[str, Any] = {
         "handoffs": [],
         "apply_flux": [],
         "warn_bootstrap": [],
@@ -15952,7 +15966,7 @@ def test_flux_apply_command_all_targets_persists_contexts_without_switching_curr
         cli,
         "_prepare_cluster_handoff_kube_env",
         lambda config, paths, *, stack, target=None, persist_local_kubeconfig=True, set_current_context=True: (
-            cast(list[tuple[object, ...]], captured["handoffs"]).append(
+            cast(list[tuple[Any, ...]], captured["handoffs"]).append(
                 (
                     config,
                     paths,
@@ -15961,7 +15975,7 @@ def test_flux_apply_command_all_targets_persists_contexts_without_switching_curr
                     set_current_context,
                 )
             )
-            or {"KUBECONFIG": f"/tmp/{target['target_ref']}.kubeconfig"}
+            or {"KUBECONFIG": f"/tmp/{cast(Mapping[str, Any], target)['target_ref']}.kubeconfig"}
         ),
     )
     monkeypatch.setattr(
@@ -15982,7 +15996,7 @@ def test_flux_apply_command_all_targets_persists_contexts_without_switching_curr
         cli,
         "_warn_if_flux_gitops_not_bootstrapped",
         lambda config, paths, *, extra_env=None, target_ref=None, **_kwargs: cast(
-            list[tuple[object, ...]], captured["warn_bootstrap"]
+            list[tuple[Any, ...]], captured["warn_bootstrap"]
         ).append((config, paths, extra_env, target_ref)),
     )
     monkeypatch.setattr(
@@ -16063,7 +16077,7 @@ def test_flux_destroy_command_deletes_rendered_flux_with_cluster_handoff(
         "schema": "nebius-cxcli-generated/v1",
         "deploy": {"targets": [_mk8s_target(fake_paths)]},
     }
-    captured: dict[str, object] = {}
+    captured: dict[str, Any] = {}
 
     monkeypatch.setattr(
         cli, "_load_generated_flux_context", lambda _path: (fake_config, fake_paths, manifest)
@@ -16104,7 +16118,7 @@ def test_flux_destroy_command_confirmation_targets_flux_dir(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fake_paths = _fake_paths(tmp_path)
-    captured: dict[str, object] = {}
+    captured: dict[str, Any] = {}
     config = {"apps": {"charts": [{"id": "gateway-helm", "enabled": True}]}}
     manifest = {"schema": "nebius-cxcli-generated/v1"}
 
@@ -17321,7 +17335,7 @@ def test_email_command_handles_sent_and_noop(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fake_paths = _fake_paths(tmp_path)
-    captured: dict[str, object] = {}
+    captured: dict[str, Any] = {}
     monkeypatch.setattr(
         cli,
         "_load_email_context",
@@ -17610,7 +17624,7 @@ def test_bootstrap_ci_command_with_auth_passes_github_flags(
         replaced_workflow=False,
     )
 
-    captured: dict[str, object] = {}
+    captured: dict[str, Any] = {}
 
     monkeypatch.setattr(cli, "_load_context", lambda _path: (fake_config, fake_paths))
     monkeypatch.setattr(cli, "_require_git_root", lambda _path: tmp_path)
@@ -17851,7 +17865,7 @@ def test_mysterybox_eso_credentials_from_json_requires_subject_credentials() -> 
 def test_create_mysterybox_eso_credentials_uses_dedicated_service_account(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    captured: dict[str, object] = {}
+    captured: dict[str, Any] = {}
     wait_calls: list[tuple[str, cli.MysteryBoxEsoCredentials]] = []
     runtime_env = {
         "NEBIUS_SA_ID": "runtime-tf-sa",
@@ -17906,7 +17920,7 @@ def test_create_mysterybox_eso_credentials_uses_dedicated_service_account(
 def test_ensure_mysterybox_eso_service_account_uses_operator_auth(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    captured: dict[str, object] = {}
+    captured: dict[str, Any] = {}
     runtime_env = {
         "NEBIUS_SA_ID": "runtime-tf-sa",
         "NEBIUS_AUTH_PUBLIC_KEY_ID": "runtime-tf-key",
@@ -18042,7 +18056,7 @@ def test_ensure_mysterybox_eso_credentials_secret_rotates_stale_cluster_secret(
             nebius=SimpleNamespace(project_id="project-123"),
         )
     )
-    applied: list[dict[str, object]] = []
+    applied: list[dict[str, Any]] = []
     rendered_messages: list[str] = []
 
     monkeypatch.setattr(
@@ -18146,7 +18160,7 @@ def test_ensure_mysterybox_eso_runtime_creates_credentials_secret(
         )
     )
     applied: list[tuple[object, dict[str, str] | None]] = []
-    tls_checks: list[dict[str, object]] = []
+    tls_checks: list[dict[str, Any]] = []
     credential_creates: list[str] = []
 
     monkeypatch.setattr(cli, "mysterybox_eso_enabled", lambda *_args, **_kwargs: True)
@@ -18317,7 +18331,7 @@ def test_ensure_mysterybox_eso_runtime_prints_confirmation_per_applied_secret(
 def test_kubectl_validate_mysterybox_eso_tls_uses_in_cluster_curl_probe(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    captured: dict[str, object] = {}
+    captured: dict[str, Any] = {}
     rendered_messages: list[str] = []
 
     def _fake_run(args: list[str], **kwargs: object) -> SimpleNamespace:
@@ -19935,7 +19949,7 @@ def test_mk8s_image_defaults_replace_stale_soperator_gpu_stack_default() -> None
         },
     }
 
-    class _Lookup:
+    class _Lookup(cli.ProviderOptionLookup):
         def resolve(self, *, provider, args, payload, field_path):
             _ = args, payload
             if provider == "mk8s_gpu_stack_presets":

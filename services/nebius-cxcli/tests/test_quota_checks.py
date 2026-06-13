@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sys
 from types import ModuleType
+from typing import Any, cast
 
 import pytest
 
@@ -255,7 +256,7 @@ def test_estimate_mk8s_requirements_add_gpu_capacity_shape_for_infiniband_nodes(
     gaps: list[QuotaCoverageGap] = []
 
     _estimate_mk8s_requirements(
-        session=_Session(),
+        session=cast(Any, _Session()),
         project_id="project-1",
         region="uk-south1",
         component_id="mk8s",
@@ -319,7 +320,7 @@ def test_estimate_mk8s_requirements_cover_boot_disk_quota_from_explicit_inputs()
     gaps: list[QuotaCoverageGap] = []
 
     _estimate_mk8s_requirements(
-        session=_Session(),
+        session=cast(Any, _Session()),
         project_id="project-1",
         region="uk-south1",
         component_id="mk8s",
@@ -377,7 +378,7 @@ def test_estimate_mk8s_requirements_cover_boot_disk_quota_from_override_template
     gaps: list[QuotaCoverageGap] = []
 
     _estimate_mk8s_requirements(
-        session=_Session(),
+        session=cast(Any, _Session()),
         project_id="project-1",
         region="uk-south1",
         component_id="mk8s",
@@ -1353,9 +1354,9 @@ def test_quota_session_does_not_cache_transient_preset_lookup_failures(
         module = ModuleType(module_name)
         module.__path__ = []
         monkeypatch.setitem(sys.modules, module_name, module)
-    common_v1 = ModuleType("nebius.api.nebius.common.v1")
+    common_v1: Any = ModuleType("nebius.api.nebius.common.v1")
     common_v1.GetByNameRequest = lambda **kwargs: kwargs
-    compute_v1 = ModuleType("nebius.api.nebius.compute.v1")
+    compute_v1: Any = ModuleType("nebius.api.nebius.compute.v1")
     compute_v1.PlatformServiceClient = _FakePlatformServiceClient
     monkeypatch.setitem(sys.modules, "nebius.api.nebius.common.v1", common_v1)
     monkeypatch.setitem(sys.modules, "nebius.api.nebius.compute.v1", compute_v1)
@@ -1607,7 +1608,7 @@ def test_estimate_vm_requirements_cover_regular_gpu_and_boot_disk() -> None:
     gaps: list[QuotaCoverageGap] = []
 
     _estimate_vm_requirements(
-        session=_Session(),
+        session=cast(Any, _Session()),
         project_id="project-1",
         region="eu-north1",
         component_id="vm",
@@ -1648,7 +1649,7 @@ def test_estimate_vm_requirements_reports_missing_boot_disk_without_size_fallbac
     gaps: list[QuotaCoverageGap] = []
 
     _estimate_vm_requirements(
-        session=_Session(),
+        session=cast(Any, _Session()),
         project_id="project-1",
         region="eu-north1",
         component_id="vm",
@@ -1683,7 +1684,7 @@ def test_estimate_vm_requirements_cover_preemptible_gpu_capacity() -> None:
     gaps: list[QuotaCoverageGap] = []
 
     _estimate_vm_requirements(
-        session=_Session(),
+        session=cast(Any, _Session()),
         project_id="project-1",
         region="us-central1",
         component_id="vm",

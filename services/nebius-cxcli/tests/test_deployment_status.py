@@ -4,6 +4,7 @@ from contextlib import contextmanager
 from datetime import UTC, datetime
 from enum import Enum
 from types import SimpleNamespace
+from typing import Any
 
 import nebius_cxcli.deployment_status as deployment_status_module
 from nebius_cxcli.deployment_status import (
@@ -712,8 +713,9 @@ def test_deployment_status_reporter_exposes_terminal_api_failure(monkeypatch) ->
         repeat_interval_seconds=999,
     ).start()
     try:
-        assert reporter.abort_reason() is not None
-        assert "RESOURCE_EXHAUSTED" in reporter.abort_reason()
+        abort_reason = reporter.abort_reason()
+        assert abort_reason is not None
+        assert "RESOURCE_EXHAUSTED" in abort_reason
     finally:
         reporter.close()
 
@@ -1094,7 +1096,7 @@ def test_postgresql_status_poller_reads_clusters_response_field(monkeypatch) -> 
 
 
 def test_postgresql_status_poller_exposes_terminal_operation_failure(monkeypatch) -> None:
-    poller = deployment_status_module._PostgreSQLStatusPoller.__new__(
+    poller: Any = deployment_status_module._PostgreSQLStatusPoller.__new__(
         deployment_status_module._PostgreSQLStatusPoller
     )
     poller._target = StatusWatcherTarget(
@@ -1127,7 +1129,7 @@ def test_postgresql_status_poller_exposes_terminal_operation_failure(monkeypatch
 
 
 def test_filesystem_status_poller_exposes_terminal_operation_failure(monkeypatch) -> None:
-    poller = deployment_status_module._FilesystemStatusPoller.__new__(
+    poller: Any = deployment_status_module._FilesystemStatusPoller.__new__(
         deployment_status_module._FilesystemStatusPoller
     )
     poller._target = StatusWatcherTarget(
@@ -1160,7 +1162,7 @@ def test_filesystem_status_poller_exposes_terminal_operation_failure(monkeypatch
 
 
 def test_object_storage_status_poller_exposes_terminal_operation_failure(monkeypatch) -> None:
-    poller = deployment_status_module._ObjectStorageBucketStatusPoller.__new__(
+    poller: Any = deployment_status_module._ObjectStorageBucketStatusPoller.__new__(
         deployment_status_module._ObjectStorageBucketStatusPoller
     )
     poller._target = StatusWatcherTarget(
@@ -1269,7 +1271,7 @@ def test_compute_instance_status_poller_reads_instance_state(monkeypatch) -> Non
 
 
 def test_compute_instance_status_poller_reports_private_ip_ready(monkeypatch) -> None:
-    poller = deployment_status_module._ComputeInstanceStatusPoller.__new__(
+    poller: Any = deployment_status_module._ComputeInstanceStatusPoller.__new__(
         deployment_status_module._ComputeInstanceStatusPoller
     )
     poller._target = StatusWatcherTarget(
@@ -1308,7 +1310,7 @@ def test_compute_instance_status_poller_reports_private_ip_ready(monkeypatch) ->
 def test_compute_instance_status_poller_exposes_terminal_operation_failure(
     monkeypatch,
 ) -> None:
-    poller = deployment_status_module._ComputeInstanceStatusPoller.__new__(
+    poller: Any = deployment_status_module._ComputeInstanceStatusPoller.__new__(
         deployment_status_module._ComputeInstanceStatusPoller
     )
     poller._target = StatusWatcherTarget(
@@ -1423,7 +1425,7 @@ def test_mysterybox_secret_status_poller_reads_secret_state(monkeypatch) -> None
 def test_mysterybox_secret_status_poller_exposes_terminal_operation_failure(
     monkeypatch,
 ) -> None:
-    poller = deployment_status_module._MysteryBoxSecretStatusPoller.__new__(
+    poller: Any = deployment_status_module._MysteryBoxSecretStatusPoller.__new__(
         deployment_status_module._MysteryBoxSecretStatusPoller
     )
     poller._target = StatusWatcherTarget(

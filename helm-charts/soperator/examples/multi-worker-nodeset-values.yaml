@@ -37,7 +37,7 @@ nodesets:
     slurmd:
       image:
         repository: cr.eu-north1.nebius.cloud/soperator/worker_slurmd
-        tag: 3.0.5-slurm25.11.3
+        tag: 4.0.2-slurm25.11.3
         pullPolicy: IfNotPresent
       customEnv:
         - name: NVIDIA_DRIVER_CAPABILITIES
@@ -60,7 +60,7 @@ nodesets:
     munge:
       image:
         repository: cr.eu-north1.nebius.cloud/soperator/munge
-        tag: 3.0.5-slurm25.11.3
+        tag: 4.0.2-slurm25.11.3
         pullPolicy: IfNotPresent
       resources:
         cpu: 500m
@@ -97,7 +97,7 @@ nodesets:
     slurmd:
       image:
         repository: cr.eu-north1.nebius.cloud/soperator/worker_slurmd
-        tag: 3.0.5-slurm25.11.3
+        tag: 4.0.2-slurm25.11.3
         pullPolicy: IfNotPresent
       customEnv:
         - name: NVIDIA_DRIVER_CAPABILITIES
@@ -120,7 +120,7 @@ nodesets:
     munge:
       image:
         repository: cr.eu-north1.nebius.cloud/soperator/munge
-        tag: 3.0.5-slurm25.11.3
+        tag: 4.0.2-slurm25.11.3
         pullPolicy: IfNotPresent
       resources:
         cpu: 500m

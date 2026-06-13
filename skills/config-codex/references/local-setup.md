@@ -297,8 +297,9 @@ Expected evidence:
 - `global-context-management` is available.
 - `config-codex` is available.
 - `repo_mapper`, `test_strategist`, and `risk_reviewer` are available, or the
-  session clearly reports that subagent delegation is unavailable or not
-  permitted in the current surface.
+  session first uses `tool_search` to look for deferred multi-agent/subagent
+  tools when controls are not visible, then clearly reports that subagent
+  delegation is unavailable or not permitted in the current surface.
 - The injected task-state path is session-scoped under
   `$CODEX_HOME/task-state/<workspace>-<hash>/<session-id>/current.md`.
 - Complex-task guidance tells Codex to read current task state when prior
@@ -327,3 +328,7 @@ configuration is working; the remaining gate is the runtime policy that
 requires the user prompt to explicitly ask for subagents, delegation, or
 parallel agents, or the optional local hook policy has not been enabled or
 trusted in a fresh session.
+
+If the explicit probe does not see subagent controls but `tool_search` is
+available, the agent should search for multi-agent/subagent tools before
+reporting delegation unavailable.

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import pytest
 import yaml
@@ -16,6 +17,7 @@ from nebius_cxcli.compute_boot_disks import (
     refresh_compute_boot_disk_defaults,
     resolve_compute_boot_disk_recommendation,
 )
+from nebius_cxcli.provider_options import ProviderOptionLookup
 
 
 def _write_sources_file(path: Path) -> None:
@@ -144,8 +146,8 @@ def _mk8s_inputs(
     cpu_preset: str = "",
     gpu_platform: str = "",
     gpu_preset: str = "",
-) -> dict[str, object]:
-    defaults: dict[str, object] = {}
+) -> dict[str, Any]:
+    defaults: dict[str, Any] = {}
     if cpu_platform or cpu_preset:
         defaults["cpu"] = {
             "platform": cpu_platform,
@@ -247,7 +249,7 @@ def test_materialize_compute_boot_disk_defaults_from_provider_resources(
         "apps": {"charts": []},
     }
 
-    class _Lookup:
+    class _Lookup(ProviderOptionLookup):
         def compute_platform_preset_resources(self, *, project_id, platform_name, preset_name):
             assert project_id == "project-1"
             if platform_name == "cpu-d3" and preset_name == "custom-cpu-shape":
@@ -562,7 +564,7 @@ def test_materialize_compute_boot_disk_defaults_fails_for_unmatched_shape(
         "apps": {"charts": []},
     }
 
-    class _Lookup:
+    class _Lookup(ProviderOptionLookup):
         def compute_platform_preset_resources(self, *, project_id, platform_name, preset_name):
             assert project_id == "project-1"
             if platform_name == "cpu-d3" and preset_name == "custom-cpu-shape":

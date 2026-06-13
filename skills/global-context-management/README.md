@@ -153,8 +153,11 @@ enabling `multi_agent` makes the tools available but does not by itself count
 as a user request to use them. When the runtime requires explicit user
 authorization, the prompt must say to use or spawn subagents, use delegation,
 or run parallel agents, or the user must deliberately enable a local hook
-policy that injects that request for complex prompts. If a session cannot spawn
-a subagent, the main agent should keep working with narrower reads and report
+policy that injects that request for complex prompts. If delegation is
+authorized and useful but subagent controls are not visible, and `tool_search`
+is available, the main agent should first search for multi-agent/subagent tools
+before reporting delegation unavailable. If a session still cannot spawn a
+subagent, the main agent should keep working with narrower reads and report
 that delegation was unavailable or not permitted.
 
 The optional hook policy lives only under `$CODEX_HOME`:

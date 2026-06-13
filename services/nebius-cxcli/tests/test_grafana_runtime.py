@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 import pytest
@@ -63,7 +64,7 @@ def test_run_kubectl_uses_explicit_target_context(monkeypatch: pytest.MonkeyPatc
     ]
 
 
-def _grafana_payload() -> dict[str, object]:
+def _grafana_payload() -> dict[str, Any]:
     return {
         "apps": {
             "charts": [
@@ -201,7 +202,7 @@ def test_explore_url_uses_grafana_panes_schema() -> None:
 def test_create_grafana_short_url_uses_public_base_url(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    recorded: dict[str, object] = {}
+    recorded: dict[str, Any] = {}
 
     def fake_post(
         base_url: str,
@@ -298,7 +299,7 @@ def test_ensure_grafana_runtime_secrets_refreshes_rejected_read_token(
             key="token",
         ),
     )
-    applied: list[dict[str, object]] = []
+    applied: list[dict[str, Any]] = []
     emitted: list[str] = []
 
     monkeypatch.setattr(grafana_runtime, "_grafana_cli_settings", lambda: settings)
@@ -358,7 +359,7 @@ def test_ensure_grafana_runtime_secrets_refreshes_rejected_read_token(
 def test_grafana_dashboard_url_rewrites_to_public_base(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    calls: list[dict[str, object]] = []
+    calls: list[dict[str, Any]] = []
 
     def fake_get(
         base_url: str,
@@ -417,7 +418,7 @@ def test_grafana_dashboard_url_rewrites_to_public_base(
 def test_grafana_dashboard_url_by_uid_uses_dashboard_meta_url(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    calls: list[dict[str, object]] = []
+    calls: list[dict[str, Any]] = []
 
     def fake_get(
         base_url: str,

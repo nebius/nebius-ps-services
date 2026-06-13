@@ -158,8 +158,11 @@ probe shows the injected task-state path and read/update guidance.
 
 Do not claim subagent activation is proven until a fresh Codex session receives
 an explicit user request to use subagents and can spawn a read-only helper, or
-reports that delegation is unavailable or not permitted in that surface. If a
-local hook policy is enabled, verify it in a fresh trusted-hook session before
+reports that delegation is unavailable or not permitted in that surface. If
+delegation is authorized and useful but subagent controls are not visible, and
+`tool_search` is available, the fresh session should first search for
+multi-agent/subagent tools before reporting delegation unavailable. If a local
+hook policy is enabled, verify it in a fresh trusted-hook session before
 claiming hook-assisted delegation works. Do not claim that hooks, skills,
 `multi_agent`, or `[agents.*]` config force automatic delegation; they only
 make delegation possible when the runtime policy allows it.

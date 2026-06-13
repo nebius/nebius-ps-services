@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import subprocess
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -18,7 +19,7 @@ from nebius_cxcli.component_sources import (
     set_component_sources_file_override,
     set_component_sources_profile_override,
 )
-from nebius_cxcli.components import component_entries, reset_component_entry_cache
+from nebius_cxcli.components import ComponentEntry, component_entries, reset_component_entry_cache
 from nebius_cxcli.config_loader import load_config
 from nebius_cxcli.config_model import to_dynamic_payload
 from nebius_cxcli.config_template import starter_config_yaml
@@ -113,7 +114,7 @@ def _stub_catalog_output_discovery(monkeypatch: pytest.MonkeyPatch) -> None:
 @pytest.fixture(scope="module", autouse=True)
 def _cache_local_soperator_chart_dependencies(
     tmp_path_factory: pytest.TempPathFactory,
-) -> None:
+) -> Iterator[None]:
     """Avoid rebuilding the same local Soperator chart dependencies for every render test."""
     monkeypatch = pytest.MonkeyPatch()
     original_stage = flux_render_module._stage_local_helm_chart
@@ -188,6 +189,26 @@ def _starter_payload(*, selected_infra: set[str], selected_apps: set[str]) -> di
     )
     assert isinstance(payload, dict)
     return payload
+
+
+def _repo_component_cli_settings_payload() -> dict:
+    payload = yaml.safe_load(
+        (Path(__file__).resolve().parents[1] / "component_cli_settings.yaml").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert isinstance(payload, dict)
+    return payload
+
+
+def _app_entry(
+    component_id: str, source_profile: SourceProfile | None = None
+) -> ComponentEntry:
+    return next(
+        entry
+        for entry in component_entries("apps", source_profile=source_profile)
+        if entry.id == component_id
+    )
 
 
 def _write_minimal_mk8s_module(base: Path) -> Path:
@@ -765,16 +786,17 @@ def test_render_binds_soperator_external_nfs_from_matching_nfs_output(tmp_path: 
             "inputs": {"kubernetes_target_ref": "cluster1"},
         },
     ]
+    soperator = _app_entry("soperator", SourceProfile.PORTABLE)
     payload["apps"]["charts"] = [
         {
             "id": "soperator",
             "instance_id": "cluster1",
-            "group": "slurm",
+            "group": soperator.group,
             "enabled": True,
-            "repo": "https://github.com/nebius/nebius-ps-services/tree/main/helm-charts/soperator",
-            "version": "",
-            "namespace": "soperator",
-            "release-name": "soperator",
+            "repo": soperator.source,
+            "version": soperator.version,
+            "namespace": soperator.default_namespace,
+            "release-name": soperator.default_release_name,
             "values": {},
         }
     ]
@@ -866,6 +888,7 @@ def test_render_binds_general_nfs_csi_storage_class_from_matching_nfs_output(
     paths = resolve_project_paths(config_path)
 
     payload = _starter_payload(selected_infra={"mk8s", "nfs"}, selected_apps={"csi-driver-nfs"})
+    nfs_csi = _app_entry("csi-driver-nfs")
     payload["infra"]["components"] = [
         {
             "id": "mk8s",
@@ -889,10 +912,10 @@ def test_render_binds_general_nfs_csi_storage_class_from_matching_nfs_output(
             "instance_id": "cluster1",
             "group": "storage",
             "enabled": True,
-            "repo": "https://raw.githubusercontent.com/kubernetes-csi/csi-driver-nfs/master/charts",
-            "version": "4.13.2",
-            "namespace": "kube-system",
-            "release-name": "csi-driver-nfs",
+            "repo": nfs_csi.chart_repo,
+            "version": nfs_csi.version,
+            "namespace": nfs_csi.default_namespace,
+            "release-name": nfs_csi.default_release_name,
             "values": {
                 "controller": {"replicas": 2},
                 "storageClass": {
@@ -945,6 +968,7 @@ def test_render_omits_nfs_csi_storage_class_until_nfs_outputs_exist(tmp_path: Pa
     paths = resolve_project_paths(config_path)
 
     payload = _starter_payload(selected_infra={"mk8s", "nfs"}, selected_apps={"csi-driver-nfs"})
+    nfs_csi = _app_entry("csi-driver-nfs")
     payload["infra"]["components"] = [
         {"id": "mk8s", "instance_id": "cluster1", "enabled": True, "inputs": {}},
         {
@@ -960,10 +984,10 @@ def test_render_omits_nfs_csi_storage_class_until_nfs_outputs_exist(tmp_path: Pa
             "instance_id": "cluster1",
             "group": "storage",
             "enabled": True,
-            "repo": "https://raw.githubusercontent.com/kubernetes-csi/csi-driver-nfs/master/charts",
-            "version": "4.13.2",
-            "namespace": "kube-system",
-            "release-name": "csi-driver-nfs",
+            "repo": nfs_csi.chart_repo,
+            "version": nfs_csi.version,
+            "namespace": nfs_csi.default_namespace,
+            "release-name": nfs_csi.default_release_name,
             "values": {"storageClass": {"name": "nfs-rwx-retain"}},
         }
     ]
@@ -984,6 +1008,7 @@ def test_render_omits_nfs_csi_storage_class_until_nfs_outputs_exist(tmp_path: Pa
 
 def test_nfs_component_auto_enables_csi_driver_for_matching_mk8s_target() -> None:
     payload = _starter_payload(selected_infra={"mk8s", "nfs"}, selected_apps=set())
+    nfs_csi = _app_entry("csi-driver-nfs")
     payload["infra"]["components"] = [
         {"id": "mk8s", "instance_id": "cluster1", "enabled": True, "inputs": {}},
         {"id": "nfs", "instance_id": "nfs-cluster1", "enabled": True, "inputs": {}},
@@ -998,10 +1023,10 @@ def test_nfs_component_auto_enables_csi_driver_for_matching_mk8s_target() -> Non
             "instance_id": "cluster1",
             "group": "storage",
             "enabled": True,
-            "repo": "https://raw.githubusercontent.com/kubernetes-csi/csi-driver-nfs/master/charts",
-            "version": "4.13.2",
-            "namespace": "kube-system",
-            "release-name": "csi-driver-nfs",
+            "repo": nfs_csi.chart_repo,
+            "version": nfs_csi.version,
+            "namespace": nfs_csi.default_namespace,
+            "release-name": nfs_csi.default_release_name,
             "values": {
                 "controller": {"replicas": 2},
                 "storageClass": {
@@ -1283,12 +1308,17 @@ def test_render_local_soperator_chart_source_writes_static_manifest(tmp_path: Pa
         if doc.get("kind") == "PodTemplate"
         and doc.get("metadata", {}).get("name") == "create-user-soperatorchecks"
     )
+    activechecks_values_path = (
+        _local_soperator_chart_path().parent / "soperator-activechecks" / "values.yaml"
+    )
+    activechecks_values = yaml.safe_load(activechecks_values_path.read_text(encoding="utf-8"))
+    expected_k8s_check_job_image = activechecks_values["images"]["k8sJob"]
     assert activechecks_pod_template["template"]["spec"]["hostUsers"] is True
     assert activechecks_pod_template["template"]["spec"]["restartPolicy"] == "Never"
     assert activechecks_pod_template["template"]["spec"]["containers"] == [
         {
             "name": "create-user-soperatorchecks",
-            "image": "cr.eu-north1.nebius.cloud/soperator/k8s_check_job:4.0.1-slurm25.11.3",
+            "image": expected_k8s_check_job_image,
         }
     ]
     activecheck = next(
@@ -2683,9 +2713,9 @@ def test_render_soperator_backup_uses_chart_owned_k8up_dependency(tmp_path: Path
     soperator_chart = next(
         chart for chart in payload["apps"]["charts"] if chart["id"] == "soperator"
     )
-    soperator_chart["repo"] = (
-        "https://github.com/nebius/nebius-ps-services/tree/main/helm-charts/soperator"
-    )
+    soperator = _app_entry("soperator", SourceProfile.PORTABLE)
+    soperator_chart["repo"] = soperator.source
+    soperator_chart["version"] = soperator.version
     soperator_chart.setdefault("values", {}).setdefault("soperator-backup-config", {})[
         "enabled"
     ] = True
@@ -4086,6 +4116,17 @@ def test_render_dynamic_oci_chart_uses_catalog_chart_name_when_id_differs(tmp_pa
     config_path = _project_config_path(tmp_path)
     config_path.parent.mkdir(parents=True, exist_ok=True)
 
+    network_operator = next(
+        entry
+        for entry in component_entries("apps", source_profile=SourceProfile.PORTABLE)
+        if entry.id == "nvidia-network-operator"
+    )
+    network_operator_repo = str(network_operator.chart_repo or "")
+    network_operator_chart = str(network_operator.chart_name or network_operator.id)
+    expected_repo_url = network_operator_repo.rstrip("/")
+    if expected_repo_url.rsplit("/", maxsplit=1)[-1].lower() == network_operator_chart.lower():
+        expected_repo_url = expected_repo_url.rsplit("/", maxsplit=1)[0]
+
     runtime_payload = _starter_payload(selected_infra={"mk8s"}, selected_apps=set())
     dynamic_payload = to_dynamic_payload(runtime_payload)
     dynamic_payload["apps"]["charts"] = [
@@ -4094,10 +4135,10 @@ def test_render_dynamic_oci_chart_uses_catalog_chart_name_when_id_differs(tmp_pa
             "instance_id": "mk8s",
             "group": "platform",
             "enabled": True,
-            "repo": "oci://cr.eu-north1.nebius.cloud/marketplace/nebius/nvidia-network-operator/chart/network-operator",
-            "version": "25.7.0",
-            "namespace": "nvidia-network-operator",
-            "release-name": "network-operator",
+            "repo": network_operator.source,
+            "version": network_operator.version,
+            "namespace": network_operator.default_namespace,
+            "release-name": network_operator.default_release_name,
             "values": {},
         }
     ]
@@ -4123,16 +4164,13 @@ def test_render_dynamic_oci_chart_uses_catalog_chart_name_when_id_differs(tmp_pa
     ]
     helm_repo_doc = next(doc for doc in repo_docs if doc.get("kind") == "HelmRepository")
     assert helm_repo_doc["spec"]["type"] == "oci"
-    assert (
-        helm_repo_doc["spec"]["url"]
-        == "oci://cr.eu-north1.nebius.cloud/marketplace/nebius/nvidia-network-operator/chart"
-    )
+    assert helm_repo_doc["spec"]["url"] == expected_repo_url
 
     release_doc = yaml.safe_load(release.read_text(encoding="utf-8"))
     chart_spec = release_doc["spec"]["chart"]["spec"]
     assert chart_spec["sourceRef"]["kind"] == "HelmRepository"
-    assert chart_spec["chart"] == "network-operator"
-    assert chart_spec["version"] == "25.7.0"
+    assert chart_spec["chart"] == network_operator_chart
+    assert chart_spec["version"] == network_operator.version
 
 
 def test_render_uses_component_source_release_timeout_for_helm_release(
@@ -4191,6 +4229,7 @@ def test_render_uses_global_flux_release_timeout_when_chart_omits_override(
 ) -> None:
     mk8s_dir = _write_minimal_mk8s_module(tmp_path)
     sources_file = tmp_path / "component_sources.yaml"
+    flux_version = _repo_component_cli_settings_payload()["cli"]["flux"]["version"]
     sources_file.write_text(
         yaml.safe_dump(
             _catalog(
@@ -4218,7 +4257,7 @@ def test_render_uses_global_flux_release_timeout_when_chart_omits_override(
             {
                 "cli": {
                     "flux": {
-                        "version": "v2.8.0",
+                        "version": flux_version,
                         "release_timeout": "15m",
                     }
                 },

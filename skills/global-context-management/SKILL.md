@@ -54,8 +54,10 @@ authorized and available, and careful final consolidation.
 
 If subagent tools are unavailable, disabled, hidden in the current surface, or
 not permitted by the current instructions, continue locally with narrower
-reads. State that delegation was unavailable or not permitted instead of
-pretending it happened.
+reads. When delegation is otherwise authorized and useful but subagent controls
+are not visible, and `tool_search` is available, first search for
+multi-agent/subagent tools before reporting delegation unavailable. State that
+delegation was unavailable or not permitted instead of pretending it happened.
 
 If the active runtime policy requires explicit user authorization for
 subagents, a complex task or this skill's activation is not enough by itself.

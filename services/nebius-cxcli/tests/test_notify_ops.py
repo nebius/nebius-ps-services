@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
@@ -17,7 +18,7 @@ class FakeSMTP:
         self.started_tls = False
         self.tls_context: object | None = None
         self.logged_in: tuple[str, str] | None = None
-        self.messages: list[object] = []
+        self.messages: list[Any] = []
 
     def __enter__(self) -> FakeSMTP:
         return self

@@ -357,6 +357,11 @@ def subagent_context(home: Path) -> str:
         "Keep subagent requests bounded and read-only. If spawning is unavailable "
         "or denied, continue locally with narrow reads and state that limitation."
     )
+    lines.append(
+        "If delegation is authorized and useful but subagent controls are not "
+        "visible, and `tool_search` is available, first search for "
+        "multi-agent/subagent tools before reporting delegation unavailable."
+    )
     return "\n".join(lines) + "\n"
 
 
