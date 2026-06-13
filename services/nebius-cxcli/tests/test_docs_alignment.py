@@ -26,6 +26,23 @@ def test_readme_quick_start_uses_current_create_target_contract() -> None:
     assert "creates it before writing the tenant/project scaffold" in readme
 
 
+def test_design_architecture_summary_matches_upgrade_surface() -> None:
+    design = (REPO_ROOT / "docs" / "design.md").read_text(encoding="utf-8")
+    architecture = _section(design, "## Architecture Summary", "## How Flux Works")
+    architecture_flat = _squash(architecture)
+
+    assert "V1 implements Kubernetes version, combined node-template, OS image" in (
+        architecture_flat
+    )
+    assert "focused MK8s node-layer, and target-scoped Helm chart upgrades" in (
+        architecture_flat
+    )
+    assert "separate subcommands instead of folding unrelated layers" in architecture_flat
+    assert "later GPU stack, platform, hardware preset, and app/chart upgrades" not in (
+        architecture_flat
+    )
+
+
 def test_readme_documents_redacted_guided_create_prefill_example() -> None:
     readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
     flat = _squash(readme)
@@ -220,6 +237,7 @@ def test_readme_upgrade_section_is_visible_and_consolidated() -> None:
     )
     assert "  - [Soperator Rules and Safety Checks](#soperator-rules-and-safety-checks)" in toc
     assert "- [Upgrade](#upgrade)" in toc
+    assert "  - [When To Use upgrade](#when-to-use-upgrade)" in toc
     assert "  - [Upgrade Principles](#upgrade-principles)" in toc
     assert "  - [Kubernetes Version Upgrade](#kubernetes-version-upgrade)" in toc
     assert "  - [Node Template Upgrade](#node-template-upgrade)" in toc
@@ -267,6 +285,18 @@ def test_readme_upgrade_section_is_visible_and_consolidated() -> None:
     assert "Onboarded external MK8s clusters are not Terraform-managed" in soperator
     assert "best-effort high availability" in soperator_flat
 
+    assert "### When To Use upgrade" in upgrade
+    assert "Use `upgrade` when the change is one of the covered operational upgrades" in (
+        upgrade
+    )
+    assert "MK8s Kubernetes minor upgrades." in upgrade
+    assert "MK8s node-template upgrades: Kubernetes version, OS, and GPU stack." in upgrade
+    assert "MK8s node-layer changes: platform, CPU/GPU preset, and GPU stack preset." in (
+        upgrade
+    )
+    assert "MK8s or VM OS image changes." in upgrade
+    assert "Target-scoped Helm chart version bumps." in upgrade
+    assert "Edit `config.yaml` manually instead when the change" in upgrade
     assert "### Upgrade Principles" in upgrade
     assert "### Kubernetes Version Upgrade" in upgrade
     assert "### Node Template Upgrade" in upgrade
@@ -353,6 +383,7 @@ def test_readme_upgrade_section_is_visible_and_consolidated() -> None:
     assert "generic `infra:vm@<target>` `source_image_family` upgrades" in unreleased
     assert "`upgrade node-template <config.yaml> infra:mk8s@<target>" in unreleased
     assert "`--to-gpu-stack-preset` flag" in unreleased
+    assert "Documented when operators should use the structured `upgrade` command" in unreleased
     assert "reusable upgrade wizard choice builder" in unreleased_flat
     assert "Improved external Soperator migration completion handoff" in unreleased_flat
     assert "live post-migration discovery refresh" in unreleased_flat

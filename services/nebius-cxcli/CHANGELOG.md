@@ -6,6 +6,9 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Documented when operators should use the structured `upgrade` command instead
+  of direct `config.yaml` edits, including covered MK8s, VM OS image, and
+  target-scoped Helm chart upgrade layers.
 - Added downgrade guardrails for day-2 upgrades. MK8s version downgrade targets
   remain refused, external Soperator node-template rechecks now fail if the
   accepted target is below the live control-plane version, and Helm chart

@@ -53,15 +53,13 @@ Core principles:
 - `config.yaml` is the canonical render/reset contract.
 - `generated/` is the deploy contract for customer repositories.
 - Project-level workflow commands use `config.yaml` as the CLI entrypoint.
-- `upgrade` is a day-2 lifecycle command group. V1 implements
-  `upgrade k8s-version <config.yaml> [infra:mk8s@<target>] --to-version <version>`
-  and `upgrade os-image <config.yaml> [infra:mk8s@<target>|infra:vm@<target>] --to-os <os>`;
-  in interactive terminals the target selector and target value can be omitted
-  so the upgrade wizard prompts from the generated managed-MK8s target set,
-  generic VM component set, live supported Kubernetes versions, and live image
-  choices where applicable;
-  later GPU stack, platform, hardware preset, and app/chart upgrades stay
-  separate subcommands instead of being folded into one mixed operation.
+- `upgrade` is a day-2 lifecycle command group. V1 implements Kubernetes
+  version, combined node-template, OS image, focused MK8s node-layer, and
+  target-scoped Helm chart upgrades as separate subcommands instead of folding
+  unrelated layers into one mixed operation. In interactive terminals, commands
+  that support guided mode can prompt from the generated managed-MK8s target
+  set, generic VM component set, live supported Kubernetes versions, live image
+  choices, and live provider-backed node-layer choices where applicable.
 - Bundle-level validation can inspect any path under `generated/`; Terraform and
   Flux subcommands stay scoped to `generated/infra/` and `generated/flux/`.
 - Source-driven component discovery from `component_sources.yaml`.
@@ -494,6 +492,13 @@ Component output and handoff contract:
 `upgrade` is the explicit day-2 lifecycle surface for changes that must be
 visible to cxcli before it calls live provider APIs. The command group is
 layered deliberately:
+
+Use `upgrade` when a covered operational upgrade should get cxcli guardrails
+before live reconciliation: MK8s Kubernetes minor upgrades, MK8s node-template
+upgrades for Kubernetes version/OS/GPU stack, MK8s node-layer platform or
+preset changes, MK8s or VM OS image changes, and target-scoped Helm chart
+version bumps. Manual `config.yaml` desired-state edits remain valid for
+unsupported fields, broader project refactors, and chart source-family changes.
 
 - `upgrade k8s-version <config.yaml> [infra:mk8s@<target>] --to-version <major.minor>`
   is implemented first. It accepts only Terraform-managed `infra:mk8s`

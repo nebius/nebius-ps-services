@@ -25,6 +25,7 @@ change what gets applied.
   - [Managed Upgrade vs External Onboard and Migrate](#managed-upgrade-vs-external-onboard-and-migrate)
   - [Soperator Rules and Safety Checks](#soperator-rules-and-safety-checks)
 - [Upgrade](#upgrade)
+  - [When To Use upgrade](#when-to-use-upgrade)
   - [Upgrade Principles](#upgrade-principles)
   - [Kubernetes Version Upgrade](#kubernetes-version-upgrade)
   - [Node Template Upgrade](#node-template-upgrade)
@@ -2869,6 +2870,25 @@ node-template upgrades for Kubernetes version, OS, and Nebius-image GPU stack,
 OS image upgrades for Terraform-managed MK8s node groups and generic VM
 components, MK8s node-layer upgrades for GPU stack, platform, CPU preset, and
 GPU preset changes, and target-scoped Helm chart version upgrades.
+
+### When To Use upgrade
+
+Use `upgrade` when the change is one of the covered operational upgrades and
+you want cxcli to protect the operator from unsafe or incomplete steps:
+
+- MK8s Kubernetes minor upgrades.
+- MK8s node-template upgrades: Kubernetes version, OS, and GPU stack.
+- MK8s node-layer changes: platform, CPU/GPU preset, and GPU stack preset.
+- MK8s or VM OS image changes.
+- Target-scoped Helm chart version bumps.
+
+These paths keep `config.yaml` as the source of desired state, but they add live
+discovery, compatibility checks, Kubernetes preflight checks, staged output,
+repeatable dry-run commands, rollout waits, and final readiness verification
+where the layer supports it. Edit `config.yaml` manually instead when the change
+is outside those covered upgrade layers, spans broader project refactoring, or
+changes a chart source family such as `repo` plus `version`; then run `render`
+and `deploy`, `terraform apply`, or `flux apply` as appropriate.
 
 ### Upgrade Principles
 
