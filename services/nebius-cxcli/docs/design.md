@@ -565,12 +565,32 @@ unsupported fields, broader project refactors, and chart source-family changes.
   remain outside this command because Nebius requires creating a new node group
   for those fields.
 - `upgrade gpu-stack-preset`, `upgrade platform`, `upgrade cpu-preset`,
-  `upgrade gpu-preset`, and `upgrade helm-chart` are implemented focused
-  upgrade layers. The MK8s node-layer commands update selected desired-state
-  node-group fields, rerender, validate, plan/apply Terraform, and wait for
-  Managed Kubernetes node-group replacement. `upgrade helm-chart` updates the
-  selected `apps.charts[]` version, rerenders, validates, and applies the
-  selected Flux target. GPU stack preset means the MK8s `drivers_preset` /
+  `upgrade gpu-preset`, generic `upgrade helm-chart`, and managed
+  `soperator upgrade` are implemented focused upgrade layers. The MK8s
+  node-layer commands update selected desired-state node-group fields,
+  rerender, validate, plan/apply Terraform, and wait for Managed Kubernetes
+  node-group replacement. Generic `upgrade helm-chart` updates the selected
+  non-Soperator `apps.charts[]` version, rerenders, validates, and applies the
+  selected Flux target. When the selected chart is `apps:soperator@<target>`,
+  it redirects into `soperator upgrade`, the canonical managed Soperator chart
+  path. That path wraps the same version bump/render/Flux apply with a live
+  Soperator/Slurm smoke preflight, external-migration bypass guard, Helm
+  readiness verification, postflight Soperator/Slurm validation, and
+  `deploy-report.md` refresh. If
+  `values.soperator-activechecks.enabled` or
+  `values.soperator-activechecks.waitForChecks.enabled` is true in the
+  cxcli-owned Soperator row, it snapshots the original values, writes a local
+  upgrade checkpoint, renders/applies a temporary ActiveChecks suspension,
+  patches matching live ActiveCheck CRs to suspend launch-on-create checks,
+  removes matching already-launched check CronJobs/jobs/pods, and restores the
+  original values after postflight validation. If live ActiveChecks cannot be
+  inspected, the managed upgrade fails closed before the chart upgrade so the
+  report does not claim an ambiguous live suspension. The flow writes
+  `upgrade-report.md` and `upgrade-report.json` next to `deploy-report.md` for
+  restore evidence.
+  External Soperator adoption, storage/compute
+  remediation, and external MK8s node-template upgrades remain owned by
+  `ext-soperator migrate`. GPU stack preset means the MK8s `drivers_preset` /
   cxcli `gpu_stack_preset` layer, for example `cuda13.0`. Platform and CPU/GPU
   hardware preset changes are node-group replacement migrations, not in-place
   preset mutation. Node firmware is maintained by the Nebius hardware team and
@@ -681,8 +701,8 @@ Source validation requirements (`validate-sources`):
     static local chart path for local chart-backed entries. A non-empty `repo`
     is an explicit Helm source override in the config row, such as a published
     parent OCI package. Source-family changes are direct desired-state edits to
-    the row `repo` plus `version`; the structured `upgrade helm-chart` command
-    changes only the row `version`.
+    the row `repo` plus `version`; structured generic `upgrade helm-chart` and
+    Soperator-aware `soperator upgrade` commands change only the row `version`.
   - Soperator is source-backed but not HelmRelease-backed: local and published
     parent OCI Soperator sources are rendered into the static post-Flux manifest
     path. This avoids Kubernetes' 1 MiB object data limit for Helm release
@@ -1529,7 +1549,12 @@ The recommended production-training values are
 `values.soperator-checks.enabled=false`,
 `values.soperator-dcgm-exporter.enabled=false`,
 `values.soperator-notifier.enabled=false`, and
-`values.soperator-backup-config.enabled=false`. The in-chart service defaults
+`values.soperator-backup-config.enabled=false`. Managed `soperator upgrade`
+keeps that contract strict: if ActiveChecks or `waitForChecks` are enabled in
+the cxcli-owned Soperator row, the non-dry-run upgrade performs a checkpointed
+suspend/restore lifecycle and records the original values, live suspension
+attempt, restore event, and final status in the upgrade report. The in-chart
+service defaults
 are `values.qosConfiguration.enabled=false`,
 the guided SSSD gate defaults to `values.sssd.enabled=false` and materializes
 to `values.slurmNodes.sssd.enabled=false` and `values.nodesets[].sssd.enabled=false`

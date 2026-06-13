@@ -1390,7 +1390,7 @@ app = typer.Typer(
         "discover uses a deployment-scope directory; grafana exports dashboard JSON from a "
         "Grafana API or local JSON file and only edits component_sources.yaml with --attach; "
         "validate, validate-dashboards, quota-check, quota-request, render, deploy, "
-        "upgrade, and bootstrap-ci use config.yaml; "
+        "soperator, upgrade, and bootstrap-ci use config.yaml; "
         "ext-soperator onboard registers existing Nebius MK8s targets in config.yaml; "
         "destroy uses config.yaml to tear down all rendered project resources from sibling generated/; "
         "email also uses config.yaml and resolves sibling generated/ automatically; "
@@ -1452,10 +1452,25 @@ ext_soperator_app = typer.Typer(
         "deploy-report.md plus deploy-time validations. Use deploy --target <target-id> "
         "only to narrow one run. If migration-owned work is required, "
         "do not deploy first; run ext-soperator migrate --dry-run, then ext-soperator migrate "
-        "--execute --approve. Managed chart-only Soperator upgrades use upgrade "
-        "helm-chart; external MK8s control-plane and node-template upgrades "
+        "--execute --approve. Managed chart-only Soperator upgrades use soperator "
+        "upgrade; external MK8s control-plane and node-template upgrades "
         "selected by onboarding are owned by ext-soperator migrate; "
         "Terraform-managed MK8s node-template upgrades use upgrade node-template."
+    ),
+)
+soperator_app = typer.Typer(
+    help=(
+        "Manage cxcli-managed Soperator deployments. Use upgrade for "
+        "Soperator-aware chart upgrades with Slurm preflight and postflight "
+        "validation."
+    ),
+    epilog=(
+        "Managed workflow: nebius-cxcli soperator upgrade <config.yaml> "
+        "--target <target> --to-version <chart-version> --dry-run, then rerun "
+        "without --dry-run to update config.yaml, rerender, apply the selected "
+        "target, verify Helm readiness, and run required Soperator/Slurm "
+        "validation. Existing external Soperator clusters still use "
+        "ext-soperator onboard/migrate for adoption or migration-owned work."
     ),
 )
 upgrade_app = typer.Typer(
@@ -1471,6 +1486,7 @@ app.add_typer(component_app, name="component")
 app.add_typer(terraform_app, name="terraform")
 app.add_typer(flux_app, name="flux")
 app.add_typer(ext_soperator_app, name="ext-soperator")
+app.add_typer(soperator_app, name="soperator")
 app.add_typer(upgrade_app, name="upgrade")
 
 
@@ -1775,6 +1791,29 @@ class _HelmChartUpgradePlan:
         return comparison is not None and comparison < 0
 
 
+@dataclass(frozen=True)
+class _SoperatorUpgradeValueSnapshot:
+    path: str
+    present: bool
+    value: Any
+
+
+@dataclass(frozen=True)
+class _SoperatorActiveChecksLifecycle:
+    required: bool
+    snapshots: tuple[_SoperatorUpgradeValueSnapshot, ...]
+
+
+SOPERATOR_UPGRADE_CHECKPOINT_SCHEMA = "nebius-cxcli-soperator-upgrade/v1"
+SOPERATOR_UPGRADE_CHECKPOINT_DIR = ".nebius-cxcli/soperator-upgrades"
+UPGRADE_REPORT_FILENAME = "upgrade-report.md"
+UPGRADE_REPORT_JSON_FILENAME = "upgrade-report.json"
+_SOPERATOR_ACTIVECHECKS_UPGRADE_PATHS = (
+    "values.soperator-activechecks.enabled",
+    "values.soperator-activechecks.waitForChecks.enabled",
+)
+
+
 _NODE_LAYER_UPGRADE_SPECS: dict[str, NodeLayerUpgradeSpec] = {
     "gpu-stack-preset": NodeLayerUpgradeSpec(
         command="gpu-stack-preset",
@@ -1984,6 +2023,89 @@ def _prompt_upgrade_helm_chart_to_version_if_needed(
         return _validate_helm_chart_version_value(current)
     value = _prompt_upgrade_scalar(
         "upgrade.helm_chart.to_version",
+        "",
+        type_hint="string",
+        missing="--to-version <chart-version>",
+    )
+    return _validate_helm_chart_version_value(str(value))
+
+
+def _source_soperator_upgrade_target_choices(
+    source_payload: Mapping[str, Any],
+) -> list[OptionChoice]:
+    choices = [
+        choice
+        for choice in _source_helm_chart_target_choices(source_payload)
+        if _parse_helm_chart_upgrade_selector(choice.value).chart_id == _SOPERATOR_APP_ID
+    ]
+    if choices and not any(choice.recommended for choice in choices):
+        first = choices[0]
+        choices[0] = OptionChoice(
+            value=first.value,
+            label=first.label,
+            recommended=True,
+            metadata=first.metadata,
+        )
+    return choices
+
+
+def _parse_soperator_upgrade_target(target_ref: str) -> _HelmChartUpgradeTarget:
+    raw = _non_empty_text(target_ref)
+    if not raw:
+        raise ValueError("Soperator target is required.")
+    target = (
+        _parse_helm_chart_upgrade_selector(raw)
+        if raw.startswith("apps:")
+        else _parse_helm_chart_upgrade_selector(f"apps:{_SOPERATOR_APP_ID}@{raw}")
+    )
+    if target.chart_id != _SOPERATOR_APP_ID:
+        raise ValueError(
+            "Soperator upgrades require apps:soperator@<target> or --target <target>."
+        )
+    return target
+
+
+def _prompt_soperator_upgrade_target_if_needed(
+    *,
+    source_payload: Mapping[str, Any],
+    target_ref: str | None,
+    interactive: bool,
+) -> _HelmChartUpgradeTarget:
+    current = _non_empty_text(target_ref)
+    if current:
+        return _parse_soperator_upgrade_target(current)
+    choices = _source_soperator_upgrade_target_choices(source_payload)
+    if not choices:
+        raise RuntimeError(
+            "No enabled apps:soperator rows are declared in config.yaml. Add or onboard "
+            "Soperator before running `nebius-cxcli soperator upgrade`."
+        )
+    if len(choices) == 1:
+        return _parse_helm_chart_upgrade_selector(choices[0].value)
+    if not interactive:
+        available = ", ".join(choice.value for choice in choices)
+        raise RuntimeError(
+            "Multiple Soperator targets are declared in config.yaml. Pass "
+            f"--target <target>. Available targets: {available}"
+        )
+    selector = _prompt_upgrade_choice(
+        "soperator.upgrade.target",
+        recommended_choice_value(choices),
+        choices=choices,
+        missing="Soperator target",
+    )
+    return _parse_helm_chart_upgrade_selector(selector)
+
+
+def _prompt_soperator_upgrade_to_version_if_needed(
+    *,
+    to_version: str | None,
+) -> str:
+    current = _non_empty_text(to_version)
+    if current:
+        return _validate_helm_chart_version_value(current)
+    value = _prompt_upgrade_scalar(
+        "soperator.upgrade.to_version",
         "",
         type_hint="string",
         missing="--to-version <chart-version>",
@@ -2522,10 +2644,11 @@ def _resolve_helm_chart_upgrade_options(
     *,
     guided: bool,
     dry_run: bool,
+    path_prefix: str = "upgrade.helm_chart",
 ) -> bool:
     if guided and not dry_run:
         prompted_dry_run = _prompt_upgrade_scalar(
-            "upgrade.helm_chart.dry_run",
+            f"{path_prefix}.dry_run",
             True,
             type_hint="bool",
             required=True,
@@ -2534,7 +2657,7 @@ def _resolve_helm_chart_upgrade_options(
         dry_run = bool(prompted_dry_run)
     if guided and not dry_run:
         confirm_apply = _prompt_upgrade_scalar(
-            "upgrade.helm_chart.confirm_apply",
+            f"{path_prefix}.confirm_apply",
             False,
             type_hint="bool",
             required=True,
@@ -2710,6 +2833,27 @@ def _upgrade_helm_chart_dry_run_command(
     )
 
 
+def _soperator_upgrade_dry_run_command(
+    *,
+    config_path: Path,
+    target_ref: str,
+    to_version: str,
+) -> str:
+    return shlex.join(
+        [
+            "nebius-cxcli",
+            "soperator",
+            "upgrade",
+            str(config_path),
+            "--target",
+            target_ref,
+            "--to-version",
+            to_version,
+            "--dry-run",
+        ]
+    )
+
+
 def _source_helm_chart_row_path(
     payload: dict[str, Any],
     target: _HelmChartUpgradeTarget,
@@ -2817,6 +2961,417 @@ def _format_helm_chart_upgrade_plan(
     return tuple(lines)
 
 
+def _mapping_path_exists(node: Mapping[str, Any], dotted_path: str) -> bool:
+    current: Any = node
+    for segment in [part.strip() for part in dotted_path.split(".") if part.strip()]:
+        if not isinstance(current, Mapping) or segment not in current:
+            return False
+        current = current[segment]
+    return True
+
+
+def _soperator_upgrade_activechecks_lifecycle(
+    payload: dict[str, Any],
+    target: _HelmChartUpgradeTarget,
+) -> _SoperatorActiveChecksLifecycle:
+    row = _source_helm_chart_row(payload, target)
+    snapshots = tuple(
+        _SoperatorUpgradeValueSnapshot(
+            path=path,
+            present=_mapping_path_exists(row, path),
+            value=copy.deepcopy(read_component_path(row, path)),
+        )
+        for path in _SOPERATOR_ACTIVECHECKS_UPGRADE_PATHS
+    )
+    required = any(snapshot.value is True for snapshot in snapshots)
+    return _SoperatorActiveChecksLifecycle(required=required, snapshots=snapshots)
+
+
+def _soperator_upgrade_activechecks_snapshot_payload(
+    lifecycle: _SoperatorActiveChecksLifecycle,
+) -> list[dict[str, Any]]:
+    return [
+        {
+            "path": snapshot.path,
+            "present": snapshot.present,
+            "value": snapshot.value,
+        }
+        for snapshot in lifecycle.snapshots
+    ]
+
+
+def _soperator_upgrade_suspend_activechecks_values(
+    payload: dict[str, Any],
+    target: _HelmChartUpgradeTarget,
+) -> bool:
+    row = _source_helm_chart_row(payload, target)
+    before = copy.deepcopy(row)
+    for path in _SOPERATOR_ACTIVECHECKS_UPGRADE_PATHS:
+        _set_mapping_path_value(row, path, False)
+    return row != before
+
+
+def _soperator_upgrade_restore_activechecks_values(
+    payload: dict[str, Any],
+    target: _HelmChartUpgradeTarget,
+    lifecycle: _SoperatorActiveChecksLifecycle,
+) -> bool:
+    row = _source_helm_chart_row(payload, target)
+    before = copy.deepcopy(row)
+    for snapshot in lifecycle.snapshots:
+        if snapshot.present:
+            _set_mapping_path_value(row, snapshot.path, copy.deepcopy(snapshot.value))
+        else:
+            _delete_mapping_path_value(row, snapshot.path)
+    return row != before
+
+
+def _soperator_upgrade_checkpoint_path(config_path: Path, target_ref: str) -> Path:
+    normalized = normalize_component_token(target_ref) or "mk8s"
+    return (
+        config_path.parent
+        / SOPERATOR_UPGRADE_CHECKPOINT_DIR
+        / normalized
+        / "checkpoint.json"
+    )
+
+
+def _soperator_upgrade_relative_path(path: Path, *, root: Path) -> str:
+    try:
+        return str(path.resolve().relative_to(root.resolve()))
+    except ValueError:
+        return str(path)
+
+
+def _soperator_upgrade_now_iso() -> str:
+    return datetime.now(UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
+def _new_soperator_upgrade_checkpoint(
+    *,
+    plan: _HelmChartUpgradePlan,
+    lifecycle: _SoperatorActiveChecksLifecycle,
+    checkpoint_path: Path,
+    paths: ProjectPaths,
+) -> dict[str, Any]:
+    return {
+        "schema": SOPERATOR_UPGRADE_CHECKPOINT_SCHEMA,
+        "status": "planned",
+        "target_ref": plan.target.target_ref,
+        "selector": plan.target.selector,
+        "namespace": plan.namespace or "default",
+        "release_name": plan.release_name,
+        "current_version": plan.current_version,
+        "target_version": plan.target_version,
+        "checkpoint_path": _soperator_upgrade_relative_path(
+            checkpoint_path,
+            root=paths.project_dir,
+        ),
+        "reports": {
+            "upgrade": _soperator_upgrade_relative_path(
+                paths.reports_dir / UPGRADE_REPORT_FILENAME,
+                root=paths.project_dir,
+            ),
+            "deploy": _soperator_upgrade_relative_path(
+                paths.reports_dir / DEPLOY_REPORT_FILENAME,
+                root=paths.project_dir,
+            ),
+        },
+        "activechecks": {
+            "required": lifecycle.required,
+            "snapshots": _soperator_upgrade_activechecks_snapshot_payload(lifecycle),
+            "live_suspend": {},
+        },
+        "events": [
+            {
+                "time": _soperator_upgrade_now_iso(),
+                "event": "planned",
+            }
+        ],
+    }
+
+
+def _append_soperator_upgrade_event(
+    checkpoint: dict[str, Any],
+    event: str,
+    **details: Any,
+) -> None:
+    events = checkpoint.setdefault("events", [])
+    if not isinstance(events, list):
+        events = []
+        checkpoint["events"] = events
+    entry: dict[str, Any] = {"time": _soperator_upgrade_now_iso(), "event": event}
+    entry.update({key: value for key, value in details.items() if value is not None})
+    events.append(entry)
+    checkpoint["status"] = event
+
+
+def _write_soperator_upgrade_checkpoint(path: Path, checkpoint: Mapping[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(checkpoint, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def _write_soperator_upgrade_report(
+    paths: ProjectPaths,
+    checkpoint: Mapping[str, Any],
+) -> tuple[Path, Path]:
+    paths.reports_dir.mkdir(parents=True, exist_ok=True)
+    json_path = paths.reports_dir / UPGRADE_REPORT_JSON_FILENAME
+    markdown_path = paths.reports_dir / UPGRADE_REPORT_FILENAME
+    json_path.write_text(json.dumps(dict(checkpoint), indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+    activechecks = checkpoint.get("activechecks")
+    activechecks_map = activechecks if isinstance(activechecks, Mapping) else {}
+    snapshots = activechecks_map.get("snapshots")
+    snapshot_lines: list[str] = []
+    if isinstance(snapshots, list):
+        for item in snapshots:
+            if not isinstance(item, Mapping):
+                continue
+            path = str(item.get("path") or "")
+            if not path:
+                continue
+            value = item.get("value") if bool(item.get("present")) else "absent"
+            snapshot_lines.append(f"- `{path}` original value: `{value}`")
+    if not snapshot_lines:
+        snapshot_lines.append("- No ActiveChecks value changes were required.")
+
+    events = checkpoint.get("events")
+    event_lines: list[str] = []
+    if isinstance(events, list):
+        for index, item in enumerate(events, start=1):
+            if not isinstance(item, Mapping):
+                continue
+            event = str(item.get("event") or "event")
+            when = str(item.get("time") or "")
+            event_lines.append(f"{index}. `{event}`" + (f" at `{when}`" if when else ""))
+    if not event_lines:
+        event_lines.append("1. `planned`")
+
+    markdown = "\n".join(
+        [
+            "# Soperator Upgrade Report",
+            "",
+            f"- Target: `{checkpoint.get('target_ref', '')}`",
+            f"- Release: `{checkpoint.get('namespace', 'default')}/{checkpoint.get('release_name', '')}`",
+            f"- Chart version: `{checkpoint.get('current_version') or 'unset'}` -> `{checkpoint.get('target_version') or 'unset'}`",
+            f"- Status: `{checkpoint.get('status', 'unknown')}`",
+            f"- Checkpoint: `{checkpoint.get('checkpoint_path', '')}`",
+            f"- Deploy report: `{_soperator_upgrade_relative_path(paths.reports_dir / DEPLOY_REPORT_FILENAME, root=paths.project_dir)}`",
+            "",
+            "## ActiveChecks Lifecycle",
+            "",
+            (
+                "- Result: checkpointed suspend/restore was required."
+                if bool(activechecks_map.get("required"))
+                else "- Result: no ActiveChecks suspend/restore was required."
+            ),
+            *snapshot_lines,
+            "",
+            "## Events",
+            "",
+            *event_lines,
+            "",
+        ]
+    )
+    markdown_path.write_text(markdown, encoding="utf-8")
+    return markdown_path, json_path
+
+
+def _soperator_upgrade_slurm_cluster_ref(
+    payload: dict[str, Any],
+    target: _HelmChartUpgradeTarget,
+) -> str:
+    row = _source_helm_chart_row(payload, target)
+    cluster_name = str(read_component_path(row, "values.clusterName") or "").strip()
+    return cluster_name or target.target_ref
+
+
+def _suspend_live_soperator_activechecks(
+    config: Any,
+    paths: ProjectPaths,
+    manifest: Mapping[str, Any],
+    plan: _HelmChartUpgradePlan,
+    *,
+    source_payload: dict[str, Any],
+) -> dict[str, Any]:
+    selected_targets = _resolve_selected_deploy_targets(
+        manifest,
+        requested_target_ref=plan.target.target_ref,
+        all_targets=False,
+    )
+    target = selected_targets[0] if selected_targets else None
+    if target is None:
+        return {
+            "status": "skipped",
+            "reason": f"target '{plan.target.target_ref}' was not found in the generated manifest",
+        }
+    namespace = plan.namespace or "default"
+    cluster_ref = _soperator_upgrade_slurm_cluster_ref(source_payload, plan.target)
+    patched: list[str] = []
+    skipped: list[str] = []
+    activecheck_job_names: list[str] = []
+    with ExitStack() as stack:
+        kube_env = _prepare_cluster_handoff_kube_env(
+            config,
+            paths,
+            stack=stack,
+            target=target,
+            persist_local_kubeconfig=False,
+            set_current_context=False,
+        )
+        completed = subprocess.run(
+            [
+                "kubectl",
+                "-n",
+                namespace,
+                "get",
+                "activechecks.slurm.nebius.ai",
+                "-o",
+                "json",
+            ],
+            env=_post_flux_subprocess_env(kube_env),
+            timeout=60,
+            capture_output=True,
+            text=True,
+        )
+        if completed.returncode != 0:
+            detail = _first_non_empty_line(completed.stderr or completed.stdout or "")
+            raise RuntimeError(
+                "Cannot suspend live Soperator ActiveChecks before upgrade: "
+                f"{detail or 'ActiveCheck resources are not available'}"
+            )
+        try:
+            payload = json.loads(completed.stdout or "{}")
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(
+                "Cannot suspend live Soperator ActiveChecks before upgrade: "
+                "kubectl returned unreadable ActiveCheck JSON."
+            ) from exc
+        items = payload.get("items")
+        if not isinstance(items, list):
+            raise RuntimeError(
+                "Cannot suspend live Soperator ActiveChecks before upgrade: "
+                "kubectl returned no ActiveCheck item list."
+            )
+        for item in items:
+            if not isinstance(item, Mapping):
+                continue
+            metadata = item.get("metadata")
+            spec = item.get("spec")
+            status = item.get("status")
+            metadata_map = metadata if isinstance(metadata, Mapping) else {}
+            spec_map = spec if isinstance(spec, Mapping) else {}
+            status_map = status if isinstance(status, Mapping) else {}
+            name = str(metadata_map.get("name") or "").strip()
+            item_cluster_ref = str(spec_map.get("slurmClusterRefName") or "").strip()
+            if not name:
+                continue
+            if cluster_ref and item_cluster_ref and item_cluster_ref != cluster_ref:
+                skipped.append(name)
+                continue
+            k8s_status = status_map.get("k8sJobsStatus")
+            k8s_status_map = k8s_status if isinstance(k8s_status, Mapping) else {}
+            job_name = str(k8s_status_map.get("lastJobName") or "").strip()
+            if job_name:
+                activecheck_job_names.append(job_name)
+            _run_post_flux_kubectl(
+                [
+                    "kubectl",
+                    "-n",
+                    namespace,
+                    "patch",
+                    "activechecks.slurm.nebius.ai",
+                    name,
+                    "--type=merge",
+                    "-p",
+                    json.dumps({"spec": {"suspend": True, "runAfterCreation": False}}),
+                ],
+                env=kube_env,
+                timeout=120,
+                retries=2,
+                retry_delay_seconds=5.0,
+                retry_stderr_markers=_KUBECTL_TRANSIENT_FAILURE_MARKERS,
+            )
+            patched.append(name)
+        workload_cleanup = _delete_soperator_activecheck_workloads_in_namespace(
+            namespace,
+            env=kube_env,
+            cluster_ref=cluster_ref,
+            activecheck_job_names=activecheck_job_names,
+        )
+    return {
+        "status": "suspended" if patched else "no_matching_activechecks",
+        "namespace": namespace,
+        "cluster_ref": cluster_ref,
+        "patched": patched,
+        "skipped": skipped,
+        "workload_cleanup": workload_cleanup,
+    }
+
+
+def _soperator_upgrade_optional_service_notes(
+    payload: dict[str, Any],
+    target: _HelmChartUpgradeTarget,
+) -> tuple[str, ...]:
+    row = _source_helm_chart_row(payload, target)
+    activechecks_enabled = (
+        read_component_path(row, "values.soperator-activechecks.enabled") is True
+    )
+    checks_enabled = read_component_path(row, "values.soperator-checks.enabled") is True
+    notes: list[str] = []
+    if checks_enabled and not activechecks_enabled:
+        notes.append(
+            "The Soperator checks controller is enabled without ActiveChecks; it "
+            "can still reconcile maintenance/degraded node conditions."
+        )
+    return tuple(notes)
+
+
+def _format_soperator_upgrade_plan(
+    plan: _HelmChartUpgradePlan,
+    *,
+    payload: dict[str, Any],
+    dry_run: bool,
+    repeat_dry_run_command: str | None = None,
+) -> tuple[str, ...]:
+    lines = list(
+        _format_helm_chart_upgrade_plan(
+            plan,
+            dry_run=dry_run,
+            repeat_dry_run_command=repeat_dry_run_command,
+        )
+    )
+    lines[0] = "Soperator upgrade plan"
+    lines.extend(
+        [
+            "- Soperator-aware gates:",
+            "  - preflight runs the existing generated-bundle validation and a live Soperator/Slurm smoke validation before mutation.",
+            "  - apply updates config.yaml, rerenders, validates the new bundle, and applies only the selected target Flux bundle.",
+            "  - postflight verifies Helm readiness and reruns the required Soperator/Slurm smoke validation, refreshing deploy-report.md.",
+        ]
+    )
+    lifecycle = _soperator_upgrade_activechecks_lifecycle(payload, plan.target)
+    if plan.mutates and lifecycle.required:
+        lines.append("- ActiveChecks upgrade lifecycle:")
+        lines.append(
+            "  - cxcli snapshots the current ActiveChecks config, writes a local "
+            "checkpoint, suspends ActiveChecks and wait-for-active-checks for the "
+            "upgrade window, then restores the original values after postflight."
+        )
+        lines.append(
+            "  - the checkpointed stage also patches existing live ActiveCheck CRs "
+            "to suspend launch-on-create checks, fails closed when live ActiveChecks "
+            "cannot be inspected, and deletes matching already-launched check "
+            "jobs/CronJobs/pods before upgrade smoke validation."
+        )
+    notes = _soperator_upgrade_optional_service_notes(payload, plan.target)
+    if notes:
+        lines.append("- Soperator optional-service notes:")
+        lines.extend(f"  - {note}" for note in notes)
+    return tuple(lines)
+
+
 def _verify_helm_chart_upgrade_ready(
     config: Any,
     paths: ProjectPaths,
@@ -2850,6 +3405,122 @@ def _verify_helm_chart_upgrade_ready(
             expected_version=plan.target_version,
         )
     console.print(f"[green]{result.summary()}[/green]")
+
+
+def _soperator_upgrade_validation_specs(
+    manifest: Mapping[str, Any],
+    *,
+    target_ref: str,
+) -> list[dict[str, Any]]:
+    validations = _filter_validations_for_target(
+        _manifest_deploy_validations(manifest),
+        target_ref=target_ref,
+    )
+    selected = [
+        dict(item)
+        for item in validations
+        if str(item.get("kind", "") or "").strip() == SOPERATOR_CLUSTER_VALIDATION_KIND
+    ]
+    if not selected:
+        raise RuntimeError(
+            f"Cannot run Soperator upgrade validation for target '{target_ref}': "
+            "the generated manifest does not declare the required "
+            f"{SOPERATOR_CLUSTER_VALIDATION_KIND} validation. Rerender with "
+            "`nebius-cxcli render <config.yaml>` before upgrading."
+        )
+    return selected
+
+
+def _run_soperator_upgrade_validation_phase(
+    config: Any,
+    paths: ProjectPaths,
+    manifest: Mapping[str, Any],
+    plan: _HelmChartUpgradePlan,
+    *,
+    phase_label: str,
+    refresh_deploy_report: bool,
+) -> DeployValidationReport | None:
+    selected_targets = _resolve_selected_deploy_targets(
+        manifest,
+        requested_target_ref=plan.target.target_ref,
+        all_targets=False,
+    )
+    target = selected_targets[0] if selected_targets else None
+    if target is None:
+        raise RuntimeError(
+            f"Cannot run Soperator upgrade validation for {plan.target.selector}: "
+            f"target '{plan.target.target_ref}' was not found in the generated deploy manifest."
+        )
+    validations = _soperator_upgrade_validation_specs(
+        manifest,
+        target_ref=plan.target.target_ref,
+    )
+    with ExitStack() as stack:
+        kube_env = _prepare_cluster_handoff_kube_env(
+            config,
+            paths,
+            stack=stack,
+            target=target,
+            persist_local_kubeconfig=False,
+            set_current_context=False,
+        )
+        with console.status(
+            f"[cyan]{phase_label} Soperator/Slurm validation for {plan.target.target_ref}...[/cyan]",
+            spinner="dots",
+        ) as status:
+            last_validation_phase = ""
+
+            def _emit_validation_phase(message: str) -> None:
+                nonlocal last_validation_phase
+                status.update(message)
+                if not _console_is_terminal() and message != last_validation_phase:
+                    console.print(message)
+                last_validation_phase = message
+
+            if refresh_deploy_report:
+                paths.reports_dir.mkdir(parents=True, exist_ok=True)
+                clear_deploy_validation_artifacts(validations, reports_dir=paths.reports_dir)
+                reports_dir = paths.reports_dir
+            else:
+                temp_dir = stack.enter_context(
+                    tempfile.TemporaryDirectory(
+                        prefix="nebius-cxcli-soperator-upgrade-preflight-"
+                    )
+                )
+                reports_dir = Path(temp_dir)
+            _run_deploy_validations(
+                validations,
+                reports_dir=reports_dir,
+                extra_env=kube_env,
+                emit=_emit_validation_phase,
+            )
+    if not refresh_deploy_report:
+        return None
+    artifacts = write_inventory(config, paths, validations=validations)
+    return build_deploy_validation_report(
+        validations,
+        reports_dir=paths.reports_dir,
+        markdown_path=artifacts.markdown,
+    )
+
+
+def _raise_if_soperator_upgrade_would_bypass_migration(
+    config: Any,
+    *,
+    config_path: Path,
+    manifest: Mapping[str, Any],
+    target_ref: str,
+) -> None:
+    selected_targets = _resolve_selected_deploy_targets(
+        manifest,
+        requested_target_ref=target_ref,
+        all_targets=False,
+    )
+    _raise_if_deploy_would_bypass_soperator_migration(
+        config,
+        config_path=config_path,
+        selected_targets=selected_targets,
+    )
 
 
 def _status_watchers_for_component(
@@ -5501,113 +6172,523 @@ def upgrade_helm_chart_command(
     ] = True,
 ) -> None:
     try:
-        guided = not _non_empty_text(target_selector) or not _non_empty_text(to_version)
-        if guided and not interactive:
-            missing = []
-            if not _non_empty_text(target_selector):
-                missing.append("target selector")
-            if not _non_empty_text(to_version):
-                missing.append("--to-version <chart-version>")
-            raise RuntimeError(
-                "Missing "
-                + " and ".join(missing)
-                + ". Pass explicit upgrade options or allow interactive prompting."
-            )
-
-        source_payload = _load_source_payload(config_path)
-        generated_config, paths, manifest = _load_deploy_context_readonly(config_path)
-        target = _prompt_upgrade_helm_chart_target_selector_if_needed(
-            source_payload=source_payload,
+        _run_helm_chart_upgrade_command(
+            config_path=config_path,
             target_selector=target_selector,
-        )
-        target_version = _prompt_upgrade_helm_chart_to_version_if_needed(
             to_version=to_version,
-        )
-        dry_run = _resolve_helm_chart_upgrade_options(
-            guided=guided,
             dry_run=dry_run,
-        )
-        plan = _plan_helm_chart_upgrade(
-            payload=source_payload,
-            target=target,
-            target_version=target_version,
-        )
-        repeat_dry_run_command = (
-            _upgrade_helm_chart_dry_run_command(
-                config_path=config_path,
-                target_selector=target.selector,
-                to_version=target_version,
-            )
-            if dry_run
-            else None
-        )
-        _print_upgrade_plan_lines(
-            _format_helm_chart_upgrade_plan(
-                plan,
-                dry_run=dry_run,
-                repeat_dry_run_command=repeat_dry_run_command,
-            )
-        )
-        if dry_run:
-            return
-        if not plan.mutates:
-            _verify_helm_chart_upgrade_ready(generated_config, paths, manifest, plan)
-            console.print(
-                f"Helm chart target {target.selector} already uses version {target_version}."
-            )
-            return
-
-        _run_generated_bundle_validation(
-            generated_config,
-            paths,
-            auto_auth_bootstrap=True,
-            title="Helm chart upgrade preflight",
-            quota_phase="upgrade",
-            flux_command_name="upgrade",
-            manifest=manifest,
-            prompt_mysterybox_payload_values=False,
-        )
-        changed = _update_source_helm_chart_version(
-            source_payload,
-            target=target,
-            target_version=target_version,
-        )
-        if not changed:
-            console.print(
-                f"Helm chart target {target.selector} already uses version {target_version}."
-            )
-            return
-        config_path.write_text(render_updated_source_payload(source_payload), encoding="utf-8")
-        console.print(
-            f"Updated {config_path} for Helm chart {target.selector} upgrade to {target_version}.",
-            soft_wrap=True,
-        )
-        _run_internal_render_command(config_path, force=True)
-        staged_config, staged_paths, staged_manifest = _load_deploy_context(config_path)
-        _run_generated_bundle_validation(
-            staged_config,
-            staged_paths,
-            auto_auth_bootstrap=True,
-            title=f"Validate rendered Helm chart upgrade to {target_version}",
-            quota_phase="upgrade",
-            flux_command_name="upgrade",
-            manifest=staged_manifest,
-            prompt_mysterybox_payload_values=False,
-        )
-        flux_apply_command(
-            staged_paths.generated_dir,
-            auto_auth_bootstrap=True,
-            target_ref=target.target_ref,
-            all_targets=False,
-        )
-        _verify_helm_chart_upgrade_ready(staged_config, staged_paths, staged_manifest, plan)
-        console.print(
-            f"[green]Helm chart upgrade completed[/green]: {target.selector} -> {target_version}"
+            interactive=interactive,
+            soperator_aware=False,
         )
     except typer.Exit:
         raise
     except Exception as exc:  # pragma: no cover - CLI surface
         _exit_with_error(exc)
+
+
+@soperator_app.command(
+    "upgrade",
+    short_help="Upgrade a cxcli-managed Soperator chart with Slurm validations.",
+    epilog=(
+        "Example: nebius-cxcli soperator upgrade <config.yaml> --target mk8s "
+        "--to-version <chart-version> --dry-run. External/adopted clusters with "
+        "migration-owned work still use ext-soperator migrate."
+    ),
+)
+def soperator_upgrade_command(
+    config_path: Annotated[
+        Path,
+        typer.Argument(metavar="CONFIG_YAML", help=_CONFIG_YAML_ARGUMENT_HELP),
+    ],
+    target_ref: Annotated[
+        str | None,
+        typer.Option(
+            "--target",
+            help=(
+                "cxcli target ref for apps:soperator@<target>. Omit only when "
+                "one Soperator target is configured or interactive prompting is allowed."
+            ),
+        ),
+    ] = None,
+    to_version: Annotated[
+        str | None,
+        typer.Option("--to-version", help="Target Soperator chart/app version."),
+    ] = None,
+    dry_run: Annotated[
+        bool,
+        typer.Option(
+            "--dry-run", help="Print the Soperator upgrade plan without writing or applying."
+        ),
+    ] = False,
+    interactive: Annotated[
+        bool,
+        typer.Option(
+            "--interactive/--no-interactive",
+            help="Prompt for missing Soperator upgrade flags when running from a terminal.",
+        ),
+    ] = True,
+) -> None:
+    try:
+        _run_soperator_upgrade_command(
+            config_path=config_path,
+            target_ref=target_ref,
+            to_version=to_version,
+            dry_run=dry_run,
+            interactive=interactive,
+        )
+    except typer.Exit:
+        raise
+    except Exception as exc:  # pragma: no cover - CLI surface
+        _exit_with_error(exc)
+
+
+def _run_soperator_upgrade_command(
+    *,
+    config_path: Path,
+    target_ref: str | None,
+    to_version: str | None,
+    dry_run: bool,
+    interactive: bool,
+) -> None:
+    source_payload = _load_source_payload(config_path)
+    target_missing = not _non_empty_text(target_ref)
+    version_missing = not _non_empty_text(to_version)
+    target = _prompt_soperator_upgrade_target_if_needed(
+        source_payload=source_payload,
+        target_ref=target_ref,
+        interactive=interactive,
+    )
+    if version_missing and not interactive:
+        raise RuntimeError(
+            "Missing --to-version <chart-version>. Pass explicit Soperator upgrade "
+            "options or allow interactive prompting."
+        )
+    target_version = _prompt_soperator_upgrade_to_version_if_needed(to_version=to_version)
+    guided = version_missing or (target_missing and interactive)
+    dry_run = _resolve_helm_chart_upgrade_options(
+        guided=guided,
+        dry_run=dry_run,
+        path_prefix="soperator.upgrade",
+    )
+    _run_helm_chart_upgrade_command(
+        config_path=config_path,
+        target_selector=target.selector,
+        to_version=target_version,
+        dry_run=dry_run,
+        interactive=interactive,
+        soperator_aware=True,
+    )
+
+
+def _run_helm_chart_upgrade_command(
+    *,
+    config_path: Path,
+    target_selector: str | None,
+    to_version: str | None,
+    dry_run: bool,
+    interactive: bool,
+    soperator_aware: bool,
+) -> None:
+    guided = not _non_empty_text(target_selector) or not _non_empty_text(to_version)
+    if guided and not interactive:
+        missing = []
+        if not _non_empty_text(target_selector):
+            missing.append("target selector")
+        if not _non_empty_text(to_version):
+            missing.append("--to-version <chart-version>")
+        raise RuntimeError(
+            "Missing "
+            + " and ".join(missing)
+            + ". Pass explicit upgrade options or allow interactive prompting."
+        )
+
+    source_payload = _load_source_payload(config_path)
+    generated_config, paths, manifest = _load_deploy_context_readonly(config_path)
+    target = _prompt_upgrade_helm_chart_target_selector_if_needed(
+        source_payload=source_payload,
+        target_selector=target_selector,
+    )
+    target_version = _prompt_upgrade_helm_chart_to_version_if_needed(
+        to_version=to_version,
+    )
+    if soperator_aware and target.chart_id != _SOPERATOR_APP_ID:
+        raise RuntimeError(
+            "Soperator upgrades require apps:soperator@<target>. "
+            f"Received {target.selector}."
+        )
+    dry_run = _resolve_helm_chart_upgrade_options(
+        guided=guided,
+        dry_run=dry_run,
+        path_prefix="soperator.upgrade" if soperator_aware else "upgrade.helm_chart",
+    )
+    if target.chart_id == _SOPERATOR_APP_ID and not soperator_aware:
+        console.print(
+            "Soperator Helm chart upgrades use the Soperator-aware command; "
+            "redirecting to "
+            f"`nebius-cxcli soperator upgrade {config_path} "
+            f"--target {target.target_ref} --to-version {target_version}`.",
+            soft_wrap=True,
+        )
+        _run_helm_chart_upgrade_command(
+            config_path=config_path,
+            target_selector=target.selector,
+            to_version=target_version,
+            dry_run=dry_run,
+            interactive=interactive,
+            soperator_aware=True,
+        )
+        return
+    plan = _plan_helm_chart_upgrade(
+        payload=source_payload,
+        target=target,
+        target_version=target_version,
+    )
+    if soperator_aware:
+        _raise_if_soperator_upgrade_would_bypass_migration(
+            generated_config,
+            config_path=config_path,
+            manifest=manifest,
+            target_ref=target.target_ref,
+        )
+    repeat_dry_run_command = (
+        (
+            _soperator_upgrade_dry_run_command(
+                config_path=config_path,
+                target_ref=target.target_ref,
+                to_version=target_version,
+            )
+            if soperator_aware
+            else _upgrade_helm_chart_dry_run_command(
+                config_path=config_path,
+                target_selector=target.selector,
+                to_version=target_version,
+            )
+        )
+        if dry_run
+        else None
+    )
+    plan_lines = (
+        _format_soperator_upgrade_plan(
+            plan,
+            payload=source_payload,
+            dry_run=dry_run,
+            repeat_dry_run_command=repeat_dry_run_command,
+        )
+        if soperator_aware
+        else _format_helm_chart_upgrade_plan(
+            plan,
+            dry_run=dry_run,
+            repeat_dry_run_command=repeat_dry_run_command,
+        )
+    )
+    _print_upgrade_plan_lines(plan_lines)
+    if dry_run:
+        return
+    if not plan.mutates:
+        _verify_helm_chart_upgrade_ready(generated_config, paths, manifest, plan)
+        if soperator_aware:
+            _run_soperator_upgrade_validation_phase(
+                generated_config,
+                paths,
+                manifest,
+                plan,
+                phase_label="Postflight",
+                refresh_deploy_report=True,
+            )
+            console.print(
+                f"Soperator upgrade validation report: {paths.reports_dir / DEPLOY_REPORT_FILENAME}",
+                soft_wrap=True,
+            )
+            lifecycle = _soperator_upgrade_activechecks_lifecycle(source_payload, target)
+            checkpoint_path = _soperator_upgrade_checkpoint_path(config_path, target.target_ref)
+            checkpoint = _new_soperator_upgrade_checkpoint(
+                plan=plan,
+                lifecycle=lifecycle,
+                checkpoint_path=checkpoint_path,
+                paths=paths,
+            )
+            _append_soperator_upgrade_event(checkpoint, "completed", reason="already-current")
+            _write_soperator_upgrade_checkpoint(checkpoint_path, checkpoint)
+            upgrade_report_path, _upgrade_report_json_path = _write_soperator_upgrade_report(
+                paths,
+                checkpoint,
+            )
+            console.print(f"Soperator upgrade report: {upgrade_report_path}", soft_wrap=True)
+        already_current_message = (
+            f"Soperator target {target.target_ref} already uses version {target_version}."
+            if soperator_aware
+            else f"Helm chart target {target.selector} already uses version {target_version}."
+        )
+        console.print(already_current_message)
+        return
+
+    if soperator_aware:
+        lifecycle = _soperator_upgrade_activechecks_lifecycle(source_payload, target)
+        checkpoint_path = _soperator_upgrade_checkpoint_path(config_path, target.target_ref)
+        checkpoint = _new_soperator_upgrade_checkpoint(
+            plan=plan,
+            lifecycle=lifecycle,
+            checkpoint_path=checkpoint_path,
+            paths=paths,
+        )
+        restore_required = False
+
+        def _checkpoint(event: str, **details: Any) -> None:
+            _append_soperator_upgrade_event(checkpoint, event, **details)
+            _write_soperator_upgrade_checkpoint(checkpoint_path, checkpoint)
+
+        def _expected_version_plan(expected_version: str) -> _HelmChartUpgradePlan:
+            return replace(
+                plan,
+                current_version=expected_version,
+                target_version=expected_version,
+            )
+
+        def _render_validate_apply_soperator_stage(
+            *,
+            update_message: str,
+            validation_title: str,
+            expected_plan: _HelmChartUpgradePlan,
+        ) -> tuple[Any, ProjectPaths, Mapping[str, Any]]:
+            config_path.write_text(render_updated_source_payload(source_payload), encoding="utf-8")
+            console.print(f"Updated {config_path} for {update_message}.", soft_wrap=True)
+            _run_internal_render_command(config_path, force=True)
+            staged_config, staged_paths, staged_manifest = _load_deploy_context(config_path)
+            _run_generated_bundle_validation(
+                staged_config,
+                staged_paths,
+                auto_auth_bootstrap=True,
+                title=validation_title,
+                quota_phase="upgrade",
+                flux_command_name="upgrade",
+                manifest=staged_manifest,
+                prompt_mysterybox_payload_values=False,
+            )
+            flux_apply_command(
+                staged_paths.generated_dir,
+                auto_auth_bootstrap=True,
+                target_ref=target.target_ref,
+                all_targets=False,
+            )
+            _verify_helm_chart_upgrade_ready(
+                staged_config,
+                staged_paths,
+                staged_manifest,
+                expected_plan,
+            )
+            return staged_config, staged_paths, staged_manifest
+
+        try:
+            _checkpoint("preflight-generated-validation-started")
+            _run_generated_bundle_validation(
+                generated_config,
+                paths,
+                auto_auth_bootstrap=True,
+                title="Soperator upgrade preflight",
+                quota_phase="upgrade",
+                flux_command_name="upgrade",
+                manifest=manifest,
+                prompt_mysterybox_payload_values=False,
+            )
+            _checkpoint("preflight-generated-validation-completed")
+
+            if lifecycle.required:
+                _checkpoint("activechecks-suspend-started")
+                _soperator_upgrade_suspend_activechecks_values(source_payload, target)
+                restore_required = True
+                current_version_plan = _expected_version_plan(plan.current_version)
+                generated_config, paths, manifest = _render_validate_apply_soperator_stage(
+                    update_message="Soperator ActiveChecks suspension",
+                    validation_title="Validate rendered Soperator ActiveChecks suspension",
+                    expected_plan=current_version_plan,
+                )
+                live_suspend = _suspend_live_soperator_activechecks(
+                    generated_config,
+                    paths,
+                    manifest,
+                    current_version_plan,
+                    source_payload=source_payload,
+                )
+                activechecks_state = checkpoint.setdefault("activechecks", {})
+                if isinstance(activechecks_state, dict):
+                    activechecks_state["live_suspend"] = live_suspend
+                _checkpoint("activechecks-suspended", live_suspend=live_suspend)
+
+            _run_soperator_upgrade_validation_phase(
+                generated_config,
+                paths,
+                manifest,
+                plan,
+                phase_label="Preflight",
+                refresh_deploy_report=False,
+            )
+            _checkpoint("preflight-soperator-validation-completed")
+
+            changed = _update_source_helm_chart_version(
+                source_payload,
+                target=target,
+                target_version=target_version,
+            )
+            if not changed:
+                console.print(
+                    f"Soperator target {target.target_ref} already uses version {target_version}."
+                )
+                staged_config, staged_paths, staged_manifest = (
+                    generated_config,
+                    paths,
+                    manifest,
+                )
+                _checkpoint("upgrade-version-already-current")
+            else:
+                staged_config, staged_paths, staged_manifest = (
+                    _render_validate_apply_soperator_stage(
+                        update_message=(
+                            f"Soperator chart {target.selector} upgrade to {target_version}"
+                        ),
+                        validation_title=(
+                            f"Validate rendered Soperator upgrade to {target_version}"
+                        ),
+                        expected_plan=plan,
+                    )
+                )
+                _checkpoint("upgrade-applied")
+            _run_soperator_upgrade_validation_phase(
+                staged_config,
+                staged_paths,
+                staged_manifest,
+                plan,
+                phase_label="Postflight",
+                refresh_deploy_report=True,
+            )
+            _checkpoint("postflight-soperator-validation-completed")
+
+            if lifecycle.required:
+                _checkpoint("activechecks-restore-started")
+                _soperator_upgrade_restore_activechecks_values(
+                    source_payload,
+                    target,
+                    lifecycle,
+                )
+                staged_config, staged_paths, staged_manifest = (
+                    _render_validate_apply_soperator_stage(
+                        update_message="Soperator ActiveChecks restore",
+                        validation_title="Validate rendered Soperator ActiveChecks restore",
+                        expected_plan=_expected_version_plan(target_version),
+                    )
+                )
+                restore_required = False
+                _checkpoint("activechecks-restored")
+
+            _checkpoint("completed")
+            upgrade_report_path, _upgrade_report_json_path = _write_soperator_upgrade_report(
+                staged_paths,
+                checkpoint,
+            )
+            console.print(
+                f"Soperator upgrade validation report: {staged_paths.reports_dir / DEPLOY_REPORT_FILENAME}",
+                soft_wrap=True,
+            )
+            console.print(f"Soperator upgrade report: {upgrade_report_path}", soft_wrap=True)
+            console.print(
+                f"[green]Soperator upgrade completed[/green]: {target.target_ref} -> {target_version}"
+            )
+        except Exception as exc:
+            _checkpoint("failed", error=str(exc))
+            activechecks_restore_status = (
+                "already-restored"
+                if lifecycle.required and not restore_required
+                else "not-required"
+            )
+            if lifecycle.required and restore_required:
+                try:
+                    activechecks_restore_status = "started"
+                    _checkpoint("activechecks-restore-after-failure-started")
+                    _soperator_upgrade_restore_activechecks_values(
+                        source_payload,
+                        target,
+                        lifecycle,
+                    )
+                    expected_version = _non_empty_text(
+                        _source_helm_chart_row(source_payload, target).get("version")
+                    )
+                    _render_validate_apply_soperator_stage(
+                        update_message="Soperator ActiveChecks restore after failed upgrade",
+                        validation_title=(
+                            "Validate rendered Soperator ActiveChecks restore after failed upgrade"
+                        ),
+                        expected_plan=_expected_version_plan(expected_version),
+                    )
+                    restore_required = False
+                    activechecks_restore_status = "restored"
+                    _checkpoint("activechecks-restored-after-failure")
+                except Exception as restore_exc:
+                    activechecks_restore_status = "restore-failed"
+                    _checkpoint(
+                        "activechecks-restore-after-failure-failed",
+                        error=str(restore_exc),
+                    )
+                    console.print(
+                        "[yellow]Could not restore Soperator ActiveChecks after the failed "
+                        f"upgrade attempt:[/yellow] {restore_exc}",
+                        soft_wrap=True,
+                    )
+            checkpoint["status"] = "failed"
+            checkpoint["failure"] = {
+                "error": str(exc),
+                "activechecks_restore": activechecks_restore_status,
+            }
+            _write_soperator_upgrade_checkpoint(checkpoint_path, checkpoint)
+            _write_soperator_upgrade_report(paths, checkpoint)
+            raise
+        return
+
+    _run_generated_bundle_validation(
+        generated_config,
+        paths,
+        auto_auth_bootstrap=True,
+        title="Helm chart upgrade preflight",
+        quota_phase="upgrade",
+        flux_command_name="upgrade",
+        manifest=manifest,
+        prompt_mysterybox_payload_values=False,
+    )
+    changed = _update_source_helm_chart_version(
+        source_payload,
+        target=target,
+        target_version=target_version,
+    )
+    if not changed:
+        console.print(
+            f"Helm chart target {target.selector} already uses version {target_version}."
+        )
+        return
+    config_path.write_text(render_updated_source_payload(source_payload), encoding="utf-8")
+    console.print(
+        f"Updated {config_path} for Helm chart {target.selector} upgrade to {target_version}.",
+        soft_wrap=True,
+    )
+    _run_internal_render_command(config_path, force=True)
+    staged_config, staged_paths, staged_manifest = _load_deploy_context(config_path)
+    _run_generated_bundle_validation(
+        staged_config,
+        staged_paths,
+        auto_auth_bootstrap=True,
+        title=f"Validate rendered Helm chart upgrade to {target_version}",
+        quota_phase="upgrade",
+        flux_command_name="upgrade",
+        manifest=staged_manifest,
+        prompt_mysterybox_payload_values=False,
+    )
+    flux_apply_command(
+        staged_paths.generated_dir,
+        auto_auth_bootstrap=True,
+        target_ref=target.target_ref,
+        all_targets=False,
+    )
+    _verify_helm_chart_upgrade_ready(staged_config, staged_paths, staged_manifest, plan)
+    console.print(
+        f"[green]Helm chart upgrade completed[/green]: {target.selector} -> {target_version}"
+    )
 
 
 def _load_destroy_context(target_path: Path) -> tuple:
@@ -30117,20 +31198,28 @@ def _soperator_custom_resource_namespaces(docs: Sequence[Mapping[str, Any]]) -> 
     return tuple(sorted(namespaces))
 
 
-def _delete_stale_soperator_activecheck_workloads(
-    docs: Sequence[Mapping[str, Any]],
+def _delete_soperator_activecheck_workloads_in_namespace(
+    namespace: str,
     *,
     env: Mapping[str, str],
-) -> None:
-    for namespace in _soperator_custom_resource_namespaces(docs):
+    cluster_ref: str | None = None,
+    activecheck_job_names: Sequence[str] = (),
+) -> dict[str, Any]:
+    scoped_cluster_ref = _non_empty_text(cluster_ref)
+    if scoped_cluster_ref:
+        selector = (
+            "app.kubernetes.io/component=soperatorchecks,"
+            f"app.kubernetes.io/instance={scoped_cluster_ref}"
+        )
         _run_post_flux_kubectl(
             [
                 "kubectl",
                 "-n",
                 namespace,
                 "delete",
-                "cronjob.batch/run-extensive-check-on-reservations",
-                "cronjob.batch/extensive-check",
+                "cronjob.batch",
+                "-l",
+                selector,
                 "--ignore-not-found=true",
                 "--wait=false",
             ],
@@ -30145,13 +31234,92 @@ def _delete_stale_soperator_activecheck_workloads(
                 "delete",
                 "job.batch,pod",
                 "-l",
-                "app.kubernetes.io/component=soperatorchecks",
+                selector,
                 "--ignore-not-found=true",
                 "--wait=false",
             ],
             env=env,
             timeout=120,
         )
+        exact_jobs = tuple(sorted({_non_empty_text(name) for name in activecheck_job_names} - {""}))
+        for job_name in exact_jobs:
+            _run_post_flux_kubectl(
+                [
+                    "kubectl",
+                    "-n",
+                    namespace,
+                    "delete",
+                    f"job.batch/{job_name}",
+                    "--ignore-not-found=true",
+                    "--wait=false",
+                ],
+                env=env,
+                timeout=120,
+            )
+            _run_post_flux_kubectl(
+                [
+                    "kubectl",
+                    "-n",
+                    namespace,
+                    "delete",
+                    "pod",
+                    "-l",
+                    f"job-name={job_name}",
+                    "--ignore-not-found=true",
+                    "--wait=false",
+                ],
+                env=env,
+                timeout=120,
+            )
+        return {
+            "scope": "cluster_ref",
+            "namespace": namespace,
+            "cluster_ref": scoped_cluster_ref,
+            "activecheck_job_names": list(exact_jobs),
+        }
+
+    _run_post_flux_kubectl(
+        [
+            "kubectl",
+            "-n",
+            namespace,
+            "delete",
+            "cronjob.batch/run-extensive-check-on-reservations",
+            "cronjob.batch/extensive-check",
+            "--ignore-not-found=true",
+            "--wait=false",
+        ],
+        env=env,
+        timeout=120,
+    )
+    _run_post_flux_kubectl(
+        [
+            "kubectl",
+            "-n",
+            namespace,
+            "delete",
+            "job.batch,pod",
+            "-l",
+            "app.kubernetes.io/component=soperatorchecks",
+            "--ignore-not-found=true",
+            "--wait=false",
+        ],
+        env=env,
+        timeout=120,
+    )
+    return {
+        "scope": "namespace",
+        "namespace": namespace,
+    }
+
+
+def _delete_stale_soperator_activecheck_workloads(
+    docs: Sequence[Mapping[str, Any]],
+    *,
+    env: Mapping[str, str],
+) -> None:
+    for namespace in _soperator_custom_resource_namespaces(docs):
+        _delete_soperator_activecheck_workloads_in_namespace(namespace, env=env)
 
 
 def _post_flux_webhook_service_refs(

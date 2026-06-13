@@ -2132,7 +2132,8 @@ to render/apply the Soperator app and to run guarded migration phases.
 | `nebius-cxcli ext-soperator onboard <config.yaml-or-deployments-root>` | Register one existing Nebius MK8s cluster by `cluster_id`, discover source Soperator state, choose storage/compute onboarding modes, and write the accepted onboarding plan. | Read-only against the existing cluster; writes local `config.yaml` and `source-soperator-cluster-discovery-report.json`. Non-interactive runs use `--cluster-id` and optional `--target-id`; no-op reruns preserve stable discovery content so unchanged onboarding does not invalidate migration checkpoints. |
 | `nebius-cxcli ext-soperator migrate <config.yaml> --target <target> --dry-run` | Inspect the accepted external-cluster migration plan before any live mutation. | Read-only; validates accepted onboarding, refuses deploy-owned/no-migration action sets with render/deploy guidance, and prints a color-highlighted phase plan in interactive terminals. |
 | `nebius-cxcli ext-soperator migrate <config.yaml> --target <target> --execute --approve` | Execute approved external-cluster MK8s control-plane/node-template, target GPU stack, storage, compute, Soperator cutover, configured MK8s GPU validations, and required Soperator/Slurm smoke validation when the dry run is accepted. | Mutates only supported migration surfaces, auto-detects source worker node groups, writes a local checkpoint, rechecks completed selected actions against live state on rerun, verifies external MK8s node-template state, verifies target Helm chart workloads, suspends old source-family Flux Kustomization desired state, deletes suspended old source-family Flux HelmRelease records, retires stale profile-derived source-family Helm release records while preserving shared/storage resources, writes validation detail reports under `generated/reports/`, writes MK8s GPU and Soperator/Slurm validation rollups into `migrate-report.md`, refreshes `deploy-report.md` as a secondary deploy-compatible MK8s GPU summary, and stops at guarded pending gates. |
-| `nebius-cxcli upgrade helm-chart <config.yaml> apps:soperator@<target> --to-version <chart-version>` | Upgrade a cxcli-managed Soperator Helm chart row after it is already part of the generated bundle. | Updates the source app version, rerenders, validates, applies the target Flux bundle, and verifies the live Helm release plus rendered Deployment/StatefulSet/DaemonSet workloads. |
+| `nebius-cxcli soperator upgrade <config.yaml> --target <target> --to-version <chart-version>` | Upgrade a cxcli-managed Soperator Helm chart row after it is already part of the generated bundle. | Soperator-aware managed upgrade: validates the current bundle, runs live Soperator/Slurm smoke preflight, updates the source app version, rerenders, validates, applies the target Flux bundle, verifies the live Helm release plus rendered workloads, reruns required Soperator/Slurm validation, and refreshes `deploy-report.md`. |
+| `nebius-cxcli upgrade helm-chart <config.yaml> apps:soperator@<target> --to-version <chart-version>` | Compatibility entry point for Soperator chart upgrades. | Redirects to the Soperator-aware managed upgrade path instead of treating Soperator like a generic Helm chart. |
 | `nebius-cxcli upgrade k8s-version`, `upgrade node-template`, `upgrade os-image`, and node-layer upgrade commands | Upgrade Terraform-managed MK8s or VM infrastructure underneath a cxcli-managed deployment. | Terraform desired-state updates for managed infra only; they do not manage external onboarded MK8s node groups. |
 
 ### Managed Soperator Clusters
@@ -2155,30 +2156,59 @@ creating the target node groups itself.
 
 For day-2 upgrades of a cxcli-managed Soperator deployment:
 
-- Use `upgrade helm-chart` to bump the Soperator chart/app row:
+- Use `soperator upgrade` to bump the Soperator chart/app row through the
+  Soperator-aware managed path:
 
   ```bash
-  nebius-cxcli upgrade helm-chart <config.yaml> apps:soperator@<target> \
+  nebius-cxcli soperator upgrade <config.yaml> \
+    --target <target> \
     --to-version <chart-version> \
     --dry-run
-  nebius-cxcli upgrade helm-chart <config.yaml> apps:soperator@<target> \
+  nebius-cxcli soperator upgrade <config.yaml> \
+    --target <target> \
     --to-version <chart-version>
   ```
 
-  This command changes only the selected Soperator app row `version`. If that
-  row currently has `repo: ''`, it remains a local static chart render. If you
-  want the exact published parent OCI package, first set the row `repo` to
-  `oci://cr.eu-north1.nebius.cloud/e00th0mgv3zddz7468/charts/soperator` and
-  `version` to the desired package version, then run `render` and `deploy`.
-  cxcli still renders Soperator as a static post-Flux manifest so the chart
-  source can be OCI without using Helm's in-cluster release Secret storage.
+  This command changes only the selected Soperator app row `version`. Before
+  mutation it validates the current generated bundle and runs the required live
+  Soperator/Slurm smoke validation so a broken Slurm control plane, queue, or
+  GPU/NCCL path blocks the upgrade instead of becoming a post-upgrade surprise.
+  After apply it verifies Helm readiness, reruns the same required
+  Soperator/Slurm validation, and refreshes `generated/reports/deploy-report.md`.
+  `nebius-cxcli upgrade helm-chart <config.yaml> apps:soperator@<target> --to-version <chart-version>`
+  redirects to this Soperator-aware path.
+  If the managed Soperator app row has
+  `values.soperator-activechecks.enabled=true` or
+  `values.soperator-activechecks.waitForChecks.enabled=true`, non-dry-run
+  `soperator upgrade` owns a checkpointed maintenance-window lifecycle: it
+  snapshots the original values, writes
+  `.nebius-cxcli/soperator-upgrades/<target>/checkpoint.json`, renders and
+  applies a temporary suspension, patches matching live ActiveCheck CRs to stop
+  launch-on-create checks, deletes matching already-launched ActiveChecks
+  CronJobs/jobs/pods, runs the upgrade and postflight validation, then restores
+  the original cxcli-owned values. If cxcli cannot inspect live ActiveCheck
+  state for an ActiveChecks-enabled managed upgrade, it fails closed before the
+  chart upgrade rather than leaving launch-on-create checks ambiguous. The
+  command writes
+  `generated/reports/upgrade-report.md` and `upgrade-report.json` so the
+  operator can verify what was suspended and whether it was restored.
+
+  If the row currently has `repo: ''`, it remains a local static chart render.
+  If you want the exact published parent OCI package, first set the row `repo`
+  to `oci://cr.eu-north1.nebius.cloud/e00th0mgv3zddz7468/charts/soperator` and
+  `version` to the desired package version, then run `soperator upgrade` or
+  `render` and `deploy`. cxcli still renders Soperator as a static post-Flux
+  manifest so the chart source can be OCI without using Helm's in-cluster
+  release Secret storage.
   If `upgrade helm-chart --to-version` appears lower than the current
   configured chart version, cxcli prints a production downgrade warning but
   still allows the change for rollback or recovery. Helm chart downgrades are
   not guaranteed safe; review chart release notes, CRDs/schema migrations,
-  application state, and backups first. Direct `config.yaml` edits followed by
-  `render` and `deploy` are treated as desired state and do not perform a live
-  version-order downgrade check.
+  application state, and backups first. The same warning applies through
+  `soperator upgrade`. Direct `config.yaml` edits followed by `render` and
+  `deploy` remain desired-state changes, but the canonical managed Soperator
+  upgrade path is `soperator upgrade` because it adds the explicit pre/post
+  Soperator validation gates.
 
 - Use `upgrade k8s-version` for Terraform-managed MK8s Kubernetes minor
   upgrades.
@@ -2684,6 +2714,16 @@ ActiveChecks CronJobs/jobs/pods so stale old-chart desired state no longer
 appears in discovery or smoke validation. It does not drain
 or delete preserved worker node groups as part of a synthetic parallel-worker
 migration.
+If a legacy external cluster has Soperator ActiveChecks or
+`wait-for-active-checks` enabled, treat them as a maintenance-window concern:
+they can consume GPU/RDMA capacity or extend readiness waits. Managed
+`soperator upgrade` handles cxcli-owned ActiveChecks with the checkpointed
+suspend/restore lifecycle described above, and migration removes stale
+source-family check workloads during takeover, but cxcli does not silently
+disable arbitrary live external ActiveChecks before migration because those
+settings may be operator-owned diagnostics. Disable external diagnostics
+deliberately before the migration window unless they are part of a
+cxcli-managed upgrade checkpoint.
 After a mutating phase starts, resume relies on phase checkpoints because the
 original full discovery fingerprint is expected to change as new storage,
 attachments, and target node groups appear.
@@ -2730,21 +2770,27 @@ next explicit action.
 
 ### Managed Upgrade vs External Onboard and Migrate
 
-Use `upgrade helm-chart` when cxcli already manages the Soperator app row and
+Use `soperator upgrade` when cxcli already manages the Soperator app row and
 the target is already part of the rendered bundle:
 
 ```bash
-nebius-cxcli upgrade helm-chart <config.yaml> apps:soperator@<target> \
+nebius-cxcli soperator upgrade <config.yaml> \
+  --target <target> \
   --to-version <chart-version> \
   --dry-run
-nebius-cxcli upgrade helm-chart <config.yaml> apps:soperator@<target> \
+nebius-cxcli soperator upgrade <config.yaml> \
+  --target <target> \
   --to-version <chart-version>
 ```
 
-That path is a chart upgrade. It validates the current generated bundle, updates
-the Soperator app version in `config.yaml`, rerenders, validates the new bundle,
-and applies the selected target Flux bundle. It does not run the external
-source-cluster migration analyzer, does not use
+That path is a managed chart upgrade. It validates the current generated
+bundle, runs live Soperator/Slurm smoke preflight, updates the Soperator app
+version in `config.yaml`, rerenders, validates the new bundle, applies the
+selected target Flux bundle, verifies Helm readiness, reruns the required
+Soperator/Slurm smoke validation, and refreshes `deploy-report.md`.
+`upgrade helm-chart <config.yaml> apps:soperator@<target> --to-version <chart-version>`
+redirects to this Soperator-aware path. The managed upgrade path does not run
+the external source-cluster migration analyzer, does not use
 `source-soperator-cluster-discovery-report.json`, and has no node-drain or
 storage-copy flags.
 
@@ -2758,8 +2804,9 @@ repo: oci://cr.eu-north1.nebius.cloud/e00th0mgv3zddz7468/charts/soperator
 version: 4.0.2-ps.1
 ```
 
-Then run `nebius-cxcli render <config.yaml>` and
-`nebius-cxcli deploy <config.yaml>` or the target-scoped Flux apply path.
+Then run `nebius-cxcli soperator upgrade <config.yaml> --target <target> --to-version <chart-version>`
+or, for manual desired-state changes, `nebius-cxcli render <config.yaml>` and
+`nebius-cxcli deploy <config.yaml>`.
 The rendered Soperator output remains a static post-Flux manifest even when the
 source is OCI; this avoids the Helm release Secret size limit for the Soperator
 umbrella chart.
@@ -2804,9 +2851,9 @@ Underlying MK8s infrastructure upgrade commands are also different:
   temporarily quiesce their Soperator workloads and restore them after the
   matching node-group update.
 - After an external target has been onboarded and deployed under cxcli app
-  management, future Soperator chart-only upgrades can use `upgrade helm-chart`
-  against `apps:soperator@<target>`; the external cluster lifecycle still
-  remains outside Terraform ownership.
+  management with no migration-owned work remaining, future Soperator
+  chart-only upgrades can use `soperator upgrade --target <target>`; the
+  external cluster lifecycle still remains outside Terraform ownership.
 
 ### Soperator Rules and Safety Checks
 
@@ -2880,7 +2927,8 @@ you want cxcli to protect the operator from unsafe or incomplete steps:
 - MK8s node-template upgrades: Kubernetes version, OS, and GPU stack.
 - MK8s node-layer changes: platform, CPU/GPU preset, and GPU stack preset.
 - MK8s or VM OS image changes.
-- Target-scoped Helm chart version bumps.
+- Target-scoped Helm chart version bumps. Use `soperator upgrade` instead of
+  the generic Helm path for Soperator chart bumps.
 
 These paths keep `config.yaml` as the source of desired state, but they add live
 discovery, compatibility checks, Kubernetes preflight checks, staged output,
@@ -3317,6 +3365,7 @@ nebius-cxcli upgrade platform <config.yaml> infra:mk8s@<target> --to-platform cp
 nebius-cxcli upgrade cpu-preset <config.yaml> infra:mk8s@<target> --to-preset <preset>
 nebius-cxcli upgrade gpu-preset <config.yaml> infra:mk8s@<target> --to-preset <preset>
 nebius-cxcli upgrade helm-chart <config.yaml> apps:<chart>@<target> --to-version <chart-version>
+nebius-cxcli soperator upgrade <config.yaml> --target <target> --to-version <chart-version>
 ```
 
 - `gpu-stack-preset` means the MK8s `drivers_preset` /
@@ -3341,7 +3390,13 @@ nebius-cxcli upgrade helm-chart <config.yaml> apps:<chart>@<target> --to-version
   the Helm release and rendered workloads. It has no node-drain flags. It does
   not switch a row between local static rendering and an OCI/HTTP/Git chart
   source; edit `repo` plus `version` directly when that source-family change is
-  the desired state, then run `render` and `deploy` or `flux apply`.
+  the desired state, then run `render` and `deploy` or `flux apply`. When the
+  selected chart is `apps:soperator@<target>`, `upgrade helm-chart` redirects
+  to `soperator upgrade`.
+- `soperator upgrade` is the canonical managed Soperator chart upgrade path.
+  It wraps the same version bump/render/apply workflow with live
+  Soperator/Slurm preflight and postflight validation and refreshes
+  `deploy-report.md`.
 - Operators can still upgrade manually by editing the required desired-state
   values in `config.yaml`, such as Kubernetes version, OS image, platform,
   preset, GPU stack preset, or chart version, then running `render` and
@@ -3588,7 +3643,7 @@ nebius-cxcli auth --project-config /path/to/config.yaml --validate-profile
   - `discover`: pass the deployments root or any narrower directory under it, including one project directory or `generated/`.
   - `component list/add/remove`: pass the project `config.yaml` with `--config <config.yaml>` so component selectors can be written first.
   - `grafana`: no positional path; use `--export-dashboard <grafana-base-or-folder-url>` or `--dashboard-json <path>` and optional `--component-sources` with `--attach`.
-  - `component`, `validate`, `validate-dashboards`, `quota-check`, `quota-request`, `render`, `deploy`, `upgrade`, `bootstrap-ci`, `wireguard`, `ssh-jumphost`, `destroy`, `email`: operate on the project `config.yaml`.
+  - `component`, `validate`, `validate-dashboards`, `quota-check`, `quota-request`, `render`, `deploy`, `soperator`, `upgrade`, `bootstrap-ci`, `wireguard`, `ssh-jumphost`, `destroy`, `email`: operate on the project `config.yaml`.
   - `upgrade k8s-version`: pass `config.yaml` alone in an interactive terminal to choose the managed MK8s target, version, and options through the wizard; pass an explicit `infra:mk8s@<target>` selector plus `--to-version <major.minor>` for automation. V1 supports Terraform-managed MK8s targets only.
   - `upgrade os-image`: pass `config.yaml` alone in an interactive terminal to choose an upgradeable `infra:mk8s@<target>` or `infra:vm@<target>` component through the wizard; pass an explicit selector plus `--to-os <os>` for automation. MK8s selectors update node template OS values and can use `--node-group <source-key-or-live-name>` to narrow the rolling update to one group. VM selectors update generic `infra:vm` `inputs.source_image_family`.
   - `validate-generated`: pass `generated/`, one of its subdirectories, or a file under that tree.
@@ -3865,7 +3920,11 @@ Common command flags:
 - `upgrade node-template`: `--to-version`, `--to-os`, `--to-gpu-stack-preset`, `--node-group`, `--dry-run`, `--disruption-policy`, `--drain-timeout`, `--auto-auth-bootstrap/--no-auto-auth-bootstrap`, `--skip-validations`, `--skip-validation`
 - `upgrade os-image`: `--to-os`, `--node-group`, `--dry-run`, `--disruption-policy`, `--drain-timeout`, `--interactive/--no-interactive`
 - Node-layer upgrades (`upgrade gpu-stack-preset`, `upgrade platform`, `upgrade cpu-preset`, `upgrade gpu-preset`): target flag (`--to-gpu-stack-preset`, `--to-preset`, or `--to-platform`), `--node-group`, `--dry-run`, `--disruption-policy`, `--drain-timeout`, `--interactive/--no-interactive`
-- `upgrade helm-chart`: `--to-version`, `--dry-run`, `--interactive/--no-interactive`
+- `soperator upgrade`: `--target`, `--to-version`, `--dry-run`,
+  `--interactive/--no-interactive`
+- `upgrade helm-chart`: `--to-version`, `--dry-run`,
+  `--interactive/--no-interactive` (`apps:soperator@<target>` redirects to
+  `soperator upgrade`)
 - `destroy`: `--auto-auth-bootstrap/--no-auto-auth-bootstrap`, `--yes`
 - `discover`: `--all`
 - `wireguard`:

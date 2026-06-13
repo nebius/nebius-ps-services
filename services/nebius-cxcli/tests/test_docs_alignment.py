@@ -30,6 +30,7 @@ def test_design_architecture_summary_matches_upgrade_surface() -> None:
     design = (REPO_ROOT / "docs" / "design.md").read_text(encoding="utf-8")
     architecture = _section(design, "## Architecture Summary", "## How Flux Works")
     architecture_flat = _squash(architecture)
+    design_flat = _squash(design)
 
     assert "V1 implements Kubernetes version, combined node-template, OS image" in (
         architecture_flat
@@ -41,6 +42,11 @@ def test_design_architecture_summary_matches_upgrade_surface() -> None:
     assert "later GPU stack, platform, hardware preset, and app/chart upgrades" not in (
         architecture_flat
     )
+    assert "managed `soperator upgrade`" in design_flat
+    assert "redirects into `soperator upgrade`, the canonical managed Soperator chart path" in (
+        design_flat
+    )
+    assert "External Soperator adoption, storage/compute remediation" in design_flat
 
 
 def test_readme_documents_redacted_guided_create_prefill_example() -> None:
@@ -140,8 +146,8 @@ def test_readme_supporting_commands_include_current_quota_and_target_flags() -> 
     ) in supporting
     assert (
         "`component`, `validate`, `validate-dashboards`, `quota-check`, "
-        "`quota-request`, `render`, `deploy`, `upgrade`, `bootstrap-ci`, `wireguard`, "
-        "`ssh-jumphost`, `destroy`, `email`"
+        "`quota-request`, `render`, `deploy`, `soperator`, `upgrade`, "
+        "`bootstrap-ci`, `wireguard`, `ssh-jumphost`, `destroy`, `email`"
     ) in supporting
     assert (
         "- `grafana`: no positional path; use `--export-dashboard <grafana-base-or-folder-url>` "
@@ -156,6 +162,7 @@ def test_readme_supporting_commands_include_current_quota_and_target_flags() -> 
     assert "drain-timeout defaults" in supporting
 
     common_flags = supporting.split("Common command flags:", maxsplit=1)[1]
+    common_flags_flat = _squash(common_flags)
     assert (
         "- `create`:\n  `--client-name`, `--tenant-id`, `--project-id`, `--region-id`, "
         "`--email`, `--infra`, `--app`, `--app-namespace`, `--app-releasename`, "
@@ -191,8 +198,14 @@ def test_readme_supporting_commands_include_current_quota_and_target_flags() -> 
         "`--disruption-policy`, `--drain-timeout`, `--interactive/--no-interactive`"
     ) in common_flags
     assert (
-        "- `upgrade helm-chart`: `--to-version`, `--dry-run`, `--interactive/--no-interactive`"
-    ) in common_flags
+        "- `soperator upgrade`: `--target`, `--to-version`, `--dry-run`, "
+        "`--interactive/--no-interactive`"
+    ) in common_flags_flat
+    assert (
+        "- `upgrade helm-chart`: `--to-version`, `--dry-run`, "
+        "`--interactive/--no-interactive` (`apps:soperator@<target>` redirects to "
+        "`soperator upgrade`)"
+    ) in common_flags_flat
     assert (
         "- `grafana`: `--export-dashboard`, `--dashboard-json`, `--output-dir`, `--folder-uid`, "
         "`--dashboard-uid`, `--overwrite`, `--attach`, `--component-sources`, "
@@ -263,11 +276,12 @@ def test_readme_upgrade_section_is_visible_and_consolidated() -> None:
         in soperator
     )
     assert (
-        "`nebius-cxcli upgrade helm-chart <config.yaml> apps:soperator@<target> --to-version <chart-version>`"
+        "`nebius-cxcli soperator upgrade <config.yaml> --target <target> --to-version <chart-version>`"
         in soperator
     )
+    assert "Redirects to the Soperator-aware managed upgrade path" in soperator
     assert "External onboarding is not a Terraform import." in soperator
-    assert "Use `upgrade helm-chart` when cxcli already manages the Soperator app row" in (
+    assert "Use `soperator upgrade` when cxcli already manages the Soperator app row" in (
         soperator
     )
     assert "If the existing Soperator row uses `repo: ''`" in soperator
@@ -278,7 +292,16 @@ def test_readme_upgrade_section_is_visible_and_consolidated() -> None:
     assert "published parent OCI package" in soperator
     assert "static post-Flux manifest" in soperator
     assert "Helm chart downgrades are not guaranteed safe" in soperator_flat
-    assert "do not perform a live version-order downgrade check" in soperator_flat
+    assert "canonical managed Soperator upgrade path is `soperator upgrade`" in (
+        soperator_flat
+    )
+    assert "live Soperator/Slurm smoke preflight" in soperator_flat
+    assert "checkpointed maintenance-window lifecycle" in soperator_flat
+    assert "fails closed before the chart upgrade" in soperator_flat
+    assert "generated/reports/upgrade-report.md" in soperator_flat
+    assert "does not silently disable arbitrary live external ActiveChecks" in (
+        soperator_flat
+    )
     assert "Use `ext-soperator onboard` plus `ext-soperator migrate` when the source cluster is not" in (
         soperator
     )
@@ -365,6 +388,13 @@ def test_readme_upgrade_section_is_visible_and_consolidated() -> None:
     assert (
         "upgrade helm-chart <config.yaml> apps:<chart>@<target> --to-version <chart-version>"
     ) in upgrade
+    assert (
+        "soperator upgrade <config.yaml> --target <target> --to-version <chart-version>"
+    ) in upgrade
+    assert "Use `soperator upgrade` instead of the generic Helm path" in upgrade_flat
+    assert "selected chart is `apps:soperator@<target>`, `upgrade helm-chart` redirects" in (
+        upgrade_flat
+    )
     assert "does not switch a row between local static rendering and an OCI/HTTP/Git chart source" in (
         upgrade_flat
     )
@@ -983,7 +1013,7 @@ def test_design_defines_soperator_profile_policy_model() -> None:
     assert "A non-empty `repo` is an explicit Helm source override in the config row" in (
         design_flat
     )
-    assert "changes only the row `version`" in design_flat
+    assert "change only the row `version`" in design_flat
     assert "Soperator is source-backed but not HelmRelease-backed" in design
     assert "`wizard_profile: soperator`" in design
     assert "`soperator_nodesets_profile` table stays in `component_cli_settings.yaml`" in design

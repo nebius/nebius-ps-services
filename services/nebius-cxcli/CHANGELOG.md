@@ -6,6 +6,26 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Added `nebius-cxcli soperator upgrade <config.yaml>` as the canonical
+  managed Soperator chart upgrade path. The generic
+  `upgrade helm-chart apps:soperator@<target>` entry now redirects to the
+  Soperator-aware flow, which validates the current bundle, runs live
+  Soperator/Slurm preflight, updates and rerenders the chart version, applies
+  the selected target Flux bundle, verifies Helm readiness, reruns required
+  Soperator/Slurm validation, and refreshes `deploy-report.md`.
+- Clarified that external Soperator ActiveChecks and `wait-for-active-checks`
+  should be handled as maintenance-window diagnostics rather than silently
+  disabled by migration; cxcli removes stale source-family check workloads
+  during takeover but does not automatically mutate operator-owned external
+  ActiveChecks without an explicit checkpointed restore contract.
+- Added a checkpointed managed Soperator ActiveChecks lifecycle for non-dry-run
+  `soperator upgrade`: when `values.soperator-activechecks.enabled` or
+  `values.soperator-activechecks.waitForChecks.enabled` is true in cxcli-owned
+  config, cxcli snapshots the original values, suspends them for the upgrade
+  window, patches matching live ActiveCheck CRs, deletes matching
+  already-launched check workloads, fails closed when live ActiveChecks cannot
+  be inspected, restores the original values after postflight validation, and
+  writes `upgrade-report.md` / `upgrade-report.json` restore evidence.
 - Documented when operators should use the structured `upgrade` command instead
   of direct `config.yaml` edits, including covered MK8s, VM OS image, and
   target-scoped Helm chart upgrade layers.
