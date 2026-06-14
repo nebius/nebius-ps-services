@@ -813,7 +813,42 @@ def soperator_migration_profile_group(profile_id: str) -> Mapping[str, Any]:
     return dict(profile_group)
 
 
-def soperator_migration_profile_for_version(version: str) -> Mapping[str, Any] | None:
+def _soperator_generation_for_version(version: str) -> str:
+    normalized = normalize_soperator_release_version(version)
+    match = re.match(r"^([0-9]+)(?:\.|$)", normalized)
+    if match is None:
+        return ""
+    major = int(match.group(1))
+    if major <= 1:
+        return "legacy-v1"
+    return f"v{major}"
+
+
+def _soperator_profile_id_for_generation(generation: str) -> str:
+    return f"{generation}-to-target" if generation else ""
+
+
+def _soperator_profile_with_group(
+    row: Mapping[str, Any],
+    *,
+    profile_groups: Mapping[str, Any],
+) -> Mapping[str, Any]:
+    result = dict(row)
+    profile_id = str(row.get("profile_id", "") or "").strip()
+    profile_group = profile_groups.get(profile_id)
+    if isinstance(profile_group, Mapping):
+        result["profile_group"] = dict(profile_group)
+        for key in ("requires_aligned_sfs", "compatibility_axes", "execution_contract"):
+            if key in profile_group and key not in result:
+                result[key] = to_plain_data(profile_group[key])
+    return result
+
+
+def soperator_migration_profile_for_version(
+    version: str,
+    *,
+    allow_generation_fallback: bool = False,
+) -> Mapping[str, Any] | None:
     normalized = normalize_soperator_release_version(version)
     if not normalized:
         return None
@@ -828,16 +863,62 @@ def soperator_migration_profile_for_version(version: str) -> Mapping[str, Any] |
         if not isinstance(row, Mapping):
             continue
         if normalized in _soperator_migration_profile_version_candidates(row):
-            result = dict(row)
-            profile_id = str(row.get("profile_id", "") or "").strip()
-            profile_group = profile_groups.get(profile_id)
-            if isinstance(profile_group, Mapping):
-                result["profile_group"] = dict(profile_group)
-                for key in ("requires_aligned_sfs", "compatibility_axes", "execution_contract"):
-                    if key in profile_group and key not in result:
-                        result[key] = to_plain_data(profile_group[key])
-            return result
-    return None
+            return _soperator_profile_with_group(row, profile_groups=profile_groups)
+    if not allow_generation_fallback:
+        return None
+    generation = _soperator_generation_for_version(normalized)
+    profile_id = _soperator_profile_id_for_generation(generation)
+    profile_group = profile_groups.get(profile_id)
+    if not isinstance(profile_group, Mapping):
+        return None
+    row = {
+        "version": normalized,
+        "upstream_tag": normalized,
+        "generation": generation,
+        "profile_id": profile_id,
+        "migration_class": str(profile_group.get("migration_class", "") or "").strip(),
+        "profile_match": "generation-fallback",
+    }
+    return _soperator_profile_with_group(row, profile_groups=profile_groups)
+
+
+def _soperator_migration_profile_is_generation_fallback(profile: Mapping[str, Any]) -> bool:
+    return str(profile.get("profile_match", "") or "").strip() == "generation-fallback"
+
+
+def _soperator_migration_profile_match_finding(
+    *,
+    profile: Mapping[str, Any],
+    source_version: str,
+    target_version: str,
+) -> SoperatorOnboardingFinding:
+    profile_id = str(profile.get("profile_id", "") or "").strip()
+    if _soperator_migration_profile_is_generation_fallback(profile):
+        return SoperatorOnboardingFinding(
+            layer="migration-profile",
+            status="matched-generation",
+            severity="recommended",
+            message=(
+                "Detected Soperator release does not have an exact committed profile row; "
+                f"using major-generation migration profile '{profile_id}'."
+            ),
+            evidence={
+                "source_version": source_version,
+                "target_version": target_version,
+                "generation": str(profile.get("generation", "") or ""),
+            },
+        )
+    return SoperatorOnboardingFinding(
+        layer="migration-profile",
+        status="matched",
+        severity="info",
+        message=f"Detected Soperator release matched migration profile '{profile_id}'.",
+        evidence={
+            "source_version": source_version,
+            "target_version": target_version,
+            "generation": str(profile.get("generation", "") or ""),
+        },
+    )
 
 
 def _migration_phase(
@@ -926,15 +1007,15 @@ def _default_soperator_migration_plan(
                 "external-node-template-upgrade",
                 "Upgrade external MK8s control plane and node templates",
                 progress_label=(
-                    "External MK8s Upgrade: control plane first, worker groups in safe waves"
+                    "External MK8s Upgrade: control plane first, worker groups zero-surge by default"
                 ),
                 requires_customer_approval=True,
                 notes=(
                     "Run direct Nebius cluster and node-group updates; do not call Terraform.",
                     "Upgrade the control plane first, one Kubernetes minor at a time when needed.",
                     "Upgrade service-role source node groups with a temporary zero-surge strategy.",
-                    "Upgrade worker source node groups with safe-surge waves by default and restore "
-                    "each group's original strategy.",
+                    "Upgrade worker source node groups with zero-surge by default, or safe-surge "
+                    "waves when selected, and restore each group's original strategy.",
                 ),
             )
         )
@@ -989,7 +1070,7 @@ def _default_soperator_migration_plan(
                 "Create or reuse service-role node groups without duplicating worker capacity.",
                 "Map worker NodeSets to detected existing worker node groups.",
                 "Apply migration-owned template changes with serial zero-surge service-role "
-                "updates and safe-surge worker waves by default.",
+                "updates and zero-surge worker updates by default.",
             )
         else:
             rolling_title = "Soperator chart upgrade with existing compute layout"
@@ -2324,29 +2405,60 @@ def analyze_soperator_onboarding_snapshot(
             )
         )
 
+    detected_source_version = (
+        _release_detected_version(soperator_release) if isinstance(soperator_release, Mapping) else ""
+    )
+    detected_source_profile = (
+        soperator_migration_profile_for_version(
+            detected_source_version,
+            allow_generation_fallback=True,
+        )
+        if detected_source_version
+        else None
+    )
     manual_source_version_applies = bool(
         manual_source_version and (has_soperator_crds or incompatible_release is not None)
     )
     release_identity_needs_source_version = (
-        incompatible_release is not None and not manual_source_version_applies
+        incompatible_release is not None
+        and not manual_source_version_applies
+        and detected_source_profile is None
     )
 
     if incompatible_release is not None and not manual_source_version_applies:
-        state = ONBOARDING_STATE_EXISTING_SOPERATOR_UNKNOWN
-        findings.append(
-            SoperatorOnboardingFinding(
-                layer="soperator",
-                status="source-version-required",
-                severity="required",
-                message=(
-                    "Existing Soperator-like Helm release has incompatible release name, "
-                    "namespace, or chart identity. Select the source Soperator version so "
-                    "cxcli can match a committed migration profile before it manages the "
-                    "release."
-                ),
-                evidence={"release": dict(incompatible_release)},
+        if release_identity_needs_source_version:
+            state = ONBOARDING_STATE_EXISTING_SOPERATOR_UNKNOWN
+            findings.append(
+                SoperatorOnboardingFinding(
+                    layer="soperator",
+                    status="source-version-required",
+                    severity="required",
+                    message=(
+                        "Existing Soperator-like Helm release has incompatible release name, "
+                        "namespace, or chart identity. Select the source Soperator version so "
+                        "cxcli can match an exact committed migration-profile row or known "
+                        "major-generation profile before it manages the release."
+                    ),
+                    evidence={"release": dict(incompatible_release)},
+                )
             )
-        )
+        else:
+            findings.append(
+                SoperatorOnboardingFinding(
+                    layer="soperator",
+                    status="noncanonical-release-detected",
+                    severity="recommended",
+                    message=(
+                        "Compatible Soperator release version was detected and matched to a "
+                        "migration profile; the noncanonical Soperator-like Helm release is "
+                        "kept as review evidence instead of requiring source-version input."
+                    ),
+                    evidence={
+                        "release": dict(incompatible_release),
+                        "source_version": detected_source_version,
+                    },
+                )
+            )
     elif incompatible_release is not None:
         state = ONBOARDING_STATE_EXISTING_SOPERATOR_UNKNOWN
         findings.append(
@@ -2405,12 +2517,9 @@ def analyze_soperator_onboarding_snapshot(
                     layer="soperator",
                     selected=True,
                     reason="Existing resources must be adopted cautiously before cxcli manages them.",
-                )
             )
+        )
 
-    detected_source_version = (
-        _release_detected_version(soperator_release) if isinstance(soperator_release, Mapping) else ""
-    )
     source_version = detected_source_version or (
         manual_source_version if manual_source_version_applies else ""
     )
@@ -2441,39 +2550,65 @@ def analyze_soperator_onboarding_snapshot(
             )
         comparison = compare_chart_versions(live_chart, pinned_chart_version)
         app_comparison = compare_chart_versions(live_app, pinned_app_version)
-        migration_profile = soperator_migration_profile_for_version(source_version)
-        if migration_profile is None:
-            state = ONBOARDING_STATE_EXISTING_SOPERATOR_UNKNOWN
+        release_matches_target = (
+            isinstance(soperator_release, Mapping)
+            and not release_identity_needs_source_version
+            and comparison == "equal"
+            and (app_comparison in {"equal", "unknown"} or not live_app or not pinned_app_version)
+        )
+        if release_matches_target:
+            migration_profile = soperator_migration_profile_for_version(
+                source_version,
+                allow_generation_fallback=True,
+            )
+            if migration_profile is not None:
+                migration_profile_id = str(migration_profile.get("profile_id", "") or "").strip()
+                findings.append(
+                    _soperator_migration_profile_match_finding(
+                        profile=migration_profile,
+                        source_version=source_version,
+                        target_version=target_version,
+                    )
+                )
+            state = ONBOARDING_STATE_EXISTING_SOPERATOR_TARGET
             findings.append(
                 SoperatorOnboardingFinding(
-                    layer="migration-profile",
-                    status="profile-missing",
-                    severity="required",
-                    message=(
-                        "Detected Soperator release does not match a committed cxcli "
-                        "migration profile. Refresh the profile history before onboarding."
-                    ),
-                    evidence={"source_version": source_version or live_chart or live_app},
+                    layer="versions",
+                    status="target-version",
+                    severity="info",
+                    message="Existing Soperator version matches the cxcli-pinned target.",
+                    evidence={"live_chart": live_chart, "live_app": live_app},
                 )
             )
         else:
-            migration_profile_id = str(migration_profile.get("profile_id", "") or "").strip()
-            findings.append(
-                SoperatorOnboardingFinding(
-                    layer="migration-profile",
-                    status="matched",
-                    severity="info",
-                    message=(
-                        "Detected Soperator release matched migration profile "
-                        f"'{migration_profile_id}'."
-                    ),
-                    evidence={
-                        "source_version": source_version,
-                        "target_version": target_version,
-                        "generation": str(migration_profile.get("generation", "") or ""),
-                    },
-                )
+            migration_profile = soperator_migration_profile_for_version(
+                source_version,
+                allow_generation_fallback=True,
             )
+            if migration_profile is None:
+                state = ONBOARDING_STATE_EXISTING_SOPERATOR_UNKNOWN
+                findings.append(
+                    SoperatorOnboardingFinding(
+                        layer="migration-profile",
+                        status="profile-missing",
+                        severity="required",
+                        message=(
+                            "Detected Soperator release does not match an exact committed "
+                            "cxcli migration profile or known generation profile. Refresh "
+                            "the profile history before onboarding."
+                        ),
+                        evidence={"source_version": source_version or live_chart or live_app},
+                    )
+                )
+            else:
+                migration_profile_id = str(migration_profile.get("profile_id", "") or "").strip()
+                findings.append(
+                    _soperator_migration_profile_match_finding(
+                        profile=migration_profile,
+                        source_version=source_version,
+                        target_version=target_version,
+                    )
+                )
         if comparison == "older" or app_comparison == "older":
             if migration_profile is not None and not release_identity_needs_source_version:
                 state = ONBOARDING_STATE_EXISTING_SOPERATOR_SUPPORTED
@@ -2661,6 +2796,7 @@ def analyze_soperator_onboarding_snapshot(
             not in {
                 ONBOARDING_STATE_EXISTING_SOPERATOR_SUPPORTED,
                 ONBOARDING_STATE_EXISTING_SOPERATOR_NEWER,
+                ONBOARDING_STATE_EXISTING_SOPERATOR_TARGET,
             }
             and migration_profile is not None
             and comparison == "equal"
@@ -2686,7 +2822,8 @@ def analyze_soperator_onboarding_snapshot(
                 severity="required",
                 message=(
                     "Soperator CRDs were detected but no compatible Helm release version was found. "
-                    "Select the source Soperator version so cxcli can plan migration."
+                    "Select the source Soperator version so cxcli can match an exact committed "
+                    "migration-profile row or known major-generation profile."
                 ),
             )
         )

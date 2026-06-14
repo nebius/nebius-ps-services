@@ -29021,3 +29021,2541 @@ releases:
       file_count: 0
       files: []
     contract_fingerprint: bbc252775503b7f7ff1acd958c4fbe3857a916787f64ec2eb36798c139638ffd
+- version: 3.0.6
+  upstream_tag: 3.0.6
+  published_at: '2026-06-09'
+  generation: v3
+  profile_id: v3-to-target
+  migration_class: storage-and-layout-migration
+  chart_path: helm/soperator
+  chart_name: helm-soperator
+  chart_version: 3.0.6
+  app_version: 3.0.6
+  source_tarball_sha256: ad2eb0ad02fafad769fd2bf32b3f88b44cc9272428f1bce53b792bb44f79ff5b
+  contract_fingerprint: 46b3331ac8f099c25e82987f4f9cc128ff0a85ec62e1380dbdef29dbe21a4acb
+  component_contracts:
+  - id: nfs-server
+    chart_path: helm/nfs-server
+    chart_name: helm-nfs-server
+    chart_version: 1.2.0
+    app_version: 1.2.0
+    chart_archive:
+      sha256: d2ef2d4ca97475e42a86809d813977144798114eae895f7bd50bd17bfb0c53c2
+      file_count: 15
+    crds:
+      sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+      file_count: 0
+      files: []
+    templates:
+      sha256: d895dad1f5769aece25373f02e1313ee263ab09182d43912fe5b8efb391af0d8
+      file_count: 11
+      files:
+      - templates/_helpers.tpl
+      - templates/configmap.yaml
+      - templates/priorityclass.yaml
+      - templates/pvc.yaml
+      - templates/service.yaml
+      - templates/serviceaccount.yaml
+      - templates/servicemonitor.yaml
+      - templates/statefulset.yaml
+      - templates/storageclass.yaml
+      - templates/tests/test-configmap-exports.yaml
+      - templates/tests/test-nfs-connectivity.yaml
+    values:
+      sha256: f06df76c279e02b658e950673383700621a17a451e5233ec7e25ad8181494e9b
+      file_count: 2
+      files:
+      - Chart.yaml
+      - values.yaml
+    images:
+      sha256: 7986110eb9d157ce070ae25f7ef45e1d29b488f2c6d494025e58f87fd75d8138
+      count: 1
+      values:
+      - cr.eu-north1.nebius.cloud/soperator/nfs-server:1.2.0
+    slurm_contract:
+      sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+      file_count: 0
+      files: []
+    contract_fingerprint: 1bc472fcfccfef443f77a9698864585cc2ddd556e7ae01ac3db070d116a4a8b6
+  - id: nodeconfigurator
+    chart_path: helm/nodeconfigurator
+    chart_name: helm-nodeconfigurator
+    chart_version: 3.0.6
+    app_version: 3.0.6
+    chart_archive:
+      sha256: b18df5fc751f0412812f2b353b94bd3d09491acf48fdb90d31e85ffc9f159fbf
+      file_count: 10
+    crds:
+      sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+      file_count: 0
+      files: []
+    templates:
+      sha256: 23d56dcd5f59f0839ec23f8e91e5ca2475ac85a8d68e4e9cb5cf1311ece12be5
+      file_count: 7
+      files:
+      - templates/_helpers.tpl
+      - templates/binding-rbac.yaml
+      - templates/metrics-service.yaml
+      - templates/nodeconfigurator-cr.yaml
+      - templates/nodeconfigurator-rbac.yaml
+      - templates/serviceaccount.yaml
+      - templates/servicemonitor.yaml
+    values:
+      sha256: e04c7a3de4c0d61443407c3868825d39fe0a72d6e05934a1feda25b7e002dd88
+      file_count: 2
+      files:
+      - Chart.yaml
+      - values.yaml
+    images:
+      sha256: db2fdc5d830b7c20cafd50fc22ebd32c1417eb760745ec3c1d9ea697b4b4e112
+      count: 3
+      values:
+      - cr.eu-north1.nebius.cloud/soperator/busybox
+      - cr.eu-north1.nebius.cloud/soperator/busybox:latest
+      - cr.eu-north1.nebius.cloud/soperator/rebooter:3.0.6
+    slurm_contract:
+      sha256: 1b548e34ad9d4face441b8e3c42039deb715ab114649c9f6466c6ceb13881914
+      file_count: 8
+      files:
+      - Chart.yaml
+      - templates/_helpers.tpl
+      - templates/binding-rbac.yaml
+      - templates/metrics-service.yaml
+      - templates/nodeconfigurator-cr.yaml
+      - templates/nodeconfigurator-rbac.yaml
+      - templates/serviceaccount.yaml
+      - templates/servicemonitor.yaml
+    contract_fingerprint: fc65db8c8b40aeb0b45c24623b3677517ac2a47121a5a0b14e5070d46f09a916
+  - id: nodesets
+    chart_path: helm/nodesets
+    chart_name: helm-nodesets
+    chart_version: 3.0.6
+    app_version: 3.0.6
+    chart_archive:
+      sha256: d356467ee023a99dac7f1bac04b662000ab433c8bae85beee80f2b14b6904527
+      file_count: 12
+    crds:
+      sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+      file_count: 0
+      files: []
+    templates:
+      sha256: 4e245f338c097a796bfc71ba117cc8f173e3d0946155d55d290d7a682770f0cf
+      file_count: 3
+      files:
+      - templates/_helpers.tpl
+      - templates/nodeset.yaml
+      - templates/priority-class.yaml
+    values:
+      sha256: 7570340bd808c24a4fd0a9b4e649a6d79acf96aa7769c709d212cff607342aa8
+      file_count: 2
+      files:
+      - Chart.yaml
+      - values.yaml
+    images:
+      sha256: 51334abe9350a00c3058bd7e218a3971a485c09fc0cc0fe7a5d10bf82acec7b8
+      count: 2
+      values:
+      - cr.eu-north1.nebius.cloud/soperator/munge:3.0.6-slurm25.11.3
+      - cr.eu-north1.nebius.cloud/soperator/worker_slurmd:3.0.6-slurm25.11.3
+    slurm_contract:
+      sha256: 0ecfd970456bea1101034ba3ee184c2cdb8e65a36251670d792da0cefe2d5829
+      file_count: 11
+      files:
+      - Chart.yaml
+      - templates/_helpers.tpl
+      - templates/nodeset.yaml
+      - templates/priority-class.yaml
+      - tests/basic_test.yaml
+      - tests/custom_values_test.yaml
+      - tests/gpu_config_test.yaml
+      - tests/node_config_test.yaml
+      - tests/priority_class_test.yaml
+      - tests/volumes_test.yaml
+      - values.yaml
+    contract_fingerprint: d47a923d160d22b7ab6cf1087b6bb33f9c63cae56671a2bb14a3154bcd0efd59
+  - id: slurm-cluster
+    chart_path: helm/slurm-cluster
+    chart_name: helm-slurm-cluster
+    chart_version: 3.0.6
+    app_version: 3.0.6
+    chart_archive:
+      sha256: ee1544977db1ae770917e8e789e0f1eabe7ea86e5faceca4fa48be4edbeb6a10
+      file_count: 72
+    crds:
+      sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+      file_count: 0
+      files: []
+    templates:
+      sha256: aba513ce7edfa49bc7b45baaf26c868a2085cd6bbe749fe68cb6bd12deee6f95
+      file_count: 18
+      files:
+      - templates/_helpers.tpl
+      - templates/_registry_helpers.tpl
+      - templates/_secret_helpers.tpl
+      - templates/exporter-role.yaml
+      - templates/exporter-rolebinding.yaml
+      - templates/exporter-serviceaccount.yaml
+      - templates/priority-class.yaml
+      - templates/pvc.yaml
+      - templates/sconfigcontroller-metrics-service.yaml
+      - templates/sconfigcontroller-role.yaml
+      - templates/sconfigcontroller-rolebinding.yaml
+      - templates/sconfigcontroller-serviceaccount.yaml
+      - templates/sconfigcontroller-servicemonitor.yaml
+      - templates/slurm-cluster-cr.yaml
+      - templates/slurm-controller-role.yaml
+      - templates/slurm-controller-rolebinding.yaml
+      - templates/slurm-controller-serviceaccount.yaml
+      - templates/slurm-scripts-cm.yaml
+    values:
+      sha256: 16e69fc07cda1cb35c268388bae14f820345ca838edb1c48037015b0729bd643
+      file_count: 2
+      files:
+      - Chart.yaml
+      - values.yaml
+    images:
+      sha256: 1f71a4c256359278d8cccdef15129a4b3c0b91b830565809f0a52f6492957e01
+      count: 9
+      values:
+      - cr.eu-north1.nebius.cloud/soperator/controller_slurmctld:3.0.6-slurm25.11.3
+      - cr.eu-north1.nebius.cloud/soperator/controller_slurmdbd:3.0.6-slurm25.11.3
+      - cr.eu-north1.nebius.cloud/soperator/login_sshd:3.0.6-slurm25.11.3
+      - cr.eu-north1.nebius.cloud/soperator/munge:3.0.6-slurm25.11.3
+      - cr.eu-north1.nebius.cloud/soperator/sconfigcontroller:3.0.6
+      - cr.eu-north1.nebius.cloud/soperator/slurmrestd:3.0.6-slurm25.11.3
+      - cr.eu-north1.nebius.cloud/soperator/soperator-exporter:3.0.6-slurm25.11.3
+      - cr.eu-north1.nebius.cloud/soperator/worker_slurmd:3.0.6-slurm25.11.3
+      - docker-registry1.mariadb.com/library/mariadb:12.1.2
+    slurm_contract:
+      sha256: 874a70d3e612c5b123ce1ae23ca613a8f343ca27d2d7ba8b8d297064ff1df678
+      file_count: 56
+      files:
+      - slurm_scripts/alloc_gpus_busy.drain.sh
+      - slurm_scripts/alloc_gpus_busy.drain.sh.json
+      - slurm_scripts/alloc_gpus_busy.undrain.sh
+      - slurm_scripts/alloc_gpus_busy.undrain.sh.json
+      - slurm_scripts/alloc_mem_used.drain.sh
+      - slurm_scripts/alloc_mem_used.drain.sh.json
+      - slurm_scripts/alloc_mem_used.undrain.sh
+      - slurm_scripts/alloc_mem_used.undrain.sh.json
+      - slurm_scripts/boot_disk_full.sh
+      - slurm_scripts/boot_disk_full.sh.json
+      - slurm_scripts/check_runner.py
+      - slurm_scripts/chmod_enroot_layers.sh
+      - slurm_scripts/chmod_enroot_layers.sh.json
+      - slurm_scripts/cleanup_enroot.sh
+      - slurm_scripts/cleanup_enroot.sh.json
+      - slurm_scripts/cleanup_scratch_data.sh
+      - slurm_scripts/cleanup_scratch_data.sh.json
+      - slurm_scripts/drop_page_cache.sh
+      - slurm_scripts/drop_page_cache.sh.json
+      - slurm_scripts/drop_posix_shmem.sh
+      - slurm_scripts/drop_posix_shmem.sh.json
+      - slurm_scripts/epilog.sh
+      - slurm_scripts/gpu_health_check.py
+      - slurm_scripts/gpu_health_check.py.json
+      - slurm_scripts/hc_program.sh
+      - slurm_scripts/job_tmpfs_delete.sh
+      - slurm_scripts/job_tmpfs_delete.sh.json
+      - slurm_scripts/job_tmpfs_delete_leftover.sh
+      - slurm_scripts/job_tmpfs_delete_leftover.sh.json
+      - slurm_scripts/job_tmpfs_recreate.sh
+      - slurm_scripts/job_tmpfs_recreate.sh.json
+      - slurm_scripts/map_job_dcgm.sh
+      - slurm_scripts/map_job_dcgm.sh.json
+      - slurm_scripts/nvme_raid_health.sh
+      - slurm_scripts/nvme_raid_health.sh.json
+      - slurm_scripts/prolog.sh
+      - slurm_scripts/unmap_job_dcgm.sh
+      - slurm_scripts/unmap_job_dcgm.sh.json
+      - templates/sconfigcontroller-metrics-service.yaml
+      - templates/sconfigcontroller-role.yaml
+      - templates/sconfigcontroller-rolebinding.yaml
+      - templates/sconfigcontroller-serviceaccount.yaml
+      - templates/sconfigcontroller-servicemonitor.yaml
+      - templates/slurm-cluster-cr.yaml
+      - templates/slurm-controller-role.yaml
+      - templates/slurm-controller-rolebinding.yaml
+      - templates/slurm-controller-serviceaccount.yaml
+      - templates/slurm-scripts-cm.yaml
+      - tests/custom_slurm_config_test.yaml
+      - tests/exporter-rbac_test.yaml
+      - tests/minimal-config_test.yaml
+      - tests/optional-fields_test.yaml
+      - tests/partition_configuration_test.yaml
+      - tests/sconfigcontroller-rbac_test.yaml
+      - tests/volume-sources-filtering_test.yaml
+      - values.yaml
+    contract_fingerprint: 4abc96124f9cc3c150ecef59b7cf6c1d5bc087594366e67580719647d7340b06
+  - id: slurm-cluster-storage
+    chart_path: helm/slurm-cluster-storage
+    chart_name: helm-slurm-cluster-storage
+    chart_version: 3.0.6
+    app_version: 3.0.6
+    chart_archive:
+      sha256: 5f2946a534e4680490ca0a2139d2bd3da9826434e44df2ed6802704d71af5cbe
+      file_count: 18
+    crds:
+      sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+      file_count: 0
+      files: []
+    templates:
+      sha256: ebb7c6db22f4272f80beaeb43756f10e74c27d7ca2f0f443ebfa71763f392894
+      file_count: 14
+      files:
+      - templates/_helpers.tpl
+      - templates/accounting-mount-daemonset.yaml
+      - templates/accounting-pv.yaml
+      - templates/controller-spool-mount-daemonset.yaml
+      - templates/controller-spool-pv.yaml
+      - templates/controller-spool-pvc.yaml
+      - templates/jail-mount-daemonset.yaml
+      - templates/jail-pv.yaml
+      - templates/jail-pvc.yaml
+      - templates/jail-submounts-mount-daemonset.yaml
+      - templates/jail-submounts-pv.yaml
+      - templates/jail-submounts-pvc.yaml
+      - templates/local-storageclass.yaml
+      - templates/mount-scripts-configmap.yaml
+    values:
+      sha256: 1aac7aa2e32e4f98181a7e278e54e01cd52551fb1a60de53ba882e148fe29c70
+      file_count: 2
+      files:
+      - Chart.yaml
+      - values.yaml
+    images:
+      sha256: 001064b7f8895db601b97f48c220d7c02fd4b9db779c588c696907893eb1f85a
+      count: 1
+      values:
+      - cr.eu-north1.nebius.cloud/ml-containers/neubuntu:noble-20260206131521
+    slurm_contract:
+      sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+      file_count: 0
+      files: []
+    contract_fingerprint: 0bfb7a1883c9994dc9284ba7144becfa8d3c321c3b3894c542a82d09f84d521a
+  - id: soperator
+    chart_path: helm/soperator
+    chart_name: helm-soperator
+    chart_version: 3.0.6
+    app_version: 3.0.6
+    chart_archive:
+      sha256: e738aeccd4128ce77effcb9878e44faed3f8a7016d9b781c7b7d4b10d24a5e5f
+      file_count: 24
+    crds:
+      sha256: c4ee236a9854dfa3092ad08f024c064054ade6433950c6bb523ca9603704a86e
+      file_count: 1
+      files:
+      - crds/slurmcluster-crd.yaml
+    templates:
+      sha256: 4f7c42bbb91f2733e647a319cdc628c2861db67610aa70413d5b3722cce6edf1
+      file_count: 16
+      files:
+      - templates/_helpers.tpl
+      - templates/binding-rbac.yaml
+      - templates/deployment.yaml
+      - templates/leader-election-rbac.yaml
+      - templates/manager-rbac.yaml
+      - templates/metrics-reader-rbac.yaml
+      - templates/metrics-service.yaml
+      - templates/mutating-webhook-configuration.yaml
+      - templates/proxy-rbac.yaml
+      - templates/selfsigned-issuer.yaml
+      - templates/serviceaccount.yaml
+      - templates/servicemonitor.yaml
+      - templates/serving-cert.yaml
+      - templates/soperator-checks-rbac.yaml
+      - templates/validating-webhook-configuration.yaml
+      - templates/webhook-service.yaml
+    values:
+      sha256: 204537d6f6cd3ba6712527af80f8657247f231cc29c703ab3e35f64c1400d3c6
+      file_count: 2
+      files:
+      - Chart.yaml
+      - values.yaml
+    images:
+      sha256: 70fb8f2505b1e3d4dcceb6f2954e052d9671f2cf9ccc87f5baff539446e356d1
+      count: 2
+      values:
+      - cr.eu-north1.nebius.cloud/soperator/slurm-operator:3.0.6
+      - registry.k8s.io/kubebuilder/kube-rbac-proxy:v0.15.0
+    slurm_contract:
+      sha256: b76969c769bfeac7a47faeaddd1473297cf99df180c3cda912f84cb1f9a2a79e
+      file_count: 6
+      files:
+      - crds/slurmcluster-crd.yaml
+      - templates/_helpers.tpl
+      - templates/manager-rbac.yaml
+      - templates/mutating-webhook-configuration.yaml
+      - templates/validating-webhook-configuration.yaml
+      - values.yaml
+    contract_fingerprint: 486e8ce3c1bac8b0305d6627e34958f1209bb00f439a55aa0fec944b2e8d26cd
+  - id: soperator-activechecks
+    chart_path: helm/soperator-activechecks
+    chart_name: helm-soperator-activechecks
+    chart_version: 3.0.6
+    app_version: 3.0.6
+    chart_archive:
+      sha256: 10f7e941c3953b81ee3b08374255f5534ec99b541aed2f58cfc2fb098d4af1c7
+      file_count: 35
+    crds:
+      sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+      file_count: 0
+      files: []
+    templates:
+      sha256: fb0901ba0b1d07aaf01ca349365a3b839d4fd99bbfa78f6cb9417b64ef45d303
+      file_count: 7
+      files:
+      - templates/_helpers.tpl
+      - templates/active-checks.yaml
+      - templates/run-extensive-check-on-reservations.yaml
+      - templates/wait-for-checks-job.yaml
+      - templates/wait-for-checks-role.yaml
+      - templates/wait-for-checks-rolebinging.yaml
+      - templates/wait-for-checks-sa.yaml
+    values:
+      sha256: 2a816c74db78951138c95d24fa8c87ef42cd05b7f5c26e08c0bf5b1a5e580da9
+      file_count: 2
+      files:
+      - Chart.yaml
+      - values.yaml
+    images:
+      sha256: 3f9d71eed77124bd0e958970bd5565f7a6b30ed1791496cefd4ce837cf40d2bd
+      count: 6
+      values:
+      - alpine/k8s:1.31.11
+      - cr.eu-north1.nebius.cloud/soperator/k8s_check_job:3.0.6-slurm25.11.3
+      - cr.eu-north1.nebius.cloud/soperator/munge:3.0.6-slurm25.11.3
+      - cr.eu-north1.nebius.cloud/soperator/sansible:3.0.6-slurm25.11.3
+      - cr.eu-north1.nebius.cloud/soperator/slurm_check_job:3.0.6-slurm25.11.3
+      - reg/repo:tag
+    slurm_contract:
+      sha256: 878511916f4011f0e4ed4fd477cf5a8a0023243bf210af1267538f010762d67f
+      file_count: 17
+      files:
+      - Chart.yaml
+      - scripts/all-reduce-perf-nccl-in-docker.sh
+      - scripts/cuda-samples.sh
+      - scripts/extensive-check.sh
+      - scripts/gpu-fryer.sh
+      - scripts/ib-gpu-perf.sh
+      - scripts/mem-perf.sh
+      - scripts/prepull-container-image.sh
+      - templates/_helpers.tpl
+      - templates/active-checks.yaml
+      - templates/run-extensive-check-on-reservations.yaml
+      - templates/wait-for-checks-job.yaml
+      - templates/wait-for-checks-role.yaml
+      - templates/wait-for-checks-rolebinging.yaml
+      - templates/wait-for-checks-sa.yaml
+      - tests/k8sjob_spec_test.yaml
+      - values.yaml
+    contract_fingerprint: 2646d7840df3290cc7907142eee50ea3ff594e03ea56ddf9ac1e61191fd3043a
+  - id: soperator-backup-config
+    chart_path: helm/soperator-backup-config
+    chart_name: helm-soperator-backup-config
+    chart_version: 3.0.6
+    app_version: 3.0.6
+    chart_archive:
+      sha256: ae03351df37aaedb245603cb8a0865ec2c5150d9311990de0121c6b354e7654e
+      file_count: 4
+    crds:
+      sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+      file_count: 0
+      files: []
+    templates:
+      sha256: 22f31d204b918605cf1c7434c873f6dcdd467664dda3d05939cc41b1a5048fe0
+      file_count: 2
+      files:
+      - templates/_helpers.tpl
+      - templates/schedule.yaml
+    values:
+      sha256: f857342ceb2f0c8c45a9a2b3edb932c41a1ce2e81bbff6ac4362d0f3596d39d3
+      file_count: 2
+      files:
+      - Chart.yaml
+      - values.yaml
+    images:
+      sha256: 4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945
+      count: 0
+      values: []
+    slurm_contract:
+      sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+      file_count: 0
+      files: []
+    contract_fingerprint: 3d3799ff3c9992624e8833a9998d954e0944fcc3657773094858ef78c3ac7845
+  - id: soperator-crds
+    chart_path: helm/soperator-crds
+    chart_name: helm-soperator-crds
+    chart_version: 3.0.6
+    app_version: 3.0.6
+    chart_archive:
+      sha256: 53a52fbf6b3ab5f0d6ef7bda2efc2e0259eca0e70e61eefea6f72271e0a16e05
+      file_count: 5
+    crds:
+      sha256: a7de78b89066dd64e5e3e7bebb6ab20b191d05b7b899c39117ee204def35c596
+      file_count: 1
+      files:
+      - templates/slurmcluster-crd.yaml
+    templates:
+      sha256: 13fa5fd391ae361b34ef0effc32efe557ff757f09c1fc8f9cfd9b77169fe579a
+      file_count: 2
+      files:
+      - templates/_helpers.tpl
+      - templates/slurmcluster-crd.yaml
+    values:
+      sha256: 36de584ea9581451e1e0fbff2edaffac4d6c2434c727ee4a4eb211148bcbb235
+      file_count: 2
+      files:
+      - Chart.yaml
+      - values.yaml
+    images:
+      sha256: 4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945
+      count: 0
+      values: []
+    slurm_contract:
+      sha256: a7de78b89066dd64e5e3e7bebb6ab20b191d05b7b899c39117ee204def35c596
+      file_count: 1
+      files:
+      - templates/slurmcluster-crd.yaml
+    contract_fingerprint: f33f5220240737e2470bfc8f00c0c98a5d48d333d736d6512690f5db2b736d86
+  - id: soperator-custom-configmaps
+    chart_path: helm/soperator-custom-configmaps
+    chart_name: helm-soperator-custom-configmaps
+    chart_version: 3.0.6
+    app_version: 3.0.6
+    chart_archive:
+      sha256: a9c48c366160ab097e568f61c6c2070c583c84e169fc8f744d0c48fcb283cc66
+      file_count: 12
+    crds:
+      sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+      file_count: 0
+      files: []
+    templates:
+      sha256: 3641128bf5ec301558d2cae99b68b0bed5391c97ba1cf51c6c40e1e043036f8b
+      file_count: 4
+      files:
+      - templates/_helpers.tpl
+      - templates/configmap-image-storage.yaml
+      - templates/configmap-motd.yaml
+      - templates/configmap-supervisord.yaml
+    values:
+      sha256: 83a6a8f22c7aa9171675834e53c50433a57541b05820f4d642e8f3669e4c546f
+      file_count: 2
+      files:
+      - Chart.yaml
+      - values.yaml
+    images:
+      sha256: 4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945
+      count: 0
+      values: []
+    slurm_contract:
+      sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+      file_count: 0
+      files: []
+    contract_fingerprint: 778db65fca00ab7d8be9bb2ecd4264305e706d33f94017e275a9fa23df420425
+  - id: soperator-dcgm-exporter
+    chart_path: helm/soperator-dcgm-exporter
+    chart_name: helm-soperator-dcgm-exporter
+    chart_version: 3.0.6
+    app_version: 3.0.6
+    chart_archive:
+      sha256: 91acc1eb16ec6ad1e481d2e42793feea96ca690973b53a3d5334f02e18dd9723
+      file_count: 11
+    crds:
+      sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+      file_count: 0
+      files: []
+    templates:
+      sha256: 1a29146315cac021f8c60778dc90afd0bc680091ea7469f209484c908fa23010
+      file_count: 8
+      files:
+      - templates/_helpers.tpl
+      - templates/configmap.yaml
+      - templates/daemonset.yaml
+      - templates/role.yaml
+      - templates/rolebinding.yaml
+      - templates/service.yaml
+      - templates/serviceaccount.yaml
+      - templates/servicemonitor.yaml
+    values:
+      sha256: f26993a995bf9b5f46ddf5042b828e716ce9721125dcb09799220263dac533ba
+      file_count: 2
+      files:
+      - Chart.yaml
+      - values.yaml
+    images:
+      sha256: 4060f45eb8a357efb200d5eecc22e64a694d9a61a89dacc70239222b29dc6657
+      count: 3
+      values:
+      - cr.eu-north1.nebius.cloud/marketplace/nebius/nvidia-gpu-operator/image/gpu-operator-validator:v24.6.2
+      - cr.eu-north1.nebius.cloud/soperator/busybox:latest
+      - cr.eu-north1.nebius.cloud/soperator/dcgm-exporter:4.4.2-4.7.0-ubuntu22.04
+    slurm_contract:
+      sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+      file_count: 0
+      files: []
+    contract_fingerprint: 658f5e90a578732d5c0e64094aa18654dfa2d9bc5b1dfb127fae3fb2b8c98571
+  - id: soperator-fluxcd
+    chart_path: helm/soperator-fluxcd
+    chart_name: helm-soperator-fluxcd
+    chart_version: 3.0.6
+    app_version: 3.0.6
+    chart_archive:
+      sha256: 4e46166c7d590454096dda1be6e6b953dd6a6b07234dd34e3a765b5b17c221a2
+      file_count: 42
+    crds:
+      sha256: 233b57fb7cfe72ae944d89b6dde672f5c1d22bb651c4e4a5b341bb3c58603a03
+      file_count: 3
+      files:
+      - templates/mariadb-operator-crds.yaml
+      - templates/prometheus-operator-crds.yaml
+      - templates/victoria-metrics-operator-crds.yaml
+    templates:
+      sha256: e5960d75ae5a8d471375d86e5e7390b9797bbc5c220108fb388a70c131bf8af0
+      file_count: 32
+      files:
+      - templates/_helpers.tpl
+      - templates/backup-config.yaml
+      - templates/backup.yaml
+      - templates/cert-manager.yaml
+      - templates/csi-driver-nfs.yaml
+      - templates/dcgm-exporter.yaml
+      - templates/helmrepository.yaml
+      - templates/kruise.yaml
+      - templates/mariadb-operator-crds.yaml
+      - templates/mariadb-operator.yaml
+      - templates/monitoring-dashboards.yaml
+      - templates/namespaces.yaml
+      - templates/nfs-server.yaml
+      - templates/nodeconfigurator.yaml
+      - templates/nodesets.yaml
+      - templates/notifier.yaml
+      - templates/opentelemetry-collector-events.yaml
+      - templates/opentelemetry-collector-jail-logs.yaml
+      - templates/opentelemetry-collector-logs.yaml
+      - templates/prometheus-operator-crds.yaml
+      - templates/security-profiles-operator.yaml
+      - templates/slurm-cluster-storage.yaml
+      - templates/slurm-cluster.yaml
+      - templates/soperator-activechecks.yaml
+      - templates/soperator-custom-configmaps.yaml
+      - templates/soperator.yaml
+      - templates/soperatorchecks.yaml
+      - templates/storageclasses.yaml
+      - templates/tailscale.yaml
+      - templates/victoria-metrics-operator-crds.yaml
+      - templates/vm-logs.yaml
+      - templates/vm-stack.yaml
+    values:
+      sha256: dfbe11e925f15f50f48470a61e18465fa967d010b4817a1cd9411f615fd35fca
+      file_count: 2
+      files:
+      - Chart.yaml
+      - values.yaml
+    images:
+      sha256: 1930d6498a0c70637709a5f35d42d8e82d4a1d188bc45eacec8952ec9f3f5339
+      count: 3
+      values:
+      - cr.eu-north1.nebius.cloud/soperator/busybox:latest
+      - cr.eu-north1.nebius.cloud/soperator/kruise-helm-hook
+      - cr.eu-north1.nebius.cloud/soperator/kruise-manager
+    slurm_contract:
+      sha256: 2e5c334b776eac89b2cad0f0548574d2d32395f03b358cdd18c9e2c3daaca7e6
+      file_count: 14
+      files:
+      - templates/backup-config.yaml
+      - templates/kruise.yaml
+      - templates/namespaces.yaml
+      - templates/nodeconfigurator.yaml
+      - templates/nodesets.yaml
+      - templates/opentelemetry-collector-jail-logs.yaml
+      - templates/slurm-cluster-storage.yaml
+      - templates/slurm-cluster.yaml
+      - templates/soperator-activechecks.yaml
+      - templates/vm-stack.yaml
+      - tests/component_enabled_test.yaml
+      - tests/soperator_dependency_test.yaml
+      - tests/values_override_test.yaml
+      - values.yaml
+    contract_fingerprint: bc6eb0027b7267dacdb859b250c3f81aea2e00838ce4e7f5f7afbab319664b59
+  - id: soperator-fluxcd-bootstrap
+    chart_path: helm/soperator-fluxcd-bootstrap
+    chart_name: helm-soperator-fluxcd-bootstrap
+    chart_version: 3.0.6
+    app_version: 3.0.6
+    chart_archive:
+      sha256: 8ea1e8d4019bc2dc3ff873e88c42313e7bb1a66482cbf8c23596d11a8c2bafa4
+      file_count: 7
+    crds:
+      sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+      file_count: 0
+      files: []
+    templates:
+      sha256: ee3baf2024b372b98ca89c7fbff3d950d59f38d26aaa9673f8e88a04e0177ca9
+      file_count: 3
+      files:
+      - templates/_helpers.tpl
+      - templates/helmrelease.yaml
+      - templates/helmrepository.yaml
+    values:
+      sha256: 84df15e6d2086c2ea2e722373bc59962efdd5ad8ef1f7e1aa0d9af6fabe0ec22
+      file_count: 2
+      files:
+      - Chart.yaml
+      - values.yaml
+    images:
+      sha256: 4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945
+      count: 0
+      values: []
+    slurm_contract:
+      sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+      file_count: 0
+      files: []
+    contract_fingerprint: 1a235106886187a9556b0a21996069e5029c9fc4ab3d95cf602335808cd8ae5c
+  - id: soperator-monitoring-dashboards
+    chart_path: helm/soperator-monitoring-dashboards
+    chart_name: helm-soperator-monitoring-dashboards
+    chart_version: 3.0.6
+    app_version: 3.0.6
+    chart_archive:
+      sha256: 905949dc8ab0de4ae6f259c4df1009782e33c640813ea5285b2367ea03b3b7fc
+      file_count: 9
+    crds:
+      sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+      file_count: 0
+      files: []
+    templates:
+      sha256: 05b64487eb98ce8a906f2020f231879b34c21ec8dbdb58c72fc451279397af6d
+      file_count: 2
+      files:
+      - templates/_helpers.tpl
+      - templates/configmaps.yaml
+    values:
+      sha256: f14bddceb18b9cd34faddefce266a4a5c7340f38375d3f178375af0b665088ec
+      file_count: 2
+      files:
+      - Chart.yaml
+      - values.yaml
+    images:
+      sha256: 4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945
+      count: 0
+      values: []
+    slurm_contract:
+      sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+      file_count: 0
+      files: []
+    contract_fingerprint: d50be597a4f1dbdaf0aa2c910ce1a61b7ab0d8bd8d0e35ced583fde0a576cc9b
+  - id: soperator-notifier
+    chart_path: helm/soperator-notifier
+    chart_name: helm-soperator-notifier
+    chart_version: 3.0.6
+    app_version: 3.0.6
+    chart_archive:
+      sha256: a3807524fb7c6af20b6a2acb5ac80749c343ebdc66c94eae54849d80c29786bc
+      file_count: 20
+    crds:
+      sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+      file_count: 0
+      files: []
+    templates:
+      sha256: 4a61d27d3bdf5a02dcaec108d0ef106bed5d32ac37af4505c7316c5c86c0916f
+      file_count: 11
+      files:
+      - templates/01_secret.yml
+      - templates/02_config.yml
+      - templates/03_manager.yml
+      - templates/04_rule.yml
+      - templates/05_alert.yml
+      - templates/_helpers.00_slack.tpl
+      - templates/_helpers.02_config.tpl
+      - templates/_helpers.03_manager.tpl
+      - templates/_helpers.04_rule.tpl
+      - templates/_helpers.05_alert.tpl
+      - templates/_helpers.tpl
+    values:
+      sha256: 9db0c4db88bed3db2c15c9509ad517c99f1db07cd985029c794b48ccd2be09ae
+      file_count: 2
+      files:
+      - Chart.yaml
+      - values.yaml
+    images:
+      sha256: 4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945
+      count: 0
+      values: []
+    slurm_contract:
+      sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+      file_count: 0
+      files: []
+    contract_fingerprint: 353e675d5aa7a6379656408a021d6ed462f1a310d81843a65acf91d9f06da27a
+  - id: soperatorchecks
+    chart_path: helm/soperatorchecks
+    chart_name: helm-soperatorchecks
+    chart_version: 3.0.6
+    app_version: 3.0.6
+    chart_archive:
+      sha256: 4af89078c5fcc27cb6bef60ef13ac616f405bc3ec89fb3e14dc8d0d9c669ba9e
+      file_count: 10
+    crds:
+      sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+      file_count: 0
+      files: []
+    templates:
+      sha256: 19f04b469a24e04371bf1e2163e2db4b0535630f77c8fd054eb439ab7ebad55c
+      file_count: 7
+      files:
+      - templates/_helpers.tpl
+      - templates/deployment.yaml
+      - templates/metrics-service.yaml
+      - templates/serviceaccount.yaml
+      - templates/servicemonitor.yaml
+      - templates/soperator-checks-binding-rbac.yaml
+      - templates/soperator-checks-rbac.yaml
+    values:
+      sha256: 5cffc3f10008624d772bba148db7c91b7b438b9d36389664985d9eb926df4e69
+      file_count: 2
+      files:
+      - Chart.yaml
+      - values.yaml
+    images:
+      sha256: a70be2ca609454fffa6e8081279e1b286b8558ea62a7afbf0bf76b95b4159061
+      count: 2
+      values:
+      - cr.eu-north1.nebius.cloud/soperator/soperatorchecks:3.0.6
+      - registry.k8s.io/kubebuilder/kube-rbac-proxy:v0.15.0
+    slurm_contract:
+      sha256: 5dbd3232b83f5dd4b310a172334786393fa49a2bcdbb794e5173fde59c0f5e29
+      file_count: 3
+      files:
+      - templates/_helpers.tpl
+      - templates/soperator-checks-rbac.yaml
+      - values.yaml
+    contract_fingerprint: 71aba2a92c07a089b16d2dd2c85abeefd45bf723257989e3b47221de121f79f7
+  - id: storageclasses
+    chart_path: helm/storageclasses
+    chart_name: helm-storageclasses
+    chart_version: 3.0.6
+    app_version: 3.0.6
+    chart_archive:
+      sha256: 90e208ab8ab57520686234e4c6d1779ecb33c75d4896922b664baa1f3f20ae01
+      file_count: 4
+    crds:
+      sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+      file_count: 0
+      files: []
+    templates:
+      sha256: b3c92d59cdf91e158abf048ddf540a4f1511f93b10098793da42209750c9eba1
+      file_count: 2
+      files:
+      - templates/_helpers.tpl
+      - templates/storageclasses.yaml
+    values:
+      sha256: e403d199ab015f3e7ba07a024ea3b1fbdc69ca0fb0054392dd7cbc1bbb6ee631
+      file_count: 2
+      files:
+      - Chart.yaml
+      - values.yaml
+    images:
+      sha256: 4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945
+      count: 0
+      values: []
+    slurm_contract:
+      sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+      file_count: 0
+      files: []
+    contract_fingerprint: c55eb89c584987d20f692978096be1bebb53f8c6dcca339df5ccaf5ee25d7455
+- version: 4.0.2
+  upstream_tag: 4.0.2
+  published_at: '2026-06-09'
+  generation: v4
+  profile_id: v4-to-target
+  migration_class: adopt-or-install
+  chart_path: helm/soperator
+  chart_name: helm-soperator
+  chart_version: 4.0.2
+  app_version: 4.0.2
+  source_tarball_sha256: a3eff84e94bfa4bf2505dac7afb5a79f743b1ec5044cb552c68762a3de89abaa
+  contract_fingerprint: 27823d940dcbf1f6de71121fb178d8d571effc0f8f18a5d1af5e4fd45504756f
+  component_contracts:
+  - id: nfs-server
+    chart_path: helm/nfs-server
+    chart_name: helm-nfs-server
+    chart_version: 1.2.0
+    app_version: 1.2.0
+    chart_archive:
+      sha256: 015dc42a61a0a6e5d04e36417f10a58760496d445136b7c340b337c6155002e6
+      file_count: 15
+    crds:
+      sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+      file_count: 0
+      files: []
+    templates:
+      sha256: 24e77cd11591f8fbec177c0a16f2f6760f157fed42a20bb0c0266edf93ced57e
+      file_count: 11
+      files:
+      - templates/_helpers.tpl
+      - templates/configmap.yaml
+      - templates/priorityclass.yaml
+      - templates/pvc.yaml
+      - templates/service.yaml
+      - templates/serviceaccount.yaml
+      - templates/servicemonitor.yaml
+      - templates/statefulset.yaml
+      - templates/storageclass.yaml
+      - templates/tests/test-configmap-exports.yaml
+      - templates/tests/test-nfs-connectivity.yaml
+    values:
+      sha256: 2b8da9b4e55df4061ccf0ddf36525263649636a383c34378695fa8a8d98a6b2e
+      file_count: 2
+      files:
+      - Chart.yaml
+      - values.yaml
+    images:
+      sha256: 579198f335ef49f2171196f2fdac85fd0647ff64dc0f9da330a5d409468f77c1
+      count: 3
+      values:
+      - cr.eu-north1.nebius.cloud/soperator-proxy-docker-io/library/alpine:3.18
+      - cr.eu-north1.nebius.cloud/soperator-proxy-docker-io/prom/node-exporter:v1.10.2
+      - cr.eu-north1.nebius.cloud/soperator/nfs-server:1.2.0
+    slurm_contract:
+      sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+      file_count: 0
+      files: []
+    contract_fingerprint: 2de6b2d956e178f0486bb8671aa5f63ff31aee965978f67cd352c9ab47c6cca4
+  - id: nodeconfigurator
+    chart_path: helm/nodeconfigurator
+    chart_name: helm-nodeconfigurator
+    chart_version: 4.0.2
+    app_version: 4.0.2
+    chart_archive:
+      sha256: de15fb49628e4aff52b35267517aa2462edf747dc3b6d206ab6a297d408231c9
+      file_count: 10
+    crds:
+      sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+      file_count: 0
+      files: []
+    templates:
+      sha256: 23d56dcd5f59f0839ec23f8e91e5ca2475ac85a8d68e4e9cb5cf1311ece12be5
+      file_count: 7
+      files:
+      - templates/_helpers.tpl
+      - templates/binding-rbac.yaml
+      - templates/metrics-service.yaml
+      - templates/nodeconfigurator-cr.yaml
+      - templates/nodeconfigurator-rbac.yaml
+      - templates/serviceaccount.yaml
+      - templates/servicemonitor.yaml
+    values:
+      sha256: 8636bd58d82bf5c0926139b340fc85e599576512299a33d471e9ef39d0b14baa
+      file_count: 2
+      files:
+      - Chart.yaml
+      - values.yaml
+    images:
+      sha256: e0e522f38bc4494d54a1de6f869a80daca11bb889cf612607a1c162df087465b
+      count: 3
+      values:
+      - cr.eu-north1.nebius.cloud/soperator/busybox
+      - cr.eu-north1.nebius.cloud/soperator/busybox:latest
+      - cr.eu-north1.nebius.cloud/soperator/rebooter:4.0.2
+    slurm_contract:
+      sha256: 3db7b49ac919d4aabffb66554bb4ad3548675e6ae2ac74ee98cc1d567b5e87c7
+      file_count: 8
+      files:
+      - Chart.yaml
+      - templates/_helpers.tpl
+      - templates/binding-rbac.yaml
+      - templates/metrics-service.yaml
+      - templates/nodeconfigurator-cr.yaml
+      - templates/nodeconfigurator-rbac.yaml
+      - templates/serviceaccount.yaml
+      - templates/servicemonitor.yaml
+    contract_fingerprint: d71ca38acfb6f8436e9747a090dea79ba0212724c361215bb85944cf8a51a2d3
+  - id: nodesets
+    chart_path: helm/nodesets
+    chart_name: helm-nodesets
+    chart_version: 4.0.2
+    app_version: 4.0.2
+    chart_archive:
+      sha256: 41d8fa3d4fcafc4bb2eba0131c36619a95aa7a6bd3eb77fd761d66b75294cf84
+      file_count: 14
+    crds:
+      sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+      file_count: 0
+      files: []
+    templates:
+      sha256: 050a1a301db9e8d277eae978bd729287e279555cca181c678a85d10407905423
+      file_count: 3
+      files:
+      - templates/_helpers.tpl
+      - templates/nodeset.yaml
+      - templates/priority-class.yaml
+    values:
+      sha256: 19c585c0a63be29d7dcb07e1bcc6bfb091493fb442667d27abf65a53cecc8256
+      file_count: 2
+      files:
+      - Chart.yaml
+      - values.yaml
+    images:
+      sha256: 55900069511b49dc4a1dc22e78789467170c59336e814b03b9b4e8ec0003a468
+      count: 4
+      values:
+      - cr.eu-north1.nebius.cloud/soperator-proxy-docker-io/library/busybox
+      - cr.eu-north1.nebius.cloud/soperator/munge:4.0.2-slurm25.11.3
+      - cr.eu-north1.nebius.cloud/soperator/sssd:2.9.4-1-63
+      - cr.eu-north1.nebius.cloud/soperator/worker_slurmd:4.0.2-slurm25.11.3
+    slurm_contract:
+      sha256: fefe093da13a6e62abb3b462f8d2e9b0eda4dc187410393cb8f8618902122773
+      file_count: 13
+      files:
+      - Chart.yaml
+      - templates/_helpers.tpl
+      - templates/nodeset.yaml
+      - templates/priority-class.yaml
+      - tests/basic_test.yaml
+      - tests/custom_values_test.yaml
+      - tests/ephemeral_nodes_test.yaml
+      - tests/gpu_config_test.yaml
+      - tests/node_config_test.yaml
+      - tests/priority_class_test.yaml
+      - tests/sssd_test.yaml
+      - tests/volumes_test.yaml
+      - values.yaml
+    contract_fingerprint: 6ac4eee46ec311ca5e7d3150995da5ac243b1397cd4b52fda6ffe20a6e3fcd26
+  - id: slurm-cluster
+    chart_path: helm/slurm-cluster
+    chart_name: helm-slurm-cluster
+    chart_version: 4.0.2
+    app_version: 4.0.2
+    chart_archive:
+      sha256: fea600d6f39a8d80da3874761b137aca7111ab876278909ff955d769c527c499
+      file_count: 74
+    crds:
+      sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+      file_count: 0
+      files: []
+    templates:
+      sha256: 2ff6efc5ebb8d9bd7e033f20724aa329d574de99e973741a747152ba5b477ed5
+      file_count: 18
+      files:
+      - templates/_helpers.tpl
+      - templates/_registry_helpers.tpl
+      - templates/_secret_helpers.tpl
+      - templates/exporter-role.yaml
+      - templates/exporter-rolebinding.yaml
+      - templates/exporter-serviceaccount.yaml
+      - templates/priority-class.yaml
+      - templates/pvc.yaml
+      - templates/sconfigcontroller-metrics-service.yaml
+      - templates/sconfigcontroller-role.yaml
+      - templates/sconfigcontroller-rolebinding.yaml
+      - templates/sconfigcontroller-serviceaccount.yaml
+      - templates/sconfigcontroller-servicemonitor.yaml
+      - templates/slurm-cluster-cr.yaml
+      - templates/slurm-controller-role.yaml
+      - templates/slurm-controller-rolebinding.yaml
+      - templates/slurm-controller-serviceaccount.yaml
+      - templates/slurm-scripts-cm.yaml
+    values:
+      sha256: c09248f0e4defed8d70fb3c9cb8329ff364331e0b0cf6a2d8034bc7a77bd14c6
+      file_count: 2
+      files:
+      - Chart.yaml
+      - values.yaml
+    images:
+      sha256: 243a6c63e6d76b8bc63623498e7ee5d94998c9f746cc6451e53162e34beb4e52
+      count: 10
+      values:
+      - cr.eu-north1.nebius.cloud/soperator/controller_slurmctld:4.0.2-slurm25.11.3
+      - cr.eu-north1.nebius.cloud/soperator/controller_slurmdbd:4.0.2-slurm25.11.3
+      - cr.eu-north1.nebius.cloud/soperator/login_sshd:4.0.2-slurm25.11.3
+      - cr.eu-north1.nebius.cloud/soperator/munge:4.0.2-slurm25.11.3
+      - cr.eu-north1.nebius.cloud/soperator/sconfigcontroller:4.0.2
+      - cr.eu-north1.nebius.cloud/soperator/slurmrestd:4.0.2-slurm25.11.3
+      - cr.eu-north1.nebius.cloud/soperator/soperator-exporter:4.0.2-slurm25.11.3
+      - cr.eu-north1.nebius.cloud/soperator/sssd:2.9.4-1-63
+      - cr.eu-north1.nebius.cloud/soperator/worker_slurmd:4.0.2-slurm25.11.3
+      - docker-registry1.mariadb.com/library/mariadb:12.1.2
+    slurm_contract:
+      sha256: 652ed6aa65707c3fa16b9a71242d78b3a563b52a6110f93a68e56240e4972fff
+      file_count: 57
+      files:
+      - slurm_scripts/alloc_gpus_busy.drain.sh
+      - slurm_scripts/alloc_gpus_busy.drain.sh.json
+      - slurm_scripts/alloc_gpus_busy.undrain.sh
+      - slurm_scripts/alloc_gpus_busy.undrain.sh.json
+      - slurm_scripts/alloc_mem_used.drain.sh
+      - slurm_scripts/alloc_mem_used.drain.sh.json
+      - slurm_scripts/alloc_mem_used.undrain.sh
+      - slurm_scripts/alloc_mem_used.undrain.sh.json
+      - slurm_scripts/boot_disk_full.sh
+      - slurm_scripts/boot_disk_full.sh.json
+      - slurm_scripts/check_runner.py
+      - slurm_scripts/chmod_enroot_layers.sh
+      - slurm_scripts/chmod_enroot_layers.sh.json
+      - slurm_scripts/cleanup_enroot.sh
+      - slurm_scripts/cleanup_enroot.sh.json
+      - slurm_scripts/cleanup_scratch_data.sh
+      - slurm_scripts/cleanup_scratch_data.sh.json
+      - slurm_scripts/drop_page_cache.sh
+      - slurm_scripts/drop_page_cache.sh.json
+      - slurm_scripts/drop_posix_shmem.sh
+      - slurm_scripts/drop_posix_shmem.sh.json
+      - slurm_scripts/epilog.sh
+      - slurm_scripts/gpu_health_check.py
+      - slurm_scripts/gpu_health_check.py.json
+      - slurm_scripts/hc_program.sh
+      - slurm_scripts/job_tmpfs_delete.sh
+      - slurm_scripts/job_tmpfs_delete.sh.json
+      - slurm_scripts/job_tmpfs_delete_leftover.sh
+      - slurm_scripts/job_tmpfs_delete_leftover.sh.json
+      - slurm_scripts/job_tmpfs_recreate.sh
+      - slurm_scripts/job_tmpfs_recreate.sh.json
+      - slurm_scripts/map_job_dcgm.sh
+      - slurm_scripts/map_job_dcgm.sh.json
+      - slurm_scripts/nvme_raid_health.sh
+      - slurm_scripts/nvme_raid_health.sh.json
+      - slurm_scripts/prolog.sh
+      - slurm_scripts/pyxis_caching_importer.sh
+      - slurm_scripts/unmap_job_dcgm.sh
+      - slurm_scripts/unmap_job_dcgm.sh.json
+      - templates/sconfigcontroller-metrics-service.yaml
+      - templates/sconfigcontroller-role.yaml
+      - templates/sconfigcontroller-rolebinding.yaml
+      - templates/sconfigcontroller-serviceaccount.yaml
+      - templates/sconfigcontroller-servicemonitor.yaml
+      - templates/slurm-cluster-cr.yaml
+      - templates/slurm-controller-role.yaml
+      - templates/slurm-controller-rolebinding.yaml
+      - templates/slurm-controller-serviceaccount.yaml
+      - templates/slurm-scripts-cm.yaml
+      - tests/custom_slurm_config_test.yaml
+      - tests/exporter-rbac_test.yaml
+      - tests/minimal-config_test.yaml
+      - tests/optional-fields_test.yaml
+      - tests/partition_configuration_test.yaml
+      - tests/sconfigcontroller-rbac_test.yaml
+      - tests/volume-sources-filtering_test.yaml
+      - values.yaml
+    contract_fingerprint: 0d860e7d7e84f7276be173feacefaa26b9750409839c27eb3e3de0d421f3bc5a
+  - id: slurm-cluster-storage
+    chart_path: helm/slurm-cluster-storage
+    chart_name: helm-slurm-cluster-storage
+    chart_version: 4.0.2
+    app_version: 4.0.2
+    chart_archive:
+      sha256: 5406551580b06830da6324f57cb60a84dc0d72ea35cd88e97806a66b91364a15
+      file_count: 18
+    crds:
+      sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+      file_count: 0
+      files: []
+    templates:
+      sha256: d91e4d263c22c02f973b5f47ba287ee44bc0b1b9fc62f8698993f5d78357671c
+      file_count: 14
+      files:
+      - templates/_helpers.tpl
+      - templates/accounting-mount-daemonset.yaml
+      - templates/accounting-pv.yaml
+      - templates/controller-spool-mount-daemonset.yaml
+      - templates/controller-spool-pv.yaml
+      - templates/controller-spool-pvc.yaml
+      - templates/jail-mount-daemonset.yaml
+      - templates/jail-pv.yaml
+      - templates/jail-pvc.yaml
+      - templates/jail-submounts-mount-daemonset.yaml
+      - templates/jail-submounts-pv.yaml
+      - templates/jail-submounts-pvc.yaml
+      - templates/local-storageclass.yaml
+      - templates/mount-scripts-configmap.yaml
+    values:
+      sha256: 27d3d3b3a4fbb79d039824409c4e2e6fb8e3efaab6340b2209a893684e746b41
+      file_count: 2
+      files:
+      - Chart.yaml
+      - values.yaml
+    images:
+      sha256: 94beff77c70184a9b947e3da96eddc856764b310d77a459fd9c4c57ce4760cfb
+      count: 1
+      values:
+      - cr.eu-north1.nebius.cloud/ml-containers/neubuntu:noble-20260324150527
+    slurm_contract:
+      sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+      file_count: 0
+      files: []
+    contract_fingerprint: ccdb77a21670b438ef4385de79b31739791a089df6b2ab8d5eba50b29ed33346
+  - id: soperator
+    chart_path: helm/soperator
+    chart_name: helm-soperator
+    chart_version: 4.0.2
+    app_version: 4.0.2
+    chart_archive:
+      sha256: 119a2d0ec8c0462f44de7399b81b1928930fdf5b747166fbd76333eb362b1d0f
+      file_count: 24
+    crds:
+      sha256: bd0df19b5dfebd8eced92b893eee5340dbeaf7e64ee1065d2cf9bd78fedfe147
+      file_count: 1
+      files:
+      - crds/slurmcluster-crd.yaml
+    templates:
+      sha256: 08a3aafd62ea6df220548a5ff2f1c31fb75fa2137359922acdd0368cdd0de5f1
+      file_count: 16
+      files:
+      - templates/_helpers.tpl
+      - templates/binding-rbac.yaml
+      - templates/deployment.yaml
+      - templates/leader-election-rbac.yaml
+      - templates/manager-rbac.yaml
+      - templates/metrics-reader-rbac.yaml
+      - templates/metrics-service.yaml
+      - templates/mutating-webhook-configuration.yaml
+      - templates/proxy-rbac.yaml
+      - templates/selfsigned-issuer.yaml
+      - templates/serviceaccount.yaml
+      - templates/servicemonitor.yaml
+      - templates/serving-cert.yaml
+      - templates/soperator-checks-rbac.yaml
+      - templates/validating-webhook-configuration.yaml
+      - templates/webhook-service.yaml
+    values:
+      sha256: 45403f981ed9af7190adb6d05bd019a4f087a94db6ba41a72a34e98444b75865
+      file_count: 2
+      files:
+      - Chart.yaml
+      - values.yaml
+    images:
+      sha256: dcf3805f416833ab34094726721744d147db5b13cbcb67e8a86dd85db6646ff4
+      count: 2
+      values:
+      - cr.eu-north1.nebius.cloud/soperator/slurm-operator:4.0.2
+      - registry.k8s.io/kubebuilder/kube-rbac-proxy:v0.15.0
+    slurm_contract:
+      sha256: d5ffb8eebf80ddcc8602ba4951bb22fdfca368a4037b677a5465051cff1e7f26
+      file_count: 6
+      files:
+      - crds/slurmcluster-crd.yaml
+      - templates/_helpers.tpl
+      - templates/manager-rbac.yaml
+      - templates/mutating-webhook-configuration.yaml
+      - templates/validating-webhook-configuration.yaml
+      - values.yaml
+    contract_fingerprint: 19d95e340c4c6245c89401d5c9257b43308242c576cab923c701ec814afe5c8b
+  - id: soperator-activechecks
+    chart_path: helm/soperator-activechecks
+    chart_name: helm-soperator-activechecks
+    chart_version: 4.0.2
+    app_version: 4.0.2
+    chart_archive:
+      sha256: c32f52b98bdc3ddbe0fab4ceb3fa80a9663edea3c1edb5dddc1ee35d683aa63e
+      file_count: 38
+    crds:
+      sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+      file_count: 0
+      files: []
+    templates:
+      sha256: 9c6e941031311ad90e2c85e98dd0cc2686b325879d9095c80c644f561a9d3030
+      file_count: 7
+      files:
+      - templates/_helpers.tpl
+      - templates/active-checks.yaml
+      - templates/run-extensive-check-on-reservations.yaml
+      - templates/wait-for-checks-job.yaml
+      - templates/wait-for-checks-role.yaml
+      - templates/wait-for-checks-rolebinging.yaml
+      - templates/wait-for-checks-sa.yaml
+    values:
+      sha256: bd0d4672c547fc1cc92fcab565513491dbeb8e3231c93f8cbe5b8fc05612857c
+      file_count: 2
+      files:
+      - Chart.yaml
+      - values.yaml
+    images:
+      sha256: 75fe4eed67457b7e656f39c1e5dde5e8317a174b0c9d74be59614a3590c953bf
+      count: 6
+      values:
+      - cr.eu-north1.nebius.cloud/soperator-proxy-docker-io/alpine/k8s:1.31.11
+      - cr.eu-north1.nebius.cloud/soperator/k8s_check_job:4.0.2-slurm25.11.3
+      - cr.eu-north1.nebius.cloud/soperator/munge:4.0.2-slurm25.11.3
+      - cr.eu-north1.nebius.cloud/soperator/sansible:4.0.2-slurm25.11.3
+      - cr.eu-north1.nebius.cloud/soperator/slurm_check_job:4.0.2-slurm25.11.3
+      - reg/repo:tag
+    slurm_contract:
+      sha256: 2d011797c33f0f45c22acbc7ed25fc0ad524193ba36d22805408de8ff7d3c080
+      file_count: 20
+      files:
+      - Chart.yaml
+      - scripts/all-reduce-perf-nccl-in-docker.sh
+      - scripts/cuda-samples.sh
+      - scripts/extensive-check.sh
+      - scripts/gpu-fryer.sh
+      - scripts/ib-gpu-perf.sh
+      - scripts/mem-perf.sh
+      - scripts/prepull-container-image.sh
+      - templates/_helpers.tpl
+      - templates/active-checks.yaml
+      - templates/run-extensive-check-on-reservations.yaml
+      - templates/wait-for-checks-job.yaml
+      - templates/wait-for-checks-role.yaml
+      - templates/wait-for-checks-rolebinging.yaml
+      - templates/wait-for-checks-sa.yaml
+      - tests/active_deadline_seconds_test.yaml
+      - tests/hostusers_k8s_new_test.yaml
+      - tests/hostusers_k8s_old_test.yaml
+      - tests/k8sjob_spec_test.yaml
+      - values.yaml
+    contract_fingerprint: 1f9dd6d0b7e16e6fa0652c22d2551071ce4a480be42aa2292b1244a627bc8f61
+  - id: soperator-backup-config
+    chart_path: helm/soperator-backup-config
+    chart_name: helm-soperator-backup-config
+    chart_version: 4.0.2
+    app_version: 4.0.2
+    chart_archive:
+      sha256: fed449c3d9f7c5264b3641b545f2a8b2769c9c7e2a72f996467b08da425b7178
+      file_count: 4
+    crds:
+      sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+      file_count: 0
+      files: []
+    templates:
+      sha256: 22f31d204b918605cf1c7434c873f6dcdd467664dda3d05939cc41b1a5048fe0
+      file_count: 2
+      files:
+      - templates/_helpers.tpl
+      - templates/schedule.yaml
+    values:
+      sha256: 43271e26bf3a49265891ecd02cba0f1addcf0f1d24c43ac37e6831e64544fec8
+      file_count: 2
+      files:
+      - Chart.yaml
+      - values.yaml
+    images:
+      sha256: 4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945
+      count: 0
+      values: []
+    slurm_contract:
+      sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+      file_count: 0
+      files: []
+    contract_fingerprint: 75abb67c786a68d7e666df59cd094460d991540b5ccd51c051b06d39ce010ba9
+  - id: soperator-crds
+    chart_path: helm/soperator-crds
+    chart_name: helm-soperator-crds
+    chart_version: 4.0.2
+    app_version: 4.0.2
+    chart_archive:
+      sha256: b3f28d9246b6577a1fe6a2b27a5dea5d14f1529698dded8e91a5883bff520c6a
+      file_count: 5
+    crds:
+      sha256: 10fec2ff30492f9f8d36a0072f2ca7530f738769b9ea9f0f19195f63cf1da399
+      file_count: 1
+      files:
+      - templates/slurmcluster-crd.yaml
+    templates:
+      sha256: 3495a4b3490ff3ddea3d4df87eabe9429ceaf244e120424a07f5d3acf2b8ac19
+      file_count: 2
+      files:
+      - templates/_helpers.tpl
+      - templates/slurmcluster-crd.yaml
+    values:
+      sha256: b9cff8025d1a7e367e1100d081243af23116c3f4780e0fe702172a7e8d9957e2
+      file_count: 2
+      files:
+      - Chart.yaml
+      - values.yaml
+    images:
+      sha256: 4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945
+      count: 0
+      values: []
+    slurm_contract:
+      sha256: 10fec2ff30492f9f8d36a0072f2ca7530f738769b9ea9f0f19195f63cf1da399
+      file_count: 1
+      files:
+      - templates/slurmcluster-crd.yaml
+    contract_fingerprint: ebafa51d017f6d06ca9cb645a2d4d74cf1f4244e98a4aa7c3d4080f5574803ca
+  - id: soperator-custom-configmaps
+    chart_path: helm/soperator-custom-configmaps
+    chart_name: helm-soperator-custom-configmaps
+    chart_version: 4.0.2
+    app_version: 4.0.2
+    chart_archive:
+      sha256: d65187e7d67738ea6dcbb31b9b8cfc3744f8a6c3d22dccc255c55a1b23afe6fe
+      file_count: 12
+    crds:
+      sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+      file_count: 0
+      files: []
+    templates:
+      sha256: 3641128bf5ec301558d2cae99b68b0bed5391c97ba1cf51c6c40e1e043036f8b
+      file_count: 4
+      files:
+      - templates/_helpers.tpl
+      - templates/configmap-image-storage.yaml
+      - templates/configmap-motd.yaml
+      - templates/configmap-supervisord.yaml
+    values:
+      sha256: 31d30a7ddd0b063904b19b63c301fbce99421399f198d30bff84cb8a05fd6ae1
+      file_count: 2
+      files:
+      - Chart.yaml
+      - values.yaml
+    images:
+      sha256: 4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945
+      count: 0
+      values: []
+    slurm_contract:
+      sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+      file_count: 0
+      files: []
+    contract_fingerprint: 90169c715f8532e4b7f37c227c6c96145f2263f7f576d2f19e33d0242ac4f73c
+  - id: soperator-dcgm-exporter
+    chart_path: helm/soperator-dcgm-exporter
+    chart_name: helm-soperator-dcgm-exporter
+    chart_version: 4.0.2
+    app_version: 4.0.2
+    chart_archive:
+      sha256: 98ff6d0f42b904887d5d9c3abf0fbee8323b27729602192be39884d7ca71bd93
+      file_count: 11
+    crds:
+      sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+      file_count: 0
+      files: []
+    templates:
+      sha256: 1a29146315cac021f8c60778dc90afd0bc680091ea7469f209484c908fa23010
+      file_count: 8
+      files:
+      - templates/_helpers.tpl
+      - templates/configmap.yaml
+      - templates/daemonset.yaml
+      - templates/role.yaml
+      - templates/rolebinding.yaml
+      - templates/service.yaml
+      - templates/serviceaccount.yaml
+      - templates/servicemonitor.yaml
+    values:
+      sha256: 788e292d73f23d47649a8a487149e5df077a4b4ff6fd38b83f7abcbe1d5a67f7
+      file_count: 2
+      files:
+      - Chart.yaml
+      - values.yaml
+    images:
+      sha256: 4060f45eb8a357efb200d5eecc22e64a694d9a61a89dacc70239222b29dc6657
+      count: 3
+      values:
+      - cr.eu-north1.nebius.cloud/marketplace/nebius/nvidia-gpu-operator/image/gpu-operator-validator:v24.6.2
+      - cr.eu-north1.nebius.cloud/soperator/busybox:latest
+      - cr.eu-north1.nebius.cloud/soperator/dcgm-exporter:4.4.2-4.7.0-ubuntu22.04
+    slurm_contract:
+      sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+      file_count: 0
+      files: []
+    contract_fingerprint: 4e5f739857a48f5626240c098549a31830dbff407dd910bddcb5b145d5482e04
+  - id: soperator-fluxcd
+    chart_path: helm/soperator-fluxcd
+    chart_name: helm-soperator-fluxcd
+    chart_version: 4.0.2
+    app_version: 4.0.2
+    chart_archive:
+      sha256: 55c6565634e3fdf57c039ccf525400f6ceece6ecc64ad8b06de6229f1f64acaf
+      file_count: 42
+    crds:
+      sha256: 233b57fb7cfe72ae944d89b6dde672f5c1d22bb651c4e4a5b341bb3c58603a03
+      file_count: 3
+      files:
+      - templates/mariadb-operator-crds.yaml
+      - templates/prometheus-operator-crds.yaml
+      - templates/victoria-metrics-operator-crds.yaml
+    templates:
+      sha256: e790b16e44cc92b993150c5575b9116f6324a19f7a049f61f75588f329f3d35c
+      file_count: 32
+      files:
+      - templates/_helpers.tpl
+      - templates/backup-config.yaml
+      - templates/backup.yaml
+      - templates/cert-manager.yaml
+      - templates/csi-driver-nfs.yaml
+      - templates/dcgm-exporter.yaml
+      - templates/helmrepository.yaml
+      - templates/kruise.yaml
+      - templates/mariadb-operator-crds.yaml
+      - templates/mariadb-operator.yaml
+      - templates/monitoring-dashboards.yaml
+      - templates/namespaces.yaml
+      - templates/nfs-server.yaml
+      - templates/nodeconfigurator.yaml
+      - templates/nodesets.yaml
+      - templates/notifier.yaml
+      - templates/opentelemetry-collector-events.yaml
+      - templates/opentelemetry-collector-jail-logs.yaml
+      - templates/opentelemetry-collector-logs.yaml
+      - templates/prometheus-operator-crds.yaml
+      - templates/security-profiles-operator.yaml
+      - templates/slurm-cluster-storage.yaml
+      - templates/slurm-cluster.yaml
+      - templates/soperator-activechecks.yaml
+      - templates/soperator-custom-configmaps.yaml
+      - templates/soperator.yaml
+      - templates/soperatorchecks.yaml
+      - templates/storageclasses.yaml
+      - templates/tailscale.yaml
+      - templates/victoria-metrics-operator-crds.yaml
+      - templates/vm-logs.yaml
+      - templates/vm-stack.yaml
+    values:
+      sha256: d6661fea5b517c6fc750031db7a27a9d0eb6f42fdb4987c09ecbb82eb3a0fbda
+      file_count: 2
+      files:
+      - Chart.yaml
+      - values.yaml
+    images:
+      sha256: 1930d6498a0c70637709a5f35d42d8e82d4a1d188bc45eacec8952ec9f3f5339
+      count: 3
+      values:
+      - cr.eu-north1.nebius.cloud/soperator/busybox:latest
+      - cr.eu-north1.nebius.cloud/soperator/kruise-helm-hook
+      - cr.eu-north1.nebius.cloud/soperator/kruise-manager
+    slurm_contract:
+      sha256: 5ef84bb1d1f2bc4dde5769cc7bccc306a572e2efa2b516e8052075ecac7713ed
+      file_count: 14
+      files:
+      - templates/backup-config.yaml
+      - templates/kruise.yaml
+      - templates/namespaces.yaml
+      - templates/nodeconfigurator.yaml
+      - templates/nodesets.yaml
+      - templates/opentelemetry-collector-jail-logs.yaml
+      - templates/slurm-cluster-storage.yaml
+      - templates/slurm-cluster.yaml
+      - templates/soperator-activechecks.yaml
+      - templates/vm-stack.yaml
+      - tests/component_enabled_test.yaml
+      - tests/soperator_dependency_test.yaml
+      - tests/values_override_test.yaml
+      - values.yaml
+    contract_fingerprint: 54f157695ec50c987f1c579a47ef855b7c07deceb94be41672a87a5040f6d0db
+  - id: soperator-fluxcd-bootstrap
+    chart_path: helm/soperator-fluxcd-bootstrap
+    chart_name: helm-soperator-fluxcd-bootstrap
+    chart_version: 4.0.2
+    app_version: 4.0.2
+    chart_archive:
+      sha256: d5a4296c5d4ffcf8f7cd05cc285c724ef184e9af3c24de889da9be35e095ac90
+      file_count: 7
+    crds:
+      sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+      file_count: 0
+      files: []
+    templates:
+      sha256: ee3baf2024b372b98ca89c7fbff3d950d59f38d26aaa9673f8e88a04e0177ca9
+      file_count: 3
+      files:
+      - templates/_helpers.tpl
+      - templates/helmrelease.yaml
+      - templates/helmrepository.yaml
+    values:
+      sha256: 6e646a530288461872bfc5fda3d294ca061d8176bec86738036bf3dbd65db414
+      file_count: 2
+      files:
+      - Chart.yaml
+      - values.yaml
+    images:
+      sha256: 4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945
+      count: 0
+      values: []
+    slurm_contract:
+      sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+      file_count: 0
+      files: []
+    contract_fingerprint: 146ff0268baeef95daf781b9f55a58148df1ef4b0d34249784b2f15f18c957a2
+  - id: soperator-monitoring-dashboards
+    chart_path: helm/soperator-monitoring-dashboards
+    chart_name: helm-soperator-monitoring-dashboards
+    chart_version: 4.0.2
+    app_version: 4.0.2
+    chart_archive:
+      sha256: 7fa9ea9604c510c89bc4e62cdcaa4a1bdfd15dc218a4686d4e74b5a7557c2a8a
+      file_count: 12
+    crds:
+      sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+      file_count: 0
+      files: []
+    templates:
+      sha256: 05b64487eb98ce8a906f2020f231879b34c21ec8dbdb58c72fc451279397af6d
+      file_count: 2
+      files:
+      - templates/_helpers.tpl
+      - templates/configmaps.yaml
+    values:
+      sha256: 48ea3fd290d0906c3b3ca24588b9ac5c68e3ad87b2a63a1147e9062420c51c98
+      file_count: 2
+      files:
+      - Chart.yaml
+      - values.yaml
+    images:
+      sha256: 4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945
+      count: 0
+      values: []
+    slurm_contract:
+      sha256: eff5d139ebd4f344432b14e3b95ffab4d4c32cc833410d2e25de676ff8af6f5c
+      file_count: 1
+      files:
+      - dashboards/slurm_controller.json
+    contract_fingerprint: 97a97498111ecf38532d6cc013a260ac3b59ef37e39ef83d893042608b19b6b6
+  - id: soperator-notifier
+    chart_path: helm/soperator-notifier
+    chart_name: helm-soperator-notifier
+    chart_version: 4.0.2
+    app_version: 4.0.2
+    chart_archive:
+      sha256: 456df68a8f66350d274edb1d8acc2124f29b9b48139b579003fddeee3938e333
+      file_count: 20
+    crds:
+      sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+      file_count: 0
+      files: []
+    templates:
+      sha256: 4a61d27d3bdf5a02dcaec108d0ef106bed5d32ac37af4505c7316c5c86c0916f
+      file_count: 11
+      files:
+      - templates/01_secret.yml
+      - templates/02_config.yml
+      - templates/03_manager.yml
+      - templates/04_rule.yml
+      - templates/05_alert.yml
+      - templates/_helpers.00_slack.tpl
+      - templates/_helpers.02_config.tpl
+      - templates/_helpers.03_manager.tpl
+      - templates/_helpers.04_rule.tpl
+      - templates/_helpers.05_alert.tpl
+      - templates/_helpers.tpl
+    values:
+      sha256: 4c7b59fa476a163ef30e67c7bbc1e6fe07e954c8c3d7f3a140ef6096325ee991
+      file_count: 2
+      files:
+      - Chart.yaml
+      - values.yaml
+    images:
+      sha256: 4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945
+      count: 0
+      values: []
+    slurm_contract:
+      sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+      file_count: 0
+      files: []
+    contract_fingerprint: 2f40d9bdac45972d05cf9df2117df6193f00c507b1a879dc6589d3e40c2eddc7
+  - id: soperatorchecks
+    chart_path: helm/soperatorchecks
+    chart_name: helm-soperatorchecks
+    chart_version: 4.0.2
+    app_version: 4.0.2
+    chart_archive:
+      sha256: 3681e06968157d745da9f5395891c3c4126710e256d77defadc58e4278cf8232
+      file_count: 10
+    crds:
+      sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+      file_count: 0
+      files: []
+    templates:
+      sha256: 19f04b469a24e04371bf1e2163e2db4b0535630f77c8fd054eb439ab7ebad55c
+      file_count: 7
+      files:
+      - templates/_helpers.tpl
+      - templates/deployment.yaml
+      - templates/metrics-service.yaml
+      - templates/serviceaccount.yaml
+      - templates/servicemonitor.yaml
+      - templates/soperator-checks-binding-rbac.yaml
+      - templates/soperator-checks-rbac.yaml
+    values:
+      sha256: e6b4d6d3546d00304440eae310a6d052a52acc189008ce85673f3822c61f8d94
+      file_count: 2
+      files:
+      - Chart.yaml
+      - values.yaml
+    images:
+      sha256: 4ec08894fb1c49b59db8f578956028a2ce11209a1c6aa123819f72345e1a0cc3
+      count: 2
+      values:
+      - cr.eu-north1.nebius.cloud/soperator/soperatorchecks:4.0.2
+      - registry.k8s.io/kubebuilder/kube-rbac-proxy:v0.15.0
+    slurm_contract:
+      sha256: 893296e35ab16d814a3951e12300b6f3b50ec18e169b2de0f2539ca4044c55cb
+      file_count: 3
+      files:
+      - templates/_helpers.tpl
+      - templates/soperator-checks-rbac.yaml
+      - values.yaml
+    contract_fingerprint: c645bcc96b395a4893afb7fd2409ba76ffa70d033671cdb6e212611735fbbefa
+  - id: storageclasses
+    chart_path: helm/storageclasses
+    chart_name: helm-storageclasses
+    chart_version: 4.0.2
+    app_version: 4.0.2
+    chart_archive:
+      sha256: 423155de053ffb0a16def98e447ae27db5d07eaeab52715b07a39c539ce500fc
+      file_count: 4
+    crds:
+      sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+      file_count: 0
+      files: []
+    templates:
+      sha256: b3c92d59cdf91e158abf048ddf540a4f1511f93b10098793da42209750c9eba1
+      file_count: 2
+      files:
+      - templates/_helpers.tpl
+      - templates/storageclasses.yaml
+    values:
+      sha256: e1e5791d9ddd4eb89a377f1e855a9f9a35cca419c2f83951d26f41d417a4dadc
+      file_count: 2
+      files:
+      - Chart.yaml
+      - values.yaml
+    images:
+      sha256: 4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945
+      count: 0
+      values: []
+    slurm_contract:
+      sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+      file_count: 0
+      files: []
+    contract_fingerprint: ccbf531ad8c59060bf874c654649fed671395e328acda762fc920a8214bab7cc
+- version: 3.0.7
+  upstream_tag: 3.0.7
+  published_at: '2026-06-12'
+  generation: v3
+  profile_id: v3-to-target
+  migration_class: storage-and-layout-migration
+  chart_path: helm/soperator
+  chart_name: helm-soperator
+  chart_version: 3.0.7
+  app_version: 3.0.7
+  source_tarball_sha256: 039d330540b2babe193ad5cb0f1588e83f42341093fcfd53406f41ee4ca5f9a7
+  contract_fingerprint: 3c293be7475a3c9c941e2a0317156f78bf8b98af79029b3f66fb596f8c992635
+  component_contracts:
+  - id: nfs-server
+    chart_path: helm/nfs-server
+    chart_name: helm-nfs-server
+    chart_version: 1.2.0
+    app_version: 1.2.0
+    chart_archive:
+      sha256: d2ef2d4ca97475e42a86809d813977144798114eae895f7bd50bd17bfb0c53c2
+      file_count: 15
+    crds:
+      sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+      file_count: 0
+      files: []
+    templates:
+      sha256: d895dad1f5769aece25373f02e1313ee263ab09182d43912fe5b8efb391af0d8
+      file_count: 11
+      files:
+      - templates/_helpers.tpl
+      - templates/configmap.yaml
+      - templates/priorityclass.yaml
+      - templates/pvc.yaml
+      - templates/service.yaml
+      - templates/serviceaccount.yaml
+      - templates/servicemonitor.yaml
+      - templates/statefulset.yaml
+      - templates/storageclass.yaml
+      - templates/tests/test-configmap-exports.yaml
+      - templates/tests/test-nfs-connectivity.yaml
+    values:
+      sha256: f06df76c279e02b658e950673383700621a17a451e5233ec7e25ad8181494e9b
+      file_count: 2
+      files:
+      - Chart.yaml
+      - values.yaml
+    images:
+      sha256: 7986110eb9d157ce070ae25f7ef45e1d29b488f2c6d494025e58f87fd75d8138
+      count: 1
+      values:
+      - cr.eu-north1.nebius.cloud/soperator/nfs-server:1.2.0
+    slurm_contract:
+      sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+      file_count: 0
+      files: []
+    contract_fingerprint: 1bc472fcfccfef443f77a9698864585cc2ddd556e7ae01ac3db070d116a4a8b6
+  - id: nodeconfigurator
+    chart_path: helm/nodeconfigurator
+    chart_name: helm-nodeconfigurator
+    chart_version: 3.0.7
+    app_version: 3.0.7
+    chart_archive:
+      sha256: 1c82477a6e66239a69ad402643ec062ae6322b69912ffd096b7206564aadfa25
+      file_count: 10
+    crds:
+      sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+      file_count: 0
+      files: []
+    templates:
+      sha256: 23d56dcd5f59f0839ec23f8e91e5ca2475ac85a8d68e4e9cb5cf1311ece12be5
+      file_count: 7
+      files:
+      - templates/_helpers.tpl
+      - templates/binding-rbac.yaml
+      - templates/metrics-service.yaml
+      - templates/nodeconfigurator-cr.yaml
+      - templates/nodeconfigurator-rbac.yaml
+      - templates/serviceaccount.yaml
+      - templates/servicemonitor.yaml
+    values:
+      sha256: 1c394aa5f2c5f342c577e654da63191e2dd516c0696b902cb49d58a051e9bc07
+      file_count: 2
+      files:
+      - Chart.yaml
+      - values.yaml
+    images:
+      sha256: 09d07c6e6fb7df018a734687ce7f39ff86ad7ce2ec614ed616ae6fd9a6c63ccf
+      count: 3
+      values:
+      - cr.eu-north1.nebius.cloud/soperator/busybox
+      - cr.eu-north1.nebius.cloud/soperator/busybox:latest
+      - cr.eu-north1.nebius.cloud/soperator/rebooter:3.0.7
+    slurm_contract:
+      sha256: 6d952c29a9727e168e267f14a35c19c1c623cd1cb75d2450e60d8a1883b61025
+      file_count: 8
+      files:
+      - Chart.yaml
+      - templates/_helpers.tpl
+      - templates/binding-rbac.yaml
+      - templates/metrics-service.yaml
+      - templates/nodeconfigurator-cr.yaml
+      - templates/nodeconfigurator-rbac.yaml
+      - templates/serviceaccount.yaml
+      - templates/servicemonitor.yaml
+    contract_fingerprint: 4062846708b5ad0025cc2cc4717fbbafdbbac53736584f70b3c2819b9a9646f1
+  - id: nodesets
+    chart_path: helm/nodesets
+    chart_name: helm-nodesets
+    chart_version: 3.0.7
+    app_version: 3.0.7
+    chart_archive:
+      sha256: 4f39c425406369ed4ccc9ccdd24f5e666ad93ca863a498f710b53f7d1c92a62c
+      file_count: 12
+    crds:
+      sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+      file_count: 0
+      files: []
+    templates:
+      sha256: 4e245f338c097a796bfc71ba117cc8f173e3d0946155d55d290d7a682770f0cf
+      file_count: 3
+      files:
+      - templates/_helpers.tpl
+      - templates/nodeset.yaml
+      - templates/priority-class.yaml
+    values:
+      sha256: 0df15f9d70eba62e713a93957537d928f73c0e03d7b1bb0fbfc8cdf2f5f4cf7d
+      file_count: 2
+      files:
+      - Chart.yaml
+      - values.yaml
+    images:
+      sha256: 4bd6c41e90e197f173742a9259a480284a6841f462a5fb78940c240bff42a983
+      count: 2
+      values:
+      - cr.eu-north1.nebius.cloud/soperator/munge:3.0.7-slurm25.11.3
+      - cr.eu-north1.nebius.cloud/soperator/worker_slurmd:3.0.7-slurm25.11.3
+    slurm_contract:
+      sha256: 4b5a50a0981c4cfd31d2f656cf659f18aa949eba1f17fee2e929b15dcc05b827
+      file_count: 11
+      files:
+      - Chart.yaml
+      - templates/_helpers.tpl
+      - templates/nodeset.yaml
+      - templates/priority-class.yaml
+      - tests/basic_test.yaml
+      - tests/custom_values_test.yaml
+      - tests/gpu_config_test.yaml
+      - tests/node_config_test.yaml
+      - tests/priority_class_test.yaml
+      - tests/volumes_test.yaml
+      - values.yaml
+    contract_fingerprint: 53acaefe5ec70e521c7374c38c6629ab8d182ed659ade03d207ed6e1c354fe90
+  - id: slurm-cluster
+    chart_path: helm/slurm-cluster
+    chart_name: helm-slurm-cluster
+    chart_version: 3.0.7
+    app_version: 3.0.7
+    chart_archive:
+      sha256: 4e98d10a6f718835ad904ddb7423e35376b12b56b7697f3ce78539f2d2a08e2b
+      file_count: 72
+    crds:
+      sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+      file_count: 0
+      files: []
+    templates:
+      sha256: aba513ce7edfa49bc7b45baaf26c868a2085cd6bbe749fe68cb6bd12deee6f95
+      file_count: 18
+      files:
+      - templates/_helpers.tpl
+      - templates/_registry_helpers.tpl
+      - templates/_secret_helpers.tpl
+      - templates/exporter-role.yaml
+      - templates/exporter-rolebinding.yaml
+      - templates/exporter-serviceaccount.yaml
+      - templates/priority-class.yaml
+      - templates/pvc.yaml
+      - templates/sconfigcontroller-metrics-service.yaml
+      - templates/sconfigcontroller-role.yaml
+      - templates/sconfigcontroller-rolebinding.yaml
+      - templates/sconfigcontroller-serviceaccount.yaml
+      - templates/sconfigcontroller-servicemonitor.yaml
+      - templates/slurm-cluster-cr.yaml
+      - templates/slurm-controller-role.yaml
+      - templates/slurm-controller-rolebinding.yaml
+      - templates/slurm-controller-serviceaccount.yaml
+      - templates/slurm-scripts-cm.yaml
+    values:
+      sha256: 58c7d8eb5e3cdcfa3120034f59b54b0eafabc241a9aeec89ae211a44f8b495a2
+      file_count: 2
+      files:
+      - Chart.yaml
+      - values.yaml
+    images:
+      sha256: baa8fc3d3f3377f7687580de7b5285c17eba384413214f748dd348046d01bd77
+      count: 9
+      values:
+      - cr.eu-north1.nebius.cloud/soperator/controller_slurmctld:3.0.7-slurm25.11.3
+      - cr.eu-north1.nebius.cloud/soperator/controller_slurmdbd:3.0.7-slurm25.11.3
+      - cr.eu-north1.nebius.cloud/soperator/login_sshd:3.0.7-slurm25.11.3
+      - cr.eu-north1.nebius.cloud/soperator/munge:3.0.7-slurm25.11.3
+      - cr.eu-north1.nebius.cloud/soperator/sconfigcontroller:3.0.7
+      - cr.eu-north1.nebius.cloud/soperator/slurmrestd:3.0.7-slurm25.11.3
+      - cr.eu-north1.nebius.cloud/soperator/soperator-exporter:3.0.7-slurm25.11.3
+      - cr.eu-north1.nebius.cloud/soperator/worker_slurmd:3.0.7-slurm25.11.3
+      - docker-registry1.mariadb.com/library/mariadb:12.1.2
+    slurm_contract:
+      sha256: 0d5840a8c60af4ef0f8082e87d4ba229d74a0488e4c37a3dccd6d3b7e6a9b8f5
+      file_count: 56
+      files:
+      - slurm_scripts/alloc_gpus_busy.drain.sh
+      - slurm_scripts/alloc_gpus_busy.drain.sh.json
+      - slurm_scripts/alloc_gpus_busy.undrain.sh
+      - slurm_scripts/alloc_gpus_busy.undrain.sh.json
+      - slurm_scripts/alloc_mem_used.drain.sh
+      - slurm_scripts/alloc_mem_used.drain.sh.json
+      - slurm_scripts/alloc_mem_used.undrain.sh
+      - slurm_scripts/alloc_mem_used.undrain.sh.json
+      - slurm_scripts/boot_disk_full.sh
+      - slurm_scripts/boot_disk_full.sh.json
+      - slurm_scripts/check_runner.py
+      - slurm_scripts/chmod_enroot_layers.sh
+      - slurm_scripts/chmod_enroot_layers.sh.json
+      - slurm_scripts/cleanup_enroot.sh
+      - slurm_scripts/cleanup_enroot.sh.json
+      - slurm_scripts/cleanup_scratch_data.sh
+      - slurm_scripts/cleanup_scratch_data.sh.json
+      - slurm_scripts/drop_page_cache.sh
+      - slurm_scripts/drop_page_cache.sh.json
+      - slurm_scripts/drop_posix_shmem.sh
+      - slurm_scripts/drop_posix_shmem.sh.json
+      - slurm_scripts/epilog.sh
+      - slurm_scripts/gpu_health_check.py
+      - slurm_scripts/gpu_health_check.py.json
+      - slurm_scripts/hc_program.sh
+      - slurm_scripts/job_tmpfs_delete.sh
+      - slurm_scripts/job_tmpfs_delete.sh.json
+      - slurm_scripts/job_tmpfs_delete_leftover.sh
+      - slurm_scripts/job_tmpfs_delete_leftover.sh.json
+      - slurm_scripts/job_tmpfs_recreate.sh
+      - slurm_scripts/job_tmpfs_recreate.sh.json
+      - slurm_scripts/map_job_dcgm.sh
+      - slurm_scripts/map_job_dcgm.sh.json
+      - slurm_scripts/nvme_raid_health.sh
+      - slurm_scripts/nvme_raid_health.sh.json
+      - slurm_scripts/prolog.sh
+      - slurm_scripts/unmap_job_dcgm.sh
+      - slurm_scripts/unmap_job_dcgm.sh.json
+      - templates/sconfigcontroller-metrics-service.yaml
+      - templates/sconfigcontroller-role.yaml
+      - templates/sconfigcontroller-rolebinding.yaml
+      - templates/sconfigcontroller-serviceaccount.yaml
+      - templates/sconfigcontroller-servicemonitor.yaml
+      - templates/slurm-cluster-cr.yaml
+      - templates/slurm-controller-role.yaml
+      - templates/slurm-controller-rolebinding.yaml
+      - templates/slurm-controller-serviceaccount.yaml
+      - templates/slurm-scripts-cm.yaml
+      - tests/custom_slurm_config_test.yaml
+      - tests/exporter-rbac_test.yaml
+      - tests/minimal-config_test.yaml
+      - tests/optional-fields_test.yaml
+      - tests/partition_configuration_test.yaml
+      - tests/sconfigcontroller-rbac_test.yaml
+      - tests/volume-sources-filtering_test.yaml
+      - values.yaml
+    contract_fingerprint: 9f6f699d25da4cbd8aa4fa026a996f9319db1b8df1b1fa94d8faf11ce2773bb8
+  - id: slurm-cluster-storage
+    chart_path: helm/slurm-cluster-storage
+    chart_name: helm-slurm-cluster-storage
+    chart_version: 3.0.7
+    app_version: 3.0.7
+    chart_archive:
+      sha256: 675755ceaebcf133d483c6a1f0a560313be7a203536e248fe62200d0704b2be7
+      file_count: 18
+    crds:
+      sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+      file_count: 0
+      files: []
+    templates:
+      sha256: ebb7c6db22f4272f80beaeb43756f10e74c27d7ca2f0f443ebfa71763f392894
+      file_count: 14
+      files:
+      - templates/_helpers.tpl
+      - templates/accounting-mount-daemonset.yaml
+      - templates/accounting-pv.yaml
+      - templates/controller-spool-mount-daemonset.yaml
+      - templates/controller-spool-pv.yaml
+      - templates/controller-spool-pvc.yaml
+      - templates/jail-mount-daemonset.yaml
+      - templates/jail-pv.yaml
+      - templates/jail-pvc.yaml
+      - templates/jail-submounts-mount-daemonset.yaml
+      - templates/jail-submounts-pv.yaml
+      - templates/jail-submounts-pvc.yaml
+      - templates/local-storageclass.yaml
+      - templates/mount-scripts-configmap.yaml
+    values:
+      sha256: 5a290fd832c3bb6ebf6cc016ad3522bd2c2dade3b4066d98d615a9dc095075d5
+      file_count: 2
+      files:
+      - Chart.yaml
+      - values.yaml
+    images:
+      sha256: 001064b7f8895db601b97f48c220d7c02fd4b9db779c588c696907893eb1f85a
+      count: 1
+      values:
+      - cr.eu-north1.nebius.cloud/ml-containers/neubuntu:noble-20260206131521
+    slurm_contract:
+      sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+      file_count: 0
+      files: []
+    contract_fingerprint: 9df0bf9729d12032041228b50f4dd10274f6f5dbffe9c4949ea0b5381c608b28
+  - id: soperator
+    chart_path: helm/soperator
+    chart_name: helm-soperator
+    chart_version: 3.0.7
+    app_version: 3.0.7
+    chart_archive:
+      sha256: c537ae85688d635b028e2684726ebff266eb11afdfc2600ebd55bc0cf287aac0
+      file_count: 24
+    crds:
+      sha256: c4ee236a9854dfa3092ad08f024c064054ade6433950c6bb523ca9603704a86e
+      file_count: 1
+      files:
+      - crds/slurmcluster-crd.yaml
+    templates:
+      sha256: 4f7c42bbb91f2733e647a319cdc628c2861db67610aa70413d5b3722cce6edf1
+      file_count: 16
+      files:
+      - templates/_helpers.tpl
+      - templates/binding-rbac.yaml
+      - templates/deployment.yaml
+      - templates/leader-election-rbac.yaml
+      - templates/manager-rbac.yaml
+      - templates/metrics-reader-rbac.yaml
+      - templates/metrics-service.yaml
+      - templates/mutating-webhook-configuration.yaml
+      - templates/proxy-rbac.yaml
+      - templates/selfsigned-issuer.yaml
+      - templates/serviceaccount.yaml
+      - templates/servicemonitor.yaml
+      - templates/serving-cert.yaml
+      - templates/soperator-checks-rbac.yaml
+      - templates/validating-webhook-configuration.yaml
+      - templates/webhook-service.yaml
+    values:
+      sha256: 09962f36e39c922aa2e0b133791d58997c87303219e416b9ea180b61c27ad47b
+      file_count: 2
+      files:
+      - Chart.yaml
+      - values.yaml
+    images:
+      sha256: a8ff02e1734bc55b87ffa97e7c33d5611d875e5b42ed1e2134ca0aee378ee2fb
+      count: 2
+      values:
+      - cr.eu-north1.nebius.cloud/soperator/slurm-operator:3.0.7
+      - registry.k8s.io/kubebuilder/kube-rbac-proxy:v0.15.0
+    slurm_contract:
+      sha256: d29eeaa5e9737feb9249e1fd253c9468684f79c3ef39144f192511f410cb4427
+      file_count: 6
+      files:
+      - crds/slurmcluster-crd.yaml
+      - templates/_helpers.tpl
+      - templates/manager-rbac.yaml
+      - templates/mutating-webhook-configuration.yaml
+      - templates/validating-webhook-configuration.yaml
+      - values.yaml
+    contract_fingerprint: 45887212f2b53486ae56fc1f9c6db5137455bc2a2eb1af7869b8d8f6e8f21f9f
+  - id: soperator-activechecks
+    chart_path: helm/soperator-activechecks
+    chart_name: helm-soperator-activechecks
+    chart_version: 3.0.7
+    app_version: 3.0.7
+    chart_archive:
+      sha256: 7d2e7f045d7968e1f25e8e586e91c6823b123b5b9d5c87d15f09a4cfe93e1bde
+      file_count: 35
+    crds:
+      sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+      file_count: 0
+      files: []
+    templates:
+      sha256: fb0901ba0b1d07aaf01ca349365a3b839d4fd99bbfa78f6cb9417b64ef45d303
+      file_count: 7
+      files:
+      - templates/_helpers.tpl
+      - templates/active-checks.yaml
+      - templates/run-extensive-check-on-reservations.yaml
+      - templates/wait-for-checks-job.yaml
+      - templates/wait-for-checks-role.yaml
+      - templates/wait-for-checks-rolebinging.yaml
+      - templates/wait-for-checks-sa.yaml
+    values:
+      sha256: 4c8d00c5a06ff2b1ca54191f7ea8b3625ced9fd66dcaee21934d3206963a18ec
+      file_count: 2
+      files:
+      - Chart.yaml
+      - values.yaml
+    images:
+      sha256: 98ba1266e3af229725f44d19eeeef7469a90dad62a46038f38788325c02e9cb5
+      count: 6
+      values:
+      - alpine/k8s:1.31.11
+      - cr.eu-north1.nebius.cloud/soperator/k8s_check_job:3.0.7-slurm25.11.3
+      - cr.eu-north1.nebius.cloud/soperator/munge:3.0.7-slurm25.11.3
+      - cr.eu-north1.nebius.cloud/soperator/sansible:3.0.7-slurm25.11.3
+      - cr.eu-north1.nebius.cloud/soperator/slurm_check_job:3.0.7-slurm25.11.3
+      - reg/repo:tag
+    slurm_contract:
+      sha256: b332f40586d954eec060cd524ed1196a2884f8351089aa167cdc70823a7bffc0
+      file_count: 17
+      files:
+      - Chart.yaml
+      - scripts/all-reduce-perf-nccl-in-docker.sh
+      - scripts/cuda-samples.sh
+      - scripts/extensive-check.sh
+      - scripts/gpu-fryer.sh
+      - scripts/ib-gpu-perf.sh
+      - scripts/mem-perf.sh
+      - scripts/prepull-container-image.sh
+      - templates/_helpers.tpl
+      - templates/active-checks.yaml
+      - templates/run-extensive-check-on-reservations.yaml
+      - templates/wait-for-checks-job.yaml
+      - templates/wait-for-checks-role.yaml
+      - templates/wait-for-checks-rolebinging.yaml
+      - templates/wait-for-checks-sa.yaml
+      - tests/k8sjob_spec_test.yaml
+      - values.yaml
+    contract_fingerprint: 443df10a6d35a747ca0b4299be597370fe236f9ee53269c105dd6dce296f2ff3
+  - id: soperator-backup-config
+    chart_path: helm/soperator-backup-config
+    chart_name: helm-soperator-backup-config
+    chart_version: 3.0.7
+    app_version: 3.0.7
+    chart_archive:
+      sha256: d912633a78b0b14245802215ce98c92c8e07bc8c083ed1716be371016236f130
+      file_count: 4
+    crds:
+      sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+      file_count: 0
+      files: []
+    templates:
+      sha256: 22f31d204b918605cf1c7434c873f6dcdd467664dda3d05939cc41b1a5048fe0
+      file_count: 2
+      files:
+      - templates/_helpers.tpl
+      - templates/schedule.yaml
+    values:
+      sha256: b36e3aa2018a63e3b580cfd17c02adad6aa23058a97ff5ecb6673c4ed6ea7059
+      file_count: 2
+      files:
+      - Chart.yaml
+      - values.yaml
+    images:
+      sha256: 4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945
+      count: 0
+      values: []
+    slurm_contract:
+      sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+      file_count: 0
+      files: []
+    contract_fingerprint: 01f98ea8444e0237a88d93cad61a371a99396a3dabc25c468ef6f1bcd1ada8a1
+  - id: soperator-crds
+    chart_path: helm/soperator-crds
+    chart_name: helm-soperator-crds
+    chart_version: 3.0.7
+    app_version: 3.0.7
+    chart_archive:
+      sha256: 01e3353dac638dcbf0efcaf65d954c6232be93d8c98e91fd34813b98813c05ee
+      file_count: 5
+    crds:
+      sha256: a7de78b89066dd64e5e3e7bebb6ab20b191d05b7b899c39117ee204def35c596
+      file_count: 1
+      files:
+      - templates/slurmcluster-crd.yaml
+    templates:
+      sha256: 13fa5fd391ae361b34ef0effc32efe557ff757f09c1fc8f9cfd9b77169fe579a
+      file_count: 2
+      files:
+      - templates/_helpers.tpl
+      - templates/slurmcluster-crd.yaml
+    values:
+      sha256: bc4d23ab4cfe8a99e42ad8bbc5627c0da8e4834026e5316c6ee21ecb7c18f6fb
+      file_count: 2
+      files:
+      - Chart.yaml
+      - values.yaml
+    images:
+      sha256: 4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945
+      count: 0
+      values: []
+    slurm_contract:
+      sha256: a7de78b89066dd64e5e3e7bebb6ab20b191d05b7b899c39117ee204def35c596
+      file_count: 1
+      files:
+      - templates/slurmcluster-crd.yaml
+    contract_fingerprint: 25ebbfae68bec1df1415460433788805b7b7a44bf5fba4007755921f68077c32
+  - id: soperator-custom-configmaps
+    chart_path: helm/soperator-custom-configmaps
+    chart_name: helm-soperator-custom-configmaps
+    chart_version: 3.0.7
+    app_version: 3.0.7
+    chart_archive:
+      sha256: da7f028e7368f9c525a51155e73a332a0a80f58bff90d4cbe818b0a7eb6578ce
+      file_count: 12
+    crds:
+      sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+      file_count: 0
+      files: []
+    templates:
+      sha256: 3641128bf5ec301558d2cae99b68b0bed5391c97ba1cf51c6c40e1e043036f8b
+      file_count: 4
+      files:
+      - templates/_helpers.tpl
+      - templates/configmap-image-storage.yaml
+      - templates/configmap-motd.yaml
+      - templates/configmap-supervisord.yaml
+    values:
+      sha256: fe737a4f8f9b401d3b0d4721f9c0432522eddf67b412988b36f2ca104198ef23
+      file_count: 2
+      files:
+      - Chart.yaml
+      - values.yaml
+    images:
+      sha256: 4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945
+      count: 0
+      values: []
+    slurm_contract:
+      sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+      file_count: 0
+      files: []
+    contract_fingerprint: 8cb5e993ea0a224c6f048f7a89404e51a8c0290fdc2df3cb6fdbeb32ca4c46b0
+  - id: soperator-dcgm-exporter
+    chart_path: helm/soperator-dcgm-exporter
+    chart_name: helm-soperator-dcgm-exporter
+    chart_version: 3.0.7
+    app_version: 3.0.7
+    chart_archive:
+      sha256: aa63e4f9ddce9c3af9aaa972761302c2722a2704a375201979c5d9d3cb1ffc8b
+      file_count: 11
+    crds:
+      sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+      file_count: 0
+      files: []
+    templates:
+      sha256: 1a29146315cac021f8c60778dc90afd0bc680091ea7469f209484c908fa23010
+      file_count: 8
+      files:
+      - templates/_helpers.tpl
+      - templates/configmap.yaml
+      - templates/daemonset.yaml
+      - templates/role.yaml
+      - templates/rolebinding.yaml
+      - templates/service.yaml
+      - templates/serviceaccount.yaml
+      - templates/servicemonitor.yaml
+    values:
+      sha256: 3c432c18e1ce906cc3976c9875b4bbb7c6d8bc0ef7ee8d65e19038363ba44ac8
+      file_count: 2
+      files:
+      - Chart.yaml
+      - values.yaml
+    images:
+      sha256: 4060f45eb8a357efb200d5eecc22e64a694d9a61a89dacc70239222b29dc6657
+      count: 3
+      values:
+      - cr.eu-north1.nebius.cloud/marketplace/nebius/nvidia-gpu-operator/image/gpu-operator-validator:v24.6.2
+      - cr.eu-north1.nebius.cloud/soperator/busybox:latest
+      - cr.eu-north1.nebius.cloud/soperator/dcgm-exporter:4.4.2-4.7.0-ubuntu22.04
+    slurm_contract:
+      sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+      file_count: 0
+      files: []
+    contract_fingerprint: 5c634b2ef8e05e599d20912f234d02981cfe0e80b284540f65110b8b71e899b7
+  - id: soperator-fluxcd
+    chart_path: helm/soperator-fluxcd
+    chart_name: helm-soperator-fluxcd
+    chart_version: 3.0.7
+    app_version: 3.0.7
+    chart_archive:
+      sha256: ebd0e62fa62d0d4367a6c477faac7d71404d08f2c1339e92796fa8484312976f
+      file_count: 42
+    crds:
+      sha256: 233b57fb7cfe72ae944d89b6dde672f5c1d22bb651c4e4a5b341bb3c58603a03
+      file_count: 3
+      files:
+      - templates/mariadb-operator-crds.yaml
+      - templates/prometheus-operator-crds.yaml
+      - templates/victoria-metrics-operator-crds.yaml
+    templates:
+      sha256: e5960d75ae5a8d471375d86e5e7390b9797bbc5c220108fb388a70c131bf8af0
+      file_count: 32
+      files:
+      - templates/_helpers.tpl
+      - templates/backup-config.yaml
+      - templates/backup.yaml
+      - templates/cert-manager.yaml
+      - templates/csi-driver-nfs.yaml
+      - templates/dcgm-exporter.yaml
+      - templates/helmrepository.yaml
+      - templates/kruise.yaml
+      - templates/mariadb-operator-crds.yaml
+      - templates/mariadb-operator.yaml
+      - templates/monitoring-dashboards.yaml
+      - templates/namespaces.yaml
+      - templates/nfs-server.yaml
+      - templates/nodeconfigurator.yaml
+      - templates/nodesets.yaml
+      - templates/notifier.yaml
+      - templates/opentelemetry-collector-events.yaml
+      - templates/opentelemetry-collector-jail-logs.yaml
+      - templates/opentelemetry-collector-logs.yaml
+      - templates/prometheus-operator-crds.yaml
+      - templates/security-profiles-operator.yaml
+      - templates/slurm-cluster-storage.yaml
+      - templates/slurm-cluster.yaml
+      - templates/soperator-activechecks.yaml
+      - templates/soperator-custom-configmaps.yaml
+      - templates/soperator.yaml
+      - templates/soperatorchecks.yaml
+      - templates/storageclasses.yaml
+      - templates/tailscale.yaml
+      - templates/victoria-metrics-operator-crds.yaml
+      - templates/vm-logs.yaml
+      - templates/vm-stack.yaml
+    values:
+      sha256: 7e2ffa177ac303018a8569270ee88524d6edad65c1d64686043ff61b22f51a7a
+      file_count: 2
+      files:
+      - Chart.yaml
+      - values.yaml
+    images:
+      sha256: 1930d6498a0c70637709a5f35d42d8e82d4a1d188bc45eacec8952ec9f3f5339
+      count: 3
+      values:
+      - cr.eu-north1.nebius.cloud/soperator/busybox:latest
+      - cr.eu-north1.nebius.cloud/soperator/kruise-helm-hook
+      - cr.eu-north1.nebius.cloud/soperator/kruise-manager
+    slurm_contract:
+      sha256: 1ada287230d700823d3379754c5c55b3d63412e38b383e5a3762b964930ec400
+      file_count: 14
+      files:
+      - templates/backup-config.yaml
+      - templates/kruise.yaml
+      - templates/namespaces.yaml
+      - templates/nodeconfigurator.yaml
+      - templates/nodesets.yaml
+      - templates/opentelemetry-collector-jail-logs.yaml
+      - templates/slurm-cluster-storage.yaml
+      - templates/slurm-cluster.yaml
+      - templates/soperator-activechecks.yaml
+      - templates/vm-stack.yaml
+      - tests/component_enabled_test.yaml
+      - tests/soperator_dependency_test.yaml
+      - tests/values_override_test.yaml
+      - values.yaml
+    contract_fingerprint: 2beeae57cce5352829bd76b0970fa4307687dbb8256030c4c57a8545b7fa0b77
+  - id: soperator-fluxcd-bootstrap
+    chart_path: helm/soperator-fluxcd-bootstrap
+    chart_name: helm-soperator-fluxcd-bootstrap
+    chart_version: 3.0.7
+    app_version: 3.0.7
+    chart_archive:
+      sha256: 1c6fc5212be92df6ee87c4d9fa3ee76a9938438c820a14ec03c6c89cc307c9d8
+      file_count: 7
+    crds:
+      sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+      file_count: 0
+      files: []
+    templates:
+      sha256: ee3baf2024b372b98ca89c7fbff3d950d59f38d26aaa9673f8e88a04e0177ca9
+      file_count: 3
+      files:
+      - templates/_helpers.tpl
+      - templates/helmrelease.yaml
+      - templates/helmrepository.yaml
+    values:
+      sha256: 7af87296028dcb6f36015cc058d356614de2b8362757e59ba27c3ab94fe38039
+      file_count: 2
+      files:
+      - Chart.yaml
+      - values.yaml
+    images:
+      sha256: 4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945
+      count: 0
+      values: []
+    slurm_contract:
+      sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+      file_count: 0
+      files: []
+    contract_fingerprint: 902bc563d5a7467bfd11831ec4857c9ca71585ecc95dececa7fb89348f6b5b24
+  - id: soperator-monitoring-dashboards
+    chart_path: helm/soperator-monitoring-dashboards
+    chart_name: helm-soperator-monitoring-dashboards
+    chart_version: 3.0.7
+    app_version: 3.0.7
+    chart_archive:
+      sha256: 47cea342fafcfb2ad099f0f31b92ee8e3faa540e36362d94ac78976c5e410a37
+      file_count: 9
+    crds:
+      sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+      file_count: 0
+      files: []
+    templates:
+      sha256: 05b64487eb98ce8a906f2020f231879b34c21ec8dbdb58c72fc451279397af6d
+      file_count: 2
+      files:
+      - templates/_helpers.tpl
+      - templates/configmaps.yaml
+    values:
+      sha256: f067582d87d1f57cc98239f12bc93ad607c0177a05b37a2afc1512c099e1fcf8
+      file_count: 2
+      files:
+      - Chart.yaml
+      - values.yaml
+    images:
+      sha256: 4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945
+      count: 0
+      values: []
+    slurm_contract:
+      sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+      file_count: 0
+      files: []
+    contract_fingerprint: a45d75b5e2c37331b373dabb732beff0c2913bcab2fc37b8d9cc0a6bf7b7a106
+  - id: soperator-notifier
+    chart_path: helm/soperator-notifier
+    chart_name: helm-soperator-notifier
+    chart_version: 3.0.7
+    app_version: 3.0.7
+    chart_archive:
+      sha256: dba744d9421618760f407c6ebb955e168864c7c81bf1a06835d3670a6608b929
+      file_count: 20
+    crds:
+      sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+      file_count: 0
+      files: []
+    templates:
+      sha256: 4a61d27d3bdf5a02dcaec108d0ef106bed5d32ac37af4505c7316c5c86c0916f
+      file_count: 11
+      files:
+      - templates/01_secret.yml
+      - templates/02_config.yml
+      - templates/03_manager.yml
+      - templates/04_rule.yml
+      - templates/05_alert.yml
+      - templates/_helpers.00_slack.tpl
+      - templates/_helpers.02_config.tpl
+      - templates/_helpers.03_manager.tpl
+      - templates/_helpers.04_rule.tpl
+      - templates/_helpers.05_alert.tpl
+      - templates/_helpers.tpl
+    values:
+      sha256: 77beffbd79b9d3f51d6d1711253cce3554545c7df526a953c99cd471dc2f1a01
+      file_count: 2
+      files:
+      - Chart.yaml
+      - values.yaml
+    images:
+      sha256: 4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945
+      count: 0
+      values: []
+    slurm_contract:
+      sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+      file_count: 0
+      files: []
+    contract_fingerprint: fcc23d14a9302c779e90fa6733f676597b7af8213d656f117bc432b4cf7ae372
+  - id: soperatorchecks
+    chart_path: helm/soperatorchecks
+    chart_name: helm-soperatorchecks
+    chart_version: 3.0.7
+    app_version: 3.0.7
+    chart_archive:
+      sha256: 31527b93162657e2df35317e34802b4f3df79c34e819f49d50ae8d84433c137e
+      file_count: 10
+    crds:
+      sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+      file_count: 0
+      files: []
+    templates:
+      sha256: 19f04b469a24e04371bf1e2163e2db4b0535630f77c8fd054eb439ab7ebad55c
+      file_count: 7
+      files:
+      - templates/_helpers.tpl
+      - templates/deployment.yaml
+      - templates/metrics-service.yaml
+      - templates/serviceaccount.yaml
+      - templates/servicemonitor.yaml
+      - templates/soperator-checks-binding-rbac.yaml
+      - templates/soperator-checks-rbac.yaml
+    values:
+      sha256: ee947c356cd5365ef9304b3acc4ea2acdca82080a4168fb6d585caabc99d8fe2
+      file_count: 2
+      files:
+      - Chart.yaml
+      - values.yaml
+    images:
+      sha256: 09a8ca1b464097bd1078c3024d7178f6156307fcc357ac97713676d46518e40d
+      count: 2
+      values:
+      - cr.eu-north1.nebius.cloud/soperator/soperatorchecks:3.0.7
+      - registry.k8s.io/kubebuilder/kube-rbac-proxy:v0.15.0
+    slurm_contract:
+      sha256: 3810b9b7b7ee8f61a8a5a222ae2a7f59948131e859fcb2126eb6f1088bd58677
+      file_count: 3
+      files:
+      - templates/_helpers.tpl
+      - templates/soperator-checks-rbac.yaml
+      - values.yaml
+    contract_fingerprint: 3fd8ffa70c8993222f30511a43bf33dd1866cc33a8cd9510749daf50f481051d
+  - id: storageclasses
+    chart_path: helm/storageclasses
+    chart_name: helm-storageclasses
+    chart_version: 3.0.7
+    app_version: 3.0.7
+    chart_archive:
+      sha256: 2c93c4e1508b5370e522c087ce081288d0d14af1699c05cd6a4f5051915d7e64
+      file_count: 4
+    crds:
+      sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+      file_count: 0
+      files: []
+    templates:
+      sha256: b3c92d59cdf91e158abf048ddf540a4f1511f93b10098793da42209750c9eba1
+      file_count: 2
+      files:
+      - templates/_helpers.tpl
+      - templates/storageclasses.yaml
+    values:
+      sha256: 186e4bcde56e8bf2d8d3857660019f369c0cbf25a398571e1720b87915dbb514
+      file_count: 2
+      files:
+      - Chart.yaml
+      - values.yaml
+    images:
+      sha256: 4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945
+      count: 0
+      values: []
+    slurm_contract:
+      sha256: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+      file_count: 0
+      files: []
+    contract_fingerprint: edd74809eae16bc40112f6dc0f3ca61d13ea72e293874497ff38692294373007

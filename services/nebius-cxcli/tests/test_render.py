@@ -3629,6 +3629,13 @@ def test_render_instance_resets_generated_bundle_and_removes_stale_files(
     bootstrap_kustomization = bootstrap_flux_dir / "kustomization.yaml"
     stale_flux_file = paths.flux_dir / "stale.yaml"
     stale_report = paths.reports_dir / "old.json"
+    deploy_report = paths.reports_dir / "deploy-report.md"
+    deploy_detail_report = paths.reports_dir / "gpu-visibility-report-mk8s.json"
+    migrate_report = paths.reports_dir / "migrate-report.md"
+    migration_detail_report = paths.reports_dir / "soperator-cluster-validation-report-external.json"
+    unreferenced_migration_like_report = paths.reports_dir / "soperator-cluster-validation-report-old.json"
+    upgrade_report = paths.reports_dir / "upgrade-report.md"
+    upgrade_report_json = paths.reports_dir / "upgrade-report.json"
     stale_top_level = paths.generated_dir / "obsolete.txt"
     stale_tf.parent.mkdir(parents=True, exist_ok=True)
     bootstrap_flux_dir.mkdir(parents=True, exist_ok=True)
@@ -3642,6 +3649,20 @@ def test_render_instance_resets_generated_bundle_and_removes_stale_files(
     )
     stale_flux_file.write_text("apiVersion: v1\nkind: Secret\n", encoding="utf-8")
     stale_report.write_text("{}\n", encoding="utf-8")
+    deploy_report.write_text(
+        "# Deploy Report\n\n### GPU visibility\n\n- Detail report: `gpu-visibility-report-mk8s.json`\n",
+        encoding="utf-8",
+    )
+    deploy_detail_report.write_text('{"status": "passed"}\n', encoding="utf-8")
+    migrate_report.write_text(
+        "# Soperator Migration Report\n\n"
+        "- `soperator-cluster-validation-report-external.json`: `PASS` - ok\n",
+        encoding="utf-8",
+    )
+    migration_detail_report.write_text('{"passed": true}\n', encoding="utf-8")
+    unreferenced_migration_like_report.write_text('{"passed": false}\n', encoding="utf-8")
+    upgrade_report.write_text("# Soperator Upgrade Report\n", encoding="utf-8")
+    upgrade_report_json.write_text('{"status": "completed"}\n', encoding="utf-8")
     stale_top_level.write_text("obsolete\n", encoding="utf-8")
 
     render_project(config, paths, source_profile=SourceProfile.LOCAL)
@@ -3649,6 +3670,13 @@ def test_render_instance_resets_generated_bundle_and_removes_stale_files(
     assert not stale_tf.exists()
     assert not stale_flux_file.exists()
     assert not stale_report.exists()
+    assert deploy_report.read_text(encoding="utf-8").startswith("# Deploy Report")
+    assert deploy_detail_report.read_text(encoding="utf-8") == '{"status": "passed"}\n'
+    assert migrate_report.read_text(encoding="utf-8").startswith("# Soperator Migration Report")
+    assert migration_detail_report.read_text(encoding="utf-8") == '{"passed": true}\n'
+    assert not unreferenced_migration_like_report.exists()
+    assert upgrade_report.read_text(encoding="utf-8").startswith("# Soperator Upgrade Report")
+    assert upgrade_report_json.read_text(encoding="utf-8") == '{"status": "completed"}\n'
     assert not stale_top_level.exists()
     assert not bootstrap_sync.exists()
     assert not bootstrap_components.exists()
@@ -3658,7 +3686,7 @@ def test_render_instance_resets_generated_bundle_and_removes_stale_files(
         (_target_flux_dir(paths) / "kustomization.yaml").read_text(encoding="utf-8")
     )
     assert "./flux-system" not in kustomization_doc["resources"]
-    assert not (paths.reports_dir / "deploy-report.md").exists()
+    assert (paths.reports_dir / "deploy-report.md").exists()
 
 
 def test_render_instance_preserves_existing_generated_bundle_when_rerender_fails(

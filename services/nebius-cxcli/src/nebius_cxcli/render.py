@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import re
 import shutil
 import tempfile
+from contextlib import suppress
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
@@ -26,6 +28,17 @@ from .soperator_onboarding import write_soperator_onboarding_reports
 @dataclass(frozen=True)
 class RenderResult:
     files_written: list[Path]
+
+
+_LIFECYCLE_REPORT_FILENAMES = frozenset(
+    {
+        "deploy-report.md",
+        "migrate-report.md",
+        "upgrade-report.md",
+        "upgrade-report.json",
+    }
+)
+_REPORT_JSON_REF_RE = re.compile(r"`([^`/\\]+\.json)`")
 
 
 def reset_generated_bundle(paths: ProjectPaths) -> None:
@@ -51,6 +64,36 @@ def staged_generated_paths(paths: ProjectPaths) -> ProjectPaths:
     )
 
 
+def _lifecycle_report_artifact_names(reports_dir: Path) -> tuple[str, ...]:
+    if not reports_dir.is_dir():
+        return ()
+    names = {name for name in _LIFECYCLE_REPORT_FILENAMES if (reports_dir / name).is_file()}
+    for report_name in tuple(names):
+        if not report_name.endswith(".md"):
+            continue
+        with suppress(OSError, UnicodeDecodeError):
+            report_text = (reports_dir / report_name).read_text(encoding="utf-8")
+            for match in _REPORT_JSON_REF_RE.finditer(report_text):
+                names.add(match.group(1))
+    return tuple(sorted(names))
+
+
+def _preserve_lifecycle_report_artifacts(
+    staged_paths: ProjectPaths,
+    final_paths: ProjectPaths,
+) -> None:
+    names = _lifecycle_report_artifact_names(final_paths.reports_dir)
+    if not names:
+        return
+    staged_paths.reports_dir.mkdir(parents=True, exist_ok=True)
+    for name in names:
+        source = final_paths.reports_dir / name
+        target = staged_paths.reports_dir / name
+        if not source.is_file() or target.exists():
+            continue
+        shutil.copy2(source, target)
+
+
 def promote_staged_generated_paths(
     staged_paths: ProjectPaths,
     final_paths: ProjectPaths,
@@ -58,6 +101,7 @@ def promote_staged_generated_paths(
     """Swap a fully rendered staged bundle into the canonical generated/ path."""
     backup_dir: Path | None = None
     try:
+        _preserve_lifecycle_report_artifacts(staged_paths, final_paths)
         if final_paths.generated_dir.exists():
             backup_dir = final_paths.project_dir / f".generated-backup-{uuid4().hex}"
             final_paths.generated_dir.rename(backup_dir)

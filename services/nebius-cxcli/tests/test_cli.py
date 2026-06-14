@@ -745,25 +745,26 @@ def _assert_soperator_onboard_next_steps(
     )
     assert "Soperator onboarding route:" in output
     assert "Next steps:" in output
-    assert f"`nebius-cxcli validate {config_arg}`" in output
-    assert f"`nebius-cxcli render {config_arg}`" in output
+    lines = output.splitlines()
+    assert f"nebius-cxcli validate {config_arg}" in lines
+    assert f"nebius-cxcli render {config_arg}" in lines
     if migration_required:
         assert "Route: render -> ext-soperator migrate, not render -> deploy." in output
         assert "deploy only reconciles the rendered Terraform/Flux desired state" in output
-        assert f"`nebius-cxcli deploy {config_arg}`" not in output
+        assert f"nebius-cxcli deploy {config_arg}" not in lines
         assert (
-            f"`nebius-cxcli ext-soperator migrate {config_arg} --target {target_arg} --dry-run`"
-            in output
+            f"nebius-cxcli ext-soperator migrate {config_arg} --target {target_arg} --dry-run"
+            in lines
         )
         assert (
-            "`nebius-cxcli ext-soperator migrate "
-            f"{config_arg} --target {target_arg} --execute --approve`" in output
+            "nebius-cxcli ext-soperator migrate "
+            f"{config_arg} --target {target_arg} --execute --approve" in lines
         )
-        assert "after the dry run is accepted" in output
+        assert "After the dry run is accepted:" in output
         assert "Do not run `nebius-cxcli deploy` before `ext-soperator migrate`" in output
     else:
         assert "Route: render -> deploy." in output
-        assert f"`nebius-cxcli deploy {config_arg}`" in output
+        assert f"nebius-cxcli deploy {config_arg}" in lines
         assert (
             f"Use `--target {target_arg}` only when you intentionally want to narrow deploy "
             "to this generated target."
@@ -1052,11 +1053,29 @@ def test_render_deploy_hint_lists_execute_for_multiple_migration_targets(
     cli_module._print_render_deploy_hint(config_path)
 
     output = "\n".join(printed)
+    lines = output.splitlines()
+    config_arg = shlex.quote(str(config_path.resolve()))
     assert "Route: render -> ext-soperator migrate, not render -> deploy." in output
     assert "external-cluster" in output
     assert "second-cluster" in output
-    assert "--dry-run` for each migration-required Soperator target" in output
-    assert "--execute --approve` for that target" in output
+    assert "Next step: dry-run each migration-required Soperator target:" in lines
+    assert (
+        f"nebius-cxcli ext-soperator migrate {config_arg} "
+        "--target external-cluster --dry-run"
+    ) in lines
+    assert (
+        f"nebius-cxcli ext-soperator migrate {config_arg} "
+        "--target second-cluster --dry-run"
+    ) in lines
+    assert "After accepting each dry-run plan, execute that target:" in lines
+    assert (
+        f"nebius-cxcli ext-soperator migrate {config_arg} "
+        "--target external-cluster --execute --approve"
+    ) in lines
+    assert (
+        f"nebius-cxcli ext-soperator migrate {config_arg} "
+        "--target second-cluster --execute --approve"
+    ) in lines
     assert "Do not run `nebius-cxcli deploy` before `ext-soperator migrate`" in output
 
 
@@ -2696,11 +2715,12 @@ def test_create_prints_next_step_commands_one_per_line(tmp_path: Path) -> None:
     config_arg = shlex.quote(str(_project_config_path(deployments_root).resolve()))
     lines = result.output.splitlines()
     next_steps_index = lines.index("Next steps:")
-    assert lines[next_steps_index + 1 : next_steps_index + 5] == [
-        f"  `nebius-cxcli validate {config_arg}`",
-        f"  `nebius-cxcli render {config_arg}`",
-        f"  `nebius-cxcli deploy {config_arg}`",
-        f"  `nebius-cxcli bootstrap-ci {config_arg}` (optional)",
+    assert lines[next_steps_index + 1 : next_steps_index + 6] == [
+        f"nebius-cxcli validate {config_arg}",
+        f"nebius-cxcli render {config_arg}",
+        f"nebius-cxcli deploy {config_arg}",
+        "Optional CI bootstrap:",
+        f"nebius-cxcli bootstrap-ci {config_arg}",
     ]
     assert "then deploy from the rendered bundle" not in result.output
 
@@ -5045,7 +5065,7 @@ def test_soperator_onboard_prompts_source_version_when_discovery_has_crds_only(
     }
 
 
-def test_soperator_onboard_requires_source_version_confirmation_for_mixed_release_identity() -> None:
+def test_soperator_onboard_uses_detected_profile_for_mixed_release_identity() -> None:
     snapshot = {
         "node_groups": {
             "gpu-pool": {
@@ -5059,14 +5079,14 @@ def test_soperator_onboard_requires_source_version_confirmation_for_mixed_releas
             {
                 "name": "soperator",
                 "namespace": "soperator",
-                "chart": "soperator-2.0.5",
-                "app_version": "2.0.5",
+                "chart": "helm-soperator-3.0.7",
+                "app_version": "3.0.7",
             },
             {
                 "name": "soperator",
                 "namespace": "custom",
-                "chart": "soperator-2.0.5",
-                "app_version": "2.0.5",
+                "chart": "helm-soperator-3.0.7",
+                "app_version": "3.0.7",
             },
         ],
         "crds": ["slurmclusters.slurm.nebius.ai"],
@@ -5078,31 +5098,23 @@ def test_soperator_onboard_requires_source_version_confirmation_for_mixed_releas
     report = cli_module.analyze_soperator_onboarding_snapshot(
         snapshot,
         target_ref="cluster1",
-        pinned_chart_version="4.0.1-ps.1",
-        pinned_app_version="4.0.1",
+        pinned_chart_version="4.0.2-ps.1",
+        pinned_app_version="4.0.2",
     )
 
-    assert report.source_version == "2.0.5"
-    assert report.migration_profile_id == "v2-to-target"
-    assert cli_module._soperator_onboarding_report_needs_source_version(report) is True
+    assert report.state == "existing-soperator-supported"
+    assert report.source_version == "3.0.7"
+    assert report.migration_profile_id == "v3-to-target"
+    assert cli_module._soperator_onboarding_report_needs_source_version(report) is False
+    assert any(finding.status == "noncanonical-release-detected" for finding in report.findings)
 
-    confirmed = cli_module._soperator_onboarding_report_with_source_version(
-        report,
-        snapshot=snapshot,
-        target_ref="cluster1",
-        pinned_chart_version="4.0.1-ps.1",
-        pinned_app_version="4.0.1",
-        source_version="2.0.5",
-        interactive=False,
-    )
 
-    assert confirmed.state == "existing-soperator-supported"
-    assert confirmed.source_version == "2.0.5"
-    assert confirmed.migration_profile_id == "v2-to-target"
-    assert cli_module._soperator_onboarding_report_needs_source_version(confirmed) is False
-    assert not any(
-        finding.status == "source-version-required" for finding in confirmed.findings
-    )
+def test_soperator_source_version_validator_accepts_generation_profile_patch() -> None:
+    assert cli_module._validate_soperator_source_version("3.0.7") == "3.0.7"
+    assert cli_module._validate_soperator_source_version("3.0.99") == "3.0.99"
+
+    with pytest.raises(ValueError, match="known major-generation profile"):
+        cli_module._validate_soperator_source_version("5.0.0")
 
 
 def test_soperator_onboard_detects_legacy_controller_release_without_prompt(
@@ -6465,22 +6477,39 @@ def test_soperator_migrate_dry_run_prints_onboarding_migration_plan(tmp_path: Pa
     assert "Live executor contract:" in result.output
     assert "External node-template contract:" in result.output
     assert "Worker node-template quota contract:" in result.output
-    assert "Worker rollout strategy: safe-surge" in result.output
-    assert "Worker wave parallelism: 1 concurrent worker group(s) from 1% of worker groups" in (
+    assert "Worker rollout strategy: zero-surge" in result.output
+    assert "Worker wave parallelism: 1 worker group at a time (zero-surge fallback)" in (
         result.output
     )
     assert (
-        "Worker per-group strategy: max_surge=1, max_unavailable=0, drain_timeout=30m"
+        "Worker per-group strategy: max_surge=0, max_unavailable=1, drain_timeout=30m"
         in result.output
     )
-    assert "Worker spare capacity required: 1 surge node(s) per worker group" in result.output
-    assert "Worker drain timeout:" in result.output
+    assert "Worker spare capacity required: no surge worker quota" in result.output
+    assert "active worker group capacity may be reduced by 1 node" in result.output
     assert "Planned worker waves: wave 1: gpu-pool." in result.output
     assert "temporary zero-surge strategy" in result.output
-    assert "require max_surge_count temporary surge node(s)" in result.output
+    assert "With safe-surge, preserved worker groups require" in result.output
     assert "Failure handling contract:" in result.output
     assert "Resume contract:" in result.output
     assert "Execution mode: dry-run; no cluster changes were made." in result.output
+
+    custom_zero_surge = runner.invoke(
+        app,
+        [
+            "ext-soperator",
+            "migrate",
+            str(config_path),
+            "--dry-run",
+            "--strategy-max-unavailable-count",
+            "3",
+        ],
+    )
+
+    assert custom_zero_surge.exit_code == 0, custom_zero_surge.output
+    assert "active worker group capacity may be reduced by 3 nodes" in (
+        custom_zero_surge.output
+    )
 
 
 def test_soperator_migrate_dry_run_validates_worker_rollout_cli_overrides(
@@ -6500,9 +6529,26 @@ def test_soperator_migrate_dry_run_validates_worker_rollout_cli_overrides(
         ],
     )
 
-    assert result.exit_code == 0, result.output
+    assert result.exit_code != 0
+    assert "zero-surge worker rollout does not use worker wave budget fields" in result.output
+
+    safe_surge = runner.invoke(
+        app,
+        [
+            "ext-soperator",
+            "migrate",
+            str(config_path),
+            "--dry-run",
+            "--worker-rollout-strategy",
+            "safe-surge",
+            "--worker-wave-groups",
+            "2",
+        ],
+    )
+
+    assert safe_surge.exit_code == 0, safe_surge.output
     assert "Worker wave parallelism: 1 concurrent worker group(s) from 2 worker group(s)" in (
-        result.output
+        safe_surge.output
     )
 
     conflict = runner.invoke(
@@ -6512,6 +6558,8 @@ def test_soperator_migrate_dry_run_validates_worker_rollout_cli_overrides(
             "migrate",
             str(config_path),
             "--dry-run",
+            "--worker-rollout-strategy",
+            "safe-surge",
             "--worker-wave-groups",
             "1",
             "--worker-wave-percent",
@@ -6550,7 +6598,8 @@ def test_soperator_migration_status_styles_and_spinner(monkeypatch: pytest.Monke
     styled = cli_module._style_soperator_migration_status_message(
         "Soperator migration status [4s] phase external-node-template-upgrade "
         "[External node-template upgrade] (degraded): MK8s Node Groups degraded: "
-        "nodes 7/8 Ready; problem nodes gpu-node-a:node-upgrading (down) | "
+        "Node groups: 4 group(s); gpu-pool:3/4 Ready || "
+        "Nodes: 7/8 Ready; in transition gpu-node-a:replacing (down) | "
         "Slurm Workers draining: workers drained=1"
     )
 
@@ -6559,7 +6608,10 @@ def test_soperator_migration_status_styles_and_spinner(monkeypatch: pytest.Monke
     assert "External node-template upgrade" in styled
     assert "([bold yellow]degraded[/bold yellow]):" in styled
     assert "[bold white]MK8s Node Groups[/bold white]" in styled
-    assert "[bold red]node-upgrading (down)[/bold red]" in styled
+    assert "[bold cyan]Node groups:[/bold cyan]" in styled
+    assert "[dim] || [/dim]" in styled
+    assert "[bold magenta]Nodes:[/bold magenta]" in styled
+    assert "[bold yellow]replacing (down)[/bold yellow]" in styled
     assert "[bold white]Slurm Workers[/bold white]" in styled
 
     initial_messages: list[str] = []
@@ -6591,7 +6643,7 @@ def test_soperator_migration_status_styles_and_spinner(monkeypatch: pytest.Monke
         emit(
             "Soperator migration status [4s] phase external-node-template-upgrade "
             "[External node-template upgrade] (degraded): MK8s Node Groups degraded: "
-            "nodes 7/8 Ready"
+            "Node groups: 4 group(s); gpu-pool:3/4 Ready || Nodes: 7/8 Ready"
         )
 
     assert initial_messages
@@ -6601,6 +6653,8 @@ def test_soperator_migration_status_styles_and_spinner(monkeypatch: pytest.Monke
     assert "external-node-template-upgrade" in updates[0]
     assert "External node-template upgrade" in updates[0]
     assert "[bold white]MK8s Node Groups[/bold white]" in updates[0]
+    assert "[bold cyan]Node groups:[/bold cyan]" in updates[0]
+    assert "[bold magenta]Nodes:[/bold magenta]" in updates[0]
 
 
 def test_soperator_migrate_dry_run_rejects_gpu_reconciliation_only_deploy_route(
@@ -6634,14 +6688,25 @@ def test_soperator_migrate_dry_run_rejects_gpu_reconciliation_only_deploy_route(
     )
 
     assert result.exit_code == 1
+    output_lines = result.output.splitlines()
+    assert output_lines[0].startswith("NOTE: ")
+    assert "ERROR:" not in result.output
+    assert any(line.startswith("nebius-cxcli validate ") for line in output_lines)
+    assert any(line.startswith("nebius-cxcli render ") for line in output_lines)
+    assert any(line.startswith("nebius-cxcli deploy ") for line in output_lines)
+    assert any(
+        line.startswith("nebius-cxcli deploy ") and line.endswith("--target external-cluster")
+        for line in output_lines
+    )
     normalized_output = " ".join(result.output.split())
     assert "has no migration-owned onboarding actions" in normalized_output
     assert "reconcile-target-gpu-stack" in normalized_output
-    assert "`nebius-cxcli validate" in normalized_output
-    assert "`nebius-cxcli render" in normalized_output
-    assert "`nebius-cxcli deploy" in normalized_output
+    assert "Run these commands to reconcile deploy-owned work:" in normalized_output
+    assert "nebius-cxcli validate" in normalized_output
+    assert "nebius-cxcli render" in normalized_output
+    assert "nebius-cxcli deploy" in normalized_output
     assert "config.yaml" in normalized_output
-    assert "--target external-cluster`" in normalized_output
+    assert "--target external-cluster" in normalized_output
 
 
 @pytest.mark.parametrize(
@@ -6753,7 +6818,7 @@ def test_soperator_migrate_execute_runs_checkpointed_preflight(
     assert "Execute preflight checkpoint:" in result.output
     assert "Live source version verified: 3.0.5" in result.output
     assert "Pending phase: customer-approval" in result.output
-    assert "Mutation performed: no." in result.output
+    assert "Migration performed: no." in result.output
     checkpoint_path = (
         config_path.parent
         / ".nebius-cxcli"
@@ -6764,6 +6829,53 @@ def test_soperator_migrate_execute_runs_checkpointed_preflight(
     checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
     assert checkpoint["completed_phases"] == ["discovery-and-plan"]
     assert checkpoint["pending_phase"] == "customer-approval"
+
+
+def test_soperator_migrate_execute_approved_pending_phase_exits_nonzero(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_path = _write_old_soperator_migration_config(tmp_path)
+
+    def _execute(**_kwargs):
+        return SoperatorMigrationExecutionResult(
+            checkpoint_path=tmp_path / "checkpoint.json",
+            completed_phases=("discovery-and-plan", "customer-approval"),
+            pending_phase="validation-and-rollback-hold",
+            pending_reason="Slurm NCCL benchmark failed",
+            live_source_version="3.0.5",
+            target_version="4.0.1-ps.1",
+            mutation_performed=True,
+            lines=(
+                "Execute preflight checkpoint: checkpoint.json",
+                "Pending phase: validation-and-rollback-hold",
+                "Pending reason: Slurm NCCL benchmark failed",
+            ),
+        )
+
+    monkeypatch.setattr(cli_module, "execute_soperator_migration", _execute)
+    monkeypatch.setattr(
+        cli_module,
+        "collect_kubectl_soperator_snapshot",
+        lambda *, kube_context: _old_soperator_snapshot(),
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "ext-soperator",
+            "migrate",
+            str(config_path),
+            "--target",
+            "external-cluster",
+            "--execute",
+            "--approve",
+        ],
+    )
+
+    assert result.exit_code == 1, result.output
+    assert "Pending phase: validation-and-rollback-hold" in result.output
+    assert "Pending reason: Slurm NCCL benchmark failed" in result.output
 
 
 def test_soperator_migrate_execute_derives_kube_context_from_cluster_id(
@@ -6888,11 +7000,13 @@ def test_soperator_migrate_execute_records_approval_and_worker_groups(
         "retire-old-resources"
     ) in result.output
     assert "Pending phase: none" in result.output
-    assert "Mutation performed: yes." in result.output
+    assert "Migration performed: yes." in result.output
     migrate_report_path = config_path.parent / "generated" / "reports" / "migrate-report.md"
     assert f"Migrate report: {migrate_report_path}" in result.output
     assert migrate_report_path.exists()
-    assert "Soperator and Slurm smoke" in migrate_report_path.read_text(encoding="utf-8")
+    migrate_report = migrate_report_path.read_text(encoding="utf-8")
+    assert "- Migration performed: `yes`" in migrate_report
+    assert "Soperator and Slurm smoke" in migrate_report
     checkpoint_path = (
         config_path.parent
         / ".nebius-cxcli"
@@ -9316,8 +9430,10 @@ def test_component_add_noninteractive_preserves_existing_values(tmp_path: Path) 
         "unchanged until you run render and then deploy/destroy as needed."
     ) in normalized_output
     config_arg = shlex.quote(str(config_path.resolve()))
-    assert f"Next steps: run `nebius-cxcli validate {config_arg}`, then " in normalized_output
-    assert f"`nebius-cxcli render {config_arg}`." in normalized_output
+    lines = result.output.splitlines()
+    assert "Next steps:" in lines
+    assert f"nebius-cxcli validate {config_arg}" in lines
+    assert f"nebius-cxcli render {config_arg}" in lines
 
     refreshed = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     refreshed_components = refreshed.get("infra", {}).get("components", [])
@@ -11490,8 +11606,10 @@ def test_component_remove_noninteractive_removes_app_chart_when_no_dependency_br
         "unchanged until you run render and then deploy/destroy as needed."
     ) in normalized_output
     config_arg = shlex.quote(str(config_path.resolve()))
-    assert f"Next steps: run `nebius-cxcli validate {config_arg}`, then " in normalized_output
-    assert f"`nebius-cxcli render {config_arg}`." in normalized_output
+    lines = result.output.splitlines()
+    assert "Next steps:" in lines
+    assert f"nebius-cxcli validate {config_arg}" in lines
+    assert f"nebius-cxcli render {config_arg}" in lines
 
     refreshed = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     charts = refreshed.get("apps", {}).get("charts", [])
@@ -11505,8 +11623,9 @@ def test_component_remove_noninteractive_removes_app_chart_when_no_dependency_br
     assert repeat.exit_code == 0, repeat.output
     assert "Skipped already-absent component: gateway-helm" in repeat.output
     assert "No components selected for remove." in repeat.output
-    repeat_output = " ".join(repeat.output.split())
-    assert f"Next steps: run `nebius-cxcli validate {config_arg}`, then " in repeat_output
+    repeat_lines = repeat.output.splitlines()
+    assert "Next steps:" in repeat_lines
+    assert f"nebius-cxcli validate {config_arg}" in repeat_lines
 
 
 def test_component_remove_requires_row_id_when_multiple_instances_match(

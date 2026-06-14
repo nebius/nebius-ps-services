@@ -523,7 +523,7 @@ unsupported fields, broader project refactors, and chart source-family changes.
   Planning and dry runs resolve the live cluster ID through the SDK by the
   configured cluster name, not by initializing Terraform or reading backend
   outputs. Guided dry-run output includes a complete repeatable command with
-  the resolved target, version, disruption policy, and non-default drain
+  the resolved target, version, upgrade strategy, and non-default drain
   timeout. `emptyDir` preflight findings are summarized as one advisory because
   emptyDir is ephemeral by Kubernetes design and is appropriate for scratch or
   intermediate data when persistent state uses PVC-backed volumes. After GPU
@@ -572,7 +572,7 @@ unsupported fields, broader project refactors, and chart source-family changes.
   node-group replacement. Generic `upgrade helm-chart` updates the selected
   non-Soperator `apps.charts[]` version, rerenders, validates, and applies the
   selected Flux target. When the selected chart is `apps:soperator@<target>`,
-  it redirects into `soperator upgrade`, the canonical managed Soperator chart
+  it redirects into `soperator upgrade`, the canonical cxcli-managed Soperator chart
   path. That path wraps the same version bump/render/Flux apply with a live
   Soperator/Slurm smoke preflight, external-migration bypass guard, Helm
   readiness verification, postflight Soperator/Slurm validation, and
@@ -580,14 +580,18 @@ unsupported fields, broader project refactors, and chart source-family changes.
   `values.soperator-activechecks.enabled` or
   `values.soperator-activechecks.waitForChecks.enabled` is true in the
   cxcli-owned Soperator row, it snapshots the original values, writes a local
-  upgrade checkpoint, renders/applies a temporary ActiveChecks suspension,
-  patches matching live ActiveCheck CRs to suspend launch-on-create checks,
-  removes matching already-launched check CronJobs/jobs/pods, and restores the
-  original values after postflight validation. If live ActiveChecks cannot be
-  inspected, the managed upgrade fails closed before the chart upgrade so the
-  report does not claim an ambiguous live suspension. The flow writes
+  `.nebius-cxcli/soperator-upgrades/<target>/checkpoint.json` upgrade
+  checkpoint, renders/applies a temporary ActiveChecks suspension, patches
+  matching live ActiveCheck CRs to suspend launch-on-create checks, removes
+  matching already-launched check CronJobs/jobs/pods, and restores the original
+  values after postflight validation. If live ActiveChecks cannot be inspected,
+  the cxcli-managed upgrade fails closed before the chart upgrade so the report
+  does not claim an ambiguous live suspension. The flow writes
   `upgrade-report.md` and `upgrade-report.json` next to `deploy-report.md` for
-  restore evidence.
+  restore evidence. If the process is interrupted after ActiveChecks are
+  suspended, rerunning the same `soperator upgrade` command reuses the local
+  upgrade checkpoint and restores the original values before completing the
+  maintenance flow.
   External Soperator adoption, storage/compute
   remediation, and external MK8s node-template upgrades remain owned by
   `ext-soperator migrate`. GPU stack preset means the MK8s `drivers_preset` /
@@ -608,22 +612,22 @@ unsupported fields, broader project refactors, and chart source-family changes.
   and production workloads, the supported operational pattern is blue/green or
   new node-group migration followed by workload movement after validation.
 
-K8s version upgrades use `--disruption-policy safe|allow-unavailable|force-delete`.
-`safe` is the default and requires rolling headroom while respecting PDBs; cxcli
-always prints this as a general safe-mode warning and fails preflight when quota
-assessment reports a shortage.
-`allow-unavailable` uses zero surge, one unavailable node, and a bounded drain
-timeout, so PDB blockers stop preflight, workloads may become unavailable, and
-Pods can remain Pending until replacement capacity returns. `force-delete` is a
-last-resort mode selected explicitly through the disruption policy; cxcli sets a
+K8s version upgrades use `--strategy zero-surge|safe-surge|force-delete`.
+`zero-surge` is the default and sets zero surge plus one unavailable node, so it
+does not need spare node quota but can temporarily reduce active capacity. PDB
+blockers stop preflight, workloads may become unavailable, and Pods can remain
+Pending until replacement capacity returns. `safe-surge` uses one temporary
+surge node per active node group to preserve active capacity, so cxcli fails
+preflight when quota assessment reports a shortage. `force-delete` is a
+last-resort mode selected explicitly through the upgrade strategy; cxcli sets a
 finite Terraform node-group `drain_timeout`, after which Managed Kubernetes may
 fall back to Pod deletion.
 It never deletes PVC/PV objects, but forced Pod deletion can still create
 application-level consistency risk if a process skips graceful shutdown or a
 replacement Pod runs concurrently against shared storage, locks, or external
-APIs. `--drain-timeout auto` resolves to `none` for `safe`, `30m` for
-`allow-unavailable`, and `10m` for `force-delete`; finite duration values are
-accepted with `allow-unavailable` and `force-delete`. This is the provider drain
+APIs. `--drain-timeout auto` resolves to `30m` for `zero-surge` and
+`safe-surge`, and `10m` for `force-delete`; `none` waits indefinitely instead
+of allowing provider drain fallback. This is the provider drain
 fallback, not the total cxcli rollout wait budget. cxcli's SDK node-group
 rollout watch is for the whole group, starts after each Terraform apply, and
 uses max(`1h`, `10m * target node count`).
@@ -639,7 +643,7 @@ for an already-started provider rollout. If live resources are already at the
 target version but source config is stale, cxcli still updates
 `config.yaml`, rerenders `generated/`, runs Terraform plan, and applies the
 rendered bundle so Terraform desired state cannot drift backward on the next
-run. If a stage fails after a temporary node-group disruption strategy is
+run. If a stage fails after a temporary node-group strategy is
 written, cxcli restores `config.yaml` and `generated/` to the non-temporary
 strategy state before returning the original error. The bundled MK8s Terraform
 module keeps that strategy shape typed to the provider schema so a staged
@@ -828,9 +832,10 @@ config keeps only stable onboarding decisions and fingerprints. The onboarding
 flow has
 an explicit source-version recovery path: when Soperator CRDs are present but
 no compatible Helm release version is detected, interactive onboarding asks the
-operator to choose a version from the committed migration profiles or enter one
-manually, while non-interactive runs can pass `--source-version <version>`.
-That selected version is validated against
+operator to choose a version from the exact committed migration-profile rows or
+enter one manually, while non-interactive runs can pass
+`--source-version <version>`. That selected version is validated against an
+exact row or a known major-generation profile group in
 `soperator_migration_profiles.yaml` before cxcli records the source version and
 profile id. If a canonical pinned-target `soperator` release is already
 present, older same-name source-family Helm records are treated as stale
@@ -880,8 +885,9 @@ Nebius-image GPU-stack upgrades selected by onboarding are migration-owned
 external work because the target is not Terraform-owned. The executor upgrades
 the MK8s control plane first, then updates service-role node groups one group
 at a time with direct Nebius node-group updates and temporary zero-surge, while
-worker groups default to safe-surge waves after spare-capacity, worker-health,
-and Slurm queue preflights pass. CPU node groups that still carry a legacy GPU
+worker groups default to zero-surge and can use safe-surge waves after
+spare-capacity, worker-health, and Slurm queue preflights pass. CPU node groups
+that still carry a legacy GPU
 driver preset are reset to the CPU-supported empty preset during that rollout.
 One-node controller, login, and accounting node groups temporarily quiesce the
 matching Soperator workloads before their node-group update and restore them
@@ -925,11 +931,15 @@ bundles fail closed while migration-owned actions remain selected.
 `ext-soperator migrate --execute` owns the ad hoc Nebius API calls,
 checkpointing, validation hold, and source retirement phases. Use migrate for
 reruns/resume while those actions remain selected. After a full successful
-`ext-soperator migrate --execute`, cxcli refreshes the source config from live
+`ext-soperator migrate --execute`, `generated/reports/migrate-report.md` shows
+`Pending phase: none` and cxcli refreshes the source config from live
 post-migration discovery when it can, so migration-owned actions are no longer
-selected and future normal reconciliation can use render/deploy. If that refresh
-is skipped, rerun `ext-soperator onboard`, rerender, then deploy only for normal
-rendered reconciliation if needed.
+selected and future normal reconciliation can use render/deploy. If the report
+still shows any pending phase other than `none`, rerun the same
+`ext-soperator migrate ... --execute --approve` command. If the report shows
+`Pending phase: none` but the post-migration config refresh was skipped, rerun
+`ext-soperator onboard`, rerender, then deploy only for normal rendered
+reconciliation if needed.
 
 When the discovery snapshot contains GPU workers, onboarding records
 `reconcile-target-gpu-stack` and writes the same target-scoped MK8s GPU policy
@@ -971,7 +981,8 @@ worker node groups from live Nebius MK8s node-group names and Kubernetes
 and records the resolved groups in the checkpoint. The
 executor upgrades the external MK8s control plane first, updates service-role
 node groups serially with zero-surge strategy restore, updates worker node
-groups in bounded safe-surge waves by default, clears stale GPU driver presets
+groups with zero-surge by default or bounded safe-surge waves when selected,
+clears stale GPU driver presets
 from CPU node groups, temporarily quiesces one-node
 controller/login/accounting workloads for their active rollout, applies
 target-scoped GPU Operator and Network Operator app rows plus the same
@@ -997,7 +1008,14 @@ conflict resolution, retries bounded admission-webhook startup races while the
 target controller/webhook becomes ready, and removes legacy source-family
 ActiveChecks CronJobs/jobs/pods before target Slurm custom resources are
 applied. That checkpoint is local operational state and is ignored by
-cxcli-managed deployments `.gitignore` files. `ext-soperator onboard` is therefore
+cxcli-managed deployments `.gitignore` files. Operators should finish
+`ext-soperator migrate` and checkpointed `soperator upgrade` runs from the same
+laptop, workdir, and operator account that started them, because the resume
+checkpoints are local under `.nebius-cxcli/soperator-migrations/<target>/` and
+`.nebius-cxcli/soperator-upgrades/<target>/`. After those flows complete and
+source config plus generated reports are refreshed, normal `validate`, `render`,
+and `deploy` can run from any workstation with the repo state and required
+Nebius/Kubernetes access. `ext-soperator onboard` is therefore
 discovery-only and does not create SFS filesystems, attach storage, drain
 nodes, run data sync jobs, or mutate Helm/Soperator resources. After a
 mutating phase starts, resume relies on phase checkpoints because the original
@@ -1056,13 +1074,16 @@ phase-aware status snapshots: storage phases emit `Soperator migration status`
 with the elapsed time, canonical phase id, human-readable phase label, and
 overall phase health before component details. Storage phases then show aligned
 SFS/PVC copy progress plus MK8s and Slurm continuity signals, while compute and
-cutover phases emit MK8s node-group readiness, bounded problem-node details such
-as `node-upgrading (down)`, Slurm worker names/states, queue health, and
-Soperator SlurmCluster reconciliation. Down or upgrading nodes are highlighted
-in terminal output, and large clusters stay compact by showing only bounded
-problem-node details with `+N more` suffixes. The checkpoint records compact
-status snapshots at phase start, phase end, and pending gates. These status
-lines describe best-effort service continuity and degradation
+cutover phases emit MK8s status as separate `Node groups:` and `Nodes:`
+sections. Node-group readiness stays in the first section, while node-level
+external-migration rollout transitions such as `replacing (cordoned)` and real
+problem-node details such as `NotReady (down)` stay in the second section.
+Transition nodes and down states are highlighted in
+terminal output, and large clusters stay compact with `+N more` suffixes. Slurm
+worker names/states, queue health, and Soperator SlurmCluster reconciliation
+remain adjacent component details. The checkpoint records compact status
+snapshots at phase start, phase end, and pending gates. These status lines
+describe best-effort service continuity and degradation
 during migration; they do not promise that downtime cannot occur. Existing
 projects can pass `config.yaml`
 or the project directory containing it. Deployments-root onboarding resolves
@@ -1096,7 +1117,7 @@ onboarding command is
 repairs missing target-scoped Soperator-required app rows on that same target.
 The analyzer treats only exact
 `soperator` Helm release/chart identity and canonical Soperator CRDs as
-managed Soperator state, ignores sibling helper charts, and reports
+cxcli-managed Soperator state, ignores sibling helper charts, and reports
 `kubectl`/`helm` collection failures as incomplete analyses rather than
 continuing with empty-cluster assumptions. Partial or incompatible analyses
 are not marked accepted automatically. GPU/RDMA source lacks that can be
@@ -1182,18 +1203,31 @@ and aligned SFS filesystem attachments, through direct Nebius node-group
 updates. cxcli snapshots each node group's original strategy, keeps
 service-role groups conservative and serial with temporary zero-surge
 (`max_surge=0`, `max_unavailable=1`, `drain_timeout=30m`), and updates worker
-groups with safe-surge by default (`max_surge=1`, `max_unavailable=0`,
-`drain_timeout=30m`) in bounded waves. The rollout config exposes worker-wave
+groups with zero-surge by default. Operators can select safe-surge
+(`max_surge=1`, `max_unavailable=0`, `drain_timeout=30m`) for bounded waves
+when spare quota/capacity is available. The rollout config exposes worker-wave
 parallelism across worker groups plus the per-group Nebius strategy
 (`max_surge_count`, `max_unavailable_count`, and `drain_timeout`). Users can set
 `drain_timeout: none` to wait indefinitely instead of allowing provider drain
 fallback after a finite timeout. It clears invalid GPU driver presets from CPU
 templates when legacy groups carry them, quiesces and restores one-node
 controller/login/accounting workloads for the active service-role rollout, and
-requires spare worker surge capacity unless the operator explicitly chooses the
-zero-surge fallback.
+requires spare worker surge capacity only when the operator explicitly chooses
+safe-surge.
 
 The persisted rollout shape is:
+
+```yaml
+node_template_upgrade:
+  rollout:
+    strategy: zero-surge
+    worker_group_strategy:
+      max_surge_count: 0
+      max_unavailable_count: 1
+      drain_timeout: 30m
+```
+
+The capacity-preserving safe-surge shape is:
 
 ```yaml
 node_template_upgrade:
@@ -1221,13 +1255,13 @@ Approved execution also runs a strict net-new quota preflight before the first
 mutation. The preflight counts aligned SFS filesystems that do not already
 exist as spare storage required during copy, and counts target service-role
 node groups that do not already exist as net-new compute capacity. Existing
-worker node groups are preserved in place; safe-surge worker template
-remediation counts `max_surge_count` temporary surge node(s) per worker group
-in the active wave, checks the required spare quota and GPU capacity, requires
-all selected worker nodes to start Ready and schedulable, and requires the Slurm
-queue to be empty before mutation. The explicit zero-surge
-fallback skips surge worker quota but can reduce active worker capacity during
-rollout.
+worker node groups are preserved in place. The default zero-surge worker
+template remediation skips surge worker quota but can reduce active worker
+capacity during rollout. With safe-surge, remediation counts
+`max_surge_count` temporary surge node(s) per worker group in the active wave,
+checks the required spare quota and GPU capacity, requires all selected worker
+nodes to start Ready and schedulable, and requires the Slurm queue to be empty
+before mutation.
 Confirmed quota shortages, unresolved live limits, coverage gaps, or quota
 lookup failures stop the migration before SFS creation, service-role node-group
 creation, or Helm apply starts.
@@ -1549,11 +1583,14 @@ The recommended production-training values are
 `values.soperator-checks.enabled=false`,
 `values.soperator-dcgm-exporter.enabled=false`,
 `values.soperator-notifier.enabled=false`, and
-`values.soperator-backup-config.enabled=false`. Managed `soperator upgrade`
+`values.soperator-backup-config.enabled=false`. CXCLI managed `soperator upgrade`
 keeps that contract strict: if ActiveChecks or `waitForChecks` are enabled in
 the cxcli-owned Soperator row, the non-dry-run upgrade performs a checkpointed
 suspend/restore lifecycle and records the original values, live suspension
-attempt, restore event, and final status in the upgrade report. The in-chart
+attempt, restore event, and final status in the upgrade report. An interrupted
+run can be repeated with the same command; cxcli reads the unfinished upgrade
+checkpoint before deciding that the chart version is already current, so a
+pending ActiveChecks restore is still completed. The in-chart
 service defaults
 are `values.qosConfiguration.enabled=false`,
 the guided SSSD gate defaults to `values.sssd.enabled=false` and materializes
@@ -2825,9 +2862,9 @@ The command boundary is intentional:
   template changes, including Kubernetes version, node OS image, Nebius-image
   GPU stack, and aligned SFS filesystem attachments, use direct Nebius
   node-group updates. Service-role groups use serial temporary zero-surge,
-  while worker groups default to safe-surge waves with one temporary
-  replacement node per active worker group after quota/capacity, worker-health,
-  and Slurm queue preflights pass. cxcli restores each node group's original
+  while worker groups default to zero-surge and can use safe-surge waves with
+  one temporary replacement node per active worker group after quota/capacity,
+  worker-health, and Slurm queue preflights pass. cxcli restores each node group's original
   strategy after the active rollout. Render/deploy refuse
   onboarding mode until
   the target has a current accepted `deploy.targets[].soperator_onboarding`
@@ -3358,7 +3395,7 @@ Modules that expose collection/object inputs, such as `mysterybox.secrets`, `ssh
   - Uses the internal Nebius request path only when that path is available and permitted; otherwise it prints exact manual web-console follow-up targets with minimum total limits and increases.
 - `upgrade k8s-version <config.yaml> [infra:mk8s@<target>]`
   - Plans and applies one Kubernetes minor-version upgrade for a Terraform-managed MK8s target.
-  - Prompts for the target selector, `--to-version <major.minor>`, dry-run/apply choice, disruption policy, drain timeout, and post-upgrade validation choice when target or version is omitted in an interactive terminal; `--no-interactive` fails fast unless the explicit target and version are present.
+  - Prompts for the target selector, `--to-version <major.minor>`, dry-run/apply choice, upgrade strategy, drain timeout, and post-upgrade validation choice when target or version is omitted in an interactive terminal; `--no-interactive` fails fast unless the explicit target and version are present.
   - Rejects app/external target selectors, downgrades, multi-minor skips, and OS/GPU stack incompatibilities that need a separate node-layer change first.
   - Rejects live node groups that already report a Kubernetes minor above the requested target/control-plane version.
   - Uses the same generated-bundle target resolution and SDK-backed cluster handoff as deploy. Before any live mutation, it writes the new version into `config.yaml`, rerenders `generated/`, and validates the rendered bundle so Terraform desired state is the mutation source.
@@ -3367,12 +3404,12 @@ Modules that expose collection/object inputs, such as `mysterybox.secrets`, `ssh
   - Prints that upgrade stages are per control-plane hop and per node group, not per node. Large node groups therefore increase provider rollout/watch time, not the number of cxcli render stages.
   - `--dry-run` resolves the live cluster through the SDK, prints the live plan plus a wrapped repeat dry-run command, and exits without changing `config.yaml`, `generated/`, Terraform backend state, or live Nebius resources.
   - Non-dry runs use the SDK for live discovery, compatibility checks, generated handoff, progress/error watching, and final rollout verification. Terraform remains the reconciler that changes cluster and node-group version fields. Before success, a final MK8s readiness check re-reads the live control plane and selected node groups to verify the requested Kubernetes version has settled, and it requires provider node-group status rather than accepting matching spec fields alone.
-  - Non-dry runs wait for node groups to finish provider rollout and can resume that wait after partial live progress. If live resources are already at the target version but source config is stale, cxcli still syncs the desired-state files through Terraform plan/apply. If a rerun only needs to wait for an already-requested rollout after a temporary `allow-unavailable` or `force-delete` strategy was staged, cxcli still performs a final rendered apply after the rollout settles so the configured node-group strategy is restored.
-  - Kubernetes preflight inspection failures block non-dry runs for every disruption policy, including `force-delete`, so unknown cluster state cannot be treated as a known PDB or drain blocker.
+  - Non-dry runs wait for node groups to finish provider rollout and can resume that wait after partial live progress. If live resources are already at the target version but source config is stale, cxcli still syncs the desired-state files through Terraform plan/apply. If a rerun only needs to wait for an already-requested rollout after a temporary strategy was staged, cxcli still performs a final rendered apply after the rollout settles so the configured node-group strategy is restored.
+  - Kubernetes preflight inspection failures block non-dry runs for every upgrade strategy, including `force-delete`, so unknown cluster state cannot be treated as a known PDB or drain blocker.
   - After GPU node groups settle, enabled target-scoped deploy validations such as GPU stack readiness, GPU Visibility, and NCCL are the post-upgrade GPU canary phase.
   - De-duplicates repeated deploy-validation advisory text within the upgrade run while still validating every rendered stage.
-  - Temporary `allow-unavailable` or `force-delete` node-group strategy settings are restored in `config.yaml` and `generated/` if a staged render, validation, Terraform plan/apply, or rollout wait fails.
-  - `--disruption-policy safe|allow-unavailable|force-delete` selects rolling headroom, zero-surge/unavailable, or last-resort Pod deletion behavior. `--drain-timeout auto|none|<duration>` resolves to `none` for `safe`, `30m` for `allow-unavailable`, and `10m` for `force-delete`; finite values are accepted only for `allow-unavailable` and `force-delete` because Nebius MK8s can fall back to Pod deletion after that timeout. The drain timeout does not shorten cxcli's node-group rollout wait, which is for the whole group and uses max(`1h`, `10m * target node count`).
+  - Temporary node-group strategy settings are restored in `config.yaml` and `generated/` if a staged render, validation, Terraform plan/apply, or rollout wait fails.
+  - `--strategy zero-surge|safe-surge|force-delete` selects zero-surge/unavailable, rolling headroom, or last-resort Pod deletion behavior. `--drain-timeout auto|none|<duration>` resolves to `30m` for `zero-surge` and `safe-surge`, and `10m` for `force-delete`; `none` waits indefinitely instead of allowing provider drain fallback. The drain timeout does not shorten cxcli's node-group rollout wait, which is for the whole group and uses max(`1h`, `10m * target node count`).
 - `upgrade os-image <config.yaml> [infra:mk8s@<target>|infra:vm@<target>] --to-os <os>`
   - Prompts for missing target and OS image values in interactive terminals,
     listing Terraform-managed MK8s targets and generic VM components that use
@@ -3401,7 +3438,7 @@ Modules that expose collection/object inputs, such as `mysterybox.secrets`, `ssh
     name. In the guided wizard this is a plain optional flag-value prompt, not a
     live per-node-group menu; blank omits the flag and updates every managed
     node group.
-  - Uses the same `--disruption-policy` and `--drain-timeout` semantics as
+  - Uses the same `--strategy` and `--drain-timeout` semantics as
     `upgrade k8s-version` for MK8s targets. Those node-drain flags and
     `--node-group` are rejected for VM targets. It does not SSH to nodes or
     VMs, run apt-based Ubuntu upgrades, or mutate packages in place.
@@ -3423,7 +3460,7 @@ Modules that expose collection/object inputs, such as `mysterybox.secrets`, `ssh
     Before success, a final MK8s readiness check re-reads the live control plane
     and selected node groups to verify Kubernetes version, OS, and Nebius
     `drivers_preset` / CUDA stack.
-  - Carries the same `--node-group`, `--dry-run`, `--disruption-policy`,
+  - Carries the same `--node-group`, `--dry-run`, `--strategy`,
     `--drain-timeout`, auth bootstrap, and validation skip guardrails as the
     other MK8s upgrade commands. It has no `--yes` and no interactive flags.
 - Node-layer upgrade commands keep wizard prompts aligned with their explicit
@@ -3435,7 +3472,7 @@ Modules that expose collection/object inputs, such as `mysterybox.secrets`, `ssh
   --to-preset <preset>` updates CPU/system node-group presets; and
   `upgrade gpu-preset <config.yaml> infra:mk8s@<target> --to-preset <preset>`
   updates GPU node-group hardware presets. Each carries `--node-group`,
-  `--dry-run`, `--disruption-policy`, and `--drain-timeout`, plans from live
+  `--dry-run`, `--strategy`, and `--drain-timeout`, plans from live
   SDK node groups, writes only the selected source `config.yaml` fields,
   rerenders, validates, runs quiet Terraform plan/apply, and waits for Managed
   Kubernetes node-group replacement to settle. Before success, a final MK8s
@@ -3672,7 +3709,7 @@ Flux render:
 - Runtime inventory/report artifacts are written only by deployment/apply paths.
 - `generated/reports/deploy-report.md` is the single human-readable customer report and the body used by the `email` command after a deployment/apply command has created it.
 - The generated Markdown should stay lint-clean, including no trailing duplicate blank lines at EOF.
-- `create` and `render` do not create the Markdown report; `deploy`, `terraform apply`, `flux apply`, and `flux bootstrap` refresh it for the active project.
+- `create` and `render` do not create the Markdown report; `deploy`, `terraform apply`, `flux apply`, and `flux bootstrap` refresh it for the active project. The render-time `generated/` replacement preserves command-owned runtime reports such as `deploy-report.md`, external Soperator `migrate-report.md`, `upgrade-report.md`, `upgrade-report.json`, and JSON detail files referenced from those Markdown reports, but still removes unrelated stale report files with the replaced bundle.
 - Explicit Namespace docs for chart target namespaces.
 - Generic HelmRelease docs from enabled app releases.
 - Deterministic flat output under the rendered Flux tree:

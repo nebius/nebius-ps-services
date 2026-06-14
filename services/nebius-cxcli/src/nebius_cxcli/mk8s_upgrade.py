@@ -20,8 +20,8 @@ from .mk8s_node_groups import Mk8sNodeGroup, iter_node_groups
 MK8S_COMPONENT_ID = "mk8s"
 UPGRADE_SELECTOR_KIND = "infra"
 K8S_TARGET_PREFIX = f"{UPGRADE_SELECTOR_KIND}:{MK8S_COMPONENT_ID}@"
-DISRUPTION_POLICY_SAFE = "safe"
-DISRUPTION_POLICY_ALLOW_UNAVAILABLE = "allow-unavailable"
+DISRUPTION_POLICY_SAFE = "safe-surge"
+DISRUPTION_POLICY_ALLOW_UNAVAILABLE = "zero-surge"
 DISRUPTION_POLICY_FORCE_DELETE = "force-delete"
 DISRUPTION_POLICIES = frozenset(
     {
@@ -360,7 +360,7 @@ def validate_disruption_policy(value: str) -> str:
     policy = _text(value).lower()
     if policy not in DISRUPTION_POLICIES:
         allowed = "|".join(sorted(DISRUPTION_POLICIES))
-        raise ValueError(f"--disruption-policy must be one of {allowed}.")
+        raise ValueError(f"--strategy must be one of {allowed}.")
     return policy
 
 
@@ -378,7 +378,7 @@ def resolve_drain_timeout(policy: str, raw_timeout: str) -> DrainTimeout:
     policy = validate_disruption_policy(policy)
     raw = _text(raw_timeout).lower() or "auto"
     if raw == "auto":
-        if policy == DISRUPTION_POLICY_ALLOW_UNAVAILABLE:
+        if policy in {DISRUPTION_POLICY_SAFE, DISRUPTION_POLICY_ALLOW_UNAVAILABLE}:
             seconds = ALLOW_UNAVAILABLE_DRAIN_TIMEOUT_SECONDS
         elif policy == DISRUPTION_POLICY_FORCE_DELETE:
             seconds = FORCE_DELETE_DRAIN_TIMEOUT_SECONDS
@@ -1066,8 +1066,9 @@ def _node_layer_follow_up(
     if layer_command == "os-image":
         command = f"nebius-cxcli upgrade os-image {config_path} {target_selector} --to-os {value}"
         return (
-            f"Run `{command}` before rerunning upgrade k8s-version, or set "
-            f"{_node_group_config_field(group, field)} to {value} in config.yaml, "
+            "Run this command before rerunning upgrade k8s-version:\n"
+            f"{command}\n"
+            f"Or set {_node_group_config_field(group, field)} to {value} in config.yaml, "
             "then render/deploy that node-layer change manually."
         )
     if layer_command == "gpu-stack-preset":
@@ -1076,8 +1077,9 @@ def _node_layer_follow_up(
             f"--to-gpu-stack-preset {value}"
         )
         return (
-            f"Run `{command}` before rerunning upgrade k8s-version, or set "
-            f"{_node_group_config_field(group, field)} to {value} in config.yaml, "
+            "Run this command before rerunning upgrade k8s-version:\n"
+            f"{command}\n"
+            f"Or set {_node_group_config_field(group, field)} to {value} in config.yaml, "
             "then render/deploy that node-layer change manually."
         )
     if layer_command == "platform":
@@ -1086,8 +1088,9 @@ def _node_layer_follow_up(
             f"--to-platform {value}"
         )
         return (
-            f"Run `{command}` before rerunning upgrade k8s-version, or set "
-            f"{_node_group_config_field(group, field)} to {value} in config.yaml, "
+            "Run this command before rerunning upgrade k8s-version:\n"
+            f"{command}\n"
+            f"Or set {_node_group_config_field(group, field)} to {value} in config.yaml, "
             "then render/deploy that node-layer change manually."
         )
     return (
@@ -1196,9 +1199,9 @@ def compatibility_failures_for_node_group(
             ),
             follow_up=(
                 "Review live compatibility, then apply the required node-layer change "
-                f"outside upgrade k8s-version before rerunning "
+                "outside upgrade k8s-version before rerunning:\n"
                 f"nebius-cxcli upgrade k8s-version {config_path} {target_selector} "
-                f"--to-version {target_version}."
+                f"--to-version {target_version}"
             ),
         ),
     )
@@ -1734,6 +1737,36 @@ def _preflight_finding_summary_lines(findings: Sequence[PreflightFinding]) -> tu
     return tuple(lines)
 
 
+def _looks_like_copy_paste_command(line: str) -> bool:
+    return line.strip().startswith(
+        (
+            "nebius-cxcli ",
+            "kubectl ",
+            "helm ",
+            "terraform ",
+            "flux ",
+            "wg-quick ",
+            "ssh ",
+        )
+    )
+
+
+def _append_compatibility_failure_lines(
+    lines: list[str],
+    failure: CompatibilityFailure,
+) -> None:
+    lines.append(f"  - {failure.node_group}: {failure.reason}")
+    lines.append("    follow-up:")
+    for raw_line in str(failure.follow_up or "").splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        if _looks_like_copy_paste_command(line):
+            lines.append(line)
+        else:
+            lines.append(f"      {line}")
+
+
 def format_upgrade_plan(
     plan: Mk8sUpgradePlan,
     *,
@@ -1746,7 +1779,7 @@ def format_upgrade_plan(
         f"- cluster: {plan.cluster_name or plan.cluster_id} ({plan.cluster_id})",
         f"- current version: {plan.current_version}",
         f"- target version: {plan.target_version}",
-        f"- disruption policy: {plan.disruption_policy}",
+        f"- strategy: {plan.disruption_policy}",
         f"- drain timeout: {plan.drain_timeout.label}",
     ]
     if plan.hops:
@@ -1769,15 +1802,14 @@ def format_upgrade_plan(
     if plan.compatibility_failures:
         lines.append("- compatibility blockers:")
         for failure in plan.compatibility_failures:
-            lines.append(f"  - {failure.node_group}: {failure.reason}")
-            lines.append(f"    follow-up: {failure.follow_up}")
+            _append_compatibility_failure_lines(lines, failure)
     if plan.warnings:
         lines.append("- warnings:")
         lines.extend(f"  - {warning}" for warning in plan.warnings)
     if dry_run:
         if repeat_dry_run_command:
             lines.append("- repeat dry-run command:")
-            lines.append(f"  {repeat_dry_run_command}")
+            lines.append(repeat_dry_run_command)
         lines.append(
             "Dry run only: no config.yaml write, generated bundle render, or Terraform plan/apply was performed."
         )
@@ -1796,7 +1828,7 @@ def format_os_image_upgrade_plan(
         f"- cluster: {plan.cluster_name or plan.cluster_id} ({plan.cluster_id})",
         f"- Kubernetes version: {plan.k8s_version}",
         f"- target OS image: {plan.target_os}",
-        f"- disruption policy: {plan.disruption_policy}",
+        f"- strategy: {plan.disruption_policy}",
         f"- drain timeout: {plan.drain_timeout.label}",
     ]
     if plan.node_groups:
@@ -1812,15 +1844,14 @@ def format_os_image_upgrade_plan(
     if plan.compatibility_failures:
         lines.append("- compatibility blockers:")
         for failure in plan.compatibility_failures:
-            lines.append(f"  - {failure.node_group}: {failure.reason}")
-            lines.append(f"    follow-up: {failure.follow_up}")
+            _append_compatibility_failure_lines(lines, failure)
     if plan.warnings:
         lines.append("- warnings:")
         lines.extend(f"  - {warning}" for warning in plan.warnings)
     if dry_run:
         if repeat_dry_run_command:
             lines.append("- repeat dry-run command:")
-            lines.append(f"  {repeat_dry_run_command}")
+            lines.append(repeat_dry_run_command)
         lines.append(
             "Dry run only: no config.yaml write, generated bundle render, "
             "or Terraform plan/apply was performed."
@@ -1840,7 +1871,7 @@ def format_node_layer_upgrade_plan(
         f"- cluster: {plan.cluster_name or plan.cluster_id} ({plan.cluster_id})",
         f"- Kubernetes version: {plan.k8s_version}",
         f"- target {plan.spec.target_label}: {plan.target_value}",
-        f"- disruption policy: {plan.disruption_policy}",
+        f"- strategy: {plan.disruption_policy}",
         f"- drain timeout: {plan.drain_timeout.label}",
     ]
     if plan.node_groups:
@@ -1857,15 +1888,14 @@ def format_node_layer_upgrade_plan(
     if plan.compatibility_failures:
         lines.append("- compatibility blockers:")
         for failure in plan.compatibility_failures:
-            lines.append(f"  - {failure.node_group}: {failure.reason}")
-            lines.append(f"    follow-up: {failure.follow_up}")
+            _append_compatibility_failure_lines(lines, failure)
     if plan.warnings:
         lines.append("- warnings:")
         lines.extend(f"  - {warning}" for warning in plan.warnings)
     if dry_run:
         if repeat_dry_run_command:
             lines.append("- repeat dry-run command:")
-            lines.append(f"  {repeat_dry_run_command}")
+            lines.append(repeat_dry_run_command)
         lines.append(
             "Dry run only: no config.yaml write, generated bundle render, "
             "or Terraform plan/apply was performed."
@@ -1891,7 +1921,7 @@ def format_node_template_upgrade_plan(
             if plan.target_gpu_stack_preset
             else "- target GPU stack preset: not requested"
         ),
-        f"- disruption policy: {plan.disruption_policy}",
+        f"- strategy: {plan.disruption_policy}",
         f"- drain timeout: {plan.drain_timeout.label}",
     ]
     if plan.hops:
@@ -1921,15 +1951,14 @@ def format_node_template_upgrade_plan(
     if plan.compatibility_failures:
         lines.append("- compatibility blockers:")
         for failure in plan.compatibility_failures:
-            lines.append(f"  - {failure.node_group}: {failure.reason}")
-            lines.append(f"    follow-up: {failure.follow_up}")
+            _append_compatibility_failure_lines(lines, failure)
     if plan.warnings:
         lines.append("- warnings:")
         lines.extend(f"  - {warning}" for warning in plan.warnings)
     if dry_run:
         if repeat_dry_run_command:
             lines.append("- repeat dry-run command:")
-            lines.append(f"  {repeat_dry_run_command}")
+            lines.append(repeat_dry_run_command)
         lines.append(
             "Dry run only: no config.yaml write, generated bundle render, "
             "or Terraform plan/apply was performed."
@@ -2353,15 +2382,19 @@ def _node_group_has_status(node_group: Any) -> bool:
 def terraform_node_group_strategy_for_policy(
     policy: str, timeout: DrainTimeout
 ) -> dict[str, Any] | None:
-    """Return the Terraform node-group strategy override for a disruption policy."""
+    """Return the Terraform node-group strategy override for an upgrade strategy."""
 
     policy = validate_disruption_policy(policy)
     if policy == DISRUPTION_POLICY_SAFE:
-        return None
-    strategy: dict[str, Any] = {
-        "max_surge": {"count": 0},
-        "max_unavailable": {"count": 1},
-    }
+        strategy: dict[str, Any] = {
+            "max_surge": {"count": 1},
+            "max_unavailable": {"count": 0},
+        }
+    else:
+        strategy = {
+            "max_surge": {"count": 0},
+            "max_unavailable": {"count": 1},
+        }
     if timeout.seconds is not None:
         strategy["drain_timeout"] = timeout.label
     return strategy
@@ -2649,15 +2682,15 @@ def plan_k8s_upgrade(
     warnings: list[str] = []
     if disruption_policy == DISRUPTION_POLICY_SAFE:
         warnings.append(
-            "safe mode uses Nebius rolling node replacement and generally requires spare "
-            "quota/capacity; this note is always shown for safe mode. cxcli fails "
-            "preflight when quota assessment reports a shortage."
+            "safe-surge uses one temporary surge node per active node group "
+            "(max_surge=1, max_unavailable=0) and requires spare quota/capacity; "
+            "cxcli fails preflight when quota assessment reports a shortage."
         )
     if disruption_policy == DISRUPTION_POLICY_ALLOW_UNAVAILABLE:
         warnings.append(
-            "allow-unavailable sets zero surge, one unavailable node, and a finite "
-            "drain_timeout; workloads may become unavailable and provider drain fallback "
-            "can occur after the timeout."
+            "zero-surge sets max_surge=0 and max_unavailable=1; it avoids spare "
+            "node quota but active capacity can drop by one node per active node group, "
+            "and provider drain fallback can occur after the finite drain_timeout."
         )
     if disruption_policy == DISRUPTION_POLICY_FORCE_DELETE:
         warnings.append(
@@ -2738,15 +2771,15 @@ def plan_os_image_upgrade(
     warnings: list[str] = []
     if disruption_policy == DISRUPTION_POLICY_SAFE:
         warnings.append(
-            "safe mode uses Nebius rolling node replacement and generally requires spare "
-            "quota/capacity; this note is always shown for safe mode. cxcli fails "
-            "preflight when quota assessment reports a shortage."
+            "safe-surge uses one temporary surge node per active node group "
+            "(max_surge=1, max_unavailable=0) and requires spare quota/capacity; "
+            "cxcli fails preflight when quota assessment reports a shortage."
         )
     if disruption_policy == DISRUPTION_POLICY_ALLOW_UNAVAILABLE:
         warnings.append(
-            "allow-unavailable sets zero surge, one unavailable node, and a finite "
-            "drain_timeout; workloads may become unavailable and provider drain fallback "
-            "can occur after the timeout."
+            "zero-surge sets max_surge=0 and max_unavailable=1; it avoids spare "
+            "node quota but active capacity can drop by one node per active node group, "
+            "and provider drain fallback can occur after the finite drain_timeout."
         )
     if disruption_policy == DISRUPTION_POLICY_FORCE_DELETE:
         warnings.append(
@@ -2774,15 +2807,15 @@ def _node_layer_warning_lines(disruption_policy: str) -> tuple[str, ...]:
     warnings: list[str] = []
     if disruption_policy == DISRUPTION_POLICY_SAFE:
         warnings.append(
-            "safe mode uses Nebius rolling node replacement and generally requires spare "
-            "quota/capacity; this note is always shown for safe mode. cxcli fails "
-            "preflight when quota assessment reports a shortage."
+            "safe-surge uses one temporary surge node per active node group "
+            "(max_surge=1, max_unavailable=0) and requires spare quota/capacity; "
+            "cxcli fails preflight when quota assessment reports a shortage."
         )
     if disruption_policy == DISRUPTION_POLICY_ALLOW_UNAVAILABLE:
         warnings.append(
-            "allow-unavailable sets zero surge, one unavailable node, and a finite "
-            "drain_timeout; workloads may become unavailable and provider drain fallback "
-            "can occur after the timeout."
+            "zero-surge sets max_surge=0 and max_unavailable=1; it avoids spare "
+            "node quota but active capacity can drop by one node per active node group, "
+            "and provider drain fallback can occur after the finite drain_timeout."
         )
     if disruption_policy == DISRUPTION_POLICY_FORCE_DELETE:
         warnings.append(

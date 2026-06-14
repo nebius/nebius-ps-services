@@ -1300,6 +1300,23 @@ def test_soperator_onboarding_analyzer_requires_source_version_for_incompatible_
     assert any(finding.status == "source-version-required" for finding in report.findings)
 
 
+def test_soperator_onboarding_analyzer_source_version_finding_names_profile_contract() -> None:
+    snapshot = _snapshot()
+    snapshot["crds"] = ["slurmclusters.slurm.nebius.ai"]
+    snapshot["namespaces"] = ["soperator"]
+
+    report = analyze_soperator_onboarding_snapshot(
+        snapshot,
+        target_ref="cluster1",
+        pinned_chart_version="4.0.2-ps.1",
+        pinned_app_version="4.0.2",
+    )
+
+    findings = [finding for finding in report.findings if finding.status == "source-version-required"]
+    assert len(findings) == 1
+    assert "exact committed migration-profile row or known major-generation profile" in findings[0].message
+
+
 def test_soperator_onboarding_analyzer_matches_manual_source_version_for_crd_only_cluster() -> None:
     snapshot = _snapshot()
     snapshot["crds"] = ["slurmclusters.slurm.nebius.ai"]
@@ -1389,6 +1406,21 @@ def test_soperator_migration_profile_history_covers_known_release_window() -> No
     assert len(versions) >= 61
 
 
+def test_soperator_migration_profile_generation_fallback_matches_v3_patch() -> None:
+    exact_profile = soperator_migration_profile_for_version("3.0.99")
+    fallback_profile = soperator_migration_profile_for_version(
+        "3.0.99",
+        allow_generation_fallback=True,
+    )
+
+    assert exact_profile is None
+    assert fallback_profile is not None
+    assert fallback_profile["profile_match"] == "generation-fallback"
+    assert fallback_profile["profile_id"] == "v3-to-target"
+    assert fallback_profile["generation"] == "v3"
+    assert fallback_profile["requires_aligned_sfs"] is True
+
+
 def test_soperator_migration_profile_exposes_component_compatibility_axes() -> None:
     profile = soperator_migration_profile_for_version("3.0.5")
 
@@ -1415,6 +1447,58 @@ def test_soperator_migration_profile_matches_chart_version_aliases() -> None:
     assert profile is not None
     assert profile["profile_id"] == "legacy-v1-to-target"
     assert "1.14.5" in profile.get("version_aliases", ())
+
+
+@pytest.mark.parametrize(
+    ("source_version", "expected_profile_status"),
+    [
+        ("3.0.7", "matched"),
+        ("3.0.99", "matched-generation"),
+    ],
+)
+def test_soperator_onboarding_analyzer_uses_profile_for_detected_patch(
+    source_version: str,
+    expected_profile_status: str,
+) -> None:
+    snapshot = _snapshot()
+    snapshot["helm_releases"] = [
+        {
+            "name": "soperator",
+            "namespace": "soperator",
+            "chart": f"helm-soperator-{source_version}",
+            "app_version": source_version,
+            "revision": "1",
+            "status": "deployed",
+        },
+        {
+            "name": "soperator",
+            "namespace": "custom",
+            "chart": f"helm-soperator-{source_version}",
+            "app_version": source_version,
+            "revision": "1",
+            "status": "deployed",
+        },
+    ]
+    snapshot["crds"] = ["slurmclusters.slurm.nebius.ai"]
+    snapshot["namespaces"] = ["soperator", "custom"]
+
+    report = analyze_soperator_onboarding_snapshot(
+        snapshot,
+        target_ref="cluster1",
+        pinned_chart_version="4.0.2-ps.1",
+        pinned_app_version="4.0.2",
+    )
+
+    assert report.state == "existing-soperator-supported"
+    assert report.source_version == source_version
+    assert report.migration_profile_id == "v3-to-target"
+    assert not any(finding.status == "source-version-required" for finding in report.findings)
+    assert any(
+        finding.status == expected_profile_status
+        and finding.evidence.get("source_version") == source_version
+        for finding in report.findings
+    )
+    assert any(finding.status == "noncanonical-release-detected" for finding in report.findings)
 
 
 def test_soperator_onboarding_analyzer_blocks_collection_errors() -> None:
@@ -1821,6 +1905,22 @@ def test_runtime_validation_rejects_soperator_worker_rollout_conflicting_budget(
     }
 
     with pytest.raises(ValueError, match="must set only one"):
+        validate_runtime_payload(payload)
+
+
+def test_runtime_validation_rejects_zero_surge_worker_wave_fields() -> None:
+    payload = _onboarding_payload()
+    target = payload["deploy"]["targets"][0]  # type: ignore[index]
+    onboarding = target["soperator_onboarding"]  # type: ignore[index]
+    onboarding["node_template_upgrade"] = {  # type: ignore[index]
+        "rollout": {
+            "strategy": "zero-surge",
+            "worker_wave_groups": 2,
+            "max_parallel_worker_groups": 2,
+        }
+    }
+
+    with pytest.raises(ValueError, match="zero-surge.*does not use worker wave"):
         validate_runtime_payload(payload)
 
 

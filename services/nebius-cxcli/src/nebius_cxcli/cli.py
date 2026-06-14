@@ -572,6 +572,12 @@ def _print_live_quota_report(report: QuotaReport, *, phase: str) -> None:
         console.print(line)
 
 
+def _print_copy_paste_command(command: str) -> None:
+    normalized = str(command or "").strip()
+    if normalized:
+        console.print(normalized, highlight=False, soft_wrap=True)
+
+
 def _quota_check_all_regions_command(config_path: Path) -> str:
     return f"nebius-cxcli quota-check --all-regions {shlex.quote(str(config_path))}"
 
@@ -582,7 +588,7 @@ def _quota_request_command(config_path: Path) -> str:
 
 def _print_quota_request_hint(config_path: Path) -> None:
     console.print("Next step: review and submit quota requests with:")
-    console.print(f"  {_quota_request_command(config_path)}")
+    _print_copy_paste_command(_quota_request_command(config_path))
 
 
 def _quota_report_has_capacity_dashboard_shortage(report: QuotaReport) -> bool:
@@ -612,7 +618,7 @@ def _print_quota_check_all_regions_hint(config_path: Path, *, enabled: bool) -> 
     if not enabled:
         return
     console.print("Next step: compare quota availability across regions with:")
-    console.print(f"  {_quota_check_all_regions_command(config_path)}")
+    _print_copy_paste_command(_quota_check_all_regions_command(config_path))
 
 
 def _warn_on_live_quota_issues(
@@ -1325,7 +1331,7 @@ _UPGRADE_GROUP_EPILOG = (
     f"nebius-cxcli upgrade os-image {_UPGRADE_EXAMPLE_CONFIG} "
     "infra:vm@worker --to-os ubuntu24.04-driverless --dry-run  |  "
     f"nebius-cxcli upgrade k8s-version {_UPGRADE_EXAMPLE_CONFIG} "
-    "infra:mk8s@mk8s --to-version 1.33 --disruption-policy allow-unavailable  |  "
+    "infra:mk8s@mk8s --to-version 1.33 --strategy zero-surge  |  "
     "nebius-cxcli upgrade node-template <config.yaml> infra:mk8s@<target> --to-version 1.33 --to-os ubuntu24.04 --to-gpu-stack-preset cuda13.0  |  "
     "nebius-cxcli upgrade gpu-stack-preset <config.yaml> infra:mk8s@<target> --to-gpu-stack-preset cuda13.0  |  "
     "nebius-cxcli upgrade platform <config.yaml> infra:mk8s@<target> --to-platform cpu-d3  |  "
@@ -1338,16 +1344,16 @@ _UPGRADE_K8S_EPILOG = (
     f"Guided wizard: nebius-cxcli upgrade k8s-version {_UPGRADE_EXAMPLE_CONFIG}  |  "
     f"Dry-run plan: nebius-cxcli upgrade k8s-version {_UPGRADE_EXAMPLE_CONFIG} "
     "infra:mk8s@mk8s --to-version 1.33 --dry-run  |  "
-    f"Safe upgrade: nebius-cxcli upgrade k8s-version {_UPGRADE_EXAMPLE_CONFIG} "
+    f"Default zero-surge: nebius-cxcli upgrade k8s-version {_UPGRADE_EXAMPLE_CONFIG} "
     "infra:mk8s@mk8s --to-version 1.33  |  "
-    f"Allow unavailable: nebius-cxcli upgrade k8s-version {_UPGRADE_EXAMPLE_CONFIG} "
-    "infra:mk8s@mk8s --to-version 1.33 --disruption-policy allow-unavailable  |  "
+    f"Capacity-preserving safe-surge: nebius-cxcli upgrade k8s-version {_UPGRADE_EXAMPLE_CONFIG} "
+    "infra:mk8s@mk8s --to-version 1.33 --strategy safe-surge  |  "
     f"Custom drain timeout: nebius-cxcli upgrade k8s-version {_UPGRADE_EXAMPLE_CONFIG} "
-    "infra:mk8s@mk8s --to-version 1.33 --disruption-policy allow-unavailable "
+    "infra:mk8s@mk8s --to-version 1.33 --strategy zero-surge "
     "--drain-timeout 45m  |  "
     f"Last-resort force-delete: nebius-cxcli upgrade k8s-version {_UPGRADE_EXAMPLE_CONFIG} "
-    "infra:mk8s@mk8s --to-version 1.33 --disruption-policy force-delete. "
-    "Defaults: safe -> none, allow-unavailable -> 30m, force-delete -> 10m. "
+    "infra:mk8s@mk8s --to-version 1.33 --strategy force-delete. "
+    "Defaults: zero-surge -> 30m, safe-surge -> 30m, force-delete -> 10m. "
     "force-delete never deletes PVC/PV objects. Non-dry runs finish with a "
     "final MK8s readiness check against the live control plane and selected "
     "node groups."
@@ -1362,8 +1368,8 @@ _UPGRADE_OS_IMAGE_EPILOG = (
     f"One node group: nebius-cxcli upgrade os-image {_UPGRADE_EXAMPLE_CONFIG} "
     "infra:mk8s@mk8s --to-os ubuntu24.04 --node-group system  |  "
     f"Allow unavailable: nebius-cxcli upgrade os-image {_UPGRADE_EXAMPLE_CONFIG} "
-    "infra:mk8s@mk8s --to-os ubuntu24.04 --disruption-policy allow-unavailable. "
-    "Defaults: safe -> none, allow-unavailable -> 30m, force-delete -> 10m. "
+    "infra:mk8s@mk8s --to-os ubuntu24.04 --strategy zero-surge. "
+    "Defaults: zero-surge -> 30m, safe-surge -> 30m, force-delete -> 10m. "
     "This changes the MK8s node template OS through Terraform and Managed "
     "Kubernetes rolling node replacement, or a generic VM source_image_family "
     "through Terraform replacement; it does not SSH to nodes or run apt. "
@@ -1415,7 +1421,7 @@ app = typer.Typer(
         "nebius-cxcli deploy ./deployments/tenant/project/config.yaml. "
         f"Upgrade example: nebius-cxcli upgrade k8s-version {_UPGRADE_EXAMPLE_CONFIG} "
         "infra:mk8s@mk8s --to-version 1.33 --dry-run. "
-        "Run `nebius-cxcli upgrade --help` for disruption-policy and node-layer examples. "
+        "Run `nebius-cxcli upgrade --help` for strategy and node-layer examples. "
         "Soperator wizards expose schedulingConfig, partitionConfiguration.partitions[].policy, "
         "qosConfiguration plus catalog choices for partition_profile and topology_profile "
         "(nebius-nvl-rack-v1 covers GB300/NVL)."
@@ -1452,8 +1458,8 @@ ext_soperator_app = typer.Typer(
         "deploy-report.md plus deploy-time validations. Use deploy --target <target-id> "
         "only to narrow one run. If migration-owned work is required, "
         "do not deploy first; run ext-soperator migrate --dry-run, then ext-soperator migrate "
-        "--execute --approve. Managed chart-only Soperator upgrades use soperator "
-        "upgrade; external MK8s control-plane and node-template upgrades "
+        "--execute --approve. CXCLI managed chart-only Soperator upgrades use "
+        "soperator upgrade; external MK8s control-plane and node-template upgrades "
         "selected by onboarding are owned by ext-soperator migrate; "
         "Terraform-managed MK8s node-template upgrades use upgrade node-template."
     ),
@@ -1465,7 +1471,7 @@ soperator_app = typer.Typer(
         "validation."
     ),
     epilog=(
-        "Managed workflow: nebius-cxcli soperator upgrade <config.yaml> "
+        "CXCLI managed workflow: nebius-cxcli soperator upgrade <config.yaml> "
         "--target <target> --to-version <chart-version> --dry-run, then rerun "
         "without --dry-run to update config.yaml, rerender, apply the selected "
         "target, verify Helm readiness, and run required Soperator/Slurm "
@@ -2371,26 +2377,26 @@ def _prompt_upgrade_disruption_options_if_guided(
             missing="--dry-run choice",
         )
         dry_run = bool(prompted_dry_run)
-    if disruption_policy == DISRUPTION_POLICY_SAFE:
+    if disruption_policy == DISRUPTION_POLICY_ALLOW_UNAVAILABLE:
         disruption_policy = _prompt_upgrade_choice(
-            f"{path_prefix}.disruption_policy",
-            DISRUPTION_POLICY_SAFE,
+            f"{path_prefix}.strategy",
+            DISRUPTION_POLICY_ALLOW_UNAVAILABLE,
             choices=[
                 OptionChoice(
-                    value=DISRUPTION_POLICY_SAFE,
-                    label="safe  (rolling headroom; no finite drain timeout)",
+                    value=DISRUPTION_POLICY_ALLOW_UNAVAILABLE,
+                    label="zero-surge  (default; no spare node quota; capacity can drop)",
                     recommended=True,
                 ),
                 OptionChoice(
-                    value=DISRUPTION_POLICY_ALLOW_UNAVAILABLE,
-                    label="allow-unavailable  (zero surge; default drain timeout 30m)",
+                    value=DISRUPTION_POLICY_SAFE,
+                    label="safe-surge  (needs spare quota; preserves active capacity)",
                 ),
                 OptionChoice(
                     value=DISRUPTION_POLICY_FORCE_DELETE,
                     label="force-delete  (last resort; default drain timeout 10m)",
                 ),
             ],
-            missing="--disruption-policy",
+            missing="--strategy",
         )
     if drain_timeout == "auto":
         prompted_timeout = _prompt_upgrade_scalar(
@@ -2599,13 +2605,6 @@ def _resolve_os_image_disruption_request(
     )
     policy = validate_disruption_policy(disruption_policy)
     resolved_timeout = resolve_drain_timeout(policy, drain_timeout)
-    if policy == DISRUPTION_POLICY_SAFE and resolved_timeout.seconds is not None:
-        raise RuntimeError(
-            "--drain-timeout <duration> is only supported with "
-            "--disruption-policy allow-unavailable or force-delete. In Nebius MK8s "
-            "node-group strategy, a finite drain_timeout allows Managed Kubernetes "
-            "to fall back to Pod deletion after the timeout."
-        )
     return dry_run, policy, resolved_timeout
 
 
@@ -2684,7 +2683,7 @@ def _upgrade_k8s_dry_run_command(
         target_selector,
         "--to-version",
         to_version,
-        "--disruption-policy",
+        "--strategy",
         disruption_policy,
     ]
     if str(drain_timeout.raw).strip().lower() not in {"", "auto"}:
@@ -2710,7 +2709,7 @@ def _upgrade_os_image_dry_run_command(
         target_selector,
         "--to-os",
         to_os,
-        "--disruption-policy",
+        "--strategy",
         disruption_policy,
     ]
     if node_group:
@@ -2742,7 +2741,7 @@ def _upgrade_node_template_dry_run_command(
         to_version,
         "--to-os",
         to_os,
-        "--disruption-policy",
+        "--strategy",
         disruption_policy,
     ]
     if to_gpu_stack_preset:
@@ -2782,7 +2781,7 @@ def _upgrade_node_layer_dry_run_command(
         target_selector,
         option_name,
         target_value,
-        "--disruption-policy",
+        "--strategy",
         disruption_policy,
     ]
     if node_group:
@@ -3047,6 +3046,31 @@ def _soperator_upgrade_now_iso() -> str:
     return datetime.now(UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
+def _write_text_atomic(path: Path, content: str, *, encoding: str = "utf-8") -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    data = content.encode(encoding)
+    fd = -1
+    temp_path: Path | None = None
+    try:
+        fd, raw_temp_path = tempfile.mkstemp(
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            dir=path.parent,
+        )
+        temp_path = Path(raw_temp_path)
+        with os.fdopen(fd, "wb") as handle:
+            fd = -1
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp_path, path)
+    finally:
+        if fd >= 0:
+            os.close(fd)
+        if temp_path is not None:
+            temp_path.unlink(missing_ok=True)
+
+
 def _new_soperator_upgrade_checkpoint(
     *,
     plan: _HelmChartUpgradePlan,
@@ -3091,6 +3115,150 @@ def _new_soperator_upgrade_checkpoint(
     }
 
 
+def _load_soperator_upgrade_checkpoint(path: Path) -> dict[str, Any] | None:
+    if not path.exists():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"Could not parse Soperator upgrade checkpoint {path}.") from exc
+    if not isinstance(payload, dict):
+        raise RuntimeError(f"Soperator upgrade checkpoint {path} must contain a JSON object.")
+    if payload.get("schema") != SOPERATOR_UPGRADE_CHECKPOINT_SCHEMA:
+        raise RuntimeError(f"Unsupported Soperator upgrade checkpoint schema in {path}.")
+    return payload
+
+
+def _soperator_upgrade_checkpoint_events(checkpoint: Mapping[str, Any]) -> tuple[str, ...]:
+    events = checkpoint.get("events")
+    if not isinstance(events, list):
+        return ()
+    names: list[str] = []
+    for item in events:
+        if not isinstance(item, Mapping):
+            continue
+        event = _non_empty_text(item.get("event"))
+        if event:
+            names.append(event)
+    return tuple(names)
+
+
+def _soperator_upgrade_checkpoint_has_pending_activechecks_restore(
+    checkpoint: Mapping[str, Any],
+) -> bool:
+    activechecks = checkpoint.get("activechecks")
+    activechecks_map = activechecks if isinstance(activechecks, Mapping) else {}
+    if not bool(activechecks_map.get("required")):
+        return False
+    events = _soperator_upgrade_checkpoint_events(checkpoint)
+    if not any(event.startswith("activechecks-suspend") for event in events):
+        return False
+    if "activechecks-restored" in events or "activechecks-restored-after-failure" in events:
+        return False
+    failure = checkpoint.get("failure")
+    return not (
+        isinstance(failure, Mapping) and failure.get("activechecks_restore") == "restored"
+    )
+
+
+def _soperator_upgrade_checkpoint_lifecycle(
+    checkpoint: Mapping[str, Any],
+    *,
+    checkpoint_path: Path,
+) -> _SoperatorActiveChecksLifecycle:
+    activechecks = checkpoint.get("activechecks")
+    activechecks_map = activechecks if isinstance(activechecks, Mapping) else {}
+    snapshots = activechecks_map.get("snapshots")
+    if not isinstance(snapshots, list):
+        raise RuntimeError(
+            f"Soperator upgrade checkpoint {checkpoint_path} is missing ActiveChecks snapshots; "
+            "rerun cannot safely restore the pre-upgrade values."
+        )
+    parsed: list[_SoperatorUpgradeValueSnapshot] = []
+    seen_paths: set[str] = set()
+    for item in snapshots:
+        if not isinstance(item, Mapping):
+            continue
+        path = _non_empty_text(item.get("path"))
+        if path not in _SOPERATOR_ACTIVECHECKS_UPGRADE_PATHS:
+            continue
+        seen_paths.add(path)
+        parsed.append(
+            _SoperatorUpgradeValueSnapshot(
+                path=path,
+                present=bool(item.get("present")),
+                value=copy.deepcopy(item.get("value")),
+            )
+        )
+    missing = [path for path in _SOPERATOR_ACTIVECHECKS_UPGRADE_PATHS if path not in seen_paths]
+    if missing:
+        raise RuntimeError(
+            f"Soperator upgrade checkpoint {checkpoint_path} is missing ActiveChecks snapshots "
+            f"for: {', '.join(missing)}. Rerun cannot safely restore the pre-upgrade values."
+        )
+    required = bool(activechecks_map.get("required")) or any(
+        snapshot.value is True for snapshot in parsed
+    )
+    return _SoperatorActiveChecksLifecycle(required=required, snapshots=tuple(parsed))
+
+
+def _soperator_upgrade_resume_checkpoint(
+    *,
+    checkpoint_path: Path,
+    plan: _HelmChartUpgradePlan,
+    paths: ProjectPaths,
+) -> tuple[dict[str, Any] | None, _SoperatorActiveChecksLifecycle | None]:
+    checkpoint = _load_soperator_upgrade_checkpoint(checkpoint_path)
+    if checkpoint is None:
+        return None, None
+    if not _soperator_upgrade_checkpoint_has_pending_activechecks_restore(checkpoint):
+        return None, None
+    checkpoint_target_ref = _non_empty_text(checkpoint.get("target_ref"))
+    if checkpoint_target_ref and checkpoint_target_ref != plan.target.target_ref:
+        raise RuntimeError(
+            f"Soperator upgrade checkpoint {checkpoint_path} belongs to target "
+            f"{checkpoint_target_ref!r}, not {plan.target.target_ref!r}."
+        )
+    checkpoint_target_version = _non_empty_text(checkpoint.get("target_version"))
+    if checkpoint_target_version and checkpoint_target_version != plan.target_version:
+        raise RuntimeError(
+            f"Unfinished Soperator upgrade checkpoint {checkpoint_path} targets chart version "
+            f"{checkpoint_target_version}, but this run requested {plan.target_version}. "
+            "Rerun the same upgrade command first so cxcli can restore the checkpointed "
+            "ActiveChecks values."
+        )
+    lifecycle = _soperator_upgrade_checkpoint_lifecycle(
+        checkpoint,
+        checkpoint_path=checkpoint_path,
+    )
+    checkpoint["target_ref"] = plan.target.target_ref
+    checkpoint["selector"] = plan.target.selector
+    checkpoint["namespace"] = plan.namespace or "default"
+    checkpoint["release_name"] = plan.release_name
+    checkpoint["current_version"] = plan.current_version
+    checkpoint["target_version"] = plan.target_version
+    checkpoint["checkpoint_path"] = _soperator_upgrade_relative_path(
+        checkpoint_path,
+        root=paths.project_dir,
+    )
+    checkpoint["reports"] = {
+        "upgrade": _soperator_upgrade_relative_path(
+            paths.reports_dir / UPGRADE_REPORT_FILENAME,
+            root=paths.project_dir,
+        ),
+        "deploy": _soperator_upgrade_relative_path(
+            paths.reports_dir / DEPLOY_REPORT_FILENAME,
+            root=paths.project_dir,
+        ),
+    }
+    _append_soperator_upgrade_event(
+        checkpoint,
+        "resumed",
+        reason="pending-activechecks-restore",
+    )
+    return checkpoint, lifecycle
+
+
 def _append_soperator_upgrade_event(
     checkpoint: dict[str, Any],
     event: str,
@@ -3107,8 +3275,7 @@ def _append_soperator_upgrade_event(
 
 
 def _write_soperator_upgrade_checkpoint(path: Path, checkpoint: Mapping[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(checkpoint, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    _write_text_atomic(path, json.dumps(checkpoint, indent=2, sort_keys=True) + "\n")
 
 
 def _write_soperator_upgrade_report(
@@ -3118,7 +3285,7 @@ def _write_soperator_upgrade_report(
     paths.reports_dir.mkdir(parents=True, exist_ok=True)
     json_path = paths.reports_dir / UPGRADE_REPORT_JSON_FILENAME
     markdown_path = paths.reports_dir / UPGRADE_REPORT_FILENAME
-    json_path.write_text(json.dumps(dict(checkpoint), indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    _write_text_atomic(json_path, json.dumps(dict(checkpoint), indent=2, sort_keys=True) + "\n")
 
     activechecks = checkpoint.get("activechecks")
     activechecks_map = activechecks if isinstance(activechecks, Mapping) else {}
@@ -3174,7 +3341,7 @@ def _write_soperator_upgrade_report(
             "",
         ]
     )
-    markdown_path.write_text(markdown, encoding="utf-8")
+    _write_text_atomic(markdown_path, markdown)
     return markdown_path, json_path
 
 
@@ -3539,39 +3706,6 @@ def _status_watchers_for_component(
     ]
 
 
-def _shell_command_display_lines(line: str) -> tuple[str, ...]:
-    indent = line[: len(line) - len(line.lstrip())]
-    command = line.strip()
-    if not command:
-        return (line,)
-    try:
-        args = shlex.split(command)
-    except ValueError:
-        return (line,)
-    if len(args) <= 1:
-        return (line,)
-
-    command_prefix_size = 3 if args[:2] == ["nebius-cxcli", "upgrade"] and len(args) >= 3 else 1
-    segments = [shlex.join(args[:command_prefix_size])]
-    index = command_prefix_size
-    while index < len(args):
-        item = args[index]
-        if item.startswith("-") and index + 1 < len(args) and not args[index + 1].startswith("-"):
-            segments.append(shlex.join(args[index : index + 2]))
-            index += 2
-            continue
-        segments.append(shlex.join([item]))
-        index += 1
-
-    wrapped: list[str] = []
-    continuation_indent = f"{indent}  "
-    for segment_index, segment in enumerate(segments):
-        prefix = indent if segment_index == 0 else continuation_indent
-        suffix = " \\" if segment_index < len(segments) - 1 else ""
-        wrapped.append(f"{prefix}{segment}{suffix}")
-    return tuple(wrapped)
-
-
 def _print_upgrade_plan_lines(lines: Sequence[str]) -> None:
     in_warnings = False
     in_repeat_dry_run_command = False
@@ -3589,9 +3723,8 @@ def _print_upgrade_plan_lines(lines: Sequence[str]) -> None:
             in_repeat_dry_run_command = True
             console.print(line)
             continue
-        if in_repeat_dry_run_command and line.startswith("  "):
-            for wrapped_line in _shell_command_display_lines(line):
-                console.print(wrapped_line, soft_wrap=True)
+        if in_repeat_dry_run_command and line.strip().startswith("nebius-cxcli "):
+            _print_copy_paste_command(line)
             continue
         in_warnings = False
         in_repeat_dry_run_command = False
@@ -3660,13 +3793,9 @@ def _run_vm_os_image_upgrade(
 ) -> None:
     if request.node_group:
         raise RuntimeError("--node-group is supported only for infra:mk8s OS-image upgrades.")
-    if (
-        request.disruption_policy != DISRUPTION_POLICY_SAFE
-        or request.drain_timeout.seconds is not None
-    ):
+    if request.disruption_policy == DISRUPTION_POLICY_FORCE_DELETE:
         raise RuntimeError(
-            "--disruption-policy and finite --drain-timeout are supported only for "
-            "infra:mk8s OS-image upgrades."
+            "--strategy force-delete is supported only for infra:mk8s OS-image upgrades."
         )
 
     source_component = find_source_vm_component(
@@ -3818,10 +3947,10 @@ def upgrade_k8s_version_command(
     disruption_policy: Annotated[
         str,
         typer.Option(
-            "--disruption-policy",
-            help="Upgrade disruption policy: safe, allow-unavailable, or force-delete.",
+            "--strategy",
+            help="Upgrade strategy: zero-surge, safe-surge, or force-delete.",
         ),
-    ] = "safe",
+    ] = DISRUPTION_POLICY_ALLOW_UNAVAILABLE,
     drain_timeout: Annotated[
         str,
         typer.Option(
@@ -3877,14 +4006,7 @@ def upgrade_k8s_version_command(
             )
         if not guided:
             initial_policy = validate_disruption_policy(disruption_policy)
-            initial_timeout = resolve_drain_timeout(initial_policy, drain_timeout)
-            if initial_policy == DISRUPTION_POLICY_SAFE and initial_timeout.seconds is not None:
-                raise RuntimeError(
-                    "--drain-timeout <duration> is only supported with "
-                    "--disruption-policy allow-unavailable or force-delete. In Nebius MK8s "
-                    "node-group strategy, a finite drain_timeout allows Managed Kubernetes "
-                    "to fall back to Pod deletion after the timeout."
-                )
+            resolve_drain_timeout(initial_policy, drain_timeout)
 
         source_payload = _load_source_payload(config_path)
         generated_config, paths, manifest = _load_deploy_context_readonly(config_path)
@@ -3938,13 +4060,6 @@ def upgrade_k8s_version_command(
         )
         policy = validate_disruption_policy(disruption_policy)
         resolved_timeout = resolve_drain_timeout(policy, drain_timeout)
-        if policy == DISRUPTION_POLICY_SAFE and resolved_timeout.seconds is not None:
-            raise RuntimeError(
-                "--drain-timeout <duration> is only supported with "
-                "--disruption-policy allow-unavailable or force-delete. In Nebius MK8s "
-                "node-group strategy, a finite drain_timeout allows Managed Kubernetes "
-                "to fall back to Pod deletion after the timeout."
-            )
         supported_minors = {parse_k8s_version(version).minor_text for version in supported_versions}
         if supported_minors and normalized_to_version not in supported_minors:
             raise RuntimeError(
@@ -4364,10 +4479,10 @@ def upgrade_node_template_command(
     disruption_policy: Annotated[
         str,
         typer.Option(
-            "--disruption-policy",
-            help="Upgrade disruption policy: safe, allow-unavailable, or force-delete.",
+            "--strategy",
+            help="Upgrade strategy: zero-surge, safe-surge, or force-delete.",
         ),
-    ] = "safe",
+    ] = DISRUPTION_POLICY_ALLOW_UNAVAILABLE,
     drain_timeout: Annotated[
         str,
         typer.Option(
@@ -4431,13 +4546,6 @@ def upgrade_node_template_command(
         )
         policy = validate_disruption_policy(disruption_policy)
         resolved_timeout = resolve_drain_timeout(policy, drain_timeout)
-        if policy == DISRUPTION_POLICY_SAFE and resolved_timeout.seconds is not None:
-            raise RuntimeError(
-                "--drain-timeout <duration> is only supported with "
-                "--disruption-policy allow-unavailable or force-delete. In Nebius MK8s "
-                "node-group strategy, a finite drain_timeout allows Managed Kubernetes "
-                "to fall back to Pod deletion after the timeout."
-            )
 
         source_payload = _load_source_payload(config_path)
         generated_config, paths, manifest = _load_deploy_context_readonly(config_path)
@@ -4918,10 +5026,10 @@ def upgrade_os_image_command(
     disruption_policy: Annotated[
         str,
         typer.Option(
-            "--disruption-policy",
-            help="Upgrade disruption policy: safe, allow-unavailable, or force-delete.",
+            "--strategy",
+            help="Upgrade strategy: zero-surge, safe-surge, or force-delete.",
         ),
-    ] = "safe",
+    ] = DISRUPTION_POLICY_ALLOW_UNAVAILABLE,
     drain_timeout: Annotated[
         str,
         typer.Option(
@@ -5880,10 +5988,10 @@ def upgrade_gpu_stack_preset_command(
     disruption_policy: Annotated[
         str,
         typer.Option(
-            "--disruption-policy",
-            help="Upgrade disruption policy: safe, allow-unavailable, or force-delete.",
+            "--strategy",
+            help="Upgrade strategy: zero-surge, safe-surge, or force-delete.",
         ),
-    ] = "safe",
+    ] = DISRUPTION_POLICY_ALLOW_UNAVAILABLE,
     drain_timeout: Annotated[
         str,
         typer.Option(
@@ -5953,10 +6061,10 @@ def upgrade_platform_command(
     disruption_policy: Annotated[
         str,
         typer.Option(
-            "--disruption-policy",
-            help="Upgrade disruption policy: safe, allow-unavailable, or force-delete.",
+            "--strategy",
+            help="Upgrade strategy: zero-surge, safe-surge, or force-delete.",
         ),
-    ] = "safe",
+    ] = DISRUPTION_POLICY_ALLOW_UNAVAILABLE,
     drain_timeout: Annotated[
         str,
         typer.Option(
@@ -6026,10 +6134,10 @@ def upgrade_cpu_preset_command(
     disruption_policy: Annotated[
         str,
         typer.Option(
-            "--disruption-policy",
-            help="Upgrade disruption policy: safe, allow-unavailable, or force-delete.",
+            "--strategy",
+            help="Upgrade strategy: zero-surge, safe-surge, or force-delete.",
         ),
-    ] = "safe",
+    ] = DISRUPTION_POLICY_ALLOW_UNAVAILABLE,
     drain_timeout: Annotated[
         str,
         typer.Option(
@@ -6099,10 +6207,10 @@ def upgrade_gpu_preset_command(
     disruption_policy: Annotated[
         str,
         typer.Option(
-            "--disruption-policy",
-            help="Upgrade disruption policy: safe, allow-unavailable, or force-delete.",
+            "--strategy",
+            help="Upgrade strategy: zero-surge, safe-surge, or force-delete.",
         ),
-    ] = "safe",
+    ] = DISRUPTION_POLICY_ALLOW_UNAVAILABLE,
     drain_timeout: Annotated[
         str,
         typer.Option(
@@ -6384,7 +6492,17 @@ def _run_helm_chart_upgrade_command(
     _print_upgrade_plan_lines(plan_lines)
     if dry_run:
         return
-    if not plan.mutates:
+    checkpoint_path: Path | None = None
+    resume_checkpoint: dict[str, Any] | None = None
+    resume_lifecycle: _SoperatorActiveChecksLifecycle | None = None
+    if soperator_aware:
+        checkpoint_path = _soperator_upgrade_checkpoint_path(config_path, target.target_ref)
+        resume_checkpoint, resume_lifecycle = _soperator_upgrade_resume_checkpoint(
+            checkpoint_path=checkpoint_path,
+            plan=plan,
+            paths=paths,
+        )
+    if not plan.mutates and resume_checkpoint is None:
         _verify_helm_chart_upgrade_ready(generated_config, paths, manifest, plan)
         if soperator_aware:
             _run_soperator_upgrade_validation_phase(
@@ -6423,15 +6541,19 @@ def _run_helm_chart_upgrade_command(
         return
 
     if soperator_aware:
-        lifecycle = _soperator_upgrade_activechecks_lifecycle(source_payload, target)
-        checkpoint_path = _soperator_upgrade_checkpoint_path(config_path, target.target_ref)
-        checkpoint = _new_soperator_upgrade_checkpoint(
+        lifecycle = resume_lifecycle or _soperator_upgrade_activechecks_lifecycle(
+            source_payload,
+            target,
+        )
+        if checkpoint_path is None:
+            checkpoint_path = _soperator_upgrade_checkpoint_path(config_path, target.target_ref)
+        checkpoint = resume_checkpoint or _new_soperator_upgrade_checkpoint(
             plan=plan,
             lifecycle=lifecycle,
             checkpoint_path=checkpoint_path,
             paths=paths,
         )
-        restore_required = False
+        restore_required = bool(resume_checkpoint is not None and lifecycle.required)
 
         def _checkpoint(event: str, **details: Any) -> None:
             _append_soperator_upgrade_event(checkpoint, event, **details)
@@ -6450,7 +6572,7 @@ def _run_helm_chart_upgrade_command(
             validation_title: str,
             expected_plan: _HelmChartUpgradePlan,
         ) -> tuple[Any, ProjectPaths, Mapping[str, Any]]:
-            config_path.write_text(render_updated_source_payload(source_payload), encoding="utf-8")
+            _write_text_atomic(config_path, render_updated_source_payload(source_payload))
             console.print(f"Updated {config_path} for {update_message}.", soft_wrap=True)
             _run_internal_render_command(config_path, force=True)
             staged_config, staged_paths, staged_manifest = _load_deploy_context(config_path)
@@ -6662,7 +6784,7 @@ def _run_helm_chart_upgrade_command(
             f"Helm chart target {target.selector} already uses version {target_version}."
         )
         return
-    config_path.write_text(render_updated_source_payload(source_payload), encoding="utf-8")
+    _write_text_atomic(config_path, render_updated_source_payload(source_payload))
     console.print(
         f"Updated {config_path} for Helm chart {target.selector} upgrade to {target_version}.",
         soft_wrap=True,
@@ -6820,6 +6942,24 @@ def _confirm_generated_destroy(
 
 def _exit_with_error(exc: Exception) -> None:
     console.print(f"{error_markup('ERROR:', bold=True)} {escape(str(exc))}")
+    raise typer.Exit(code=1) from exc
+
+
+class _SoperatorDeployOwnedRoute(RuntimeError):
+    def __init__(self, lines: Sequence[str]) -> None:
+        self.lines = tuple(lines)
+        super().__init__("\n".join(self.lines))
+
+
+def _exit_with_soperator_deploy_owned_route(exc: _SoperatorDeployOwnedRoute) -> None:
+    if not exc.lines:
+        raise typer.Exit(code=1) from exc
+    console.print(f"{warning_markup('NOTE:', bold=True)} {escape(exc.lines[0])}", soft_wrap=True)
+    for line in exc.lines[1:]:
+        if line:
+            console.print(escape(line), soft_wrap=True)
+        else:
+            console.print()
     raise typer.Exit(code=1) from exc
 
 
@@ -7549,16 +7689,14 @@ def _print_render_deploy_hint(config_path: Path) -> None:
                 migration_required=True,
             ):
                 console.print(line, soft_wrap=True)
-            console.print(
-                "Next step: "
-                f"`nebius-cxcli ext-soperator migrate {config_arg} --target {target_arg} --dry-run`",
-                soft_wrap=True,
+            console.print("Next step: dry-run the Soperator migration:")
+            _print_copy_paste_command(
+                f"nebius-cxcli ext-soperator migrate {config_arg} --target {target_arg} --dry-run"
             )
-            console.print(
-                "Then, after accepting the dry-run plan: "
-                f"`nebius-cxcli ext-soperator migrate {config_arg} --target {target_arg} "
-                "--execute --approve`",
-                soft_wrap=True,
+            console.print("After accepting the dry-run plan, execute it:")
+            _print_copy_paste_command(
+                "nebius-cxcli ext-soperator migrate "
+                f"{config_arg} --target {target_arg} --execute --approve"
             )
         else:
             console.print("Route: render -> ext-soperator migrate, not render -> deploy.")
@@ -7568,17 +7706,20 @@ def _print_render_deploy_hint(config_path: Path) -> None:
                     + _soperator_migration_reason_text(onboarding),
                     soft_wrap=True,
                 )
-            console.print(
-                "Next step: run `nebius-cxcli ext-soperator migrate "
-                f"{config_arg} --target <target> --dry-run` for each migration-required "
-                "Soperator target: " + ", ".join(target for target, _ in migration_targets),
-                soft_wrap=True,
-            )
-            console.print(
-                "Then, after accepting each dry-run plan, run `nebius-cxcli ext-soperator migrate "
-                f"{config_arg} --target <target> --execute --approve` for that target.",
-                soft_wrap=True,
-            )
+            console.print("Next step: dry-run each migration-required Soperator target:")
+            for target_ref, _onboarding in migration_targets:
+                target_arg = shlex.quote(target_ref)
+                _print_copy_paste_command(
+                    "nebius-cxcli ext-soperator migrate "
+                    f"{config_arg} --target {target_arg} --dry-run"
+                )
+            console.print("After accepting each dry-run plan, execute that target:")
+            for target_ref, _onboarding in migration_targets:
+                target_arg = shlex.quote(target_ref)
+                _print_copy_paste_command(
+                    "nebius-cxcli ext-soperator migrate "
+                    f"{config_arg} --target {target_arg} --execute --approve"
+                )
         console.print(
             "Do not run `nebius-cxcli deploy` before `ext-soperator migrate` for migration-required Soperator targets.",
             soft_wrap=True,
@@ -7594,7 +7735,8 @@ def _print_render_deploy_hint(config_path: Path) -> None:
                 console.print(line, soft_wrap=True)
         else:
             console.print("Route: render -> deploy.")
-        console.print(f"Next step: `nebius-cxcli deploy {config_arg}`", soft_wrap=True)
+        console.print("Next step: deploy the rendered bundle:")
+        _print_copy_paste_command(f"nebius-cxcli deploy {config_arg}")
         console.print(
             "Use `--target <target-id>` only when you intentionally want to narrow this "
             "run to one generated target. Install/adopt-only Soperator targets: "
@@ -7602,7 +7744,8 @@ def _print_render_deploy_hint(config_path: Path) -> None:
             soft_wrap=True,
         )
         return
-    console.print(f"Next step: `nebius-cxcli deploy {config_arg}`", soft_wrap=True)
+    console.print("Next step: deploy the rendered bundle:")
+    _print_copy_paste_command(f"nebius-cxcli deploy {config_arg}")
 
 
 @contextmanager
@@ -7639,12 +7782,9 @@ def _temporary_env(overrides: Mapping[str, str]) -> Iterator[None]:
 
 def _print_component_edit_next_steps(config_path: Path) -> None:
     config_arg = _config_cli_arg(config_path)
-    console.print(
-        "Next steps: run "
-        f"`nebius-cxcli validate {config_arg}`, then "
-        f"`nebius-cxcli render {config_arg}`.",
-        soft_wrap=True,
-    )
+    console.print("Next steps:")
+    _print_copy_paste_command(f"nebius-cxcli validate {config_arg}")
+    _print_copy_paste_command(f"nebius-cxcli render {config_arg}")
 
 
 def _print_soperator_onboard_next_steps(
@@ -7677,14 +7817,16 @@ def _print_soperator_onboard_next_steps(
                 (
                     "nebius-cxcli ext-soperator migrate "
                     f"{config_arg} --target {target_arg} --execute --approve",
-                    " (after the dry run is accepted)",
+                    "After the dry run is accepted:",
                 ),
             ]
         )
     else:
         commands.append((f"nebius-cxcli deploy {config_arg}", ""))
     for command, suffix in commands:
-        console.print(f"  `{command}`{suffix}", soft_wrap=True)
+        if suffix:
+            console.print(suffix.strip())
+        _print_copy_paste_command(command)
     if migration_required:
         console.print(
             "Do not run `nebius-cxcli deploy` before `ext-soperator migrate` for this target; "
@@ -7703,13 +7845,11 @@ def _print_soperator_onboard_next_steps(
 def _print_create_next_steps(config_path: Path) -> None:
     config_arg = _config_cli_arg(config_path)
     console.print("Next steps:")
-    for command, suffix in (
-        (f"nebius-cxcli validate {config_arg}", ""),
-        (f"nebius-cxcli render {config_arg}", ""),
-        (f"nebius-cxcli deploy {config_arg}", ""),
-        (f"nebius-cxcli bootstrap-ci {config_arg}", " (optional)"),
-    ):
-        console.print(f"  `{command}`{suffix}", soft_wrap=True)
+    _print_copy_paste_command(f"nebius-cxcli validate {config_arg}")
+    _print_copy_paste_command(f"nebius-cxcli render {config_arg}")
+    _print_copy_paste_command(f"nebius-cxcli deploy {config_arg}")
+    console.print("Optional CI bootstrap:")
+    _print_copy_paste_command(f"nebius-cxcli bootstrap-ci {config_arg}")
 
 
 def _print_component_edit_config_only_note() -> None:
@@ -9584,12 +9724,19 @@ def _validate_soperator_source_version(value: object) -> str:
     normalized = normalize_soperator_release_version(str(value or ""))
     if not normalized:
         raise ValueError("Enter a Soperator release version such as 3.0.5.")
-    if soperator_migration_profile_for_version(normalized) is None:
+    if (
+        soperator_migration_profile_for_version(
+            normalized,
+            allow_generation_fallback=True,
+        )
+        is None
+    ):
         choices = [choice.value for choice in _soperator_source_version_choices()]
         preview = ", ".join(choices[:8])
         suffix = f" Known profile versions include: {preview}." if preview else ""
         raise ValueError(
-            f"Soperator source version '{value}' does not match a committed migration profile."
+            f"Soperator source version '{value}' does not match an exact committed "
+            "migration-profile row or known major-generation profile."
             f"{suffix}"
         )
     return normalized
@@ -9629,14 +9776,16 @@ def _prompt_soperator_onboarding_source_version(report: Any) -> str:
         console.print(
             f"[dim]Detected Soperator version {source_version}, but cxcli also found "
             "a Soperator-like Helm release with noncanonical identity. Confirm the "
-            "source Soperator version so cxcli can match a committed migration profile "
-            "before managing the release.[/dim]"
+            "source Soperator version so cxcli can match an exact committed "
+            "migration-profile row or known major-generation profile before managing "
+            "the release.[/dim]"
         )
     else:
         console.print(
             "[dim]Soperator CRDs were detected, but cxcli could not detect a compatible "
             "Helm release version. Select the source Soperator version so cxcli can match "
-            "a committed migration profile.[/dim]"
+            "an exact committed migration-profile row or known major-generation "
+            "profile.[/dim]"
         )
     field = "deploy.targets[].soperator_onboarding.source_version"
     with _soperator_onboarding_status("Loading Soperator migration profile versions..."):
@@ -9832,17 +9981,17 @@ def _print_soperator_onboarding_mode_choice_guidance() -> None:
 def _soperator_rollout_strategy_choices(default: str) -> list[OptionChoice]:
     labels = {
         SOPERATOR_WORKER_ROLLOUT_STRATEGY_SAFE_SURGE: (
-            "safe-surge  (use temporary surge nodes for worker updates)"
+            "safe-surge  (uses temporary surge nodes; quota/capacity preflight)"
         ),
         SOPERATOR_WORKER_ROLLOUT_STRATEGY_ZERO_SURGE: (
-            "zero-surge  (avoid extra worker quota; reduce active capacity)"
+            "zero-surge  (default; no spare quota, active capacity can drop)"
         ),
     }
     return [
         OptionChoice(value=value, label=labels[value], recommended=value == default)
         for value in (
-            SOPERATOR_WORKER_ROLLOUT_STRATEGY_SAFE_SURGE,
             SOPERATOR_WORKER_ROLLOUT_STRATEGY_ZERO_SURGE,
+            SOPERATOR_WORKER_ROLLOUT_STRATEGY_SAFE_SURGE,
         )
     ]
 
@@ -9860,6 +10009,49 @@ def _soperator_rollout_wave_mode_choices(default: str) -> list[OptionChoice]:
             recommended=default == "groups",
         ),
     ]
+
+
+_SOPERATOR_ROLLOUT_FIELD_GUIDANCE = {
+    "strategy": (
+        "Strategy: zero-surge is the default and avoids spare worker quota by allowing "
+        "one unavailable node per group; safe-surge preserves capacity with temporary "
+        "surge nodes and requires quota/capacity preflight."
+    ),
+    "wave_budget": (
+        "Safe-surge wave budget: choose groups for a fixed batch size, or percent to "
+        "scale each wave from the total worker-group count."
+    ),
+    "worker_wave_groups": (
+        "Safe-surge worker wave groups: number of worker groups updated per wave. "
+        "Larger values finish faster but increase quota needs and rollout blast radius."
+    ),
+    "worker_wave_percent": (
+        "Safe-surge worker wave percent: percentage of worker groups updated per wave. "
+        "cxcli rounds up to at least one group."
+    ),
+    "max_parallel_worker_groups": (
+        "Max parallel worker groups: optional hard cap for concurrent worker-group "
+        "updates. Leave blank to use the wave budget."
+    ),
+    "max_surge_count": (
+        "Max surge count: temporary extra nodes per worker group. Use 1 for capacity-"
+        "preserving safe-surge; 0 requires max_unavailable_count greater than 0."
+    ),
+    "max_unavailable_count": (
+        "Max unavailable count: nodes per worker group allowed down during rollout. "
+        "0 preserves worker capacity; higher values allow temporary capacity loss."
+    ),
+    "drain_timeout": (
+        "Drain timeout: time to wait for pod eviction before MK8s may delete the node. "
+        "Use none to wait indefinitely."
+    ),
+}
+
+
+def _print_soperator_rollout_field_guidance(field_key: str) -> None:
+    message = _SOPERATOR_ROLLOUT_FIELD_GUIDANCE.get(field_key)
+    if message:
+        console.print(f"[dim]{message}[/dim]")
 
 
 def _prompt_soperator_rollout_value(
@@ -9902,91 +10094,117 @@ def _prompt_soperator_onboarding_rollout_manifest(
         return _soperator_rollout_manifest_from_options()
     current = resolve_external_node_template_rollout(onboarding)
     console.print(
-        "[dim]Configure external worker node-template rollout. safe-surge requires "
-        "spare quota for the configured surge nodes; finite drain_timeout can delete "
-        "a node after the timeout if eviction is still blocked. Use none to wait "
-        "indefinitely for drain completion.[/dim]"
+        "[dim]Configure external worker node-template rollout for preserved worker "
+        "groups during migration.[/dim]"
     )
+
+    def _strategy_defaults(strategy_value: str) -> tuple[int, int]:
+        if strategy_value == SOPERATOR_WORKER_ROLLOUT_STRATEGY_SAFE_SURGE:
+            return (1, 0)
+        return (0, 1)
+
+    _print_soperator_rollout_field_guidance("strategy")
     strategy = str(
         _prompt_soperator_rollout_value(
             "deploy.targets[].soperator_onboarding.node_template_upgrade.rollout.strategy",
             current.strategy,
             validator=lambda value: _soperator_rollout_manifest_from_options(
-                onboarding, worker_rollout_strategy=str(value or "")
+                onboarding,
+                worker_rollout_strategy=str(value or ""),
+                strategy_max_surge_count=_strategy_defaults(str(value or ""))[0],
+                strategy_max_unavailable_count=_strategy_defaults(str(value or ""))[1],
             ),
             choices=_soperator_rollout_strategy_choices(current.strategy),
             type_hint="string",
             required=True,
         )
     )
-    wave_mode_default = "groups" if current.worker_wave_groups is not None else "percent"
-    wave_mode = str(
-        _prompt_soperator_rollout_value(
-            "deploy.targets[].soperator_onboarding.node_template_upgrade.rollout.wave_budget",
-            wave_mode_default,
-            validator=lambda value: (
-                {"value": value}
-                if str(value or "") in {"percent", "groups"}
-                else (_ for _ in ()).throw(ValueError("choose percent or groups"))
-            ),
-            choices=_soperator_rollout_wave_mode_choices(wave_mode_default),
-            type_hint="string",
-            required=True,
-        )
+    selected_current = resolve_external_node_template_rollout(
+        onboarding,
+        strategy=strategy,
+        strategy_max_surge_count=_strategy_defaults(strategy)[0],
+        strategy_max_unavailable_count=_strategy_defaults(strategy)[1],
     )
     worker_wave_groups: int | None = None
     worker_wave_percent: int | None = None
-    if wave_mode == "groups":
-        default_groups = current.worker_wave_groups or 1
-        worker_wave_groups = int(
+    max_parallel: int | None = None
+    if strategy == SOPERATOR_WORKER_ROLLOUT_STRATEGY_SAFE_SURGE:
+        wave_mode_default = (
+            "groups" if selected_current.worker_wave_groups is not None else "percent"
+        )
+        _print_soperator_rollout_field_guidance("wave_budget")
+        wave_mode = str(
             _prompt_soperator_rollout_value(
-                "deploy.targets[].soperator_onboarding.node_template_upgrade.rollout.worker_wave_groups",
-                default_groups,
-                validator=lambda value: _soperator_rollout_manifest_from_options(
-                    onboarding,
-                    worker_rollout_strategy=strategy,
-                    worker_wave_groups=int(value),
-                    worker_wave_percent=None,
+                "deploy.targets[].soperator_onboarding.node_template_upgrade.rollout.wave_budget",
+                wave_mode_default,
+                validator=lambda value: (
+                    {"value": value}
+                    if str(value or "") in {"percent", "groups"}
+                    else (_ for _ in ()).throw(ValueError("choose percent or groups"))
                 ),
-                type_hint="integer",
+                choices=_soperator_rollout_wave_mode_choices(wave_mode_default),
+                type_hint="string",
                 required=True,
             )
         )
-    else:
-        default_percent = current.worker_wave_percent or SOPERATOR_WORKER_ROLLOUT_DEFAULT_WAVE_PERCENT
-        worker_wave_percent = int(
-            _prompt_soperator_rollout_value(
-                "deploy.targets[].soperator_onboarding.node_template_upgrade.rollout.worker_wave_percent",
-                default_percent,
-                validator=lambda value: _soperator_rollout_manifest_from_options(
-                    onboarding,
-                    worker_rollout_strategy=strategy,
-                    worker_wave_groups=None,
-                    worker_wave_percent=int(value),
-                ),
-                type_hint="integer",
-                required=True,
+        if wave_mode == "groups":
+            default_groups = selected_current.worker_wave_groups or 1
+            _print_soperator_rollout_field_guidance("worker_wave_groups")
+            worker_wave_groups = int(
+                _prompt_soperator_rollout_value(
+                    "deploy.targets[].soperator_onboarding.node_template_upgrade.rollout.worker_wave_groups",
+                    default_groups,
+                    validator=lambda value: _soperator_rollout_manifest_from_options(
+                        onboarding,
+                        worker_rollout_strategy=strategy,
+                        worker_wave_groups=int(value),
+                        worker_wave_percent=None,
+                    ),
+                    type_hint="integer",
+                    required=True,
+                )
             )
+        else:
+            default_percent = (
+                selected_current.worker_wave_percent
+                or SOPERATOR_WORKER_ROLLOUT_DEFAULT_WAVE_PERCENT
+            )
+            _print_soperator_rollout_field_guidance("worker_wave_percent")
+            worker_wave_percent = int(
+                _prompt_soperator_rollout_value(
+                    "deploy.targets[].soperator_onboarding.node_template_upgrade.rollout.worker_wave_percent",
+                    default_percent,
+                    validator=lambda value: _soperator_rollout_manifest_from_options(
+                        onboarding,
+                        worker_rollout_strategy=strategy,
+                        worker_wave_groups=None,
+                        worker_wave_percent=int(value),
+                    ),
+                    type_hint="integer",
+                    required=True,
+                )
+            )
+        _print_soperator_rollout_field_guidance("max_parallel_worker_groups")
+        max_parallel_raw = _prompt_soperator_rollout_value(
+            "deploy.targets[].soperator_onboarding.node_template_upgrade.rollout.max_parallel_worker_groups",
+            selected_current.max_parallel_worker_groups,
+            validator=lambda value: _soperator_rollout_manifest_from_options(
+                onboarding,
+                worker_rollout_strategy=strategy,
+                worker_wave_groups=worker_wave_groups,
+                worker_wave_percent=worker_wave_percent,
+                max_parallel_worker_groups=None if value in {None, ""} else int(value),
+            ),
+            type_hint="integer",
+            required=False,
+            unset_on_skip=True,
         )
-    max_parallel_raw = _prompt_soperator_rollout_value(
-        "deploy.targets[].soperator_onboarding.node_template_upgrade.rollout.max_parallel_worker_groups",
-        current.max_parallel_worker_groups,
-        validator=lambda value: _soperator_rollout_manifest_from_options(
-            onboarding,
-            worker_rollout_strategy=strategy,
-            worker_wave_groups=worker_wave_groups,
-            worker_wave_percent=worker_wave_percent,
-            max_parallel_worker_groups=None if value in {None, ""} else int(value),
-        ),
-        type_hint="integer",
-        required=False,
-        unset_on_skip=True,
-    )
-    max_parallel = None if max_parallel_raw in {None, ""} else int(max_parallel_raw)
+        max_parallel = None if max_parallel_raw in {None, ""} else int(max_parallel_raw)
+    _print_soperator_rollout_field_guidance("max_surge_count")
     max_surge = int(
         _prompt_soperator_rollout_value(
             "deploy.targets[].soperator_onboarding.node_template_upgrade.rollout.worker_group_strategy.max_surge_count",
-            current.strategy_max_surge_count,
+            selected_current.strategy_max_surge_count,
             validator=lambda value: _soperator_rollout_manifest_from_options(
                 onboarding,
                 worker_rollout_strategy=strategy,
@@ -9999,10 +10217,11 @@ def _prompt_soperator_onboarding_rollout_manifest(
             required=True,
         )
     )
+    _print_soperator_rollout_field_guidance("max_unavailable_count")
     max_unavailable = int(
         _prompt_soperator_rollout_value(
             "deploy.targets[].soperator_onboarding.node_template_upgrade.rollout.worker_group_strategy.max_unavailable_count",
-            current.strategy_max_unavailable_count,
+            selected_current.strategy_max_unavailable_count,
             validator=lambda value: _soperator_rollout_manifest_from_options(
                 onboarding,
                 worker_rollout_strategy=strategy,
@@ -10016,10 +10235,11 @@ def _prompt_soperator_onboarding_rollout_manifest(
             required=True,
         )
     )
+    _print_soperator_rollout_field_guidance("drain_timeout")
     drain_timeout = str(
         _prompt_soperator_rollout_value(
             "deploy.targets[].soperator_onboarding.node_template_upgrade.rollout.worker_group_strategy.drain_timeout",
-            current.strategy_drain_timeout,
+            selected_current.strategy_drain_timeout,
             validator=lambda value: _soperator_rollout_manifest_from_options(
                 onboarding,
                 worker_rollout_strategy=strategy,
@@ -32280,14 +32500,15 @@ def _raise_if_deploy_would_bypass_soperator_migration(
         lines.extend(
             [
                 f"- {target_ref}: " + _soperator_migration_reason_text(onboarding),
+                "Dry-run command:",
                 (
-                    "  `nebius-cxcli ext-soperator migrate "
-                    f"{config_arg} --target {target_arg} --dry-run`"
+                    "nebius-cxcli ext-soperator migrate "
+                    f"{config_arg} --target {target_arg} --dry-run"
                 ),
+                "Execute after the dry run is accepted:",
                 (
-                    "  `nebius-cxcli ext-soperator migrate "
-                    f"{config_arg} --target {target_arg} --execute --approve` "
-                    "(after the dry run is accepted)"
+                    "nebius-cxcli ext-soperator migrate "
+                    f"{config_arg} --target {target_arg} --execute --approve"
                 ),
             ]
         )
@@ -32897,18 +33118,18 @@ def _deploy_footer_command_lines(
 ) -> list[str]:
     lines: list[str] = []
     for hint in wireguard_access_command_hints(config, paths):
-        lines.extend([f"  # {hint['label']}", f"  {hint['command']}"])
+        lines.extend([f"# {hint['label']}", hint["command"]])
     for hint in ssh_jump_access_hints(config, paths):
         lines.extend(
             [
-                f"  # SSH {hint['target_label']} via {hint['jump_host_label']}",
-                f"  {hint['command']}",
+                f"# SSH {hint['target_label']} via {hint['jump_host_label']}",
+                hint["command"],
             ]
         )
     for command in _unique_texts(summary.gitops_bootstrap_commands):
-        lines.extend(["  # Enable GitOps sync", f"  {command}"])
+        lines.extend(["# Enable GitOps sync", command])
     if not lines:
-        lines.append("  No immediate access or follow-up commands were derived.")
+        lines.append("No immediate access or follow-up commands were derived.")
     return lines
 
 
@@ -33528,7 +33749,7 @@ def _warn_if_flux_gitops_not_bootstrapped(
     )
     if print_command:
         console.print("Optional command to enable GitOps sync:")
-        console.print(command, style="cyan", no_wrap=True, overflow="ignore")
+        _print_copy_paste_command(command)
     return command
 
 
@@ -37116,7 +37337,8 @@ def soperator_onboard_command(
             "--source-version",
             help=(
                 "Existing Soperator source version used only when discovery cannot infer "
-                "a compatible Helm release version from the live cluster."
+                "a compatible Helm release version from the live cluster; must match an "
+                "exact migration profile or known major-generation profile."
             ),
         ),
     ] = None,
@@ -37163,7 +37385,7 @@ def soperator_onboard_command(
             "--strategy-max-surge-count",
             help=(
                 "Nebius node-group strategy max_surge count for each active worker group. "
-                "Default: 1."
+                "Default: 0 for zero-surge / 1 for safe-surge."
             ),
         ),
     ] = None,
@@ -37173,7 +37395,7 @@ def soperator_onboard_command(
             "--strategy-max-unavailable-count",
             help=(
                 "Nebius node-group strategy max_unavailable count for each active worker "
-                "group. Default: 0."
+                "group. Default: 1 for zero-surge / 0 for safe-surge."
             ),
         ),
     ] = None,
@@ -37395,17 +37617,19 @@ _SOPERATOR_MIGRATION_EXECUTOR_CONTRACT_LINES = (
     "version, node OS image, and Nebius GPU driver preset. Control plane is "
     "upgraded first; service-role node groups are then updated one group at a "
     "time with temporary zero-surge strategy (max_surge=0, max_unavailable=1, "
-    "drain_timeout=30m), while worker node groups use safe-surge by default "
-    "(max_surge=1, max_unavailable=0, drain_timeout=30m) in bounded "
-    "parallel waves. Set worker_group_strategy.drain_timeout to none to wait "
+    "drain_timeout=30m), while worker node groups also default to zero-surge. "
+    "Operators can select safe-surge (max_surge=1, max_unavailable=0, "
+    "drain_timeout=30m) for bounded parallel waves when spare quota/capacity "
+    "is available. Set worker_group_strategy.drain_timeout to none to wait "
     "indefinitely instead of allowing provider drain fallback. cxcli restores "
     "each node group's original strategy.",
-    "Worker node-template quota contract: safe-surge preserved worker groups "
+    "Worker node-template quota contract: zero-surge requires no spare worker "
+    "quota but can reduce active capacity by max_unavailable_count node(s) per "
+    "worker group during rollout. With safe-surge, preserved worker groups "
     "require max_surge_count temporary surge node(s) for each worker group in "
     "the active wave; cxcli checks the required spare quota and GPU capacity "
     "and requires selected worker nodes to start Ready and schedulable before "
-    "mutation. Operators can explicitly select zero-surge to avoid surge worker "
-    "quota at the cost of temporary active-group capacity reduction.",
+    "mutation.",
     "Status contract: approved --execute prints phase-aware Soperator "
     "migration status; target remediation phases report MK8s health, storage "
     "phases report SFS/PVC progress and continuity, while compute and cutover "
@@ -37547,6 +37771,9 @@ def _style_soperator_migration_status_message(message: str) -> str:
         ("Soperator migration status", "[bold cyan]Soperator migration status[/bold cyan]"),
         ("MK8s Node Groups", "[bold white]MK8s Node Groups[/bold white]"),
         ("Slurm Workers", "[bold white]Slurm Workers[/bold white]"),
+        ("Node groups:", "[bold cyan]Node groups:[/bold cyan]"),
+        ("Nodes:", "[bold magenta]Nodes:[/bold magenta]"),
+        (" || ", "[dim] || [/dim]"),
         ("Soperator degraded", "Soperator [bold yellow]degraded[/bold yellow]"),
         ("Soperator down", "Soperator [bold red]down[/bold red]"),
         ("(degraded):", "([bold yellow]degraded[/bold yellow]):"),
@@ -37554,14 +37781,14 @@ def _style_soperator_migration_status_message(message: str) -> str:
         ("(draining):", "([bold yellow]draining[/bold yellow]):"),
         ("(unknown):", "([yellow]unknown[/yellow]):"),
         ("(serving):", "([green]serving[/green]):"),
-        ("node-upgrading (down)", "[bold red]node-upgrading (down)[/bold red]"),
+        ("replacing (down)", "[bold yellow]replacing (down)[/bold yellow]"),
         ("NotReady (down)", "[bold red]NotReady (down)[/bold red]"),
         ("down (down)", "[bold red]down (down)[/bold red]"),
         ("unknown (down)", "[bold red]unknown (down)[/bold red]"),
         ("invalid (down)", "[bold red]invalid (down)[/bold red]"),
         ("fail (down)", "[bold red]fail (down)[/bold red]"),
         ("failing (down)", "[bold red]failing (down)[/bold red]"),
-        ("node-upgrading (cordoned)", "[bold yellow]node-upgrading (cordoned)[/bold yellow]"),
+        ("replacing (cordoned)", "[bold yellow]replacing (cordoned)[/bold yellow]"),
         ("degraded:", "[bold yellow]degraded:[/bold yellow]"),
         ("down:", "[bold red]down:[/bold red]"),
         ("draining:", "[bold yellow]draining:[/bold yellow]"),
@@ -37701,21 +37928,28 @@ def _require_soperator_migration_actions(
         }
     )
     selected_detail = (
-        " Selected onboarding actions are deploy-owned for this command: "
+        "Selected onboarding actions are deploy-owned for this command: "
         + ", ".join(selected_actions)
         + "."
         if selected_actions
-        else " No onboarding actions are selected."
+        else "No onboarding actions are selected."
     )
-    raise RuntimeError(
-        f"Soperator target '{target_ref}' has no migration-owned onboarding actions. "
-        "`ext-soperator migrate` is only for accepted onboarding plans that contain "
-        "storage migration, compute migration, Soperator upgrade, or external "
-        f"MK8s node-template upgrade actions.{selected_detail} Run "
-        f"`nebius-cxcli validate {config_path}`, `nebius-cxcli render {config_path}`, "
-        f"then `nebius-cxcli deploy {config_path}` to reconcile deploy-owned work. "
-        f"Use `nebius-cxcli deploy {config_path} --target {target_ref}` only to narrow "
-        "one deliberate run."
+    raise _SoperatorDeployOwnedRoute(
+        (
+            f"Soperator target '{target_ref}' has no migration-owned onboarding actions.",
+            "`ext-soperator migrate` is only for accepted onboarding plans that contain "
+            "storage migration, compute migration, Soperator upgrade, or external "
+            "MK8s node-template upgrade actions.",
+            selected_detail,
+            "",
+            "Run these commands to reconcile deploy-owned work:",
+            f"nebius-cxcli validate {config_path}",
+            f"nebius-cxcli render {config_path}",
+            f"nebius-cxcli deploy {config_path}",
+            "",
+            "Use this only to narrow one deliberate run:",
+            f"nebius-cxcli deploy {config_path} --target {target_ref}",
+        )
     )
 
 
@@ -38146,13 +38380,13 @@ def _refresh_soperator_onboarding_after_completed_migration(
         "records explicit approval when --approve is passed, auto-detects source worker "
         "node groups from live Nebius node-group names and Slurm worker labels, checks "
         "net-new aligned SFS, net-new service-role node-group quota, and safe-surge "
-        "worker wave spare capacity, requires selected worker nodes to start Ready "
+        "worker wave spare capacity when selected, requires selected worker nodes to start Ready "
         "and schedulable, and requires an empty Slurm queue before approved "
         "mutations, upgrades the external "
         "MK8s control plane first, then updates service-role source node groups one "
         "group at a time with zero-surge node-group updates (max_surge=0, "
-        "max_unavailable=1, drain_timeout=30m), updates worker groups with the "
-        "configured safe-surge rollout by default (max_surge=1, max_unavailable=0, "
+        "max_unavailable=1, drain_timeout=30m), updates worker groups with zero-surge "
+        "by default or the configured safe-surge rollout (max_surge=1, max_unavailable=0, "
         "drain_timeout=30m), restores the original strategy, applies target GPU stack app rows when "
         "selected, creates or reuses aligned SFS filesystems, attaches them to "
         "discovered Nebius node groups, runs data-copy jobs when old and target PVC "
@@ -38222,10 +38456,10 @@ def soperator_migrate_command(
         typer.Option(
             "--worker-rollout-strategy",
             help=(
-                "External node-template worker rollout strategy. Use safe-surge "
-                "for the default no-unavailable worker update with temporary surge "
-                "capacity, or zero-surge to update one worker group at a time with "
-                "possible temporary capacity reduction."
+                "External node-template worker rollout strategy. zero-surge is the "
+                "default and requires no spare worker quota but can reduce active "
+                "capacity; safe-surge uses temporary surge capacity and verifies "
+                "quota/capacity before mutation."
             ),
         ),
     ] = None,
@@ -38267,7 +38501,7 @@ def soperator_migrate_command(
             "--strategy-max-surge-count",
             help=(
                 "Nebius node-group strategy max_surge count for each active worker group. "
-                "Default comes from config.yaml, or 1."
+                "Default comes from config.yaml, or 0 for zero-surge / 1 for safe-surge."
             ),
         ),
     ] = None,
@@ -38277,7 +38511,7 @@ def soperator_migrate_command(
             "--strategy-max-unavailable-count",
             help=(
                 "Nebius node-group strategy max_unavailable count for each active worker "
-                "group. Default comes from config.yaml, or 0."
+                "group. Default comes from config.yaml, or 1 for zero-surge / 0 for safe-surge."
             ),
         ),
     ] = None,
@@ -38367,6 +38601,10 @@ def soperator_migrate_command(
                 console.print(line, soft_wrap=True)
             for line in post_migration_config_lines:
                 console.print(line, soft_wrap=True)
+            if approve and execution_result.pending_phase != "none":
+                raise typer.Exit(code=1)
+    except _SoperatorDeployOwnedRoute as exc:
+        _exit_with_soperator_deploy_owned_route(exc)
     except typer.Exit:
         raise
     except (KeyboardInterrupt, EOFError, typer.Abort):
@@ -39419,21 +39657,15 @@ def wireguard_command(
         )
         connect_command = f"wg-quick up {shlex.quote(str(result.output_path))}"
         disconnect_command = f"wg-quick down {shlex.quote(str(result.output_path))}"
-        console.print(
-            f"Run this command to connect: [bold]{escape(connect_command)}[/bold]",
-            soft_wrap=True,
-        )
-        console.print(
-            f"Run this command to disconnect: [bold]{escape(disconnect_command)}[/bold]",
-            soft_wrap=True,
-        )
+        console.print("Run this command to connect:")
+        _print_copy_paste_command(connect_command)
+        console.print("Run this command to disconnect:")
+        _print_copy_paste_command(disconnect_command)
         if _wireguard_client_tool_missing():
             install_command = _wireguard_client_install_command()
             console.print("[yellow]WireGuard client tool not found locally:[/yellow] wg-quick")
-            console.print(
-                f"Install it with: [bold]{escape(install_command)}[/bold]",
-                soft_wrap=True,
-            )
+            console.print("Install it with:")
+            _print_copy_paste_command(install_command)
     except Exception as exc:  # pragma: no cover - CLI surface
         _exit_with_error(exc)
 
