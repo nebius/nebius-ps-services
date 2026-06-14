@@ -792,8 +792,17 @@ def test_node_group_rollout_complete_requires_no_outdated_or_surge_nodes() -> No
         outdated_node_count=0,
         reconciling=False,
     )
+    missing_outdated = _node_group(id="ng-system", name="system", version="1.33")
+    missing_outdated.status = SimpleNamespace(
+        version="v1.33.7-nebius-node.64",
+        ready_node_count=2,
+        target_node_count=2,
+        node_count=2,
+        reconciling=False,
+    )
 
     assert not upgrade.node_group_rollout_complete(rolling, version="1.33")
+    assert not upgrade.node_group_rollout_complete(missing_outdated, version="1.33")
     assert upgrade.node_group_rollout_complete(complete, version="1.33")
 
 

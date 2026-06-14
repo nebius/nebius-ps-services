@@ -204,7 +204,21 @@ def test_init_nebius_sdk_fetches_iam_token_from_cli_when_needed(
 
     assert sdk.kwargs["credentials"] == "cli-token-456"
     assert sdk.kwargs["parent_id"] == "project-1"
-    assert sdk_auth.os.environ["NEBIUS_IAM_TOKEN"] == "cli-token-456"
+    assert "NEBIUS_IAM_TOKEN" not in sdk_auth.os.environ
+
+
+def test_cli_token_fallback_does_not_mask_unexpected_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("NEBIUS_IAM_TOKEN", raising=False)
+
+    def _bug(*_args: object, **_kwargs: object) -> object:
+        raise RuntimeError("unexpected bug")
+
+    monkeypatch.setattr(sdk_auth.subprocess, "run", _bug)
+
+    with pytest.raises(RuntimeError, match="unexpected bug"):
+        sdk_auth._ensure_iam_token_from_cli()
 
 
 def test_init_nebius_sdk_can_disable_cli_token_fallback(

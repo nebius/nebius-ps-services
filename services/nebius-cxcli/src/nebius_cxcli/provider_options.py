@@ -2668,6 +2668,7 @@ class ProviderOptionLookup:
     def _paged_list(self, *, request_factory, request_call) -> list[Any]:
         items: list[Any] = []
         page_token = ""
+        seen_tokens: set[str] = set()
         request_kwargs = _provider_request_kwargs()
         while True:
             response = request_call(request_factory(page_token), **request_kwargs).wait()
@@ -2675,6 +2676,12 @@ class ProviderOptionLookup:
             next_page_token = _as_str(getattr(response, "next_page_token", None))
             if not next_page_token:
                 return items
+            if next_page_token == page_token or next_page_token in seen_tokens:
+                raise RuntimeError(
+                    "Provider option lookup received a repeated pagination token from "
+                    "the Nebius API; aborting to avoid an infinite list loop."
+                )
+            seen_tokens.add(next_page_token)
             page_token = next_page_token
 
     def _sdk_or_none(self) -> Any | None:

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import sys
-from types import ModuleType
+from types import ModuleType, SimpleNamespace
 from typing import Any, cast
 
 import pytest
@@ -178,6 +178,41 @@ def test_aggregate_requirements_sums_shared_quota_usage() -> None:
     assert check.available == 2
     assert check.sufficient is False
     assert check.reason == "ssh-jumphost: one VM; managed-postgresql: two database hosts"
+
+
+def test_quota_session_list_quotas_rejects_repeated_page_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _ListQuotaAllowancesRequest:
+        def __init__(self, *, parent_id: str, page_size: int, page_token: str) -> None:
+            self.parent_id = parent_id
+            self.page_size = page_size
+            self.page_token = page_token
+
+    calls: list[str] = []
+
+    class _QuotaAllowanceServiceClient:
+        def __init__(self, _sdk: object) -> None:
+            pass
+
+        def list(self, request: _ListQuotaAllowancesRequest):  # type: ignore[no-untyped-def]
+            calls.append(request.page_token)
+            response = SimpleNamespace(items=[], next_page_token="same-token")
+            return SimpleNamespace(wait=lambda: response)
+
+    quota_module = ModuleType("nebius.api.nebius.quotas.v1")
+    quota_module.ListQuotaAllowancesRequest = _ListQuotaAllowancesRequest  # type: ignore[attr-defined]
+    quota_module.QuotaAllowanceServiceClient = _QuotaAllowanceServiceClient  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "nebius.api.nebius.quotas.v1", quota_module)
+
+    session = quota_checks._QuotaSession.__new__(quota_checks._QuotaSession)
+    session._sdk = object()
+    session._quota_cache = {}
+
+    with pytest.raises(RuntimeError, match="repeated pagination token"):
+        session.list_quotas(parent_id="tenant-1")
+
+    assert calls == ["", "same-token"]
 
 
 def test_aggregate_requirements_keep_gpu_capacity_shapes_separate() -> None:

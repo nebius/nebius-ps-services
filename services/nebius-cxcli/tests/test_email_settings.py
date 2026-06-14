@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+import nebius_cxcli.email_settings as email_settings
 from nebius_cxcli.email_settings import (
     EmailSettings,
     disable_email_settings,
@@ -41,6 +42,29 @@ def test_write_and_load_email_settings_round_trip(tmp_path: Path) -> None:
     assert written_path == config_path.resolve()
     assert loaded == settings
     assert written_path.stat().st_mode & 0o777 == 0o600
+
+
+def test_write_email_settings_preserves_existing_file_when_temp_write_fails(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    config_path = tmp_path / "email.yaml"
+    original = "smtp:\n  host: old.example.com\n"
+    config_path.write_text(original, encoding="utf-8")
+    config_path.chmod(0o644)
+
+    def _fail_mkstemp(**_kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(email_settings.tempfile, "mkstemp", _fail_mkstemp)
+
+    with pytest.raises(OSError, match="disk full"):
+        write_email_settings(
+            EmailSettings(host="smtp.example.com", port=587),
+            explicit=config_path,
+        )
+
+    assert config_path.read_text(encoding="utf-8") == original
+    assert config_path.stat().st_mode & 0o777 == 0o644
 
 
 def test_load_email_settings_accepts_legacy_starttls_disabled_file(tmp_path: Path) -> None:

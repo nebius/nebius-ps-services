@@ -1397,6 +1397,36 @@ def test_execute_writes_checkpoint_and_stops_before_mutation(tmp_path: Path) -> 
     assert checkpoint["events"][0]["event"] == "execute-preflight-completed"
 
 
+def test_write_checkpoint_preserves_existing_file_when_replace_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    checkpoint_path = tmp_path / "checkpoint.json"
+    existing = {
+        "schema": migration.SOPERATOR_MIGRATION_EXECUTION_SCHEMA,
+        "status": "old",
+    }
+    migration._write_checkpoint(checkpoint_path, existing)
+    before = checkpoint_path.read_text(encoding="utf-8")
+
+    def _fail_replace(_source: object, _target: object) -> None:
+        raise OSError("replace failed")
+
+    monkeypatch.setattr(migration.os, "replace", _fail_replace)
+
+    with pytest.raises(OSError, match="replace failed"):
+        migration._write_checkpoint(
+            checkpoint_path,
+            {
+                "schema": migration.SOPERATOR_MIGRATION_EXECUTION_SCHEMA,
+                "status": "new",
+            },
+        )
+
+    assert checkpoint_path.read_text(encoding="utf-8") == before
+    assert not list(tmp_path.glob(".checkpoint.json.*.tmp"))
+
+
 def test_execute_quota_preflight_blocks_before_mutation(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1656,6 +1686,16 @@ def test_external_node_template_completion_recheck_rejects_k8s_downgrade_target(
             worker_node_groups=(),
             command_runner=runner,
         )
+
+
+def test_external_node_template_k8s_version_checks_fail_closed_on_malformed_live_version() -> None:
+    message = migration._external_node_template_k8s_downgrade_error("garbage", "1.33")
+
+    assert "could not parse" in message
+    with pytest.raises(RuntimeError, match="could not parse"):
+        migration._ensure_external_node_template_k8s_not_downgrade("garbage", "1.33")
+    with pytest.raises(RuntimeError, match="could not parse"):
+        migration._minor_version_at_least("garbage", "1.33")
 
 
 def test_sfs_attachment_uses_zero_surge_strategy_and_restores_original() -> None:
@@ -3021,6 +3061,158 @@ def test_execute_upgrades_external_node_template_with_safe_surge_strategy(
         line.startswith("post-migration-mk8s-check: External MK8s node-template verified")
         for line in result.lines
     )
+
+
+def test_execute_external_node_template_parallel_worker_failure_checkpoints_after_executor_exit(
+    tmp_path: Path,
+) -> None:
+    def _source_worker_group(name: str, node_group_id: str) -> dict[str, Any]:
+        return {
+            "gpu": True,
+            "node_count": 2,
+            "labels": {
+                "nebius.com/node-group": name,
+                "nebius.com/node-group-id": node_group_id,
+                "slurm.nebius.ai/nodeset": name,
+            },
+            "allocatable": {"nvidia.com/gpu": "8"},
+            "nodes": [f"{name}-a", f"{name}-b"],
+        }
+
+    def _live_worker_group(name: str, node_group_id: str) -> dict[str, Any]:
+        return {
+            "metadata": {
+                "id": node_group_id,
+                "name": name,
+                "parent_id": "cluster-123",
+            },
+            "spec": {
+                "version": "1.32",
+                "strategy": {
+                    "max_surge": {"count": 2},
+                    "max_unavailable": {"count": 0},
+                    "drain_timeout": "10m",
+                },
+                "template": {
+                    "metadata": {"labels": {"nebius.com/node-group": name}},
+                    "resources": {
+                        "platform": "gpu-h100-sxm",
+                        "preset": "8gpu-128vcpu-1600gb",
+                    },
+                    "boot_disk": {"type": "NETWORK_SSD", "size_gibibytes": "256"},
+                    "gpu_settings": {"drivers_preset": "cuda12.8"},
+                    "os": "ubuntu22.04",
+                    "network_interfaces": [{"subnet_id": "subnet-123"}],
+                    "filesystems": [],
+                },
+            },
+            "status": _ready_node_group_status(version="1.32", nodes=2),
+        }
+
+    class _FailingParallelWorkerRunner(_FakeCommandRunner):
+        def __call__(
+            self,
+            args,
+            *,
+            input_text: str | None = None,
+            timeout_seconds: int = 300,
+            check: bool = True,
+        ) -> SoperatorMigrationCommandResult:
+            command = tuple(str(item) for item in args)
+            if (
+                command[:5]
+                == (
+                    "nebius",
+                    "mk8s",
+                    "node-group",
+                    "update",
+                    "nodegroup-worker-b",
+                )
+                and "--version" in command
+            ):
+                self.calls.append((command, input_text))
+                if check:
+                    raise RuntimeError(
+                        f"{' '.join(command)} failed: simulated update failure"
+                    )
+                return SoperatorMigrationCommandResult(command, 1, "", "simulated update failure")
+            return super().__call__(
+                args,
+                input_text=input_text,
+                timeout_seconds=timeout_seconds,
+                check=check,
+            )
+
+    config_path = tmp_path / "config.yaml"
+    snapshot = _snapshot()
+    snapshot["node_groups"] = {
+        "worker-gpu-a": _source_worker_group("worker-gpu-a", "nodegroup-worker-a"),
+        "worker-gpu-b": _source_worker_group("worker-gpu-b", "nodegroup-worker-b"),
+    }
+    source_report = _source_report(snapshot)
+    payload = _payload()
+    target = payload["deploy"]["targets"][0]  # type: ignore[index]
+    assert isinstance(target, dict)
+    onboarding = target["soperator_onboarding"]
+    assert isinstance(onboarding, dict)
+    onboarding["actions"] = ["upgrade-external-node-template"]
+    onboarding["node_template_upgrade"] = {
+        "target_k8s_version": "1.33",
+        "target_os": "ubuntu24.04",
+        "target_gpu_stack_preset": "cuda13.0",
+        "rollout": {"worker_wave_percent": 100},
+    }
+    runner = _FailingParallelWorkerRunner(
+        existing_node_groups=[
+            _live_worker_group("worker-gpu-a", "nodegroup-worker-a"),
+            _live_worker_group("worker-gpu-b", "nodegroup-worker-b"),
+        ],
+        live_nodes=[
+            {
+                "metadata": {
+                    "name": "worker-gpu-a-node-a",
+                    "labels": {
+                        "nebius.com/node-group": "worker-gpu-a",
+                        "nebius.com/node-group-id": "nodegroup-worker-a",
+                    },
+                },
+                "spec": {},
+                "status": {"conditions": [{"type": "Ready", "status": "True"}]},
+            },
+            {
+                "metadata": {
+                    "name": "worker-gpu-b-node-a",
+                    "labels": {
+                        "nebius.com/node-group": "worker-gpu-b",
+                        "nebius.com/node-group-id": "nodegroup-worker-b",
+                    },
+                },
+                "spec": {},
+                "status": {"conditions": [{"type": "Ready", "status": "True"}]},
+            },
+        ],
+    )
+
+    with pytest.raises(RuntimeError, match="simulated update failure"):
+        execute_soperator_migration(
+            config_path=config_path,
+            target_ref="external-cluster",
+            payload=payload,
+            source_report=source_report,
+            snapshot_collector=lambda *, kube_context: snapshot,
+            approved=True,
+            command_runner=runner,
+        )
+
+    checkpoint = json.loads(
+        soperator_migration_checkpoint_path(config_path, "external-cluster").read_text(
+            encoding="utf-8"
+        )
+    )
+    phase = checkpoint["phase_state"]["external-node-template-upgrade"]
+    assert phase["worker_waves"] == [["worker-gpu-a", "worker-gpu-b"]]
+    assert phase["node_groups"]["worker-gpu-b"]["status"] == "failed"
+    assert "simulated update failure" in phase["node_groups"]["worker-gpu-b"]["error"]
 
 
 class _TimeoutAfterAcceptedNodeTemplateUpdateRunner(_FakeCommandRunner):

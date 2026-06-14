@@ -1953,8 +1953,13 @@ def _minor_version_at_least(current: str, target: str) -> bool:
     try:
         current_version = parse_k8s_version(current)
         target_version = parse_k8s_version(target)
-    except ValueError:
-        return current == target
+    except ValueError as exc:
+        raise RuntimeError(
+            "external MK8s node-template Kubernetes version check could not parse "
+            f"live control plane '{current or 'unknown'}' or target '{target or 'unknown'}'. "
+            "Rerun onboarding after confirming the live MK8s version is reported in a "
+            "supported semantic form such as 1.33."
+        ) from exc
     return (current_version.major, current_version.minor) >= (
         target_version.major,
         target_version.minor,
@@ -1968,7 +1973,12 @@ def _external_node_template_k8s_downgrade_error(current: str, target: str) -> st
         current_version = parse_k8s_version(current)
         target_version = parse_k8s_version(target)
     except ValueError:
-        return ""
+        return (
+            "external MK8s node-template Kubernetes version check could not parse "
+            f"live control plane '{current or 'unknown'}' or target '{target or 'unknown'}'. "
+            "Rerun onboarding after confirming the live MK8s version is reported in a "
+            "supported semantic form such as 1.33."
+        )
     if (target_version.major, target_version.minor) >= (
         current_version.major,
         current_version.minor,
@@ -8851,6 +8861,7 @@ def _execute_external_node_template_upgrade_phase(
             rollout.strategy == SOPERATOR_WORKER_ROLLOUT_STRATEGY_SAFE_SURGE
             and len(wave) > 1
         ):
+            worker_exception: BaseException | None = None
             with ThreadPoolExecutor(max_workers=len(wave)) as executor:
                 future_by_group = {
                     executor.submit(
@@ -8864,10 +8875,15 @@ def _execute_external_node_template_upgrade_phase(
                 for future in as_completed(future_by_group):
                     try:
                         results.append(future.result())
-                    except Exception:
-                        if checkpoint_writer is not None:
-                            checkpoint_writer()
-                        raise
+                    except Exception as exc:
+                        worker_exception = exc
+                        for pending in future_by_group:
+                            pending.cancel()
+                        break
+            if worker_exception is not None:
+                if checkpoint_writer is not None:
+                    checkpoint_writer()
+                raise worker_exception
         else:
             for work in wave:
                 try:
@@ -10165,9 +10181,29 @@ def _load_checkpoint(path: Path) -> dict[str, Any] | None:
 
 def _write_checkpoint(path: Path, checkpoint: Mapping[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps(to_plain_data(checkpoint), indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    content = (json.dumps(to_plain_data(checkpoint), indent=2, sort_keys=True) + "\n").encode(
+        "utf-8"
     )
+    fd = -1
+    temp_path: Path | None = None
+    try:
+        fd, raw_temp_path = tempfile.mkstemp(
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            dir=path.parent,
+        )
+        temp_path = Path(raw_temp_path)
+        with os.fdopen(fd, "wb") as handle:
+            fd = -1
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp_path, path)
+    finally:
+        if fd >= 0:
+            os.close(fd)
+        if temp_path is not None:
+            temp_path.unlink(missing_ok=True)
 
 
 def _phase_report_status(

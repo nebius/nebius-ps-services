@@ -100,6 +100,21 @@ def test_readme_render_warning_lives_in_recommended_workflow() -> None:
     assert "terraform validate` after render" not in readme
 
 
+def test_docs_document_managed_tool_checksum_verification() -> None:
+    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+    design = (REPO_ROOT / "docs" / "design.md").read_text(encoding="utf-8")
+    combined = _squash(f"{readme}\n{design}")
+
+    assert "Managed Terraform downloads verify HashiCorp's published SHA256 manifest" in readme
+    assert "Managed Flux downloads verify the published Flux checksum manifest" in readme
+    assert "Managed downloads verify the official release SHA256 manifest" in readme
+    assert (
+        "Managed Terraform and Flux downloads verify the official release SHA256 manifest "
+        "before installation"
+    ) in combined
+    assert "local checksum sidecar still matches the binary" in combined
+
+
 def test_readme_mk8s_gpu_workload_validation_defaults_include_soperator() -> None:
     readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
 

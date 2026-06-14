@@ -5,6 +5,8 @@ from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from typing import Any, cast
 
+import pytest
+
 import nebius_cxcli.provider_options as provider_options
 from nebius_cxcli.provider_options import OptionChoice, ProviderOptionLookup
 
@@ -27,6 +29,21 @@ def test_provider_request_kwargs_are_bounded_and_env_tunable(monkeypatch) -> Non
     }
 
 
+def test_paged_list_rejects_repeated_page_token() -> None:
+    lookup = ProviderOptionLookup()
+
+    def _request_factory(page_token: str) -> str:
+        return page_token
+
+    def _request_call(_request: str, **_kwargs: object):
+        return SimpleNamespace(
+            wait=lambda: SimpleNamespace(items=[], next_page_token="same-token")
+        )
+
+    with pytest.raises(RuntimeError, match="repeated pagination token"):
+        lookup._paged_list(request_factory=_request_factory, request_call=_request_call)
+
+
 def _install_module(monkeypatch, name: str, module: ModuleType) -> None:
     parts = name.split(".")
     for index in range(1, len(parts)):
@@ -38,11 +55,16 @@ def _install_module(monkeypatch, name: str, module: ModuleType) -> None:
             monkeypatch.setitem(sys.modules, package_name, package)
         if index > 1:
             parent_name = ".".join(parts[: index - 1])
-            setattr(sys.modules[parent_name], parts[index - 1], package)
+            monkeypatch.setattr(
+                sys.modules[parent_name],
+                parts[index - 1],
+                package,
+                raising=False,
+            )
     monkeypatch.setitem(sys.modules, name, module)
     if len(parts) > 1:
         parent_name = ".".join(parts[:-1])
-        setattr(sys.modules[parent_name], parts[-1], module)
+        monkeypatch.setattr(sys.modules[parent_name], parts[-1], module, raising=False)
 
 
 def _install_fake_mk8s_module(

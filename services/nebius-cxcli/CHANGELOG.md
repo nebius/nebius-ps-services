@@ -6,6 +6,12 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Hardened cxcli safety paths: managed Terraform/Flux downloads now verify
+  published SHA256 manifests, use bounded reads, atomically install cached
+  binaries, and reject corrupted cache entries; local SMTP settings and
+  Soperator migration checkpoints are written atomically; Nebius SDK pagination
+  loops fail fast on repeated page tokens; and CLI-sourced IAM tokens are no
+  longer written into process-global environment variables.
 - Added `nebius-cxcli soperator upgrade <config.yaml>` as the canonical
   managed Soperator chart upgrade path. The generic
   `upgrade helm-chart apps:soperator@<target>` entry now redirects to the
