@@ -24011,7 +24011,7 @@ def _run_component_field_wizard(
                     module_dependency_expander = _expand_module_dependency_prompts
             elif entry.scope == "apps":
                 # App wizard prompts are Helm values-driven.
-                for key in ("version", "namespace", "release-name"):
+                for key in ("namespace", "release-name"):
                     full_path = component_path + (key,)
                     if full_path in pre_prompted_app_paths:
                         continue
@@ -25441,6 +25441,7 @@ def _validate_enabled_chart_sources(
     *,
     chart_meta_cache: _ChartMetaCache | None = None,
     candidate_app_ids: set[str] | None = None,
+    candidate_app_identities: set[tuple[str, str]] | None = None,
 ) -> list[str]:
     issues: list[str] = []
     payload = to_plain_data(config)
@@ -25450,9 +25451,16 @@ def _validate_enabled_chart_sources(
 
     for chart_row in _dynamic_enabled_app_chart_rows(payload):
         chart_id = str(chart_row["id"])
-        if candidate_app_ids is not None and chart_id not in candidate_app_ids:
-            continue
         instance_id = str(chart_row["instance_id"])
+        if candidate_app_identities is not None:
+            normalized_identity = (
+                normalize_component_token(chart_id),
+                normalize_component_token(instance_id),
+            )
+            if normalized_identity not in candidate_app_identities:
+                continue
+        elif candidate_app_ids is not None and chart_id not in candidate_app_ids:
+            continue
         chart_repo = str(chart_row.get("repo", "")).strip()
         chart_version = str(chart_row.get("version", "")).strip()
         entry = app_entry_by_id.get(chart_id)
@@ -25477,7 +25485,8 @@ def _validate_enabled_chart_sources(
         for issue in issues_for_chart:
             issue_text = (
                 f"version '{chart_version}' {issue}"
-                if candidate_app_ids is not None and chart_version
+                if (candidate_app_ids is not None or candidate_app_identities is not None)
+                and chart_version
                 else issue
             )
             issues.append(
@@ -25505,19 +25514,52 @@ def _app_chart_ids_with_non_catalog_versions(
     return changed
 
 
+def _app_chart_identities_with_non_catalog_versions(
+    *,
+    payload: dict[str, Any],
+    app_entries: tuple[ComponentEntry, ...],
+) -> set[tuple[str, str]]:
+    entry_by_id = {entry.id: entry for entry in app_entries}
+    changed: set[tuple[str, str]] = set()
+    for chart_row in _dynamic_enabled_app_chart_rows(payload):
+        chart_id = str(chart_row["id"])
+        chart_version = str(chart_row.get("version", "")).strip()
+        if not chart_version:
+            continue
+        entry = entry_by_id.get(chart_id)
+        catalog_version = str(entry.version or "").strip() if entry is not None else ""
+        if not catalog_version or chart_version != catalog_version:
+            changed.add(
+                (
+                    normalize_component_token(chart_id),
+                    normalize_component_token(str(chart_row["instance_id"])),
+                )
+            )
+    return changed
+
+
 def _validate_requested_app_chart_versions_or_raise(
     *,
     payload: dict[str, Any],
-    candidate_app_ids: set[str],
+    candidate_app_ids: set[str] | None = None,
+    candidate_app_identities: set[tuple[str, str]] | None = None,
 ) -> None:
-    candidate_ids = {normalize_component_token(item) for item in candidate_app_ids if item}
-    if not candidate_ids:
+    candidate_ids = {
+        normalize_component_token(item) for item in candidate_app_ids or set() if item
+    }
+    candidate_identities = {
+        (normalize_component_token(chart_id), normalize_component_token(instance_id))
+        for chart_id, instance_id in candidate_app_identities or set()
+        if chart_id and instance_id
+    }
+    if not candidate_ids and not candidate_identities:
         return
     chart_meta_cache: _ChartMetaCache = {}
     issues = _validate_enabled_chart_sources(
         payload,
         chart_meta_cache=chart_meta_cache,
-        candidate_app_ids=candidate_ids,
+        candidate_app_ids=candidate_ids or None,
+        candidate_app_identities=candidate_identities or None,
     )
     if issues:
         raise RuntimeError(
@@ -37474,17 +37516,21 @@ def component_add_command(
                 already_validated_app_ids=source_validated_app_ids,
                 candidate_app_ids=final_app_ids_to_validate,
             )
-            requested_version_app_ids = set(app_version_overrides)
-            requested_version_app_ids.update(
-                _app_chart_ids_with_non_catalog_versions(
+            requested_version_app_identities = {
+                identity
+                for identity in newly_enabled_app_identities
+                if identity[0] in set(app_version_overrides)
+            }
+            requested_version_app_identities.update(
+                _app_chart_identities_with_non_catalog_versions(
                     payload=next_payload,
                     app_entries=app_entries,
                 )
-                & newly_enabled_app_ids
+                & newly_enabled_app_identities
             )
             _validate_requested_app_chart_versions_or_raise(
                 payload=next_payload,
-                candidate_app_ids=requested_version_app_ids,
+                candidate_app_identities=requested_version_app_identities,
             )
 
         wrote_config = _write_runtime_payload_config(config_path.resolve(), next_payload)

@@ -11724,7 +11724,7 @@ def test_component_add_mysterybox_interactive_preserves_existing_mk8s_target(
     result = _component_add(
         config_path,
         "mysterybox",
-        input_text="y\ny\n\n" + json.dumps(secrets) + "\n\n",
+        input_text="y\ny\n\n" + json.dumps(secrets) + "\n\n\n",
     )
 
     assert result.exit_code == 0, result.output
