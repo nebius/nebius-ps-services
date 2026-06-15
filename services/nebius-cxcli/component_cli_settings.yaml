@@ -735,19 +735,19 @@ components:
                     name: "{target}-jail"
                     size_gib: 1024
                     block_size_kib: 4
-                    mount_tag: jail
+                    mount_tag: "{target}-jail"
                     forbid_deletion: false
                   controller-spool:
                     name: "{target}-controller-spool"
                     size_gib: 128
                     block_size_kib: 4
-                    mount_tag: controller-spool
+                    mount_tag: "{target}-controller-spool"
                     forbid_deletion: false
                   accounting:
                     name: "{target}-accounting"
                     size_gib: 128
                     block_size_kib: 4
-                    mount_tag: accounting
+                    mount_tag: "{target}-accounting"
                     forbid_deletion: false
               chart:
                 topology_profiles:

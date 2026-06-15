@@ -32,12 +32,14 @@ def test_design_architecture_summary_matches_upgrade_surface() -> None:
     architecture_flat = _squash(architecture)
     design_flat = _squash(design)
 
-    assert "V1 implements Kubernetes version, combined node-template, OS image" in (
+    assert "It supports Kubernetes version, combined node-template, OS image" in (
         architecture_flat
     )
     assert "focused MK8s node-layer, and target-scoped Helm chart upgrades" in (
         architecture_flat
     )
+    legacy_scope_label = "V" + "1"
+    assert legacy_scope_label not in architecture_flat
     assert "separate subcommands instead of folding unrelated layers" in architecture_flat
     assert "later GPU stack, platform, hardware preset, and app/chart upgrades" not in (
         architecture_flat
@@ -77,6 +79,14 @@ def test_readme_documents_redacted_guided_create_prefill_example() -> None:
         and "--app cert-manager" in readme
     )
     assert "App chart dependencies can still add required chart rows automatically." in flat
+    assert (
+        "`release.namespace`, `release.name`: default Helm namespace and release name "
+        "used during `create` and `component add`."
+    ) in readme
+    assert (
+        "`release.namespace` and `release.name` are the default Helm namespace and "
+        "release name used by `create` and `component add`."
+    ) in readme
     assert re.search(r"\btenant-[a-z0-9]{16,}\b", readme) is None
     assert re.search(r"\bproject-[a-z0-9]{16,}\b", readme) is None
 
@@ -180,10 +190,16 @@ def test_readme_supporting_commands_include_current_quota_and_target_flags() -> 
     common_flags = supporting.split("Common command flags:", maxsplit=1)[1]
     common_flags_flat = _squash(common_flags)
     assert (
+        "- `component add`: `--no-interactive`, `--app-namespace`, "
+        "`--app-releasename`, `--app-version`, `--network-id`, `--subnet-id`, "
+        "`--network-ref`, `--subnet-ref`, "
+        "`--validate-sources/--no-validate-sources`"
+    ) in common_flags_flat
+    assert (
         "- `create`:\n  `--client-name`, `--tenant-id`, `--project-id`, `--region-id`, "
         "`--email`, `--infra`, `--app`, `--app-namespace`, `--app-releasename`, "
-        "`--network-id`, `--subnet-id`, `--network-ref`, `--subnet-ref`, "
-        "`--validate-sources/--no-validate-sources`, "
+        "`--app-version`, `--network-id`, `--subnet-id`, `--network-ref`, "
+        "`--subnet-ref`, `--validate-sources/--no-validate-sources`, "
         "`--validate-config/--no-validate-config`, `--no-interactive`, `--force`"
     ) in common_flags
     assert (

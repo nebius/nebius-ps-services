@@ -53,7 +53,7 @@ Core principles:
 - `config.yaml` is the canonical render/reset contract.
 - `generated/` is the deploy contract for customer repositories.
 - Project-level workflow commands use `config.yaml` as the CLI entrypoint.
-- `upgrade` is a day-2 lifecycle command group. V1 implements Kubernetes
+- `upgrade` is a day-2 lifecycle command group. It supports Kubernetes
   version, combined node-template, OS image, focused MK8s node-layer, and
   target-scoped Helm chart upgrades as separate subcommands instead of folding
   unrelated layers into one mixed operation. In interactive terminals, commands
@@ -223,8 +223,9 @@ Sections:
 - During interactive `create`, scalar-named infra targets such as MK8s are
   aligned to the entered resource name before the app wizard section starts.
   That means app prompt labels, skipped-default previews, derived
-  `target_ref`, and Soperator `values.clusterName` all use the entered cluster
-  target name instead of the initial placeholder or `client_info.client_name`.
+  `target_ref`, Soperator `values.clusterName`, and Soperator-created SFS
+  filesystem `name`/`mount_tag` defaults all use the entered cluster target name
+  instead of the initial placeholder or `client_info.client_name`.
 - dependency-backed wizard fields are gated by the selected upstream component or context: for example GPU validation waits for MK8s GPU, VM journald log fields wait for the VM observability context, provider-backed choices wait for their declared `depends_on` value, and native MysteryBox ESO sync waits for both MK8s and the Terraform `mysterybox` component
 - the bundled MK8s profile suppresses raw parent prompts for the typed
   `inputs.cluster` and `inputs.node_groups` objects; the wizard asks for the
@@ -288,7 +289,9 @@ Sections:
   Soperator has already materialized a multi-filesystem SFS map, the wizard
   skips the single-filesystem prompts and exposes the generated jail,
   controller-spool, and accounting entries through guided `name`, `size_gib`,
-  `block_size_kib`, `mount_tag`, and `forbid_deletion` prompts. Standalone SFS
+  `block_size_kib`, `mount_tag`, and `forbid_deletion` prompts. Soperator SFS
+  `name` and `mount_tag` defaults use `<cluster-name>-<role>` so the visible
+  Nebius filesystem identity and mount tag stay target-scoped. Standalone SFS
   prompts default to `name=sfs`, `size_gib=1024`, `type=NETWORK_SSD`,
   `block_size_kib=4`, and `forbid_deletion=false`.
 - `status` is the canonical Nebius status-polling contract for infra components; if polling is needed, `status.kind` must be declared explicitly
@@ -1287,18 +1290,20 @@ The Soperator app wizard hides raw parent chart values by default and exposes a
 small guided surface instead: nodeset profile, partition profile, topology
 profile, and top-level optional-service gates. Before every app chart field
 phase, cxcli prints up to four concise lines of the defaults that answering `n`
-will keep. For Soperator, that preview prioritizes release/profile basics,
-cluster/partition defaults, and SFS-derived jail/controller-spool/accounting
-sizes. SFS remains the physical filesystem capacity owner; the Soperator app row
-mirrors those values into Helm `values.volume.*`, `values.sfs.filesystems.*`,
-and chart-managed MariaDB storage because the chart renders storage objects and
+will keep, then prompts for the chart version separately so operators can change
+only the package version without entering the longer app config phase. For
+Soperator, that preview prioritizes release/profile basics, cluster/partition
+defaults, and SFS-derived jail/controller-spool/accounting sizes. SFS remains
+the physical filesystem capacity owner; the Soperator app row mirrors those
+values into Helm `values.volume.*`, `values.sfs.filesystems.*`, and
+chart-managed MariaDB storage because the chart renders storage objects and
 mounts.
 If the operator answers `n` to the app field phase, cxcli keeps the catalog
-production defaults: five-role GPU layout (`system`, `controller`, `login`,
-`accounting`, and GPU `worker`), SFS jail/controller-spool/accounting
-filesystems, Slurm accounting, SlurmDBD, and chart-managed MariaDB enabled
-with storage bound to the accounting SFS-backed `slurm-local-pv` class, one
-node in each generated role group by default, with
+production chart config defaults: five-role GPU layout (`system`, `controller`,
+`login`, `accounting`, and GPU `worker`), SFS jail/controller-spool/accounting
+filesystems, Slurm accounting, SlurmDBD, and chart-managed MariaDB enabled with
+storage bound to the accounting SFS-backed `slurm-local-pv` class, one node in
+each generated role group by default, with
 ActiveChecks, checks controller, Soperator DCGM job mapping, notifier, backup,
 QoS reconcile, SSSD, and the NodeConfigurator rebooter disabled. Exact
 descendant wizard entries can still prompt under `values.*`; broad chart
@@ -1719,7 +1724,7 @@ Instance self-containment:
 - Config-based commands resolve sources from the active `component_sources.yaml` resolution path.
 - Canonical project path shape is `<deployments-root>/<tenant-folder>/<project-folder>/config.yaml`.
 - `create` still takes `tenant_id` / `project_id` as the project identity inputs. Folder names are resolved from the validated Nebius names only after ID validation succeeds, and runtime identity continues to come from `config.yaml`.
-- App chart defaults (`release.namespace`, `release.name`) can be edited in wizard mode or overridden in non-interactive mode with `--app-namespace` and `--app-releasename`.
+- App chart defaults (`release.namespace`, `release.name`) can be edited in wizard mode or overridden in non-interactive `create` and `component add` with `--app-namespace` and `--app-releasename`.
 - App chart `release.timeout` is optional catalog metadata for Flux `HelmRelease.spec.timeout`; when omitted, the chart inherits `cli.flux.release_timeout`. That keeps a global default in the catalog while still allowing per-chart overrides without hardcoding chart-specific logic in the deploy loop.
 - `deploy.targets[].observability.*` is the canonical customer-facing MK8s observability contract, and `deploy.observability.vm.*` remains the VM observability contract. cxcli renders those deploy settings into infra labels and app chart values during render/deploy, keeping `config.yaml` organized under `infra`, `apps`, and `deploy`.
 
@@ -2767,6 +2772,16 @@ Canonical model is dynamic:
 - `infra.components[]`: `id`, `instance_id`, `enabled`, `inputs`
 - `apps.charts[]`: `id`, `instance_id`, `group`, `enabled`, `repo`, `version`, `namespace`, `release-name`, `values`
 - Enabled `apps.charts[]` rows require at least one enabled MK8s target, and each app row `instance_id` must match one enabled target cluster `instance_id`.
+- App chart versions default to the active `component_sources.yaml` pin.
+  Interactive `create` and `component add` prompt for the row `version`
+  immediately after each selected app's default preview and before the full app
+  field phase, so an operator can set a published chart version while still
+  skipping the longer app config prompt. Non-interactive `create` and
+  `component add` accept
+  `--app-version <app-id>=<chart-version>` for explicit published-version
+  overrides. With source validation enabled, cxcli validates non-catalog
+  requested versions against the resolved Helm/OCI chart source before writing
+  `config.yaml`.
 - Source catalogs use `release.name`; project `config.yaml` uses `release-name`. Alias keys are intentionally unsupported.
 - Static nested component blocks are not accepted.
 
@@ -2792,7 +2807,7 @@ The command boundary is intentional:
 - Unless `--tenant-id` / `--project-id` were passed explicitly, interactive `create` starts those identity prompts blank instead of prefilling values from an existing project under the deployments root.
 - After `create` writes the resulting `config.yaml`, it runs the internal warning-only post-create validation by default; `--no-validate-config` is the explicit escape hatch.
 - `component add`/`component remove` are the day-2 config-editing commands for an already existing `config.yaml`. They take that file with `--config <config.yaml>` so component selectors can be written first.
-- Live Helm chart defaults remain implicit in the chart and are not persisted into `config.yaml`; the wizard may surface them as prompt defaults, but only explicit chart overrides are written.
+- Live Helm chart defaults remain implicit in the chart and are not persisted into `config.yaml`; the wizard may surface them as prompt defaults, but only explicit chart overrides are written. Chart version defaults are the exception already present in each app row: `create` and `component add` seed the active catalog pin into `apps.charts[].version`, prompt for that version before the longer app config phase, and replace the pin only when the operator explicitly requests another version.
 - CLI help should label positional targets explicitly as `DEPLOYMENTS_ROOT`, `CONFIG_YAML`,
   `GENERATED_PATH`, or `COMPONENT_SOURCES_YAML` so operators can tell the expected path type
   from the first `--help` screen.
@@ -2834,6 +2849,11 @@ The command boundary is intentional:
 - Auto-resolves app chart dependencies from chart metadata and app
   `release.install_after` prerequisites before persisting the updated selection.
 - Runs the field wizard only for newly added components; existing component values remain untouched.
+- Newly added app charts prompt for `apps.charts[].version` before the longer
+  app config phase. Non-interactive `component add` accepts `--app-namespace`,
+  `--app-releasename`, and `--app-version` for app rows added by that operation;
+  requested non-catalog versions are validated before `config.yaml` is written
+  when source validation is enabled.
 - The field wizard offers all discoverable required and optional fields for each newly added component, keeping module/chart defaults virtual unless the operator overrides them.
 - In interactive `component add`, answering `n` at a newly added infra
   component's `Configure '<component>' component fields now?` phase cancels

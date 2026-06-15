@@ -1481,7 +1481,7 @@ soperator_app = typer.Typer(
 )
 upgrade_app = typer.Typer(
     help=(
-        "Run day-2 lifecycle upgrades from config.yaml. V1 implements MK8s "
+        "Run day-2 lifecycle upgrades from config.yaml. Supports MK8s "
         "Kubernetes version, combined node-template, OS-image, node-layer, and "
         "target-scoped Helm chart upgrades with dry-run planning and guardrails."
     ),
@@ -1973,12 +1973,12 @@ def _prompt_upgrade_helm_chart_target_selector_if_needed(
     return _parse_helm_chart_upgrade_selector(selector)
 
 
-def _validate_helm_chart_version_value(value: str) -> str:
+def _validate_helm_chart_version_value(value: str, *, option_name: str = "--to-version") -> str:
     raw = _non_empty_text(value)
     if not raw:
-        raise ValueError("--to-version must not be empty.")
+        raise ValueError(f"{option_name} must not be empty.")
     if any(char.isspace() for char in raw):
-        raise ValueError("--to-version must not contain whitespace.")
+        raise ValueError(f"{option_name} must not contain whitespace.")
     return raw
 
 
@@ -7983,6 +7983,7 @@ def _dependency_seed_payload(
     app_entries: tuple[ComponentEntry, ...],
     existing_payload: dict[str, Any] | None,
     merge_existing: bool,
+    app_version_overrides: dict[str, str] | None = None,
 ) -> dict[str, Any] | None:
     if not selected_apps:
         return None
@@ -8014,6 +8015,13 @@ def _dependency_seed_payload(
         infra_entries=infra_entries,
         app_entries=app_entries,
     )
+    _apply_app_release_overrides(
+        payload=parsed_seed_payload,
+        selected_apps=selected_apps,
+        namespace_overrides={},
+        release_name_overrides={},
+        version_overrides=app_version_overrides or {},
+    )
     return parsed_seed_payload
 
 
@@ -8030,6 +8038,7 @@ def _starter_component_payload(
     app_entries: tuple[ComponentEntry, ...],
     app_namespace_overrides: dict[str, str] | None = None,
     app_releasename_overrides: dict[str, str] | None = None,
+    app_version_overrides: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     starter_yaml = starter_config_yaml(
         client_name=client_name,
@@ -8057,6 +8066,7 @@ def _starter_component_payload(
         selected_apps=selected_apps,
         namespace_overrides=app_namespace_overrides or {},
         release_name_overrides=app_releasename_overrides or {},
+        version_overrides=app_version_overrides or {},
     )
     materialize_shared_defaults(
         payload=starter_payload,
@@ -8931,10 +8941,13 @@ def _apply_app_release_overrides(
     *,
     payload: dict[str, Any],
     selected_apps: set[str],
+    selected_app_identities: set[tuple[str, str]] | None = None,
     namespace_overrides: dict[str, str],
     release_name_overrides: dict[str, str],
+    version_overrides: dict[str, str] | None = None,
 ) -> None:
-    if not namespace_overrides and not release_name_overrides:
+    chart_version_overrides = version_overrides or {}
+    if not namespace_overrides and not release_name_overrides and not chart_version_overrides:
         return
     apps_node = payload.get("apps")
     if not isinstance(apps_node, dict):
@@ -8943,32 +8956,59 @@ def _apply_app_release_overrides(
     if not isinstance(charts, list):
         raise RuntimeError("Generated payload is missing apps.charts list.")
 
-    by_id: dict[str, dict[str, Any]] = {}
+    selected_app_ids = {normalize_component_token(item) for item in selected_apps if item}
+    selected_identities = (
+        {
+            (normalize_component_token(chart_id), normalize_component_token(instance_id))
+            for chart_id, instance_id in selected_app_identities
+            if chart_id and instance_id
+        }
+        if selected_app_identities is not None
+        else None
+    )
+    by_id: dict[str, list[dict[str, Any]]] = {}
     for item in charts:
         if not isinstance(item, dict):
             continue
-        chart_id = str(item.get("id", "")).strip().lower()
-        if chart_id:
-            by_id[chart_id] = item
+        chart_id = normalize_component_token(item.get("id"))
+        if not chart_id or chart_id not in selected_app_ids:
+            continue
+        if selected_identities is not None and (
+            chart_id,
+            component_instance_id(item),
+        ) not in selected_identities:
+            continue
+        by_id.setdefault(chart_id, []).append(item)
 
-    target_ids = set(namespace_overrides) | set(release_name_overrides)
+    target_ids = set(namespace_overrides) | set(release_name_overrides) | set(chart_version_overrides)
     for chart_id in sorted(target_ids):
-        if chart_id not in selected_apps:
+        chart_id = normalize_component_token(chart_id)
+        if chart_id not in selected_app_ids:
             raise RuntimeError(
                 f"Override target apps component '{chart_id}' is not enabled. "
-                "Enable it with --app first."
+                "Select it in this command first."
             )
-        row = by_id.get(chart_id)
-        if row is None:
+        rows = by_id.get(chart_id, [])
+        if not rows:
             raise RuntimeError(
                 f"Override target apps component '{chart_id}' was not found in apps.charts."
             )
-        namespace = namespace_overrides.get(chart_id)
-        if namespace is not None:
-            row["namespace"] = namespace
-        release_name = release_name_overrides.get(chart_id)
-        if release_name is not None:
-            row["release-name"] = release_name
+        for row in rows:
+            namespace = namespace_overrides.get(chart_id)
+            if namespace is not None:
+                row["namespace"] = namespace
+            release_name = release_name_overrides.get(chart_id)
+            if release_name is not None:
+                row["release-name"] = release_name
+            chart_version = chart_version_overrides.get(chart_id)
+            if chart_version is not None:
+                try:
+                    row["version"] = _validate_helm_chart_version_value(
+                        chart_version,
+                        option_name="--app-version",
+                    )
+                except ValueError as exc:
+                    raise RuntimeError(str(exc)) from exc
 
 
 def _resolve_component_ids_from_tokens(
@@ -14780,17 +14820,97 @@ def _materialize_soperator_sfs_profile(
     profile: Mapping[str, Any],
     target_ref: str,
 ) -> dict[str, Any]:
-    sfs_profile = _profile_mapping(profile, "sfs")
-    profile_filesystems = _profile_mapping(sfs_profile, "filesystems")
-    rendered_filesystems = {
-        key: _render_soperator_profile_value(value, target_ref=target_ref)
-        for key, value in profile_filesystems.items()
-    }
+    rendered_filesystems = _render_soperator_sfs_profile_filesystems(
+        profile=profile,
+        target_ref=target_ref,
+    )
     filesystems = inputs.setdefault("filesystems", {})
     if isinstance(filesystems, dict):
         _merge_missing_mapping(filesystems, rendered_filesystems)
         return copy.deepcopy(filesystems)
     return {}
+
+
+def _render_soperator_sfs_profile_filesystems(
+    *,
+    profile: Mapping[str, Any],
+    target_ref: str,
+) -> dict[str, Any]:
+    sfs_profile = _profile_mapping(profile, "sfs")
+    profile_filesystems = _profile_mapping(sfs_profile, "filesystems")
+    return {
+        key: _render_soperator_profile_value(value, target_ref=target_ref)
+        for key, value in profile_filesystems.items()
+    }
+
+
+def _soperator_sfs_rows_for_target(
+    payload: Mapping[str, Any],
+    *,
+    target_ref: str,
+) -> list[dict[str, Any]]:
+    infra_rows = _scope_rows(payload, scope="infra")
+    enabled_sfs_rows = [
+        row
+        for row in infra_rows
+        if isinstance(row, dict)
+        and bool(row.get("enabled", False))
+        and component_type_id(row) == "sfs"
+    ]
+    exact_rows = [row for row in enabled_sfs_rows if component_instance_id(row) == target_ref]
+    if exact_rows:
+        return exact_rows
+    soperator_targets = _soperator_app_target_refs(payload)
+    if len(enabled_sfs_rows) == 1 and len(soperator_targets) == 1 and target_ref in soperator_targets:
+        return enabled_sfs_rows
+    return []
+
+
+def _retarget_soperator_sfs_profile_defaults(
+    payload: dict[str, Any],
+    *,
+    target_renames: Mapping[str, str],
+) -> bool:
+    if not target_renames:
+        return False
+    profile_by_target = _soperator_profile_by_target(payload)
+    changed = False
+    for old_target_ref, new_target_ref in target_renames.items():
+        profile = profile_by_target.get(new_target_ref, {})
+        if not profile:
+            continue
+        old_filesystems = _render_soperator_sfs_profile_filesystems(
+            profile=profile,
+            target_ref=old_target_ref,
+        )
+        new_filesystems = _render_soperator_sfs_profile_filesystems(
+            profile=profile,
+            target_ref=new_target_ref,
+        )
+        for row in _soperator_sfs_rows_for_target(payload, target_ref=new_target_ref):
+            inputs = row.get("inputs")
+            if not isinstance(inputs, dict):
+                continue
+            filesystems = inputs.get("filesystems")
+            if not isinstance(filesystems, dict):
+                continue
+            for filesystem_key, new_spec in new_filesystems.items():
+                current_spec = filesystems.get(filesystem_key)
+                old_spec = old_filesystems.get(filesystem_key)
+                if not isinstance(current_spec, dict) or not isinstance(old_spec, Mapping):
+                    continue
+                if not isinstance(new_spec, Mapping):
+                    continue
+                for field_name in ("name", "mount_tag"):
+                    old_value = str(old_spec.get(field_name, "") or "").strip()
+                    new_value = str(new_spec.get(field_name, "") or "").strip()
+                    current_value = str(current_spec.get(field_name, "") or "").strip()
+                    if not new_value:
+                        continue
+                    if not current_value or current_value == old_value:
+                        current_spec[field_name] = new_value
+                        changed = True
+    return changed
 
 
 def _materialize_soperator_partition_profile(
@@ -21455,6 +21575,7 @@ def _run_component_field_wizard(
     provider_lookup: ProviderOptionLookup | None = None,
     skip_soperator_profile_prompt: bool = False,
     align_infra_resource_names_before_apps: bool = False,
+    prompt_app_version_before_app_config: bool = False,
     skipped_components: set[tuple[ComponentScope, str, str]] | None = None,
 ) -> tuple[str, bool]:
     payload = yaml.safe_load(config_yaml) or {}
@@ -21641,6 +21762,7 @@ def _run_component_field_wizard(
                 selected_infra.remove(old)
                 selected_infra.add(new)
         _materialize_single_target_app_bindings(payload)
+        _retarget_soperator_sfs_profile_defaults(payload, target_renames=renames)
         _materialize_soperator_component_defaults(payload)
 
     def _ensure_target_scoped_auto_app_rows(auto_enabled_app_ids: Sequence[str]) -> None:
@@ -23430,6 +23552,7 @@ def _run_component_field_wizard(
             if entry.scope == "infra"
             else _dynamic_app_chart_path(payload, entry.id, instance_id=instance_id)
         )
+        pre_prompted_app_paths: set[PayloadPath] = set()
         _print_wizard_component_selection_context(
             current_label=component_label,
             current_scope=entry.scope,
@@ -23442,6 +23565,32 @@ def _run_component_field_wizard(
                 component_node if isinstance(component_node, Mapping) else None,
                 entry=entry,
             )
+            if prompt_app_version_before_app_config and component_path is not None:
+                version_path = component_path + ("version",)
+                current_version = (
+                    _get_payload_value(payload, version_path)
+                    if _payload_path_exists(payload, version_path)
+                    else entry.version or ""
+                )
+                version_label = _format_payload_path(version_path)
+                updated_version, should_stop = _prompt_scalar_override(
+                    version_label,
+                    current_version,
+                )
+                if should_stop:
+                    return _WizardComponentOutcome.QUIT
+                if _wizard_backtrack_requested(updated_version):
+                    return _WizardComponentOutcome.BACK
+                if _payload_path_exists(payload, version_path):
+                    _set_payload_value(payload, version_path, updated_version)
+                else:
+                    _set_payload_value_creating_containers(
+                        payload,
+                        version_path,
+                        updated_version,
+                    )
+                _print_wizard_selected_field(version_label, updated_version)
+                pre_prompted_app_paths.add(version_path)
         decision = _wizard_continue_phase(
             f"Configure '{component_label}' component fields now?",
             default=entry.scope == "infra",
@@ -23864,6 +24013,8 @@ def _run_component_field_wizard(
                 # App wizard prompts are Helm values-driven.
                 for key in ("namespace", "release-name"):
                     full_path = component_path + (key,)
+                    if full_path in pre_prompted_app_paths:
+                        continue
                     if full_path in bound_prompt_paths:
                         continue
                     label = _format_payload_path(full_path)
@@ -23912,6 +24063,8 @@ def _run_component_field_wizard(
                         seen_prompt_labels.add(label)
                         prompt_paths.append(full_path)
                 for full_path in declared_prompt_paths:
+                    if full_path in pre_prompted_app_paths:
+                        continue
                     if full_path in bound_prompt_paths:
                         continue
                     label = _format_payload_path(full_path)
@@ -24586,6 +24739,7 @@ def _run_component_field_wizard(
                 if _confirm_exit_from_first_step():
                     return _wizard_payload_yaml(), False
                 continue
+            _align_infra_resource_names_for_app_section()
             infra_index += 1
             if infra_index < len(infra_components):
                 continue
@@ -25286,6 +25440,8 @@ def _validate_enabled_chart_sources(
     config: Any,
     *,
     chart_meta_cache: _ChartMetaCache | None = None,
+    candidate_app_ids: set[str] | None = None,
+    candidate_app_identities: set[tuple[str, str]] | None = None,
 ) -> list[str]:
     issues: list[str] = []
     payload = to_plain_data(config)
@@ -25296,6 +25452,15 @@ def _validate_enabled_chart_sources(
     for chart_row in _dynamic_enabled_app_chart_rows(payload):
         chart_id = str(chart_row["id"])
         instance_id = str(chart_row["instance_id"])
+        if candidate_app_identities is not None:
+            normalized_identity = (
+                normalize_component_token(chart_id),
+                normalize_component_token(instance_id),
+            )
+            if normalized_identity not in candidate_app_identities:
+                continue
+        elif candidate_app_ids is not None and chart_id not in candidate_app_ids:
+            continue
         chart_repo = str(chart_row.get("repo", "")).strip()
         chart_version = str(chart_row.get("version", "")).strip()
         entry = app_entry_by_id.get(chart_id)
@@ -25318,10 +25483,88 @@ def _validate_enabled_chart_sources(
                 chart_meta_cache=chart_meta_cache,
             )
         for issue in issues_for_chart:
+            issue_text = (
+                f"version '{chart_version}' {issue}"
+                if (candidate_app_ids is not None or candidate_app_identities is not None)
+                and chart_version
+                else issue
+            )
             issues.append(
-                f"{_component_instance_path_label('apps', chart_id, instance_id)} {issue}"
+                f"{_component_instance_path_label('apps', chart_id, instance_id)} {issue_text}"
             )
     return issues
+
+
+def _app_chart_ids_with_non_catalog_versions(
+    *,
+    payload: dict[str, Any],
+    app_entries: tuple[ComponentEntry, ...],
+) -> set[str]:
+    entry_by_id = {entry.id: entry for entry in app_entries}
+    changed: set[str] = set()
+    for chart_row in _dynamic_enabled_app_chart_rows(payload):
+        chart_id = str(chart_row["id"])
+        chart_version = str(chart_row.get("version", "")).strip()
+        if not chart_version:
+            continue
+        entry = entry_by_id.get(chart_id)
+        catalog_version = str(entry.version or "").strip() if entry is not None else ""
+        if not catalog_version or chart_version != catalog_version:
+            changed.add(chart_id)
+    return changed
+
+
+def _app_chart_identities_with_non_catalog_versions(
+    *,
+    payload: dict[str, Any],
+    app_entries: tuple[ComponentEntry, ...],
+) -> set[tuple[str, str]]:
+    entry_by_id = {entry.id: entry for entry in app_entries}
+    changed: set[tuple[str, str]] = set()
+    for chart_row in _dynamic_enabled_app_chart_rows(payload):
+        chart_id = str(chart_row["id"])
+        chart_version = str(chart_row.get("version", "")).strip()
+        if not chart_version:
+            continue
+        entry = entry_by_id.get(chart_id)
+        catalog_version = str(entry.version or "").strip() if entry is not None else ""
+        if not catalog_version or chart_version != catalog_version:
+            changed.add(
+                (
+                    normalize_component_token(chart_id),
+                    normalize_component_token(str(chart_row["instance_id"])),
+                )
+            )
+    return changed
+
+
+def _validate_requested_app_chart_versions_or_raise(
+    *,
+    payload: dict[str, Any],
+    candidate_app_ids: set[str] | None = None,
+    candidate_app_identities: set[tuple[str, str]] | None = None,
+) -> None:
+    candidate_ids = {
+        normalize_component_token(item) for item in candidate_app_ids or set() if item
+    }
+    candidate_identities = {
+        (normalize_component_token(chart_id), normalize_component_token(instance_id))
+        for chart_id, instance_id in candidate_app_identities or set()
+        if chart_id and instance_id
+    }
+    if not candidate_ids and not candidate_identities:
+        return
+    chart_meta_cache: _ChartMetaCache = {}
+    issues = _validate_enabled_chart_sources(
+        payload,
+        chart_meta_cache=chart_meta_cache,
+        candidate_app_ids=candidate_ids or None,
+        candidate_app_identities=candidate_identities or None,
+    )
+    if issues:
+        raise RuntimeError(
+            "Requested app chart version validation failed:\n  - " + "\n  - ".join(issues)
+        )
 
 
 _SEMVER_TAG_PATTERN = re.compile(r"^v?\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$")
@@ -35289,6 +35532,18 @@ def create_command(
             ),
         ),
     ] = None,
+    app_version_opt: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--app-version",
+            help=(
+                "Override app chart version with '<app-id>=<chart-version>' "
+                "(repeatable or comma-separated). Defaults come from component_sources.yaml; "
+                "with source validation enabled, the requested chart version must resolve before "
+                "create writes config.yaml."
+            ),
+        ),
+    ] = None,
     network_ids_opt: Annotated[
         list[str] | None,
         typer.Option(
@@ -35613,6 +35868,10 @@ def create_command(
             raw_values=app_releasename_opt,
             option_name="--app-releasename",
         )
+        app_version_overrides = _parse_component_value_overrides(
+            raw_values=app_version_opt,
+            option_name="--app-version",
+        )
         soperator_install_mode: str | None = None
         soperator_profile: str | None = None
         if interactive_mode and optional_wizard_mode and _SOPERATOR_APP_ID in selected_apps_raw:
@@ -35679,6 +35938,7 @@ def create_command(
             app_entries=app_entries,
             existing_payload=None,
             merge_existing=False,
+            app_version_overrides=app_version_overrides,
         )
 
         dependency_resolution_started = time.monotonic()
@@ -35726,6 +35986,7 @@ def create_command(
             app_entries=app_entries,
             app_namespace_overrides=app_namespace_overrides,
             app_releasename_overrides=app_releasename_overrides,
+            app_version_overrides=app_version_overrides,
         )
         if soperator_install_mode is not None:
             _apply_soperator_install_mode_to_payload(
@@ -35798,6 +36059,7 @@ def create_command(
             if soperator_profile is not None:
                 field_wizard_kwargs["skip_soperator_profile_prompt"] = True
             field_wizard_kwargs["align_infra_resource_names_before_apps"] = True
+            field_wizard_kwargs["prompt_app_version_before_app_config"] = True
             config_yaml_override, wizard_completed = _run_component_field_wizard(
                 config_yaml=yaml.safe_dump(final_payload, sort_keys=False),
                 selected_infra=selected_infra,
@@ -35880,6 +36142,7 @@ def create_command(
                 app_entries=app_entries,
                 app_namespace_overrides=app_namespace_overrides,
                 app_releasename_overrides=app_releasename_overrides,
+                app_version_overrides=app_version_overrides,
             )
             _ensure_payload_contains_component_rows(
                 payload=final_payload,
@@ -35919,6 +36182,7 @@ def create_command(
                 app_entries=app_entries,
                 app_namespace_overrides=app_namespace_overrides,
                 app_releasename_overrides=app_releasename_overrides,
+                app_version_overrides=app_version_overrides,
             )
             _ensure_payload_contains_component_rows(
                 payload=final_payload,
@@ -35982,6 +36246,17 @@ def create_command(
                 payload=final_payload,
                 app_entries=app_entries,
                 already_validated_app_ids=source_validated_app_ids,
+            )
+            requested_version_app_ids = set(app_version_overrides)
+            requested_version_app_ids.update(
+                _app_chart_ids_with_non_catalog_versions(
+                    payload=final_payload,
+                    app_entries=app_entries,
+                )
+            )
+            _validate_requested_app_chart_versions_or_raise(
+                payload=final_payload,
+                candidate_app_ids=requested_version_app_ids,
             )
         selected_infra = _enabled_ids_from_runtime_payload(
             payload=final_payload,
@@ -36249,6 +36524,38 @@ def component_add_command(
             help="Disable interactive selection and field prompts.",
         ),
     ] = False,
+    app_namespace_opt: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--app-namespace",
+            help=(
+                "Override added app namespace with '<app-id>=<namespace>' "
+                "(repeatable or comma-separated). Applies to app rows added by this operation."
+            ),
+        ),
+    ] = None,
+    app_releasename_opt: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--app-releasename",
+            help=(
+                "Override added app release name with '<app-id>=<release-name>' "
+                "(repeatable or comma-separated). Applies to app rows added by this operation."
+            ),
+        ),
+    ] = None,
+    app_version_opt: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--app-version",
+            help=(
+                "Override added app chart version with '<app-id>=<chart-version>' "
+                "(repeatable or comma-separated). Defaults come from component_sources.yaml; "
+                "with source validation enabled, the requested chart version must resolve before "
+                "component add writes config.yaml."
+            ),
+        ),
+    ] = None,
     network_ids_opt: Annotated[
         list[str] | None,
         typer.Option(
@@ -36312,6 +36619,9 @@ def component_add_command(
 
       --config <config.yaml>
       --no-interactive
+      --app-namespace <app-id>=<namespace>
+      --app-releasename <app-id>=<release-name>
+      --app-version <app-id>=<chart-version>
       --network-id <id-or-scoped-id>
       --subnet-id <id-or-scoped-id>
       --network-ref <ref-or-scoped-ref>
@@ -36353,6 +36663,18 @@ def component_add_command(
         interactive_mode = not no_interactive
         client_name, tenant_id, project_id, region_id, email = _identity_values_from_payload(
             payload
+        )
+        app_namespace_overrides = _parse_component_value_overrides(
+            raw_values=app_namespace_opt,
+            option_name="--app-namespace",
+        )
+        app_releasename_overrides = _parse_component_value_overrides(
+            raw_values=app_releasename_opt,
+            option_name="--app-releasename",
+        )
+        app_version_overrides = _parse_component_value_overrides(
+            raw_values=app_version_opt,
+            option_name="--app-version",
         )
         provider_lookup = ProviderOptionLookup()
         provider_scope_validated = False
@@ -36554,6 +36876,7 @@ def component_add_command(
             app_entries=app_entries,
             existing_payload=payload,
             merge_existing=True,
+            app_version_overrides=app_version_overrides,
         )
         dependency_resolution_started = time.monotonic()
         app_chart_dependency_payload = dependency_seed_payload if requested_apps_types else None
@@ -36836,6 +37159,7 @@ def component_add_command(
             field_wizard_kwargs: dict[str, Any] = {}
             if soperator_profile is not None:
                 field_wizard_kwargs["skip_soperator_profile_prompt"] = True
+            field_wizard_kwargs["prompt_app_version_before_app_config"] = True
             skipped_components: set[tuple[ComponentScope, str, str]] = set()
             config_yaml_override, wizard_completed = _run_component_field_wizard(
                 config_yaml=config_yaml_override,
@@ -37160,6 +37484,27 @@ def component_add_command(
             app_entries=app_entries,
         )
         _refresh_soperator_onboarding_fingerprints(next_payload)
+        newly_enabled_app_identities = {
+            (
+                component_type_id(row),
+                component_instance_id(row),
+            )
+            for row in _dynamic_enabled_app_chart_rows(next_payload)
+            if (
+                component_type_id(row),
+                component_instance_id(row),
+            )
+            not in initially_enabled_app_rows
+        }
+        newly_enabled_app_ids = {app_id for app_id, _instance_id in newly_enabled_app_identities}
+        _apply_app_release_overrides(
+            payload=next_payload,
+            selected_apps=newly_enabled_app_ids,
+            selected_app_identities=newly_enabled_app_identities,
+            namespace_overrides=app_namespace_overrides,
+            release_name_overrides=app_releasename_overrides,
+            version_overrides=app_version_overrides,
+        )
         if validate_sources:
             final_app_ids_to_validate = _enabled_app_ids_for_new_rows(
                 payload=next_payload,
@@ -37170,6 +37515,22 @@ def component_add_command(
                 app_entries=app_entries,
                 already_validated_app_ids=source_validated_app_ids,
                 candidate_app_ids=final_app_ids_to_validate,
+            )
+            requested_version_app_identities = {
+                identity
+                for identity in newly_enabled_app_identities
+                if identity[0] in set(app_version_overrides)
+            }
+            requested_version_app_identities.update(
+                _app_chart_identities_with_non_catalog_versions(
+                    payload=next_payload,
+                    app_entries=app_entries,
+                )
+                & newly_enabled_app_identities
+            )
+            _validate_requested_app_chart_versions_or_raise(
+                payload=next_payload,
+                candidate_app_identities=requested_version_app_identities,
             )
 
         wrote_config = _write_runtime_payload_config(config_path.resolve(), next_payload)

@@ -42,6 +42,10 @@ All notable changes to the reusable Codex skills are tracked here.
   parent-thread discipline, bounded read-only subagents, local-only hook
   templates, final risk review guidance, a local-only template validation
   helper, and a skill-local design README.
+- Added the `install-grafana-mcp-for-nebius` Codex skill for installing the
+  official Grafana MCP server, wiring it into Codex, refreshing a
+  Nebius-managed Grafana token file, discovering Grafana datasources, and
+  keeping external Grafana static-key setup guarded and optional.
 - Added skill-local `README.md` files across reusable skills so each skill
   folder has human-facing architecture, workflow, core concept, and file
   responsibility documentation.
@@ -61,6 +65,21 @@ All notable changes to the reusable Codex skills are tracked here.
   read-only information gathering: it reports from existing files only and does
   not edit, format, build, test, install, generate coverage, or stage files.
   Its helper also disables Git optional locks for Git inspection commands.
+- Expanded `install-grafana-mcp-for-nebius` with a Nebius-managed Grafana
+  token-refresh wrapper, Codex registration examples that launch the wrapper,
+  and clearer tenant/project input guidance. The default path now avoids
+  Nebius static-key and service-account setup unless the user explicitly asks
+  to connect external Grafana to Nebius read endpoints.
+- Hardened `install-grafana-mcp-for-nebius` for repeated laptop runs with an
+  idempotent setup contract, check/apply local-config helper, managed shell
+  defaults, check-before-add Codex MCP registration, and no duplicate
+  static-key issuance unless rotation is explicitly requested.
+- Aligned `install-grafana-mcp-for-nebius` with the current Grafana MCP docs
+  and the latest released/Homebrew binary behavior: the wrapper now prefers
+  token-file auth when supported, falls back to startup-only inline token auth
+  for released binaries that lack token-file support, and the config helper now
+  reports mismatched existing Codex MCP servers instead of silently reusing
+  them.
 - Minimized the global AGENTS template to durable always-on policy, moved
   detailed workflow guidance back to skills, preserved the explicit `$align`
   post-edit rule, and shortened high-impact skill descriptions so implicit

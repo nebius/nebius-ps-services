@@ -17765,6 +17765,8 @@ def test_help_text_aligns_render_and_apply_surfaces() -> None:
     assert "copy-paste commands" in deploy_help
     assert "important generated paths" in deploy_help
     assert "day-2 lifecycle upgrades from config.yaml" in upgrade_help
+    legacy_scope_label = "V" + "1"
+    assert legacy_scope_label not in upgrade_help
     assert "k8s-version" in upgrade_help
     assert "node-template" in upgrade_help
     assert "os-image" in upgrade_help
@@ -18203,6 +18205,8 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "Validate infra sources first" in normalized_create_help
     assert "selected app chart sources" in normalized_create_help
     assert "auto-enabled app dependencies" in normalized_create_help
+    assert "--app-version" in normalized_create_help
+    assert "Override app chart version" in normalized_create_help
     assert "list [OPTIONS]" in component_list_help
     assert "--config CONFIG_YAML" in normalized_component_list_help
     assert "nebius-cxcli component list --config <config.yaml>" in normalized_component_list_help
@@ -18260,6 +18264,11 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "Validate infra sources first" in normalized_component_add_help
     assert "app chart sources selected" in normalized_component_add_help
     assert "auto-enabled by this add" in normalized_component_add_help
+    assert "--app-namespace" in normalized_component_add_help
+    assert "--app-releasename" in normalized_component_add_help
+    assert "--app-version" in normalized_component_add_help
+    assert "Override added app chart version" in normalized_component_add_help
+    assert "requested chart version must resolve before" in normalized_component_add_help
     assert "component add" in normalized_component_add_help
     assert (
         "Add source-defined components to an existing project config.yaml"
@@ -20614,7 +20623,7 @@ def test_soperator_selection_seeds_required_infra_and_defaults() -> None:
     sfs_inputs = payload["infra"]["components"][1]["inputs"]
     assert sfs_inputs["filesystems"]["jail"]["name"] == "cluster1-jail"
     assert sfs_inputs["filesystems"]["jail"]["block_size_kib"] == 4
-    assert sfs_inputs["filesystems"]["accounting"]["mount_tag"] == "accounting"
+    assert sfs_inputs["filesystems"]["accounting"]["mount_tag"] == "cluster1-accounting"
     for filesystem_key in ("jail", "controller-spool", "accounting"):
         filesystem = sfs_inputs["filesystems"][filesystem_key]
         assert filesystem["block_size_kib"] == 4
@@ -20637,12 +20646,12 @@ def test_soperator_selection_seeds_required_infra_and_defaults() -> None:
         },
     }
     assert soperator_values["slurmNodes"]["login"]["sshRootPublicKeys"] == []
-    assert soperator_values["sfs"]["filesystems"]["jail"]["mount_tag"] == "jail"
+    assert soperator_values["sfs"]["filesystems"]["jail"]["mount_tag"] == "cluster1-jail"
     assert soperator_values["volume"]["jail"]["size"] == "1024Gi"
     assert soperator_values["volume"]["accounting"]["enabled"] is True
     assert soperator_values["volume"]["accounting"]["size"] == "128Gi"
     assert soperator_values["volume"]["controllerSpool"]["filestoreDeviceName"] == (
-        "controller-spool"
+        "cluster1-controller-spool"
     )
     assert soperator_values["nodeGroupMapping"]["worker"] == ["worker"]
 
@@ -20738,21 +20747,21 @@ def test_soperator_profiles_share_complete_sfs_filesystem_defaults() -> None:
             "name": "{target}-jail",
             "size_gib": 1024,
             "block_size_kib": 4,
-            "mount_tag": "jail",
+            "mount_tag": "{target}-jail",
             "forbid_deletion": False,
         }
         assert filesystems["controller-spool"] == {
             "name": "{target}-controller-spool",
             "size_gib": 128,
             "block_size_kib": 4,
-            "mount_tag": "controller-spool",
+            "mount_tag": "{target}-controller-spool",
             "forbid_deletion": False,
         }
         assert filesystems["accounting"] == {
             "name": "{target}-accounting",
             "size_gib": 128,
             "block_size_kib": 4,
-            "mount_tag": "accounting",
+            "mount_tag": "{target}-accounting",
             "forbid_deletion": False,
         }
 

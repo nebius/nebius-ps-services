@@ -105,8 +105,9 @@ nebius-cxcli bootstrap-ci <config.yaml>
 - In the interactive `create` wizard, the entered MK8s `cluster.cluster_name`
   becomes the target `instance_id` before app defaults are previewed. Rendered
   Terraform/Flux artifacts use that target identity, not
-  `client_info.client_name`; Terraform module labels may still replace hyphens
-  with underscores for HCL syntax.
+  `client_info.client_name`; Soperator-created SFS filesystem `name` and
+  `mount_tag` defaults also use `<cluster-name>-<role>`. Terraform module labels
+  may still replace hyphens with underscores for HCL syntax.
 - Authored `config.yaml` does not use `apps.charts[].target_ref`; any internal generated `target_ref` is derived from and must equal the same target `instance_id`.
 - Terraform outputs consumed by app bindings, deploy, or bootstrap behavior are stable interfaces. Renaming or changing one is a breaking contract change.
 - Generated-bundle commands recreate ignored Terraform tfvars from the generated manifest before Terraform runs. Use `nebius-cxcli terraform plan <generated>`, `nebius-cxcli terraform apply <generated>`, or `nebius-cxcli deploy <config.yaml>` from a fresh checkout.
@@ -404,7 +405,7 @@ Field guide:
   - `ui.selectable`: optional selector metadata. Omit it for normal persistent app chart sources. Set it to `false` only for cataloged chart sources that cxcli owns through another runtime flow.
   - `usage.lifecycle`: optional chart lifecycle metadata. Omit it for normal persistent app chart sources. `transient` marks a reusable Helm source for a cxcli-owned runtime flow; transient charts must also set `ui.enabled: false` and `ui.selectable: false`.
   - `usage.config.ref`: required with `usage.lifecycle: transient`. It points to the customer-facing config field that activates the runtime flow, for example `deploy.targets[].validations.mk8s_gpu.nccl`.
-  - `release.namespace`, `release.name`: default Helm namespace and release name used during `create`.
+  - `release.namespace`, `release.name`: default Helm namespace and release name used during `create` and `component add`.
   - `release.timeout`: optional Flux `HelmRelease.spec.timeout` duration such as `10m` or `12m30s`. When omitted, the chart inherits `cli.flux.release_timeout`.
   - `release.install_after`: app prerequisite list. cxcli auto-selects the
     listed app components when this app is selected and renders Flux
@@ -527,7 +528,10 @@ Bundled infra component alignment:
   choices rather than a raw nested object prompt.
 - `sfs` uses `wizard_profile: sfs` because its name, size, filesystem type,
   block size, mount tag, and deletion-protection (`forbid_deletion`) defaults
-  should be visible and editable instead of blank optional prompts.
+  should be visible and editable instead of blank optional prompts. When
+  Soperator materializes the multi-filesystem SFS map, the generated `name` and
+  `mount_tag` defaults use the target cluster name plus role, such as
+  `<cluster-name>-accounting`.
 - `soperator` uses `wizard_profile: soperator` because its app wizard is a
   concise policy surface over `install_mode`, NodeSet profile, partition
   profile, topology profile, role mapping, and optional child-chart gates rather
@@ -987,7 +991,7 @@ Source requirements enforced by `validate-sources`:
     chart can exceed Kubernetes' 1 MiB Helm release Secret limit when Helm
     stores release state in-cluster.
   - App `defaults` seed `values.*` when missing.
-  - `release.namespace` and `release.name` are the default Helm namespace and release name used by `create`.
+  - `release.namespace` and `release.name` are the default Helm namespace and release name used by `create` and `component add`.
 
 Resolution precedence:
 
@@ -1162,10 +1166,23 @@ When enabled charts are deployed, the CLI reads the rendered Terraform output `c
 
 For app source entries, `release.namespace` and `release.name` are defaults:
 
-- interactive create wizard prompts them for enabled apps
-- non-interactive create can override with:
+- interactive `create` and `component add` wizards prompt them for selected app
+  rows
+- non-interactive `create` and `component add` can override added/selected app
+  rows with:
   - `--app-namespace <app-id>=<namespace>`
   - `--app-releasename <app-id>=<release-name>`
+  - `--app-version <app-id>=<chart-version>`
+
+App chart versions default to the active `component_sources.yaml` pin. During
+interactive `create` and `component add`, each selected app chart prompts for
+`apps.charts[].version` immediately after the default preview and before the
+full app-config yes/no prompt; pressing Enter keeps the pin, and typing a
+different version records that value in `apps.charts[].version` even when the
+rest of the app config is skipped. In non-interactive mode, `--app-version`
+provides the same override for app rows added by the command. With source
+validation enabled, cxcli validates requested non-catalog chart versions against
+the resolved Helm/OCI source before writing `config.yaml`.
 
 Runtime config shape:
 
@@ -1230,6 +1247,13 @@ Wizard field behavior:
 - Interactive `create` and `component add` offer all discoverable required and optional component fields for newly selected components.
 - When no `--app` values are provided, interactive `create` opens app chart selection only after an MK8s target is selected. Explicit app selections still run normal target validation, so Helm charts cannot be added by `create` without a managed MK8s target. Existing external Nebius MK8s targets are registered later with `nebius-cxcli ext-soperator onboard <config.yaml-or-deployments-root>`.
 - Infra component field phases default to `y`; app chart field phases default to `n`, because chart overrides are usually optional and Helm/chart defaults still apply unless you choose to edit them.
+- App chart version prompts keep the active `component_sources.yaml` pin as the
+  default and run before the full app field phase in `create` and
+  `component add`. Operators can type a known published chart version, then
+  answer `n` to the longer app config prompt when no other app overrides are
+  needed, or pass `--app-version <app-id>=<chart-version>` in non-interactive
+  mode. With source validation enabled, cxcli fails before writing `config.yaml`
+  if that requested version cannot be resolved.
 - Optional-wizard controls are consistent across component selection, component phase prompts, and field prompts: `q` backs up to the previous step so you can revise an earlier answer, while `qq` stops the wizard immediately and saves the current config state. Interactive TTY list and checkbox prompts bind those controls directly to the keys instead of showing Back/Quit as selectable rows. When a field has a constrained choice list, the TTY wizard shows only selectable values, plus an explicit skip row for optional unset fields; the non-TTY fallback accepts only a listed index or exact value. Manual free text is reserved for fields without resolved choices, except required VPC network/subnet fields which fail fast when live lookup is unavailable.
 - Interactive component selection prints one resolved infra/apps summary after dependency resolution finishes. During field input, the wizard context is a one-line Rich-colored `Wizard context: Current: <scope> / <component-or-target-feature>` marker, so long app lists are not repeated before every prompt. Fields under `deploy.targets[]`, such as native MysteryBox ESO sync, are labeled as deploy-target context rather than ordinary MK8s Terraform inputs.
 - Interactive `component add` uses that target-aware summary as the component report and does not repeat final `Added infra/apps components` lines after writing `config.yaml`; non-interactive adds still print compact added-component summaries for categories that actually changed because they do not run the wizard summary.
@@ -3004,7 +3028,7 @@ Underlying MK8s infrastructure upgrade commands are also different:
 ## Upgrade
 
 `nebius-cxcli upgrade` is the day-2 lifecycle surface for version and component
-changes that need cxcli safety gates before live reconciliation. V1 implements
+changes that need cxcli safety gates before live reconciliation. It supports
 Kubernetes version upgrades for Terraform-managed MK8s clusters, combined MK8s
 node-template upgrades for Kubernetes version, OS, and Nebius-image GPU stack,
 OS image upgrades for Terraform-managed MK8s node groups and generic VM
@@ -3086,7 +3110,7 @@ and `deploy`, `terraform apply`, or `flux apply` as appropriate.
 
 ### Kubernetes Version Upgrade
 
-The implemented V1 command can run as a guided wizard from only `config.yaml`:
+The command can run as a guided wizard from only `config.yaml`:
 
 ```bash
 nebius-cxcli upgrade k8s-version <config.yaml>
@@ -3865,7 +3889,7 @@ nebius-cxcli auth --project-config /path/to/config.yaml --validate-profile
   - `component list/add/remove`: pass the project `config.yaml` with `--config <config.yaml>` so component selectors can be written first.
   - `grafana`: no positional path; use `--export-dashboard <grafana-base-or-folder-url>` or `--dashboard-json <path>` and optional `--component-sources` with `--attach`.
   - `component`, `validate`, `validate-dashboards`, `quota-check`, `quota-request`, `render`, `deploy`, `soperator`, `upgrade`, `bootstrap-ci`, `wireguard`, `ssh-jumphost`, `destroy`, `email`: operate on the project `config.yaml`.
-  - `upgrade k8s-version`: pass `config.yaml` alone in an interactive terminal to choose the managed MK8s target, version, and options through the wizard; pass an explicit `infra:mk8s@<target>` selector plus `--to-version <major.minor>` for automation. V1 supports Terraform-managed MK8s targets only.
+  - `upgrade k8s-version`: pass `config.yaml` alone in an interactive terminal to choose the managed MK8s target, version, and options through the wizard; pass an explicit `infra:mk8s@<target>` selector plus `--to-version <major.minor>` for automation. Supports Terraform-managed MK8s targets only.
   - `upgrade os-image`: pass `config.yaml` alone in an interactive terminal to choose an upgradeable `infra:mk8s@<target>` or `infra:vm@<target>` component through the wizard; pass an explicit selector plus `--to-os <os>` for automation. MK8s selectors update node template OS values and can use `--node-group <source-key-or-live-name>` to narrow the rolling update to one group. VM selectors update generic `infra:vm` `inputs.source_image_family`.
   - `validate-generated`: pass `generated/`, one of its subdirectories, or a file under that tree.
   - `terraform *`: pass the project `generated/` directory or a path under `generated/infra/`.
@@ -3898,6 +3922,11 @@ nebius-cxcli auth --project-config /path/to/config.yaml --validate-profile
     generic NCCL path off; enable Soperator ActiveChecks only for
     benchmark/diagnostic clusters or maintenance windows.
   - Interactive mode prompts for infra first and can complete an infra-only add without selecting any app. It asks for app selection only when no infra was selected or when you explicitly choose to add apps too, then confirms the final selection, auto-resolves app chart dependencies plus `release.install_after` prerequisites, and runs the field wizard only for the newly added components. Auto-enabled app rows created by that field wizard are target-scoped to the newly selected target, so adding `mk8s@cluster2` to a config that already has `cluster1` shows and prompts only the new rows such as `grafana@cluster2`. If apps are selected without an enabled MK8s target, cxcli warns immediately and sends the operator back to select `infra:mk8s` or remove the app selection.
+  - Newly added app charts prompt for `apps.charts[].version` before the longer
+    app config phase. Press Enter to keep the pinned `component_sources.yaml`
+    version, or type a known chart package version. Non-interactive
+    `component add` accepts `--app-namespace`, `--app-releasename`, and
+    `--app-version` for app rows added by that operation.
   - When that wizard reaches per-component field phases, infra components
     default to `y` and app charts default to `n`. Answering `n` for a newly
     added infra component cancels that pending add instead of writing an
@@ -3976,6 +4005,13 @@ nebius-cxcli auth --project-config /path/to/config.yaml --validate-profile
     and `--app n8n,gateway-helm --app cert-manager` select multiple infra and
     app components in one create run. App chart dependencies can still add
     required chart rows automatically.
+  - App chart rows use the active `component_sources.yaml` version pin by
+    default. In `create` and `component add`, use
+    `--app-version soperator=4.0.1-ps.2`, or type the version at the
+    interactive app chart version prompt before the full app config phase, when
+    you intentionally want a different published chart package. With source
+    validation enabled, cxcli checks that requested version before writing
+    `config.yaml`.
   - Interactive `create` offers app chart selection only after the infra
     selection includes an MK8s target. To configure Soperator interactively,
     select `infra:mk8s` first and then `apps:soperator`; non-interactive
@@ -4121,13 +4157,13 @@ nebius-cxcli auth --project-config /path/to/config.yaml --validate-profile
 Common command flags:
 
 - `component add`:
-  `--no-interactive`, `--network-id`, `--subnet-id`, `--network-ref`,
-  `--subnet-ref`,
+  `--no-interactive`, `--app-namespace`, `--app-releasename`, `--app-version`,
+  `--network-id`, `--subnet-id`, `--network-ref`, `--subnet-ref`,
   `--validate-sources/--no-validate-sources`
 - `component remove`:
   `--no-interactive`
 - `create`:
-  `--client-name`, `--tenant-id`, `--project-id`, `--region-id`, `--email`, `--infra`, `--app`, `--app-namespace`, `--app-releasename`, `--network-id`, `--subnet-id`, `--network-ref`, `--subnet-ref`, `--validate-sources/--no-validate-sources`, `--validate-config/--no-validate-config`, `--no-interactive`, `--force`
+  `--client-name`, `--tenant-id`, `--project-id`, `--region-id`, `--email`, `--infra`, `--app`, `--app-namespace`, `--app-releasename`, `--app-version`, `--network-id`, `--subnet-id`, `--network-ref`, `--subnet-ref`, `--validate-sources/--no-validate-sources`, `--validate-config/--no-validate-config`, `--no-interactive`, `--force`
 - `bootstrap-ci`:
   `--auth-bootstrap/--no-auth-bootstrap`, `--github-repo`, `--github-token-env`, `--cli-ref`
 - `grafana`: `--export-dashboard`, `--dashboard-json`, `--output-dir`, `--folder-uid`, `--dashboard-uid`, `--overwrite`, `--attach`, `--component-sources`, `--dashboard-folder`, `--datasource`, `--token-env`, `--username`, `--password-env`
