@@ -9,7 +9,9 @@ import re
 import secrets
 import shlex
 import subprocess
+import tempfile
 from collections.abc import Callable, Mapping, Sequence
+from contextlib import suppress
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
@@ -214,6 +216,32 @@ def _safe_client_config_filename(client_name: str) -> str:
     return f"{client_name}.conf"
 
 
+def _atomic_write_secret_text(path: Path, content: str) -> None:
+    fd = -1
+    temp_path: Path | None = None
+    try:
+        fd, raw_temp_path = tempfile.mkstemp(
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            dir=path.parent,
+        )
+        temp_path = Path(raw_temp_path)
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            fd = -1
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp_path, path)
+        path.chmod(0o600)
+    finally:
+        if fd >= 0:
+            os.close(fd)
+        if temp_path is not None:
+            with suppress(OSError):
+                temp_path.unlink(missing_ok=True)
+
+
 def _extract_json_payload(stdout: str) -> Mapping[str, Any]:
     for line in reversed([item.strip() for item in stdout.splitlines() if item.strip()]):
         try:
@@ -338,8 +366,7 @@ def generate_wireguard_client_config(
     output_path = request.output_dir / _safe_client_config_filename(client_name)
     if output_path.exists() and not request.force:
         raise RuntimeError(f"Refusing to overwrite existing WireGuard client config: {output_path}")
-    output_path.write_text(config_text, encoding="utf-8")
-    output_path.chmod(0o600)
+    _atomic_write_secret_text(output_path, config_text)
 
     return WireGuardClientGenerationResult(
         client_name=client_name,

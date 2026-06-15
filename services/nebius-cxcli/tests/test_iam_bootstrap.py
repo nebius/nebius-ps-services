@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib
 import sys
 from dataclasses import dataclass
 from types import ModuleType, SimpleNamespace
@@ -64,6 +65,18 @@ def _install_fake_access_permit_modules(monkeypatch: pytest.MonkeyPatch) -> None
     iam_module.ListAccessPermitRequest = _FakeListAccessPermitRequest  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, "nebius.api.nebius.common.v1", common_module)
     monkeypatch.setitem(sys.modules, "nebius.api.nebius.iam.v1", iam_module)
+    monkeypatch.setattr(
+        importlib.import_module("nebius.api.nebius.common"),
+        "v1",
+        common_module,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        importlib.import_module("nebius.api.nebius.iam"),
+        "v1",
+        iam_module,
+        raising=False,
+    )
 
 
 def test_auth_public_key_exists_closes_sdk(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -242,6 +255,74 @@ def test_access_permits_normalize_prefixed_role_ids(monkeypatch: pytest.MonkeyPa
     assert created == ["editor"]
     assert already == []
     assert access_permits.create_requests[0].spec.role == "editor"
+
+
+def test_access_permits_reject_repeated_page_token(monkeypatch: pytest.MonkeyPatch) -> None:
+    _install_fake_access_permit_modules(monkeypatch)
+
+    class _RepeatingAccessPermits:
+        def __init__(self) -> None:
+            self.list_requests: list[_FakeListAccessPermitRequest] = []
+
+        def list(self, request: _FakeListAccessPermitRequest):  # type: ignore[no-untyped-def]
+            self.list_requests.append(request)
+            response = SimpleNamespace(items=[], next_page_token="same-token")
+            return SimpleNamespace(wait=lambda: response)
+
+    access_permits = _RepeatingAccessPermits()
+
+    with pytest.raises(RuntimeError, match="repeated pagination token"):
+        iam_bootstrap._ensure_project_role_permits(
+            access_permits=access_permits,
+            permit_parent_id="group-123",
+            principal_label="IAM group 'demo'",
+            project_id="project-abc",
+            role_ids=["editor"],
+        )
+
+    assert [request.page_token for request in access_permits.list_requests] == [
+        None,
+        "same-token",
+    ]
+
+
+def test_group_member_ids_reject_repeated_page_token(monkeypatch: pytest.MonkeyPatch) -> None:
+    @dataclass
+    class _FakeListGroupMembershipsRequest:
+        parent_id: str
+        page_token: str | None = None
+
+    iam_module = ModuleType("nebius.api.nebius.iam.v1")
+    iam_module.ListGroupMembershipsRequest = _FakeListGroupMembershipsRequest  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "nebius.api.nebius.iam.v1", iam_module)
+    monkeypatch.setattr(
+        importlib.import_module("nebius.api.nebius.iam"),
+        "v1",
+        iam_module,
+        raising=False,
+    )
+
+    class _RepeatingGroupMemberships:
+        def __init__(self) -> None:
+            self.list_requests: list[_FakeListGroupMembershipsRequest] = []
+
+        def list_members(self, request: _FakeListGroupMembershipsRequest):  # type: ignore[no-untyped-def]
+            self.list_requests.append(request)
+            response = SimpleNamespace(memberships=[], next_page_token="same-token")
+            return SimpleNamespace(wait=lambda: response)
+
+    group_memberships = _RepeatingGroupMemberships()
+
+    with pytest.raises(RuntimeError, match="repeated pagination token"):
+        iam_bootstrap._group_member_ids(
+            group_memberships=group_memberships,
+            group_id="group-123",
+        )
+
+    assert [request.page_token for request in group_memberships.list_requests] == [
+        None,
+        "same-token",
+    ]
 
 
 def test_group_name_for_service_account_is_stable_and_bounded() -> None:

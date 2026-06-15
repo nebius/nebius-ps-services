@@ -557,6 +557,16 @@ def test_soperator_cluster_validation_runs_slurm_gpu_and_nccl_benchmark(
     assert nccl_check["ranks"] == 16
     assert any("--partition=gpu" in script for script in smoke_scripts)
     assert any("mpirun --allow-run-as-root" in script for script in smoke_scripts)
+    assert any("salloc --job-name=cxcli-soperator-nccl" in script for script in smoke_scripts)
+    assert any(
+        "--nodes=\"$target_nodes\" --ntasks=\"$target_nodes\" --ntasks-per-node=1" in script
+        for script in smoke_scripts
+    )
+    assert any(
+        "srun --job-name=cxcli-soperator-nccl-launcher --nodes=1 --ntasks=1" in script
+        for script in smoke_scripts
+    )
+    assert all("SLURM_PROCID" not in script for script in smoke_scripts)
 
 
 def test_soperator_cluster_validation_runs_slurm_nccl_benchmark_on_one_8_gpu_node(

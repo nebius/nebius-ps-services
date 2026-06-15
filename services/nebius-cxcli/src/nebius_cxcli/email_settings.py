@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -120,8 +122,29 @@ def write_email_settings(settings: EmailSettings, *, explicit: Path | None = Non
             "password": settings.password,
         }
     }
-    path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
-    path.chmod(0o600)
+    content = yaml.safe_dump(payload, sort_keys=False).encode("utf-8")
+    fd = -1
+    temp_path: Path | None = None
+    try:
+        fd, raw_temp_path = tempfile.mkstemp(
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            dir=path.parent,
+        )
+        temp_path = Path(raw_temp_path)
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "wb") as handle:
+            fd = -1
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp_path, path)
+        path.chmod(0o600)
+    finally:
+        if fd >= 0:
+            os.close(fd)
+        if temp_path is not None:
+            temp_path.unlink(missing_ok=True)
     return path
 
 

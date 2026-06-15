@@ -760,7 +760,10 @@ def test_render_uses_cluster_instance_ids_for_multi_target_artifacts(
     assert not _target_flux_dir(paths, "mk8s").exists()
 
 
-def test_render_binds_soperator_external_nfs_from_matching_nfs_output(tmp_path: Path) -> None:
+def test_render_binds_soperator_external_nfs_from_matching_nfs_output(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     config_path = _project_config_path(tmp_path)
     config_path.parent.mkdir(parents=True, exist_ok=True)
     paths = resolve_project_paths(config_path)
@@ -800,6 +803,17 @@ def test_render_binds_soperator_external_nfs_from_matching_nfs_output(tmp_path: 
             "values": {},
         }
     ]
+    rendered_calls: list[dict[str, object]] = []
+
+    def _render_remote_static(**kwargs: object) -> str:
+        rendered_calls.append(kwargs)
+        return "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: rendered-soperator\n"
+
+    monkeypatch.setattr(
+        flux_render_module,
+        "_render_remote_helm_chart_static",
+        _render_remote_static,
+    )
 
     render_flux(
         payload,
@@ -812,34 +826,26 @@ def test_render_binds_soperator_external_nfs_from_matching_nfs_output(tmp_path: 
         },
     )
 
-    release_doc = yaml.safe_load(
-        (_target_flux_dir(paths, "cluster1") / "helmrelease-slurm-soperator.yaml").read_text(
-            encoding="utf-8"
-        )
-    )
-    assert release_doc["spec"]["values"]["externalNfs"] == {
+    flux_dir = _target_flux_dir(paths, "cluster1")
+    rendered_chart = flux_dir / "post-flux-helmrender-slurm-soperator.yaml"
+    assert rendered_chart.exists()
+    assert not (flux_dir / "helmrelease-slurm-soperator.yaml").exists()
+    assert rendered_calls
+    assert rendered_calls[0]["chart_ref"] == "soperator"
+    assert rendered_calls[0]["chart_version"] == soperator.version
+    assert rendered_calls[0]["source_url"] == soperator.source.rsplit("/", maxsplit=1)[0]
+    rendered_values = rendered_calls[0]["values"]
+    assert isinstance(rendered_values, dict)
+    assert rendered_values["externalNfs"] == {
         "enabled": True,
         "server": "10.10.0.5",
         "path": "/srv/nfs/home",
     }
-    patches = release_doc["spec"]["postRenderers"][0]["kustomize"]["patches"]
-    certificate_patches = {
-        patch["target"]["name"]: yaml.safe_load(patch["patch"])
-        for patch in patches
-        if patch["target"].get("group") == "cert-manager.io"
-        and patch["target"].get("kind") == "Certificate"
-    }
-    assert set(certificate_patches) == {
-        "soperator-serving-cert",
-        "soperator-mariadb-operator-webhook-cert",
-    }
-    assert {
-        patch["spec"]["privateKey"]["rotationPolicy"] for patch in certificate_patches.values()
-    } == {"Always"}
 
 
 def test_render_soperator_certificate_patch_preserves_explicit_rotation_policy(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _set_catalog_override(_local_catalog_path(), source_profile=SourceProfile.PORTABLE)
     config_path = _project_config_path(tmp_path)
@@ -853,31 +859,27 @@ def test_render_soperator_certificate_patch_preserves_explicit_rotation_policy(
     }
     _retarget_enabled_apps(payload)
     config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+    rendered_calls: list[dict[str, object]] = []
+
+    def _render_remote_static(**kwargs: object) -> str:
+        rendered_calls.append(kwargs)
+        return "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: rendered-soperator\n"
+
+    monkeypatch.setattr(
+        flux_render_module,
+        "_render_remote_helm_chart_static",
+        _render_remote_static,
+    )
 
     render_project(load_config(config_path), paths, source_profile=SourceProfile.PORTABLE)
 
-    release_doc = yaml.safe_load(
-        (_target_flux_dir(paths) / "helmrelease-slurm-soperator.yaml").read_text(encoding="utf-8")
-    )
-    patches = release_doc["spec"]["postRenderers"][0]["kustomize"]["patches"]
-    certificate_patches = {
-        patch["target"]["name"]: yaml.safe_load(patch["patch"])
-        for patch in patches
-        if patch["target"].get("group") == "cert-manager.io"
-        and patch["target"].get("kind") == "Certificate"
-    }
-
-    assert release_doc["spec"]["values"]["certManager"]["privateKey"]["rotationPolicy"] == "Never"
-    assert (
-        certificate_patches["soperator-serving-cert"]["spec"]["privateKey"]["rotationPolicy"]
-        == "Never"
-    )
-    assert (
-        certificate_patches["soperator-mariadb-operator-webhook-cert"]["spec"]["privateKey"][
-            "rotationPolicy"
-        ]
-        == "Always"
-    )
+    assert rendered_calls
+    rendered_values = rendered_calls[0]["values"]
+    assert isinstance(rendered_values, dict)
+    assert rendered_values["certManager"]["privateKey"]["rotationPolicy"] == "Never"
+    flux_dir = _target_flux_dir(paths)
+    assert (flux_dir / "post-flux-helmrender-slurm-soperator.yaml").exists()
+    assert not (flux_dir / "helmrelease-slurm-soperator.yaml").exists()
 
 
 def test_render_binds_general_nfs_csi_storage_class_from_matching_nfs_output(
@@ -2701,7 +2703,10 @@ def test_render_local_soperator_backup_uses_only_secret_reference(tmp_path: Path
     }
 
 
-def test_render_soperator_backup_uses_chart_owned_k8up_dependency(tmp_path: Path) -> None:
+def test_render_soperator_backup_uses_chart_owned_k8up_dependency(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     config_path = _project_config_path(tmp_path)
     config_path.parent.mkdir(parents=True, exist_ok=True)
     paths = resolve_project_paths(config_path)
@@ -2721,6 +2726,17 @@ def test_render_soperator_backup_uses_chart_owned_k8up_dependency(tmp_path: Path
     ] = True
     _retarget_enabled_apps(payload)
     config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+    rendered_calls: list[dict[str, object]] = []
+
+    def _render_remote_static(**kwargs: object) -> str:
+        rendered_calls.append(kwargs)
+        return "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: rendered-soperator\n"
+
+    monkeypatch.setattr(
+        flux_render_module,
+        "_render_remote_helm_chart_static",
+        _render_remote_static,
+    )
 
     render_project(
         load_config(config_path),
@@ -2732,11 +2748,14 @@ def test_render_soperator_backup_uses_chart_owned_k8up_dependency(tmp_path: Path
         source_profile=SourceProfile.LOCAL,
     )
 
-    release_doc = yaml.safe_load(
-        (_target_flux_dir(paths) / "helmrelease-slurm-soperator.yaml").read_text(encoding="utf-8")
-    )
-    assert {"name": "k8up", "namespace": "k8up"} not in release_doc["spec"].get("dependsOn", [])
-    assert not (_target_flux_dir(paths) / "helmrelease-storage-k8up.yaml").exists()
+    flux_dir = _target_flux_dir(paths)
+    assert rendered_calls
+    rendered_values = rendered_calls[0]["values"]
+    assert isinstance(rendered_values, dict)
+    assert rendered_values["soperator-backup-config"]["enabled"] is True
+    assert (flux_dir / "post-flux-helmrender-slurm-soperator.yaml").exists()
+    assert not (flux_dir / "helmrelease-slurm-soperator.yaml").exists()
+    assert not (flux_dir / "helmrelease-storage-k8up.yaml").exists()
 
 
 def test_render_soperator_mk8s_node_groups_attach_sibling_sfs(tmp_path: Path) -> None:
@@ -3610,6 +3629,13 @@ def test_render_instance_resets_generated_bundle_and_removes_stale_files(
     bootstrap_kustomization = bootstrap_flux_dir / "kustomization.yaml"
     stale_flux_file = paths.flux_dir / "stale.yaml"
     stale_report = paths.reports_dir / "old.json"
+    deploy_report = paths.reports_dir / "deploy-report.md"
+    deploy_detail_report = paths.reports_dir / "gpu-visibility-report-mk8s.json"
+    migrate_report = paths.reports_dir / "migrate-report.md"
+    migration_detail_report = paths.reports_dir / "soperator-cluster-validation-report-external.json"
+    unreferenced_migration_like_report = paths.reports_dir / "soperator-cluster-validation-report-old.json"
+    upgrade_report = paths.reports_dir / "upgrade-report.md"
+    upgrade_report_json = paths.reports_dir / "upgrade-report.json"
     stale_top_level = paths.generated_dir / "obsolete.txt"
     stale_tf.parent.mkdir(parents=True, exist_ok=True)
     bootstrap_flux_dir.mkdir(parents=True, exist_ok=True)
@@ -3623,6 +3649,20 @@ def test_render_instance_resets_generated_bundle_and_removes_stale_files(
     )
     stale_flux_file.write_text("apiVersion: v1\nkind: Secret\n", encoding="utf-8")
     stale_report.write_text("{}\n", encoding="utf-8")
+    deploy_report.write_text(
+        "# Deploy Report\n\n### GPU visibility\n\n- Detail report: `gpu-visibility-report-mk8s.json`\n",
+        encoding="utf-8",
+    )
+    deploy_detail_report.write_text('{"status": "passed"}\n', encoding="utf-8")
+    migrate_report.write_text(
+        "# Soperator Migration Report\n\n"
+        "- `soperator-cluster-validation-report-external.json`: `PASS` - ok\n",
+        encoding="utf-8",
+    )
+    migration_detail_report.write_text('{"passed": true}\n', encoding="utf-8")
+    unreferenced_migration_like_report.write_text('{"passed": false}\n', encoding="utf-8")
+    upgrade_report.write_text("# Soperator Upgrade Report\n", encoding="utf-8")
+    upgrade_report_json.write_text('{"status": "completed"}\n', encoding="utf-8")
     stale_top_level.write_text("obsolete\n", encoding="utf-8")
 
     render_project(config, paths, source_profile=SourceProfile.LOCAL)
@@ -3630,6 +3670,13 @@ def test_render_instance_resets_generated_bundle_and_removes_stale_files(
     assert not stale_tf.exists()
     assert not stale_flux_file.exists()
     assert not stale_report.exists()
+    assert deploy_report.read_text(encoding="utf-8").startswith("# Deploy Report")
+    assert deploy_detail_report.read_text(encoding="utf-8") == '{"status": "passed"}\n'
+    assert migrate_report.read_text(encoding="utf-8").startswith("# Soperator Migration Report")
+    assert migration_detail_report.read_text(encoding="utf-8") == '{"passed": true}\n'
+    assert not unreferenced_migration_like_report.exists()
+    assert upgrade_report.read_text(encoding="utf-8").startswith("# Soperator Upgrade Report")
+    assert upgrade_report_json.read_text(encoding="utf-8") == '{"status": "completed"}\n'
     assert not stale_top_level.exists()
     assert not bootstrap_sync.exists()
     assert not bootstrap_components.exists()
@@ -3639,7 +3686,7 @@ def test_render_instance_resets_generated_bundle_and_removes_stale_files(
         (_target_flux_dir(paths) / "kustomization.yaml").read_text(encoding="utf-8")
     )
     assert "./flux-system" not in kustomization_doc["resources"]
-    assert not (paths.reports_dir / "deploy-report.md").exists()
+    assert (paths.reports_dir / "deploy-report.md").exists()
 
 
 def test_render_instance_preserves_existing_generated_bundle_when_rerender_fails(

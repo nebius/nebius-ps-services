@@ -9,36 +9,48 @@ change what gets applied.
 
 ## Table of Contents
 
+Use this guide by task:
+
+| Need | Start Here |
+| --- | --- |
+| First project or local run | [Quick Start Guide](#quick-start-guide), then [Recommended Workflow](#recommended-workflow) |
+| Existing Soperator cluster or Soperator upgrade | [Soperator Commands](#soperator-commands) |
+| MK8s, node-template, OS image, or chart upgrades | [Upgrade](#upgrade) |
+| Command flags and generated-bundle operations | [Commands](#commands) |
+| Catalog authoring and schema details | [Runtime Metadata](#runtime-metadata) and [Catalog File Reference](#catalog-file-reference) |
+| Runtime credentials, CI, and security boundaries | [Auth Workflow](#auth-workflow), [Development](#development), and [Security Notes](#security-notes) |
+
 - [Quick Start Guide](#quick-start-guide)
 - [Core Concepts](#core-concepts)
 - [Features](#features)
 - [Prerequisites and Installation](#prerequisites-and-installation)
 - [Runtime Metadata](#runtime-metadata)
 - [Catalog File Reference](#catalog-file-reference)
-  - [Soperator Slurm Scheduling And Command Examples](#soperator-slurm-scheduling-and-command-examples)
 - [Recommended Workflow](#recommended-workflow)
 - [Soperator Commands](#soperator-commands)
   - [Soperator Command Map](#soperator-command-map)
-  - [Managed Soperator Clusters](#managed-soperator-clusters)
+  - [CXCLI Managed Soperator Clusters](#cxcli-managed-soperator-clusters)
+  - [Soperator Slurm Scheduling And Command Examples](#soperator-slurm-scheduling-and-command-examples)
   - [External Soperator Onboarding](#external-soperator-onboarding)
   - [External Soperator Migration](#external-soperator-migration)
-  - [Managed Upgrade vs External Onboard and Migrate](#managed-upgrade-vs-external-onboard-and-migrate)
+  - [CXCLI Managed Upgrade vs External Onboard and Migrate](#cxcli-managed-upgrade-vs-external-onboard-and-migrate)
   - [Soperator Rules and Safety Checks](#soperator-rules-and-safety-checks)
 - [Upgrade](#upgrade)
+  - [When To Use upgrade](#when-to-use-upgrade)
   - [Upgrade Principles](#upgrade-principles)
   - [Kubernetes Version Upgrade](#kubernetes-version-upgrade)
   - [Node Template Upgrade](#node-template-upgrade)
   - [OS Image Upgrade](#os-image-upgrade)
-  - [Disruption Policies](#disruption-policies)
+  - [Upgrade Strategies](#upgrade-strategies)
   - [Upgrade Examples](#upgrade-examples)
   - [Node-Layer And Helm Upgrades](#node-layer-and-helm-upgrades)
 - [Releases](#releases)
 - [Commands](#commands)
   - [Generator-side Commands](#generator-side-commands)
   - [Customer-side Commands](#customer-side-commands)
+  - [Command Examples](#command-examples)
   - [Supporting Commands](#supporting-commands)
 - [Auth Workflow](#auth-workflow)
-- [Examples](#examples)
 - [Development](#development)
 - [Security Notes](#security-notes)
 
@@ -203,8 +215,8 @@ On Linux, install `kubectl` and `helm` from their vendor-maintained apt reposito
 
 Tool notes:
 
-- `terraform` is used for Terraform-backed validation, render lockfile generation, `terraform plan`, `terraform apply`, `terraform unlock`, and backend-backed Terraform output lookups. For those supported command paths, `nebius-cxcli` downloads Terraform into its local cache when it is missing instead of requiring a system-wide install.
-- `flux` is used for `flux bootstrap`. For that supported command path, `nebius-cxcli` downloads Flux into its local cache when it is missing instead of requiring a system-wide install.
+- `terraform` is used for Terraform-backed validation, render lockfile generation, `terraform plan`, `terraform apply`, `terraform unlock`, and backend-backed Terraform output lookups. For those supported command paths, `nebius-cxcli` downloads Terraform into its local cache when it is missing instead of requiring a system-wide install. Managed Terraform downloads verify HashiCorp's published SHA256 manifest before installing or reusing a cached binary.
+- `flux` is used for `flux bootstrap`. For that supported command path, `nebius-cxcli` downloads Flux into its local cache when it is missing instead of requiring a system-wide install. Managed Flux downloads verify the published Flux checksum manifest before installing or reusing a cached binary.
 - `kubectl` is used for `validate-generated`, `deploy`, `destroy`, `flux apply`, `flux destroy`, `flux bootstrap`, and MK8s GPU validation flows.
 - `helm` is used for `validate-sources` and selected app chart source/metadata validation paths. When source validation is enabled, `create` validates infra sources before any existing project overwrite confirmation, then validates only the selected app chart sources plus auto-enabled app dependencies after app selection. It is not required for the normal `render`, `deploy`, `destroy`, `flux apply`, or `flux destroy` flow.
 - `aws` CLI is used for `terraform unlock`.
@@ -722,7 +734,7 @@ Bundled MK8s GPU app policy:
 
 - MK8s GPU software defaults are policy-driven in code and source-driven in the catalog.
 - The bundled catalog keeps chart source selection, release metadata, and default Helm values in `component_sources.yaml`; activation rules, validation images, thresholds, and timeouts live in `component_cli_settings.yaml`. The CLI only evaluates those rules against the selected MK8s context. Platform charts with documented safe HA knobs default to two replicas where upstream defaults are one: Grafana's Envoy data plane, Envoy Gateway, cert-manager controller/webhook/cainjector, and External Secrets controller/webhook/cert-controller. External Secrets also enables leader election with that default. Grafana itself stays on the upstream one-replica default because the bundled chart path uses per-pod SQLite/emptyDir storage; runtime validation rejects `grafana.values.replicas > 1` unless the chart values configure a shared MySQL or Postgres database. DaemonSets, validation jobs, n8n's enterprise-only multi-main path, and charts without a chart-native safe replica knob stay on upstream defaults.
-- Soperator renders make cert-manager `Certificate.spec.privateKey.rotationPolicy` values explicit as `Always`: local post-Flux manifests are normalized after Helm rendering, and portable Flux `HelmRelease` output carries equivalent post-render patches for the Soperator and MariaDB Operator webhook certificates.
+- Soperator renders make cert-manager `Certificate.spec.privateKey.rotationPolicy` values explicit as `Always`; both local and portable source-backed Soperator outputs use the static post-Flux manifest path, so the normalized Certificate manifests are applied directly.
 - The same `source.portable` / `source.local` contract now applies to first-party Helm charts as well as Terraform modules.
 - The canonical GPU role is `nvidia-gpu-operator` for both Nebius-image and `operator_managed` node groups. On Nebius-managed images the CLI disables the driver, the NVIDIA Container Toolkit runtime (`values.toolkit.enabled`), and the Nebius `NVIDIADriver` CRD path. On `operator_managed` stacks it keeps the normal GPU Operator driver and toolkit paths enabled but still forces `values.driver.nvidiaDriverCRD.enabled=false`, because the bundled GPU Operator chart's Nebius `NVIDIADriver` CRD template is currently broken during Flux install. The catalog now keeps only those Nebius-specific operator deltas instead of restating live chart defaults. cxcli does not pre-label operator-managed nodes with `nvidia.com/gpu.deploy.operands=true` or `nvidia.com/gpu.deploy.device-plugin=true`; those operand labels are manual escape hatches for preinstalled-driver or forced-operand workflows, while the operator-managed path lets GPU Operator bring the stack up in dependency order and validates readiness through ClusterPolicy, DaemonSets, and allocatable `nvidia.com/gpu`.
 - The `gpu_stack_source` wizard menu is part of the GPU-enabled MK8s flow and keeps the same stored values but labels them with the driver ownership difference: `nebius_image` means the Nebius GPU node image already includes the host NVIDIA driver/toolkit, while `operator_managed` means GPU Operator installs and manages those host components. CPU-only MK8s configs omit `inputs.node_group_defaults.gpu.gpu_stack_source` and per-node-group `gpu_stack_source`; when GPU node groups are enabled and the field is omitted, the module and cxcli GPU policy fallback still use `nebius_image`.
@@ -958,6 +970,22 @@ Source requirements enforced by `validate-sources`:
     derived from the checked-out chart's `Chart.yaml`, so local-profile
     generated `config.yaml` rows show the active local chart version while
     still leaving `repo` blank for static local chart rendering.
+  - In a project `config.yaml`, an app chart row with `repo: ''` stays on the
+    static local render path when the selected catalog source has local chart
+    metadata. A non-empty `repo` selects a Helm source directly. For example,
+    to use the published Soperator parent OCI package instead of the local
+    chart tree, set the Soperator row to:
+
+    ```yaml
+    repo: oci://cr.eu-north1.nebius.cloud/e00th0mgv3zddz7468/charts/soperator
+    version: 4.0.2-ps.1
+    ```
+
+    Then run `render` and `deploy` or the narrower `flux apply`. Soperator is
+    special-cased to render the selected OCI/local chart source into a static
+    post-Flux manifest instead of a Flux `HelmRelease`, because the umbrella
+    chart can exceed Kubernetes' 1 MiB Helm release Secret limit when Helm
+    stores release state in-cluster.
   - App `defaults` seed `values.*` when missing.
   - `release.namespace` and `release.name` are the default Helm namespace and release name used by `create`.
 
@@ -1171,7 +1199,7 @@ Generated manifest output:
 
 - `generated/nebius-cxcli-manifest.json`
 - The generated manifest includes the render-time quota report alongside the runtime config snapshot and deploy metadata, so later bundle commands can explain quota-related failures without rerendering first.
-- `create` and `render` do not create `generated/reports/deploy-report.md`. That file is a runtime handoff report and is written by deploy/apply commands after live state can be read.
+- `create` and `render` do not create `generated/reports/deploy-report.md`. That file is a runtime handoff report and is written by deploy/apply commands after live state can be read. Rerendering preserves command-owned runtime reports such as `deploy-report.md`, external Soperator `migrate-report.md`, `upgrade-report.md`, `upgrade-report.json`, and JSON detail reports referenced from those Markdown reports, while unrelated stale report files are still removed with the replaced generated bundle.
 - `deploy-report.md` is the single human-readable customer report. It combines the project inventory with a `Validations` section, and `nebius-cxcli email` sends that same file after it exists.
 - The report starts with a `Client` section for the client name, tenant, project, and region. `Infra`, `Apps`, and `Grafana` use focused subsections: `Infra Component Status` and `App Component Status` list enabled and disabled catalog rows, while catalog-driven `Infra Component Reports` and `App Component Reports` include enabled rows only. MK8s cluster details are nested per cluster, enabled app handoff details stay grouped by platform/observability/workload where useful, and Grafana links plus credentials are grouped per target. MK8s cluster rows include the Nebius cluster ID and derived kube context when Terraform state is available, and Grafana credentials use that target-specific `kubectl --context=...` command.
 - The generated report is emitted without trailing blank lines so customer-repo Markdown linting stays clean.
@@ -1774,6 +1802,301 @@ Resolution model:
 - Terraform-backed outputs for app consumers resolve from Terraform state. `deploy` and `flux bootstrap` handle that automatically after Terraform outputs exist.
 - Plain `render` resolves Terraform-backed app bindings only when prior Terraform state already exists. Otherwise it fails fast with guidance instead of emitting partial values.
 
+## Recommended Workflow
+
+1. `nebius-cxcli create <deployments-root>`
+2. Optional day-2 config edits on the existing project:
+   - `nebius-cxcli component list --config <config.yaml>`
+   - `nebius-cxcli component add infra:vm --config <config.yaml>`
+   - `nebius-cxcli component remove managed-postgresql --config <config.yaml>`
+3. Edit the project `config.yaml` with real values.
+4. Validate the project config: `nebius-cxcli validate <config.yaml>`
+5. `nebius-cxcli render <config.yaml>`
+   `render` expects the project `config.yaml` path, not the `generated/` directory.
+   On successful render, the final terminal line prints the copy-paste deploy
+   helper: `Next step: nebius-cxcli deploy <config.yaml>`.
+
+   > **IMPORTANT:** After any manual or wizard change to `config.yaml`, run
+   > `nebius-cxcli render <config.yaml>` again before `nebius-cxcli deploy`,
+   > `nebius-cxcli terraform plan`, `nebius-cxcli terraform apply`,
+   > `nebius-cxcli flux apply`, `nebius-cxcli flux bootstrap`, or CI.
+   > Render updates `generated/nebius-cxcli-manifest.json`; `deploy` then
+   > recreates `generated/infra/terraform.auto.tfvars.json` from that manifest
+   > before Terraform runs. Passing `config.yaml` to `deploy` only locates the
+   > sibling `generated/` directory and does not rerender changed config values.
+
+6. Validate the rendered bundle: `nebius-cxcli validate-generated <generated-dir>`
+7. Commit the project `config.yaml` and the deployable `generated/` bundle to the customer private repo.
+8. Deploy from the generated bundle:
+   - `nebius-cxcli deploy <config.yaml>`
+   - `nebius-cxcli terraform apply <generated-dir>`
+   - `nebius-cxcli flux apply <generated-dir>`
+   - CI workflow deploys from `generated/`, not from `config.yaml`
+9. Optional CI setup:
+   - `nebius-cxcli bootstrap-ci <config.yaml>`
+   - The generated customer workflow watches canonical `<tenant-folder>/<project-folder>/generated/**` paths only. Editing `config.yaml` in the customer repo does not trigger CI deploys; rerendering from `config.yaml` is a manual replace action.
+
+`create` is the bootstrap path, not the day-2 component-editing path. When the same resolved project folder for the same `tenant_id`/`project_id` already exists, `create` now warns and overwrites from scratch instead of reconciling the existing component selection. Use `component list/add/remove --config <config.yaml>` for normal edits after the project already exists.
+
+`create --force` is intentionally narrow in scope: it targets the one resolved project folder only after `tenant_id` and `project_id` are known. It recreates that folder from scratch, including deleting existing generated artifacts and any other files already under that project path, but it does not delete the deployments root or unrelated projects.
+
+If those normalized tenant/project names would collide with an existing different project's folder, `create` fails fast instead of overwriting the wrong config. Other commands accept any existing `<tenant-folder>/<project-folder>/config.yaml`; GitHub environment names, generated manifests, deploy reports, and runtime operations still read `tenant_id` / `project_id` from `config.yaml`, not from the folder names.
+
+One deployments root owns one cxcli-managed `.gitignore` block for all tenant/project folders below it. Folder names remain flexible, but `create`, `render`, and `bootstrap-ci` reject targets inferred under another cxcli-managed deployments root instead of supporting nested root compatibility.
+
+`create` owns project identity (`client_name`, `tenant_id`, `project_id`, `region_id`) and initial scaffold creation from the deployments root. Once `config.yaml` already exists, use `component list/add/remove --config <config.yaml>` for day-2 component selection changes. Those commands keep the current identity and existing values intact, and `render` remains the full reconcile step back into `generated/`.
+
+The first `render` after `create` should not require overwrite confirmation just because the project already has an empty `generated/` scaffold. The overwrite prompt is intended for rerendering over a previously rendered bundle with meaningful generated content.
+
+In the customer private repo, keep both:
+
+- `config.yaml` as the original render/replace contract
+- `generated/` as the deploy contract used by day-2 operations and CI
+
+Rerendering from `config.yaml` is still supported, but it is a manual replace action. The CLI now renders into a hidden sibling staging directory and only swaps it into `generated/` after the new bundle is complete, so a failed rerender leaves the current bundle untouched. The replacement still removes stale or legacy content under `generated/`, including an old `generated/flux/flux-system` subtree. In an interactive terminal, `render` prompts for confirmation before replacement. In non-interactive contexts, rerender requires `--force`.
+
+Lifecycle reports under `generated/reports/` are carried forward during that
+bundle replacement: `deploy-report.md`, `migrate-report.md`,
+`upgrade-report.md`, `upgrade-report.json`, and JSON detail files referenced
+from those Markdown reports are preserved. Unreferenced stale report files are
+removed with the rest of the old generated bundle.
+
+The render replacement is a local artifact replacement, not a live infrastructure
+destroy. After rerender, `terraform apply`, `flux apply`, `flux bootstrap`, and
+`deploy` reconcile the generated desired state against Terraform state and the
+live cluster. They apply only the create/update/delete operations required by
+that diff. Review the Terraform plan and generated Flux diff before applying
+customer changes that rename resources, remove generated manifests, change
+ForceNew Terraform inputs, or intentionally disable components, because those
+specific diffs can still replace or delete live resources. Only `destroy`,
+`terraform destroy`, and `flux destroy` are explicitly destructive command
+paths.
+
+For Flux/GitOps, the important safety boundary is Git history, not the local render directory swap. The recommended workflow is: rerender locally, validate/review the new `generated/` diff, then commit and push one final snapshot of the watched path. Do not push an intermediate commit that removes manifests from the watched Git path, and do not routinely unbootstrap/rebootstrap Flux just to replace rendered artifacts.
+
+Project-scoped values such as jump-host SSH public keys belong in the private project `config.yaml`, not in the shipped public `component_sources.yaml`. A private customer-local source catalog may still carry `shared.admin_ssh.public_key` as a bootstrap seed, because `create`/`component add` materialize that value into `config.yaml`. Non-sensitive shared defaults such as `shared.admin_ssh.user_name` are also materialized into selected component rows so rerendering works from `config.yaml` without re-reading those values from the catalog. For operator convenience, both the private catalog seed and the per-project `inputs.ssh_public_key` field accept inline `ssh-rsa`, `ssh-ed25519`, or ECDSA text or a readable local `.pub` path; the persisted contract is always normalized inline key text.
+
+Local `deploy`/`flux bootstrap` behavior when apps + the bundled `mk8s` component are enabled:
+
+- `deploy` runs generated-bundle preflight and Terraform validation before
+  Terraform apply; it does not rerender `config.yaml`.
+- When Terraform is not already in `PATH`, `deploy`, `terraform plan`, `terraform apply`, `terraform unlock`, and backend-backed Terraform output lookups use a managed Terraform CLI download pinned by `component_cli_settings.yaml` `cli.terraform.version`. The binary is cached under the local nebius-cxcli cache and is not installed system-wide. Managed tool cache entries are reused only when their local checksum sidecar still matches the binary.
+- During long-running Terraform apply or destroy operations, `deploy`, `terraform apply`, and `terraform destroy` print one merged status surface: Terraform transitions plus a light Nebius MK8s API snapshot. When an enabled `mk8s` component is present and Nebius SDK auth is available, the CLI polls Nebius MK8s API for cluster/node-group status, suppresses SDK retry tracebacks for requests that are still being retried, and omits completed MK8s operations that predate the current watcher run; otherwise it falls back to a simple elapsed heartbeat for the API side.
+- The merged status surface is rendered as a multi-line block with distinct TF and API sections so Terraform progress and Nebius resource state are visually separate in the terminal. Only fixed labels and explicit severity markers use color; Nebius resource names, IDs, counts, and states stay plain text instead of being syntax-highlighted.
+- Severity colors are standardized across explicit CLI diagnostics: warnings render in amber and errors render in red.
+- If Terraform apply fails, the CLI exits with the Terraform error as the canonical failure and appends the last known merged Terraform/API status snapshot.
+- Remote state lock failures are called out separately: the CLI explains that Terraform never acquired the backend lock, so the run created nothing, and points at the stale `.tflock` object metadata when Terraform provides it.
+- When Nebius MK8s node-group status reports `ERROR` events, the merged status block includes those alerts from the live SDK event objects and prefers the event's human error text over raw SDK object reprs. Known transient bootstrap warnings such as waiting for ProviderID registration or temporary `Ready=False` node conditions are shown as notes instead of alerts while the node group is still provisioning.
+- If the live MK8s API reports an active terminal node-group error during apply or destroy, `deploy` / `terraform apply` / `terraform destroy` now abort the Terraform wait loop early and surface that SDK error directly instead of waiting for a generic Terraform timeout.
+- After apply, `deploy` reads the rendered Terraform output `cluster_id` and configures a temporary kubeconfig before applying Flux manifests.
+- The bundled `mk8s` component derives endpoint access from `inputs.cluster.public_endpoint`, so the CLI automatically selects the public or private control-plane endpoint instead of assuming public access.
+- When more than one built-in cluster target is enabled, enabled app charts bind to one target by setting `apps.charts[].instance_id` to that target id, and target-scoped deploy settings live under `deploy.targets[]` rows with the same `instance_id`. For MK8s, the target id is the normalized cluster resource name stored as that row's `instance_id`. Render writes internal generated target metadata with `target_ref` equal to that `instance_id` and Flux manifests under `generated/flux/targets/<target-id>/`; generated-bundle commands reject stale manifests where those two fields diverge. A plain `deploy <config.yaml>` reconciles every generated target by default; use `deploy --target <target-id>` to narrow one target or `deploy --all-targets` to spell out the default. `flux apply`, `flux destroy`, and `flux bootstrap` still require `--target <target-id>` or `--all-targets` when the generated bundle contains more than one target that needs Kubernetes access.
+- On non-CI local runs, that same built-in MK8s handoff also updates the user kubeconfig at `~/.kube/config` with a `nebius-cxcli` exec-based credential entry, creating the `.kube` directory and `config` file when they do not already exist, so `kubectl` can be used against the target cluster after `deploy`, `flux apply`, or `flux bootstrap` without installing a separate Nebius CLI.
+- `destroy` and `flux destroy` still use the same built-in MK8s handoff for temporary cluster access when they need to reach rendered app resources directly, but they do not persist or switch the user's local `~/.kube/config`.
+- When the selected cluster-access endpoint is private, `deploy`, `flux apply`, `flux bootstrap`, `destroy`, and `flux destroy` require the current machine to already have a private network path to the MK8s API. The CLI does not hardcode or auto-provision that path; customer environments can satisfy it with VPNs, routed private networks, subnet routers, SSH/WireGuard tunnels, or by running the command from an in-network runner.
+- When app charts are enabled, `deploy`, `flux apply`, and `flux bootstrap` now print a Kubernetes node-status snapshot first, then proceed directly into Flux or validation-specific readiness checks instead of blocking on a generic "all nodes Ready" gate before useful work starts.
+- When the generated manifest declares deploy-time validations, local `deploy` uses the same handed-off kubeconfig after Terraform/Flux work to run them directly with `kubectl`, keeps compact ordered JSON detail reports under `generated/reports/`, refreshes the combined customer-facing `generated/reports/deploy-report.md`, and prints a shorter target-grouped validation footer in the terminal. GPU-enabled targets can declare GPU readiness, visibility, and NCCL checks from `deploy.targets[].validations.mk8s_gpu.*`. Enabled Soperator targets also get a required `soperator_cluster_smoke` validation that fails with explicit evidence when old source-family Flux HelmReleases are still active or Soperator pods are Pending, then waits for the `soperator-manager` rollout, verifies the target `SlurmCluster` is `Available`, checks Slurm CLI access from a login pod with `sinfo` and `squeue`, runs one short synchronous `srun` smoke job, runs Slurm-side one-GPU visibility when a GPU partition is available, and runs one Slurm-owned NCCL benchmark that uses two idle GPU Slurm nodes when available or the only idle multi-GPU Slurm node otherwise. During local Soperator post-Flux apply, deploy also removes legacy source-family ActiveChecks CronJobs/jobs/pods before applying target Slurm custom resources, so old v1/v2 check pods cannot keep blocking target smoke validation. Observability-enabled MK8s targets get a generated in-cluster Observability Agent ingestion guardrail when the active settings catalog leaves `primary_agent.validation` enabled; its live Kubernetes reads are bounded for large clusters. Native ESO MysteryBox sync targets get a required `mysterybox_eso_connectivity` guardrail that validates in-cluster API TLS, `ClusterSecretStore Ready=True`, every configured `ExternalSecret Ready=True`, and ESO controller log errors since the current validation started. The JSON files remain the machine-readable detail contract; the Markdown report is the single human-readable rollup with grouped `Infra`, `Apps`, `Grafana`, and `Validations` sections. Its infra status list and enabled infra/app component reports are generated from `component_sources.yaml`, so new catalog components get a concise report without a Python allowlist; sensitive inputs such as keys, passwords, secrets, tokens, credentials, and MysteryBox payloads are omitted. MK8s cluster rows report CPU and GPU node counts with the same total-node wording, with GPU group geometry shown as additional context. Validation sections keep the one-line summary and also render a numbered list from each detail report's `checks[]` array when one is present. In multi-target MK8s deployments, the report lists each cluster shape under `Infra` > `MK8s Clusters`, groups Grafana links per target, and keeps validation headings target-scoped so repeated checks such as GPU visibility, NCCL, Soperator smoke, Observability ingestion, and ESO MysteryBox connectivity remain distinguishable. A plain deploy and `--all-targets` report every selected target. When a run selects one target with `--target <target-id>`, the refreshed validation section is scoped to that selected target instead of marking unselected target validations as not run. On Soperator targets whose worker pods reserve all Kubernetes GPUs, raw Kubernetes GPU Visibility and NCCL detail reports can still record the scheduler skip; when the same target's required Soperator smoke report passes the Slurm-side GPU visibility or NCCL benchmark, the human `deploy-report.md` validation summary leads with that Soperator-owned Slurm pass instead of the Kubernetes skip.
+- Generated bundles are expected to carry manifest `deploy.validations` metadata from `render`. If that metadata is missing or malformed, `deploy` now fails fast and requires a rerender instead of recomputing validation specs from the runtime config.
+- During deploy-time validations, `deploy` keeps one continuous spinner alive across validation boundaries and live in-cluster progress updates, so the command does not go visually idle between operator readiness, GPU visibility, NCCL, Observability Agent, or ESO MysteryBox phases.
+- Once the built-in MK8s handoff is ready, the local Flux phase now keeps one continuous spinner alive and updates its message through cluster reachability, Flux API discovery, rendered manifest apply, and the final rendered-resource readiness wait so the command does not go visually idle between phases.
+- When no app charts are enabled, `render` now emits an empty Flux kustomization without a placeholder repository file. Local `deploy` still prepares the built-in MK8s handoff and refreshes local kubeconfig when that handoff exists, but it skips Flux apply entirely; `flux apply` still refuses to run because there are no enabled charts to apply.
+- In non-interactive logs such as GitHub Actions, those same phase updates fall back to stable printed lines instead of transient spinner frames, so CI logs remain readable and do not depend on TTY animation support.
+- Generated Flux artifacts are treated as the deploy truth. If an app chart depends on Terraform-backed component outputs, you must rerender after the needed Terraform state exists before treating the rendered Flux tree (`generated/flux` or `generated/flux/targets/<target-id>`) as the final GitOps payload.
+- Flux render writes explicit Namespace manifests for chart target namespaces before namespaced `HelmRelease` resources, so local `kubectl apply -k` against the rendered Flux tree does not fail with `namespaces "<name>" not found`.
+- Flux uses a split namespace model in this project: shared Flux control-plane and source objects such as `HelmRepository` / `GitRepository` typically live in `flux-system`, while the actual `HelmRelease` and workload pods live in their target app namespace. A workload namespace does not need its own dedicated source object unless it truly uses a different chart or repo source.
+- If Flux controllers are missing, `deploy` installs the core Flux controllers into the target cluster automatically using the official Flux install manifest. `flux` CLI is not required for local `deploy`.
+- The install manifest version used by local `deploy` comes from `component_cli_settings.yaml` `cli.flux.version`.
+- After `kubectl apply -k generated/flux`, `deploy` waits for the rendered Flux `source.toolkit` and `helm.toolkit` resources to report `Ready`, so local deploy does not exit before chart source fetch or Helm reconciliation has actually succeeded.
+- Helm chart timeout policy stays catalog-driven: `components.apps.<id>.release.timeout` renders into `HelmRelease.spec.timeout`, and the local Flux wait budget now honors the longest rendered workload timeout plus a short grace window when no explicit CLI timeout override is supplied.
+- If Flux controllers had to be installed during `deploy`, the CLI also waits for the required Flux CRD-backed APIs to become discoverable before applying the rendered Flux bundle. This avoids transient `the server could not find the requested resource` races immediately after controller install.
+- While that Flux wait is in progress, `deploy` and `flux apply` poll the rendered Flux resources from the cluster with `kubectl get -o json` and print a generic status block showing which `HelmRepository`, `GitRepository`, `HelmRelease`, or `Kustomization` objects are still progressing. This is chart-agnostic and does not hardcode a specific release name.
+- When one rendered workload resource reaches a terminal Flux failure state while other rendered workloads are still progressing, the CLI keeps watching the remaining workloads until they settle, then exits non-zero with the failed-resource summary instead of sitting on an unrelated source object until the full outer timeout expires.
+- If all rendered workload resources are already `Ready` and only rendered Flux source objects remain pending without publishing a `Ready` condition, the CLI stops waiting and completes with a concise note instead of hanging until the full timeout. The note points operators at `kubectl get helmreleases.helm.toolkit.fluxcd.io -A` to verify the installed workload releases directly.
+- `deploy` and `flux apply` are intentionally local direct-apply paths. They do not bootstrap GitOps automatically, because that would require implicit GitHub/Flux bootstrap side effects and some customers intentionally operate without continuous GitOps sync. If the cluster is not bootstrapped yet, the CLI finishes the local apply and prints an informational GitOps note with the exact optional `nebius-cxcli flux bootstrap <generated-dir>` follow-up command. That command takes the local generated bundle path; `flux bootstrap` resolves the GitHub repository separately from `GITHUB_REPOSITORY` or the local git `origin`, and the rendered `generated/flux` path must be committed and pushed before continuous GitOps sync can reproduce local apply. Customers who use local direct apply as the intended workflow can skip that GitOps step.
+- At the end of `deploy`, cxcli prints a compact `Deployment summary` footer with three sections: target-grouped validation PASS/FAIL, copy-paste commands such as `wg-quick up/down`, SSH `ProxyJump`, and GitOps bootstrap follow-ups, and important paths limited to the generated bundle plus `generated/reports/deploy-report.md`. Machine-readable validation JSON reports remain under `generated/reports/` for troubleshooting but are not printed in the footer.
+- For day-2 component upgrades, use the top-level `upgrade` command group. See
+  [Upgrade](#upgrade) for supported layers, safety policies, and copy-paste
+  examples.
+- `flux apply` uses that same local app-deploy path without running Terraform apply, so it is the apps-only command for day-2 chart deploys after infra already exists.
+- `terraform apply` is safe to rerun sequentially with the same `generated/infra`: it validates the existing generated infra bundle and then relies on Terraform state convergence. It is not safe to run concurrently against the same backend state; Terraform remote locking is the protection there.
+- `flux apply` is safe to rerun sequentially with the same rendered Flux tree (`generated/flux` or `generated/flux/targets/<target-id>`): it applies the existing rendered manifests, skips Flux controller installation when controllers are already present, and waits for the rendered Flux resources to become `Ready`.
+- `flux bootstrap` auto-downloads a managed Flux CLI binary from the official Flux GitHub release for the catalog-pinned `cli.flux.version` when `flux` is not already in `PATH`. The binary is cached under the local nebius-cxcli cache and is not installed system-wide. Managed downloads verify the official release SHA256 manifest before installing cache entries.
+- `flux bootstrap` resolves the GitHub repo slug from `GITHUB_REPOSITORY` when present, otherwise it falls back to the local git `origin` remote.
+- `flux bootstrap` uses the same built-in MK8s handoff instead of hardcoding `mk8s_cluster_id` in CI workflow glue.
+- `flux bootstrap` only takes the reconcile path when the cluster already has both Flux controllers and the bootstrap Git objects `GitRepository/flux-system` plus `Kustomization/flux-system`. If controllers exist but those bootstrap objects do not, the CLI runs a real `flux bootstrap github ...` instead of a reconcile that would fail.
+- `flux bootstrap` is the GitOps path. It expects the rendered manifests to be committed and pushed to the watched GitHub repo/path before or immediately after bootstrap. If you want an immediate local cluster apply without depending on Git content yet, use `flux apply`.
+- Local kubeconfig persistence can be disabled explicitly with `NEBIUS_CXCLI_PERSIST_LOCAL_KUBECONFIG=false`. In CI it is skipped automatically.
+- `deploy`, `destroy`, `flux apply`, and `flux destroy` require `kubectl` when they operate on rendered app resources.
+- Nebius API/runtime auth interactions use the Nebius SDK. A standalone `nebius` CLI install is not required.
+- `flux bootstrap` still needs network access to GitHub releases when the managed Flux CLI download path is used.
+- The managed Terraform download path needs network access to HashiCorp releases when Terraform is not already in `PATH`.
+- If your Nebius SDK config already has auth, `deploy` can reuse that SDK config. Otherwise rerun with runtime auth material available, for example `--auto-auth-bootstrap`.
+
+## Soperator Commands
+
+`nebius-cxcli` has two Soperator lifecycle command groups, and they are
+intentionally separate:
+
+- `nebius-cxcli soperator` is for Soperator app rows that cxcli already manages
+  in `config.yaml` and the rendered bundle. Today its cxcli-managed day-2
+  command is `nebius-cxcli soperator upgrade`, which wraps a chart/app version
+  bump with Soperator-aware preflight, apply, postflight, and reports.
+- `nebius-cxcli ext-soperator` is for existing Nebius MK8s clusters that are
+  outside Terraform ownership. `ext-soperator onboard` registers and analyzes
+  one external target, and `ext-soperator migrate` is used only when the
+  accepted onboarding report says migration-owned work is required.
+
+For a new CXCLI Managed Soperator deployment, use `create` or
+`component add apps:soperator@<target>` to build the cxcli-managed
+MK8s+SFS+Soperator bundle, then use `validate`, `render`, and `deploy`. For
+later chart-only upgrades of that cxcli-managed row, use
+`nebius-cxcli soperator upgrade`.
+
+In this section, CXCLI Managed Soperator means a self-managed Soperator
+deployment that `nebius-cxcli create` or `component add apps:soperator` records
+in `config.yaml` and renders into the generated bundle. It is separate from the
+Managed Soperator service exposed through the Nebius Console.
+
+For an existing external Nebius MK8s cluster, use `ext-soperator onboard`
+first. If onboarding finds no migration-owned work, the next path is normal
+`render` and `deploy`. If onboarding records migration-owned work, run
+`ext-soperator migrate` before deploy. After a completed migration refreshes the
+target into the deploy-owned shape, future Soperator chart-only upgrades can use
+`nebius-cxcli soperator upgrade`; the external MK8s cluster still remains
+outside Terraform ownership.
+
+External onboarding is not a Terraform import. The MK8s cluster and its node
+groups remain outside Terraform ownership. cxcli records enough target
+metadata, Soperator analysis, role mapping, and accepted remediation decisions
+to render/apply the Soperator app and to run guarded migration phases.
+
+### Soperator Command Map
+
+| Command | Use it for | Mutation model |
+| --- | --- | --- |
+| `nebius-cxcli soperator upgrade <config.yaml> --target <target> --to-version <chart-version>` | Upgrade a cxcli-managed Soperator Helm chart row after it is already part of the generated bundle. Use this for cxcli-created Soperator targets and for external targets only after onboarding/migration has handed them back to the deploy-owned desired-state path. | Soperator-aware cxcli-managed upgrade: validates the current bundle, runs live Soperator/Slurm smoke preflight, updates the source app version, rerenders, validates, applies the target Flux bundle, verifies the live Helm release plus rendered workloads, reruns required Soperator/Slurm validation, writes `upgrade-report.md` / `upgrade-report.json` when checkpointed ActiveChecks handling is used, and refreshes `deploy-report.md`. |
+| `nebius-cxcli upgrade helm-chart <config.yaml> apps:soperator@<target> --to-version <chart-version>` | Compatibility entry point for Soperator chart upgrades. | Redirects to the Soperator-aware cxcli-managed upgrade path instead of treating Soperator like a generic Helm chart. |
+| `nebius-cxcli ext-soperator onboard <config.yaml-or-deployments-root>` | Register one existing Nebius MK8s cluster by `cluster_id`, discover source Soperator state, choose storage/compute onboarding modes, and write the accepted onboarding plan. | Read-only against live cluster state; writes local `config.yaml` and `source-soperator-cluster-discovery-report.json`. Non-interactive runs use `--cluster-id` and optional `--target-id`; no-op reruns preserve stable discovery content so unchanged onboarding does not invalidate migration checkpoints. |
+| `nebius-cxcli ext-soperator migrate <config.yaml> --target <target> --dry-run` | Inspect the accepted external-cluster migration plan before any live mutation. | Read-only; validates accepted onboarding, refuses deploy-owned/no-migration action sets with render/deploy guidance, and prints a color-highlighted phase plan in interactive terminals. |
+| `nebius-cxcli ext-soperator migrate <config.yaml> --target <target> --execute --approve` | Execute approved external-cluster MK8s control-plane/node-template, target GPU stack, storage, compute, Soperator cutover, configured MK8s GPU validations, and required Soperator/Slurm smoke validation when the dry run is accepted. | Mutates only supported migration surfaces, auto-detects source worker node groups, writes a local checkpoint, rechecks completed selected actions against live state on rerun, verifies external MK8s node-template state, verifies target Helm chart workloads, suspends old source-family Flux Kustomization desired state, deletes suspended old source-family Flux HelmRelease records, retires stale profile-derived source-family Helm release records while preserving shared/storage resources, writes validation detail reports under `generated/reports/`, writes MK8s GPU and Soperator/Slurm validation rollups into `migrate-report.md`, refreshes `deploy-report.md` as a secondary deploy-compatible MK8s GPU summary, and stops at guarded pending gates. |
+| `nebius-cxcli upgrade k8s-version`, `upgrade node-template`, `upgrade os-image`, and node-layer upgrade commands | Upgrade Terraform-managed MK8s or VM infrastructure underneath a cxcli-managed deployment. | Terraform desired-state updates for managed infra only; they do not manage external onboarded MK8s node groups. |
+
+Operationally, finish a running `ext-soperator migrate` or `soperator upgrade`
+from the same laptop, workdir, and operator account that started it. The resume
+checkpoints are local operational state, not deploy input and not Git-tracked
+desired state:
+
+- `ext-soperator migrate`: `.nebius-cxcli/soperator-migrations/<target>/checkpoint.json`
+- `soperator upgrade`: `.nebius-cxcli/soperator-upgrades/<target>/checkpoint.json`
+
+The cxcli-managed deployments `.gitignore` excludes `.nebius-cxcli/`, so these
+checkpoints stay local. After migration/upgrade completes and `config.yaml` plus
+generated reports are refreshed, normal `validate`, `render`, and `deploy`
+commands can run from any workstation that has the repo state and required
+Nebius/Kubernetes access.
+
+### CXCLI Managed Soperator Clusters
+
+Use the cxcli-managed path when cxcli should create and own the infrastructure:
+
+```bash
+nebius-cxcli create <deployments-root>
+# select infra:mk8s and apps:soperator in the wizard
+nebius-cxcli validate <config.yaml>
+nebius-cxcli render <config.yaml>
+nebius-cxcli deploy <config.yaml>
+```
+
+The Soperator create/component wizard uses `production-cluster` and materializes
+the complete MK8s+SFS+Soperator five-role bundle: `system`, `controller`,
+`login`, `accounting`, and `worker`, plus SFS jail, controller-spool, and
+accounting filesystems. It skips external role-mapping prompts because cxcli is
+creating the target node groups itself.
+
+For day-2 upgrades of a cxcli-managed Soperator deployment:
+
+- Use `soperator upgrade` to bump the Soperator chart/app row through the
+  Soperator-aware cxcli-managed path:
+
+  ```bash
+  nebius-cxcli soperator upgrade <config.yaml> \
+    --target <target> \
+    --to-version <chart-version> \
+    --dry-run
+  nebius-cxcli soperator upgrade <config.yaml> \
+    --target <target> \
+    --to-version <chart-version>
+  ```
+
+  This command changes only the selected Soperator app row `version`. Before
+  mutation it validates the current generated bundle and runs the required live
+  Soperator/Slurm smoke validation so a broken Slurm control plane, queue, or
+  GPU/NCCL path blocks the upgrade instead of becoming a post-upgrade surprise.
+  After apply it verifies Helm readiness, reruns the same required
+  Soperator/Slurm validation, and refreshes `generated/reports/deploy-report.md`.
+  `nebius-cxcli upgrade helm-chart <config.yaml> apps:soperator@<target> --to-version <chart-version>`
+  redirects to this Soperator-aware path.
+  If the cxcli-managed Soperator app row has
+  `values.soperator-activechecks.enabled=true` or
+  `values.soperator-activechecks.waitForChecks.enabled=true`, non-dry-run
+  `soperator upgrade` owns a checkpointed maintenance-window lifecycle: it
+  snapshots the original values, writes
+  `.nebius-cxcli/soperator-upgrades/<target>/checkpoint.json`, renders and
+  applies a temporary suspension, patches matching live ActiveCheck CRs to stop
+  launch-on-create checks, deletes matching already-launched ActiveChecks
+  CronJobs/jobs/pods, runs the upgrade and postflight validation, then restores
+  the original cxcli-owned values. If cxcli cannot inspect live ActiveCheck
+  state for an ActiveChecks-enabled row, the cxcli-managed upgrade fails closed
+  before the chart upgrade rather than leaving launch-on-create checks
+  ambiguous. The command writes
+  `generated/reports/upgrade-report.md` and `upgrade-report.json` so the
+  operator can verify what was suspended and whether it was restored.
+
+  If the row currently has `repo: ''`, it remains a local static chart render.
+  If you want the exact published parent OCI package, first set the row `repo`
+  to `oci://cr.eu-north1.nebius.cloud/e00th0mgv3zddz7468/charts/soperator` and
+  `version` to the desired package version, then run `soperator upgrade` or
+  `render` and `deploy`. cxcli still renders Soperator as a static post-Flux
+  manifest so the chart source can be OCI without using Helm's in-cluster
+  release Secret storage.
+  If `upgrade helm-chart --to-version` appears lower than the current
+  configured chart version, cxcli prints a production downgrade warning but
+  still allows the change for rollback or recovery. Helm chart downgrades are
+  not guaranteed safe; review chart release notes, CRDs/schema migrations,
+  application state, and backups first. The same warning applies through
+  `soperator upgrade`. Direct `config.yaml` edits followed by `render` and
+  `deploy` remain desired-state changes, but the canonical cxcli-managed
+  Soperator upgrade path is `soperator upgrade` because it adds the explicit
+  pre/post Soperator validation gates.
+
+- Use `upgrade k8s-version` for Terraform-managed MK8s Kubernetes minor
+  upgrades.
+- Use `upgrade node-template` when Kubernetes version, node OS image, and
+  Nebius-image GPU stack should roll together.
+- Use `upgrade os-image` for Terraform-managed MK8s node-template OS changes
+  or generic VM `inputs.source_image_family` changes.
+- Use `upgrade gpu-stack-preset`, `upgrade platform`, `upgrade cpu-preset`, or
+  `upgrade gpu-preset` for one MK8s node-template layer at a time.
+
+These `upgrade` commands are desired-state workflows. They run live discovery
+and safety checks, update `config.yaml`, rerender `generated/`, validate the
+bundle, and apply the relevant Terraform or Flux target when not in `--dry-run`.
+Kubernetes version downgrade targets are refused. Helm chart targets remain
+operator-controlled desired state: lower target versions are allowed with an
+explicit warning because they can be useful for recovery, but they are risky for
+production stateful workloads and CRD/schema changes.
+For MK8s targets, non-dry runs finish with a final MK8s readiness check that
+re-reads the live control plane and selected node groups, then verifies the
+expected Kubernetes version, node OS image, platform/preset layer, and Nebius
+`drivers_preset` / CUDA stack where that command changed them. This requires
+provider node-group status rather than accepting matching spec fields alone:
+the live node group must show ready, target, and total node counts. If the
+provider also returns outdated-node or reconciliation fields, those must be
+clean before cxcli reports success.
+They do not have `--yes`; `--dry-run` is the non-mutating preview path. See
+[Upgrade](#upgrade) for the full upgrade command contract, upgrade strategies,
+and examples.
+
 ### Soperator Slurm Scheduling And Command Examples
 
 This section is for self-managed Soperator clusters deployed by cxcli. The
@@ -1966,212 +2289,6 @@ For operator changes, prefer profile-level config first:
   plugin-level change reports that a daemon restart is required, plan a
   maintenance window and make the persistent change through Soperator values.
 
-## Recommended Workflow
-
-1. `nebius-cxcli create <deployments-root>`
-2. Optional day-2 config edits on the existing project:
-   - `nebius-cxcli component list --config <config.yaml>`
-   - `nebius-cxcli component add infra:vm --config <config.yaml>`
-   - `nebius-cxcli component remove managed-postgresql --config <config.yaml>`
-3. Edit the project `config.yaml` with real values.
-4. Validate the project config: `nebius-cxcli validate <config.yaml>`
-5. `nebius-cxcli render <config.yaml>`
-   `render` expects the project `config.yaml` path, not the `generated/` directory.
-   On successful render, the final terminal line prints the copy-paste deploy
-   helper: `Next step: nebius-cxcli deploy <config.yaml>`.
-
-   > **IMPORTANT:** After any manual or wizard change to `config.yaml`, run
-   > `nebius-cxcli render <config.yaml>` again before `nebius-cxcli deploy`,
-   > `nebius-cxcli terraform plan`, `nebius-cxcli terraform apply`,
-   > `nebius-cxcli flux apply`, `nebius-cxcli flux bootstrap`, or CI.
-   > Render updates `generated/nebius-cxcli-manifest.json`; `deploy` then
-   > recreates `generated/infra/terraform.auto.tfvars.json` from that manifest
-   > before Terraform runs. Passing `config.yaml` to `deploy` only locates the
-   > sibling `generated/` directory and does not rerender changed config values.
-
-6. Validate the rendered bundle: `nebius-cxcli validate-generated <generated-dir>`
-7. Commit the project `config.yaml` and the deployable `generated/` bundle to the customer private repo.
-8. Deploy from the generated bundle:
-   - `nebius-cxcli deploy <config.yaml>`
-   - `nebius-cxcli terraform apply <generated-dir>`
-   - `nebius-cxcli flux apply <generated-dir>`
-   - CI workflow deploys from `generated/`, not from `config.yaml`
-9. Optional CI setup:
-   - `nebius-cxcli bootstrap-ci <config.yaml>`
-   - The generated customer workflow watches canonical `<tenant-folder>/<project-folder>/generated/**` paths only. Editing `config.yaml` in the customer repo does not trigger CI deploys; rerendering from `config.yaml` is a manual replace action.
-
-`create` is the bootstrap path, not the day-2 component-editing path. When the same resolved project folder for the same `tenant_id`/`project_id` already exists, `create` now warns and overwrites from scratch instead of reconciling the existing component selection. Use `component list/add/remove --config <config.yaml>` for normal edits after the project already exists.
-
-`create --force` is intentionally narrow in scope: it targets the one resolved project folder only after `tenant_id` and `project_id` are known. It recreates that folder from scratch, including deleting existing generated artifacts and any other files already under that project path, but it does not delete the deployments root or unrelated projects.
-
-If those normalized tenant/project names would collide with an existing different project's folder, `create` fails fast instead of overwriting the wrong config. Other commands accept any existing `<tenant-folder>/<project-folder>/config.yaml`; GitHub environment names, generated manifests, deploy reports, and runtime operations still read `tenant_id` / `project_id` from `config.yaml`, not from the folder names.
-
-One deployments root owns one cxcli-managed `.gitignore` block for all tenant/project folders below it. Folder names remain flexible, but `create`, `render`, and `bootstrap-ci` reject targets inferred under another cxcli-managed deployments root instead of supporting nested root compatibility.
-
-`create` owns project identity (`client_name`, `tenant_id`, `project_id`, `region_id`) and initial scaffold creation from the deployments root. Once `config.yaml` already exists, use `component list/add/remove --config <config.yaml>` for day-2 component selection changes. Those commands keep the current identity and existing values intact, and `render` remains the full reconcile step back into `generated/`.
-
-The first `render` after `create` should not require overwrite confirmation just because the project already has an empty `generated/` scaffold. The overwrite prompt is intended for rerendering over a previously rendered bundle with meaningful generated content.
-
-In the customer private repo, keep both:
-
-- `config.yaml` as the original render/replace contract
-- `generated/` as the deploy contract used by day-2 operations and CI
-
-Rerendering from `config.yaml` is still supported, but it is a manual replace action. The CLI now renders into a hidden sibling staging directory and only swaps it into `generated/` after the new bundle is complete, so a failed rerender leaves the current bundle untouched. The replacement still removes stale or legacy content under `generated/`, including an old `generated/flux/flux-system` subtree. In an interactive terminal, `render` prompts for confirmation before overwrite. In non-interactive contexts, rerender requires `--force`.
-
-The render overwrite is a local artifact replacement, not a live infrastructure
-destroy. After rerender, `terraform apply`, `flux apply`, `flux bootstrap`, and
-`deploy` reconcile the generated desired state against Terraform state and the
-live cluster. They apply only the create/update/delete operations required by
-that diff. Review the Terraform plan and generated Flux diff before applying
-customer changes that rename resources, remove generated manifests, change
-ForceNew Terraform inputs, or intentionally disable components, because those
-specific diffs can still replace or delete live resources. Only `destroy`,
-`terraform destroy`, and `flux destroy` are explicitly destructive command
-paths.
-
-For Flux/GitOps, the important safety boundary is Git history, not the local render directory swap. The recommended workflow is: rerender locally, validate/review the new `generated/` diff, then commit and push one final snapshot of the watched path. Do not push an intermediate commit that removes manifests from the watched Git path, and do not routinely unbootstrap/rebootstrap Flux just to replace rendered artifacts.
-
-Project-scoped values such as jump-host SSH public keys belong in the private project `config.yaml`, not in the shipped public `component_sources.yaml`. A private customer-local source catalog may still carry `shared.admin_ssh.public_key` as a bootstrap seed, because `create`/`component add` materialize that value into `config.yaml`. Non-sensitive shared defaults such as `shared.admin_ssh.user_name` are also materialized into selected component rows so rerendering works from `config.yaml` without re-reading those values from the catalog. For operator convenience, both the private catalog seed and the per-project `inputs.ssh_public_key` field accept inline `ssh-rsa`, `ssh-ed25519`, or ECDSA text or a readable local `.pub` path; the persisted contract is always normalized inline key text.
-
-Local `deploy`/`flux bootstrap` behavior when apps + the bundled `mk8s` component are enabled:
-
-- `deploy` runs generated-bundle preflight and Terraform validation before
-  Terraform apply; it does not rerender `config.yaml`.
-- When Terraform is not already in `PATH`, `deploy`, `terraform plan`, `terraform apply`, `terraform unlock`, and backend-backed Terraform output lookups use a managed Terraform CLI download pinned by `component_cli_settings.yaml` `cli.terraform.version`. The binary is cached under the local nebius-cxcli cache and is not installed system-wide.
-- During long-running Terraform apply or destroy operations, `deploy`, `terraform apply`, and `terraform destroy` print one merged status surface: Terraform transitions plus a light Nebius MK8s API snapshot. When an enabled `mk8s` component is present and Nebius SDK auth is available, the CLI polls Nebius MK8s API for cluster/node-group status, suppresses SDK retry tracebacks for requests that are still being retried, and omits completed MK8s operations that predate the current watcher run; otherwise it falls back to a simple elapsed heartbeat for the API side.
-- The merged status surface is rendered as a multi-line block with distinct TF and API sections so Terraform progress and Nebius resource state are visually separate in the terminal. Only fixed labels and explicit severity markers use color; Nebius resource names, IDs, counts, and states stay plain text instead of being syntax-highlighted.
-- Severity colors are standardized across explicit CLI diagnostics: warnings render in amber and errors render in red.
-- If Terraform apply fails, the CLI exits with the Terraform error as the canonical failure and appends the last known merged Terraform/API status snapshot.
-- Remote state lock failures are called out separately: the CLI explains that Terraform never acquired the backend lock, so the run created nothing, and points at the stale `.tflock` object metadata when Terraform provides it.
-- When Nebius MK8s node-group status reports `ERROR` events, the merged status block includes those alerts from the live SDK event objects and prefers the event's human error text over raw SDK object reprs. Known transient bootstrap warnings such as waiting for ProviderID registration or temporary `Ready=False` node conditions are shown as notes instead of alerts while the node group is still provisioning.
-- If the live MK8s API reports an active terminal node-group error during apply or destroy, `deploy` / `terraform apply` / `terraform destroy` now abort the Terraform wait loop early and surface that SDK error directly instead of waiting for a generic Terraform timeout.
-- After apply, `deploy` reads the rendered Terraform output `cluster_id` and configures a temporary kubeconfig before applying Flux manifests.
-- The bundled `mk8s` component derives endpoint access from `inputs.cluster.public_endpoint`, so the CLI automatically selects the public or private control-plane endpoint instead of assuming public access.
-- When more than one built-in cluster target is enabled, enabled app charts bind to one target by setting `apps.charts[].instance_id` to that target id, and target-scoped deploy settings live under `deploy.targets[]` rows with the same `instance_id`. For MK8s, the target id is the normalized cluster resource name stored as that row's `instance_id`. Render writes internal generated target metadata with `target_ref` equal to that `instance_id` and Flux manifests under `generated/flux/targets/<target-id>/`; generated-bundle commands reject stale manifests where those two fields diverge. A plain `deploy <config.yaml>` reconciles every generated target by default; use `deploy --target <target-id>` to narrow one target or `deploy --all-targets` to spell out the default. `flux apply`, `flux destroy`, and `flux bootstrap` still require `--target <target-id>` or `--all-targets` when the generated bundle contains more than one target that needs Kubernetes access.
-- On non-CI local runs, that same built-in MK8s handoff also updates the user kubeconfig at `~/.kube/config` with a `nebius-cxcli` exec-based credential entry, creating the `.kube` directory and `config` file when they do not already exist, so `kubectl` can be used against the target cluster after `deploy`, `flux apply`, or `flux bootstrap` without installing a separate Nebius CLI.
-- `destroy` and `flux destroy` still use the same built-in MK8s handoff for temporary cluster access when they need to reach rendered app resources directly, but they do not persist or switch the user's local `~/.kube/config`.
-- When the selected cluster-access endpoint is private, `deploy`, `flux apply`, `flux bootstrap`, `destroy`, and `flux destroy` require the current machine to already have a private network path to the MK8s API. The CLI does not hardcode or auto-provision that path; customer environments can satisfy it with VPNs, routed private networks, subnet routers, SSH/WireGuard tunnels, or by running the command from an in-network runner.
-- When app charts are enabled, `deploy`, `flux apply`, and `flux bootstrap` now print a Kubernetes node-status snapshot first, then proceed directly into Flux or validation-specific readiness checks instead of blocking on a generic "all nodes Ready" gate before useful work starts.
-- When the generated manifest declares deploy-time validations, local `deploy` uses the same handed-off kubeconfig after Terraform/Flux work to run them directly with `kubectl`, keeps compact ordered JSON detail reports under `generated/reports/`, refreshes the combined customer-facing `generated/reports/deploy-report.md`, and prints a shorter target-grouped validation footer in the terminal. GPU-enabled targets can declare GPU readiness, visibility, and NCCL checks from `deploy.targets[].validations.mk8s_gpu.*`. Enabled Soperator targets also get a required `soperator_cluster_smoke` validation that fails with explicit evidence when old source-family Flux HelmReleases are still active or Soperator pods are Pending, then waits for the `soperator-manager` rollout, verifies the target `SlurmCluster` is `Available`, checks Slurm CLI access from a login pod with `sinfo` and `squeue`, runs one short synchronous `srun` smoke job, runs Slurm-side one-GPU visibility when a GPU partition is available, and runs one Slurm-owned NCCL benchmark that uses two idle GPU Slurm nodes when available or the only idle multi-GPU Slurm node otherwise. During local Soperator post-Flux apply, deploy also removes legacy source-family ActiveChecks CronJobs/jobs/pods before applying target Slurm custom resources, so old v1/v2 check pods cannot keep blocking target smoke validation. Observability-enabled MK8s targets get a generated in-cluster Observability Agent ingestion guardrail when the active settings catalog leaves `primary_agent.validation` enabled; its live Kubernetes reads are bounded for large clusters. Native ESO MysteryBox sync targets get a required `mysterybox_eso_connectivity` guardrail that validates in-cluster API TLS, `ClusterSecretStore Ready=True`, every configured `ExternalSecret Ready=True`, and ESO controller log errors since the current validation started. The JSON files remain the machine-readable detail contract; the Markdown report is the single human-readable rollup with grouped `Infra`, `Apps`, `Grafana`, and `Validations` sections. Its infra status list and enabled infra/app component reports are generated from `component_sources.yaml`, so new catalog components get a concise report without a Python allowlist; sensitive inputs such as keys, passwords, secrets, tokens, credentials, and MysteryBox payloads are omitted. MK8s cluster rows report CPU and GPU node counts with the same total-node wording, with GPU group geometry shown as additional context. Validation sections keep the one-line summary and also render a numbered list from each detail report's `checks[]` array when one is present. In multi-target MK8s deployments, the report lists each cluster shape under `Infra` > `MK8s Clusters`, groups Grafana links per target, and keeps validation headings target-scoped so repeated checks such as GPU visibility, NCCL, Soperator smoke, Observability ingestion, and ESO MysteryBox connectivity remain distinguishable. A plain deploy and `--all-targets` report every selected target. When a run selects one target with `--target <target-id>`, the refreshed validation section is scoped to that selected target instead of marking unselected target validations as not run. On Soperator targets whose worker pods reserve all Kubernetes GPUs, raw Kubernetes GPU Visibility and NCCL detail reports can still record the scheduler skip; when the same target's required Soperator smoke report passes the Slurm-side GPU visibility or NCCL benchmark, the human `deploy-report.md` validation summary leads with that Soperator-owned Slurm pass instead of the Kubernetes skip.
-- Generated bundles are expected to carry manifest `deploy.validations` metadata from `render`. If that metadata is missing or malformed, `deploy` now fails fast and requires a rerender instead of recomputing validation specs from the runtime config.
-- During deploy-time validations, `deploy` keeps one continuous spinner alive across validation boundaries and live in-cluster progress updates, so the command does not go visually idle between operator readiness, GPU visibility, NCCL, Observability Agent, or ESO MysteryBox phases.
-- Once the built-in MK8s handoff is ready, the local Flux phase now keeps one continuous spinner alive and updates its message through cluster reachability, Flux API discovery, rendered manifest apply, and the final rendered-resource readiness wait so the command does not go visually idle between phases.
-- When no app charts are enabled, `render` now emits an empty Flux kustomization without a placeholder repository file. Local `deploy` still prepares the built-in MK8s handoff and refreshes local kubeconfig when that handoff exists, but it skips Flux apply entirely; `flux apply` still refuses to run because there are no enabled charts to apply.
-- In non-interactive logs such as GitHub Actions, those same phase updates fall back to stable printed lines instead of transient spinner frames, so CI logs remain readable and do not depend on TTY animation support.
-- Generated Flux artifacts are treated as the deploy truth. If an app chart depends on Terraform-backed component outputs, you must rerender after the needed Terraform state exists before treating the rendered Flux tree (`generated/flux` or `generated/flux/targets/<target-id>`) as the final GitOps payload.
-- Flux render writes explicit Namespace manifests for chart target namespaces before namespaced `HelmRelease` resources, so local `kubectl apply -k` against the rendered Flux tree does not fail with `namespaces "<name>" not found`.
-- Flux uses a split namespace model in this project: shared Flux control-plane and source objects such as `HelmRepository` / `GitRepository` typically live in `flux-system`, while the actual `HelmRelease` and workload pods live in their target app namespace. A workload namespace does not need its own dedicated source object unless it truly uses a different chart or repo source.
-- If Flux controllers are missing, `deploy` installs the core Flux controllers into the target cluster automatically using the official Flux install manifest. `flux` CLI is not required for local `deploy`.
-- The install manifest version used by local `deploy` comes from `component_cli_settings.yaml` `cli.flux.version`.
-- After `kubectl apply -k generated/flux`, `deploy` waits for the rendered Flux `source.toolkit` and `helm.toolkit` resources to report `Ready`, so local deploy does not exit before chart source fetch or Helm reconciliation has actually succeeded.
-- Helm chart timeout policy stays catalog-driven: `components.apps.<id>.release.timeout` renders into `HelmRelease.spec.timeout`, and the local Flux wait budget now honors the longest rendered workload timeout plus a short grace window when no explicit CLI timeout override is supplied.
-- If Flux controllers had to be installed during `deploy`, the CLI also waits for the required Flux CRD-backed APIs to become discoverable before applying the rendered Flux bundle. This avoids transient `the server could not find the requested resource` races immediately after controller install.
-- While that Flux wait is in progress, `deploy` and `flux apply` poll the rendered Flux resources from the cluster with `kubectl get -o json` and print a generic status block showing which `HelmRepository`, `GitRepository`, `HelmRelease`, or `Kustomization` objects are still progressing. This is chart-agnostic and does not hardcode a specific release name.
-- When one rendered workload resource reaches a terminal Flux failure state while other rendered workloads are still progressing, the CLI keeps watching the remaining workloads until they settle, then exits non-zero with the failed-resource summary instead of sitting on an unrelated source object until the full outer timeout expires.
-- If all rendered workload resources are already `Ready` and only rendered Flux source objects remain pending without publishing a `Ready` condition, the CLI stops waiting and completes with a concise note instead of hanging until the full timeout. The note points operators at `kubectl get helmreleases.helm.toolkit.fluxcd.io -A` to verify the installed workload releases directly.
-- `deploy` and `flux apply` are intentionally local direct-apply paths. They do not bootstrap GitOps automatically, because that would require implicit GitHub/Flux bootstrap side effects. If the cluster is not bootstrapped yet, the CLI now finishes the local apply and prints a warning with the exact `nebius-cxcli flux bootstrap <generated-dir>` follow-up command. That command takes the local generated bundle path; `flux bootstrap` resolves the GitHub repository separately from `GITHUB_REPOSITORY` or the local git `origin`, and the rendered `generated/flux` path must be committed and pushed before continuous GitOps sync can reproduce local apply.
-- At the end of `deploy`, cxcli prints a compact `Deployment summary` footer with three sections: target-grouped validation PASS/FAIL, copy-paste commands such as `wg-quick up/down`, SSH `ProxyJump`, and GitOps bootstrap follow-ups, and important paths limited to the generated bundle plus `generated/reports/deploy-report.md`. Machine-readable validation JSON reports remain under `generated/reports/` for troubleshooting but are not printed in the footer.
-- For day-2 component upgrades, use the top-level `upgrade` command group. See
-  [Upgrade](#upgrade) for supported layers, safety policies, and copy-paste
-  examples.
-- `flux apply` uses that same local app-deploy path without running Terraform apply, so it is the apps-only command for day-2 chart deploys after infra already exists.
-- `terraform apply` is safe to rerun sequentially with the same `generated/infra`: it validates the existing generated infra bundle and then relies on Terraform state convergence. It is not safe to run concurrently against the same backend state; Terraform remote locking is the protection there.
-- `flux apply` is safe to rerun sequentially with the same rendered Flux tree (`generated/flux` or `generated/flux/targets/<target-id>`): it applies the existing rendered manifests, skips Flux controller installation when controllers are already present, and waits for the rendered Flux resources to become `Ready`.
-- `flux bootstrap` auto-downloads a managed Flux CLI binary from the official Flux GitHub release for the catalog-pinned `cli.flux.version` when `flux` is not already in `PATH`. The binary is cached under the local nebius-cxcli cache and is not installed system-wide.
-- `flux bootstrap` resolves the GitHub repo slug from `GITHUB_REPOSITORY` when present, otherwise it falls back to the local git `origin` remote.
-- `flux bootstrap` uses the same built-in MK8s handoff instead of hardcoding `mk8s_cluster_id` in CI workflow glue.
-- `flux bootstrap` only takes the reconcile path when the cluster already has both Flux controllers and the bootstrap Git objects `GitRepository/flux-system` plus `Kustomization/flux-system`. If controllers exist but those bootstrap objects do not, the CLI runs a real `flux bootstrap github ...` instead of a reconcile that would fail.
-- `flux bootstrap` is the GitOps path. It expects the rendered manifests to be committed and pushed to the watched GitHub repo/path before or immediately after bootstrap. If you want an immediate local cluster apply without depending on Git content yet, use `flux apply`.
-- Local kubeconfig persistence can be disabled explicitly with `NEBIUS_CXCLI_PERSIST_LOCAL_KUBECONFIG=false`. In CI it is skipped automatically.
-- `deploy`, `destroy`, `flux apply`, and `flux destroy` require `kubectl` when they operate on rendered app resources.
-- Nebius API/runtime auth interactions use the Nebius SDK. A standalone `nebius` CLI install is not required.
-- `flux bootstrap` still needs network access to GitHub releases when the managed Flux CLI download path is used.
-- The managed Terraform download path needs network access to HashiCorp releases when Terraform is not already in `PATH`.
-- If your Nebius SDK config already has auth, `deploy` can reuse that SDK config. Otherwise rerun with runtime auth material available, for example `--auto-auth-bootstrap`.
-
-## Soperator Commands
-
-`nebius-cxcli` has two Soperator lifecycle paths, and they are intentionally
-separate:
-
-- For a new cxcli-managed Soperator deployment, use `create` or
-  `component add apps:soperator@<target>` to build the managed
-  MK8s+SFS+Soperator bundle, then use `validate`, `render`, and `deploy`.
-- For an existing external Nebius MK8s cluster that already has, or will have,
-  Soperator managed by cxcli, use `ext-soperator onboard` first, then use
-  `ext-soperator migrate` only when the accepted onboarding report says migration
-  work is required.
-
-External onboarding is not a Terraform import. The MK8s cluster and its node
-groups remain outside Terraform ownership. cxcli records enough target
-metadata, Soperator analysis, role mapping, and accepted remediation decisions
-to render/apply the Soperator app and to run guarded migration phases.
-
-### Soperator Command Map
-
-| Command | Use it for | Mutation model |
-| --- | --- | --- |
-| `nebius-cxcli ext-soperator onboard <config.yaml-or-deployments-root>` | Register one existing Nebius MK8s cluster by `cluster_id`, discover source Soperator state, choose storage/compute onboarding modes, and write the accepted onboarding plan. | Read-only against the existing cluster; writes local `config.yaml` and `source-soperator-cluster-discovery-report.json`. Non-interactive runs use `--cluster-id` and optional `--target-id`; no-op reruns preserve stable discovery content so unchanged onboarding does not invalidate migration checkpoints. |
-| `nebius-cxcli ext-soperator migrate <config.yaml> --target <target> --dry-run` | Inspect the accepted external-cluster migration plan before any live mutation. | Read-only; validates accepted onboarding, refuses deploy-owned/no-migration action sets with render/deploy guidance, and prints a color-highlighted phase plan in interactive terminals. |
-| `nebius-cxcli ext-soperator migrate <config.yaml> --target <target> --execute --approve` | Execute approved external-cluster MK8s control-plane/node-template, target GPU stack, storage, compute, Soperator cutover, configured MK8s GPU validations, and required Soperator/Slurm smoke validation when the dry run is accepted. | Mutates only supported migration surfaces, auto-detects source worker node groups, writes a local checkpoint, rechecks completed selected actions against live state on rerun, verifies external MK8s node-template state, verifies target Helm chart workloads, suspends old source-family Flux Kustomization desired state, deletes suspended old source-family Flux HelmRelease records, retires stale profile-derived source-family Helm release records while preserving shared/storage resources, writes validation detail reports under `generated/reports/`, writes MK8s GPU and Soperator/Slurm validation rollups into `migrate-report.md`, refreshes `deploy-report.md` as a secondary deploy-compatible MK8s GPU summary, and stops at guarded pending gates. |
-| `nebius-cxcli upgrade helm-chart <config.yaml> apps:soperator@<target> --to-version <chart-version>` | Upgrade a cxcli-managed Soperator Helm chart row after it is already part of the generated bundle. | Updates the source app version, rerenders, validates, applies the target Flux bundle, and verifies the live Helm release plus rendered Deployment/StatefulSet/DaemonSet workloads. |
-| `nebius-cxcli upgrade k8s-version`, `upgrade node-template`, `upgrade os-image`, and node-layer upgrade commands | Upgrade Terraform-managed MK8s or VM infrastructure underneath a cxcli-managed deployment. | Terraform desired-state updates for managed infra only; they do not manage external onboarded MK8s node groups. |
-
-### Managed Soperator Clusters
-
-Use the managed path when cxcli should create and own the infrastructure:
-
-```bash
-nebius-cxcli create <deployments-root>
-# select infra:mk8s and apps:soperator in the wizard
-nebius-cxcli validate <config.yaml>
-nebius-cxcli render <config.yaml>
-nebius-cxcli deploy <config.yaml>
-```
-
-The Soperator create/component wizard uses `production-cluster` and materializes
-the complete MK8s+SFS+Soperator five-role bundle: `system`, `controller`,
-`login`, `accounting`, and `worker`, plus SFS jail, controller-spool, and
-accounting filesystems. It skips external role-mapping prompts because cxcli is
-creating the target node groups itself.
-
-For day-2 upgrades of a cxcli-managed Soperator deployment:
-
-- Use `upgrade helm-chart` to bump the Soperator chart/app row:
-
-  ```bash
-  nebius-cxcli upgrade helm-chart <config.yaml> apps:soperator@<target> \
-    --to-version <chart-version> \
-    --dry-run
-  nebius-cxcli upgrade helm-chart <config.yaml> apps:soperator@<target> \
-    --to-version <chart-version>
-  ```
-
-- Use `upgrade k8s-version` for Terraform-managed MK8s Kubernetes minor
-  upgrades.
-- Use `upgrade node-template` when Kubernetes version, node OS image, and
-  Nebius-image GPU stack should roll together.
-- Use `upgrade os-image` for Terraform-managed MK8s node-template OS changes
-  or generic VM `inputs.source_image_family` changes.
-- Use `upgrade gpu-stack-preset`, `upgrade platform`, `upgrade cpu-preset`, or
-  `upgrade gpu-preset` for one MK8s node-template layer at a time.
-
-These `upgrade` commands are desired-state workflows. They run live discovery
-and safety checks, update `config.yaml`, rerender `generated/`, validate the
-bundle, and apply the relevant Terraform or Flux target when not in `--dry-run`.
-For MK8s targets, non-dry runs finish with a final MK8s readiness check that
-re-reads the live control plane and selected node groups, then verifies the
-expected Kubernetes version, node OS image, platform/preset layer, and Nebius
-`drivers_preset` / CUDA stack where that command changed them. This requires
-provider node-group status rather than accepting matching spec fields alone:
-the live node group must show ready, target, and total node counts. If the
-provider also returns outdated-node or reconciliation fields, those must be
-clean before cxcli reports success.
-They do not have `--yes`; `--dry-run` is the non-mutating preview path. See
-[Upgrade](#upgrade) for the full upgrade command contract, disruption policies,
-and examples.
-
 ### External Soperator Onboarding
 
 Use onboarding when the cluster already exists in Nebius MK8s and should not be
@@ -2256,12 +2373,26 @@ Important onboarding flags:
   when the live cluster already satisfies the target Soperator layout.
 - `--source-version`: source Soperator version to use when discovery finds
   Soperator CRDs but no compatible Helm release version. Interactive onboarding
-  asks the operator to choose a source version from the committed migration
-  profiles or enter one manually; unsupported versions fail instead of guessing
-  a migration profile. When a canonical pinned-target `soperator` release is
-  already present, older same-name source-family Helm records are treated as
+  asks the operator to choose a source version from the exact committed
+  migration-profile rows or enter one manually. Manual values must match an
+  exact row or a known major-generation profile group; unsupported major
+  versions fail instead of guessing a migration profile. When a canonical
+  pinned-target `soperator` release is already present, older same-name
+  source-family Helm records are treated as
   informational stale discovery evidence in the saved report and do not force
   source-version confirmation.
+- `--worker-rollout-strategy`, `--worker-wave-groups`,
+  `--worker-wave-percent`, `--max-parallel-worker-groups`,
+  `--strategy-max-surge-count`, `--strategy-max-unavailable-count`, and
+  `--strategy-drain-timeout`: optional external node-template rollout defaults
+  to persist under
+  `deploy.targets[].soperator_onboarding.node_template_upgrade.rollout` during
+  non-interactive onboarding. They use the same semantics as the migrate flags:
+  `zero-surge` is the default and avoids surge quota but can temporarily reduce
+  worker capacity, `safe-surge` uses temporary worker nodes and verifies the
+  needed quota and capacity during `--execute` preflight before mutation, `none` waits
+  indefinitely for drain completion, and a finite drain timeout can let Nebius
+  delete the node after that timeout when eviction is still blocked.
 - `--validate-sources` / `--no-validate-sources`: validate selected Soperator
   dependency chart sources before writing `config.yaml`; enabled by default.
   Use `--no-validate-sources` only when the workstation cannot run the source
@@ -2275,8 +2406,9 @@ The accepted onboarding report controls the next step:
 - If no existing Soperator is detected, onboarding prepares the external target
   for a normal cxcli-rendered Soperator install.
 - If an older or noncanonical existing Soperator is detected and the selected
-  source version matches a committed profile, onboarding can mark the state as
-  migration-supported and record `upgrade-soperator`,
+  source version matches an exact profile row or known major-generation profile,
+  onboarding can mark the state as migration-supported and record
+  `upgrade-soperator`,
   `approve-soperator-migration`, storage migration, or compute migration
   actions.
 - If a pinned-target Soperator release is already detected alongside an older
@@ -2348,9 +2480,9 @@ keeps those explicit values through config pruning. Render/deploy must not
 request a smaller PVC/PV size for adopted storage; Nebius and Kubernetes storage
 resize paths are expansion-only.
 
-`ext-soperator onboard` is read-only against the existing cluster: it does not
+`ext-soperator onboard` is read-only against live cluster state: it does not
 create or attach SFS filesystems, drain nodes, run copy jobs, mutate Soperator
-CRs, or change the external cluster lifecycle. It writes only local project
+CRs, or change the external cluster lifecycle. It updates only local project
 artifacts:
 
 - `config.yaml`, including the external target, app row, fingerprint,
@@ -2394,11 +2526,14 @@ release and then perform checkpointed migration phases such as external
 node-template upgrade through ad hoc Nebius API calls, target chart apply,
 cutover, and validation hold. Use `ext-soperator migrate` for resume/rerun
 while migration-owned actions remain selected. After a full successful
-`ext-soperator migrate --execute`, cxcli refreshes `config.yaml` from live
+`ext-soperator migrate --execute`, `generated/reports/migrate-report.md` reports
+`Pending phase: none` and cxcli refreshes `config.yaml` from live
 post-migration discovery when it can, so the selected actions become deploy-owned
-for the next normal reconciliation. If that refresh is skipped, rerun
-`ext-soperator onboard`, rerun `render`, then use `deploy` only for normal
-rendered reconciliation if needed.
+for the next normal reconciliation. If the report still shows any pending phase
+other than `none`, rerun the same `ext-soperator migrate ... --execute --approve`
+command. If the report shows `Pending phase: none` but the post-migration
+config refresh was skipped, rerun `ext-soperator onboard`, rerun `render`, then
+use `deploy` only for normal rendered reconciliation if needed.
 
 The external Soperator steady-state handoff is:
 
@@ -2408,10 +2543,11 @@ The external Soperator steady-state handoff is:
 2. If migration-owned actions are selected, `deploy` is blocked and the next
    command is `ext-soperator migrate`; deploy cannot perform the ad hoc Nebius
    API mutation phases.
-3. When `ext-soperator migrate --execute` completes with `pending_phase ==
-   "none"`, cxcli performs live post-migration discovery and rewrites both
-   `config.yaml` and `source-soperator-cluster-discovery-report.json` into the
-   deploy-owned onboarding shape.
+3. When `ext-soperator migrate --execute` completes and
+   `generated/reports/migrate-report.md` shows `Pending phase: none`, cxcli
+   performs live post-migration discovery and rewrites both `config.yaml` and
+   `source-soperator-cluster-discovery-report.json` into the deploy-owned
+   onboarding shape.
 4. After that handoff, normal day-2 Soperator changes use the rendered desired
    state path: edit `config.yaml`, run `render`, then run `deploy`. Run
    `validate` before render when you want the normal pre-render checks.
@@ -2520,23 +2656,40 @@ Important migration flags:
   live execution.
 - `--approve` / `--no-approve`: record customer approval for the accepted
   migration plan. Mutating phases require approval.
-- `--worker-rollout-strategy safe-surge|zero-surge`: select the external
-  node-template worker rollout strategy. `safe-surge` is the default and uses
-  the configured surge budget per worker group in the active wave; `zero-surge`
-  avoids surge worker quota but can reduce active worker capacity during the
-  rollout.
+- `--worker-rollout-strategy zero-surge|safe-surge`: select the external
+  node-template worker rollout strategy. `zero-surge` is the default and avoids
+  surge worker quota, but can reduce active worker capacity during the rollout.
+  `safe-surge` uses temporary worker nodes and checks the required quota and
+  capacity before mutation.
 - `--worker-wave-groups`, `--worker-wave-percent`, and
   `--max-parallel-worker-groups`: bound safe-surge worker waves across worker
   groups. The fixed and percent wave-budget flags are mutually exclusive, and
   `--worker-wave-percent` is a percentage of worker groups, not worker nodes.
 - `--strategy-max-surge-count`, `--strategy-max-unavailable-count`, and
   `--strategy-drain-timeout`: configure the Nebius node-group strategy inside
-  each active worker group. Defaults are `1`, `0`, and `30m`. Use
+  each active worker group. zero-surge defaults are `0`, `1`, and `30m`;
+  safe-surge defaults are `1`, `0`, and `30m`. Use
   `--strategy-drain-timeout none` to wait indefinitely for drain completion;
   a finite timeout can let Nebius delete the node after that timeout when drain
   is still blocked.
 
 The same rollout contract is persisted under the target onboarding block:
+
+```yaml
+deploy:
+  targets:
+    - instance_id: external-cluster
+      soperator_onboarding:
+        node_template_upgrade:
+          rollout:
+            strategy: zero-surge
+            worker_group_strategy:
+              max_surge_count: 0
+              max_unavailable_count: 1
+              drain_timeout: 30m
+```
+
+For a capacity-preserving safe-surge rollout, set:
 
 ```yaml
 deploy:
@@ -2567,13 +2720,12 @@ aligned SFS filesystems that do not already exist are counted as spare storage
 required during data copy, and target service-role node groups that do not
 already exist are counted as net-new compute capacity. Existing worker node
 groups are preserved in place. For external node-template work, the default
-worker strategy is safe-surge: cxcli counts `max_surge_count` temporary surge
-node(s) for each worker group in the active wave, checks the required spare
-quota and GPU capacity before mutation, requires all selected worker nodes to
-start Ready and schedulable, and requires the Slurm queue to be empty.
-Operators can explicitly choose zero-surge when no surge worker capacity is
-available; that fallback avoids surge worker quota but may reduce active worker
-capacity during the rollout.
+worker strategy is zero-surge: it avoids surge worker quota but may reduce
+active worker capacity during the rollout. When operators choose safe-surge,
+cxcli counts `max_surge_count` temporary surge node(s) for each worker group in
+the active wave, checks the required spare quota and GPU capacity before
+mutation, requires all selected worker nodes to start Ready and schedulable, and
+requires the Slurm queue to be empty.
 Confirmed shortages, unresolved live limits, coverage gaps, or quota lookup
 errors stop migration before mutation. The local `.nebius-cxcli/soperator-migrations/`
 timeout-guarded checkpoint records the resolved source worker groups and quota
@@ -2618,9 +2770,9 @@ The planned phases depend on the accepted storage and compute modes:
   external node-group template changes, including Kubernetes version, node OS
   image, Nebius-image GPU stack, and aligned SFS filesystem attachments, use
   direct Nebius node-group updates: service-role groups are serial zero-surge,
-  while worker groups default to safe-surge waves with one temporary
-  replacement node per active worker group. cxcli restores each node group's
-  original strategy after the active rollout.
+  while worker groups default to zero-surge and can use safe-surge waves with
+  one temporary replacement node per active worker group when selected. cxcli
+  restores each node group's original strategy after the active rollout.
 
 The executor runs the supported phases in order. It can apply target-scoped GPU
 and Network Operator app rows plus the same catalog-owned post-render patches
@@ -2648,6 +2800,16 @@ ActiveChecks CronJobs/jobs/pods so stale old-chart desired state no longer
 appears in discovery or smoke validation. It does not drain
 or delete preserved worker node groups as part of a synthetic parallel-worker
 migration.
+If a legacy external cluster has Soperator ActiveChecks or
+`wait-for-active-checks` enabled, treat them as a maintenance-window concern:
+they can consume GPU/RDMA capacity or extend readiness waits. CXCLI managed
+`soperator upgrade` handles cxcli-owned ActiveChecks with the checkpointed
+suspend/restore lifecycle described above, and migration removes stale
+source-family check workloads during takeover, but cxcli does not silently
+disable arbitrary live external ActiveChecks before migration because those
+settings may be operator-owned diagnostics. Disable external diagnostics
+deliberately before the migration window unless they are part of a
+cxcli-managed upgrade checkpoint.
 After a mutating phase starts, resume relies on phase checkpoints because the
 original full discovery fingerprint is expected to change as new storage,
 attachments, and target node groups appear.
@@ -2682,35 +2844,61 @@ lines in non-interactive output. Every line starts with the elapsed time,
 canonical phase id, human-readable phase label, and overall phase health before
 component details, so a single copied line is enough to identify the active
 phase. Storage phases show aligned SFS/PVC copy progress plus MK8s and Slurm
-serving/degradation signals. Compute and cutover phases show MK8s node-group
-readiness, bounded problem-node details such as `node-upgrading (down)`, Slurm
-worker names/states, queue health, and Soperator SlurmCluster reconciliation.
-Problem nodes and down/upgrading states are highlighted in terminal output,
-while large clusters stay summarized with `+N more` suffixes. These signals are
-best-effort progress and degradation indicators, not a no-downtime guarantee.
+serving/degradation signals. Compute and cutover phases show MK8s status as
+separate `Node groups:` and `Nodes:` sections: node-group readiness stays in
+the first section, while node-level rollout transitions such as
+`replacing (cordoned)` and real problem-node details such as `NotReady (down)`
+stay in the second section. Transition nodes and down states are highlighted in
+terminal output, while large clusters stay summarized with `+N more` suffixes.
+Slurm worker names/states, queue health, and Soperator SlurmCluster
+reconciliation stay adjacent component details. These signals are best-effort
+progress and degradation indicators, not a no-downtime guarantee.
 Phases complete only when their live prerequisites are absent or satisfied;
 otherwise cxcli writes the pending phase and reason to the checkpoint for the
 next explicit action.
 
-### Managed Upgrade vs External Onboard and Migrate
+### CXCLI Managed Upgrade vs External Onboard and Migrate
 
-Use `upgrade helm-chart` when cxcli already manages the Soperator app row and
+Use `soperator upgrade` when cxcli already manages the Soperator app row and
 the target is already part of the rendered bundle:
 
 ```bash
-nebius-cxcli upgrade helm-chart <config.yaml> apps:soperator@<target> \
+nebius-cxcli soperator upgrade <config.yaml> \
+  --target <target> \
   --to-version <chart-version> \
   --dry-run
-nebius-cxcli upgrade helm-chart <config.yaml> apps:soperator@<target> \
+nebius-cxcli soperator upgrade <config.yaml> \
+  --target <target> \
   --to-version <chart-version>
 ```
 
-That path is a chart upgrade. It validates the current generated bundle, updates
-the Soperator app version in `config.yaml`, rerenders, validates the new bundle,
-and applies the selected target Flux bundle. It does not run the external
-source-cluster migration analyzer, does not use
+That path is a cxcli-managed chart upgrade. It validates the current generated
+bundle, runs live Soperator/Slurm smoke preflight, updates the Soperator app
+version in `config.yaml`, rerenders, validates the new bundle, applies the
+selected target Flux bundle, verifies Helm readiness, reruns the required
+Soperator/Slurm smoke validation, and refreshes `deploy-report.md`.
+`upgrade helm-chart <config.yaml> apps:soperator@<target> --to-version <chart-version>`
+redirects to this Soperator-aware path. The cxcli-managed upgrade path does not
+run the external source-cluster migration analyzer, does not use
 `source-soperator-cluster-discovery-report.json`, and has no node-drain or
 storage-copy flags.
+
+If the existing Soperator row uses `repo: ''`, it is pinned to static local
+chart rendering for that project config. To upgrade by the published parent OCI
+package instead, edit that same Soperator row to the OCI repo and target version
+explicitly, for example:
+
+```yaml
+repo: oci://cr.eu-north1.nebius.cloud/e00th0mgv3zddz7468/charts/soperator
+version: 4.0.2-ps.1
+```
+
+Then run `nebius-cxcli soperator upgrade <config.yaml> --target <target> --to-version <chart-version>`
+or, for manual desired-state changes, `nebius-cxcli render <config.yaml>` and
+`nebius-cxcli deploy <config.yaml>`.
+The rendered Soperator output remains a static post-Flux manifest even when the
+source is OCI; this avoids the Helm release Secret size limit for the Soperator
+umbrella chart.
 
 Use `ext-soperator onboard` plus `ext-soperator migrate` when the source cluster is not
 yet under cxcli Soperator management or when onboarding found a source
@@ -2735,7 +2923,8 @@ Underlying MK8s infrastructure upgrade commands are also different:
   Nebius-image GPU-stack upgrades selected by onboarding. It uses direct Nebius
   `mk8s cluster update` and `mk8s node-group update` calls, upgrades the
   control plane first, then updates service-role node groups serially and
-  worker node groups in safe-surge waves by default. It does not report
+  worker node groups with zero-surge by default, or safe-surge waves when
+  selected. It does not report
   completion until the live control plane and selected node groups match the
   requested Kubernetes version, OS image, and Nebius `drivers_preset` / CUDA
   stack.
@@ -2743,23 +2932,24 @@ Underlying MK8s infrastructure upgrade commands are also different:
   node-group strategy and restores it after that group finishes. Service-role
   groups use a temporary zero-surge policy (`max_surge=0`,
   `max_unavailable=1`, `drain_timeout=30m`) one group at a time. Worker groups
-  use safe-surge by default (`max_surge=1`, `max_unavailable=0`,
-  `drain_timeout=30m`) in bounded waves, after quota/capacity, worker-node
-  health, and Slurm queue preflights pass. Set `drain_timeout: none` when
+  also default to zero-surge; safe-surge (`max_surge=1`,
+  `max_unavailable=0`, `drain_timeout=30m`) runs in bounded waves only when
+  selected, after quota/capacity, worker-node health, and Slurm queue preflights
+  pass. Set `drain_timeout: none` when
   waiting indefinitely is safer than provider drain fallback. CPU node groups
   that carry stale GPU driver presets are reset to the CPU-supported empty
   preset before rollout, and one-node controller/login/accounting groups
   temporarily quiesce their Soperator workloads and restore them after the
   matching node-group update.
 - After an external target has been onboarded and deployed under cxcli app
-  management, future Soperator chart-only upgrades can use `upgrade helm-chart`
-  against `apps:soperator@<target>`; the external cluster lifecycle still
-  remains outside Terraform ownership.
+  management with no migration-owned work remaining, future Soperator
+  chart-only upgrades can use `soperator upgrade --target <target>`; the
+  external cluster lifecycle still remains outside Terraform ownership.
 
 ### Soperator Rules and Safety Checks
 
-- `ext-soperator onboard` is separate from `create`. `create` builds a new managed
-  project; onboarding registers an existing Nebius MK8s target.
+- `ext-soperator onboard` is separate from `create`. `create` builds a new
+  cxcli-managed project; onboarding registers an existing Nebius MK8s target.
 - Interactive onboarding lists project MK8s clusters and onboards one cluster
   per run.
 - Existing project configs are updated in place only after the interactive
@@ -2769,8 +2959,9 @@ Underlying MK8s infrastructure upgrade commands are also different:
   Soperator Helm release identity as source signals. Sibling charts such as
   checks or backup helpers are not enough by themselves.
 - If discovery finds Soperator CRDs but no compatible Helm release version,
-  `--source-version` or the interactive source-version picker must match a
-  committed profile in `soperator_migration_profiles.yaml`.
+  `--source-version` or the interactive source-version picker must match an
+  exact committed row or known major-generation profile group in
+  `soperator_migration_profiles.yaml`.
 - Partial or incompatible analyses are not accepted automatically. cxcli fails
   fast rather than assuming a vanilla cluster is safe to adopt.
 - Migration profile compatibility is release-scoped and component-scoped:
@@ -2779,7 +2970,8 @@ Underlying MK8s infrastructure upgrade commands are also different:
   contracts against the target profile.
 - The committed profile generator records per-component chart tarball, CRD,
   template, image, and Slurm contract fingerprints. Runtime onboarding uses
-  those committed profiles instead of fetching live release data.
+  those exact committed profiles and generation-level profile groups instead
+  of fetching live release data.
 - Profile groups also record the node-role label layout used during migration:
   legacy source inventories may expose `slurm.nebius.ai/nodeset` or
   `slurm.nebius.ai/nodeset-name`; cxcli creates or reuses service-role groups
@@ -2819,6 +3011,26 @@ OS image upgrades for Terraform-managed MK8s node groups and generic VM
 components, MK8s node-layer upgrades for GPU stack, platform, CPU preset, and
 GPU preset changes, and target-scoped Helm chart version upgrades.
 
+### When To Use upgrade
+
+Use `upgrade` when the change is one of the covered operational upgrades and
+you want cxcli to protect the operator from unsafe or incomplete steps:
+
+- MK8s Kubernetes minor upgrades.
+- MK8s node-template upgrades: Kubernetes version, OS, and GPU stack.
+- MK8s node-layer changes: platform, CPU/GPU preset, and GPU stack preset.
+- MK8s or VM OS image changes.
+- Target-scoped Helm chart version bumps. Use `soperator upgrade` instead of
+  the generic Helm path for Soperator chart bumps.
+
+These paths keep `config.yaml` as the source of desired state, but they add live
+discovery, compatibility checks, Kubernetes preflight checks, staged output,
+repeatable dry-run commands, rollout waits, and final readiness verification
+where the layer supports it. Edit `config.yaml` manually instead when the change
+is outside those covered upgrade layers, spans broader project refactoring, or
+changes a chart source family such as `repo` plus `version`; then run `render`
+and `deploy`, `terraform apply`, or `flux apply` as appropriate.
+
 ### Upgrade Principles
 
 - Upgrade commands always take an explicit layer, target selector, and target
@@ -2842,9 +3054,14 @@ GPU preset changes, and target-scoped Helm chart version upgrades.
   platform, OS image, GPU stack, CPU preset, and GPU preset choices are resolved
   from the live SDK-backed compatibility matrix, compute platform inventory,
   and compute preset inventory before falling back to manual input.
-- `--dry-run` performs live discovery and prints the plan plus a wrapped
-  repeat dry-run command without changing `config.yaml`, `generated/`,
-  Terraform backend state, or live Nebius resources.
+- `--dry-run` performs live discovery and prints the plan plus a
+  copy/paste-ready repeat dry-run command without changing `config.yaml`,
+  `generated/`, Terraform backend state, or live Nebius resources.
+- Kubernetes version downgrade targets are refused by the structured MK8s
+  upgrade paths. Helm chart targets remain operator-controlled desired state:
+  lower target versions are allowed with an explicit warning because they can
+  be useful for rollback or recovery, but they are risky for production
+  stateful workloads and CRD/schema changes.
 - Upgrade layers stay separate except for `upgrade node-template`, which is the
   explicit non-interactive path for moving Kubernetes version, node-template OS,
   and Nebius-image GPU stack together so a selected node group rolls once.
@@ -2854,10 +3071,11 @@ GPU preset changes, and target-scoped Helm chart version upgrades.
 - Manual desired-state upgrades remain supported outside the `upgrade` command:
   operators can edit `config.yaml` directly, for example bump
   `inputs.cluster.k8s_version`, explicit `inputs.node_groups.*.version`, OS,
-  GPU stack, platform, or preset values, then run `render`, review the generated
-  diff and Terraform plan, and use `deploy` or `terraform apply` to reconcile
-  that desired state. This path does not require `upgrade k8s-version`, but it
-  still goes through the guardrails of the chosen generated-bundle command:
+  GPU stack, platform, preset values, or an app chart row's `repo` and
+  `version`, then run `render`, review the generated diff and Terraform plan,
+  and use `deploy` or `terraform apply` to reconcile that desired state. This
+  path does not require `upgrade k8s-version`, but it still goes through the
+  guardrails of the chosen generated-bundle command:
   `deploy` runs the full generated-bundle preflight, including schema/readiness
   checks, VPC/resource-name preflight, live quota/capacity checks, MK8s
   GPU-stack compatibility for Nebius-image GPU node groups, Terraform/provider
@@ -2875,7 +3093,7 @@ nebius-cxcli upgrade k8s-version <config.yaml>
 ```
 
 In interactive mode the wizard prompts for the Terraform-managed MK8s target,
-target Kubernetes version, dry-run/apply choice, disruption policy, drain
+target Kubernetes version, dry-run/apply choice, upgrade strategy, drain
 timeout, and optional post-upgrade validations. Automation should pass the
 explicit target and version, or use `--no-interactive` to fail fast when those
 required values are missing:
@@ -2932,14 +3150,14 @@ For MK8s Kubernetes version upgrades, cxcli:
   persistent-data blocker when persistent state is stored on PVC-backed volumes
   and `emptyDir` is used only for scratch or intermediate data;
 - prints a complete repeatable dry-run command after guided dry runs, using
-  the selected config path, target selector, target version, disruption policy,
+  the selected config path, target selector, target version, upgrade strategy,
   and any non-default drain timeout;
 - resumes already-started rollouts on rerun instead of starting a second
   upgrade;
 - reconciles stale source/generated files through Terraform plan/apply even
   when live resources are already at the target version.
 
-If a staged run fails after adding a temporary node-group disruption strategy,
+If a staged run fails after adding a temporary node-group strategy,
 cxcli restores `config.yaml` and `generated/` to the non-temporary strategy
 state before returning the original error. The rendered MK8s Terraform module
 types that strategy object explicitly, so staged plans can update one node group
@@ -3041,7 +3259,7 @@ For MK8s OS image upgrades, cxcli:
   node group before moving on;
 - runs a final MK8s readiness check before success by re-reading selected node
   groups and verifying their live node-template OS value matches `--to-os`;
-- uses the same disruption policies and drain-timeout defaults as
+- uses the same upgrade strategies and drain-timeout defaults as
   `upgrade k8s-version`.
 
 Nebius documents node-template changes as Managed Kubernetes rolling updates:
@@ -3070,40 +3288,42 @@ For VM OS image upgrades, cxcli:
 - updates `config.yaml`, rerenders `generated/`, validates the bundle, runs a
   quiet Terraform plan, then applies Terraform with the existing compute
   instance status watcher for the selected VM;
-- treats `--node-group`, `--disruption-policy allow-unavailable`, and
-  `--disruption-policy force-delete` as MK8s-only semantics;
+- treats `--node-group` and `--strategy force-delete` as MK8s-only semantics;
+  zero-surge and safe-surge have no VM node-group effect;
 - does not SSH to VMs, run apt, or mutate packages in place.
 
-### Disruption Policies
+### Upgrade Strategies
 
-`upgrade k8s-version` and `upgrade os-image` use `--disruption-policy` plus
+`upgrade k8s-version`, `upgrade node-template`, `upgrade os-image`, and the
+node-layer upgrade commands use `--strategy` plus
 `--drain-timeout` to control node replacement safety:
 
 ```text
-safe              -> none
-allow-unavailable -> 30m
-force-delete      -> 10m
+zero-surge   -> 30m
+safe-surge   -> 30m
+force-delete -> 10m
 ```
 
-- `safe` is the default. It requires rolling replacement headroom, respects
-  PDBs, and rejects finite drain timeouts. cxcli always prints a general
-  safe-mode warning because this policy usually needs spare quota/capacity; it
-  fails preflight when quota assessment reports a shortage.
-- `allow-unavailable` uses zero surge, one unavailable node, and a bounded
-  drain timeout. Workloads may become unavailable, Pods may stay Pending until
-  replacement capacity returns, and PDB blockers still stop preflight.
+- `zero-surge` is the default. It sets `max_surge=0` and
+  `max_unavailable=1`, avoids spare node quota, and can temporarily reduce
+  active capacity by one node per active node group. PDB blockers still stop
+  preflight.
+- `safe-surge` sets `max_surge=1` and `max_unavailable=0`. It preserves active
+  node-group capacity with one temporary replacement node per active group, so
+  it requires enough spare quota and capacity; cxcli fails preflight when quota
+  assessment reports a shortage.
 - `force-delete` is a last-resort mode selected explicitly through the
-  disruption policy. It sets a finite Terraform node-group `drain_timeout` so
+  upgrade strategy. It sets a finite Terraform node-group `drain_timeout` so
   Managed Kubernetes may fall back to Pod deletion after the timeout.
 
 `--drain-timeout auto` resolves to the defaults above. Duration values use
-Go-style units such as `10m`, `30m`, or `1h`; finite values are accepted only
-with `allow-unavailable` or `force-delete`.
+Go-style units such as `10m`, `30m`, or `1h`; `none` waits indefinitely instead
+of allowing provider drain fallback.
 
 If an `upgrade` rerun only needs to wait for an already-requested MK8s
-node-group rollout after `allow-unavailable` or `force-delete` staged a
-temporary strategy, cxcli still performs one final rendered apply after the
-rollout settles so the configured node-group strategy is restored.
+node-group rollout after a staged temporary strategy, cxcli still performs one
+final rendered apply after the rollout settles so the configured node-group
+strategy is restored.
 
 The drain timeout is the provider drain fallback, not cxcli's whole rollout
 watch. cxcli's SDK node-group rollout watch starts after each Terraform apply,
@@ -3115,7 +3335,7 @@ consistency risk when old processes, shared storage, locks, or external APIs are
 involved.
 
 Kubernetes preflight inspection failures block non-dry runs for every
-disruption policy, including `force-delete`, because cxcli cannot safely
+upgrade strategy, including `force-delete`, because cxcli cannot safely
 distinguish known blockers from unknown cluster state.
 
 ### Upgrade Examples
@@ -3137,7 +3357,7 @@ nebius-cxcli upgrade k8s-version \
   --dry-run
 ```
 
-Run a safe Kubernetes upgrade:
+Run the default zero-surge Kubernetes upgrade:
 
 ```bash
 nebius-cxcli upgrade k8s-version \
@@ -3146,36 +3366,35 @@ nebius-cxcli upgrade k8s-version \
   --to-version 1.33
 ```
 
-Run an upgrade when downtime is acceptable but graceful drain semantics should
-still be used:
+Run a capacity-preserving safe-surge Kubernetes upgrade when spare quota exists:
 
 ```bash
 nebius-cxcli upgrade k8s-version \
   ~/deployments/tenant-name-example/project-name-example/config.yaml \
   infra:mk8s@mk8s \
   --to-version 1.33 \
-  --disruption-policy allow-unavailable
+  --strategy safe-surge
 ```
 
-Use a custom bounded drain timeout for `allow-unavailable`:
+Use a custom bounded drain timeout for zero-surge:
 
 ```bash
 nebius-cxcli upgrade k8s-version \
   ~/deployments/tenant-name-example/project-name-example/config.yaml \
   infra:mk8s@mk8s \
   --to-version 1.33 \
-  --disruption-policy allow-unavailable \
+  --strategy zero-surge \
   --drain-timeout 45m
 ```
 
-Use the last-resort force-delete policy:
+Use the last-resort force-delete strategy:
 
 ```bash
 nebius-cxcli upgrade k8s-version \
   ~/deployments/tenant-name-example/project-name-example/config.yaml \
   infra:mk8s@mk8s \
   --to-version 1.33 \
-  --disruption-policy force-delete
+  --strategy force-delete
 ```
 
 Skip optional post-upgrade deploy validations:
@@ -3240,6 +3459,7 @@ nebius-cxcli upgrade platform <config.yaml> infra:mk8s@<target> --to-platform cp
 nebius-cxcli upgrade cpu-preset <config.yaml> infra:mk8s@<target> --to-preset <preset>
 nebius-cxcli upgrade gpu-preset <config.yaml> infra:mk8s@<target> --to-preset <preset>
 nebius-cxcli upgrade helm-chart <config.yaml> apps:<chart>@<target> --to-version <chart-version>
+nebius-cxcli soperator upgrade <config.yaml> --target <target> --to-version <chart-version>
 ```
 
 - `gpu-stack-preset` means the MK8s `drivers_preset` /
@@ -3261,7 +3481,18 @@ nebius-cxcli upgrade helm-chart <config.yaml> apps:<chart>@<target> --to-version
 - `helm-chart` updates the selected target-scoped `apps.charts[]` row version,
   rerenders, validates, and applies the selected target's Flux bundle. Its live
   readiness check requires the selected generated target handoff, then verifies
-  the Helm release and rendered workloads. It has no node-drain flags.
+  the Helm release and rendered workloads. It has no node-drain flags. It does
+  not switch a row between local static rendering and an OCI/HTTP/Git chart
+  source; edit `repo` plus `version` directly when that source-family change is
+  the desired state, then run `render` and `deploy` or `flux apply`. When the
+  selected chart is `apps:soperator@<target>`, `upgrade helm-chart` redirects
+  to `soperator upgrade`.
+- `soperator upgrade` is the canonical cxcli-managed Soperator chart upgrade path.
+  It wraps the same version bump/render/apply workflow with live
+  Soperator/Slurm preflight and postflight validation and refreshes
+  `deploy-report.md`. If a previous run was interrupted after temporary
+  ActiveChecks suspension, rerun the same command; cxcli uses the local upgrade
+  checkpoint to restore the original ActiveChecks values before completing.
 - Operators can still upgrade manually by editing the required desired-state
   values in `config.yaml`, such as Kubernetes version, OS image, platform,
   preset, GPU stack preset, or chart version, then running `render` and
@@ -3396,7 +3627,7 @@ nebius-cxcli render /path/to/config.yaml
   - Defaults to the global source profile `portable`, which rewrites active local module sources to their portable Git equivalents when available.
   - Use `--source-profile local` only for workstation testing against checked-out local Terraform modules; those generated artifacts are intentionally non-portable.
   - Use `--component-sources-file` or `NEBIUS_CXCLI_COMPONENT_SOURCES_FILE` only when you need to select a non-default catalog file.
-  - If `generated/` already contains files, `render` prompts before overwrite in an interactive terminal.
+  - If `generated/` already contains files, `render` prompts before replacement in an interactive terminal.
   - In non-interactive contexts, use `nebius-cxcli render --force <config.yaml>` to confirm the replacement explicitly.
   - On successful render, the final terminal line prints the copy-paste deploy helper: `Next step: nebius-cxcli deploy <config.yaml>`.
   - Example: `nebius-cxcli render ~/deployments/tenant-name-example/project-name-example/config.yaml`
@@ -3424,7 +3655,7 @@ nebius-cxcli flux bootstrap /path/to/generated
   - Uses the generated bundle as the deploy contract; it does not need the original render machine's local module paths.
   - Example: `nebius-cxcli validate-generated ~/deployments/tenant-name-example/project-name-example/generated --portable`
 - `deploy <config.yaml>`
-  - Full local reconcile from the generated bundle: `deploy` resolves the sibling `generated/` directory and loads `generated/nebius-cxcli-manifest.json` as the authoritative deploy input. That keeps the rendered bundle, not the latest source file edits, as the applied contract. Before Terraform apply, `deploy` runs a generated-bundle preflight covering strict deployment-readiness checks against the manifest runtime config, VPC networking preflight, live Nebius quota/capacity validation, Terraform validation for `generated/infra`, and MK8s GPU-stack compatibility for Nebius-image GPU node groups; on bundled MK8s that Terraform-validation pass now also catches live MK8s cluster / derived GPU-cluster name collisions that are not already managed in the current Terraform state, while treating Nebius `NOT_FOUND` responses as the normal "resource is absent" case. `deploy` then applies Terraform, writes an interim inventory report from infra/app artifacts, applies Flux when app charts are enabled, captures runtime status such as Grafana URLs, runs deploy-time validations, and refreshes the final `deploy-report.md`. On success, the terminal footer prints target-grouped validation PASS/FAIL, copy-paste commands, and only the generated bundle plus `generated/reports/deploy-report.md` paths. Local runs now merge every selected built-in cluster target into `~/.kube/config`; single-target runs still switch `current-context`, while multi-target runs preserve the operator's existing `current-context` and add switchable contexts for each target. Plain multi-target `deploy` and `deploy --all-targets` reconcile every generated target, and `flux apply --all-targets` / `flux bootstrap --all-targets` leave every selected target available through `kubectl config use-context ...`. Use `deploy --target <target-id>` only when you want to narrow app and validation work to one target. If GitOps bootstrap is not configured yet, the CLI warns and includes the follow-up `flux bootstrap` command in the copy-paste footer when Flux work actually runs.
+  - Full local reconcile from the generated bundle: `deploy` resolves the sibling `generated/` directory and loads `generated/nebius-cxcli-manifest.json` as the authoritative deploy input. That keeps the rendered bundle, not the latest source file edits, as the applied contract. Before Terraform apply, `deploy` runs a generated-bundle preflight covering strict deployment-readiness checks against the manifest runtime config, VPC networking preflight, live Nebius quota/capacity validation, Terraform validation for `generated/infra`, and MK8s GPU-stack compatibility for Nebius-image GPU node groups; on bundled MK8s that Terraform-validation pass now also catches live MK8s cluster / derived GPU-cluster name collisions that are not already managed in the current Terraform state, while treating Nebius `NOT_FOUND` responses as the normal "resource is absent" case. `deploy` then applies Terraform, writes an interim inventory report from infra/app artifacts, applies Flux when app charts are enabled, captures runtime status such as Grafana URLs, runs deploy-time validations, and refreshes the final `deploy-report.md`. On success, the terminal footer prints target-grouped validation PASS/FAIL, copy-paste commands, and only the generated bundle plus `generated/reports/deploy-report.md` paths. Local runs now merge every selected built-in cluster target into `~/.kube/config`; single-target runs still switch `current-context`, while multi-target runs preserve the operator's existing `current-context` and add switchable contexts for each target. Plain multi-target `deploy` and `deploy --all-targets` reconcile every generated target, and `flux apply --all-targets` / `flux bootstrap --all-targets` leave every selected target available through `kubectl config use-context ...`. Use `deploy --target <target-id>` only when you want to narrow app and validation work to one target. If GitOps bootstrap is not configured yet, the CLI includes the optional `flux bootstrap` command in the copy-paste footer when Flux work actually runs; customers who intend to manage the cluster through local direct apply can ignore that GitOps handoff.
   - The live quota/capacity preflight uses the Capacity Dashboard for GPU quota dimensions, converts matching VM-slot availability to GPU units, and is rerun-safe for existing bundled MK8s clusters: after backend init, cxcli subtracts the MK8s quota already managed in the current Terraform state before comparing the desired bundle against live quota/capacity. Unchanged reruns therefore stay idempotent instead of failing like first deploys, while real extra requested capacity still fails fast with an explicit quota/capacity message and the exact `quota-request` / `quota-check --all-regions` follow-up commands when it exceeds live availability.
 - Deploy-time MK8s GPU checks are configured per target under `deploy.targets[].validations.mk8s_gpu.*`, where each row uses `instance_id` to bind to the cluster target. The Observability Agent ingestion check is generated for each observability-enabled MK8s target when the active settings catalog leaves `components.infra.mk8s.cli.observability.primary_agent.validation` enabled; that settings-catalog switch defaults to enabled and is separate from customer `config.yaml`. Native ESO MysteryBox connectivity is generated as a required guardrail whenever target-scoped MysteryBox sync is configured, so `--skip-validations` and repeatable `--skip-validation <kind>` only skip optional checks such as `nccl`, `gpu-visibility`, or `observability-ingestion`; those CLI flags do not rewrite `config.yaml`. If a validation fails before its normal report is complete, `deploy` still writes a failure JSON report so the combined deploy summary shows `FAIL` with the underlying error instead of `NOT RUN`.
 - Ongoing GPU health and performance monitoring is intentionally outside that fast deploy loop. NVIDIA positions DCGM Exporter as the Kubernetes telemetry path for Prometheus/Grafana, while deeper DCGM diagnostics are invasive administrator workflows with different run levels and runtimes, so cxcli does not fold those checks into every local `deploy`.
@@ -3459,7 +3690,7 @@ nebius-cxcli flux bootstrap /path/to/generated
   - Uses the same guarded destroy-recovery path as top-level `destroy`: stale-lock auto-unlock/retry first, then direct MK8s node-group cleanup only for live stuck create operations.
   - Example: `nebius-cxcli terraform destroy ~/deployments/tenant-name-example/project-name-example/generated --yes`
 - `flux apply <generated-dir>`
-  - Apps-only direct apply from the rendered Flux tree. Safe to rerun sequentially for day-2 reconciliation. If the rendered manifest needs Terraform-backed handoff or app-input outputs, `flux apply` initializes `generated/infra` first and reads the current outputs from state, but it does not run `terraform apply`. Its Flux API discovery check is resource-type based, so it does not require the app target namespaces to exist before the manifests create them. Use `--target <target-id>` or `--all-targets` when the generated bundle declares more than one built-in cluster target. If GitOps bootstrap is not configured yet, the CLI warns and prints the follow-up `flux bootstrap` command.
+  - Apps-only direct apply from the rendered Flux tree. Safe to rerun sequentially for day-2 reconciliation. If the rendered manifest needs Terraform-backed handoff or app-input outputs, `flux apply` initializes `generated/infra` first and reads the current outputs from state, but it does not run `terraform apply`. Its Flux API discovery check is resource-type based, so it does not require the app target namespaces to exist before the manifests create them. Use `--target <target-id>` or `--all-targets` when the generated bundle declares more than one built-in cluster target. If GitOps bootstrap is not configured yet, the CLI prints an optional GitOps handoff command; local direct apply remains valid when continuous Git sync is not part of the customer's operating model.
   - Accepts the project `generated/` directory or a path under `generated/flux/`; other generated subtrees such as `generated/infra/` are rejected so apps-only commands cannot accidentally target Terraform artifacts.
   - Example: `nebius-cxcli flux apply ~/deployments/tenant-name-example/project-name-example/generated`
 - `flux destroy <generated-dir>`
@@ -3472,6 +3703,131 @@ nebius-cxcli flux bootstrap /path/to/generated
   - Accepts the project `generated/` directory or a path under `generated/flux/`; other generated subtrees are rejected.
   - Normal day-2 updates should replace `generated/` locally, then commit and push one final watched-path snapshot. Do not unbootstrap/rebootstrap Flux just to roll out a new rendered bundle.
   - Example: `nebius-cxcli flux bootstrap ~/deployments/tenant-name-example/project-name-example/generated`
+
+### Command Examples
+
+```bash
+# Generator side: create and render artifacts
+# Interactive create (default wizard mode)
+nebius-cxcli create /path/to/deployments-root
+
+# Day-2 config edits against an existing project
+nebius-cxcli component list --config /path/to/config.yaml
+
+# Interactive add of a new Terraform-module-backed infra component
+nebius-cxcli component add --config /path/to/config.yaml
+
+# Non-interactive add/remove
+nebius-cxcli component add managed-postgresql --config /path/to/config.yaml --no-interactive
+nebius-cxcli component add managed-postgresql object-storage@logs-bucket --config /path/to/config.yaml --no-interactive
+nebius-cxcli component add infra:vm@worker --config /path/to/config.yaml --no-interactive --network-id infra:vm@worker=vpcnetwork-123 --subnet-id infra:vm@worker=vpcsubnet-123
+nebius-cxcli component add mk8s@training-cluster mk8s@serving-cluster --config /path/to/config.yaml --no-interactive
+nebius-cxcli component add apps:external-secrets@serving-cluster --config /path/to/config.yaml --no-interactive
+nebius-cxcli component add apps:gateway-helm@serving-cluster --config /path/to/config.yaml --no-interactive
+nebius-cxcli component remove managed-postgresql@analytics-pg --config /path/to/config.yaml --no-interactive
+nebius-cxcli component remove gateway-helm@serving-cluster --config /path/to/config.yaml --no-interactive
+
+# Non-interactive create
+nebius-cxcli create /path/to/deployments-root \
+  --client-name client-a \
+  --tenant-id tenant-123 \
+  --project-id project-123 \
+  --infra mk8s \
+  --network-id vpcnetwork-123 \
+  --subnet-id vpcsubnet-123 \
+  --app n8n \
+  --app-namespace n8n=automation \
+  --app-releasename n8n=workflow-core \
+  --no-interactive
+
+# Guided create with identity and infra choices preselected
+nebius-cxcli create /path/to/deployments-root \
+  --client-name client-slug \
+  --tenant-id TENANT_ID \
+  --project-id PROJECT_ID \
+  --infra mk8s,vm,wireguard-gw,ssh-jumphost \
+  --no-validate-sources \
+  --no-validate-config
+
+# Guided create with multiple infra and app choices preselected
+nebius-cxcli create /path/to/deployments-root \
+  --client-name client-slug \
+  --tenant-id TENANT_ID \
+  --project-id PROJECT_ID \
+  --infra mk8s,vm \
+  --infra wireguard-gw,ssh-jumphost \
+  --app n8n,gateway-helm \
+  --app cert-manager \
+  --no-validate-sources \
+  --no-validate-config
+
+# Non-interactive overwrite of an existing resolved project folder
+nebius-cxcli create /path/to/deployments-root \
+  --client-name client-a \
+  --tenant-id tenant-123 \
+  --project-id project-123 \
+  --force \
+  --no-interactive
+
+# Validate and render
+nebius-cxcli validate /path/to/config.yaml
+nebius-cxcli render /path/to/config.yaml
+
+# Local render against checked-out Terraform modules
+nebius-cxcli --source-profile local validate /path/to/config.yaml
+nebius-cxcli --source-profile local render /path/to/config.yaml
+
+# Customer side: validate and deploy generated bundle
+# Validate generated bundle before deploy
+nebius-cxcli validate-generated --portable /path/to/generated
+
+# Local deploy from rendered artifacts
+nebius-cxcli deploy /path/to/config.yaml
+
+# Local destroy from the project entrypoint
+nebius-cxcli destroy /path/to/config.yaml --yes
+
+# Infra only
+nebius-cxcli terraform plan /path/to/generated
+nebius-cxcli terraform apply /path/to/generated
+nebius-cxcli terraform destroy /path/to/generated --yes
+
+# Safe to rerun sequentially after artifact changes or partial failures
+nebius-cxcli terraform apply /path/to/generated
+
+# If `terraform` is not in PATH, nebius-cxcli downloads the catalog-pinned
+# Terraform CLI into its local cache automatically before these commands run.
+nebius-cxcli terraform apply /path/to/generated
+
+# Apps only: direct local apply to the target cluster
+nebius-cxcli flux apply /path/to/generated
+nebius-cxcli flux destroy /path/to/generated --yes
+
+# Safe to rerun sequentially for day-2 chart reconciliation
+nebius-cxcli flux apply /path/to/generated
+
+# Apps only: GitOps bootstrap/reconcile path
+nebius-cxcli flux bootstrap /path/to/generated
+
+# If `flux` is not in PATH, nebius-cxcli downloads the catalog-pinned
+# Flux CLI into its local cache automatically before bootstrapping.
+nebius-cxcli flux bootstrap /path/to/generated
+
+# Supporting: bootstrap generated-only customer CI workflow
+nebius-cxcli bootstrap-ci /path/to/config.yaml
+
+# Create local runtime auth profile (no rotation if already present)
+nebius-cxcli auth --project-id project-123 --client-name client-a --create
+
+# Force runtime auth profile rotation
+nebius-cxcli auth --project-id project-123 --client-name client-a --recreate
+
+# Validate runtime auth profile
+nebius-cxcli auth --project-config /path/to/config.yaml --validate-profile
+
+# Sync local auth profile to GitHub environment secrets
+nebius-cxcli auth --project-config /path/to/config.yaml --bootstrap-ci --github-repo owner/repo
+```
 
 ### Supporting Commands
 
@@ -3508,7 +3864,7 @@ nebius-cxcli auth --project-config /path/to/config.yaml --validate-profile
   - `discover`: pass the deployments root or any narrower directory under it, including one project directory or `generated/`.
   - `component list/add/remove`: pass the project `config.yaml` with `--config <config.yaml>` so component selectors can be written first.
   - `grafana`: no positional path; use `--export-dashboard <grafana-base-or-folder-url>` or `--dashboard-json <path>` and optional `--component-sources` with `--attach`.
-  - `component`, `validate`, `validate-dashboards`, `quota-check`, `quota-request`, `render`, `deploy`, `upgrade`, `bootstrap-ci`, `wireguard`, `ssh-jumphost`, `destroy`, `email`: operate on the project `config.yaml`.
+  - `component`, `validate`, `validate-dashboards`, `quota-check`, `quota-request`, `render`, `deploy`, `soperator`, `upgrade`, `bootstrap-ci`, `wireguard`, `ssh-jumphost`, `destroy`, `email`: operate on the project `config.yaml`.
   - `upgrade k8s-version`: pass `config.yaml` alone in an interactive terminal to choose the managed MK8s target, version, and options through the wizard; pass an explicit `infra:mk8s@<target>` selector plus `--to-version <major.minor>` for automation. V1 supports Terraform-managed MK8s targets only.
   - `upgrade os-image`: pass `config.yaml` alone in an interactive terminal to choose an upgradeable `infra:mk8s@<target>` or `infra:vm@<target>` component through the wizard; pass an explicit selector plus `--to-os <os>` for automation. MK8s selectors update node template OS values and can use `--node-group <source-key-or-live-name>` to narrow the rolling update to one group. VM selectors update generic `infra:vm` `inputs.source_image_family`.
   - `validate-generated`: pass `generated/`, one of its subdirectories, or a file under that tree.
@@ -3527,7 +3883,7 @@ nebius-cxcli auth --project-config /path/to/config.yaml --validate-profile
   - Example: `nebius-cxcli grafana --export-dashboard https://grafana.example.invalid/ --folder-uid folder-uid --dashboard-uid dashboard-uid --dashboard-folder mk8s --datasource "Nebius User Metrics" --attach`
   - Example: `nebius-cxcli grafana --dashboard-json ./dashboards/mk8s/custom.json --dashboard-folder mk8s --datasource "Nebius User Metrics" --attach`
 - Upgrade commands have a dedicated operator section. See [Upgrade](#upgrade)
-  for the copy-paste commands, disruption policies, drain-timeout defaults,
+  for the copy-paste commands, upgrade strategies, drain-timeout defaults,
   Terraform/SDK ownership model, node-layer upgrades, Helm chart upgrades, and
   manual desired-state fallback.
 - `component add [component-selector...] --config <config.yaml>`
@@ -3781,11 +4137,15 @@ Common command flags:
 - `validate-generated`: `--auto-auth-bootstrap/--no-auto-auth-bootstrap`, `--portable`
 - `render`: `--force`
 - `deploy`: `--auto-auth-bootstrap/--no-auto-auth-bootstrap`, `--skip-validations`, `--skip-validation`, `--target`, `--all-targets`
-- `upgrade k8s-version`: `--to-version`, `--dry-run`, `--disruption-policy`, `--drain-timeout`, `--auto-auth-bootstrap/--no-auto-auth-bootstrap`, `--skip-validations`, `--skip-validation`, `--interactive/--no-interactive`
-- `upgrade node-template`: `--to-version`, `--to-os`, `--to-gpu-stack-preset`, `--node-group`, `--dry-run`, `--disruption-policy`, `--drain-timeout`, `--auto-auth-bootstrap/--no-auto-auth-bootstrap`, `--skip-validations`, `--skip-validation`
-- `upgrade os-image`: `--to-os`, `--node-group`, `--dry-run`, `--disruption-policy`, `--drain-timeout`, `--interactive/--no-interactive`
-- Node-layer upgrades (`upgrade gpu-stack-preset`, `upgrade platform`, `upgrade cpu-preset`, `upgrade gpu-preset`): target flag (`--to-gpu-stack-preset`, `--to-preset`, or `--to-platform`), `--node-group`, `--dry-run`, `--disruption-policy`, `--drain-timeout`, `--interactive/--no-interactive`
-- `upgrade helm-chart`: `--to-version`, `--dry-run`, `--interactive/--no-interactive`
+- `upgrade k8s-version`: `--to-version`, `--dry-run`, `--strategy`, `--drain-timeout`, `--auto-auth-bootstrap/--no-auto-auth-bootstrap`, `--skip-validations`, `--skip-validation`, `--interactive/--no-interactive`
+- `upgrade node-template`: `--to-version`, `--to-os`, `--to-gpu-stack-preset`, `--node-group`, `--dry-run`, `--strategy`, `--drain-timeout`, `--auto-auth-bootstrap/--no-auto-auth-bootstrap`, `--skip-validations`, `--skip-validation`
+- `upgrade os-image`: `--to-os`, `--node-group`, `--dry-run`, `--strategy`, `--drain-timeout`, `--interactive/--no-interactive`
+- Node-layer upgrades (`upgrade gpu-stack-preset`, `upgrade platform`, `upgrade cpu-preset`, `upgrade gpu-preset`): target flag (`--to-gpu-stack-preset`, `--to-preset`, or `--to-platform`), `--node-group`, `--dry-run`, `--strategy`, `--drain-timeout`, `--interactive/--no-interactive`
+- `soperator upgrade`: `--target`, `--to-version`, `--dry-run`,
+  `--interactive/--no-interactive`
+- `upgrade helm-chart`: `--to-version`, `--dry-run`,
+  `--interactive/--no-interactive` (`apps:soperator@<target>` redirects to
+  `soperator upgrade`)
 - `destroy`: `--auto-auth-bootstrap/--no-auto-auth-bootstrap`, `--yes`
 - `discover`: `--all`
 - `wireguard`:
@@ -3817,6 +4177,7 @@ Terraform runtime auth behavior:
 - MysteryBox payload material is runtime-only. Generated Terraform roots expose `payload_values` as a sensitive root variable and pass it into the module, but do not write it to generated tfvars or manifests. Interactive local deploy/plan/apply commands ask for missing first-deploy payload values with hidden input; CI and other non-interactive runs should set `TF_VAR_mysterybox_payload_values` for the default `mysterybox` instance, or the rendered instance variable such as `TF_VAR_secretstore_alpha_payload_values`, with JSON/YAML shape `{"secret-name":{"PAYLOAD_KEY":"value"}}`. After the first versions exist, cxcli records their `mbsecver-...` IDs in source and generated artifacts so reruns do not need the sensitive payload values again, including reruns after a transient provider polling failure.
 - Local runtime auth can be auto-bootstrapped with a dedicated service account name: `nebius-cxcli-tf-sa`.
 - Auto-bootstrapped runtime auth material is cached under `~/.config/nebius-cxcli/<client_name>-<project-id>/` to avoid creating new key material every run.
+- The local runtime auth cache intentionally stores long-lived Terraform private-key material and Object Storage access keys in cleartext files protected by a `0700` profile directory and `0600` files. Keep this cache on local protected storage, avoid placing `NEBIUS_CXCLI_RUNTIME_AUTH_DIR` inside synced or backed-up folders, and use `nebius-cxcli auth --recreate ...` to rotate the cached keys when the local machine or cache location may be exposed.
 - ESO MysteryBox auth does not use a local cxcli auth cache. The in-cluster Kubernetes Subject Credentials Secret is the persisted ESO auth location; deploy/Flux commands create or replace it only when it is missing, invalid, or stale.
 - The Terraform runtime auth key flow is authorized-key based: the CLI generates keypair material, uploads the public key for `nebius-cxcli-tf-sa`, and stores private key material locally for Terraform runtime use. ESO uses the same Nebius authorized-key API pattern for `mysterybox-sa`, but stores the private key only in the configured Kubernetes Secret.
 - Terraform backend init uses AWS-compatible Object Storage keys (`AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`); the runtime auth profile cache auto-populates these for local runs.
@@ -3878,131 +4239,6 @@ deadline tracebacks so the operator sees the cxcli warning/retry path instead of
 SDK stack trace while Terraform continues.
 
 This keeps repeated runs safe by default while still allowing explicit rotation.
-
-## Examples
-
-```bash
-# Generator side: create and render artifacts
-# Interactive create (default wizard mode)
-nebius-cxcli create /path/to/deployments-root
-
-# Day-2 config edits against an existing project
-nebius-cxcli component list --config /path/to/config.yaml
-
-# Interactive add of a new Terraform-module-backed infra component
-nebius-cxcli component add --config /path/to/config.yaml
-
-# Non-interactive add/remove
-nebius-cxcli component add managed-postgresql --config /path/to/config.yaml --no-interactive
-nebius-cxcli component add managed-postgresql object-storage@logs-bucket --config /path/to/config.yaml --no-interactive
-nebius-cxcli component add infra:vm@worker --config /path/to/config.yaml --no-interactive --network-id infra:vm@worker=vpcnetwork-123 --subnet-id infra:vm@worker=vpcsubnet-123
-nebius-cxcli component add mk8s@training-cluster mk8s@serving-cluster --config /path/to/config.yaml --no-interactive
-nebius-cxcli component add apps:external-secrets@serving-cluster --config /path/to/config.yaml --no-interactive
-nebius-cxcli component add apps:gateway-helm@serving-cluster --config /path/to/config.yaml --no-interactive
-nebius-cxcli component remove managed-postgresql@analytics-pg --config /path/to/config.yaml --no-interactive
-nebius-cxcli component remove gateway-helm@serving-cluster --config /path/to/config.yaml --no-interactive
-
-# Non-interactive create
-nebius-cxcli create /path/to/deployments-root \
-  --client-name client-a \
-  --tenant-id tenant-123 \
-  --project-id project-123 \
-  --infra mk8s \
-  --network-id vpcnetwork-123 \
-  --subnet-id vpcsubnet-123 \
-  --app n8n \
-  --app-namespace n8n=automation \
-  --app-releasename n8n=workflow-core \
-  --no-interactive
-
-# Guided create with identity and infra choices preselected
-nebius-cxcli create /path/to/deployments-root \
-  --client-name client-slug \
-  --tenant-id TENANT_ID \
-  --project-id PROJECT_ID \
-  --infra mk8s,vm,wireguard-gw,ssh-jumphost \
-  --no-validate-sources \
-  --no-validate-config
-
-# Guided create with multiple infra and app choices preselected
-nebius-cxcli create /path/to/deployments-root \
-  --client-name client-slug \
-  --tenant-id TENANT_ID \
-  --project-id PROJECT_ID \
-  --infra mk8s,vm \
-  --infra wireguard-gw,ssh-jumphost \
-  --app n8n,gateway-helm \
-  --app cert-manager \
-  --no-validate-sources \
-  --no-validate-config
-
-# Non-interactive overwrite of an existing resolved project folder
-nebius-cxcli create /path/to/deployments-root \
-  --client-name client-a \
-  --tenant-id tenant-123 \
-  --project-id project-123 \
-  --force \
-  --no-interactive
-
-# Validate and render
-nebius-cxcli validate /path/to/config.yaml
-nebius-cxcli render /path/to/config.yaml
-
-# Local render against checked-out Terraform modules
-nebius-cxcli --source-profile local validate /path/to/config.yaml
-nebius-cxcli --source-profile local render /path/to/config.yaml
-
-# Customer side: validate and deploy generated bundle
-# Validate generated bundle before deploy
-nebius-cxcli validate-generated --portable /path/to/generated
-
-# Local deploy from rendered artifacts
-nebius-cxcli deploy /path/to/config.yaml
-
-# Local destroy from the project entrypoint
-nebius-cxcli destroy /path/to/config.yaml --yes
-
-# Infra only
-nebius-cxcli terraform plan /path/to/generated
-nebius-cxcli terraform apply /path/to/generated
-nebius-cxcli terraform destroy /path/to/generated --yes
-
-# Safe to rerun sequentially after artifact changes or partial failures
-nebius-cxcli terraform apply /path/to/generated
-
-# If `terraform` is not in PATH, nebius-cxcli downloads the catalog-pinned
-# Terraform CLI into its local cache automatically before these commands run.
-nebius-cxcli terraform apply /path/to/generated
-
-# Apps only: direct local apply to the target cluster
-nebius-cxcli flux apply /path/to/generated
-nebius-cxcli flux destroy /path/to/generated --yes
-
-# Safe to rerun sequentially for day-2 chart reconciliation
-nebius-cxcli flux apply /path/to/generated
-
-# Apps only: GitOps bootstrap/reconcile path
-nebius-cxcli flux bootstrap /path/to/generated
-
-# If `flux` is not in PATH, nebius-cxcli downloads the catalog-pinned
-# Flux CLI into its local cache automatically before bootstrapping.
-nebius-cxcli flux bootstrap /path/to/generated
-
-# Supporting: bootstrap generated-only customer CI workflow
-nebius-cxcli bootstrap-ci /path/to/config.yaml
-
-# Create local runtime auth profile (no rotation if already present)
-nebius-cxcli auth --project-id project-123 --client-name client-a --create
-
-# Force runtime auth profile rotation
-nebius-cxcli auth --project-id project-123 --client-name client-a --recreate
-
-# Validate runtime auth profile
-nebius-cxcli auth --project-config /path/to/config.yaml --validate-profile
-
-# Sync local auth profile to GitHub environment secrets
-nebius-cxcli auth --project-config /path/to/config.yaml --bootstrap-ci --github-repo owner/repo
-```
 
 ## Development
 

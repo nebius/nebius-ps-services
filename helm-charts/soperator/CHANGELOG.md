@@ -4,6 +4,11 @@ All notable changes to this chart are tracked here.
 
 ## [Unreleased]
 
+- Made upstream `--latest` sync select the highest non-draft, non-prerelease
+  SemVer release from GitHub releases instead of GitHub's mutable `Latest`
+  marker, so maintenance-branch latest labels do not make automation reject an
+  already-pinned newer release.
+
 ## [soperator-chart-v4.0.2-ps.1] - 2026-06-12
 
 - Bumped Soperator upstream release to 4.0.2 and Helm chart package to

@@ -6,6 +6,8 @@ from enum import Enum
 from types import SimpleNamespace
 from typing import Any
 
+import pytest
+
 import nebius_cxcli.deployment_status as deployment_status_module
 from nebius_cxcli.deployment_status import (
     DeploymentStatusReporter,
@@ -202,6 +204,23 @@ def test_deployment_status_reporter_includes_node_group_alerts(monkeypatch) -> N
         reporter.close()
 
     assert any("alerts ERROR workers: Quota exhausted." in message for message in messages)
+
+
+def test_paged_response_collection_rejects_repeated_page_token() -> None:
+    def _request_factory(page_token: str) -> str:
+        return page_token
+
+    def _request_call(_request: str):
+        response = SimpleNamespace(items=[], next_page_token="same-token")
+        return SimpleNamespace(wait=lambda: response)
+
+    with pytest.raises(RuntimeError, match="repeated pagination token"):
+        deployment_status_module._paged_response_collection(
+            request_factory=_request_factory,
+            request_call=_request_call,
+            context="test status",
+            field_names=("items",),
+        )
 
 
 def test_mk8s_status_poller_exposes_terminal_node_group_error() -> None:
@@ -1072,7 +1091,10 @@ def test_postgresql_status_poller_reads_clusters_response_field(monkeypatch) -> 
     monkeypatch.setattr(
         postgresql_api,
         "ListClustersRequest",
-        lambda *, parent_id: SimpleNamespace(parent_id=parent_id),
+        lambda *, parent_id, page_token="": SimpleNamespace(
+            parent_id=parent_id,
+            page_token=page_token,
+        ),
     )
 
     poller = deployment_status_module._PostgreSQLStatusPoller(
@@ -1092,6 +1114,89 @@ def test_postgresql_status_poller_reads_clusters_response_field(monkeypatch) -> 
     assert "op Create PostgreSQL cluster running 2m10s" in summary
     assert captured["parent_id"] == "project-u123"
     assert captured["context"] == "deployment status polling"
+    assert captured["resource_id"] == "postgresql-u123"
+
+
+def test_postgresql_status_poller_finds_cluster_on_second_page(monkeypatch) -> None:
+    sdk = SimpleNamespace(sync_close=lambda: None)
+    captured: dict[str, object] = {"page_tokens": []}
+
+    cluster = SimpleNamespace(
+        metadata=SimpleNamespace(
+            name="pgsql1",
+            id="postgresql-u123",
+        ),
+        status=SimpleNamespace(
+            phase="PHASE_RUNNING",
+            state="STATE_FINISHED",
+            connection_endpoints=SimpleNamespace(
+                private_read_write="private-rw.example.invalid",
+                public_read_write="",
+            ),
+        ),
+    )
+
+    class _FakeOperationService:
+        pass
+
+    class _FakeClusterClient:
+        def __init__(self, current_sdk):
+            captured["cluster_sdk"] = current_sdk
+
+        def list(self, request):
+            captured["page_tokens"].append(request.page_token)
+            if request.page_token == "":
+                response = SimpleNamespace(clusters=[], next_page_token="page-2")
+            elif request.page_token == "page-2":
+                response = SimpleNamespace(clusters=[cluster], next_page_token="")
+            else:  # pragma: no cover - defensive assertion branch
+                pytest.fail(f"unexpected page token: {request.page_token}")
+            return SimpleNamespace(wait=lambda: response)
+
+        def operation_service(self):
+            return _FakeOperationService()
+
+    monkeypatch.setattr(
+        deployment_status_module,
+        "init_nebius_sdk",
+        lambda *, parent_id, context: (
+            captured.update({"parent_id": parent_id, "context": context}) or sdk
+        ),
+    )
+    monkeypatch.setattr(
+        deployment_status_module,
+        "_latest_operation_summary",
+        lambda operation_service, resource_id: (
+            captured.update({"operation_service": operation_service, "resource_id": resource_id})
+            or None
+        ),
+    )
+
+    import nebius.api.nebius.msp.postgresql.v1alpha1 as postgresql_api
+
+    monkeypatch.setattr(postgresql_api, "ClusterServiceClient", _FakeClusterClient)
+    monkeypatch.setattr(
+        postgresql_api,
+        "ListClustersRequest",
+        lambda *, parent_id, page_token="": SimpleNamespace(
+            parent_id=parent_id,
+            page_token=page_token,
+        ),
+    )
+
+    poller = deployment_status_module._PostgreSQLStatusPoller(
+        StatusWatcherTarget(
+            component_id="managed-postgresql",
+            kind="nebius.msp.postgresql.cluster",
+            parent_id="project-u123",
+            resource_name="pgsql1",
+        )
+    )
+
+    summary = poller.summary()
+
+    assert "managed-postgresql pgsql1 (postgresql-u123): RUNNING" in summary
+    assert captured["page_tokens"] == ["", "page-2"]
     assert captured["resource_id"] == "postgresql-u123"
 
 
@@ -1249,7 +1354,10 @@ def test_compute_instance_status_poller_reads_instance_state(monkeypatch) -> Non
     monkeypatch.setattr(
         compute_api,
         "ListInstancesRequest",
-        lambda *, parent_id: SimpleNamespace(parent_id=parent_id),
+        lambda *, parent_id, page_token="": SimpleNamespace(
+            parent_id=parent_id,
+            page_token=page_token,
+        ),
     )
 
     poller = deployment_status_module._ComputeInstanceStatusPoller(

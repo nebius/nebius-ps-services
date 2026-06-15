@@ -191,14 +191,27 @@ def _materialize_notifier_mysterybox_sync(payload: dict[str, Any]) -> bool:
         if target_row is None or not namespace:
             continue
         before = copy.deepcopy(target_row)
-        secrets = target_row.setdefault("secrets", {})
-        if not isinstance(secrets, dict):
-            secrets = {}
+        raw_secrets = target_row.get("secrets")
+        if raw_secrets is None:
+            secrets: dict[str, Any] = {}
             target_row["secrets"] = secrets
-        mysterybox = secrets.setdefault("mysterybox", {})
-        if not isinstance(mysterybox, dict):
-            mysterybox = {}
+        elif isinstance(raw_secrets, dict):
+            secrets = raw_secrets
+        else:
+            continue
+        raw_mysterybox = secrets.get("mysterybox")
+        if raw_mysterybox is False:
+            continue
+        if raw_mysterybox is None:
+            mysterybox: dict[str, Any] = {}
             secrets["mysterybox"] = mysterybox
+        elif raw_mysterybox is True:
+            mysterybox = {"enabled": True}
+            secrets["mysterybox"] = mysterybox
+        elif isinstance(raw_mysterybox, dict):
+            mysterybox = raw_mysterybox
+        else:
+            continue
         if mysterybox.get("enabled") is False:
             continue
         mysterybox.setdefault("enabled", True)

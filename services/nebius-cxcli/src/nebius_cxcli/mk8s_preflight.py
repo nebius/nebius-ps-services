@@ -47,10 +47,7 @@ def _is_not_found_error(exc: Exception) -> bool:
     code = getattr(status, "code", None)
     code_name = _as_text(getattr(code, "name", None)).upper()
     code_text = _as_text(code).upper()
-    if code_name == "NOT_FOUND" or code_text in {"NOT_FOUND", "STATUSCODE.NOT_FOUND"}:
-        return True
-    message = str(exc).lower()
-    return "not found" in message or "not_found" in message or "statuscode.not_found" in message
+    return code_name == "NOT_FOUND" or code_text in {"NOT_FOUND", "STATUSCODE.NOT_FOUND"}
 
 
 @dataclass(frozen=True)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import json
 import os
 import shutil
@@ -449,7 +450,7 @@ class HelmClient:
         if not repo or _is_oci_ref(repo) or not _repo_has_index(repo):
             return []
 
-        alias = f"cxcli-{abs(hash(repo))}"
+        alias = f"cxcli-{hashlib.sha1(repo.encode('utf-8')).hexdigest()[:12]}"
         add_result = subprocess.run(
             ["helm", "repo", "add", alias, repo],
             capture_output=True,

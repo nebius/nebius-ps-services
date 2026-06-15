@@ -130,7 +130,7 @@ def _validate_soperator_onboarding_rollout(onboarding: Mapping[str, Any], field_
         return
     if not isinstance(rollout, Mapping):
         raise ValueError(f"{field_label}.node_template_upgrade.rollout must be a mapping")
-    strategy = normalize_component_token(rollout.get("strategy")) or "safe-surge"
+    strategy = normalize_component_token(rollout.get("strategy")) or "zero-surge"
     if strategy not in _SOPERATOR_WORKER_ROLLOUT_STRATEGIES:
         raise ValueError(
             f"{field_label}.node_template_upgrade.rollout.strategy must be one of: "
@@ -157,6 +157,25 @@ def _validate_soperator_onboarding_rollout(onboarding: Mapping[str, Any], field_
             f"{field_label}.node_template_upgrade.rollout must set only one of "
             f"{groups_key} or {percent_key}"
         )
+    parallel_present = (
+        rollout.get("max_parallel_worker_groups") is not None
+        and _as_text(rollout.get("max_parallel_worker_groups")) != ""
+    )
+    if strategy == "zero-surge":
+        zero_surge_wave_fields = []
+        if groups_present:
+            zero_surge_wave_fields.append(groups_key)
+        if percent_present:
+            zero_surge_wave_fields.append(percent_key)
+        if parallel_present:
+            zero_surge_wave_fields.append("max_parallel_worker_groups")
+        if zero_surge_wave_fields:
+            raise ValueError(
+                f"{field_label}.node_template_upgrade.rollout.strategy zero-surge "
+                "does not use worker wave budget fields "
+                f"({', '.join(zero_surge_wave_fields)}); set strategy to safe-surge "
+                "or remove those fields"
+            )
     _positive_int_for_validation(
         rollout.get(groups_key),
         f"{field_label}.node_template_upgrade.rollout.{groups_key}",
@@ -188,6 +207,16 @@ def _validate_soperator_onboarding_rollout(onboarding: Mapping[str, Any], field_
         raise ValueError(
             f"{field_label}.node_template_upgrade.rollout.worker_group_strategy must keep "
             "at least one of max_surge_count or max_unavailable_count greater than zero"
+        )
+    if strategy == "zero-surge" and max_surge not in {None, 0}:
+        raise ValueError(
+            f"{field_label}.node_template_upgrade.rollout.worker_group_strategy."
+            "max_surge_count must be 0 when strategy is zero-surge"
+        )
+    if strategy == "safe-surge" and max_surge == 0:
+        raise ValueError(
+            f"{field_label}.node_template_upgrade.rollout.worker_group_strategy."
+            "max_surge_count must be greater than 0 when strategy is safe-surge"
         )
     _drain_timeout_for_validation(
         worker_strategy.get("drain_timeout"),

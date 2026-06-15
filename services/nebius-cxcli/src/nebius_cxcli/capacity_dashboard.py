@@ -146,6 +146,7 @@ def list_capacity_resource_advice(
 
     client = ResourceAdviceServiceClient(sdk)
     page_token = ""
+    seen_tokens: set[str] = set()
     resolved: list[CapacityResourceAdvice] = []
     while True:
         response = client.list(
@@ -178,3 +179,9 @@ def list_capacity_resource_advice(
         page_token = _as_text(getattr(response, "next_page_token", None))
         if not page_token:
             return tuple(resolved)
+        if page_token in seen_tokens:
+            raise RuntimeError(
+                "Capacity Dashboard listing received a repeated pagination token from "
+                "the Nebius API; aborting to avoid an infinite list loop."
+            )
+        seen_tokens.add(page_token)

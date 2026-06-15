@@ -96,12 +96,12 @@ def test_parse_upgrade_selector_requires_canonical_mk8s_infra_target() -> None:
 @pytest.mark.parametrize(
     ("policy", "expected_seconds", "expected_label"),
     [
-        ("safe", None, "none"),
-        ("allow-unavailable", 1800, "30m"),
+        ("safe-surge", 1800, "30m"),
+        ("zero-surge", 1800, "30m"),
         ("force-delete", 600, "10m"),
     ],
 )
-def test_resolve_drain_timeout_auto_by_disruption_policy(
+def test_resolve_drain_timeout_auto_by_upgrade_strategy(
     policy: str,
     expected_seconds: int | None,
     expected_label: str,
@@ -114,10 +114,10 @@ def test_resolve_drain_timeout_auto_by_disruption_policy(
 
 def test_resolve_drain_timeout_accepts_go_style_duration_and_none() -> None:
     assert upgrade.resolve_drain_timeout("force-delete", "1h30m").seconds == 5400
-    assert upgrade.resolve_drain_timeout("allow-unavailable", "45m").seconds == 2700
-    assert upgrade.resolve_drain_timeout("safe", "none").seconds is None
+    assert upgrade.resolve_drain_timeout("zero-surge", "45m").seconds == 2700
+    assert upgrade.resolve_drain_timeout("safe-surge", "none").seconds is None
     with pytest.raises(ValueError, match="Go-style duration"):
-        upgrade.resolve_drain_timeout("safe", "10minutes")
+        upgrade.resolve_drain_timeout("safe-surge", "10minutes")
 
 
 def test_require_single_minor_hop_rejects_downgrade_and_skipped_minor() -> None:
@@ -604,16 +604,17 @@ def test_update_source_node_template_updates_selected_tuple_and_pins_versions() 
 
 
 def test_terraform_node_group_strategy_for_policy_matches_nebius_provider_schema() -> None:
-    assert (
-        upgrade.terraform_node_group_strategy_for_policy(
-            "safe",
-            upgrade.resolve_drain_timeout("safe", "auto"),
-        )
-        is None
-    )
     assert upgrade.terraform_node_group_strategy_for_policy(
-        "allow-unavailable",
-        upgrade.resolve_drain_timeout("allow-unavailable", "auto"),
+        "safe-surge",
+        upgrade.resolve_drain_timeout("safe-surge", "auto"),
+    ) == {
+        "max_surge": {"count": 1},
+        "max_unavailable": {"count": 0},
+        "drain_timeout": "30m",
+    }
+    assert upgrade.terraform_node_group_strategy_for_policy(
+        "zero-surge",
+        upgrade.resolve_drain_timeout("zero-surge", "auto"),
     ) == {
         "max_surge": {"count": 0},
         "max_unavailable": {"count": 1},
@@ -792,8 +793,17 @@ def test_node_group_rollout_complete_requires_no_outdated_or_surge_nodes() -> No
         outdated_node_count=0,
         reconciling=False,
     )
+    missing_outdated = _node_group(id="ng-system", name="system", version="1.33")
+    missing_outdated.status = SimpleNamespace(
+        version="v1.33.7-nebius-node.64",
+        ready_node_count=2,
+        target_node_count=2,
+        node_count=2,
+        reconciling=False,
+    )
 
     assert not upgrade.node_group_rollout_complete(rolling, version="1.33")
+    assert not upgrade.node_group_rollout_complete(missing_outdated, version="1.33")
     assert upgrade.node_group_rollout_complete(complete, version="1.33")
 
 
@@ -947,7 +957,7 @@ def test_blocking_preflight_findings_respect_disruption_policy() -> None:
 
     assert upgrade.blocking_preflight_findings(
         [pdb, stuck, inspection_failed],
-        disruption_policy="safe",
+        disruption_policy="safe-surge",
     ) == (
         pdb,
         stuck,
@@ -982,6 +992,39 @@ def test_kubernetes_preflight_inspection_failures_always_block_force_delete(
     )
 
 
+def test_pdb_findings_flags_zero_disruptions_even_when_current_exceeds_desired(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        upgrade,
+        "_kubectl_json",
+        lambda *_args, **_kwargs: {
+            "items": [
+                {
+                    "metadata": {"namespace": "app", "name": "api"},
+                    "status": {
+                        "disruptionsAllowed": 0,
+                        "desiredHealthy": 1,
+                        "currentHealthy": 2,
+                        "expectedPods": 2,
+                    },
+                }
+            ]
+        },
+    )
+
+    findings = upgrade._pdb_findings(kube_env={}, timeout_seconds=1)
+
+    assert findings == (
+        upgrade.PreflightFinding(
+            kind=upgrade.PDB_BLOCKER_KIND,
+            namespace="app",
+            name="api",
+            message="PDB allows zero disruptions (currentHealthy=2, desiredHealthy=1).",
+        ),
+    )
+
+
 def test_plan_orders_non_gpu_node_groups_before_gpu_node_groups() -> None:
     target = upgrade.parse_upgrade_selector("infra:mk8s@prod")
     source = {
@@ -1003,8 +1046,8 @@ def test_plan_orders_non_gpu_node_groups_before_gpu_node_groups() -> None:
         cluster_id="cluster-1",
         source_component=source,
         target_version="1.33",
-        disruption_policy="safe",
-        drain_timeout=upgrade.resolve_drain_timeout("safe", "auto"),
+        disruption_policy="safe-surge",
+        drain_timeout=upgrade.resolve_drain_timeout("safe-surge", "auto"),
         live_node_groups=[
             _node_group(
                 id="ng-gpu",
@@ -1064,8 +1107,8 @@ def test_plan_os_image_upgrade_orders_and_can_filter_node_group() -> None:
         cluster_id="cluster-1",
         source_component=source,
         target_os="ubuntu24.04",
-        disruption_policy="safe",
-        drain_timeout=upgrade.resolve_drain_timeout("safe", "auto"),
+        disruption_policy="safe-surge",
+        drain_timeout=upgrade.resolve_drain_timeout("safe-surge", "auto"),
         live_node_groups=[
             _node_group(
                 id="ng-gpu",
@@ -1126,8 +1169,8 @@ def test_plan_os_image_upgrade_rejects_unknown_node_group() -> None:
             cluster_id="cluster-1",
             source_component=source,
             target_os="ubuntu24.04",
-            disruption_policy="safe",
-            drain_timeout=upgrade.resolve_drain_timeout("safe", "auto"),
+            disruption_policy="safe-surge",
+            drain_timeout=upgrade.resolve_drain_timeout("safe-surge", "auto"),
             live_node_groups=[_node_group(id="ng-system", name="system")],
             compatibility_lookup=lambda **_kwargs: [
                 upgrade.CompatibilityChoice(
@@ -1160,8 +1203,8 @@ def test_plan_os_image_upgrade_rejects_unmanaged_live_node_groups() -> None:
             cluster_id="cluster-1",
             source_component=source,
             target_os="ubuntu24.04",
-            disruption_policy="safe",
-            drain_timeout=upgrade.resolve_drain_timeout("safe", "auto"),
+            disruption_policy="safe-surge",
+            drain_timeout=upgrade.resolve_drain_timeout("safe-surge", "auto"),
             live_node_groups=[
                 _node_group(id="ng-system", name="system"),
                 _node_group(id="ng-rogue", name="rogue"),
@@ -1209,8 +1252,8 @@ def test_plan_node_template_upgrade_validates_combined_matrix_tuple() -> None:
         target_version="1.33",
         target_os="ubuntu24.04",
         target_gpu_stack_preset="cuda13.0",
-        disruption_policy="safe",
-        drain_timeout=upgrade.resolve_drain_timeout("safe", "auto"),
+        disruption_policy="safe-surge",
+        drain_timeout=upgrade.resolve_drain_timeout("safe-surge", "auto"),
         live_node_groups=[
             _node_group(
                 id="ng-gpu",
@@ -1272,8 +1315,8 @@ def test_plan_node_template_upgrade_requires_gpu_stack_for_nebius_image_gpu() ->
             source_component=source,
             target_version="1.33",
             target_os="ubuntu24.04",
-            disruption_policy="safe",
-            drain_timeout=upgrade.resolve_drain_timeout("safe", "auto"),
+            disruption_policy="safe-surge",
+            drain_timeout=upgrade.resolve_drain_timeout("safe-surge", "auto"),
             live_node_groups=[
                 _node_group(
                     id="ng-gpu",
@@ -1314,8 +1357,8 @@ def test_plan_node_template_upgrade_rejects_unused_gpu_stack_flag() -> None:
             target_version="1.33",
             target_os="ubuntu24.04",
             target_gpu_stack_preset="cuda13.0",
-            disruption_policy="safe",
-            drain_timeout=upgrade.resolve_drain_timeout("safe", "auto"),
+            disruption_policy="safe-surge",
+            drain_timeout=upgrade.resolve_drain_timeout("safe-surge", "auto"),
             live_node_groups=[
                 _node_group(id="ng-system", name="system", os="ubuntu22.04"),
             ],
@@ -1349,8 +1392,8 @@ def test_plan_node_template_upgrade_allows_operator_managed_gpu_without_driver_p
         source_component=source,
         target_version="1.33",
         target_os="ubuntu24.04",
-        disruption_policy="safe",
-        drain_timeout=upgrade.resolve_drain_timeout("safe", "auto"),
+        disruption_policy="safe-surge",
+        drain_timeout=upgrade.resolve_drain_timeout("safe-surge", "auto"),
         live_node_groups=[
             _node_group(
                 id="ng-gpu",
@@ -1409,8 +1452,8 @@ def test_plan_node_template_upgrade_reports_invalid_matrix_tuple() -> None:
         target_version="1.33",
         target_os="ubuntu24.04",
         target_gpu_stack_preset="cuda13.0",
-        disruption_policy="safe",
-        drain_timeout=upgrade.resolve_drain_timeout("safe", "auto"),
+        disruption_policy="safe-surge",
+        drain_timeout=upgrade.resolve_drain_timeout("safe-surge", "auto"),
         live_node_groups=[
             _node_group(
                 id="ng-gpu",
@@ -1475,8 +1518,8 @@ def test_plan_node_layer_upgrade_filters_cpu_and_gpu_groups() -> None:
             group_filter="cpu",
         ),
         target_value="cpu-8-32",
-        disruption_policy="safe",
-        drain_timeout=upgrade.resolve_drain_timeout("safe", "auto"),
+        disruption_policy="safe-surge",
+        drain_timeout=upgrade.resolve_drain_timeout("safe-surge", "auto"),
         live_node_groups=[
             _node_group(
                 id="ng-gpu",
@@ -1538,8 +1581,8 @@ def test_plan_node_layer_upgrade_rejects_wrong_group_kind() -> None:
                 group_filter="cpu",
             ),
             target_value="cpu-8-32",
-            disruption_policy="safe",
-            drain_timeout=upgrade.resolve_drain_timeout("safe", "auto"),
+            disruption_policy="safe-surge",
+            drain_timeout=upgrade.resolve_drain_timeout("safe-surge", "auto"),
             live_node_groups=[
                 _node_group(
                     id="ng-gpu",
@@ -1588,8 +1631,8 @@ def test_plan_gpu_stack_upgrade_uses_compatibility_matrix() -> None:
             group_filter="gpu",
         ),
         target_value="cuda13.0",
-        disruption_policy="safe",
-        drain_timeout=upgrade.resolve_drain_timeout("safe", "auto"),
+        disruption_policy="safe-surge",
+        drain_timeout=upgrade.resolve_drain_timeout("safe-surge", "auto"),
         live_node_groups=[
             _node_group(
                 id="ng-gpu",
@@ -1646,8 +1689,8 @@ def test_plan_gpu_stack_upgrade_rejects_incompatible_stack() -> None:
             group_filter="gpu",
         ),
         target_value="cuda14.0",
-        disruption_policy="safe",
-        drain_timeout=upgrade.resolve_drain_timeout("safe", "auto"),
+        disruption_policy="safe-surge",
+        drain_timeout=upgrade.resolve_drain_timeout("safe-surge", "auto"),
         live_node_groups=[
             _node_group(
                 id="ng-gpu",
@@ -1724,8 +1767,8 @@ def test_plan_rejects_node_groups_above_target_control_plane_version() -> None:
             cluster_id="cluster-1",
             source_component=source,
             target_version="1.32",
-            disruption_policy="safe",
-            drain_timeout=upgrade.resolve_drain_timeout("safe", "auto"),
+            disruption_policy="safe-surge",
+            drain_timeout=upgrade.resolve_drain_timeout("safe-surge", "auto"),
             live_node_groups=[
                 _node_group(id="ng-system", name="system", version="v1.33.7-nebius-node.64"),
             ],
@@ -1757,8 +1800,8 @@ def test_plan_mutates_when_control_plane_is_target_but_node_group_is_old() -> No
         cluster_id="cluster-1",
         source_component=source,
         target_version="1.33",
-        disruption_policy="safe",
-        drain_timeout=upgrade.resolve_drain_timeout("safe", "auto"),
+        disruption_policy="safe-surge",
+        drain_timeout=upgrade.resolve_drain_timeout("safe-surge", "auto"),
         live_node_groups=[
             _node_group(id="ng-system", name="system", version="1.32"),
         ],
@@ -1783,8 +1826,8 @@ def test_format_upgrade_plan_summarizes_emptydir_findings_and_repeat_command() -
         current_version="1.31",
         target_version="1.32",
         hops=(upgrade.UpgradeHop(from_version="1.31", to_version="1.32"),),
-        disruption_policy="safe",
-        drain_timeout=upgrade.resolve_drain_timeout("safe", "auto"),
+        disruption_policy="safe-surge",
+        drain_timeout=upgrade.resolve_drain_timeout("safe-surge", "auto"),
         node_groups=(
             upgrade.LiveNodeGroup(
                 id="ng-system",
@@ -1838,7 +1881,7 @@ def test_format_upgrade_plan_summarizes_emptydir_findings_and_repeat_command() -
     assert all("source-controller-abc" not in line for line in lines)
     assert all("metrics-server-def" not in line for line in lines)
     assert "- repeat dry-run command:" in lines
-    assert ("  nebius-cxcli upgrade k8s-version config.yaml infra:mk8s@prod --dry-run") in lines
+    assert "nebius-cxcli upgrade k8s-version config.yaml infra:mk8s@prod --dry-run" in lines
 
 
 def test_wait_for_node_group_rollout_uses_sdk_status_without_sdk_updates() -> None:
@@ -1875,8 +1918,8 @@ def test_wait_for_node_group_rollout_uses_sdk_status_without_sdk_updates() -> No
         current_version="1.33",
         target_version="1.33",
         hops=(),
-        disruption_policy="safe",
-        drain_timeout=upgrade.resolve_drain_timeout("safe", "auto"),
+        disruption_policy="safe-surge",
+        drain_timeout=upgrade.resolve_drain_timeout("safe-surge", "auto"),
         node_groups=(
             upgrade.LiveNodeGroup(
                 id="ng-system",

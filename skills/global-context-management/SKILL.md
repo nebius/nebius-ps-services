@@ -9,8 +9,9 @@ description: "Use for complex Codex work: planning, implementation, debugging, r
 
 Use this skill to keep long or complex Codex work focused and recoverable.
 The workflow keeps durable decisions outside the conversation, delegates noisy
-read-heavy investigation when explicitly authorized, available, and useful, and
-keeps the parent thread centered on implementation and final judgment.
+read-heavy investigation when authorized by the prompt or by a user-enabled
+local hook policy, and when delegation is available and useful. It keeps the
+parent thread centered on implementation and final judgment.
 
 ## Use This Skill For
 
@@ -34,11 +35,11 @@ and a short final summary.
 - Do not assume subagent tools are available or permitted just because this
   skill was loaded. Use them only when the current Codex surface exposes them
   and current user or developer instructions allow delegation.
-- Do not treat generic hook-injected or skill-injected instructions as user
-  authorization when the runtime requires the user to explicitly request
-  subagents, delegation, or parallel agents. A local hook policy can record a
-  deliberate user opt-in and inject that request, but active runtime policy may
-  still deny delegation.
+- Do not treat skill activation, generic hook context, or configured
+  `[agents.*]` roles as delegation authorization. Authorization comes from the
+  user prompt or from a user-enabled local hook policy that deliberately
+  injects a subagent delegation request for the current prompt; active runtime
+  policy may still deny delegation.
 - Do not claim runtime hook or skill activation is proven unless it was
   observed in the current Codex surface.
 
@@ -49,8 +50,8 @@ This skill is a workflow contract, not a context-window control plane.
 It cannot remove system/developer instructions, injected memories, available
 tool metadata, prior conversation turns, or tool outputs that already entered
 the parent thread. It can only influence future behavior: concise exploration,
-external task-state notes, bounded subagent delegation when explicitly
-authorized and available, and careful final consolidation.
+external task-state notes, bounded subagent delegation when authorization is
+present and the tools are available, and careful final consolidation.
 
 If subagent tools are unavailable, disabled, hidden in the current surface, or
 not permitted by the current instructions, continue locally with narrower
@@ -59,11 +60,12 @@ are not visible, and `tool_search` is available, first search for
 multi-agent/subagent tools before reporting delegation unavailable. State that
 delegation was unavailable or not permitted instead of pretending it happened.
 
-If the active runtime policy requires explicit user authorization for
-subagents, a complex task or this skill's activation is not enough by itself.
-The user prompt must clearly ask Codex to use or spawn subagents, use
-delegation, or run parallel agents, unless a user-enabled local hook policy
-injects that request and the current runtime accepts it.
+Treat the user prompt and a user-enabled local hook policy as the two valid
+authorization sources. A complex task, this skill's activation, or configured
+agent roles are not enough by themselves. The prompt must clearly ask Codex to
+use or spawn subagents, use delegation, or run parallel agents, unless a
+user-enabled local hook policy injects that request and the current runtime
+accepts it.
 
 ## Task State
 
@@ -119,16 +121,16 @@ Before running a noisy command in the parent thread, narrow it:
   recursive reads.
 - Limit command output when possible and summarize only the relevant facts.
 - Route broad read-only mapping, test discovery, and risk review to subagents
-  only when the user explicitly authorized delegation and the tools and
-  instructions permit it.
+  only when delegation is authorized by the prompt or a user-enabled local
+  hook policy, and the tools and instructions permit it.
 - Put durable decisions, current plan, and validation status in task state;
   do not copy raw logs there.
 
 ## Subagent Delegation
 
 For complex tasks, use bounded read-only subagents when they materially help,
-the user explicitly authorized delegation if required by the runtime, and the
-current Codex surface permits delegation:
+delegation is authorized by the prompt or a user-enabled local hook policy,
+and the current Codex surface permits delegation:
 
 - `repo_mapper`: map relevant files, symbols, execution paths, and conventions.
 - `test_strategist`: identify focused tests, fixtures, and validation order.
@@ -163,17 +165,19 @@ for a subagent would stall the next step.
 1. Understand the task and constraints.
 2. Read existing global task state when prior context may matter; create the
    task-state file only when complex work needs continuity, then update it.
-3. Explore with targeted reads; use read-only subagents only when they are
-   explicitly authorized, useful, available, and permitted. Wait for their
-   final summaries and close completed subagent threads after consolidation
-   when close controls are available. For multiple subagents, repeat
-   wait-and-close until every spawned handle is closed.
+3. Explore with targeted reads; use read-only subagents only when delegation
+   is authorized by the prompt or a user-enabled local hook policy, useful for
+   the task, available, and permitted. Wait for their final summaries and
+   close completed subagent threads after consolidation when close controls
+   are available. For multiple subagents, repeat wait-and-close until every
+   spawned handle is closed.
 4. Plan the smallest coherent implementation.
 5. Edit in focused patches using existing project conventions.
 6. Inspect the diff.
 7. Run narrow validation first, then broader checks when appropriate.
 8. Use `risk_reviewer` before finalizing non-trivial or risky changes only
-   when subagent delegation is explicitly authorized and permitted.
+   when subagent delegation is authorized by the prompt or a user-enabled local
+   hook policy, and permitted.
 9. Update task state and return the final summary.
 
 ## Local Setup

@@ -248,6 +248,31 @@ def _response_collection(response: Any, *field_names: str) -> list[Any]:
     return []
 
 
+def _paged_response_collection(
+    *,
+    request_factory: Callable[[str], Any],
+    request_call: Callable[[Any], Any],
+    context: str,
+    field_names: tuple[str, ...],
+) -> list[Any]:
+    items: list[Any] = []
+    page_token = ""
+    seen_tokens: set[str] = set()
+    while True:
+        response = request_call(request_factory(page_token)).wait()
+        items.extend(_response_collection(response, *field_names))
+        next_page_token = _as_text(getattr(response, "next_page_token", None))
+        if not next_page_token:
+            return items
+        if next_page_token == page_token or next_page_token in seen_tokens:
+            raise RuntimeError(
+                f"{context} listing returned a repeated pagination token; "
+                "aborting to avoid an infinite status-polling loop."
+            )
+        seen_tokens.add(next_page_token)
+        page_token = next_page_token
+
+
 def _enum_field_name(message: Any, field_name: str, *, prefixes: tuple[str, ...] = ()) -> str:
     if message is None:
         return "UNKNOWN"
@@ -458,10 +483,15 @@ class _Mk8sStatusPoller:
             return text or "UNKNOWN"
 
     def _find_cluster(self):
-        response = self._cluster_client.list(
-            ListClustersRequest(parent_id=self._target.project_id)
-        ).wait()
-        items = _response_collection(response, "items", "clusters")
+        items = _paged_response_collection(
+            request_factory=lambda page_token: ListClustersRequest(
+                parent_id=self._target.project_id,
+                page_token=page_token,
+            ),
+            request_call=self._cluster_client.list,
+            context="MK8s cluster status",
+            field_names=("items", "clusters"),
+        )
         for item in items:
             metadata = getattr(item, "metadata", None)
             if _as_text(getattr(metadata, "name", None)) == self._target.cluster_name:
@@ -469,8 +499,15 @@ class _Mk8sStatusPoller:
         return None
 
     def _list_node_groups(self, cluster_id: str) -> list[Any]:
-        response = self._node_group_client.list(ListNodeGroupsRequest(parent_id=cluster_id)).wait()
-        return _response_collection(response, "items", "node_groups")
+        return _paged_response_collection(
+            request_factory=lambda page_token: ListNodeGroupsRequest(
+                parent_id=cluster_id,
+                page_token=page_token,
+            ),
+            request_call=self._node_group_client.list,
+            context="MK8s node-group status",
+            field_names=("items", "node_groups"),
+        )
 
     def _node_group_event_summaries(
         self, item: Any, *, state_name: str
@@ -681,10 +718,15 @@ class _PostgreSQLStatusPoller:
         self._list_request = ListClustersRequest
 
     def _find_cluster(self):
-        response = self._cluster_client.list(
-            self._list_request(parent_id=self._target.parent_id)
-        ).wait()
-        items = _response_collection(response, "items", "clusters")
+        items = _paged_response_collection(
+            request_factory=lambda page_token: self._list_request(
+                parent_id=self._target.parent_id,
+                page_token=page_token,
+            ),
+            request_call=self._cluster_client.list,
+            context="managed-postgresql status",
+            field_names=("items", "clusters"),
+        )
         for item in items:
             if _resource_metadata_name(item) == self._target.resource_name:
                 return item
@@ -791,10 +833,15 @@ class _FilesystemStatusPoller:
         self._list_request = ListFilesystemsRequest
 
     def _find_filesystem(self):
-        response = self._filesystem_client.list(
-            self._list_request(parent_id=self._target.parent_id)
-        ).wait()
-        items = _response_collection(response, "items", "filesystems")
+        items = _paged_response_collection(
+            request_factory=lambda page_token: self._list_request(
+                parent_id=self._target.parent_id,
+                page_token=page_token,
+            ),
+            request_call=self._filesystem_client.list,
+            context="shared-filesystem status",
+            field_names=("items", "filesystems"),
+        )
         for item in items:
             if _resource_metadata_name(item) == self._target.resource_name:
                 return item
@@ -967,10 +1014,15 @@ class _ComputeInstanceStatusPoller:
         self._list_request = ListInstancesRequest
 
     def _find_instance(self):
-        response = self._instance_client.list(
-            self._list_request(parent_id=self._target.parent_id)
-        ).wait()
-        items = _response_collection(response, "items", "instances")
+        items = _paged_response_collection(
+            request_factory=lambda page_token: self._list_request(
+                parent_id=self._target.parent_id,
+                page_token=page_token,
+            ),
+            request_call=self._instance_client.list,
+            context="compute instance status",
+            field_names=("items", "instances"),
+        )
         for item in items:
             if _resource_metadata_name(item) == self._target.resource_name:
                 return item

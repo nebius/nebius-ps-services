@@ -113,11 +113,10 @@ def _ensure_iam_token_from_cli(*, timeout_seconds: int = 10) -> str | None:
             text=True,
             timeout=timeout_seconds,
         )
-    except Exception:
+    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
         return None
     token = cp.stdout.strip()
     if token:
-        os.environ["NEBIUS_IAM_TOKEN"] = token
         return token
     return None
 

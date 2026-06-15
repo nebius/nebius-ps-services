@@ -14,6 +14,10 @@ def _split_path(path: str) -> tuple[str, ...]:
     return tuple(segment.strip() for segment in str(path).split(".") if segment.strip())
 
 
+def _path_segment_candidates(segment: str) -> tuple[str, str, str]:
+    return (segment, segment.replace("-", "_"), segment.replace("_", "-"))
+
+
 def _has_material_value(value: Any) -> bool:
     if value is None:
         return False
@@ -31,8 +35,10 @@ def read_component_path(component_node: Mapping[str, Any], path: str) -> Any:
     for segment in _split_path(path):
         if not isinstance(current, Mapping):
             return None
-        candidates = (segment, segment.replace("-", "_"), segment.replace("_", "-"))
-        matched = next((candidate for candidate in candidates if candidate in current), None)
+        matched = next(
+            (candidate for candidate in _path_segment_candidates(segment) if candidate in current),
+            None,
+        )
         if matched is None:
             return None
         current = current[matched]
@@ -45,12 +51,20 @@ def set_component_path(component_node: dict[str, Any], path: str, value: Any) ->
         return
     current = component_node
     for segment in segments[:-1]:
-        next_value = current.get(segment)
+        matched = next(
+            (candidate for candidate in _path_segment_candidates(segment) if candidate in current),
+            segment,
+        )
+        next_value = current.get(matched)
         if not isinstance(next_value, dict):
             next_value = {}
-            current[segment] = next_value
+            current[matched] = next_value
         current = next_value
-    current[segments[-1]] = copy.deepcopy(value)
+    leaf = next(
+        (candidate for candidate in _path_segment_candidates(segments[-1]) if candidate in current),
+        segments[-1],
+    )
+    current[leaf] = copy.deepcopy(value)
 
 
 def component_path_has_material_value(value: Any) -> bool:

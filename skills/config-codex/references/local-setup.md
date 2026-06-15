@@ -160,9 +160,12 @@ do not hardcode agent names for this path. The hook reads `$CODEX_HOME/config.to
 discovers `[agents.<name>]` entries whose referenced config files have
 `sandbox_mode = "read-only"`, and injects those agent names into model-visible
 context. It does not inject local agent config paths, and it does not directly
-call the subagent tool. The parent agent still owns lifecycle cleanup: wait for
-returned summaries, consolidate them, and close completed subagent threads when
-close controls are available and no follow-up is needed.
+call the subagent tool. The injected request is the local-policy delegation
+request for that turn, so the main agent should not wait for another manual
+prompt phrase before using useful, available, and permitted read-only helpers.
+The parent agent still owns lifecycle cleanup: wait for returned summaries,
+consolidate them, and close completed subagent threads when close controls are
+available and no follow-up is needed.
 With multiple subagents, close each completed handle as its terminal result
 arrives and continue waiting on the remaining handles.
 
@@ -324,10 +327,10 @@ codex exec --sandbox read-only --cd <PROJECT_ROOT> \
 ```
 
 If that succeeds but ordinary complex prompts do not spawn subagents, the
-configuration is working; the remaining gate is the runtime policy that
-requires the user prompt to explicitly ask for subagents, delegation, or
-parallel agents, or the optional local hook policy has not been enabled or
-trusted in a fresh session.
+configuration is working; the remaining gate is delegation authorization. A
+prompt can explicitly ask for subagents, delegation, or parallel agents, and
+the optional local hook policy can inject that request for complex prompts
+after it is enabled and trusted in a fresh session.
 
 If the explicit probe does not see subagent controls but `tool_search` is
 available, the agent should search for multi-agent/subagent tools before

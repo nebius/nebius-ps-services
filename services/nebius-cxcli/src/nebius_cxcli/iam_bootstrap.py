@@ -198,6 +198,7 @@ def _ensure_project_role_permits(
 
     existing_roles: set[str] = set()
     page_token: str | None = None
+    seen_tokens: set[str] = set()
     while True:
         response = access_permits.list(
             ListAccessPermitRequest(parent_id=permit_parent_id, page_token=page_token)
@@ -213,6 +214,12 @@ def _ensure_project_role_permits(
         page_token = getattr(response, "next_page_token", "") or None
         if not page_token:
             break
+        if page_token in seen_tokens:
+            raise RuntimeError(
+                "IAM access permit listing received a repeated pagination token from "
+                "the Nebius API; aborting to avoid an infinite list loop."
+            )
+        seen_tokens.add(page_token)
 
     created: list[str] = []
     already_present: list[str] = []
@@ -315,6 +322,7 @@ def _group_member_ids(
 
     members: set[str] = set()
     page_token: str | None = None
+    seen_tokens: set[str] = set()
     while True:
         response = group_memberships.list_members(
             ListGroupMembershipsRequest(parent_id=group_id, page_token=page_token)
@@ -329,6 +337,12 @@ def _group_member_ids(
         page_token = getattr(response, "next_page_token", "") or None
         if not page_token:
             break
+        if page_token in seen_tokens:
+            raise RuntimeError(
+                "IAM group membership listing received a repeated pagination token from "
+                "the Nebius API; aborting to avoid an infinite list loop."
+            )
+        seen_tokens.add(page_token)
     return members
 
 

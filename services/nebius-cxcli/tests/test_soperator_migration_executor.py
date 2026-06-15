@@ -10,7 +10,7 @@ from typing import Any
 import pytest
 
 from nebius_cxcli import soperator_migration as migration
-from nebius_cxcli.quota_checks import QuotaCheck, QuotaReport
+from nebius_cxcli.quota_checks import QuotaCheck, QuotaReport, QuotaRequirement
 from nebius_cxcli.soperator_migration import (
     SoperatorMigrationCommandResult,
     execute_soperator_migration,
@@ -50,6 +50,36 @@ def _snapshot(version: str = "3.0.5") -> dict[str, Any]:
         "pvcs": [],
         "collection_errors": [],
     }
+
+
+@pytest.mark.parametrize(
+    "stderr",
+    [
+        "not found",
+        "resource not found",
+        "Request error NOT_FOUND: node group missing",
+        "rpc error: code = NotFound desc = node group missing",
+        'Error from server (NotFound): helmreleases.helm.toolkit.fluxcd.io "missing" not found',
+    ],
+)
+def test_command_not_found_recognizes_explicit_not_found_status(stderr: str) -> None:
+    result = SoperatorMigrationCommandResult(("nebius", "mk8s", "node-group", "delete"), 1, "", stderr)
+
+    assert migration._command_not_found(result) is True
+
+
+@pytest.mark.parametrize(
+    "stderr",
+    [
+        "transient dependency not found while deleting node group",
+        "permission denied because subject credentials secret was not found",
+        "deadline exceeded while waiting for resource not found cleanup",
+    ],
+)
+def test_command_not_found_does_not_mask_contextual_errors(stderr: str) -> None:
+    result = SoperatorMigrationCommandResult(("nebius", "mk8s", "node-group", "delete"), 1, "", stderr)
+
+    assert migration._command_not_found(result) is False
 
 
 def _source_worker_nodeset(name: str, *, gpu: bool) -> dict[str, Any]:
@@ -142,6 +172,15 @@ def _ready_node_group_status(version: str = "1.31", *, nodes: int = 1) -> dict[s
         "outdated_node_count": 0,
         "reconciling": False,
     }
+
+
+def test_node_group_rollout_timeout_uses_live_status_count() -> None:
+    assert (
+        migration._node_group_rollout_timeout_seconds(
+            {"spec": {}, "status": {"target_node_count": "7", "node_count": "7"}}
+        )
+        == 4200
+    )
 
 
 def _payload(*, include_role_mapping: bool = False) -> dict[str, Any]:
@@ -280,6 +319,8 @@ class _FakeCommandRunner:
         *,
         existing_filesystems: dict[str, dict[str, Any]] | None = None,
         helm_errors: list[str] | None = None,
+        helm_errors_by_release: dict[tuple[str, str], list[str]] | None = None,
+        helm_timeouts_by_release: dict[tuple[str, str], list[bool]] | None = None,
         helm_history: list[dict[str, Any]] | None = None,
         existing_node_groups: list[dict[str, Any]] | None = None,
         live_nodes: list[dict[str, Any]] | None = None,
@@ -303,6 +344,12 @@ class _FakeCommandRunner:
         self.calls: list[tuple[tuple[str, ...], str | None]] = []
         self.existing_filesystems = existing_filesystems or {}
         self.helm_errors = list(helm_errors or [])
+        self.helm_errors_by_release = {
+            key: list(value) for key, value in (helm_errors_by_release or {}).items()
+        }
+        self.helm_timeouts_by_release = {
+            key: list(value) for key, value in (helm_timeouts_by_release or {}).items()
+        }
         self.helm_history = list(helm_history or [])
         self.existing_node_groups = list(existing_node_groups or [])
         self.cluster = cluster or {
@@ -537,7 +584,6 @@ spec:
         timeout_seconds: int = 300,
         check: bool = True,
     ) -> SoperatorMigrationCommandResult:
-        del timeout_seconds
         command: Any = tuple(str(item) for item in args)
         self.calls.append((command, input_text))
         if command[:4] == ("nebius", "compute", "filesystem", "get-by-name"):
@@ -766,6 +812,53 @@ spec:
                 command[command.index("--install") + 2] if "--install" in command else release_name
             )
             chart_name = Path(chart).name or release_name
+            release_timeouts = self.helm_timeouts_by_release.get((namespace, release_name))
+            if release_timeouts:
+                release_timeouts.pop(0)
+                if not release_timeouts:
+                    self.helm_timeouts_by_release.pop((namespace, release_name), None)
+                if release_name != "soperator":
+                    self.helm_statuses[(namespace, release_name)] = "deployed"
+                    self._upsert_helm_release(
+                        namespace=namespace,
+                        release_name=release_name,
+                        chart=f"{chart_name}-{version}",
+                        app_version=version,
+                    )
+                    self.helm_manifests.setdefault(
+                        (namespace, release_name),
+                        f"""
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {release_name}
+  namespace: {namespace}
+spec:
+  replicas: 1
+""",
+                    )
+                    self.live_workloads.setdefault(
+                        ("Deployment", namespace, release_name),
+                        {
+                            "metadata": {"generation": 1},
+                            "spec": {"replicas": 1},
+                            "status": {
+                                "observedGeneration": 1,
+                                "readyReplicas": 1,
+                                "availableReplicas": 1,
+                                "updatedReplicas": 1,
+                            },
+                        },
+                    )
+                raise subprocess.TimeoutExpired(list(command), timeout_seconds)
+            release_errors = self.helm_errors_by_release.get((namespace, release_name))
+            if release_errors:
+                error = release_errors.pop(0)
+                if not release_errors:
+                    self.helm_errors_by_release.pop((namespace, release_name), None)
+                if check:
+                    raise RuntimeError(error)
+                return SoperatorMigrationCommandResult(command, 1, "", error)
             if release_name != "soperator":
                 self.helm_statuses[(namespace, release_name)] = "deployed"
                 self._upsert_helm_release(
@@ -1397,6 +1490,129 @@ def test_execute_writes_checkpoint_and_stops_before_mutation(tmp_path: Path) -> 
     assert checkpoint["events"][0]["event"] == "execute-preflight-completed"
 
 
+def test_write_checkpoint_preserves_existing_file_when_replace_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    checkpoint_path = tmp_path / "checkpoint.json"
+    existing = {
+        "schema": migration.SOPERATOR_MIGRATION_EXECUTION_SCHEMA,
+        "status": "old",
+    }
+    migration._write_checkpoint(checkpoint_path, existing)
+    before = checkpoint_path.read_text(encoding="utf-8")
+
+    def _fail_replace(_source: object, _target: object) -> None:
+        raise OSError("replace failed")
+
+    monkeypatch.setattr(migration.os, "replace", _fail_replace)
+
+    with pytest.raises(OSError, match="replace failed"):
+        migration._write_checkpoint(
+            checkpoint_path,
+            {
+                "schema": migration.SOPERATOR_MIGRATION_EXECUTION_SCHEMA,
+                "status": "new",
+            },
+        )
+
+    assert checkpoint_path.read_text(encoding="utf-8") == before
+    assert not list(tmp_path.glob(".checkpoint.json.*.tmp"))
+
+
+def test_write_checkpoint_uses_default_text_file_mode_for_new_file(tmp_path: Path) -> None:
+    baseline_path = tmp_path / "baseline.txt"
+    baseline_path.write_text("baseline\n", encoding="utf-8")
+    checkpoint_path = tmp_path / "checkpoint.json"
+
+    migration._write_checkpoint(
+        checkpoint_path,
+        {
+            "schema": migration.SOPERATOR_MIGRATION_EXECUTION_SCHEMA,
+            "status": "new",
+        },
+    )
+
+    assert checkpoint_path.stat().st_mode & 0o777 == baseline_path.stat().st_mode & 0o777
+
+
+def test_write_checkpoint_preserves_existing_file_mode(tmp_path: Path) -> None:
+    checkpoint_path = tmp_path / "checkpoint.json"
+    checkpoint_path.write_text("{}\n", encoding="utf-8")
+    checkpoint_path.chmod(0o640)
+
+    migration._write_checkpoint(
+        checkpoint_path,
+        {
+            "schema": migration.SOPERATOR_MIGRATION_EXECUTION_SCHEMA,
+            "status": "new",
+        },
+    )
+
+    assert checkpoint_path.stat().st_mode & 0o777 == 0o640
+
+
+def _write_minimal_migrate_report(config_path: Path) -> Path:
+    return migration._write_soperator_migrate_report(
+        config_path=config_path,
+        checkpoint_path=config_path.parent / ".nebius-cxcli" / "checkpoint.json",
+        checkpoint={"phase_state": {}, "events": []},
+        phase_ids=("discovery-and-plan",),
+        completed_phases=set(),
+        target_ref="external-cluster",
+        source_version="3.0.5",
+        target_version="4.0.2-ps.1",
+        pending_phase="customer-approval",
+        pending_reason="approval required",
+        mutation_performed=False,
+    )
+
+
+def test_write_migrate_report_uses_default_text_file_mode_for_new_file(tmp_path: Path) -> None:
+    baseline_path = tmp_path / "baseline.txt"
+    baseline_path.write_text("baseline\n", encoding="utf-8")
+    config_path = tmp_path / "config.yaml"
+
+    report_path = _write_minimal_migrate_report(config_path)
+
+    assert report_path.stat().st_mode & 0o777 == baseline_path.stat().st_mode & 0o777
+
+
+def test_write_migrate_report_preserves_existing_file_mode(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.yaml"
+    report_path = tmp_path / "generated" / "reports" / "migrate-report.md"
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text("# Existing Migration Report\n", encoding="utf-8")
+    report_path.chmod(0o640)
+
+    written_path = _write_minimal_migrate_report(config_path)
+
+    assert written_path == report_path
+    assert report_path.stat().st_mode & 0o777 == 0o640
+
+
+def test_write_migrate_report_preserves_existing_file_when_replace_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_path = tmp_path / "config.yaml"
+    report_path = tmp_path / "generated" / "reports" / "migrate-report.md"
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text("# Existing Migration Report\n", encoding="utf-8")
+    before = report_path.read_text(encoding="utf-8")
+
+    def _fail_replace(_source: object, _target: object) -> None:
+        raise OSError("replace failed")
+
+    monkeypatch.setattr(migration.os, "replace", _fail_replace)
+
+    with pytest.raises(OSError, match="replace failed"):
+        _write_minimal_migrate_report(config_path)
+
+    assert report_path.read_text(encoding="utf-8") == before
+    assert not list(report_path.parent.glob(".migrate-report.md.*.tmp"))
+
+
 def test_execute_quota_preflight_blocks_before_mutation(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1503,7 +1719,10 @@ def test_worker_safe_surge_quota_preflight_counts_active_wave(
     payload = _payload(include_role_mapping=True)
     onboarding = payload["deploy"]["targets"][0]["soperator_onboarding"]  # type: ignore[index]
     assert isinstance(onboarding, dict)
-    rollout = migration.resolve_external_node_template_rollout(onboarding)
+    rollout = migration.resolve_external_node_template_rollout(
+        onboarding,
+        strategy="safe-surge",
+    )
     recorded_inputs: list[dict[str, Any]] = []
 
     def _record_quota_inputs(**kwargs: object):
@@ -1533,17 +1752,119 @@ def test_worker_safe_surge_quota_preflight_counts_active_wave(
     assert any("requires 1 temporary surge node(s) per group" in line for line in lines)
 
 
+def test_execute_worker_safe_surge_quota_shortage_blocks_before_mutation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = _payload()
+    onboarding = payload["deploy"]["targets"][0]["soperator_onboarding"]  # type: ignore[index]
+    assert isinstance(onboarding, dict)
+    onboarding["storage_mode"] = "keep-existing-storage"
+    onboarding["compute_mode"] = "keep-existing-compute"
+    onboarding["actions"] = ["upgrade-external-node-template"]
+    onboarding["node_template_upgrade"] = {
+        "rollout": {
+            "strategy": "safe-surge",
+            "worker_group_strategy": {
+                "max_surge_count": 1,
+                "max_unavailable_count": 0,
+                "drain_timeout": "30m",
+            },
+        }
+    }
+    runner = _FakeCommandRunner()
+    recorded_inputs: list[dict[str, Any]] = []
+
+    def _estimate_worker_safe_surge(**kwargs: object):
+        if kwargs.get("context") != "soperator migration worker safe-surge quota preflight":
+            return (), ()
+        inputs = kwargs.get("inputs")
+        assert isinstance(inputs, dict)
+        recorded_inputs.append(inputs)
+        return (
+            QuotaRequirement(
+                component_id="mk8s",
+                instance_id="external-cluster-soperator-worker-surge-wave-1",
+                component_label="external worker safe-surge",
+                quota_name="compute.instance.count",
+                region="eu-north1",
+                required=1,
+                reason="safe-surge worker wave",
+            ),
+        ), ()
+
+    def _insufficient_worker_safe_surge(**kwargs: object) -> QuotaReport:
+        requirements = tuple(kwargs.get("requirements") or ())
+        assert any(
+            isinstance(item, QuotaRequirement) and item.reason == "safe-surge worker wave"
+            for item in requirements
+        )
+        return QuotaReport(
+            tenant_id=str(kwargs.get("tenant_id", "")),
+            project_id=str(kwargs.get("project_id", "")),
+            region_id=str(kwargs.get("region_id", "")),
+            checked_at="2026-01-01T00:00:00+00:00",
+            checks=(
+                QuotaCheck(
+                    component_id="mk8s",
+                    instance_id="external-cluster-soperator-worker-surge-wave-1",
+                    component_label="external worker safe-surge",
+                    quota_name="compute.instance.count",
+                    region="eu-north1",
+                    required=1,
+                    reason="safe-surge worker wave",
+                    unit="1",
+                    available=0,
+                    sufficient=False,
+                    tenant_limit=0,
+                    tenant_usage=0,
+                    project_limit=0,
+                    project_usage=0,
+                    source_scope="quota-allowance",
+                    description="Compute instance count",
+                ),
+            ),
+        )
+
+    monkeypatch.setattr(migration, "estimate_mk8s_quota_requirements", _estimate_worker_safe_surge)
+    monkeypatch.setattr(
+        migration,
+        "assess_live_quota_requirements",
+        _insufficient_worker_safe_surge,
+    )
+
+    with pytest.raises(RuntimeError, match="quota preflight failed before any cluster mutation"):
+        execute_soperator_migration(
+            config_path=tmp_path / "config.yaml",
+            target_ref="external-cluster",
+            payload=payload,
+            source_report=_source_report(),
+            snapshot_collector=lambda *, kube_context: _snapshot(),
+            approved=True,
+            command_runner=runner,
+        )
+
+    assert recorded_inputs
+    planned_groups = recorded_inputs[0]["node_groups"]
+    assert isinstance(planned_groups, dict)
+    assert set(planned_groups) == {"external-cluster-gpu-pool-safe-surge"}
+    commands = [call[0] for call in runner.calls]
+    assert not any(command[:4] == ("nebius", "mk8s", "cluster", "update") for command in commands)
+    assert not any(
+        command[:4] == ("nebius", "mk8s", "node-group", "update") for command in commands
+    )
+
+
 def test_external_node_template_rollout_config_validation_and_cli_precedence() -> None:
     onboarding = _payload()["deploy"]["targets"][0]["soperator_onboarding"]  # type: ignore[index]
     assert isinstance(onboarding, dict)
 
     default_rollout = migration.resolve_external_node_template_rollout(onboarding)
     assert default_rollout.to_manifest_dict() == {
-        "strategy": "safe-surge",
-        "worker_wave_percent": 1,
+        "strategy": "zero-surge",
         "worker_group_strategy": {
-            "max_surge_count": 1,
-            "max_unavailable_count": 0,
+            "max_surge_count": 0,
+            "max_unavailable_count": 1,
             "drain_timeout": "30m",
         },
     }
@@ -1554,16 +1875,8 @@ def test_external_node_template_rollout_config_validation_and_cli_precedence() -
             "worker_wave_groups": 2,
         }
     }
-    zero_surge = migration.resolve_external_node_template_rollout(onboarding)
-    assert zero_surge.to_manifest_dict() == {
-        "strategy": "zero-surge",
-        "worker_wave_groups": 2,
-        "worker_group_strategy": {
-            "max_surge_count": 1,
-            "max_unavailable_count": 0,
-            "drain_timeout": "30m",
-        },
-    }
+    with pytest.raises(ValueError, match="zero-surge worker rollout does not use"):
+        migration.resolve_external_node_template_rollout(onboarding)
 
     override = migration.resolve_external_node_template_rollout(
         onboarding,
@@ -1629,6 +1942,45 @@ def test_external_node_template_rollout_config_validation_and_cli_precedence() -
         migration.resolve_external_node_template_rollout(onboarding)
 
 
+def test_external_node_template_completion_recheck_rejects_k8s_downgrade_target() -> None:
+    payload = _payload()
+    target = payload["deploy"]["targets"][0]  # type: ignore[index]
+    assert isinstance(target, dict)
+    onboarding = target["soperator_onboarding"]
+    assert isinstance(onboarding, dict)
+    onboarding["actions"] = ["upgrade-external-node-template"]
+    onboarding["node_template_upgrade"] = {
+        "target_k8s_version": "1.32",
+        "target_os": "ubuntu24.04",
+        "target_gpu_stack_preset": "cuda13.0",
+    }
+    runner = _FakeCommandRunner(
+        cluster={
+            "metadata": {"id": "cluster-123", "name": "external-cluster"},
+            "spec": {"control_plane": {"version": "1.33"}},
+        }
+    )
+
+    with pytest.raises(RuntimeError, match="downgrade is not supported"):
+        migration._external_node_template_upgrade_satisfied(
+            payload=payload,
+            source_report=_source_report(),
+            target_ref="external-cluster",
+            worker_node_groups=(),
+            command_runner=runner,
+        )
+
+
+def test_external_node_template_k8s_version_checks_fail_closed_on_malformed_live_version() -> None:
+    message = migration._external_node_template_k8s_downgrade_error("garbage", "1.33")
+
+    assert "could not parse" in message
+    with pytest.raises(RuntimeError, match="could not parse"):
+        migration._ensure_external_node_template_k8s_not_downgrade("garbage", "1.33")
+    with pytest.raises(RuntimeError, match="could not parse"):
+        migration._minor_version_at_least("garbage", "1.33")
+
+
 def test_sfs_attachment_uses_zero_surge_strategy_and_restores_original() -> None:
     runner = _FakeCommandRunner(
         existing_node_groups=[
@@ -1684,6 +2036,7 @@ def test_sfs_attachment_uses_zero_surge_strategy_and_restores_original() -> None
     assert attach_update[attach_update.index("--strategy-max-surge-count") + 1] == "0"
     assert attach_update[attach_update.index("--strategy-max-unavailable-count") + 1] == "1"
     assert attach_update[attach_update.index("--strategy-drain-timeout") + 1] == "30m"
+    assert attach_update[attach_update.index("--timeout") + 1] == "60m"
     assert "--template-filesystems" not in restore_update
     assert restore_update[restore_update.index("--strategy-max-surge-count") + 1] == "1"
     assert restore_update[restore_update.index("--strategy-max-unavailable-count") + 1] == "0"
@@ -1800,6 +2153,7 @@ def test_execute_records_approval_and_runs_checkpointed_mutators(tmp_path: Path)
         snapshot_collector=lambda *, kube_context: _snapshot(),
         approved=True,
         command_runner=runner,
+        worker_rollout_strategy="safe-surge",
     )
 
     assert result.mutation_performed is True
@@ -1852,6 +2206,7 @@ def test_execute_records_approval_and_runs_checkpointed_mutators(tmp_path: Path)
         source_report=source_report,
         snapshot_collector=lambda *, kube_context: _snapshot(),
         command_runner=runner,
+        worker_rollout_strategy="safe-surge",
     )
 
     assert resumed.completed_phases == result.completed_phases
@@ -1876,6 +2231,89 @@ def test_execute_records_approval_and_runs_checkpointed_mutators(tmp_path: Path)
     assert checkpoint["completed_phases"] == list(result.completed_phases)
     assert checkpoint["pending_phase"] == "none"
     assert checkpoint["worker_node_groups"] == ["gpu-pool"]
+
+
+def test_execute_clears_stale_pending_phase_after_successful_resume(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source_report = _source_report()
+    runner = _FakeCommandRunner()
+    validation_calls = 0
+    retire_pending_observations: list[tuple[str, str]] = []
+
+    def _flaky_validation_hold(**kwargs: Any) -> tuple[bool, list[str]]:
+        nonlocal validation_calls
+        validation_calls += 1
+        if validation_calls == 1:
+            raise migration.SoperatorMigrationPhasePending(
+                "Soperator cluster smoke validation failed during validation-and-rollback-hold: "
+                "Slurm NCCL benchmark failed"
+            )
+        checkpoint = kwargs["checkpoint"]
+        assert isinstance(checkpoint, dict)
+        phase = checkpoint.setdefault("phase_state", {}).setdefault(
+            "validation-and-rollback-hold",
+            {},
+        )
+        phase["validation_contract_revision"] = migration._VALIDATION_HOLD_REVISION
+        return True, ["validation recovered"]
+
+    def _observing_retire(**kwargs: Any) -> tuple[bool, list[str]]:
+        checkpoint = kwargs["checkpoint"]
+        assert isinstance(checkpoint, dict)
+        retire_pending_observations.append(
+            (
+                str(checkpoint.get("pending_phase", "") or ""),
+                str(checkpoint.get("pending_reason", "") or ""),
+            )
+        )
+        return False, ["retire skipped"]
+
+    monkeypatch.setattr(migration, "_execute_validation_hold_phase", _flaky_validation_hold)
+    monkeypatch.setattr(migration, "_execute_retire_old_resources_phase", _observing_retire)
+
+    first = execute_soperator_migration(
+        config_path=tmp_path / "config.yaml",
+        target_ref="external-cluster",
+        payload=_payload(),
+        source_report=source_report,
+        snapshot_collector=lambda *, kube_context: _snapshot(),
+        approved=True,
+        command_runner=runner,
+        worker_rollout_strategy="safe-surge",
+    )
+
+    assert first.pending_phase == "validation-and-rollback-hold"
+    checkpoint_path = soperator_migration_checkpoint_path(
+        tmp_path / "config.yaml",
+        "external-cluster",
+    )
+    checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+    assert checkpoint["pending_phase"] == "validation-and-rollback-hold"
+    assert "Slurm NCCL benchmark failed" in checkpoint["pending_reason"]
+
+    resumed = execute_soperator_migration(
+        config_path=tmp_path / "config.yaml",
+        target_ref="external-cluster",
+        payload=_payload(),
+        source_report=source_report,
+        snapshot_collector=lambda *, kube_context: _snapshot(),
+        approved=True,
+        command_runner=runner,
+        worker_rollout_strategy="safe-surge",
+    )
+
+    assert resumed.pending_phase == "none"
+    assert retire_pending_observations == [("none", "")]
+    checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+    assert checkpoint["pending_phase"] == "none"
+    assert checkpoint["pending_reason"] == ""
+    assert any(
+        event.get("event") == "execute-pending-cleared"
+        and event.get("phase") == "validation-and-rollback-hold"
+        for event in checkpoint["events"]
+    )
 
 
 def test_execute_retires_stale_source_soperator_helm_releases_after_target_ready(
@@ -2001,6 +2439,7 @@ def test_execute_retires_stale_source_soperator_helm_releases_after_target_ready
         snapshot_collector=lambda *, kube_context: _snapshot(),
         approved=True,
         command_runner=runner,
+        worker_rollout_strategy="safe-surge",
     )
 
     output = "\n".join(result.lines)
@@ -2057,6 +2496,14 @@ def test_execute_retires_stale_source_soperator_helm_releases_after_target_ready
     ]
     assert not any("persistentvolumeclaim" in command for command in deleted_resources)
     assert not any("nodeset" in command for command in deleted_resources)
+    source_cleanup_deletes = [
+        command
+        for command in deleted_resources
+        if "deployment" in command or "service" in command
+    ]
+    assert source_cleanup_deletes
+    assert all("--wait=false" in command for command in source_cleanup_deletes)
+    assert not any("--wait=true" in command for command in source_cleanup_deletes)
 
 
 def test_completed_helm_state_retires_same_name_stale_source_before_readiness() -> None:
@@ -2353,6 +2800,10 @@ def test_source_flux_cleanup_treats_missing_patch_targets_as_idempotent() -> Non
     patch_calls = [call for call in calls if "patch" in call[0]]
     assert len(patch_calls) == 3
     assert all(check is False for _, check in patch_calls)
+    delete_calls = [command for command, _check in calls if "delete" in command]
+    assert len(delete_calls) == 1
+    assert "--wait=false" in delete_calls[0]
+    assert "--wait=true" not in delete_calls[0]
 
 
 def test_profile_backed_source_selectors_cover_related_old_soperator_charts() -> None:
@@ -2379,6 +2830,7 @@ def test_execute_retries_completed_gpu_stack_action_when_live_release_is_missing
         snapshot_collector=lambda *, kube_context: _snapshot(),
         approved=True,
         command_runner=runner,
+        worker_rollout_strategy="safe-surge",
     )
     assert first.pending_phase == "none"
 
@@ -2392,6 +2844,7 @@ def test_execute_retries_completed_gpu_stack_action_when_live_release_is_missing
         source_report=source_report,
         snapshot_collector=lambda *, kube_context: _snapshot(),
         command_runner=runner,
+        worker_rollout_strategy="safe-surge",
     )
 
     assert resumed.pending_phase == "none"
@@ -2407,6 +2860,7 @@ def test_execute_retries_completed_gpu_stack_action_when_live_release_is_missing
         "gpu-operator",
         "network-operator",
     ]
+    assert all("--no-hooks" in command for command in helm_upgrades)
 
 
 def test_target_gpu_stack_remediation_applies_catalog_post_render_patches() -> None:
@@ -2441,6 +2895,152 @@ def test_target_gpu_stack_remediation_applies_catalog_post_render_patches() -> N
     assert "rdmaSharedDevicePlugin" in (apply_calls[0][1] or "")
     assert "network-operator-v25.7.0" in (apply_calls[0][1] or "")
     assert "Applied target GPU stack post-render patch" in "\n".join(lines)
+
+
+def test_target_gpu_stack_remediation_clears_pending_helm_operation() -> None:
+    payload = _payload()
+    _add_external_gpu_cluster_inventory(payload)
+    runner = _FakeCommandRunner(
+        helm_errors_by_release={
+            (
+                "nvidia-network-operator",
+                "network-operator",
+            ): [
+                "Error: UPGRADE FAILED: another operation (install/upgrade/rollback) "
+                "is in progress"
+            ]
+        },
+        helm_history=[
+            {"revision": 1, "status": "pending-install"},
+        ],
+        helm_storage_secrets=[
+            {
+                "metadata": {
+                    "namespace": "nvidia-network-operator",
+                    "name": "sh.helm.release.v1.network-operator.v1",
+                    "labels": {
+                        "owner": "helm",
+                        "name": "network-operator",
+                        "status": "pending-install",
+                        "version": "1",
+                    },
+                }
+            }
+        ],
+    )
+    checkpoint: dict[str, Any] = {}
+
+    mutated, lines = migration._execute_target_gpu_stack_remediation_phase(
+        checkpoint=checkpoint,
+        payload=payload,
+        target_ref="external-cluster",
+        kube_context="external-context",
+        command_runner=runner,
+    )
+
+    assert mutated is True
+    network_operator_upgrades = [
+        call
+        for call in runner.calls
+        if call[0][:4] == ("helm", "--kube-context", "external-context", "upgrade")
+        and call[0][call[0].index("--install") + 1] == "network-operator"
+    ]
+    assert len(network_operator_upgrades) == 2
+    assert all("--no-hooks" in call[0] for call in network_operator_upgrades)
+    assert any(
+        call[0][:8]
+        == (
+            "kubectl",
+            "--context",
+            "external-context",
+            "-n",
+            "nvidia-network-operator",
+            "delete",
+            "secret",
+            "sh.helm.release.v1.network-operator.v1",
+        )
+        for call in runner.calls
+    )
+    assert "Applied target GPU stack chart: nvidia-network-operator" in "\n".join(lines)
+
+
+def test_target_gpu_stack_remediation_accepts_ready_release_after_helm_timeout() -> None:
+    payload = _payload()
+    _add_external_gpu_cluster_inventory(payload)
+    runner = _FakeCommandRunner(
+        helm_timeouts_by_release={
+            ("nvidia-network-operator", "network-operator"): [True],
+        }
+    )
+    checkpoint: dict[str, Any] = {}
+
+    mutated, lines = migration._execute_target_gpu_stack_remediation_phase(
+        checkpoint=checkpoint,
+        payload=payload,
+        target_ref="external-cluster",
+        kube_context="external-context",
+        command_runner=runner,
+    )
+
+    assert mutated is True
+    network_operator_upgrades = [
+        call
+        for call in runner.calls
+        if call[0][:4] == ("helm", "--kube-context", "external-context", "upgrade")
+        and call[0][call[0].index("--install") + 1] == "network-operator"
+    ]
+    assert len(network_operator_upgrades) == 1
+    assert "Applied target GPU stack chart: nvidia-network-operator" in "\n".join(lines)
+    assert "Accepted target GPU stack chart after Helm client timeout" in "\n".join(lines)
+    phase = checkpoint["phase_state"]["target-gpu-stack-remediation"]
+    network_chart = next(
+        item for item in phase["charts"] if item["id"] == "nvidia-network-operator"
+    )
+    assert "workloads 1/1 ready" in network_chart["readiness"]
+    assert network_chart["timeout_recovered"] == "true"
+    assert network_chart["timeout_seconds"] == "3000"
+
+
+def test_target_gpu_stack_remediation_timeout_reports_retry_when_readiness_probe_times_out() -> None:
+    class _ReadinessProbeTimeoutRunner(_FakeCommandRunner):
+        def __call__(
+            self,
+            args: Sequence[str],
+            *,
+            input_text: str | None = None,
+            timeout_seconds: int = 300,
+            check: bool = True,
+        ) -> SoperatorMigrationCommandResult:
+            command = tuple(str(item) for item in args)
+            if command and command[0] == "helm" and "upgrade" in command:
+                release_name = command[command.index("--install") + 1]
+                if release_name == "network-operator":
+                    self.calls.append((command, input_text))
+                    raise subprocess.TimeoutExpired(list(command), timeout_seconds)
+            if command and command[0] == "helm" and "list" in command:
+                namespace = command[command.index("-n") + 1] if "-n" in command else ""
+                if namespace == "nvidia-network-operator":
+                    self.calls.append((command, input_text))
+                    raise subprocess.TimeoutExpired(list(command), timeout_seconds)
+            return super().__call__(
+                command,
+                input_text=input_text,
+                timeout_seconds=timeout_seconds,
+                check=check,
+            )
+
+    payload = _payload()
+    _add_external_gpu_cluster_inventory(payload)
+    runner = _ReadinessProbeTimeoutRunner()
+
+    with pytest.raises(RuntimeError, match="timed out after 3000 seconds.*retry from live state"):
+        migration._execute_target_gpu_stack_remediation_phase(
+            checkpoint={},
+            payload=payload,
+            target_ref="external-cluster",
+            kube_context="external-context",
+            command_runner=runner,
+        )
 
 
 def test_target_gpu_stack_remediation_unsatisfied_when_post_render_patch_missing() -> None:
@@ -2654,6 +3254,7 @@ def test_execute_runs_configured_mk8s_gpu_validations_during_validation_hold(
     assert "## Validations" in (reports_dir / "deploy-report.md").read_text(encoding="utf-8")
     migrate_report = (reports_dir / "migrate-report.md").read_text(encoding="utf-8")
     assert "## Migration Steps" in migrate_report
+    assert "- Migration performed: `yes`" in migrate_report
     assert "Soperator and Slurm smoke" in migrate_report
     assert "### MK8s GPU" in migrate_report
     assert "soperator-cluster-validation-report-external-cluster.json" in migrate_report
@@ -2922,6 +3523,7 @@ def test_execute_upgrades_external_node_template_with_safe_surge_strategy(
         snapshot_collector=lambda *, kube_context: _snapshot(),
         approved=True,
         command_runner=runner,
+        worker_rollout_strategy="safe-surge",
     )
 
     assert result.pending_phase == "none"
@@ -2994,6 +3596,158 @@ def test_execute_upgrades_external_node_template_with_safe_surge_strategy(
     )
 
 
+def test_execute_external_node_template_parallel_worker_failure_checkpoints_after_executor_exit(
+    tmp_path: Path,
+) -> None:
+    def _source_worker_group(name: str, node_group_id: str) -> dict[str, Any]:
+        return {
+            "gpu": True,
+            "node_count": 2,
+            "labels": {
+                "nebius.com/node-group": name,
+                "nebius.com/node-group-id": node_group_id,
+                "slurm.nebius.ai/nodeset": name,
+            },
+            "allocatable": {"nvidia.com/gpu": "8"},
+            "nodes": [f"{name}-a", f"{name}-b"],
+        }
+
+    def _live_worker_group(name: str, node_group_id: str) -> dict[str, Any]:
+        return {
+            "metadata": {
+                "id": node_group_id,
+                "name": name,
+                "parent_id": "cluster-123",
+            },
+            "spec": {
+                "version": "1.32",
+                "strategy": {
+                    "max_surge": {"count": 2},
+                    "max_unavailable": {"count": 0},
+                    "drain_timeout": "10m",
+                },
+                "template": {
+                    "metadata": {"labels": {"nebius.com/node-group": name}},
+                    "resources": {
+                        "platform": "gpu-h100-sxm",
+                        "preset": "8gpu-128vcpu-1600gb",
+                    },
+                    "boot_disk": {"type": "NETWORK_SSD", "size_gibibytes": "256"},
+                    "gpu_settings": {"drivers_preset": "cuda12.8"},
+                    "os": "ubuntu22.04",
+                    "network_interfaces": [{"subnet_id": "subnet-123"}],
+                    "filesystems": [],
+                },
+            },
+            "status": _ready_node_group_status(version="1.32", nodes=2),
+        }
+
+    class _FailingParallelWorkerRunner(_FakeCommandRunner):
+        def __call__(
+            self,
+            args,
+            *,
+            input_text: str | None = None,
+            timeout_seconds: int = 300,
+            check: bool = True,
+        ) -> SoperatorMigrationCommandResult:
+            command = tuple(str(item) for item in args)
+            if (
+                command[:5]
+                == (
+                    "nebius",
+                    "mk8s",
+                    "node-group",
+                    "update",
+                    "nodegroup-worker-b",
+                )
+                and "--version" in command
+            ):
+                self.calls.append((command, input_text))
+                if check:
+                    raise RuntimeError(
+                        f"{' '.join(command)} failed: simulated update failure"
+                    )
+                return SoperatorMigrationCommandResult(command, 1, "", "simulated update failure")
+            return super().__call__(
+                args,
+                input_text=input_text,
+                timeout_seconds=timeout_seconds,
+                check=check,
+            )
+
+    config_path = tmp_path / "config.yaml"
+    snapshot = _snapshot()
+    snapshot["node_groups"] = {
+        "worker-gpu-a": _source_worker_group("worker-gpu-a", "nodegroup-worker-a"),
+        "worker-gpu-b": _source_worker_group("worker-gpu-b", "nodegroup-worker-b"),
+    }
+    source_report = _source_report(snapshot)
+    payload = _payload()
+    target = payload["deploy"]["targets"][0]  # type: ignore[index]
+    assert isinstance(target, dict)
+    onboarding = target["soperator_onboarding"]
+    assert isinstance(onboarding, dict)
+    onboarding["actions"] = ["upgrade-external-node-template"]
+    onboarding["node_template_upgrade"] = {
+        "target_k8s_version": "1.33",
+        "target_os": "ubuntu24.04",
+        "target_gpu_stack_preset": "cuda13.0",
+        "rollout": {"strategy": "safe-surge", "worker_wave_percent": 100},
+    }
+    runner = _FailingParallelWorkerRunner(
+        existing_node_groups=[
+            _live_worker_group("worker-gpu-a", "nodegroup-worker-a"),
+            _live_worker_group("worker-gpu-b", "nodegroup-worker-b"),
+        ],
+        live_nodes=[
+            {
+                "metadata": {
+                    "name": "worker-gpu-a-node-a",
+                    "labels": {
+                        "nebius.com/node-group": "worker-gpu-a",
+                        "nebius.com/node-group-id": "nodegroup-worker-a",
+                    },
+                },
+                "spec": {},
+                "status": {"conditions": [{"type": "Ready", "status": "True"}]},
+            },
+            {
+                "metadata": {
+                    "name": "worker-gpu-b-node-a",
+                    "labels": {
+                        "nebius.com/node-group": "worker-gpu-b",
+                        "nebius.com/node-group-id": "nodegroup-worker-b",
+                    },
+                },
+                "spec": {},
+                "status": {"conditions": [{"type": "Ready", "status": "True"}]},
+            },
+        ],
+    )
+
+    with pytest.raises(RuntimeError, match="simulated update failure"):
+        execute_soperator_migration(
+            config_path=config_path,
+            target_ref="external-cluster",
+            payload=payload,
+            source_report=source_report,
+            snapshot_collector=lambda *, kube_context: snapshot,
+            approved=True,
+            command_runner=runner,
+        )
+
+    checkpoint = json.loads(
+        soperator_migration_checkpoint_path(config_path, "external-cluster").read_text(
+            encoding="utf-8"
+        )
+    )
+    phase = checkpoint["phase_state"]["external-node-template-upgrade"]
+    assert phase["worker_waves"] == [["worker-gpu-a", "worker-gpu-b"]]
+    assert phase["node_groups"]["worker-gpu-b"]["status"] == "failed"
+    assert "simulated update failure" in phase["node_groups"]["worker-gpu-b"]["error"]
+
+
 class _TimeoutAfterAcceptedNodeTemplateUpdateRunner(_FakeCommandRunner):
     def __init__(self, *, leave_rollout_in_progress: bool = False) -> None:
         super().__init__(
@@ -3064,6 +3818,33 @@ class _TimeoutAfterAcceptedNodeTemplateUpdateRunner(_FakeCommandRunner):
                             "outdated_node_count": 1,
                             "reconciling": True,
                         }
+            self.timed_out = True
+            raise subprocess.TimeoutExpired(list(command), timeout_seconds)
+        return super().__call__(
+            command,
+            input_text=input_text,
+            timeout_seconds=timeout_seconds,
+            check=check,
+        )
+
+
+class _TimeoutBeforeLiveNodeTemplateVisibleRunner(_TimeoutAfterAcceptedNodeTemplateUpdateRunner):
+    def __call__(
+        self,
+        args,
+        *,
+        input_text: str | None = None,
+        timeout_seconds: int = 300,
+        check: bool = True,
+    ) -> SoperatorMigrationCommandResult:
+        command = tuple(str(item) for item in args)
+        if (
+            command[:4] == ("nebius", "mk8s", "node-group", "update")
+            and command[4] == "nodegroup-gpu-pool"
+            and "--version" in command
+            and not self.timed_out
+        ):
+            self.calls.append((command, input_text))
             self.timed_out = True
             raise subprocess.TimeoutExpired(list(command), timeout_seconds)
         return super().__call__(
@@ -3200,10 +3981,135 @@ def test_execute_external_node_template_resume_waiting_rollout_without_duplicate
     assert group_state["strategy_restored"] is True
 
 
+def test_execute_external_node_template_resumes_failed_timeout_from_live_state(
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "config.yaml"
+    runner = _TimeoutBeforeLiveNodeTemplateVisibleRunner()
+
+    with pytest.raises(RuntimeError, match="timed out before the live node group reported"):
+        execute_soperator_migration(
+            config_path=config_path,
+            target_ref="external-cluster",
+            payload=_payload(),
+            source_report=_source_report(),
+            snapshot_collector=lambda *, kube_context: _snapshot(),
+            approved=True,
+            command_runner=runner,
+        )
+
+    checkpoint = json.loads(
+        soperator_migration_checkpoint_path(config_path, "external-cluster").read_text(
+            encoding="utf-8"
+        )
+    )
+    group_state = checkpoint["phase_state"]["external-node-template-upgrade"]["node_groups"][
+        "gpu-pool"
+    ]
+    assert group_state["status"] == "failed"
+
+    for node_group in runner.existing_node_groups:
+        metadata = node_group.get("metadata")
+        if not isinstance(metadata, dict) or metadata.get("id") != "nodegroup-gpu-pool":
+            continue
+        spec = node_group.setdefault("spec", {})
+        assert isinstance(spec, dict)
+        spec["version"] = "1.33"
+        template = spec.setdefault("template", {})
+        assert isinstance(template, dict)
+        template["os"] = "ubuntu24.04"
+        gpu_settings = template.setdefault("gpu_settings", {})
+        assert isinstance(gpu_settings, dict)
+        gpu_settings["drivers_preset"] = "cuda13.0"
+        spec["strategy"] = {
+            "max_surge": {"count": 1},
+            "max_unavailable": {"count": 0},
+            "drain_timeout": "30m",
+        }
+        node_group["status"] = _ready_node_group_status(version="1.33", nodes=2)
+
+    resumed = execute_soperator_migration(
+        config_path=config_path,
+        target_ref="external-cluster",
+        payload=_payload(),
+        source_report=_source_report(),
+        snapshot_collector=lambda *, kube_context: _snapshot(),
+        approved=True,
+        command_runner=runner,
+    )
+
+    node_template_updates = [
+        call[0]
+        for call in runner.calls
+        if call[0][:4] == ("nebius", "mk8s", "node-group", "update")
+        and call[0][4] == "nodegroup-gpu-pool"
+        and "--version" in call[0]
+    ]
+    assert len(node_template_updates) == 1
+    strategy_restores = [
+        call[0]
+        for call in runner.calls
+        if call[0][:4] == ("nebius", "mk8s", "node-group", "update")
+        and call[0][4] == "nodegroup-gpu-pool"
+        and "--version" not in call[0]
+        and "--strategy-max-surge-count" in call[0]
+    ]
+    assert strategy_restores[-1][strategy_restores[-1].index("--strategy-max-surge-count") + 1] == "2"
+    assert (
+        strategy_restores[-1][
+            strategy_restores[-1].index("--strategy-max-unavailable-count") + 1
+        ]
+        == "0"
+    )
+    assert strategy_restores[-1][strategy_restores[-1].index("--strategy-drain-timeout") + 1] == (
+        "10m"
+    )
+    assert resumed.pending_phase == "none"
+    assert any(
+        "External node-template rollout completed after live-state reconciliation: "
+        "gpu-pool; original strategy restored." in line
+        for line in resumed.lines
+    )
+    checkpoint = json.loads(
+        soperator_migration_checkpoint_path(config_path, "external-cluster").read_text(
+            encoding="utf-8"
+        )
+    )
+    group_state = checkpoint["phase_state"]["external-node-template-upgrade"]["node_groups"][
+        "gpu-pool"
+    ]
+    assert group_state["status"] == "completed"
+    assert group_state["strategy_restored"] is True
+    assert "error" not in group_state
+
+
 def test_execute_external_node_template_allows_zero_surge_worker_fallback(
     tmp_path: Path,
 ) -> None:
-    runner = _FakeCommandRunner()
+    runner = _FakeCommandRunner(
+        existing_node_groups=[
+            {
+                "metadata": {
+                    "id": "nodegroup-gpu-pool",
+                    "name": "nodegroup-gpu-pool",
+                    "parent_id": "cluster-123",
+                },
+                "spec": {
+                    "version": "1.31",
+                    "template": {
+                        "metadata": {"labels": {}},
+                        "resources": {"platform": "gpu-h100-sxm", "preset": "8gpu"},
+                        "boot_disk": {"type": "NETWORK_SSD", "size_gibibytes": "93"},
+                        "os": {"name": "ubuntu24.04"},
+                        "network_interfaces": [{"subnet_id": "subnet-123"}],
+                        "filesystems": [],
+                        "gpu_settings": {"drivers_preset": "cuda12.8"},
+                    },
+                },
+                "status": _ready_node_group_status(nodes=100),
+            }
+        ]
+    )
 
     execute_soperator_migration(
         config_path=tmp_path / "config.yaml",
@@ -3228,6 +4134,7 @@ def test_execute_external_node_template_allows_zero_surge_worker_fallback(
     assert update_command[update_command.index("--strategy-max-surge-count") + 1] == "0"
     assert update_command[update_command.index("--strategy-max-unavailable-count") + 1] == "1"
     assert update_command[update_command.index("--strategy-drain-timeout") + 1] == "30m"
+    assert update_command[update_command.index("--timeout") + 1] == "1000m"
 
 
 def test_execute_rejects_changed_worker_rollout_settings_after_checkpoint(
@@ -3254,7 +4161,7 @@ def test_execute_rejects_changed_worker_rollout_settings_after_checkpoint(
             snapshot_collector=lambda *, kube_context: _snapshot(),
             approved=True,
             command_runner=_FakeCommandRunner(),
-            worker_rollout_strategy="zero-surge",
+            worker_rollout_strategy="safe-surge",
         )
 
 
@@ -3433,6 +4340,7 @@ def test_execute_external_node_template_wave_budget_does_not_allow_degraded_work
             snapshot_collector=lambda *, kube_context: _snapshot(),
             approved=True,
             command_runner=runner,
+            worker_rollout_strategy="safe-surge",
             worker_wave_groups=2,
         )
 
@@ -4271,7 +5179,8 @@ def test_suspend_legacy_flux_helmreleases_treats_timeout_as_skip() -> None:
     assert runner.calls[0][0][-1] == "--request-timeout=20s"
 
 
-def test_scale_down_legacy_soperator_controller_deployments() -> None:
+@pytest.mark.parametrize("profile_id", ["v2-to-target", "v3-to-target"])
+def test_scale_down_legacy_soperator_controller_deployments(profile_id: str) -> None:
     runner = _FakeCommandRunner(
         live_kubernetes_resources={
             "deployment": [
@@ -4329,7 +5238,7 @@ def test_scale_down_legacy_soperator_controller_deployments() -> None:
         kube_context="external-context",
         phase=phase,
         target_version="4.0.1-ps.1",
-        profile_group=migration.soperator_migration_profile_group("v2-to-target"),
+        profile_group=migration.soperator_migration_profile_group(profile_id),
     )
 
     assert changed is True
@@ -4852,7 +5761,7 @@ def test_execute_emits_phase_aware_status_for_storage_and_compute(tmp_path: Path
     }
 
 
-def test_mk8s_status_reports_node_groups_and_upgrading_down_nodes() -> None:
+def test_mk8s_status_reports_node_groups_and_replacing_nodes() -> None:
     runner = _FakeCommandRunner(
         live_nodes=[
             {
@@ -4862,6 +5771,14 @@ def test_mk8s_status_reports_node_groups_and_upgrading_down_nodes() -> None:
                 },
                 "spec": {},
                 "status": {"conditions": [{"type": "Ready", "status": "False"}]},
+            },
+            {
+                "metadata": {
+                    "name": "gpu-node-b",
+                    "labels": {"nebius.com/node-group": "gpu-pool"},
+                },
+                "spec": {"unschedulable": True},
+                "status": {"conditions": [{"type": "Ready", "status": "True"}]},
             },
             {
                 "metadata": {
@@ -4896,9 +5813,129 @@ def test_mk8s_status_reports_node_groups_and_upgrading_down_nodes() -> None:
 
     assert signal.name == "MK8s Node Groups"
     assert signal.state == "degraded"
-    assert "nodes 1/2 Ready" in signal.summary
-    assert "node groups gpu-pool:0/1 Ready, login-pool:1/1 Ready" in signal.summary
-    assert "problem nodes gpu-node-a:node-upgrading (down)" in signal.summary
+    assert signal.summary.startswith("Node groups: 2 group(s); ")
+    assert "gpu-pool:1/2 Ready, login-pool:1/1 Ready" in signal.summary
+    assert " || Nodes: 2/3 Ready; 1 cordoned; " in signal.summary
+    assert (
+        "in transition gpu-node-a:replacing (down), "
+        "gpu-node-b:replacing (cordoned)"
+    ) in signal.summary
+    assert "problem nodes" not in signal.summary
+
+
+def test_mk8s_status_keeps_problem_label_for_non_upgrading_notready_nodes() -> None:
+    runner = _FakeCommandRunner(
+        live_nodes=[
+            {
+                "metadata": {
+                    "name": "gpu-node-a",
+                    "labels": {"nebius.com/node-group": "gpu-pool"},
+                },
+                "spec": {},
+                "status": {"conditions": [{"type": "Ready", "status": "False"}]},
+            },
+            {
+                "metadata": {
+                    "name": "login-node-a",
+                    "labels": {"nebius.com/node-group": "login-pool"},
+                },
+                "spec": {},
+                "status": {"conditions": [{"type": "Ready", "status": "True"}]},
+            },
+        ]
+    )
+
+    signal = migration._collect_mk8s_status(
+        command_runner=runner,
+        kube_context="external-context",
+        checkpoint={},
+        phase_id="external-node-template-upgrade",
+    )
+
+    assert signal.name == "MK8s Node Groups"
+    assert signal.state == "degraded"
+    assert signal.summary.startswith(
+        "Node groups: 2 group(s); gpu-pool:0/1 Ready, login-pool:1/1 Ready"
+    )
+    assert " || Nodes: 1/2 Ready; " in signal.summary
+    assert "problem nodes gpu-node-a:NotReady (down)" in signal.summary
+    assert "in transition" not in signal.summary
+
+
+def test_mk8s_status_bounds_many_groups_and_transition_nodes() -> None:
+    live_nodes: list[dict[str, Any]] = []
+    node_groups: dict[str, dict[str, str]] = {}
+    group_count = 40
+    nodes_per_group = 100
+    cordoned_per_group = 2
+    for index in range(group_count):
+        group_name = f"worker-{index:02d}"
+        node_groups[group_name] = {
+            "status": "updating",
+            "node_group_name": group_name,
+            "node_group_id": f"nodegroup-{index:02d}",
+        }
+        for node_index in range(nodes_per_group):
+            cordoned = node_index < cordoned_per_group
+            live_nodes.append(
+                {
+                    "metadata": {
+                        "name": (
+                            f"{group_name}-old-{node_index:02d}"
+                            if cordoned
+                            else f"{group_name}-node-{node_index:02d}"
+                        ),
+                        "labels": {"nebius.com/node-group": group_name},
+                    },
+                    "spec": {"unschedulable": True} if cordoned else {},
+                    "status": {"conditions": [{"type": "Ready", "status": "True"}]},
+                },
+            )
+    runner = _FakeCommandRunner(live_nodes=live_nodes)
+    checkpoint = {
+        "phase_state": {
+            "external-node-template-upgrade": {
+                "node_groups": node_groups,
+            }
+        }
+    }
+
+    signal = migration._collect_mk8s_status(
+        command_runner=runner,
+        kube_context="external-context",
+        checkpoint=checkpoint,
+        phase_id="external-node-template-upgrade",
+    )
+
+    assert signal.name == "MK8s Node Groups"
+    assert signal.state == "degraded"
+    assert signal.summary.startswith("Node groups: 40 group(s); ")
+    assert "worker-00:100/100 Ready" in signal.summary
+    assert "worker-05:100/100 Ready" in signal.summary
+    assert "worker-06:100/100 Ready" not in signal.summary
+    assert "+34 more groups" in signal.summary
+    assert " || Nodes: 4000/4000 Ready; 80 cordoned; " in signal.summary
+    assert "in transition worker-00-old-00:replacing (cordoned)" in signal.summary
+    assert "worker-03-old-01:replacing (cordoned)" in signal.summary
+    assert "worker-04-old-00:replacing (cordoned)" not in signal.summary
+    assert "+72 more" in signal.summary
+    assert len(signal.summary) < 800
+
+
+def test_mk8s_status_sections_empty_node_inventory() -> None:
+    runner = _FakeCommandRunner()
+    runner.live_nodes = []
+
+    signal = migration._collect_mk8s_status(
+        command_runner=runner,
+        kube_context="external-context",
+        checkpoint={},
+        phase_id="external-node-template-upgrade",
+    )
+
+    assert signal.name == "MK8s Node Groups"
+    assert signal.state == "down"
+    assert signal.summary == "Node groups: 0 group(s) || Nodes: 0/0 Ready"
 
 
 def test_slurm_status_reports_named_worker_states() -> None:
@@ -5356,7 +6393,7 @@ def test_execute_migrates_compute_when_slurm_resources_exist(tmp_path: Path) -> 
     assert "--take-ownership" in helm_upgrade[0]
     assert "--no-hooks" in helm_upgrade[0]
     assert "--timeout" in helm_upgrade[0]
-    assert helm_upgrade[0][helm_upgrade[0].index("--timeout") + 1] == "2m"
+    assert helm_upgrade[0][helm_upgrade[0].index("--timeout") + 1] == "30m"
     assert "--wait" not in helm_upgrade[0]
     crd_applies = [
         call

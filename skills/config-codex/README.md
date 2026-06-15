@@ -149,9 +149,9 @@ only by default and does not directly call subagent tools.
 
 `global-context-management` defines the task workflow after hooks inject the
 state path. It tells Codex when to read and update task state, how to avoid
-parent-thread noise, when to use read-only subagents if the user explicitly
-authorizes delegation and the current runtime permits it, and how to validate
-and review risk.
+parent-thread noise, when to use read-only subagents if delegation is
+authorized by the prompt or a user-enabled local hook policy and the current
+runtime permits it, and how to validate and review risk.
 
 ### Custom Agents Are Read-Only Helpers
 
@@ -186,10 +186,11 @@ roles, a restarted Codex session, and a surface that exposes subagent tools.
 They may not appear as separate user-visible controls in every surface. In
 current Codex surfaces, this setup makes subagent tools available but does not
 force automatic delegation; prompts that need subagents should explicitly say
-to use or spawn subagents, use delegation, or run parallel agents. For users
-who want hook-assisted delegation, a private local policy file can opt in to
-injecting that request for complex prompts without hardcoding agent names in
-the public repo:
+to use or spawn subagents, use delegation, or run parallel agents, unless the
+local hook policy injects that request for the prompt. For users who want
+hook-assisted delegation, a private local policy file can opt in to injecting
+that request for complex prompts without hardcoding agent names in the public
+repo:
 
 When delegation is authorized and useful but subagent controls are not visible,
 and `tool_search` is available, Codex should search for multi-agent/subagent

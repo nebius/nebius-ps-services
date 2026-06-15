@@ -3646,6 +3646,81 @@ def test_vm_observability_prompt_guidance_includes_concise_field_comments(
     assert "Collect VM journald logs: answering yes applies" in joined
 
 
+def test_soperator_rollout_prompt_guidance_includes_concise_field_comments(
+    monkeypatch,
+) -> None:
+    captured: list[str] = []
+    monkeypatch.setattr(
+        cli.console, "print", lambda message, **_kwargs: captured.append(str(message))
+    )
+    answers = {
+        "deploy.targets[].soperator_onboarding.node_template_upgrade.rollout.strategy": (
+            "safe-surge"
+        ),
+        "deploy.targets[].soperator_onboarding.node_template_upgrade.rollout.wave_budget": (
+            "groups"
+        ),
+        "deploy.targets[].soperator_onboarding.node_template_upgrade.rollout.worker_wave_groups": (
+            "2"
+        ),
+        "deploy.targets[].soperator_onboarding.node_template_upgrade.rollout.max_parallel_worker_groups": (
+            "2"
+        ),
+        "deploy.targets[].soperator_onboarding.node_template_upgrade.rollout.worker_group_strategy.max_surge_count": (
+            "1"
+        ),
+        "deploy.targets[].soperator_onboarding.node_template_upgrade.rollout.worker_group_strategy.max_unavailable_count": (
+            "0"
+        ),
+        "deploy.targets[].soperator_onboarding.node_template_upgrade.rollout.worker_group_strategy.drain_timeout": (
+            "30m"
+        ),
+    }
+
+    def _prompt_scalar(field_label: str, default: object, **_kwargs: object) -> tuple[object, bool]:
+        return answers.get(field_label, default), False
+
+    monkeypatch.setattr(cli, "_prompt_scalar_override", _prompt_scalar)
+
+    manifest = cli._prompt_soperator_onboarding_rollout_manifest(
+        {
+            "soperator_onboarding": {
+                "node_template_upgrade": {
+                    "rollout": {
+                        "strategy": "safe-surge",
+                        "worker_wave_groups": 1,
+                        "worker_group_strategy": {
+                            "max_surge_count": 1,
+                            "max_unavailable_count": 0,
+                            "drain_timeout": "30m",
+                        },
+                    }
+                }
+            }
+        }
+    )
+
+    assert manifest == {
+        "strategy": "safe-surge",
+        "worker_wave_groups": 2,
+        "max_parallel_worker_groups": 2,
+        "worker_group_strategy": {
+            "max_surge_count": 1,
+            "max_unavailable_count": 0,
+            "drain_timeout": "30m",
+        },
+    }
+    joined = "\n".join(captured)
+    assert "Strategy: zero-surge is the default" in joined
+    assert "safe-surge preserves capacity with temporary surge nodes" in joined
+    assert "Safe-surge wave budget: choose groups for a fixed batch size" in joined
+    assert "Safe-surge worker wave groups: number of worker groups updated per wave" in joined
+    assert "Max parallel worker groups: optional hard cap" in joined
+    assert "Max surge count: temporary extra nodes per worker group" in joined
+    assert "Max unavailable count: nodes per worker group allowed down" in joined
+    assert "Drain timeout: time to wait for pod eviction" in joined
+
+
 def test_prompt_choice_override_defaults_to_first_option_when_required(monkeypatch) -> None:
     monkeypatch.setattr(cli, "_is_tty_session", lambda: False)
     monkeypatch.setattr(cli.typer, "prompt", lambda *_args, **_kwargs: "")

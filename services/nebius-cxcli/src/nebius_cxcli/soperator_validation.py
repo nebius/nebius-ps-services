@@ -135,9 +135,6 @@ def _nccl_script(*, partition: str) -> str:
             'export CXCLI_NCCL_RANKS="$ranks"',
             "runner_script=$(cat <<'CXCLI_NCCL_RUNNER'",
             "set -euo pipefail",
-            'if [[ "${SLURM_PROCID:-0}" != "0" ]]; then',
-            "  exit 0",
-            "fi",
             'echo "cxcli-soperator-nccl-ok mode=${CXCLI_NCCL_MODE} '
             'partition=${CXCLI_NCCL_PARTITION} nodes=${CXCLI_NCCL_NODES} '
             'gpus_per_node=${CXCLI_NCCL_GPUS_PER_NODE} ranks=${CXCLI_NCCL_RANKS}"',
@@ -159,13 +156,18 @@ def _nccl_script(*, partition: str) -> str:
             "/usr/bin/all_reduce_perf_mpi -b 512M -e 8G -f 2 -g 1",
             "CXCLI_NCCL_RUNNER",
             ")",
-            "srun --job-name=cxcli-soperator-nccl "
+            "launcher_script=$(printf "
+            "'srun --job-name=cxcli-soperator-nccl-launcher "
+            "--nodes=1 --ntasks=1 --cpus-per-task=%q --gpus=%q "
+            "--kill-on-bad-exit=1 bash -lc %q' "
+            '"$cpus_per_task" "$gpus_per_node" "$runner_script")',
+            "salloc --job-name=cxcli-soperator-nccl "
             "--partition=\"$partition\" --nodelist=\"$node_list\" "
-            "--nodes=\"$target_nodes\" --ntasks=\"$target_nodes\" "
-            "--ntasks-per-node=1 --gpus-per-node=\"$gpus_per_node\" "
+            "--nodes=\"$target_nodes\" --ntasks=\"$target_nodes\" --ntasks-per-node=1 "
+            "--gpus-per-node=\"$gpus_per_node\" "
             "--cpus-per-task=\"$cpus_per_task\" --mem=0 --time=00:30:00 "
-            "--exclusive --immediate=60 --kill-on-bad-exit=1 "
-            'bash -lc "$runner_script"',
+            "--exclusive --immediate=60 "
+            'bash -lc "$launcher_script"',
         ]
     )
 

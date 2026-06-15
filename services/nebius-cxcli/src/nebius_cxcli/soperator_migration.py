@@ -9,6 +9,7 @@ import math
 import os
 import re
 import shutil
+import stat
 import subprocess
 import tempfile
 import threading
@@ -21,6 +22,7 @@ from datetime import UTC, datetime
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Protocol
+from uuid import uuid4
 
 import yaml
 
@@ -154,6 +156,7 @@ _SOPERATOR_NODESET_LABEL_KEYS = (
 _SOURCE_WORKER_NODESET_PREFIX = "worker"
 SOPERATOR_WORKER_ROLLOUT_STRATEGY_SAFE_SURGE = "safe-surge"
 SOPERATOR_WORKER_ROLLOUT_STRATEGY_ZERO_SURGE = "zero-surge"
+SOPERATOR_WORKER_ROLLOUT_DEFAULT_STRATEGY = SOPERATOR_WORKER_ROLLOUT_STRATEGY_ZERO_SURGE
 SOPERATOR_WORKER_ROLLOUT_STRATEGIES = frozenset(
     {
         SOPERATOR_WORKER_ROLLOUT_STRATEGY_SAFE_SURGE,
@@ -161,8 +164,10 @@ SOPERATOR_WORKER_ROLLOUT_STRATEGIES = frozenset(
     }
 )
 SOPERATOR_WORKER_ROLLOUT_DEFAULT_WAVE_PERCENT = 1
-SOPERATOR_WORKER_GROUP_STRATEGY_DEFAULT_MAX_SURGE_COUNT = 1
-SOPERATOR_WORKER_GROUP_STRATEGY_DEFAULT_MAX_UNAVAILABLE_COUNT = 0
+SOPERATOR_SAFE_SURGE_WORKER_GROUP_STRATEGY_DEFAULT_MAX_SURGE_COUNT = 1
+SOPERATOR_SAFE_SURGE_WORKER_GROUP_STRATEGY_DEFAULT_MAX_UNAVAILABLE_COUNT = 0
+SOPERATOR_ZERO_SURGE_WORKER_GROUP_STRATEGY_DEFAULT_MAX_SURGE_COUNT = 0
+SOPERATOR_ZERO_SURGE_WORKER_GROUP_STRATEGY_DEFAULT_MAX_UNAVAILABLE_COUNT = 1
 SOPERATOR_WORKER_GROUP_STRATEGY_DEFAULT_DRAIN_TIMEOUT = "30m"
 _SOPERATOR_STORAGE_DEFAULTS: Mapping[str, Mapping[str, Any]] = {
     "jail": {
@@ -325,11 +330,13 @@ class SoperatorExternalNodeTemplateTarget:
 class SoperatorExternalNodeTemplateRollout:
     strategy: str
     worker_wave_groups: int | None = None
-    worker_wave_percent: int | None = SOPERATOR_WORKER_ROLLOUT_DEFAULT_WAVE_PERCENT
+    worker_wave_percent: int | None = None
     max_parallel_worker_groups: int | None = None
-    strategy_max_surge_count: int = SOPERATOR_WORKER_GROUP_STRATEGY_DEFAULT_MAX_SURGE_COUNT
+    strategy_max_surge_count: int = (
+        SOPERATOR_ZERO_SURGE_WORKER_GROUP_STRATEGY_DEFAULT_MAX_SURGE_COUNT
+    )
     strategy_max_unavailable_count: int = (
-        SOPERATOR_WORKER_GROUP_STRATEGY_DEFAULT_MAX_UNAVAILABLE_COUNT
+        SOPERATOR_ZERO_SURGE_WORKER_GROUP_STRATEGY_DEFAULT_MAX_UNAVAILABLE_COUNT
     )
     strategy_drain_timeout: str = SOPERATOR_WORKER_GROUP_STRATEGY_DEFAULT_DRAIN_TIMEOUT
 
@@ -732,6 +739,18 @@ def _external_node_template_rollout_config(
     return _mapping(node_template.get("rollout"))
 
 
+def _default_worker_group_strategy_values(strategy: str) -> tuple[int, int]:
+    if strategy == SOPERATOR_WORKER_ROLLOUT_STRATEGY_SAFE_SURGE:
+        return (
+            SOPERATOR_SAFE_SURGE_WORKER_GROUP_STRATEGY_DEFAULT_MAX_SURGE_COUNT,
+            SOPERATOR_SAFE_SURGE_WORKER_GROUP_STRATEGY_DEFAULT_MAX_UNAVAILABLE_COUNT,
+        )
+    return (
+        SOPERATOR_ZERO_SURGE_WORKER_GROUP_STRATEGY_DEFAULT_MAX_SURGE_COUNT,
+        SOPERATOR_ZERO_SURGE_WORKER_GROUP_STRATEGY_DEFAULT_MAX_UNAVAILABLE_COUNT,
+    )
+
+
 def resolve_external_node_template_rollout(
     onboarding: Mapping[str, Any],
     *,
@@ -746,9 +765,11 @@ def resolve_external_node_template_rollout(
     """Resolve external worker rollout settings from config plus CLI overrides."""
 
     config = _external_node_template_rollout_config(onboarding)
+    config_strategy = normalize_component_token(str(config.get("strategy", "") or ""))
+    cli_strategy = normalize_component_token(strategy or "") if strategy is not None else ""
     resolved_strategy = normalize_component_token(
-        strategy or str(config.get("strategy", "") or "")
-    ) or SOPERATOR_WORKER_ROLLOUT_STRATEGY_SAFE_SURGE
+        cli_strategy or config_strategy
+    ) or SOPERATOR_WORKER_ROLLOUT_DEFAULT_STRATEGY
     if resolved_strategy not in SOPERATOR_WORKER_ROLLOUT_STRATEGIES:
         available = ", ".join(sorted(SOPERATOR_WORKER_ROLLOUT_STRATEGIES))
         raise ValueError(
@@ -801,23 +822,56 @@ def resolve_external_node_template_rollout(
                 "deploy.targets[].soperator_onboarding.node_template_upgrade.rollout "
                 "must set only one of worker_wave_groups or worker_wave_percent."
             )
-        if resolved_wave_groups is None and resolved_wave_percent is None:
+        if (
+            resolved_strategy == SOPERATOR_WORKER_ROLLOUT_STRATEGY_SAFE_SURGE
+            and resolved_wave_groups is None
+            and resolved_wave_percent is None
+        ):
             resolved_wave_percent = SOPERATOR_WORKER_ROLLOUT_DEFAULT_WAVE_PERCENT
 
-    resolved_parallel = _positive_int_or_none(
-        max_parallel_worker_groups
-        if max_parallel_worker_groups is not None
-        else config.get("max_parallel_worker_groups"),
-        field_name=(
-            "--max-parallel-worker-groups"
+    if resolved_strategy == SOPERATOR_WORKER_ROLLOUT_STRATEGY_ZERO_SURGE:
+        zero_surge_wave_fields: list[str] = []
+        if resolved_wave_groups is not None:
+            zero_surge_wave_fields.append("worker_wave_groups")
+        if resolved_wave_percent is not None:
+            zero_surge_wave_fields.append("worker_wave_percent")
+        raw_max_parallel = (
+            max_parallel_worker_groups
             if max_parallel_worker_groups is not None
-            else (
-                "deploy.targets[].soperator_onboarding.node_template_upgrade.rollout."
-                "max_parallel_worker_groups"
+            else config.get("max_parallel_worker_groups")
+        )
+        if raw_max_parallel is not None and str(raw_max_parallel).strip():
+            zero_surge_wave_fields.append("max_parallel_worker_groups")
+        if zero_surge_wave_fields:
+            raise ValueError(
+                "zero-surge worker rollout does not use worker wave budget fields "
+                f"({', '.join(zero_surge_wave_fields)}); set strategy to safe-surge "
+                "or remove those fields."
             )
-        ),
+        resolved_wave_groups = None
+        resolved_wave_percent = None
+        resolved_parallel = None
+    else:
+        resolved_parallel = _positive_int_or_none(
+            max_parallel_worker_groups
+            if max_parallel_worker_groups is not None
+            else config.get("max_parallel_worker_groups"),
+            field_name=(
+                "--max-parallel-worker-groups"
+                if max_parallel_worker_groups is not None
+                else (
+                    "deploy.targets[].soperator_onboarding.node_template_upgrade.rollout."
+                    "max_parallel_worker_groups"
+                )
+            ),
+        )
+    use_config_worker_group_strategy = not cli_strategy or cli_strategy == config_strategy
+    worker_group_strategy = (
+        _mapping(config.get("worker_group_strategy")) if use_config_worker_group_strategy else {}
     )
-    worker_group_strategy = _mapping(config.get("worker_group_strategy"))
+    default_max_surge, default_max_unavailable = _default_worker_group_strategy_values(
+        resolved_strategy
+    )
     resolved_max_surge = _non_negative_int_or_default(
         strategy_max_surge_count
         if strategy_max_surge_count is not None
@@ -830,7 +884,7 @@ def resolve_external_node_template_rollout(
                 "worker_group_strategy.max_surge_count"
             )
         ),
-        default=SOPERATOR_WORKER_GROUP_STRATEGY_DEFAULT_MAX_SURGE_COUNT,
+        default=default_max_surge,
     )
     resolved_max_unavailable = _non_negative_int_or_default(
         strategy_max_unavailable_count
@@ -844,13 +898,23 @@ def resolve_external_node_template_rollout(
                 "worker_group_strategy.max_unavailable_count"
             )
         ),
-        default=SOPERATOR_WORKER_GROUP_STRATEGY_DEFAULT_MAX_UNAVAILABLE_COUNT,
+        default=default_max_unavailable,
     )
     if resolved_max_surge == 0 and resolved_max_unavailable == 0:
         raise ValueError(
             "worker_group_strategy must keep at least one of max_surge_count or "
             "max_unavailable_count greater than zero."
         )
+    if (
+        resolved_strategy == SOPERATOR_WORKER_ROLLOUT_STRATEGY_ZERO_SURGE
+        and resolved_max_surge != 0
+    ):
+        raise ValueError("zero-surge worker rollout requires max_surge_count to be 0.")
+    if (
+        resolved_strategy == SOPERATOR_WORKER_ROLLOUT_STRATEGY_SAFE_SURGE
+        and resolved_max_surge <= 0
+    ):
+        raise ValueError("safe-surge worker rollout requires max_surge_count greater than 0.")
     resolved_drain_timeout = _rollout_drain_timeout_or_default(
         strategy_drain_timeout
         if strategy_drain_timeout is not None
@@ -932,7 +996,7 @@ def _effective_worker_group_strategy_label(
     rollout: SoperatorExternalNodeTemplateRollout,
 ) -> str:
     if rollout.strategy == SOPERATOR_WORKER_ROLLOUT_STRATEGY_ZERO_SURGE:
-        return "max_surge=0, max_unavailable=1, drain_timeout=30m (zero-surge fallback)"
+        return _worker_group_strategy_label(rollout) + " (zero-surge)"
     return _worker_group_strategy_label(rollout)
 
 
@@ -980,7 +1044,8 @@ def _external_node_template_rollout_plan_lines(
         surge_count = rollout.strategy_max_surge_count
         lines.append(
             f"Worker spare capacity required: {surge_count} surge node(s) per worker "
-            "group in the active wave; quota and capacity will be verified before execute."
+            "group in the active wave; --execute preflight verifies quota and capacity "
+            "before any cluster mutation."
         )
         if rollout.strategy_drain_timeout != "none":
             lines.append(
@@ -988,9 +1053,11 @@ def _external_node_template_rollout_plan_lines(
                 f"{rollout.strategy_drain_timeout} if draining is still blocked."
             )
     else:
+        unavailable_count = rollout.strategy_max_unavailable_count
         lines.append(
             "Worker spare capacity required: no surge worker quota; active worker group "
-            "capacity may be reduced by one node during rollout."
+            f"capacity may be reduced by {unavailable_count} node"
+            f"{'' if unavailable_count == 1 else 's'} during rollout."
         )
     if service_groups:
         lines.append(
@@ -1953,12 +2020,50 @@ def _minor_version_at_least(current: str, target: str) -> bool:
     try:
         current_version = parse_k8s_version(current)
         target_version = parse_k8s_version(target)
-    except ValueError:
-        return current == target
+    except ValueError as exc:
+        raise RuntimeError(
+            "external MK8s node-template Kubernetes version check could not parse "
+            f"live control plane '{current or 'unknown'}' or target '{target or 'unknown'}'. "
+            "Rerun onboarding after confirming the live MK8s version is reported in a "
+            "supported semantic form such as 1.33."
+        ) from exc
     return (current_version.major, current_version.minor) >= (
         target_version.major,
         target_version.minor,
     )
+
+
+def _external_node_template_k8s_downgrade_error(current: str, target: str) -> str:
+    if not current:
+        return ""
+    try:
+        current_version = parse_k8s_version(current)
+        target_version = parse_k8s_version(target)
+    except ValueError:
+        return (
+            "external MK8s node-template Kubernetes version check could not parse "
+            f"live control plane '{current or 'unknown'}' or target '{target or 'unknown'}'. "
+            "Rerun onboarding after confirming the live MK8s version is reported in a "
+            "supported semantic form such as 1.33."
+        )
+    if (target_version.major, target_version.minor) >= (
+        current_version.major,
+        current_version.minor,
+    ):
+        return ""
+    return (
+        "external MK8s node-template downgrade is not supported: "
+        f"live control plane is {current_version.minor_text}, target is "
+        f"{target_version.minor_text}. Update "
+        "deploy.targets[].soperator_onboarding.node_template_upgrade.target_k8s_version "
+        "to the live or newer version, or use a blue/green replacement path."
+    )
+
+
+def _ensure_external_node_template_k8s_not_downgrade(current: str, target: str) -> None:
+    message = _external_node_template_k8s_downgrade_error(current, target)
+    if message:
+        raise RuntimeError(message)
 
 
 def _node_group_version(node_group: Mapping[str, Any]) -> str:
@@ -2126,7 +2231,7 @@ def _soperator_zero_surge_strategy_cli_args() -> list[str]:
     )
 
 
-def _soperator_safe_surge_strategy_cli_args(
+def _soperator_worker_strategy_cli_args(
     rollout: SoperatorExternalNodeTemplateRollout,
 ) -> list[str]:
     return [
@@ -2144,11 +2249,8 @@ def _external_node_template_strategy_cli_args(
     *,
     worker_group: bool,
 ) -> tuple[list[str], str]:
-    if (
-        worker_group
-        and rollout.strategy == SOPERATOR_WORKER_ROLLOUT_STRATEGY_SAFE_SURGE
-    ):
-        return _soperator_safe_surge_strategy_cli_args(rollout), "safe-surge"
+    if worker_group:
+        return _soperator_worker_strategy_cli_args(rollout), rollout.strategy
     return _soperator_zero_surge_strategy_cli_args(), "zero-surge"
 
 
@@ -2422,7 +2524,16 @@ def _json_from_node_group_update_file(
 
 
 def _node_group_rollout_timeout_seconds(node_group: Mapping[str, Any]) -> int:
-    node_count = max(1, _node_group_fixed_count(node_group))
+    status = _mapping(node_group.get("status"))
+    node_count = max(
+        1,
+        _node_group_fixed_count(node_group),
+        _positive_int(
+            status.get("target_node_count", status.get("targetNodeCount")),
+            fallback=0,
+        ),
+        _positive_int(status.get("node_count", status.get("nodeCount")), fallback=0),
+    )
     return max(3600, node_count * 600)
 
 
@@ -2548,6 +2659,7 @@ def _update_node_group_with_zero_surge_strategy(
     clear_template_gpu_settings: bool = False,
     timeout_seconds: int = 2700,
 ) -> Mapping[str, Any]:
+    timeout = _node_group_rollout_timeout_text(timeout_seconds)
     return _update_node_group_with_temporary_strategy(
         command_runner=command_runner,
         node_group_id=node_group_id,
@@ -2555,7 +2667,7 @@ def _update_node_group_with_zero_surge_strategy(
         strategy_args=_soperator_zero_surge_strategy_cli_args(),
         original_node_group=original_node_group,
         clear_template_gpu_settings=clear_template_gpu_settings,
-        timeout="45m",
+        timeout=timeout,
         timeout_seconds=timeout_seconds,
     )
 
@@ -2660,7 +2772,7 @@ def _attach_filesystems_to_source_node_groups(
                 node_group_id=node_group_id,
                 update_args=("--template-filesystems", json.dumps(merged, sort_keys=True)),
                 original_node_group=node_group,
-                timeout_seconds=2700,
+                timeout_seconds=_node_group_rollout_timeout_seconds(node_group),
             )
             mutation_performed = True
         attachments.append(
@@ -4917,7 +5029,7 @@ def _collect_mk8s_status(
         return SoperatorMigrationStatusSignal(
             "MK8s Node Groups",
             "down",
-            "nodes 0/0 Ready",
+            "Node groups: 0 group(s) || Nodes: 0/0 Ready",
         )
     total = len(nodes)
     ready = sum(1 for item in nodes if _node_ready(item))
@@ -4927,6 +5039,7 @@ def _collect_mk8s_status(
         phase_id=phase_id,
     )
     groups: dict[str, list[int]] = {}
+    transition_nodes: list[str] = []
     problem_nodes: list[str] = []
     for item in nodes:
         group = groups.setdefault(_node_group_label(item), [0, 0])
@@ -4937,36 +5050,38 @@ def _collect_mk8s_status(
             group[0] += 1
         if node_ready and not cordoned_node:
             continue
-        node_name = _node_name(item) or f"node-{len(problem_nodes) + 1}"
+        node_name = _node_name(item) or f"node-{len(transition_nodes) + len(problem_nodes) + 1}"
         upgrading = _node_in_group_set(item, updating_groups)
-        if upgrading and not node_ready:
-            detail = "node-upgrading (down)"
-        elif upgrading and cordoned_node:
-            detail = "node-upgrading (cordoned)"
-        elif not node_ready:
-            detail = "NotReady (down)"
+        if upgrading:
+            detail = "replacing (down)" if not node_ready else "replacing (cordoned)"
+            transition_nodes.append(f"{node_name}:{detail}")
+        elif cordoned_node:
+            transition_nodes.append(f"{node_name}:cordoned")
         else:
-            detail = "cordoned"
-        problem_nodes.append(f"{node_name}:{detail}")
+            problem_nodes.append(f"{node_name}:NotReady (down)")
     group_summary = ", ".join(
         f"{name}:{counts[0]}/{counts[1]} Ready"
         for name, counts in sorted(groups.items())[:_STATUS_MAX_NODE_GROUP_DETAILS]
     )
     if len(groups) > _STATUS_MAX_NODE_GROUP_DETAILS:
         group_summary += f", +{len(groups) - _STATUS_MAX_NODE_GROUP_DETAILS} more groups"
-    parts = [f"nodes {ready}/{total} Ready"]
-    if cordoned:
-        parts.append(f"{cordoned} cordoned")
+    group_parts = [f"{len(groups)} group(s)"]
     if group_summary:
-        parts.append("node groups " + group_summary)
+        group_parts.append(group_summary)
+    node_parts = [f"{ready}/{total} Ready"]
+    if cordoned:
+        node_parts.append(f"{cordoned} cordoned")
+    if transition_nodes:
+        node_parts.append("in transition " + _format_problem_node_details(transition_nodes))
     if problem_nodes:
-        parts.append("problem nodes " + _format_problem_node_details(problem_nodes))
+        node_parts.append("problem nodes " + _format_problem_node_details(problem_nodes))
     state = "serving"
     if ready <= 0:
         state = "down"
     elif ready < total or cordoned:
         state = "degraded"
-    return SoperatorMigrationStatusSignal("MK8s Node Groups", state, "; ".join(parts))
+    summary = "Node groups: " + "; ".join(group_parts) + " || Nodes: " + "; ".join(node_parts)
+    return SoperatorMigrationStatusSignal("MK8s Node Groups", state, summary)
 
 
 def _storage_status_expected_pvcs(
@@ -6949,6 +7064,7 @@ def _helm_upgrade_target_app_chart(
         "-n",
         namespace,
         "--create-namespace",
+        "--no-hooks",
         "-f",
         "-",
         "--wait",
@@ -6958,14 +7074,66 @@ def _helm_upgrade_target_app_chart(
     if version:
         command.extend(["--version", version])
     values_text = json.dumps(to_plain_data(_mapping(row.get("values"))), sort_keys=True)
-    command_runner(command, input_text=values_text, timeout_seconds=3000)
-    readiness = verify_helm_chart_ready(
-        command_runner=command_runner,
-        kube_context=kube_context,
-        release_name=release_name,
-        namespace=namespace,
-        expected_version=version,
-    )
+    pending_operation_cleared = False
+    timeout_recovered = False
+    timeout_value = ""
+    while True:
+        try:
+            command_runner(command, input_text=values_text, timeout_seconds=3000)
+            readiness = verify_helm_chart_ready(
+                command_runner=command_runner,
+                kube_context=kube_context,
+                release_name=release_name,
+                namespace=namespace,
+                expected_version=version,
+            )
+            break
+        except subprocess.TimeoutExpired as exc:
+            try:
+                readiness = verify_helm_chart_ready(
+                    command_runner=command_runner,
+                    kube_context=kube_context,
+                    release_name=release_name,
+                    namespace=namespace,
+                    expected_version=version,
+                )
+                timeout_recovered = True
+                timeout_value = str(exc.timeout or "").strip()
+                break
+            except (RuntimeError, subprocess.TimeoutExpired) as readiness_exc:
+                timeout_value = str(exc.timeout or "").strip()
+                if (
+                    not pending_operation_cleared
+                    and _clear_pending_helm_release_operation(
+                        command_runner=command_runner,
+                        kube_context=kube_context,
+                        release_name=release_name,
+                        namespace=namespace,
+                    )
+                ):
+                    pending_operation_cleared = True
+                    continue
+                raise RuntimeError(
+                    f"Helm upgrade for target GPU stack chart {namespace}/{release_name} "
+                    f"timed out after {exc.timeout} seconds and the live release is not ready yet. "
+                    "Rerun the same `nebius-cxcli ext-soperator migrate ... --execute --approve` "
+                    "command; cxcli will retry from live state."
+                ) from readiness_exc
+        except RuntimeError as exc:
+            error_text = str(exc)
+            if (
+                not pending_operation_cleared
+                and "another operation" in error_text.lower()
+                and _clear_pending_helm_release_operation(
+                    command_runner=command_runner,
+                    kube_context=kube_context,
+                    release_name=release_name,
+                    namespace=namespace,
+                )
+            ):
+                pending_operation_cleared = True
+                continue
+            raise
     return {
         "id": component_id,
         "release_name": release_name,
@@ -6974,6 +7142,8 @@ def _helm_upgrade_target_app_chart(
         "version": version,
         "readiness": readiness.summary(),
         "applied_at": _utc_now(),
+        **({"timeout_recovered": "true"} if timeout_recovered else {}),
+        **({"timeout_seconds": timeout_value} if timeout_recovered and timeout_value else {}),
     }
 
 
@@ -7233,8 +7403,8 @@ def _helm_upgrade_target_soperator(
             command.extend(["--wait", "--timeout", "45m"])
             timeout_seconds = 3000
         else:
-            command.extend(["--no-hooks", "--timeout", "2m"])
-            timeout_seconds = 180
+            command.extend(["--no-hooks", "--timeout", "30m"])
+            timeout_seconds = 2100
         values_text = json.dumps(to_plain_data(values), sort_keys=True)
         adoption_attempts: dict[tuple[str, str, str], int] = {}
         pending_operation_cleared = False
@@ -7289,6 +7459,8 @@ def _clear_pending_helm_release_operation(
     *,
     command_runner: SoperatorMigrationCommandRunner,
     kube_context: str,
+    release_name: str = _SOPERATOR_TARGET_RELEASE_NAME,
+    namespace: str = _SOPERATOR_NAMESPACE,
 ) -> bool:
     result = command_runner(
         [
@@ -7296,9 +7468,9 @@ def _clear_pending_helm_release_operation(
             "--kube-context",
             kube_context,
             "history",
-            "soperator",
+            release_name,
             "-n",
-            _SOPERATOR_NAMESPACE,
+            namespace,
             "--max",
             "20",
             "-o",
@@ -7333,10 +7505,10 @@ def _clear_pending_helm_release_operation(
             "--context",
             kube_context,
             "-n",
-            _SOPERATOR_NAMESPACE,
+            namespace,
             "delete",
             "secret",
-            f"sh.helm.release.v1.soperator.v{latest_revision}",
+            f"sh.helm.release.v1.{release_name}.v{latest_revision}",
             "--ignore-not-found",
         ],
         timeout_seconds=300,
@@ -8325,8 +8497,22 @@ def _delete_node_group(
 
 
 def _command_not_found(result: SoperatorMigrationCommandResult) -> bool:
-    detail = f"{result.stderr}\n{result.stdout}".lower()
-    return "notfound" in detail or "not found" in detail or "resource not found" in detail
+    detail = " ".join(
+        part.strip()
+        for part in (result.stderr, result.stdout)
+        if part and part.strip()
+    )
+    normalized = re.sub(r"\s+", " ", detail).strip().lower()
+    if normalized in {"not found", "notfound", "resource not found"}:
+        return True
+    if "statuscode.not_found" in normalized:
+        return True
+    if "error from server (notfound)" in normalized:
+        return True
+    return bool(
+        re.search(r"\brequest error\s+not[_ -]?found\b", normalized)
+        or re.search(r"\brpc error:\s*code\s*=\s*not[_ -]?found\b", normalized)
+    )
 
 
 def _ensure_live_nodes_ready(snapshot: Mapping[str, Any]) -> None:
@@ -8390,6 +8576,7 @@ def _execute_external_node_template_upgrade_phase(
         )
     control_plane["current_version"] = current_version
     control_plane["target_version"] = target.k8s_version
+    _ensure_external_node_template_k8s_not_downgrade(current_version, target.k8s_version)
     hops = minor_version_hops(current_version, target.k8s_version)
     hop_state = control_plane.setdefault("hops", {})
     if not isinstance(hop_state, dict):
@@ -8534,18 +8721,8 @@ def _execute_external_node_template_upgrade_phase(
                 "Soperator migration checkpoint external-node-template-upgrade "
                 f"node group {group_name}.original_strategy_args must be a list."
             )
-        timeout_seconds = (
-            _node_group_rollout_timeout_seconds(node_group)
-            if worker_group
-            and rollout.strategy == SOPERATOR_WORKER_ROLLOUT_STRATEGY_SAFE_SURGE
-            else 2700
-        )
-        timeout = (
-            _node_group_rollout_timeout_text(timeout_seconds)
-            if worker_group
-            and rollout.strategy == SOPERATOR_WORKER_ROLLOUT_STRATEGY_SAFE_SURGE
-            else "45m"
-        )
+        timeout_seconds = _node_group_rollout_timeout_seconds(node_group)
+        timeout = _node_group_rollout_timeout_text(timeout_seconds)
         group_state.update(
             {
                 "node_group_id": node_group_id,
@@ -8567,6 +8744,39 @@ def _execute_external_node_template_upgrade_phase(
                 "timeout": timeout,
             }
         )
+
+        def _restore_original_strategy_if_required(
+            current_node_group: Mapping[str, Any],
+        ) -> bool:
+            nonlocal mutation_performed
+            if not bool(group_state.get("strategy_restore_required")):
+                return False
+            if _node_group_strategy_matches_args(current_node_group, original_strategy_args):
+                return False
+            try:
+                _json_from_command(
+                    command_runner,
+                    _node_group_update_command(
+                        node_group_id,
+                        update_args=(),
+                        strategy_args=original_strategy_args,
+                        timeout=timeout,
+                    ),
+                    timeout_seconds=timeout_seconds,
+                )
+            except subprocess.TimeoutExpired as exc:
+                _reconcile_node_group_update_timeout(
+                    command_runner,
+                    node_group_id=node_group_id,
+                    update_args=(),
+                    strategy_args=original_strategy_args,
+                    clear_template_gpu_settings=False,
+                    action="strategy restore",
+                    timeout=exc,
+                )
+            mutation_performed = True
+            return True
+
         resume_waiting_rollout = group_state.get("status") == "waiting-rollout"
         if resume_waiting_rollout and not update_args and not clear_template_gpu_settings:
             ready, readiness_summary = _node_group_readiness_summary(node_group)
@@ -8579,36 +8789,11 @@ def _execute_external_node_template_upgrade_phase(
                 if checkpoint_writer is not None:
                     checkpoint_writer()
                 raise SoperatorMigrationPhasePending(str(group_state["pending_reason"]))
-            strategy_restored = False
-            if bool(group_state.get("strategy_restore_required")) and not (
-                _node_group_strategy_matches_args(node_group, original_strategy_args)
-            ):
-                try:
-                    _json_from_command(
-                        command_runner,
-                        _node_group_update_command(
-                            node_group_id,
-                            update_args=(),
-                            strategy_args=original_strategy_args,
-                            timeout=timeout,
-                        ),
-                        timeout_seconds=timeout_seconds,
-                    )
-                except subprocess.TimeoutExpired as exc:
-                    _reconcile_node_group_update_timeout(
-                        command_runner,
-                        node_group_id=node_group_id,
-                        update_args=(),
-                        strategy_args=original_strategy_args,
-                        clear_template_gpu_settings=False,
-                        action="strategy restore",
-                        timeout=exc,
-                    )
-                mutation_performed = True
-                strategy_restored = True
+            strategy_restored = _restore_original_strategy_if_required(node_group)
             group_state["status"] = "completed"
             group_state["completed_at"] = _utc_now()
             group_state["strategy_restored"] = True
+            group_state.pop("error", None)
             group_state.pop("pending_reason", None)
             if checkpoint_writer is not None:
                 checkpoint_writer()
@@ -8628,13 +8813,48 @@ def _execute_external_node_template_upgrade_phase(
             and not update_args
             and not clear_template_gpu_settings
         ):
+            group_state.pop("error", None)
+            group_state.pop("pending_reason", None)
             lines.append(f"External node-template already handled: {group_name}.")
             return None
         if not update_args and not clear_template_gpu_settings:
-            group_state["status"] = "already-current"
+            ready, readiness_summary = _node_group_readiness_summary(node_group)
+            if not ready:
+                group_state["status"] = "waiting-rollout"
+                group_state["pending_reason"] = _node_group_update_timeout_message(
+                    node_group_id=node_group_id,
+                    action="node-template update",
+                    readiness_summary=readiness_summary,
+                )
+                if checkpoint_writer is not None:
+                    checkpoint_writer()
+                raise SoperatorMigrationPhasePending(str(group_state["pending_reason"]))
+            previous_status = str(group_state.get("status", "") or "")
+            strategy_restored = _restore_original_strategy_if_required(node_group)
+            resume_after_started = previous_status in {"failed", "updating", "waiting-rollout"}
+            group_state["status"] = "completed" if resume_after_started else "already-current"
             group_state["completed_at"] = _utc_now()
-            group_state["strategy_restored"] = False
-            lines.append(f"External node-template already current: {group_name}.")
+            group_state["strategy_restored"] = (
+                bool(group_state.get("strategy_restore_required"))
+                if resume_after_started
+                else strategy_restored
+            )
+            group_state.pop("error", None)
+            group_state.pop("pending_reason", None)
+            if checkpoint_writer is not None:
+                checkpoint_writer()
+            if resume_after_started:
+                lines.append(
+                    "External node-template rollout completed after live-state "
+                    f"reconciliation: {group_name}; "
+                    + (
+                        "original strategy restored."
+                        if strategy_restored
+                        else "original strategy already in place."
+                    )
+                )
+            else:
+                lines.append(f"External node-template already current: {group_name}.")
             return None
         group_state["status"] = "updating"
         group_state["started_at"] = group_state.get("started_at") or _utc_now()
@@ -8822,6 +9042,7 @@ def _execute_external_node_template_upgrade_phase(
             rollout.strategy == SOPERATOR_WORKER_ROLLOUT_STRATEGY_SAFE_SURGE
             and len(wave) > 1
         ):
+            worker_exception: BaseException | None = None
             with ThreadPoolExecutor(max_workers=len(wave)) as executor:
                 future_by_group = {
                     executor.submit(
@@ -8835,10 +9056,15 @@ def _execute_external_node_template_upgrade_phase(
                 for future in as_completed(future_by_group):
                     try:
                         results.append(future.result())
-                    except Exception:
-                        if checkpoint_writer is not None:
-                            checkpoint_writer()
-                        raise
+                    except Exception as exc:
+                        worker_exception = exc
+                        for pending in future_by_group:
+                            pending.cancel()
+                        break
+            if worker_exception is not None:
+                if checkpoint_writer is not None:
+                    checkpoint_writer()
+                raise worker_exception
         else:
             for work in wave:
                 try:
@@ -8915,6 +9141,16 @@ def _execute_target_gpu_stack_remediation_phase(
             f"{result['id']}={result['release_name']} "
             f"({result['namespace']}, {result['chart_ref']}{version})"
         )
+        if result.get("timeout_recovered") == "true":
+            timeout_suffix = (
+                f" after {result['timeout_seconds']}s"
+                if result.get("timeout_seconds")
+                else ""
+            )
+            lines.append(
+                "Accepted target GPU stack chart after Helm client timeout"
+                f"{timeout_suffix}: {result['id']} live release is ready."
+            )
         for patch in post_render_patches:
             patch_name = patch.get("name") or patch.get("kind") or "resource"
             lines.append(
@@ -10134,11 +10370,66 @@ def _load_checkpoint(path: Path) -> dict[str, Any] | None:
     return payload
 
 
-def _write_checkpoint(path: Path, checkpoint: Mapping[str, Any]) -> None:
+def _write_text_atomic(path: Path, content: str, *, encoding: str = "utf-8") -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps(to_plain_data(checkpoint), indent=2, sort_keys=True) + "\n", encoding="utf-8"
-    )
+    data = content.encode(encoding)
+    file_mode = _replacement_text_file_mode(path)
+    fd = -1
+    temp_path: Path | None = None
+    try:
+        fd, raw_temp_path = tempfile.mkstemp(
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            dir=path.parent,
+        )
+        temp_path = Path(raw_temp_path)
+        with os.fdopen(fd, "wb") as handle:
+            fd = -1
+            os.fchmod(handle.fileno(), file_mode)
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp_path, path)
+    finally:
+        if fd >= 0:
+            os.close(fd)
+        if temp_path is not None:
+            temp_path.unlink(missing_ok=True)
+
+
+def _replacement_text_file_mode(path: Path) -> int:
+    with suppress(OSError):
+        return stat.S_IMODE(path.stat().st_mode)
+    return _default_text_file_mode(path.parent, path.name)
+
+
+def _default_text_file_mode(parent: Path, name: str) -> int:
+    for _attempt in range(100):
+        probe_path = parent / f".{name}.{uuid4().hex}.mode"
+        fd = -1
+        try:
+            fd = os.open(probe_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666)
+            return stat.S_IMODE(os.fstat(fd).st_mode)
+        except FileExistsError:
+            continue
+        finally:
+            if fd >= 0:
+                os.close(fd)
+                probe_path.unlink(missing_ok=True)
+    return 0o644
+
+
+def _write_checkpoint(path: Path, checkpoint: Mapping[str, Any]) -> None:
+    _write_text_atomic(path, json.dumps(to_plain_data(checkpoint), indent=2, sort_keys=True) + "\n")
+
+
+def _clear_completed_pending_phase(checkpoint: dict[str, Any], phase_id: str) -> bool:
+    if str(checkpoint.get("pending_phase", "") or "") != phase_id:
+        return False
+    checkpoint["pending_phase"] = "none"
+    checkpoint["pending_reason"] = ""
+    _append_event(checkpoint, "execute-pending-cleared", phase=phase_id)
+    return True
 
 
 def _phase_report_status(
@@ -10296,7 +10587,7 @@ def _write_soperator_migrate_report(
         f"- Checkpoint: `{checkpoint_path}`",
         f"- Pending phase: `{pending_phase or 'none'}`",
         f"- Pending reason: `{pending_reason or 'none'}`",
-        "- Mutation performed: `" + ("yes" if mutation_performed else "no") + "`",
+        "- Migration performed: `" + ("yes" if mutation_performed else "no") + "`",
         "",
         "## Migration Steps",
         "",
@@ -10356,7 +10647,7 @@ def _write_soperator_migrate_report(
     else:
         lines.append("- No checkpoint events recorded.")
     lines.append("")
-    report_path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
+    _write_text_atomic(report_path, "\n".join(lines).rstrip() + "\n")
     return report_path
 
 
@@ -10888,10 +11179,9 @@ def _delete_source_flux_helmreleases(
                 "helmrelease.helm.toolkit.fluxcd.io",
                 name,
                 "--ignore-not-found=true",
-                "--wait=true",
-                "--timeout=2m",
+                "--wait=false",
             ],
-            timeout_seconds=180,
+            timeout_seconds=60,
         )
         deleted.append(f"{namespace}/{name}")
     return tuple(sorted(dict.fromkeys(deleted)))
@@ -11058,11 +11348,10 @@ def _delete_kubernetes_resource(
             resource_type,
             name,
             "--ignore-not-found=true",
-            "--wait=true",
-            "--timeout=5m",
+            "--wait=false",
         ]
     )
-    command_runner(command, timeout_seconds=360)
+    command_runner(command, timeout_seconds=60)
 
 
 def _prune_safe_source_soperator_resources(
@@ -11438,7 +11727,10 @@ def _external_node_template_upgrade_satisfied(
     )
     cluster = _cluster_payload_by_id(command_runner=command_runner, cluster_id=cluster_id)
     current_version = _minor_version_text_or_empty(_cluster_control_plane_version(cluster))
-    if not current_version or not _minor_version_at_least(current_version, target.k8s_version):
+    if not current_version:
+        return False
+    _ensure_external_node_template_k8s_not_downgrade(current_version, target.k8s_version)
+    if not _minor_version_at_least(current_version, target.k8s_version):
         return False
     groups = _external_node_template_upgrade_groups(
         source_report=source_report,
@@ -11603,7 +11895,13 @@ def _verify_completed_soperator_migration_node_template_state(
 ) -> list[str]:
     onboarding = _target_onboarding(payload, target_ref)
     target = _external_node_template_target(onboarding)
-    if not current_version or not _minor_version_at_least(current_version, target.k8s_version):
+    downgrade_error = _external_node_template_k8s_downgrade_error(
+        current_version,
+        target.k8s_version,
+    )
+    if downgrade_error:
+        errors.append(downgrade_error)
+    elif not current_version or not _minor_version_at_least(current_version, target.k8s_version):
         errors.append(
             f"control plane reports Kubernetes {current_version or 'unknown'}, "
             f"expected at least {target.k8s_version}"
@@ -12391,6 +12689,7 @@ def _execute_soperator_migration_unlocked(
                 phase=phase_id,
                 mutation_performed=phase_mutation,
             )
+            _clear_completed_pending_phase(checkpoint, phase_id)
             phase_lines.extend([f"{phase_id}: {line}" for line in lines])
             _checkpoint_progress()
             if phase_id in {
@@ -12491,7 +12790,7 @@ def _execute_soperator_migration_unlocked(
         [
             f"Pending phase: {checkpoint['pending_phase']}",
             f"Pending reason: {pending_reason or 'none'}",
-            "Mutation performed: " + ("yes." if mutation_performed else "no."),
+            "Migration performed: " + ("yes." if mutation_performed else "no."),
             f"Migrate report: {report_path}",
         ]
     )

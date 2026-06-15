@@ -512,15 +512,17 @@ def test_upgrade_k8s_version_runs_staged_terraform_plan_apply_not_sdk_updates(
         {"cluster": "1.33", "system": "1.32", "gpu": "1.32"},
         {"cluster": "1.33", "system": "1.33", "gpu": "1.32"},
         {"cluster": "1.33", "system": "1.33", "gpu": "1.33"},
+        {"cluster": "1.33", "system": "1.33", "gpu": "1.33"},
     ]
-    assert (
-        "Upgrade execution stages are per control-plane hop and per node group, "
-        "not per node: 1 control-plane stage(s), 2 node-group stage(s)."
-    ) in output
+    assert "Upgrade execution stages are per control-plane hop and per node group" in output
+    assert "not per node:" in output
+    assert "1 control-plane stage(s)" in output
+    assert "2 node-group stage(s)" in output
     assert "Updated " in output
-    assert "stage 1/3: control-plane upgrade to Kubernetes 1.33" in output
-    assert "stage 2/3: node-group mk8s-live-system upgrade to Kubernetes 1.33" in output
-    assert "stage 3/3: node-group mk8s-live-gpu upgrade to Kubernetes 1.33" in output
+    compact_output = " ".join(output.split())
+    assert "control-plane upgrade to Kubernetes 1.33" in compact_output
+    assert "node-group mk8s-live-system upgrade to Kubernetes 1.33" in compact_output
+    assert "node-group mk8s-live-gpu upgrade to Kubernetes 1.33" in compact_output
     assert plan_stages == [(stage, True) for stage in expected_stages]
     assert apply_stages == expected_stages
     assert wait_calls == [
@@ -791,20 +793,29 @@ def test_upgrade_node_template_stages_control_plane_then_combined_node_groups(
             "gpu_os": "ubuntu24.04",
             "gpu_stack": "cuda13.0",
         },
+        {
+            "cluster": "1.33",
+            "system_version": "1.33",
+            "system_os": "ubuntu24.04",
+            "gpu_version": "1.33",
+            "gpu_os": "ubuntu24.04",
+            "gpu_stack": "cuda13.0",
+        },
     ]
+    assert "Node-template upgrade execution stages are per control-plane hop and per node group" in output
+    assert "not per node:" in output
+    assert "1 control-plane stage(s)" in output
+    assert "2 node-group template stage(s)" in output
+    compact_output = " ".join(output.split())
+    assert "control-plane upgrade to Kubernetes 1.33" in compact_output
     assert (
-        "Node-template upgrade execution stages are per control-plane hop and per node group, "
-        "not per node: 1 control-plane stage(s), 2 node-group template stage(s)."
-    ) in output
-    assert "stage 1/3: control-plane upgrade to Kubernetes 1.33" in output
-    assert (
-        "stage 2/3: node-group mk8s-live-system node-template upgrade to Kubernetes 1.33, "
+        "node-group mk8s-live-system node-template upgrade to Kubernetes 1.33, "
         "OS ubuntu24.04"
-    ) in output
+    ) in compact_output
     assert (
-        "stage 3/3: node-group mk8s-live-gpu node-template upgrade to Kubernetes 1.33, "
+        "node-group mk8s-live-gpu node-template upgrade to Kubernetes 1.33, "
         "OS ubuntu24.04"
-    ) in output
+    ) in compact_output
     assert plan_stages == expected_stages
     assert apply_stages == expected_stages
     assert wait_calls == [
@@ -1067,16 +1078,25 @@ def test_upgrade_node_template_node_group_stages_only_selected_group(
             "gpu_os": "ubuntu24.04",
             "gpu_stack": "cuda13.0",
         },
+        {
+            "cluster": "1.33",
+            "system_version": "1.32",
+            "system_os": "ubuntu22.04",
+            "gpu_version": "1.33",
+            "gpu_os": "ubuntu24.04",
+            "gpu_stack": "cuda13.0",
+        },
     ]
+    assert "Node-template upgrade execution stages are per control-plane hop and per node group" in output
+    assert "not per node:" in output
+    assert "1 control-plane stage(s)" in output
+    assert "1 node-group template stage(s)" in output
+    compact_output = " ".join(output.split())
+    assert "control-plane upgrade to Kubernetes 1.33" in compact_output
     assert (
-        "Node-template upgrade execution stages are per control-plane hop and per node group, "
-        "not per node: 1 control-plane stage(s), 1 node-group template stage(s)."
-    ) in output
-    assert "stage 1/2: control-plane upgrade to Kubernetes 1.33" in output
-    assert (
-        "stage 2/2: node-group mk8s-live-gpu node-template upgrade to Kubernetes 1.33, "
+        "node-group mk8s-live-gpu node-template upgrade to Kubernetes 1.33, "
         "OS ubuntu24.04"
-    ) in output
+    ) in compact_output
     assert "mk8s-live-system node-template upgrade" not in output
     assert plan_stages == expected_stages
     assert apply_stages == expected_stages
@@ -1274,7 +1294,7 @@ def test_upgrade_node_template_resume_waits_and_restores_strategy_after_timeout(
             "infra:mk8s@mk8s",
             to_version="1.33",
             to_os="ubuntu24.04",
-            disruption_policy="allow-unavailable",
+            disruption_policy="zero-surge",
             dry_run=False,
         )
     flat_output = " ".join(_plain_output(capture.get()).split())
@@ -1465,7 +1485,7 @@ def test_upgrade_k8s_version_syncs_stale_source_when_live_is_already_target(
     assert wait_calls == [("sdk-close", "")]
 
 
-def test_upgrade_k8s_version_rejects_safe_finite_drain_timeout(tmp_path: Path) -> None:
+def test_upgrade_k8s_version_rejects_unknown_strategy(tmp_path: Path) -> None:
     result = runner.invoke(
         cli.app,
         [
@@ -1476,13 +1496,13 @@ def test_upgrade_k8s_version_rejects_safe_finite_drain_timeout(tmp_path: Path) -
             "--to-version",
             "1.33",
             "--dry-run",
-            "--drain-timeout",
-            "10m",
+            "--strategy",
+            "safe",
         ],
     )
 
     assert result.exit_code == 1
-    assert "allow-unavailable or force-delete" in result.output
+    assert "--strategy must be one of" in result.output
 
 
 def test_upgrade_k8s_version_target_choices_do_not_label_endpoint_access() -> None:
@@ -1554,15 +1574,15 @@ def test_upgrade_k8s_dry_run_command_uses_selected_arguments(tmp_path: Path) -> 
         config_path=tmp_path / "project path" / "config.yaml",
         target_selector="infra:mk8s@cluster1",
         to_version="1.32",
-        disruption_policy="allow-unavailable",
-        drain_timeout=cli.resolve_drain_timeout("allow-unavailable", "45m"),
+        disruption_policy="zero-surge",
+        drain_timeout=cli.resolve_drain_timeout("zero-surge", "45m"),
     )
 
     assert command == (
         "nebius-cxcli upgrade k8s-version "
         f"'{tmp_path / 'project path' / 'config.yaml'}' "
         "infra:mk8s@cluster1 --to-version 1.32 "
-        "--disruption-policy allow-unavailable --drain-timeout 45m --dry-run"
+        "--strategy zero-surge --drain-timeout 45m --dry-run"
     )
 
 
@@ -1571,13 +1591,13 @@ def test_upgrade_k8s_dry_run_command_omits_auto_drain_timeout(tmp_path: Path) ->
         config_path=tmp_path / "config.yaml",
         target_selector="infra:mk8s@cluster1",
         to_version="1.32",
-        disruption_policy="safe",
-        drain_timeout=cli.resolve_drain_timeout("safe", "auto"),
+        disruption_policy="safe-surge",
+        drain_timeout=cli.resolve_drain_timeout("safe-surge", "auto"),
     )
 
     assert command == (
         f"nebius-cxcli upgrade k8s-version {tmp_path / 'config.yaml'} "
-        "infra:mk8s@cluster1 --to-version 1.32 --disruption-policy safe --dry-run"
+        "infra:mk8s@cluster1 --to-version 1.32 --strategy safe-surge --dry-run"
     )
 
 
@@ -1591,7 +1611,7 @@ def test_upgrade_k8s_version_force_delete_is_explicit_without_yes(tmp_path: Path
             "infra:mk8s@mk8s",
             "--to-version",
             "1.33",
-            "--disruption-policy",
+            "--strategy",
             "force-delete",
         ],
     )
@@ -1938,7 +1958,7 @@ def test_upgrade_os_image_config_only_guided_mk8s_dry_run_prompts_shared_options
             "upgrade.os_image.node_group": "",
             "upgrade.os_image.to_os": "ubuntu24.04",
             "upgrade.os_image.dry_run": True,
-            "upgrade.os_image.disruption_policy": "allow-unavailable",
+            "upgrade.os_image.strategy": "zero-surge",
             "upgrade.os_image.drain_timeout": "45m",
         }
         prompt_paths.append(path_label)
@@ -1971,17 +1991,14 @@ def test_upgrade_os_image_config_only_guided_mk8s_dry_run_prompts_shared_options
         "upgrade.os_image.node_group",
         "upgrade.os_image.to_os",
         "upgrade.os_image.dry_run",
-        "upgrade.os_image.disruption_policy",
+        "upgrade.os_image.strategy",
         "upgrade.os_image.drain_timeout",
     ]
     assert "- repeat dry-run command:" in rendered
-    assert "  nebius-cxcli upgrade os-image \\" in rendered
-    assert f"    {paths.config_path} \\" in rendered
-    assert "    infra:mk8s@mk8s \\" in rendered
-    assert "    --to-os ubuntu24.04 \\" in rendered
-    assert "    --disruption-policy allow-unavailable \\" in rendered
-    assert "    --drain-timeout 45m \\" in rendered
-    assert "    --dry-run" in rendered
+    assert (
+        f"nebius-cxcli upgrade os-image {paths.config_path} infra:mk8s@mk8s "
+        "--to-os ubuntu24.04 --strategy zero-surge --drain-timeout 45m --dry-run"
+    ) in rendered
     assert paths.config_path.read_text(encoding="utf-8") == original_config
     assert wait_calls == [("sdk-close", "")]
     assert provider_calls == [
@@ -2127,7 +2144,7 @@ def test_upgrade_cpu_preset_config_only_guided_dry_run_prompts_shared_options(
             "upgrade.cpu_preset.node_group": "",
             "upgrade.cpu_preset.to_preset": "cpu-8-32",
             "upgrade.cpu_preset.dry_run": True,
-            "upgrade.cpu_preset.disruption_policy": "allow-unavailable",
+            "upgrade.cpu_preset.strategy": "zero-surge",
             "upgrade.cpu_preset.drain_timeout": "45m",
         }
         prompt_paths.append(path_label)
@@ -2160,20 +2177,17 @@ def test_upgrade_cpu_preset_config_only_guided_dry_run_prompts_shared_options(
         "upgrade.cpu_preset.node_group",
         "upgrade.cpu_preset.to_preset",
         "upgrade.cpu_preset.dry_run",
-        "upgrade.cpu_preset.disruption_policy",
+        "upgrade.cpu_preset.strategy",
         "upgrade.cpu_preset.drain_timeout",
     ]
     assert "MK8s CPU preset upgrade plan" in rendered
     assert "mk8s-live-system: cpu-4-16 -> cpu-8-32" in rendered
     assert "mk8s-live-gpu" not in rendered
     assert "- repeat dry-run command:" in rendered
-    assert "  nebius-cxcli upgrade cpu-preset \\" in rendered
-    assert f"    {paths.config_path} \\" in rendered
-    assert "    infra:mk8s@mk8s \\" in rendered
-    assert "    --to-preset cpu-8-32 \\" in rendered
-    assert "    --disruption-policy allow-unavailable \\" in rendered
-    assert "    --drain-timeout 45m \\" in rendered
-    assert "    --dry-run" in rendered
+    assert (
+        f"nebius-cxcli upgrade cpu-preset {paths.config_path} infra:mk8s@mk8s "
+        "--to-preset cpu-8-32 --strategy zero-surge --drain-timeout 45m --dry-run"
+    ) in rendered
     assert paths.config_path.read_text(encoding="utf-8") == original_config
     assert wait_calls == [("sdk-close", "")]
     assert provider_calls == [
@@ -2311,7 +2325,7 @@ def test_upgrade_gpu_stack_preset_config_only_guided_dry_run_prompts_gpu_stack_c
             "upgrade.gpu_stack_preset.node_group": "",
             "upgrade.gpu_stack_preset.to_gpu_stack_preset": "cuda13.0",
             "upgrade.gpu_stack_preset.dry_run": True,
-            "upgrade.gpu_stack_preset.disruption_policy": "safe",
+            "upgrade.gpu_stack_preset.strategy": "safe-surge",
             "upgrade.gpu_stack_preset.drain_timeout": "auto",
         }
         prompt_paths.append(path_label)
@@ -2344,14 +2358,15 @@ def test_upgrade_gpu_stack_preset_config_only_guided_dry_run_prompts_gpu_stack_c
         "upgrade.gpu_stack_preset.node_group",
         "upgrade.gpu_stack_preset.to_gpu_stack_preset",
         "upgrade.gpu_stack_preset.dry_run",
-        "upgrade.gpu_stack_preset.disruption_policy",
+        "upgrade.gpu_stack_preset.strategy",
         "upgrade.gpu_stack_preset.drain_timeout",
     ]
     assert "MK8s GPU stack preset upgrade plan" in rendered
     assert "mk8s-live-gpu: cuda12.8 -> cuda13.0" in rendered
-    assert "  nebius-cxcli upgrade gpu-stack-preset \\" in rendered
-    assert "    --to-gpu-stack-preset cuda13.0 \\" in rendered
-    assert "    --dry-run" in rendered
+    assert (
+        f"nebius-cxcli upgrade gpu-stack-preset {paths.config_path} infra:mk8s@mk8s "
+        "--to-gpu-stack-preset cuda13.0 --strategy safe-surge --dry-run"
+    ) in rendered
     assert "--to-preset cuda13.0" not in rendered
     assert paths.config_path.read_text(encoding="utf-8") == original_config
     assert wait_calls == [("sdk-close", "")]
@@ -2470,7 +2485,7 @@ def test_upgrade_platform_config_only_guided_dry_run_prompts_live_platform_choic
             "upgrade.platform.node_group": "",
             "upgrade.platform.to_platform": "cpu-d3",
             "upgrade.platform.dry_run": True,
-            "upgrade.platform.disruption_policy": "safe",
+            "upgrade.platform.strategy": "safe-surge",
             "upgrade.platform.drain_timeout": "auto",
         }
         prompt_paths.append(path_label)
@@ -2501,13 +2516,15 @@ def test_upgrade_platform_config_only_guided_dry_run_prompts_live_platform_choic
         "upgrade.platform.node_group",
         "upgrade.platform.to_platform",
         "upgrade.platform.dry_run",
-        "upgrade.platform.disruption_policy",
+        "upgrade.platform.strategy",
         "upgrade.platform.drain_timeout",
     ]
     assert "MK8s node platform upgrade plan" in rendered
     assert "mk8s-live-system: cpu-platform -> cpu-d3" in rendered
-    assert "  nebius-cxcli upgrade platform \\" in rendered
-    assert "    --to-platform cpu-d3 \\" in rendered
+    assert (
+        f"nebius-cxcli upgrade platform {paths.config_path} infra:mk8s@mk8s "
+        "--to-platform cpu-d3 --strategy safe-surge --dry-run"
+    ) in rendered
     assert wait_calls == [("sdk-close", "")]
     assert provider_calls == [
         (
@@ -2685,11 +2702,15 @@ def test_upgrade_cpu_preset_apply_updates_source_and_waits_for_node_layer_rollou
         ("render", "cpu-8-32"),
         (
             "validate",
-            "Validate rendered stage 1/1: node-group mk8s-live-system CPU preset upgrade to cpu-8-32",
+            "Validate rendered stage 1/2: node-group mk8s-live-system CPU preset upgrade to cpu-8-32",
         ),
         ("plan", "cpu-8-32"),
         ("apply", "cpu-8-32"),
         ("wait-layer", "cluster-1:ng-system:preset:cpu-8-32:3600"),
+        ("render", "cpu-8-32"),
+        ("validate", "Validate rendered stage 2/2: node-group strategy restore"),
+        ("plan", "cpu-8-32"),
+        ("apply", "cpu-8-32"),
         "sdk-close",
     ]
 
@@ -2857,7 +2878,7 @@ def test_upgrade_cpu_preset_resume_waits_and_restores_strategy_after_timeout(
             paths.config_path,
             "infra:mk8s@mk8s",
             to_preset="cpu-8-32",
-            disruption_policy="allow-unavailable",
+            disruption_policy="zero-surge",
         )
     output = _plain_output(capture.get())
     flat_output = " ".join(output.split())
@@ -2904,6 +2925,7 @@ def test_upgrade_helm_chart_config_only_guided_dry_run_prompts_target_and_versio
                             "enabled": True,
                             "namespace": "soperator",
                             "release-name": "soperator",
+                            "target_ref": "mk8s",
                             "version": "0.25.0",
                         }
                     ]
@@ -2954,14 +2976,14 @@ def test_upgrade_helm_chart_config_only_guided_dry_run_prompts_target_and_versio
         "upgrade.helm_chart.to_version",
         "upgrade.helm_chart.dry_run",
     ]
-    assert "Helm chart upgrade plan" in rendered
+    assert "Soperator Helm chart upgrades use the Soperator-aware command" in rendered
+    assert "Soperator upgrade plan" in rendered
     assert "chart version: 0.25.0 -> 0.26.0" in rendered
     assert "- repeat dry-run command:" in rendered
-    assert "  nebius-cxcli upgrade helm-chart \\" in rendered
-    assert f"    {paths.config_path} \\" in rendered
-    assert "    apps:soperator@mk8s \\" in rendered
-    assert "    --to-version 0.26.0 \\" in rendered
-    assert "    --dry-run" in rendered
+    assert (
+        f"nebius-cxcli soperator upgrade {paths.config_path} "
+        "--target mk8s --to-version 0.26.0 --dry-run"
+    ) in rendered
     assert paths.config_path.read_text(encoding="utf-8") == original_config
 
 
@@ -2989,11 +3011,11 @@ def test_upgrade_helm_chart_apply_updates_source_and_runs_target_flux_apply(
                 "apps": {
                     "charts": [
                         {
-                            "id": "soperator",
+                            "id": "cert-manager",
                             "instance_id": "mk8s",
                             "enabled": True,
-                            "namespace": "soperator",
-                            "release-name": "soperator",
+                            "namespace": "cert-manager",
+                            "release-name": "cert-manager",
                             "version": "0.25.0",
                         }
                     ]
@@ -3031,7 +3053,7 @@ def test_upgrade_helm_chart_apply_updates_source_and_runs_target_flux_apply(
 
     cli.upgrade_helm_chart_command(
         paths.config_path,
-        "apps:soperator@mk8s",
+        "apps:cert-manager@mk8s",
         to_version="0.26.0",
     )
 
@@ -3048,6 +3070,1330 @@ def test_upgrade_helm_chart_apply_updates_source_and_runs_target_flux_apply(
         ),
         "helm-ready",
     ]
+
+
+def test_soperator_upgrade_apply_runs_soperator_preflight_and_postflight(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    paths = _fake_paths(tmp_path)
+    paths.infra_dir.mkdir(parents=True)
+    paths.flux_dir.mkdir(parents=True)
+    paths.reports_dir.mkdir(parents=True)
+    paths.config_path.write_text(
+        yaml.safe_dump(
+            {
+                "infra": {
+                    "components": [
+                        {
+                            "id": "mk8s",
+                            "instance_id": "mk8s",
+                            "enabled": True,
+                            "inputs": {},
+                        }
+                    ]
+                },
+                "apps": {
+                    "charts": [
+                        {
+                            "id": "soperator",
+                            "instance_id": "mk8s",
+                            "enabled": True,
+                            "namespace": "soperator",
+                            "release-name": "soperator",
+                            "target_ref": "mk8s",
+                            "version": "0.25.0",
+                        }
+                    ]
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    generated_config = SimpleNamespace()
+    manifest: dict[str, Any] = {"deploy": {"targets": [_mk8s_target(paths)]}}
+    calls: list[object] = []
+
+    monkeypatch.setattr(
+        cli, "_load_deploy_context_readonly", lambda _path: (generated_config, paths, manifest)
+    )
+    monkeypatch.setattr(
+        cli, "_load_deploy_context", lambda _path: (generated_config, paths, manifest)
+    )
+    monkeypatch.setattr(
+        cli,
+        "_run_generated_bundle_validation",
+        lambda *_args, **kwargs: calls.append(("validate", kwargs["title"])) or {},
+    )
+    monkeypatch.setattr(cli, "render_command", lambda *_args, **_kwargs: calls.append("render"))
+    monkeypatch.setattr(
+        cli,
+        "flux_apply_command",
+        lambda *args, **kwargs: calls.append(("flux-apply", args, kwargs)),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_verify_helm_chart_upgrade_ready",
+        lambda *_args, **_kwargs: calls.append("helm-ready"),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_raise_if_soperator_upgrade_would_bypass_migration",
+        lambda *_args, **_kwargs: calls.append("migration-guard"),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_run_soperator_upgrade_validation_phase",
+        lambda *_args, **kwargs: calls.append(("soperator-validation", kwargs["phase_label"])),
+    )
+
+    cli.soperator_upgrade_command(
+        paths.config_path,
+        target_ref="mk8s",
+        to_version="0.26.0",
+    )
+
+    payload = yaml.safe_load(paths.config_path.read_text(encoding="utf-8"))
+    assert payload["apps"]["charts"][0]["version"] == "0.26.0"
+    assert calls == [
+        "migration-guard",
+        ("validate", "Soperator upgrade preflight"),
+        ("soperator-validation", "Preflight"),
+        "render",
+        ("validate", "Validate rendered Soperator upgrade to 0.26.0"),
+        (
+            "flux-apply",
+            (paths.generated_dir,),
+            {"auto_auth_bootstrap": True, "target_ref": "mk8s", "all_targets": False},
+        ),
+        "helm-ready",
+        ("soperator-validation", "Postflight"),
+    ]
+
+
+def test_soperator_upgrade_checkpoints_activechecks_suspend_and_restore(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    paths = _fake_paths(tmp_path)
+    paths.infra_dir.mkdir(parents=True)
+    paths.flux_dir.mkdir(parents=True)
+    paths.reports_dir.mkdir(parents=True)
+    paths.config_path.write_text(
+        yaml.safe_dump(
+            {
+                "apps": {
+                    "charts": [
+                        {
+                            "id": "soperator",
+                            "instance_id": "mk8s",
+                            "enabled": True,
+                            "namespace": "soperator",
+                            "release-name": "soperator",
+                            "target_ref": "mk8s",
+                            "version": "0.25.0",
+                            "values": {
+                                "soperator-activechecks": {
+                                    "enabled": True,
+                                    "waitForChecks": {"enabled": True},
+                                }
+                            },
+                        }
+                    ]
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    generated_config = SimpleNamespace()
+    manifest: dict[str, Any] = {"deploy": {"targets": [_mk8s_target(paths)]}}
+    calls: list[object] = []
+
+    monkeypatch.setattr(
+        cli, "_load_deploy_context_readonly", lambda _path: (generated_config, paths, manifest)
+    )
+    monkeypatch.setattr(
+        cli, "_load_deploy_context", lambda _path: (generated_config, paths, manifest)
+    )
+    monkeypatch.setattr(
+        cli,
+        "_raise_if_soperator_upgrade_would_bypass_migration",
+        lambda *_args, **_kwargs: calls.append("migration-guard"),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_run_generated_bundle_validation",
+        lambda *_args, **kwargs: calls.append(("validate", kwargs["title"])) or {},
+    )
+    monkeypatch.setattr(cli, "render_command", lambda *_args, **_kwargs: calls.append("render"))
+    monkeypatch.setattr(
+        cli,
+        "flux_apply_command",
+        lambda *args, **kwargs: calls.append(("flux-apply", args, kwargs)),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_verify_helm_chart_upgrade_ready",
+        lambda *_args, **_kwargs: calls.append("helm-ready"),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_run_soperator_upgrade_validation_phase",
+        lambda *_args, **kwargs: calls.append(("soperator-validation", kwargs["phase_label"])),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_suspend_live_soperator_activechecks",
+        lambda *_args, **_kwargs: calls.append("live-activechecks-suspend")
+        or {"status": "suspended", "patched": ["nccl"], "skipped": []},
+    )
+
+    cli._run_soperator_upgrade_command(
+        config_path=paths.config_path,
+        target_ref="mk8s",
+        to_version="0.26.0",
+        dry_run=False,
+        interactive=False,
+    )
+
+    payload = yaml.safe_load(paths.config_path.read_text(encoding="utf-8"))
+    chart = payload["apps"]["charts"][0]
+    assert chart["version"] == "0.26.0"
+    assert chart["values"]["soperator-activechecks"]["enabled"] is True
+    assert chart["values"]["soperator-activechecks"]["waitForChecks"]["enabled"] is True
+    assert calls == [
+        "migration-guard",
+        ("validate", "Soperator upgrade preflight"),
+        "render",
+        ("validate", "Validate rendered Soperator ActiveChecks suspension"),
+        (
+            "flux-apply",
+            (paths.generated_dir,),
+            {"auto_auth_bootstrap": True, "target_ref": "mk8s", "all_targets": False},
+        ),
+        "helm-ready",
+        "live-activechecks-suspend",
+        ("soperator-validation", "Preflight"),
+        "render",
+        ("validate", "Validate rendered Soperator upgrade to 0.26.0"),
+        (
+            "flux-apply",
+            (paths.generated_dir,),
+            {"auto_auth_bootstrap": True, "target_ref": "mk8s", "all_targets": False},
+        ),
+        "helm-ready",
+        ("soperator-validation", "Postflight"),
+        "render",
+        ("validate", "Validate rendered Soperator ActiveChecks restore"),
+        (
+            "flux-apply",
+            (paths.generated_dir,),
+            {"auto_auth_bootstrap": True, "target_ref": "mk8s", "all_targets": False},
+        ),
+        "helm-ready",
+    ]
+    checkpoint_path = (
+        paths.project_dir
+        / cli.SOPERATOR_UPGRADE_CHECKPOINT_DIR
+        / "mk8s"
+        / "checkpoint.json"
+    )
+    checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+    assert checkpoint["status"] == "completed"
+    assert checkpoint["activechecks"]["required"] is True
+    assert checkpoint["activechecks"]["live_suspend"]["status"] == "suspended"
+    assert [event["event"] for event in checkpoint["events"]] == [
+        "planned",
+        "preflight-generated-validation-started",
+        "preflight-generated-validation-completed",
+        "activechecks-suspend-started",
+        "activechecks-suspended",
+        "preflight-soperator-validation-completed",
+        "upgrade-applied",
+        "postflight-soperator-validation-completed",
+        "activechecks-restore-started",
+        "activechecks-restored",
+        "completed",
+    ]
+    upgrade_report = (paths.reports_dir / cli.UPGRADE_REPORT_FILENAME).read_text(
+        encoding="utf-8"
+    )
+    assert "checkpointed suspend/restore was required" in upgrade_report
+    assert "`activechecks-restored`" in upgrade_report
+    assert "`completed`" in upgrade_report
+
+
+def test_soperator_upgrade_restores_activechecks_after_failed_upgrade(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    paths = _fake_paths(tmp_path)
+    paths.infra_dir.mkdir(parents=True)
+    paths.flux_dir.mkdir(parents=True)
+    paths.reports_dir.mkdir(parents=True)
+    paths.config_path.write_text(
+        yaml.safe_dump(
+            {
+                "apps": {
+                    "charts": [
+                        {
+                            "id": "soperator",
+                            "instance_id": "mk8s",
+                            "enabled": True,
+                            "namespace": "soperator",
+                            "release-name": "soperator",
+                            "target_ref": "mk8s",
+                            "version": "0.25.0",
+                            "values": {
+                                "soperator-activechecks": {
+                                    "enabled": True,
+                                    "waitForChecks": {"enabled": True},
+                                }
+                            },
+                        }
+                    ]
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    generated_config = SimpleNamespace()
+    manifest: dict[str, Any] = {"deploy": {"targets": [_mk8s_target(paths)]}}
+    calls: list[object] = []
+
+    def validation_phase(*_args: Any, **kwargs: Any) -> None:
+        phase = kwargs["phase_label"]
+        calls.append(("soperator-validation", phase))
+        if phase == "Postflight":
+            raise RuntimeError("postflight failed")
+
+    monkeypatch.setattr(
+        cli, "_load_deploy_context_readonly", lambda _path: (generated_config, paths, manifest)
+    )
+    monkeypatch.setattr(
+        cli, "_load_deploy_context", lambda _path: (generated_config, paths, manifest)
+    )
+    monkeypatch.setattr(
+        cli,
+        "_raise_if_soperator_upgrade_would_bypass_migration",
+        lambda *_args, **_kwargs: calls.append("migration-guard"),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_run_generated_bundle_validation",
+        lambda *_args, **kwargs: calls.append(("validate", kwargs["title"])) or {},
+    )
+    monkeypatch.setattr(cli, "render_command", lambda *_args, **_kwargs: calls.append("render"))
+    monkeypatch.setattr(
+        cli,
+        "flux_apply_command",
+        lambda *args, **kwargs: calls.append(("flux-apply", args, kwargs)),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_verify_helm_chart_upgrade_ready",
+        lambda *_args, **_kwargs: calls.append("helm-ready"),
+    )
+    monkeypatch.setattr(cli, "_run_soperator_upgrade_validation_phase", validation_phase)
+    monkeypatch.setattr(
+        cli,
+        "_suspend_live_soperator_activechecks",
+        lambda *_args, **_kwargs: calls.append("live-activechecks-suspend")
+        or {"status": "suspended", "patched": ["nccl"], "skipped": []},
+    )
+
+    with pytest.raises(RuntimeError, match="postflight failed"):
+        cli._run_soperator_upgrade_command(
+            config_path=paths.config_path,
+            target_ref="mk8s",
+            to_version="0.26.0",
+            dry_run=False,
+            interactive=False,
+        )
+
+    payload = yaml.safe_load(paths.config_path.read_text(encoding="utf-8"))
+    chart = payload["apps"]["charts"][0]
+    assert chart["version"] == "0.26.0"
+    assert chart["values"]["soperator-activechecks"]["enabled"] is True
+    assert chart["values"]["soperator-activechecks"]["waitForChecks"]["enabled"] is True
+    assert calls[-4:] == [
+        "render",
+        ("validate", "Validate rendered Soperator ActiveChecks restore after failed upgrade"),
+        (
+            "flux-apply",
+            (paths.generated_dir,),
+            {"auto_auth_bootstrap": True, "target_ref": "mk8s", "all_targets": False},
+        ),
+        "helm-ready",
+    ]
+    checkpoint_path = (
+        paths.project_dir
+        / cli.SOPERATOR_UPGRADE_CHECKPOINT_DIR
+        / "mk8s"
+        / "checkpoint.json"
+    )
+    checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+    assert checkpoint["status"] == "failed"
+    assert checkpoint["failure"] == {
+        "error": "postflight failed",
+        "activechecks_restore": "restored",
+    }
+    assert "activechecks-restored-after-failure" in [
+        event["event"] for event in checkpoint["events"]
+    ]
+    upgrade_report = (paths.reports_dir / cli.UPGRADE_REPORT_FILENAME).read_text(
+        encoding="utf-8"
+    )
+    assert "- Status: `failed`" in upgrade_report
+    assert "`activechecks-restored-after-failure`" in upgrade_report
+
+
+def test_soperator_upgrade_restores_activechecks_after_suspend_validation_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    paths = _fake_paths(tmp_path)
+    paths.infra_dir.mkdir(parents=True)
+    paths.flux_dir.mkdir(parents=True)
+    paths.reports_dir.mkdir(parents=True)
+    paths.config_path.write_text(
+        yaml.safe_dump(
+            {
+                "apps": {
+                    "charts": [
+                        {
+                            "id": "soperator",
+                            "instance_id": "mk8s",
+                            "enabled": True,
+                            "namespace": "soperator",
+                            "release-name": "soperator",
+                            "target_ref": "mk8s",
+                            "version": "0.25.0",
+                            "values": {
+                                "soperator-activechecks": {
+                                    "enabled": True,
+                                    "waitForChecks": {"enabled": True},
+                                }
+                            },
+                        }
+                    ]
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    generated_config = SimpleNamespace()
+    manifest: dict[str, Any] = {"deploy": {"targets": [_mk8s_target(paths)]}}
+    calls: list[object] = []
+
+    def generated_validation(*_args: Any, **kwargs: Any) -> dict[str, Any]:
+        title = kwargs["title"]
+        calls.append(("validate", title))
+        if title == "Validate rendered Soperator ActiveChecks suspension":
+            raise RuntimeError("suspension validation failed")
+        return {}
+
+    monkeypatch.setattr(
+        cli, "_load_deploy_context_readonly", lambda _path: (generated_config, paths, manifest)
+    )
+    monkeypatch.setattr(
+        cli, "_load_deploy_context", lambda _path: (generated_config, paths, manifest)
+    )
+    monkeypatch.setattr(
+        cli,
+        "_raise_if_soperator_upgrade_would_bypass_migration",
+        lambda *_args, **_kwargs: calls.append("migration-guard"),
+    )
+    monkeypatch.setattr(cli, "_run_generated_bundle_validation", generated_validation)
+    monkeypatch.setattr(cli, "render_command", lambda *_args, **_kwargs: calls.append("render"))
+    monkeypatch.setattr(
+        cli,
+        "flux_apply_command",
+        lambda *args, **kwargs: calls.append(("flux-apply", args, kwargs)),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_verify_helm_chart_upgrade_ready",
+        lambda *_args, **_kwargs: calls.append("helm-ready"),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_run_soperator_upgrade_validation_phase",
+        lambda *_args, **kwargs: calls.append(("soperator-validation", kwargs["phase_label"])),
+    )
+
+    with pytest.raises(RuntimeError, match="suspension validation failed"):
+        cli._run_soperator_upgrade_command(
+            config_path=paths.config_path,
+            target_ref="mk8s",
+            to_version="0.26.0",
+            dry_run=False,
+            interactive=False,
+        )
+
+    payload = yaml.safe_load(paths.config_path.read_text(encoding="utf-8"))
+    chart = payload["apps"]["charts"][0]
+    assert chart["version"] == "0.25.0"
+    assert chart["values"]["soperator-activechecks"]["enabled"] is True
+    assert chart["values"]["soperator-activechecks"]["waitForChecks"]["enabled"] is True
+    assert calls == [
+        "migration-guard",
+        ("validate", "Soperator upgrade preflight"),
+        "render",
+        ("validate", "Validate rendered Soperator ActiveChecks suspension"),
+        "render",
+        ("validate", "Validate rendered Soperator ActiveChecks restore after failed upgrade"),
+        (
+            "flux-apply",
+            (paths.generated_dir,),
+            {"auto_auth_bootstrap": True, "target_ref": "mk8s", "all_targets": False},
+        ),
+        "helm-ready",
+    ]
+    checkpoint_path = (
+        paths.project_dir
+        / cli.SOPERATOR_UPGRADE_CHECKPOINT_DIR
+        / "mk8s"
+        / "checkpoint.json"
+    )
+    checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+    assert checkpoint["status"] == "failed"
+    assert checkpoint["failure"] == {
+        "error": "suspension validation failed",
+        "activechecks_restore": "restored",
+    }
+    assert "activechecks-restored-after-failure" in [
+        event["event"] for event in checkpoint["events"]
+    ]
+
+
+def test_soperator_upgrade_resumes_pending_activechecks_restore_from_checkpoint(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    paths = _fake_paths(tmp_path)
+    paths.infra_dir.mkdir(parents=True)
+    paths.flux_dir.mkdir(parents=True)
+    paths.reports_dir.mkdir(parents=True)
+    paths.config_path.write_text(
+        yaml.safe_dump(
+            {
+                "apps": {
+                    "charts": [
+                        {
+                            "id": "soperator",
+                            "instance_id": "mk8s",
+                            "enabled": True,
+                            "namespace": "soperator",
+                            "release-name": "soperator",
+                            "target_ref": "mk8s",
+                            "version": "0.26.0",
+                            "values": {
+                                "soperator-activechecks": {
+                                    "enabled": False,
+                                    "waitForChecks": {"enabled": False},
+                                }
+                            },
+                        }
+                    ]
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    target = cli._HelmChartUpgradeTarget(
+        selector="apps:soperator@mk8s",
+        chart_id="soperator",
+        target_ref="mk8s",
+    )
+    checkpoint_plan = cli._HelmChartUpgradePlan(
+        target=target,
+        instance_id="mk8s",
+        namespace="soperator",
+        release_name="soperator",
+        current_version="0.25.0",
+        target_version="0.26.0",
+    )
+    lifecycle = cli._SoperatorActiveChecksLifecycle(
+        required=True,
+        snapshots=(
+            cli._SoperatorUpgradeValueSnapshot(
+                path="values.soperator-activechecks.enabled",
+                present=True,
+                value=True,
+            ),
+            cli._SoperatorUpgradeValueSnapshot(
+                path="values.soperator-activechecks.waitForChecks.enabled",
+                present=True,
+                value=True,
+            ),
+        ),
+    )
+    checkpoint_path = (
+        paths.project_dir
+        / cli.SOPERATOR_UPGRADE_CHECKPOINT_DIR
+        / "mk8s"
+        / "checkpoint.json"
+    )
+    checkpoint = cli._new_soperator_upgrade_checkpoint(
+        plan=checkpoint_plan,
+        lifecycle=lifecycle,
+        checkpoint_path=checkpoint_path,
+        paths=paths,
+    )
+    cli._append_soperator_upgrade_event(checkpoint, "activechecks-suspend-started")
+    cli._append_soperator_upgrade_event(checkpoint, "activechecks-suspended")
+    cli._write_soperator_upgrade_checkpoint(checkpoint_path, checkpoint)
+
+    generated_config = SimpleNamespace()
+    manifest: dict[str, Any] = {"deploy": {"targets": [_mk8s_target(paths)]}}
+    calls: list[object] = []
+
+    monkeypatch.setattr(
+        cli, "_load_deploy_context_readonly", lambda _path: (generated_config, paths, manifest)
+    )
+    monkeypatch.setattr(
+        cli, "_load_deploy_context", lambda _path: (generated_config, paths, manifest)
+    )
+    monkeypatch.setattr(
+        cli,
+        "_raise_if_soperator_upgrade_would_bypass_migration",
+        lambda *_args, **_kwargs: calls.append("migration-guard"),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_run_generated_bundle_validation",
+        lambda *_args, **kwargs: calls.append(("validate", kwargs["title"])) or {},
+    )
+    monkeypatch.setattr(cli, "render_command", lambda *_args, **_kwargs: calls.append("render"))
+    monkeypatch.setattr(
+        cli,
+        "flux_apply_command",
+        lambda *args, **kwargs: calls.append(("flux-apply", args, kwargs)),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_verify_helm_chart_upgrade_ready",
+        lambda *_args, **_kwargs: calls.append("helm-ready"),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_run_soperator_upgrade_validation_phase",
+        lambda *_args, **kwargs: calls.append(("soperator-validation", kwargs["phase_label"])),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_suspend_live_soperator_activechecks",
+        lambda *_args, **_kwargs: calls.append("live-activechecks-suspend")
+        or {"status": "suspended", "patched": ["nccl"], "skipped": []},
+    )
+
+    cli._run_soperator_upgrade_command(
+        config_path=paths.config_path,
+        target_ref="mk8s",
+        to_version="0.26.0",
+        dry_run=False,
+        interactive=False,
+    )
+
+    payload = yaml.safe_load(paths.config_path.read_text(encoding="utf-8"))
+    chart = payload["apps"]["charts"][0]
+    assert chart["version"] == "0.26.0"
+    assert chart["values"]["soperator-activechecks"]["enabled"] is True
+    assert chart["values"]["soperator-activechecks"]["waitForChecks"]["enabled"] is True
+    assert calls == [
+        "migration-guard",
+        ("validate", "Soperator upgrade preflight"),
+        "render",
+        ("validate", "Validate rendered Soperator ActiveChecks suspension"),
+        (
+            "flux-apply",
+            (paths.generated_dir,),
+            {"auto_auth_bootstrap": True, "target_ref": "mk8s", "all_targets": False},
+        ),
+        "helm-ready",
+        "live-activechecks-suspend",
+        ("soperator-validation", "Preflight"),
+        ("soperator-validation", "Postflight"),
+        "render",
+        ("validate", "Validate rendered Soperator ActiveChecks restore"),
+        (
+            "flux-apply",
+            (paths.generated_dir,),
+            {"auto_auth_bootstrap": True, "target_ref": "mk8s", "all_targets": False},
+        ),
+        "helm-ready",
+    ]
+    checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+    event_names = [event["event"] for event in checkpoint["events"]]
+    assert "resumed" in event_names
+    assert "activechecks-restored" in event_names
+    assert checkpoint["status"] == "completed"
+    assert checkpoint["current_version"] == "0.26.0"
+    assert checkpoint["target_version"] == "0.26.0"
+
+
+def test_soperator_upgrade_resumed_activechecks_restore_survives_preflight_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    paths = _fake_paths(tmp_path)
+    paths.infra_dir.mkdir(parents=True)
+    paths.flux_dir.mkdir(parents=True)
+    paths.reports_dir.mkdir(parents=True)
+    paths.config_path.write_text(
+        yaml.safe_dump(
+            {
+                "apps": {
+                    "charts": [
+                        {
+                            "id": "soperator",
+                            "instance_id": "mk8s",
+                            "enabled": True,
+                            "namespace": "soperator",
+                            "release-name": "soperator",
+                            "target_ref": "mk8s",
+                            "version": "0.26.0",
+                            "values": {
+                                "soperator-activechecks": {
+                                    "enabled": False,
+                                    "waitForChecks": {"enabled": False},
+                                }
+                            },
+                        }
+                    ]
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    target = cli._HelmChartUpgradeTarget(
+        selector="apps:soperator@mk8s",
+        chart_id="soperator",
+        target_ref="mk8s",
+    )
+    checkpoint_plan = cli._HelmChartUpgradePlan(
+        target=target,
+        instance_id="mk8s",
+        namespace="soperator",
+        release_name="soperator",
+        current_version="0.25.0",
+        target_version="0.26.0",
+    )
+    lifecycle = cli._SoperatorActiveChecksLifecycle(
+        required=True,
+        snapshots=(
+            cli._SoperatorUpgradeValueSnapshot(
+                path="values.soperator-activechecks.enabled",
+                present=True,
+                value=True,
+            ),
+            cli._SoperatorUpgradeValueSnapshot(
+                path="values.soperator-activechecks.waitForChecks.enabled",
+                present=True,
+                value=True,
+            ),
+        ),
+    )
+    checkpoint_path = (
+        paths.project_dir
+        / cli.SOPERATOR_UPGRADE_CHECKPOINT_DIR
+        / "mk8s"
+        / "checkpoint.json"
+    )
+    checkpoint = cli._new_soperator_upgrade_checkpoint(
+        plan=checkpoint_plan,
+        lifecycle=lifecycle,
+        checkpoint_path=checkpoint_path,
+        paths=paths,
+    )
+    cli._append_soperator_upgrade_event(checkpoint, "activechecks-suspend-started")
+    cli._append_soperator_upgrade_event(checkpoint, "activechecks-suspended")
+    cli._write_soperator_upgrade_checkpoint(checkpoint_path, checkpoint)
+
+    generated_config = SimpleNamespace()
+    manifest: dict[str, Any] = {"deploy": {"targets": [_mk8s_target(paths)]}}
+    calls: list[object] = []
+
+    def generated_validation(*_args: Any, **kwargs: Any) -> dict[str, Any]:
+        title = kwargs["title"]
+        calls.append(("validate", title))
+        if title == "Soperator upgrade preflight":
+            raise RuntimeError("preflight failed")
+        return {}
+
+    monkeypatch.setattr(
+        cli, "_load_deploy_context_readonly", lambda _path: (generated_config, paths, manifest)
+    )
+    monkeypatch.setattr(
+        cli, "_load_deploy_context", lambda _path: (generated_config, paths, manifest)
+    )
+    monkeypatch.setattr(
+        cli,
+        "_raise_if_soperator_upgrade_would_bypass_migration",
+        lambda *_args, **_kwargs: calls.append("migration-guard"),
+    )
+    monkeypatch.setattr(cli, "_run_generated_bundle_validation", generated_validation)
+    monkeypatch.setattr(cli, "render_command", lambda *_args, **_kwargs: calls.append("render"))
+    monkeypatch.setattr(
+        cli,
+        "flux_apply_command",
+        lambda *args, **kwargs: calls.append(("flux-apply", args, kwargs)),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_verify_helm_chart_upgrade_ready",
+        lambda *_args, **_kwargs: calls.append("helm-ready"),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_run_soperator_upgrade_validation_phase",
+        lambda *_args, **kwargs: calls.append(("soperator-validation", kwargs["phase_label"])),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_suspend_live_soperator_activechecks",
+        lambda *_args, **_kwargs: calls.append("live-activechecks-suspend")
+        or {"status": "suspended", "patched": ["nccl"], "skipped": []},
+    )
+
+    with pytest.raises(RuntimeError, match="preflight failed"):
+        cli._run_soperator_upgrade_command(
+            config_path=paths.config_path,
+            target_ref="mk8s",
+            to_version="0.26.0",
+            dry_run=False,
+            interactive=False,
+        )
+
+    payload = yaml.safe_load(paths.config_path.read_text(encoding="utf-8"))
+    chart = payload["apps"]["charts"][0]
+    assert chart["version"] == "0.26.0"
+    assert chart["values"]["soperator-activechecks"]["enabled"] is True
+    assert chart["values"]["soperator-activechecks"]["waitForChecks"]["enabled"] is True
+    assert calls == [
+        "migration-guard",
+        ("validate", "Soperator upgrade preflight"),
+        "render",
+        ("validate", "Validate rendered Soperator ActiveChecks restore after failed upgrade"),
+        (
+            "flux-apply",
+            (paths.generated_dir,),
+            {"auto_auth_bootstrap": True, "target_ref": "mk8s", "all_targets": False},
+        ),
+        "helm-ready",
+    ]
+    checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+    assert checkpoint["status"] == "failed"
+    assert checkpoint["failure"] == {
+        "error": "preflight failed",
+        "activechecks_restore": "restored",
+    }
+    event_names = [event["event"] for event in checkpoint["events"]]
+    assert "resumed" in event_names
+    assert "activechecks-restored-after-failure" in event_names
+    upgrade_report = (paths.reports_dir / cli.UPGRADE_REPORT_FILENAME).read_text(
+        encoding="utf-8"
+    )
+    assert "- Status: `failed`" in upgrade_report
+    assert "`activechecks-restored-after-failure`" in upgrade_report
+
+
+def test_soperator_upgrade_live_activechecks_cleanup_is_cluster_scoped(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    paths = _fake_paths(tmp_path)
+    target = cli._HelmChartUpgradeTarget(
+        selector="apps:soperator@mk8s",
+        chart_id="soperator",
+        target_ref="mk8s",
+    )
+    plan = cli._HelmChartUpgradePlan(
+        target=target,
+        instance_id="mk8s",
+        namespace="soperator",
+        release_name="soperator",
+        current_version="0.25.0",
+        target_version="0.25.0",
+    )
+    source_payload = {
+        "apps": {
+            "charts": [
+                {
+                    "id": "soperator",
+                    "instance_id": "mk8s",
+                    "enabled": True,
+                    "target_ref": "mk8s",
+                    "values": {"clusterName": "cluster-a"},
+                }
+            ]
+        }
+    }
+    kubectl_calls: list[tuple[str, ...]] = []
+
+    def fake_run(cmd: list[str], **_kwargs: Any) -> SimpleNamespace:
+        assert cmd == [
+            "kubectl",
+            "-n",
+            "soperator",
+            "get",
+            "activechecks.slurm.nebius.ai",
+            "-o",
+            "json",
+        ]
+        return SimpleNamespace(
+            returncode=0,
+            stderr="",
+            stdout=json.dumps(
+                {
+                    "items": [
+                        {
+                            "metadata": {"name": "nccl"},
+                            "spec": {"slurmClusterRefName": "cluster-a"},
+                            "status": {"k8sJobsStatus": {"lastJobName": "nccl-job"}},
+                        },
+                        {
+                            "metadata": {"name": "other"},
+                            "spec": {"slurmClusterRefName": "cluster-b"},
+                        },
+                    ]
+                }
+            ),
+        )
+
+    monkeypatch.setattr(
+        cli,
+        "_resolve_selected_deploy_targets",
+        lambda *_args, **_kwargs: [_mk8s_target(paths)],
+    )
+    monkeypatch.setattr(
+        cli,
+        "_prepare_cluster_handoff_kube_env",
+        lambda *_args, **_kwargs: {"KUBECONFIG": "test"},
+    )
+    monkeypatch.setattr(cli.subprocess, "run", fake_run)
+    monkeypatch.setattr(
+        cli,
+        "_run_post_flux_kubectl",
+        lambda cmd, **_kwargs: kubectl_calls.append(tuple(cmd)),
+    )
+
+    result = cli._suspend_live_soperator_activechecks(
+        SimpleNamespace(),
+        paths,
+        {"deploy": {"targets": [_mk8s_target(paths)]}},
+        plan,
+        source_payload=source_payload,
+    )
+
+    selector = (
+        "app.kubernetes.io/component=soperatorchecks,"
+        "app.kubernetes.io/instance=cluster-a"
+    )
+    assert result["status"] == "suspended"
+    assert result["patched"] == ["nccl"]
+    assert result["skipped"] == ["other"]
+    assert result["workload_cleanup"] == {
+        "scope": "cluster_ref",
+        "namespace": "soperator",
+        "cluster_ref": "cluster-a",
+        "activecheck_job_names": ["nccl-job"],
+    }
+    assert kubectl_calls == [
+        (
+            "kubectl",
+            "-n",
+            "soperator",
+            "patch",
+            "activechecks.slurm.nebius.ai",
+            "nccl",
+            "--type=merge",
+            "-p",
+            json.dumps({"spec": {"suspend": True, "runAfterCreation": False}}),
+        ),
+        (
+            "kubectl",
+            "-n",
+            "soperator",
+            "delete",
+            "cronjob.batch",
+            "-l",
+            selector,
+            "--ignore-not-found=true",
+            "--wait=false",
+        ),
+        (
+            "kubectl",
+            "-n",
+            "soperator",
+            "delete",
+            "job.batch,pod",
+            "-l",
+            selector,
+            "--ignore-not-found=true",
+            "--wait=false",
+        ),
+        (
+            "kubectl",
+            "-n",
+            "soperator",
+            "delete",
+            "job.batch/nccl-job",
+            "--ignore-not-found=true",
+            "--wait=false",
+        ),
+        (
+            "kubectl",
+            "-n",
+            "soperator",
+            "delete",
+            "pod",
+            "-l",
+            "job-name=nccl-job",
+            "--ignore-not-found=true",
+            "--wait=false",
+        ),
+    ]
+
+
+def test_soperator_upgrade_live_activechecks_list_failure_blocks_upgrade(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    paths = _fake_paths(tmp_path)
+    target = cli._HelmChartUpgradeTarget(
+        selector="apps:soperator@mk8s",
+        chart_id="soperator",
+        target_ref="mk8s",
+    )
+    plan = cli._HelmChartUpgradePlan(
+        target=target,
+        instance_id="mk8s",
+        namespace="soperator",
+        release_name="soperator",
+        current_version="0.25.0",
+        target_version="0.25.0",
+    )
+    source_payload = {
+        "apps": {
+            "charts": [
+                {
+                    "id": "soperator",
+                    "instance_id": "mk8s",
+                    "enabled": True,
+                    "target_ref": "mk8s",
+                    "values": {"clusterName": "cluster-a"},
+                }
+            ]
+        }
+    }
+    kubectl_calls: list[tuple[str, ...]] = []
+
+    monkeypatch.setattr(
+        cli,
+        "_resolve_selected_deploy_targets",
+        lambda *_args, **_kwargs: [_mk8s_target(paths)],
+    )
+    monkeypatch.setattr(
+        cli,
+        "_prepare_cluster_handoff_kube_env",
+        lambda *_args, **_kwargs: {"KUBECONFIG": "test"},
+    )
+    monkeypatch.setattr(
+        cli.subprocess,
+        "run",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            returncode=1,
+            stderr="Error from server (Forbidden): activechecks is forbidden",
+            stdout="",
+        ),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_run_post_flux_kubectl",
+        lambda cmd, **_kwargs: kubectl_calls.append(tuple(cmd)),
+    )
+
+    with pytest.raises(RuntimeError, match="Cannot suspend live Soperator ActiveChecks"):
+        cli._suspend_live_soperator_activechecks(
+            SimpleNamespace(),
+            paths,
+            {"deploy": {"targets": [_mk8s_target(paths)]}},
+            plan,
+            source_payload=source_payload,
+        )
+    assert kubectl_calls == []
+
+
+def test_soperator_upgrade_guided_prompts_dry_run_before_mutation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    paths = _fake_paths(tmp_path)
+    paths.infra_dir.mkdir(parents=True)
+    paths.flux_dir.mkdir(parents=True)
+    paths.reports_dir.mkdir(parents=True)
+    paths.config_path.write_text(
+        yaml.safe_dump(
+            {
+                "infra": {
+                    "components": [
+                        {
+                            "id": "mk8s",
+                            "instance_id": "mk8s",
+                            "enabled": True,
+                            "inputs": {},
+                        }
+                    ]
+                },
+                "apps": {
+                    "charts": [
+                        {
+                            "id": "soperator",
+                            "instance_id": "mk8s",
+                            "enabled": True,
+                            "namespace": "soperator",
+                            "release-name": "soperator",
+                            "version": "0.25.0",
+                        }
+                    ]
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    original_config = paths.config_path.read_text(encoding="utf-8")
+    generated_config = SimpleNamespace()
+    manifest: dict[str, Any] = {"deploy": {"targets": [_mk8s_target(paths)]}}
+    prompt_paths: list[str] = []
+    rich_console = cli.Console(record=True, width=300)
+
+    def _prompt_scalar(
+        path_label: str,
+        current: object,
+        *,
+        choices: list[cli.OptionChoice] | None = None,
+        type_hint: str | None = None,
+        required: bool = False,
+        unset_on_skip: bool = False,
+    ) -> tuple[object, bool]:
+        del current, choices, type_hint, required, unset_on_skip
+        answers: dict[str, Any] = {
+            "soperator.upgrade.to_version": "0.26.0",
+            "soperator.upgrade.dry_run": True,
+        }
+        prompt_paths.append(path_label)
+        return answers[path_label], False
+
+    monkeypatch.setattr(cli, "_upgrade_interactive_prompts_enabled", lambda: True)
+    monkeypatch.setattr(
+        cli, "_load_deploy_context_readonly", lambda _path: (generated_config, paths, manifest)
+    )
+    monkeypatch.setattr(cli, "_prompt_scalar_override", _prompt_scalar)
+    monkeypatch.setattr(
+        cli,
+        "_raise_if_soperator_upgrade_would_bypass_migration",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(cli, "console", rich_console)
+
+    cli.soperator_upgrade_command(paths.config_path)
+
+    rendered = rich_console.export_text()
+    assert prompt_paths == [
+        "soperator.upgrade.to_version",
+        "soperator.upgrade.dry_run",
+    ]
+    assert "Soperator upgrade plan" in rendered
+    assert "Dry run only" in rendered
+    assert paths.config_path.read_text(encoding="utf-8") == original_config
+
+
+def test_soperator_upgrade_no_interactive_requires_version_before_prompt(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    paths = _fake_paths(tmp_path)
+    paths.config_path.parent.mkdir(parents=True, exist_ok=True)
+    paths.config_path.write_text(
+        yaml.safe_dump(
+            {
+                "infra": {
+                    "components": [
+                        {
+                            "id": "mk8s",
+                            "instance_id": "mk8s",
+                            "enabled": True,
+                            "inputs": {},
+                        }
+                    ]
+                },
+                "apps": {
+                    "charts": [
+                        {
+                            "id": "soperator",
+                            "instance_id": "mk8s",
+                            "enabled": True,
+                            "version": "0.25.0",
+                        }
+                    ]
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    prompted = False
+
+    def _prompt_scalar(*_args: object, **_kwargs: object) -> tuple[object, bool]:
+        nonlocal prompted
+        prompted = True
+        return "", False
+
+    monkeypatch.setattr(cli, "_upgrade_interactive_prompts_enabled", lambda: True)
+    monkeypatch.setattr(cli, "_prompt_scalar_override", _prompt_scalar)
+
+    with pytest.raises(RuntimeError, match="Missing --to-version"):
+        cli._run_soperator_upgrade_command(
+            config_path=paths.config_path,
+            target_ref="mk8s",
+            to_version=None,
+            dry_run=False,
+            interactive=False,
+        )
+    assert prompted is False
+
+
+def test_soperator_upgrade_validation_specs_select_target_and_require_manifest() -> None:
+    manifest = {
+        "deploy": {
+            "validations": [
+                {
+                    "kind": cli.SOPERATOR_CLUSTER_VALIDATION_KIND,
+                    "target_ref": "mk8s",
+                    "name": "Soperator smoke",
+                    "report_file": "soperator-smoke.json",
+                },
+                {
+                    "kind": cli.SOPERATOR_CLUSTER_VALIDATION_KIND,
+                    "target_ref": "other",
+                    "name": "Other Soperator smoke",
+                },
+                {"kind": "mk8s_gpu_visibility", "target_ref": "mk8s"},
+            ]
+        }
+    }
+
+    selected = cli._soperator_upgrade_validation_specs(manifest, target_ref="mk8s")
+
+    assert selected == [
+        {
+            "kind": cli.SOPERATOR_CLUSTER_VALIDATION_KIND,
+            "target_ref": "mk8s",
+            "name": "Soperator smoke",
+            "report_file": "soperator-smoke.json",
+        }
+    ]
+    with pytest.raises(RuntimeError, match="does not declare the required"):
+        cli._soperator_upgrade_validation_specs(manifest, target_ref="missing")
+
+
+def test_soperator_upgrade_postflight_refreshes_deploy_report(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    paths = _fake_paths(tmp_path)
+    paths.reports_dir.mkdir(parents=True)
+    validation = {
+        "kind": cli.SOPERATOR_CLUSTER_VALIDATION_KIND,
+        "target_ref": "mk8s",
+        "name": "Soperator smoke",
+        "report_file": "soperator-smoke.json",
+    }
+    manifest = {
+        "deploy": {
+            "targets": [_mk8s_target(paths)],
+            "validations": [validation],
+        }
+    }
+    plan = cli._HelmChartUpgradePlan(
+        target=cli._HelmChartUpgradeTarget(
+            selector="apps:soperator@mk8s",
+            chart_id="soperator",
+            target_ref="mk8s",
+        ),
+        instance_id="mk8s",
+        namespace="soperator",
+        release_name="soperator",
+        current_version="0.25.0",
+        target_version="0.26.0",
+    )
+    calls: list[object] = []
+
+    monkeypatch.setattr(
+        cli,
+        "_prepare_cluster_handoff_kube_env",
+        lambda *_args, **_kwargs: {"KUBECONFIG": "fake"},
+    )
+    monkeypatch.setattr(
+        cli,
+        "_run_deploy_validations",
+        lambda validations, **kwargs: calls.append(
+            ("run-validations", validations, kwargs["reports_dir"], kwargs["extra_env"])
+        )
+        or [paths.reports_dir / "soperator-smoke.json"],
+    )
+    monkeypatch.setattr(
+        cli,
+        "write_inventory",
+        lambda *_args, **kwargs: calls.append(("write-inventory", kwargs["validations"]))
+        or SimpleNamespace(markdown=paths.reports_dir / "deploy-report.md"),
+    )
+    monkeypatch.setattr(
+        cli,
+        "build_deploy_validation_report",
+        lambda validations, **kwargs: calls.append(
+            ("build-report", validations, kwargs["markdown_path"])
+        )
+        or SimpleNamespace(overall_status="passed"),
+    )
+
+    report = cli._run_soperator_upgrade_validation_phase(
+        SimpleNamespace(),
+        paths,
+        manifest,
+        plan,
+        phase_label="Postflight",
+        refresh_deploy_report=True,
+    )
+
+    assert report.overall_status == "passed"
+    assert calls == [
+        ("run-validations", [validation], paths.reports_dir, {"KUBECONFIG": "fake"}),
+        ("write-inventory", [validation]),
+        ("build-report", [validation], paths.reports_dir / "deploy-report.md"),
+    ]
+
+
+def test_format_helm_chart_upgrade_plan_warns_when_target_appears_lower() -> None:
+    plan = cli._HelmChartUpgradePlan(
+        target=cli._HelmChartUpgradeTarget(
+            selector="apps:soperator@mk8s",
+            chart_id="soperator",
+            target_ref="mk8s",
+        ),
+        instance_id="mk8s",
+        namespace="soperator",
+        release_name="soperator",
+        current_version="4.0.2-ps.1",
+        target_version="4.0.1-ps.2",
+    )
+
+    rendered = "\n".join(cli._format_helm_chart_upgrade_plan(plan, dry_run=True))
+
+    assert "- warnings:" in rendered
+    assert "requested chart version appears lower" in rendered
+    assert "Helm chart downgrades are not guaranteed safe" in rendered
 
 
 def test_upgrade_helm_chart_readiness_requires_generated_target(
@@ -3172,11 +4518,10 @@ def test_upgrade_os_image_config_only_guided_vm_dry_run_prompts_target_and_image
         "upgrade.os_image.dry_run",
     ]
     assert "VM OS image upgrade plan" in rendered
-    assert "  nebius-cxcli upgrade os-image \\" in rendered
-    assert f"    {paths.config_path} \\" in rendered
-    assert "    infra:vm@worker \\" in rendered
-    assert "    --to-os ubuntu24.04-driverless \\" in rendered
-    assert "    --dry-run" in rendered
+    assert (
+        f"nebius-cxcli upgrade os-image {paths.config_path} infra:vm@worker "
+        "--to-os ubuntu24.04-driverless --dry-run"
+    ) in rendered
     assert paths.config_path.read_text(encoding="utf-8") == original_config
 
 
@@ -3300,9 +4645,8 @@ def test_upgrade_os_image_vm_apply_updates_source_and_uses_vm_status_watcher(
             "--node-group is supported only for infra:mk8s OS-image upgrades.",
         ),
         (
-            ["--disruption-policy", "allow-unavailable"],
-            "--disruption-policy and finite --drain-timeout are supported only for "
-            "infra:mk8s OS-image upgrades.",
+            ["--strategy", "force-delete"],
+            "--strategy force-delete is supported only for infra:mk8s OS-image upgrades.",
         ),
     ],
 )
@@ -3516,12 +4860,10 @@ def test_upgrade_os_image_dry_run_does_not_write_or_apply(
     assert "MK8s OS image upgrade plan" in output
     assert "mk8s-live-system: ubuntu22.04 -> ubuntu24.04" in output
     assert "Dry run only" in output
-    assert "  nebius-cxcli upgrade os-image \\" in output
-    assert f"    {paths.config_path} \\" in output
-    assert "    infra:mk8s@mk8s \\" in output
-    assert "    --to-os ubuntu24.04 \\" in output
-    assert "    --disruption-policy safe \\" in output
-    assert "    --dry-run" in output
+    assert (
+        f"nebius-cxcli upgrade os-image {paths.config_path} infra:mk8s@mk8s "
+        "--to-os ubuntu24.04 --strategy zero-surge --dry-run"
+    ) in output
     assert paths.config_path.read_text(encoding="utf-8") == original_config
     assert calls == ["sdk-close"]
 
@@ -3729,12 +5071,12 @@ def test_upgrade_os_image_runs_single_node_group_stage(
     output = _plain_output(capture.get())
 
     expected_stage = {"system": "ubuntu22.04", "gpu": "ubuntu24.04"}
-    assert (
-        "OS image upgrade execution stages are per node group, not per node: 1 node-group stage(s)."
-    ) in output
-    assert "stage 1/1: node-group gpu-workers OS image upgrade to ubuntu24.04" in output
-    assert plan_stages == [(expected_stage, True)]
-    assert apply_stages == [expected_stage]
+    assert "OS image upgrade execution stages are per node group, not per node:" in output
+    assert "1 node-group stage(s)" in output
+    compact_output = " ".join(output.split())
+    assert "node-group gpu-workers OS image upgrade to ubuntu24.04" in compact_output
+    assert plan_stages == [(expected_stage, True), (expected_stage, True)]
+    assert apply_stages == [expected_stage, expected_stage]
     assert wait_calls == [
         ("node-group-os", "cluster-1:ng-gpu:ubuntu24.04:3600"),
         ("sdk-close", ""),
@@ -3849,7 +5191,7 @@ def test_upgrade_os_image_runs_all_node_groups_in_order_and_restores_strategy(
             paths.config_path,
             "infra:mk8s@mk8s",
             to_os="ubuntu24.04",
-            disruption_policy="allow-unavailable",
+            disruption_policy="zero-surge",
         )
     output = _plain_output(capture.get())
 
@@ -3859,12 +5201,12 @@ def test_upgrade_os_image_runs_all_node_groups_in_order_and_restores_strategy(
         "max_unavailable": {"count": 1},
     }
     restored_strategy = {"max_surge": {"count": 1}}
-    assert (
-        "OS image upgrade execution stages are per node group, not per node: "
-        "2 node-group stage(s), 1 strategy-restore stage."
-    ) in output
-    assert "stage 1/3: node-group mk8s-live-system OS image upgrade to ubuntu24.04" in output
-    assert "stage 2/3: node-group gpu-workers OS image upgrade to ubuntu24.04" in output
+    assert "OS image upgrade execution stages are per node group, not per node:" in output
+    assert "2 node-group stage(s)" in output
+    assert "1 strategy-restore stage" in output
+    compact_output = " ".join(output.split())
+    assert "node-group mk8s-live-system OS image upgrade to ubuntu24.04" in compact_output
+    assert "node-group gpu-workers OS image upgrade to ubuntu24.04" in compact_output
     assert stage_plans == [
         {
             "system_os": "ubuntu24.04",
@@ -4143,7 +5485,7 @@ def test_resolve_managed_mk8s_upgrade_target_uses_shared_upgrade_wording() -> No
     assert "k8s-version" not in str(component_error.value)
 
 
-def test_upgrade_os_image_rejects_safe_finite_drain_timeout(tmp_path: Path) -> None:
+def test_upgrade_os_image_rejects_unknown_strategy(tmp_path: Path) -> None:
     result = runner.invoke(
         cli.app,
         [
@@ -4154,13 +5496,13 @@ def test_upgrade_os_image_rejects_safe_finite_drain_timeout(tmp_path: Path) -> N
             "--to-os",
             "ubuntu24.04",
             "--dry-run",
-            "--drain-timeout",
-            "10m",
+            "--strategy",
+            "safe",
         ],
     )
 
     assert result.exit_code == 1
-    assert "allow-unavailable or force-delete" in result.output
+    assert "--strategy must be one of" in result.output
 
 
 def test_upgrade_os_image_force_delete_is_explicit_without_yes(tmp_path: Path) -> None:
@@ -4173,7 +5515,7 @@ def test_upgrade_os_image_force_delete_is_explicit_without_yes(tmp_path: Path) -
             "infra:mk8s@mk8s",
             "--to-os",
             "ubuntu24.04",
-            "--disruption-policy",
+            "--strategy",
             "force-delete",
         ],
     )
@@ -4325,7 +5667,7 @@ def test_upgrade_k8s_version_config_only_guided_dry_run_prompts_required_and_opt
             "upgrade.k8s_version.target": "infra:mk8s@mk8s",
             "upgrade.k8s_version.to_version": "1.33",
             "upgrade.k8s_version.dry_run": True,
-            "upgrade.k8s_version.disruption_policy": "allow-unavailable",
+            "upgrade.k8s_version.strategy": "zero-surge",
             "upgrade.k8s_version.drain_timeout": "45m",
             "upgrade.k8s_version.run_post_upgrade_validations": True,
         }
@@ -4353,18 +5695,15 @@ def test_upgrade_k8s_version_config_only_guided_dry_run_prompts_required_and_opt
         "upgrade.k8s_version.target",
         "upgrade.k8s_version.to_version",
         "upgrade.k8s_version.dry_run",
-        "upgrade.k8s_version.disruption_policy",
+        "upgrade.k8s_version.strategy",
         "upgrade.k8s_version.drain_timeout",
         "upgrade.k8s_version.run_post_upgrade_validations",
     ]
     assert "- repeat dry-run command:" in rendered
-    assert "  nebius-cxcli upgrade k8s-version \\" in rendered
-    assert f"    {paths.config_path} \\" in rendered
-    assert "    infra:mk8s@mk8s \\" in rendered
-    assert "    --to-version 1.33 \\" in rendered
-    assert "    --disruption-policy allow-unavailable \\" in rendered
-    assert "    --drain-timeout 45m \\" in rendered
-    assert "    --dry-run" in rendered
+    assert (
+        f"nebius-cxcli upgrade k8s-version {paths.config_path} infra:mk8s@mk8s "
+        "--to-version 1.33 --strategy zero-surge --drain-timeout 45m --dry-run"
+    ) in rendered
     assert paths.config_path.read_text(encoding="utf-8") == original_config
     assert sdk_closed is True
 
@@ -4630,7 +5969,7 @@ def test_upgrade_k8s_version_restores_temporary_strategy_after_failed_stage(
             "infra:mk8s@mk8s",
             to_version="1.33",
             dry_run=False,
-            disruption_policy="allow-unavailable",
+            disruption_policy="zero-surge",
         )
 
     component = _current_payload()["infra"]["components"][0]
@@ -4721,7 +6060,8 @@ def test_render_overwrite_warning_never_mentions_flux_system(tmp_path: Path) -> 
     warning_without_bootstrap = cli._render_overwrite_warning(fake_paths)
 
     assert warning_without_bootstrap is not None
-    assert "Render will overwrite existing generated artifacts under" in warning_without_bootstrap
+    assert "Render will replace existing generated artifacts under" in warning_without_bootstrap
+    assert "referenced JSON detail files" in warning_without_bootstrap
     assert "generated/flux/flux-system" not in warning_without_bootstrap
 
     bootstrap_dir = fake_paths.flux_dir / "flux-system"
@@ -4749,7 +6089,8 @@ def test_render_overwrite_warning_treats_report_files_as_meaningful(
     warning = cli._render_overwrite_warning(fake_paths)
 
     assert warning is not None
-    assert "Render will overwrite existing generated artifacts under" in warning
+    assert "Render will replace existing generated artifacts under" in warning
+    assert "lifecycle reports under `generated/reports/`" in warning
 
 
 def test_validate_command_runs_strict_checks_by_default(
@@ -4998,8 +6339,10 @@ def test_runtime_validation_non_strict_warns_on_confirmed_live_quota_insufficien
         )
 
     output = _plain_output(capture.get())
+    lines = output.splitlines()
     assert "Valid with quota warnings:" in output
     assert "nebius-cxcli quota-request" in output
+    assert f"nebius-cxcli quota-request {tmp_path / 'config.yaml'}" in lines
 
 
 def test_validate_command_prints_mk8s_gpu_validation_warning(
@@ -5353,6 +6696,7 @@ def test_quota_check_command_fails_on_confirmed_insufficiency(
 
     assert result.exit_code != 0
     plain_output = _plain_output(result.output)
+    lines = plain_output.splitlines()
     output = " ".join(plain_output.split())
     output_without_linebreaks = plain_output.replace("\n", "")
     assert "Nebius quota/capacity is insufficient for quota check." in output
@@ -5364,6 +6708,8 @@ def test_quota_check_command_fails_on_confirmed_insufficiency(
     assert "compute.instance.count requires 1, available 0" in output
     assert "Next step: compare quota availability across regions with:" in output
     assert "nebius-cxcli quota-check --all-regions" in output
+    assert f"nebius-cxcli quota-request {fake_paths.config_path}" in lines
+    assert f"nebius-cxcli quota-check --all-regions {fake_paths.config_path}" in lines
     assert str(fake_paths.config_path) in output_without_linebreaks
 
 
@@ -5410,12 +6756,16 @@ def test_quota_check_capacity_only_shortage_does_not_suggest_quota_request(
     result = runner.invoke(cli.app, ["quota-check", str(tmp_path / "config.yaml")])
 
     assert result.exit_code != 0
-    output = " ".join(_plain_output(result.output).split())
+    plain_output = _plain_output(result.output)
+    lines = plain_output.splitlines()
+    output = " ".join(plain_output.split())
     assert "nebius-cxcli quota-request" not in output
+    assert not any(line.startswith("nebius-cxcli quota-request ") for line in lines)
     assert (
         "choose a GPU platform/preset/fabric or region with available Capacity Dashboard capacity"
     ) in output
     assert "nebius-cxcli quota-check --all-regions" in output
+    assert f"nebius-cxcli quota-check --all-regions {fake_paths.config_path}" in lines
 
 
 def test_quota_request_discounts_existing_mk8s_state_for_day2_scale(
@@ -6051,9 +7401,11 @@ def test_render_command_invokes_renderer(tmp_path: Path, monkeypatch: pytest.Mon
 
     assert result.exit_code == 0, result.output
     assert "Rendered 2 file(s)" in _plain_output(result.output)
-    assert _plain_output(result.output).splitlines()[-1] == (
-        f"Next step: `nebius-cxcli deploy {str((tmp_path / 'config.yaml').resolve())}`"
-    )
+    lines = _plain_output(result.output).splitlines()
+    assert lines[-2:] == [
+        "Next step: deploy the rendered bundle:",
+        f"nebius-cxcli deploy {str((tmp_path / 'config.yaml').resolve())}",
+    ]
     assert calls["terraform_config"] == "cfg"
     assert calls["terraform_profile"] == SourceProfile.PORTABLE
     assert calls["outputs_config"] == "cfg"
@@ -6143,20 +7495,22 @@ def test_render_command_points_migration_required_soperator_to_migrate(
     result = runner.invoke(cli.app, ["render", str(fake_paths.config_path)])
 
     assert result.exit_code == 0, result.output
-    normalized_output = " ".join(_plain_output(result.output).split())
+    plain_output = _plain_output(result.output)
+    normalized_output = " ".join(plain_output.split())
     config_arg = str(fake_paths.config_path.resolve())
+    lines = plain_output.splitlines()
     assert (
-        f"Next step: `nebius-cxcli ext-soperator migrate {config_arg} "
-        "--target external-cluster --dry-run`"
-    ) in normalized_output
+        f"nebius-cxcli ext-soperator migrate {config_arg} "
+        "--target external-cluster --dry-run"
+    ) in lines
     assert (
         f"nebius-cxcli ext-soperator migrate {config_arg} "
         "--target external-cluster --execute --approve"
-    ) in normalized_output
+    ) in lines
     assert "Do not run `nebius-cxcli deploy` before `ext-soperator migrate`" in (
         normalized_output
     )
-    assert f"Next step: `nebius-cxcli deploy {config_arg}`" not in normalized_output
+    assert f"nebius-cxcli deploy {config_arg}" not in lines
 
 
 def test_render_command_points_gpu_reconciliation_only_soperator_to_deploy(
@@ -6221,12 +7575,10 @@ def test_render_command_points_gpu_reconciliation_only_soperator_to_deploy(
     result = runner.invoke(cli.app, ["render", str(fake_paths.config_path)])
 
     assert result.exit_code == 0, result.output
-    normalized_output = " ".join(_plain_output(result.output).split())
+    plain_output = _plain_output(result.output)
+    normalized_output = " ".join(plain_output.split())
     config_arg = str(fake_paths.config_path.resolve())
-    assert (
-        f"Next step: `nebius-cxcli deploy {config_arg}`"
-        in normalized_output
-    )
+    assert f"nebius-cxcli deploy {config_arg}" in plain_output.splitlines()
     assert "Use `--target <target-id>` only when you intentionally want to narrow this run" in (
         normalized_output
     )
@@ -6362,9 +7714,10 @@ def test_render_command_persists_quota_report_and_warns(
     assert "Render completed with quota warnings." in _plain_output(result.output)
     assert "compute.instance.count requires 1, available 0" in _plain_output(result.output)
     assert "boot-disk quota could not be fully evaluated" not in _plain_output(result.output)
-    assert _plain_output(result.output).splitlines()[-1] == (
-        f"Next step: `nebius-cxcli deploy {str((tmp_path / 'config.yaml').resolve())}`"
-    )
+    assert _plain_output(result.output).splitlines()[-2:] == [
+        "Next step: deploy the rendered bundle:",
+        f"nebius-cxcli deploy {str((tmp_path / 'config.yaml').resolve())}",
+    ]
 
 
 def test_render_command_accepts_local_source_profile(
@@ -7717,6 +9070,27 @@ def test_render_command_force_allows_noninteractive_overwrite(
     fake_paths = _fake_paths(tmp_path)
     fake_paths.generated_dir.mkdir(parents=True, exist_ok=True)
     (fake_paths.generated_dir / "existing.txt").write_text("existing", encoding="utf-8")
+    fake_paths.reports_dir.mkdir(parents=True, exist_ok=True)
+    deploy_report = fake_paths.reports_dir / "deploy-report.md"
+    deploy_detail_report = fake_paths.reports_dir / "gpu-visibility-report-mk8s.json"
+    migrate_report = fake_paths.reports_dir / "migrate-report.md"
+    migrate_detail_report = fake_paths.reports_dir / "external-nccl-test-report.json"
+    upgrade_report = fake_paths.reports_dir / "upgrade-report.md"
+    upgrade_report_json = fake_paths.reports_dir / "upgrade-report.json"
+    stale_report = fake_paths.reports_dir / "old.json"
+    deploy_report.write_text(
+        "# Deploy Report\n\n- Detail report: `gpu-visibility-report-mk8s.json`\n",
+        encoding="utf-8",
+    )
+    deploy_detail_report.write_text('{"status": "passed"}\n', encoding="utf-8")
+    migrate_report.write_text(
+        "# Soperator Migration Report\n\n- `external-nccl-test-report.json`: `PASS` - ok\n",
+        encoding="utf-8",
+    )
+    migrate_detail_report.write_text('{"passed": true}\n', encoding="utf-8")
+    upgrade_report.write_text("# Soperator Upgrade Report\n", encoding="utf-8")
+    upgrade_report_json.write_text('{"status": "completed"}\n', encoding="utf-8")
+    stale_report.write_text("{}\n", encoding="utf-8")
     calls: dict[str, bool] = {"rendered": False}
 
     monkeypatch.setattr(cli, "_load_runtime_context", lambda _path: ("cfg", fake_paths))
@@ -7739,6 +9113,13 @@ def test_render_command_force_allows_noninteractive_overwrite(
 
     assert result.exit_code == 0, result.output
     assert calls["rendered"] is True
+    assert deploy_report.read_text(encoding="utf-8").startswith("# Deploy Report")
+    assert deploy_detail_report.read_text(encoding="utf-8") == '{"status": "passed"}\n'
+    assert migrate_report.read_text(encoding="utf-8").startswith("# Soperator Migration Report")
+    assert migrate_detail_report.read_text(encoding="utf-8") == '{"passed": true}\n'
+    assert upgrade_report.read_text(encoding="utf-8").startswith("# Soperator Upgrade Report")
+    assert upgrade_report_json.read_text(encoding="utf-8") == '{"status": "completed"}\n'
+    assert not stale_report.exists()
 
 
 def test_render_command_prompts_before_overwrite_when_interactive(
@@ -7768,7 +9149,7 @@ def test_render_command_prompts_before_overwrite_when_interactive(
     result = runner.invoke(cli.app, ["render", str(tmp_path / "config.yaml")], input="y\n")
 
     assert result.exit_code == 0, result.output
-    assert "Continue and overwrite the existing generated artifacts?" in _plain_output(
+    assert "Continue and replace the existing generated artifacts?" in _plain_output(
         result.output
     )
     assert calls["rendered"] is True
@@ -8013,7 +9394,7 @@ def test_deploy_footer_groups_target_validations_and_keeps_paths_concise(
             "467.7 Gbps (threshold 300.0) across 1 worker; DMA-BUF enabled."
         ),
         "[bright_magenta]Copy/paste commands:[/bright_magenta]",
-        "  No immediate access or follow-up commands were derived.",
+        "No immediate access or follow-up commands were derived.",
         "[bright_magenta]Important paths:[/bright_magenta]",
         f"  Generated bundle: {fake_paths.generated_dir}",
         f"  Deploy report: {fake_paths.reports_dir / 'deploy-report.md'}",
@@ -8049,9 +9430,12 @@ def test_deploy_command_prints_ssh_jumphost_access_hint(
 
     assert result.exit_code == 0, result.output
     output = _plain_output(result.output)
+    lines = output.splitlines()
     assert "Copy/paste commands:" in output
     assert "# SSH vm via ssh-jumphost" in output
     assert "ssh -J admin@198.51.100.20 ubuntu@10.0.0.15" in output
+    assert "# SSH vm via ssh-jumphost" in lines
+    assert "ssh -J admin@198.51.100.20 ubuntu@10.0.0.15" in lines
 
 
 def test_deploy_command_prints_wireguard_access_commands(
@@ -8083,10 +9467,15 @@ def test_deploy_command_prints_wireguard_access_commands(
 
     assert result.exit_code == 0, result.output
     output = _plain_output(result.output)
+    lines = output.splitlines()
     assert "# WireGuard connect laptop" in output
     assert "wg-quick up /tmp/laptop.conf" in output
     assert "# WireGuard disconnect laptop" in output
     assert "wg-quick down /tmp/laptop.conf" in output
+    assert "# WireGuard connect laptop" in lines
+    assert "wg-quick up /tmp/laptop.conf" in lines
+    assert "# WireGuard disconnect laptop" in lines
+    assert "wg-quick down /tmp/laptop.conf" in lines
 
 
 def test_deploy_command_prints_wireguard_generation_command(
@@ -8114,8 +9503,11 @@ def test_deploy_command_prints_wireguard_generation_command(
 
     assert result.exit_code == 0, result.output
     output = _plain_output(result.output)
+    lines = output.splitlines()
     assert "# Generate WireGuard client config for wireguard-gw" in output
     assert f"nebius-cxcli wireguard --gen-client-conf {fake_paths.config_path}" in output
+    assert "# Generate WireGuard client config for wireguard-gw" in lines
+    assert f"nebius-cxcli wireguard --gen-client-conf {fake_paths.config_path}" in lines
     assert "--component wireguard-gw" not in output
 
 
@@ -9024,6 +10416,8 @@ def test_generated_bundle_live_quota_failure_prints_remediation_hints(
     assert f"nebius-cxcli quota-request {fake_paths.config_path}" in output
     assert "Next step: compare quota availability across regions with:" in output
     assert f"nebius-cxcli quota-check --all-regions {fake_paths.config_path}" in output
+    assert f"nebius-cxcli quota-request {fake_paths.config_path}" in rendered_messages
+    assert f"nebius-cxcli quota-check --all-regions {fake_paths.config_path}" in rendered_messages
 
 
 def test_adjust_quota_report_for_managed_mk8s_state_discounts_existing_cluster_capacity() -> None:
@@ -10805,7 +12199,7 @@ def test_deploy_generated_artifacts_writes_summary_even_when_validation_fails(
         "    [red]FAIL[/red] GPU stack readiness: GPU Operator ready on 0 GPU nodes.",
         "    NOT RUN GPU Visibility test: No deploy validation results recorded yet.",
         "[bright_magenta]Copy/paste commands:[/bright_magenta]",
-        "  No immediate access or follow-up commands were derived.",
+        "No immediate access or follow-up commands were derived.",
         "[bright_magenta]Important paths:[/bright_magenta]",
         f"  Generated bundle: {fake_paths.generated_dir}",
         f"  Deploy report: {fake_paths.reports_dir / 'deploy-report.md'}",
@@ -12312,6 +13706,43 @@ def test_run_post_flux_kubectl_retries_transient_webhook_failures(
     assert envs[0]["PATH"] == os.environ["PATH"]
 
 
+def test_run_post_flux_kubectl_retries_etcd_leader_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, ...]] = []
+    sleeps: list[float] = []
+
+    def _fake_run(cmd: list[str], **_kwargs: object) -> SimpleNamespace:
+        calls.append(tuple(cmd))
+        if len(calls) == 1:
+            return SimpleNamespace(
+                returncode=1,
+                stderr=(
+                    "Error from server: etcdserver: request timed out, "
+                    "possibly due to previous leader failure"
+                ),
+                stdout="",
+            )
+        return SimpleNamespace(returncode=0, stderr="", stdout="")
+
+    monkeypatch.setattr(cli.subprocess, "run", _fake_run)
+    monkeypatch.setattr(cli.time, "sleep", lambda seconds: sleeps.append(seconds))
+
+    cli._run_post_flux_kubectl(
+        ["kubectl", "apply", "--server-side", "--force-conflicts", "-f", "custom.yaml"],
+        env={"KUBECONFIG": "/tmp/kubeconfig"},
+        retries=1,
+        retry_delay_seconds=2.0,
+        retry_stderr_markers=cli._KUBECTL_TRANSIENT_FAILURE_MARKERS,
+    )
+
+    assert calls == [
+        ("kubectl", "apply", "--server-side", "--force-conflicts", "-f", "custom.yaml"),
+        ("kubectl", "apply", "--server-side", "--force-conflicts", "-f", "custom.yaml"),
+    ]
+    assert sleeps == [2.0]
+
+
 def test_apply_rendered_flux_prints_phase_lines_when_console_is_not_terminal(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -13225,18 +14656,16 @@ def test_print_upgrade_plan_lines_wraps_repeat_dry_run_command(
             "- repeat dry-run command:",
             "  nebius-cxcli upgrade os-image '/tmp/project path/config.yaml' "
             "infra:mk8s@cluster1 --to-os ubuntu24.04 "
-            "--disruption-policy allow-unavailable --dry-run",
+            "--strategy zero-surge --dry-run",
             "Dry run only: no changes.",
         )
     )
 
     rendered = rich_console.export_text()
-    assert "  nebius-cxcli upgrade os-image \\" in rendered
-    assert "    '/tmp/project path/config.yaml' \\" in rendered
-    assert "    infra:mk8s@cluster1 \\" in rendered
-    assert "    --to-os ubuntu24.04 \\" in rendered
-    assert "    --disruption-policy allow-unavailable \\" in rendered
-    assert "    --dry-run" in rendered
+    assert (
+        "nebius-cxcli upgrade os-image '/tmp/project path/config.yaml' "
+        "infra:mk8s@cluster1 --to-os ubuntu24.04 --strategy zero-surge --dry-run"
+    ) in rendered
     assert "Dry run only: no changes." in rendered
 
 
@@ -16172,10 +17601,14 @@ def test_warn_if_flux_gitops_not_bootstrapped_prints_guidance(
 
     assert len(messages) >= 3
     assert "Flux GitOps bootstrap is not configured" in messages[0]
+    assert "Local direct apply succeeded" in messages[0]
+    assert "supported operating mode" in messages[0]
+    assert "If this cluster should continuously sync from Git" in messages[1]
     assert "local generated bundle path" in messages[1]
     assert f"git origin under {fake_paths.repo_root}" in messages[1]
     assert "Commit and push the rendered generated/flux path" in messages[2]
-    assert "Run to enable GitOps sync:" in messages[3]
+    assert "skip this step when local direct apply is the intended workflow" in messages[2]
+    assert "Optional command to enable GitOps sync:" in messages[3]
     assert f"nebius-cxcli flux bootstrap {fake_paths.generated_dir}" == messages[4]
     assert command == f"nebius-cxcli flux bootstrap {fake_paths.generated_dir}"
 
@@ -16189,8 +17622,9 @@ def test_warn_if_flux_gitops_not_bootstrapped_prints_guidance(
 
     assert len(messages) == 3
     assert "Flux GitOps bootstrap is not configured" in messages[0]
+    assert "Local direct apply succeeded" in messages[0]
     assert "final Deployment summary" in messages[1]
-    assert "Run to enable GitOps sync:" not in "\n".join(messages)
+    assert "Optional command to enable GitOps sync:" not in "\n".join(messages)
     assert command == f"nebius-cxcli flux bootstrap {fake_paths.generated_dir}"
 
 
@@ -16282,7 +17716,7 @@ def test_help_text_aligns_render_and_apply_surfaces() -> None:
 
     assert (
         "validate, validate-dashboards, quota-check, quota-request, render, deploy, "
-        "upgrade, and bootstrap-ci use config.yaml"
+        "soperator, upgrade, and bootstrap-ci use config.yaml"
     ) in top_help
     assert (
         f"upgrade example: nebius-cxcli upgrade k8s-version {upgrade_example_config} "
@@ -16315,7 +17749,7 @@ def test_help_text_aligns_render_and_apply_surfaces() -> None:
     assert "--all-regions" in quota_check_help
     assert "selected config region still" in quota_check_help
     assert "quota-only" in quota_check_help
-    assert "prompting before overwrite unless --force is provided" in render_help
+    assert "prompting before replacement unless --force is provided" in render_help
     assert "target cluster instance_id" in validate_dashboards_help
     assert "explicit kube context" in validate_dashboards_help
     assert "target_ref" not in validate_dashboards_help
@@ -16351,6 +17785,8 @@ def test_help_text_aligns_render_and_apply_surfaces() -> None:
         "infra:vm@worker --to-os ubuntu24.04-driverless --dry-run"
     ) in upgrade_help
     assert "--yes" not in upgrade_help
+    assert "--disruption-policy" not in upgrade_help
+    assert "allow-unavailable" not in upgrade_help
     assert (
         f"nebius-cxcli upgrade k8s-version {upgrade_example_config} "
         "infra:mk8s@mk8s --to-version 1.33 --dry-run"
@@ -16360,7 +17796,7 @@ def test_help_text_aligns_render_and_apply_surfaces() -> None:
     ) in upgrade_help
     assert (
         f"nebius-cxcli upgrade k8s-version {upgrade_example_config} "
-        "infra:mk8s@mk8s --to-version 1.33 --disruption-policy allow-unavailable"
+        "infra:mk8s@mk8s --to-version 1.33 --strategy zero-surge"
     ) in upgrade_help
     assert (
         "nebius-cxcli upgrade node-template <config.yaml> infra:mk8s@<target> "
@@ -16383,18 +17819,20 @@ def test_help_text_aligns_render_and_apply_surfaces() -> None:
     assert "--to-version" in upgrade_k8s_help
     assert "--dry-run" in upgrade_k8s_help
     assert "--yes" not in upgrade_k8s_help
-    assert "--disruption-policy" in upgrade_k8s_help
+    assert "--strategy" in upgrade_k8s_help
     assert "--drain-timeout" in upgrade_k8s_help
+    assert "--disruption-policy" not in upgrade_k8s_help
+    assert "allow-unavailable" not in upgrade_k8s_help
     assert "--interactive" in upgrade_k8s_help
     assert "--no-interactive" in upgrade_k8s_help
     assert "force-delete" in upgrade_k8s_help
     assert "guided wizard:" in upgrade_k8s_help
     assert "dry-run plan:" in upgrade_k8s_help
-    assert "safe upgrade:" in upgrade_k8s_help
-    assert "allow unavailable:" in upgrade_k8s_help
+    assert "default zero-surge:" in upgrade_k8s_help
+    assert "capacity-preserving safe-surge:" in upgrade_k8s_help
     assert "custom drain timeout:" in upgrade_k8s_help
     assert "last-resort force-delete:" in upgrade_k8s_help
-    assert "safe -> none, allow-unavailable -> 30m, force-delete -> 10m" in upgrade_k8s_help
+    assert "zero-surge -> 30m, safe-surge -> 30m, force-delete -> 10m" in upgrade_k8s_help
     assert "force-delete never deletes pvc/pv objects" in upgrade_k8s_help
     assert "final mk8s readiness check" in upgrade_k8s_help
     assert (f"nebius-cxcli upgrade k8s-version {upgrade_example_config}") in upgrade_k8s_help
@@ -16404,12 +17842,12 @@ def test_help_text_aligns_render_and_apply_surfaces() -> None:
     ) in upgrade_k8s_help
     assert (
         f"nebius-cxcli upgrade k8s-version {upgrade_example_config} "
-        "infra:mk8s@mk8s --to-version 1.33 --disruption-policy allow-unavailable "
+        "infra:mk8s@mk8s --to-version 1.33 --strategy zero-surge "
         "--drain-timeout 45m"
     ) in upgrade_k8s_help
     assert (
         f"nebius-cxcli upgrade k8s-version {upgrade_example_config} "
-        "infra:mk8s@mk8s --to-version 1.33 --disruption-policy force-delete"
+        "infra:mk8s@mk8s --to-version 1.33 --strategy force-delete"
     ) in upgrade_k8s_help
     assert (
         "upgrade mk8s kubernetes version, os image, and gpu stack together in "
@@ -16424,8 +17862,10 @@ def test_help_text_aligns_render_and_apply_surfaces() -> None:
     assert "--yes" not in upgrade_node_template_help
     assert "--interactive" not in upgrade_node_template_help
     assert "--no-interactive" not in upgrade_node_template_help
-    assert "--disruption-policy" in upgrade_node_template_help
+    assert "--strategy" in upgrade_node_template_help
     assert "--drain-timeout" in upgrade_node_template_help
+    assert "--disruption-policy" not in upgrade_node_template_help
+    assert "allow-unavailable" not in upgrade_node_template_help
     assert "--auto-auth-bootstrap" in upgrade_node_template_help
     assert "--skip-validations" in upgrade_node_template_help
     assert "--skip-validation" in upgrade_node_template_help
@@ -16446,8 +17886,10 @@ def test_help_text_aligns_render_and_apply_surfaces() -> None:
     assert "--node-group" in upgrade_os_help
     assert "--dry-run" in upgrade_os_help
     assert "--yes" not in upgrade_os_help
-    assert "--disruption-policy" in upgrade_os_help
+    assert "--strategy" in upgrade_os_help
     assert "--drain-timeout" in upgrade_os_help
+    assert "--disruption-policy" not in upgrade_os_help
+    assert "allow-unavailable" not in upgrade_os_help
     assert "--to-os" in upgrade_os_help
     assert "--interactive" in upgrade_os_help
     assert "--no-interactive" in upgrade_os_help
@@ -16477,7 +17919,7 @@ def test_help_text_aligns_render_and_apply_surfaces() -> None:
         assert "--node-group" in node_layer_help
         assert "--dry-run" in node_layer_help
         assert "--yes" not in node_layer_help
-        assert "--disruption-policy" in node_layer_help
+        assert "--strategy" in node_layer_help
         assert "--drain-timeout" in node_layer_help
         assert "--interactive" in node_layer_help
         assert "--no-interactive" in node_layer_help
@@ -16511,7 +17953,7 @@ def test_help_text_aligns_render_and_apply_surfaces() -> None:
     assert "--interactive" in upgrade_helm_help
     assert "--no-interactive" in upgrade_helm_help
     assert "--yes" not in upgrade_helm_help
-    assert "--disruption-policy" not in upgrade_helm_help
+    assert "--strategy" not in upgrade_helm_help
     assert (
         "example: nebius-cxcli upgrade helm-chart <config.yaml> "
         "apps:soperator@mk8s --to-version <chart-version> --dry-run"
@@ -16557,7 +17999,7 @@ def test_help_text_maps_commands_to_target_types() -> None:
     ) in output
     assert (
         "validate, validate-dashboards, quota-check, quota-request, render, "
-        "deploy, upgrade, and bootstrap-ci use config.yaml"
+        "deploy, soperator, upgrade, and bootstrap-ci use config.yaml"
     ) in output
     assert (
         "destroy uses config.yaml to tear down all rendered project resources from sibling generated/"
@@ -16627,6 +18069,13 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     destroy_result = runner.invoke(cli.app, ["destroy", "--help"])
     tf_destroy_result = runner.invoke(cli.app, ["terraform", "destroy", "--help"])
     flux_destroy_result = runner.invoke(cli.app, ["flux", "destroy", "--help"])
+    managed_soperator_result = runner.invoke(cli.app, ["soperator", "--help"])
+    managed_soperator_upgrade_result = runner.invoke(
+        cli.app,
+        ["soperator", "upgrade", "--help"],
+        env={"COLUMNS": "240"},
+        terminal_width=240,
+    )
     soperator_result = runner.invoke(cli.app, ["ext-soperator", "--help"])
     soperator_onboard_result = runner.invoke(
         cli.app,
@@ -16660,6 +18109,10 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert destroy_result.exit_code == 0, destroy_result.output
     assert tf_destroy_result.exit_code == 0, tf_destroy_result.output
     assert flux_destroy_result.exit_code == 0, flux_destroy_result.output
+    assert managed_soperator_result.exit_code == 0, managed_soperator_result.output
+    assert managed_soperator_upgrade_result.exit_code == 0, (
+        managed_soperator_upgrade_result.output
+    )
     assert soperator_result.exit_code == 0, soperator_result.output
     assert soperator_onboard_result.exit_code == 0, soperator_onboard_result.output
     assert soperator_migrate_result.exit_code == 0, soperator_migrate_result.output
@@ -16683,6 +18136,8 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     destroy_help = _plain_output(destroy_result.output)
     tf_destroy_help = _plain_output(tf_destroy_result.output)
     flux_destroy_help = _plain_output(flux_destroy_result.output)
+    managed_soperator_help = _plain_output(managed_soperator_result.output)
+    managed_soperator_upgrade_help = _plain_output(managed_soperator_upgrade_result.output)
     soperator_help = _plain_output(soperator_result.output)
     soperator_onboard_help = _plain_output(soperator_onboard_result.output)
     soperator_migrate_help = _plain_output(soperator_migrate_result.output)
@@ -16692,6 +18147,10 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     normalized_component_add_help = " ".join(component_add_help.split())
     normalized_component_remove_help = " ".join(component_remove_help.split())
     normalized_soperator_help = " ".join(soperator_help.split())
+    normalized_managed_soperator_help = " ".join(managed_soperator_help.split())
+    normalized_managed_soperator_upgrade_help = " ".join(
+        managed_soperator_upgrade_help.split()
+    )
     normalized_soperator_onboard_help = " ".join(soperator_onboard_help.split())
     normalized_soperator_migrate_help = " ".join(soperator_migrate_help.split())
     normalized_wireguard_help = " ".join(wireguard_help.split())
@@ -16835,6 +18294,22 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "use `ext-soperator onboard` for existing Nebius MK8s targets" in normalized_create_help
     assert "onboard-existing-cluster role-mapping install" not in normalized_create_help
     assert "complete production MK8s+SFS+Soperator cluster" in normalized_create_help
+    assert "soperator [OPTIONS] COMMAND [ARGS]" in managed_soperator_help
+    assert "Manage cxcli-managed Soperator deployments" in (
+        normalized_managed_soperator_help
+    )
+    assert "Soperator-aware chart upgrades with Slurm preflight and postflight validation" in (
+        normalized_managed_soperator_help
+    )
+    assert "CXCLI managed workflow" in normalized_managed_soperator_help
+    assert "soperator upgrade <config.yaml>" in normalized_managed_soperator_help
+    assert "External/adopted clusters" in normalized_managed_soperator_upgrade_help
+    assert "upgrade [OPTIONS] CONFIG_YAML" in managed_soperator_upgrade_help
+    assert "--target" in normalized_managed_soperator_upgrade_help
+    assert "--to-version" in normalized_managed_soperator_upgrade_help
+    assert "--dry-run" in normalized_managed_soperator_upgrade_help
+    assert "--interactive --no-interactive" in normalized_managed_soperator_upgrade_help
+    assert "Target Soperator chart/app version" in normalized_managed_soperator_upgrade_help
     assert "ext-soperator [OPTIONS] COMMAND [ARGS]" in soperator_help
     assert "Manage existing external Nebius MK8s clusters for Soperator" in (
         normalized_soperator_help
@@ -16857,7 +18332,7 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "If migration-owned work is required, do not deploy first" in normalized_soperator_help
     assert "ext-soperator migrate --dry-run" in normalized_soperator_help
     assert "ext-soperator migrate --execute --approve" in normalized_soperator_help
-    assert "Managed chart-only Soperator upgrades use upgrade helm-chart" in (
+    assert "CXCLI managed chart-only Soperator upgrades use soperator upgrade" in (
         normalized_soperator_help
     )
     assert "Terraform-managed MK8s node-template upgrades use upgrade node-template" in (
@@ -16922,6 +18397,12 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "--strategy-max-surge-count" in normalized_soperator_onboard_help
     assert "--strategy-max-unavailable-count" in normalized_soperator_onboard_help
     assert "--strategy-drain-timeout" in normalized_soperator_onboard_help
+    assert "Default: 0 for zero-surge / 1 for safe-surge" in (
+        normalized_soperator_onboard_help
+    )
+    assert "Default: 1 for zero-surge / 0 for safe-surge" in (
+        normalized_soperator_onboard_help
+    )
     assert "--source-version 1.23.3" not in normalized_soperator_onboard_help
     assert "nebius-cxcli validate <config.yaml>" in normalized_soperator_onboard_help
     assert "nebius-cxcli render <config.yaml>" in normalized_soperator_onboard_help
@@ -17015,7 +18496,8 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "max_surge=0, max_unavailable=1, drain_timeout=30m" in (
         normalized_soperator_migrate_help
     )
-    assert "configured safe-surge rollout by default" in normalized_soperator_migrate_help
+    assert "updates worker groups with zero-surge by default" in normalized_soperator_migrate_help
+    assert "configured safe-surge rollout" in normalized_soperator_migrate_help
     assert "max_surge=1, max_unavailable=0, drain_timeout=30m" in (
         normalized_soperator_migrate_help
     )
@@ -17207,11 +18689,13 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "using --setup." in normalized_email_help
 
 
-def test_legacy_soperator_command_group_is_not_exposed() -> None:
+def test_managed_soperator_command_group_exposes_upgrade() -> None:
     result = runner.invoke(cli.app, ["soperator", "--help"])
 
-    assert result.exit_code != 0
-    assert "No such command" in _plain_output(result.output)
+    assert result.exit_code == 0, result.output
+    output = _plain_output(result.output)
+    assert "Manage cxcli-managed Soperator deployments" in output
+    assert "upgrade" in output
 
 
 def test_public_command_help_omits_legacy_mk8s_shortcut_fields() -> None:
@@ -17807,6 +19291,35 @@ def test_runtime_auth_cache_metadata_write_keeps_previous_file_on_replace_failur
 
     assert json.loads(metadata_file.read_text(encoding="utf-8")) == {"old": True}
     assert not list(tmp_path.glob(f".{cli._RUNTIME_AUTH_CACHE_FILE}.*.tmp"))
+
+
+def test_runtime_auth_cache_write_creates_private_files_with_restricted_modes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(cli._RUNTIME_AUTH_CACHE_ENV, str(tmp_path))
+
+    cli._runtime_auth_cache_write(
+        project_id="project-123",
+        client_name="client-a",
+        service_account_id="serviceaccount-123",
+        auth_public_key_id="publickey-123",
+        private_key_pem="PRIVATE-KEY",
+        s3_access_key_id="access-key",
+        s3_secret_access_key="secret-key",
+    )
+
+    cache_dir = cli._runtime_auth_cache_dir(project_id="project-123", client_name="client-a")
+    private_key_file = cache_dir / "auth-private.pem"
+    metadata_file = cache_dir / cli._RUNTIME_AUTH_CACHE_FILE
+
+    assert oct(cache_dir.stat().st_mode & 0o777) == "0o700"
+    assert private_key_file.read_text(encoding="utf-8") == "PRIVATE-KEY\n"
+    assert oct(private_key_file.stat().st_mode & 0o777) == "0o600"
+    assert oct(metadata_file.stat().st_mode & 0o777) == "0o600"
+    assert json.loads(metadata_file.read_text(encoding="utf-8"))["s3_secret_access_key"] == (
+        "secret-key"
+    )
 
 
 def test_mysterybox_eso_credentials_json_uses_subject_credentials_format() -> None:
@@ -18484,14 +19997,21 @@ def test_run_mysterybox_eso_connectivity_validation_writes_deploy_report_detail(
     assert [item["name"] for item in report["checks"]] == [
         "Nebius API TLS",
         "ClusterSecretStore Ready",
-        "ExternalSecret Ready (app/app-config)",
+        "ExternalSecret Ready",
         "ESO controller log scan",
     ]
-    assert report["checks"][0]["details"]["summary_lines"] == [
-        '*  subjectAltName: host "api.nebius.cloud" matched cert\'s "api.nebius.cloud"',
-        "*  issuer: C=US; O=Let's Encrypt; CN=R13",
-        "*  SSL certificate verify ok.",
-    ]
+    assert all(set(item) == {"name", "passed"} for item in report["checks"])
+    assert "synced_resource_count" not in report
+    assert "credentials_secret" not in report
+    assert "external_secrets" not in report
+    report_text = report_path.read_text(encoding="utf-8")
+    assert "credentials.json" not in report_text
+    assert "nebius-mysterybox-shared-creds" not in report_text
+    assert "nebius-mysterybox-shared" not in report_text
+    assert "external-secrets" not in report_text
+    assert "app-config" not in report_text
+    assert "api.nebius.cloud" not in report_text
+    assert "provider nebiusmysterybox sync ok" not in report_text
     assert calls[0][-1] == "api.nebius.cloud:443"
 
 
