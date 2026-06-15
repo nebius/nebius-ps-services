@@ -16,7 +16,8 @@ All notable changes to this project are tracked here. This changelog follows
   coerced before arithmetic, and Soperator child-chart value writes preserve
   existing `-`/`_` key variants and explicit MysteryBox sync disables. The auth
   docs now call out the intentional plaintext local runtime-auth cache and
-  rotation boundary.
+  rotation boundary. MysteryBox ESO connectivity reports no longer persist raw
+  credential Secret spec objects.
 - Hardened cxcli safety paths: managed Terraform/Flux downloads now verify
   published SHA256 manifests, use bounded reads, atomically install cached
   binaries, and reject corrupted cache entries; local SMTP settings and
