@@ -52,9 +52,9 @@ show_usage() {
   printf '\n'
   printf '%b\n' "${S_BOLD}Options:${S_RESET}"
   printf '%b\n' "  ${S_YELLOW}--lock-file PATH${S_RESET}    Lock file to read (default: chart upstream-soperator.lock.yaml)"
-  printf '%b\n' "  ${S_YELLOW}--check-latest${S_RESET}      Compare the lock release with GitHub latest without writing"
+  printf '%b\n' "  ${S_YELLOW}--check-latest${S_RESET}      Compare the lock release with the highest GitHub SemVer release without writing"
   printf '%b\n' "  ${S_YELLOW}--sync${S_RESET}              Apply full upstream sync and validate it without staging changes"
-  printf '%b\n' "  ${S_YELLOW}--latest${S_RESET}            With --sync, use GitHub latest release and update the lock"
+  printf '%b\n' "  ${S_YELLOW}--latest${S_RESET}            With --sync, use the highest GitHub SemVer release and update the lock"
   printf '%b\n' "  ${S_YELLOW}--scope SCOPE${S_RESET}       Limit read-only checks to scripts, crds, images, or all (default: all)"
   printf '%b\n' "  ${S_YELLOW}--report${S_RESET}            Print detailed per-item status; with --sync, print a readable changed-file summary"
   printf '%b\n' "  ${S_YELLOW}-h, --help${S_RESET}          Show help"
@@ -63,13 +63,13 @@ show_usage() {
   printf '%b\n' "  ${S_DIM}Verify all upstream tracking without writing:${S_RESET}"
   printf '%b\n' "  ${S_CYAN}helm-charts/soperator/scripts/verify-upstream-soperator-sync.sh --scope all --report${S_RESET}"
   printf '\n'
-  printf '%b\n' "  ${S_DIM}Check whether the lock matches GitHub latest:${S_RESET}"
+  printf '%b\n' "  ${S_DIM}Check whether the lock matches the highest GitHub SemVer release:${S_RESET}"
   printf '%b\n' "  ${S_CYAN}helm-charts/soperator/scripts/verify-upstream-soperator-sync.sh --check-latest${S_RESET}"
   printf '\n'
   printf '%b\n' "  ${S_DIM}Refresh the release already named in the lock and leave changes unstaged:${S_RESET}"
   printf '%b\n' "  ${S_CYAN}helm-charts/soperator/scripts/verify-upstream-soperator-sync.sh --sync --report${S_RESET}"
   printf '\n'
-  printf '%b\n' "  ${S_DIM}Sync GitHub latest, create a branch when needed, validate, and leave changes unstaged:${S_RESET}"
+  printf '%b\n' "  ${S_DIM}Sync the highest GitHub SemVer release, create a branch when needed, validate, and leave changes unstaged:${S_RESET}"
   printf '%b\n' "  ${S_CYAN}helm-charts/soperator/scripts/verify-upstream-soperator-sync.sh --latest --sync --report${S_RESET}"
   printf '\n'
   printf '%b\n' "  ${S_DIM}Read-only scoped checks:${S_RESET}"
@@ -422,14 +422,67 @@ curl_github_api() {
   curl "${curl_args[@]}" "$@" "${url}"
 }
 
-latest_release_tag() {
+release_tags_page() {
   local repo="$1"
+  local page="$2"
   local api_repo
   api_repo="${repo#https://github.com/}"
   api_repo="${api_repo%.git}"
-  curl_github_api "https://api.github.com/repos/${api_repo}/releases/latest" \
-    | sed -n 's/^[[:space:]]*"tag_name":[[:space:]]*"\([^"]*\)".*/\1/p' \
-    | head -n 1
+  curl_github_api "https://api.github.com/repos/${api_repo}/releases?per_page=100&page=${page}" \
+    | ruby -rjson -e '
+payload = JSON.parse(STDIN.read)
+unless payload.is_a?(Array)
+  warn "GitHub releases response is not an array"
+  exit 1
+end
+
+if payload.empty?
+  puts "__nebius_cxcli_empty_release_page__"
+  exit
+end
+
+payload.each do |release|
+  next if release["draft"] || release["prerelease"]
+  tag = release["tag_name"].to_s.strip
+  puts tag unless tag.empty?
+end
+'
+}
+
+highest_release_tag() {
+  local repo="$1"
+  local page=1
+  local best=""
+  local tags tag comparison page_empty
+
+  while [[ "${page}" -le 20 ]]; do
+    if ! tags="$(release_tags_page "${repo}" "${page}")"; then
+      return 1
+    fi
+    page_empty=0
+
+    while IFS= read -r tag; do
+      [[ -n "${tag}" ]] || continue
+      if [[ "${tag}" == "__nebius_cxcli_empty_release_page__" ]]; then
+        page_empty=1
+        continue
+      fi
+      if [[ -z "${best}" ]]; then
+        if compare_releases "${tag}" "${tag}" >/dev/null 2>&1; then
+          best="${tag}"
+        fi
+        continue
+      fi
+      if comparison="$(compare_releases "${tag}" "${best}" 2>/dev/null)" && [[ "${comparison}" -gt 0 ]]; then
+        best="${tag}"
+      fi
+    done <<<"${tags}"
+
+    [[ "${page_empty}" -eq 0 ]] || break
+    page=$((page + 1))
+  done
+
+  printf '%s\n' "${best}"
 }
 
 fetch_release() {
@@ -1110,46 +1163,46 @@ main() {
   fi
 
   if [[ "${check_latest}" -eq 1 ]]; then
-    local github_latest
-    github_latest="$(latest_release_tag "${repo}")"
-    if [[ -z "${github_latest}" ]]; then
-      log_error "Could not determine latest GitHub release for ${repo}."
+    local github_highest
+    github_highest="$(highest_release_tag "${repo}")"
+    if [[ -z "${github_highest}" ]]; then
+      log_error "Could not determine highest GitHub SemVer release for ${repo}."
       exit 1
     fi
     local release_comparison
-    if ! release_comparison="$(compare_releases "${release}" "${github_latest}")"; then
-      log_error "Could not compare locked release '${release}' with GitHub latest '${github_latest}'."
+    if ! release_comparison="$(compare_releases "${release}" "${github_highest}")"; then
+      log_error "Could not compare locked release '${release}' with highest GitHub SemVer release '${github_highest}'."
       exit 1
     fi
     if [[ "${release_comparison}" -lt 0 ]]; then
-      log_error "Latest Soperator release is '${github_latest}', but lock is pinned to '${release}'. Run --latest --sync --report from a clean working tree."
+      log_error "Highest Soperator release is '${github_highest}', but lock is pinned to '${release}'. Run --latest --sync --report from a clean working tree."
       exit 1
     elif [[ "${release_comparison}" -gt 0 ]]; then
-      log_error "Locked Soperator release '${release}' is newer than GitHub latest '${github_latest}'. Check the lock for a typo or wait for GitHub latest metadata before syncing."
+      log_error "Locked Soperator release '${release}' is newer than highest GitHub SemVer release '${github_highest}'. Check the lock for a typo or wait for GitHub release metadata before syncing."
       exit 1
     fi
-    log_success "Pinned Soperator release '${release}' is the latest GitHub release."
+    log_success "Pinned Soperator release '${release}' is the highest GitHub SemVer release."
     exit 0
   fi
 
   if [[ "${sync_latest}" -eq 1 ]]; then
-    local github_latest
-    github_latest="$(latest_release_tag "${repo}")"
-    if [[ -z "${github_latest}" ]]; then
-      log_error "Could not determine latest GitHub release for ${repo}."
+    local github_highest
+    github_highest="$(highest_release_tag "${repo}")"
+    if [[ -z "${github_highest}" ]]; then
+      log_error "Could not determine highest GitHub SemVer release for ${repo}."
       exit 1
     fi
     local release_comparison
-    if ! release_comparison="$(compare_releases "${release}" "${github_latest}")"; then
-      log_error "Could not compare locked release '${release}' with GitHub latest '${github_latest}'."
+    if ! release_comparison="$(compare_releases "${release}" "${github_highest}")"; then
+      log_error "Could not compare locked release '${release}' with highest GitHub SemVer release '${github_highest}'."
       exit 1
     fi
     if [[ "${release_comparison}" -gt 0 ]]; then
-      log_error "Locked Soperator release '${release}' is newer than GitHub latest '${github_latest}'. Refusing --latest sync before mutating files; check the lock for a typo or wait for GitHub latest metadata."
+      log_error "Locked Soperator release '${release}' is newer than highest GitHub SemVer release '${github_highest}'. Refusing --latest sync before mutating files; check the lock for a typo or wait for GitHub release metadata."
       exit 1
     fi
-    release="${github_latest}"
-    tag="${github_latest}"
+    release="${github_highest}"
+    tag="${github_highest}"
   elif [[ "${sync}" -eq 1 ]]; then
     tag="${release}"
   fi

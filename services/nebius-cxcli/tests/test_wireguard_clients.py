@@ -179,6 +179,27 @@ def test_generate_wireguard_client_config_writes_secret_file(
     assert result.remaining_client_slots == 252
 
 
+def test_wireguard_secret_write_keeps_previous_file_on_replace_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    output_path = tmp_path / "wg-client.conf"
+    output_path.write_text("old\n", encoding="utf-8")
+    output_path.chmod(0o600)
+
+    def _fail_replace(_src: object, _dst: object) -> None:
+        raise RuntimeError("replace failed")
+
+    monkeypatch.setattr(wireguard_module.os, "replace", _fail_replace)
+
+    with pytest.raises(RuntimeError, match="replace failed"):
+        wireguard_module._atomic_write_secret_text(output_path, "new\n")
+
+    assert output_path.read_text(encoding="utf-8") == "old\n"
+    assert oct(output_path.stat().st_mode & 0o777) == "0o600"
+    assert not list(tmp_path.glob(".wg-client.conf.*.tmp"))
+
+
 def test_generate_wireguard_client_config_rejects_wg_quick_invalid_name(tmp_path: Path) -> None:
     component = select_wireguard_component(
         {
@@ -327,8 +348,10 @@ def test_wireguard_command_uses_deployed_output_and_default_ignored_dir(
     assert "Client config ignore rule" not in result.output
     connect_command = f"wg-quick up {shlex.quote(str(request.output_dir / 'client-1.conf'))}"
     disconnect_command = f"wg-quick down {shlex.quote(str(request.output_dir / 'client-1.conf'))}"
-    assert f"Run this command to connect: {connect_command}" in result.output
-    assert f"Run this command to disconnect: {disconnect_command}" in result.output
+    assert "Run this command to connect:" in result.output
+    assert connect_command in result.output
+    assert "Run this command to disconnect:" in result.output
+    assert disconnect_command in result.output
 
 
 def test_wireguard_command_prints_macos_install_hint_when_wg_quick_is_missing(
@@ -381,7 +404,8 @@ def test_wireguard_command_prints_macos_install_hint_when_wg_quick_is_missing(
 
     assert result.exit_code == 0, result.output
     assert "WireGuard client tool not found locally: wg-quick" in result.output
-    assert "Install it with: brew install wireguard-tools" in result.output
+    assert "Install it with:" in result.output
+    assert "brew install wireguard-tools" in result.output
 
 
 def test_wireguard_client_install_command_is_os_specific(tmp_path: Path) -> None:

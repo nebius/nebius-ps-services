@@ -27292,33 +27292,39 @@ def _runtime_auth_cache_root() -> Path:
     return (Path.home() / ".config" / "nebius-cxcli").resolve()
 
 
+def _runtime_auth_cache_write_text(path: Path, content: str, *, mode: int = 0o600) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd = -1
+    tmp_path: Path | None = None
+    try:
+        fd, raw_tmp_path = tempfile.mkstemp(
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            dir=path.parent,
+        )
+        tmp_path = Path(raw_tmp_path)
+        os.fchmod(fd, mode)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            fd = -1
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp_path, path)
+        path.chmod(mode)
+    finally:
+        if fd >= 0:
+            os.close(fd)
+        if tmp_path is not None:
+            with suppress(OSError):
+                tmp_path.unlink(missing_ok=True)
+
+
 def _runtime_auth_cache_write_metadata(
     metadata_file: Path,
     payload: Mapping[str, Any],
 ) -> None:
-    metadata_file.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path: Path | None = None
-    try:
-        with tempfile.NamedTemporaryFile(
-            "w",
-            encoding="utf-8",
-            dir=metadata_file.parent,
-            prefix=f".{metadata_file.name}.",
-            suffix=".tmp",
-            delete=False,
-        ) as tmp_file:
-            tmp_path = Path(tmp_file.name)
-            json.dump(dict(payload), tmp_file, indent=2, sort_keys=True)
-            tmp_file.write("\n")
-            tmp_file.flush()
-            os.fsync(tmp_file.fileno())
-        tmp_path.chmod(0o600)
-        os.replace(tmp_path, metadata_file)
-        metadata_file.chmod(0o600)
-    finally:
-        if tmp_path is not None and tmp_path.exists():
-            with suppress(OSError):
-                tmp_path.unlink()
+    content = json.dumps(dict(payload), indent=2, sort_keys=True) + "\n"
+    _runtime_auth_cache_write_text(metadata_file, content)
 
 
 def _runtime_auth_cache_write(
@@ -27336,8 +27342,7 @@ def _runtime_auth_cache_write(
     cache_dir.chmod(0o700)
 
     private_key_file = cache_dir / "auth-private.pem"
-    private_key_file.write_text(private_key_pem.rstrip() + "\n", encoding="utf-8")
-    private_key_file.chmod(0o600)
+    _runtime_auth_cache_write_text(private_key_file, private_key_pem.rstrip() + "\n")
 
     payload = {
         "client_name": client_name,

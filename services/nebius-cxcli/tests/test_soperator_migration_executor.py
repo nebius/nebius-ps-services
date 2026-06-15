@@ -52,6 +52,36 @@ def _snapshot(version: str = "3.0.5") -> dict[str, Any]:
     }
 
 
+@pytest.mark.parametrize(
+    "stderr",
+    [
+        "not found",
+        "resource not found",
+        "Request error NOT_FOUND: node group missing",
+        "rpc error: code = NotFound desc = node group missing",
+        'Error from server (NotFound): helmreleases.helm.toolkit.fluxcd.io "missing" not found',
+    ],
+)
+def test_command_not_found_recognizes_explicit_not_found_status(stderr: str) -> None:
+    result = SoperatorMigrationCommandResult(("nebius", "mk8s", "node-group", "delete"), 1, "", stderr)
+
+    assert migration._command_not_found(result) is True
+
+
+@pytest.mark.parametrize(
+    "stderr",
+    [
+        "transient dependency not found while deleting node group",
+        "permission denied because subject credentials secret was not found",
+        "deadline exceeded while waiting for resource not found cleanup",
+    ],
+)
+def test_command_not_found_does_not_mask_contextual_errors(stderr: str) -> None:
+    result = SoperatorMigrationCommandResult(("nebius", "mk8s", "node-group", "delete"), 1, "", stderr)
+
+    assert migration._command_not_found(result) is False
+
+
 def _source_worker_nodeset(name: str, *, gpu: bool) -> dict[str, Any]:
     slurmd_resources: dict[str, Any] = {
         "cpu": "127000m" if gpu else "15000m",

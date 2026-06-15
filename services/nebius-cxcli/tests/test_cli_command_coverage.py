@@ -2188,7 +2188,6 @@ def test_upgrade_cpu_preset_config_only_guided_dry_run_prompts_shared_options(
         f"nebius-cxcli upgrade cpu-preset {paths.config_path} infra:mk8s@mk8s "
         "--to-preset cpu-8-32 --strategy zero-surge --drain-timeout 45m --dry-run"
     ) in rendered
-    assert "    --dry-run" in rendered
     assert paths.config_path.read_text(encoding="utf-8") == original_config
     assert wait_calls == [("sdk-close", "")]
     assert provider_calls == [
@@ -2703,11 +2702,15 @@ def test_upgrade_cpu_preset_apply_updates_source_and_waits_for_node_layer_rollou
         ("render", "cpu-8-32"),
         (
             "validate",
-            "Validate rendered stage 1/1: node-group mk8s-live-system CPU preset upgrade to cpu-8-32",
+            "Validate rendered stage 1/2: node-group mk8s-live-system CPU preset upgrade to cpu-8-32",
         ),
         ("plan", "cpu-8-32"),
         ("apply", "cpu-8-32"),
         ("wait-layer", "cluster-1:ng-system:preset:cpu-8-32:3600"),
+        ("render", "cpu-8-32"),
+        ("validate", "Validate rendered stage 2/2: node-group strategy restore"),
+        ("plan", "cpu-8-32"),
+        ("apply", "cpu-8-32"),
         "sdk-close",
     ]
 
@@ -12196,7 +12199,7 @@ def test_deploy_generated_artifacts_writes_summary_even_when_validation_fails(
         "    [red]FAIL[/red] GPU stack readiness: GPU Operator ready on 0 GPU nodes.",
         "    NOT RUN GPU Visibility test: No deploy validation results recorded yet.",
         "[bright_magenta]Copy/paste commands:[/bright_magenta]",
-        "  No immediate access or follow-up commands were derived.",
+        "No immediate access or follow-up commands were derived.",
         "[bright_magenta]Important paths:[/bright_magenta]",
         f"  Generated bundle: {fake_paths.generated_dir}",
         f"  Deploy report: {fake_paths.reports_dir / 'deploy-report.md'}",
@@ -19288,6 +19291,35 @@ def test_runtime_auth_cache_metadata_write_keeps_previous_file_on_replace_failur
 
     assert json.loads(metadata_file.read_text(encoding="utf-8")) == {"old": True}
     assert not list(tmp_path.glob(f".{cli._RUNTIME_AUTH_CACHE_FILE}.*.tmp"))
+
+
+def test_runtime_auth_cache_write_creates_private_files_with_restricted_modes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(cli._RUNTIME_AUTH_CACHE_ENV, str(tmp_path))
+
+    cli._runtime_auth_cache_write(
+        project_id="project-123",
+        client_name="client-a",
+        service_account_id="serviceaccount-123",
+        auth_public_key_id="publickey-123",
+        private_key_pem="PRIVATE-KEY",
+        s3_access_key_id="access-key",
+        s3_secret_access_key="secret-key",
+    )
+
+    cache_dir = cli._runtime_auth_cache_dir(project_id="project-123", client_name="client-a")
+    private_key_file = cache_dir / "auth-private.pem"
+    metadata_file = cache_dir / cli._RUNTIME_AUTH_CACHE_FILE
+
+    assert oct(cache_dir.stat().st_mode & 0o777) == "0o700"
+    assert private_key_file.read_text(encoding="utf-8") == "PRIVATE-KEY\n"
+    assert oct(private_key_file.stat().st_mode & 0o777) == "0o600"
+    assert oct(metadata_file.stat().st_mode & 0o777) == "0o600"
+    assert json.loads(metadata_file.read_text(encoding="utf-8"))["s3_secret_access_key"] == (
+        "secret-key"
+    )
 
 
 def test_mysterybox_eso_credentials_json_uses_subject_credentials_format() -> None:

@@ -323,3 +323,74 @@ def test_notifier_mysterybox_source_preserves_explicitly_disabled_target_sync() 
     mysterybox = payload["deploy"]["targets"][0]["secrets"]["mysterybox"]
     assert mysterybox["enabled"] is False
     assert mysterybox["sync_namespaces"] == ["default"]
+
+
+def test_notifier_mysterybox_source_preserves_scalar_disabled_target_sync() -> None:
+    payload = {
+        "deploy": {
+            "targets": [
+                {
+                    "instance_id": "cluster1",
+                    "secrets": {"mysterybox": False},
+                }
+            ]
+        },
+        "apps": {
+            "charts": [
+                {
+                    "id": "soperator",
+                    "instance_id": "cluster1",
+                    "target_ref": "cluster1",
+                    "enabled": True,
+                    "namespace": "soperator",
+                    "values": {
+                        "soperator-notifier": {
+                            "enabled": True,
+                            "slack": {
+                                "mode": "existing-webhook",
+                                "webhookSource": "mysterybox",
+                                "existingSecret": "soperator-notifier-slack-webhook",
+                                "existingSecretKey": "url",
+                                "mysterybox": {
+                                    "secretId": "mbsec-e00slack",
+                                    "property": "url",
+                                },
+                            },
+                        },
+                    },
+                },
+            ]
+        },
+    }
+
+    assert materialize_soperator_child_chart_values(payload) is False
+
+    assert payload["deploy"]["targets"][0]["secrets"]["mysterybox"] is False
+
+
+def test_activechecks_writes_preserve_existing_underscore_value_keys() -> None:
+    payload = {
+        "apps": {
+            "charts": [
+                {
+                    "id": "soperator",
+                    "instance_id": "cluster1",
+                    "enabled": True,
+                    "values": {
+                        "clusterName": "cluster-a",
+                        "soperator_activechecks": {"enabled": True},
+                        "soperator_checks": {"enabled": False},
+                        "slurmNodes": {"login": {"size": 2}},
+                    },
+                }
+            ]
+        }
+    }
+
+    assert materialize_soperator_child_chart_values(payload) is True
+
+    values = payload["apps"]["charts"][0]["values"]
+    assert "soperator-activechecks" not in values
+    assert "soperator-checks" not in values
+    assert values["soperator_activechecks"]["slurmClusterRefName"] == "cluster-a"
+    assert values["soperator_checks"]["enabled"] is True

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
@@ -144,6 +145,26 @@ def test_search_repo_skips_oci_sources(monkeypatch: pytest.MonkeyPatch) -> None:
     result = client.search_repo(chart_name="gateway-helm", chart_repo="oci://docker.io/envoyproxy")
     assert result == []
     assert invoked["value"] is False
+
+
+def test_search_repo_uses_stable_repo_alias(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("nebius_cxcli.helm_client.shutil.which", lambda _cmd: "/usr/bin/helm")
+    monkeypatch.setattr("nebius_cxcli.helm_client._repo_has_index", lambda _repo: True)
+    commands: list[list[str]] = []
+
+    def _fake_run(args: list[str], **_kwargs: object) -> SimpleNamespace:
+        commands.append(args)
+        return SimpleNamespace(returncode=0, stdout="[]", stderr="")
+
+    monkeypatch.setattr("nebius_cxcli.helm_client.subprocess.run", _fake_run)
+
+    repo = "https://charts.example.test/team"
+    result = HelmClient().search_repo(chart_name="soperator", chart_repo=f"{repo}/")
+
+    expected_alias = f"cxcli-{hashlib.sha1(repo.encode('utf-8')).hexdigest()[:12]}"
+    assert result == []
+    assert commands[0] == ["helm", "repo", "add", expected_alias, repo]
+    assert commands[1][:4] == ["helm", "search", "repo", f"{expected_alias}/soperator"]
 
 
 def test_run_helm_show_uses_configured_timeout(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -123,6 +123,12 @@ def _quota_record(
     )
 
 
+def test_available_quota_coerces_sdk_numeric_values() -> None:
+    assert quota_checks._available_quota("10", "2") == 8
+    assert quota_checks._available_quota(3.0, None) == 3
+    assert quota_checks._available_quota("not-a-number", 1) is None
+
+
 def test_aggregate_requirements_sums_shared_quota_usage() -> None:
     aggregated = _aggregate_requirements(
         [

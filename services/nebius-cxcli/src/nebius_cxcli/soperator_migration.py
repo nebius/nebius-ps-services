@@ -8497,8 +8497,22 @@ def _delete_node_group(
 
 
 def _command_not_found(result: SoperatorMigrationCommandResult) -> bool:
-    detail = f"{result.stderr}\n{result.stdout}".lower()
-    return "notfound" in detail or "not found" in detail or "resource not found" in detail
+    detail = " ".join(
+        part.strip()
+        for part in (result.stderr, result.stdout)
+        if part and part.strip()
+    )
+    normalized = re.sub(r"\s+", " ", detail).strip().lower()
+    if normalized in {"not found", "notfound", "resource not found"}:
+        return True
+    if "statuscode.not_found" in normalized:
+        return True
+    if "error from server (notfound)" in normalized:
+        return True
+    return bool(
+        re.search(r"\brequest error\s+not[_ -]?found\b", normalized)
+        or re.search(r"\brpc error:\s*code\s*=\s*not[_ -]?found\b", normalized)
+    )
 
 
 def _ensure_live_nodes_ready(snapshot: Mapping[str, Any]) -> None:

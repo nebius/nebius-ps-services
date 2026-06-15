@@ -2736,8 +2736,9 @@ and creates or updates a PR for human approval.
 `scripts/verify-upstream-soperator-sync.sh --check-latest`
 remains a read-only local or CI check and is not required before sync.
 Before a scheduled `--latest` sync writes files, the script compares the lock
-release with GitHub's latest release. If the lock is newer, the workflow fails
-with a clear typo/stale-metadata message instead of mutating chart files.
+release with the highest non-draft, non-prerelease SemVer release published in
+GitHub releases. If the lock is newer than every such release, the workflow
+fails with a clear typo/stale-metadata message instead of mutating chart files.
 
 ## Reference Sources
 

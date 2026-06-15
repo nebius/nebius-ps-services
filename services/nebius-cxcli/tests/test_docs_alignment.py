@@ -414,7 +414,7 @@ def test_readme_upgrade_section_is_visible_and_consolidated() -> None:
     assert "force-delete -> 10m" in upgrade
     assert "not cxcli's whole rollout" in upgrade
     assert "max(1h, 10m * target node count)" in upgrade
-    assert "wrapped repeat dry-run command" in upgrade_flat
+    assert "copy/paste-ready repeat dry-run command" in upgrade_flat
     assert "Kubernetes preflight inspection failures block non-dry runs" in upgrade
     assert "temporary node-group strategy" in upgrade
     assert "source/generated files through Terraform plan/apply" in upgrade
@@ -1482,7 +1482,7 @@ def test_design_supporting_commands_include_quota_request_and_flux_targets() -> 
     ) in supporting
     assert "listing Terraform-managed MK8s targets and generic VM components" in supporting
     assert "one node group at a time in CPU/system-before-GPU order" in supporting_flat
-    assert "wrapped repeat dry-run command" in supporting_flat
+    assert "copy/paste-ready command" in supporting_flat
     assert "plain optional flag-value prompt" in supporting_flat
     assert "blank omits the flag and updates every managed node group" in supporting_flat
     assert "updates only `inputs.source_image_family` on generic VM components" in supporting_flat

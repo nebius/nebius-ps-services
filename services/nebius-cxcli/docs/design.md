@@ -3287,6 +3287,7 @@ Modules that expose collection/object inputs, such as `mysterybox.secrets`, `ssh
 - `auth --create` creates runtime auth cache/profile only when missing.
 - `auth --recreate` always rotates runtime auth material and rewrites cache.
 - `auth --validate-profile` inspects cached runtime auth profile metadata/private key and verifies Nebius auth public key visibility.
+- The runtime auth cache is a local cleartext credential cache by design: it stores the Terraform private key and Object Storage access keys in a `0700` directory with `0600` files. Operators should keep `NEBIUS_CXCLI_RUNTIME_AUTH_DIR` on protected local storage, outside synced or backed-up folders, and rotate with `auth --recreate` if the cache location may be exposed.
 - Customer-side commands that run with `--auto-auth-bootstrap` also self-heal a stale cached
   runtime auth profile when the cached Nebius auth public key has been deleted or the cached
   private-key metadata is broken; healthy cached profiles are reused without rotation.
@@ -3402,7 +3403,7 @@ Modules that expose collection/object inputs, such as `mysterybox.secrets`, `ssh
   - Does not make the structured upgrade command the only supported mutation path. Operators can still make explicit desired-state edits in `config.yaml`, rerender, review the generated diff and Terraform plan, then reconcile with `deploy` or `terraform apply`. The selected generated-bundle command owns its normal guardrails: `deploy` runs the full generated-bundle preflight such as readiness/schema checks, VPC/resource-name preflight, live quota/capacity checks, Nebius-image GPU-stack compatibility, Terraform/provider validation, and Flux validation; `terraform apply` is infra-only and still runs MK8s infra preflights plus Terraform/provider validation before apply.
   - Runs Terraform plan and apply in staged order: first the control-plane version while node groups are pinned to their live versions, then node groups one at a time in cxcli's CPU/system-before-GPU order. Each enabled source node group receives an explicit `inputs.node_groups.*.version` during the upgrade so the day-2 artifact is auditable even though the Terraform module still supports defaulting node-group version from `inputs.cluster.k8s_version`.
   - Prints that upgrade stages are per control-plane hop and per node group, not per node. Large node groups therefore increase provider rollout/watch time, not the number of cxcli render stages.
-  - `--dry-run` resolves the live cluster through the SDK, prints the live plan plus a wrapped repeat dry-run command, and exits without changing `config.yaml`, `generated/`, Terraform backend state, or live Nebius resources.
+  - `--dry-run` resolves the live cluster through the SDK, prints the live plan plus a copy/paste-ready repeat dry-run command, and exits without changing `config.yaml`, `generated/`, Terraform backend state, or live Nebius resources.
   - Non-dry runs use the SDK for live discovery, compatibility checks, generated handoff, progress/error watching, and final rollout verification. Terraform remains the reconciler that changes cluster and node-group version fields. Before success, a final MK8s readiness check re-reads the live control plane and selected node groups to verify the requested Kubernetes version has settled, and it requires provider node-group status rather than accepting matching spec fields alone.
   - Non-dry runs wait for node groups to finish provider rollout and can resume that wait after partial live progress. If live resources are already at the target version but source config is stale, cxcli still syncs the desired-state files through Terraform plan/apply. If a rerun only needs to wait for an already-requested rollout after a temporary strategy was staged, cxcli still performs a final rendered apply after the rollout settles so the configured node-group strategy is restored.
   - Kubernetes preflight inspection failures block non-dry runs for every upgrade strategy, including `force-delete`, so unknown cluster state cannot be treated as a known PDB or drain blocker.
@@ -3416,8 +3417,8 @@ Modules that expose collection/object inputs, such as `mysterybox.secrets`, `ssh
     `inputs.source_image_family`.
   - Plans and applies a Terraform-managed MK8s node-template OS change or a
     generic VM source image-family change.
-  - Dry-run output prints the repeat dry-run command as wrapped shell lines so
-    long config paths and flags remain readable and copy-pasteable.
+  - Dry-run output prints the repeat dry-run command as a copy/paste-ready
+    command with the selected config path, target, and flags.
   - Uses SDK live discovery for cluster and node groups, and checks the
     requested OS against the Nebius MK8s compatibility matrix for the current
     Kubernetes version, node platform, and GPU `drivers_preset`.

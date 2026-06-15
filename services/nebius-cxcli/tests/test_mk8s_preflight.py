@@ -15,6 +15,12 @@ from nebius_cxcli.mk8s_preflight import (
 )
 
 
+class _FakeNebiusNotFoundError(RuntimeError):
+    def __init__(self, message: str) -> None:
+        self.status = SimpleNamespace(code=SimpleNamespace(name="NOT_FOUND"))
+        super().__init__(message)
+
+
 def _fake_network(*, parent_id: str = "project-123") -> SimpleNamespace:
     return SimpleNamespace(metadata=SimpleNamespace(parent_id=parent_id))
 
@@ -674,7 +680,7 @@ def test_validate_mk8s_resource_name_preflight_rejects_existing_gpu_cluster(
 
         def get_by_name(self, request: object) -> _FakeRequest:
             _ = request
-            return _FakeRequest(RuntimeError("resource not found"))
+            return _FakeRequest(_FakeNebiusNotFoundError("resource not found"))
 
     class _FakeGpuClusterServiceClient:
         def __init__(self, sdk: object) -> None:
@@ -743,7 +749,7 @@ def test_validate_mk8s_resource_name_preflight_skips_state_managed_gpu_cluster(
 
         def get_by_name(self, request: object) -> _FakeRequest:
             _ = request
-            return _FakeRequest(RuntimeError("resource not found"))
+            return _FakeRequest(_FakeNebiusNotFoundError("resource not found"))
 
     class _FakeGpuClusterServiceClient:
         def __init__(self, sdk: object) -> None:
@@ -799,11 +805,6 @@ def test_validate_mk8s_resource_name_preflight_skips_state_managed_gpu_cluster(
 def test_validate_mk8s_resource_name_preflight_accepts_nebius_not_found_request_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    class _FakeNebiusNotFoundError(RuntimeError):
-        def __init__(self, message: str) -> None:
-            self.status = SimpleNamespace(code=SimpleNamespace(name="NOT_FOUND"))
-            super().__init__(message)
-
     class _FakeRequest:
         def __init__(self, value: object) -> None:
             self._value = value
@@ -875,6 +876,71 @@ def test_validate_mk8s_resource_name_preflight_accepts_nebius_not_found_request_
     }
 
     validate_mk8s_resource_name_preflight(config)
+
+
+def test_validate_mk8s_resource_name_preflight_rejects_untyped_not_found_text(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _FakeRequest:
+        def __init__(self, value: object) -> None:
+            self._value = value
+
+        def wait(self) -> object:
+            if isinstance(self._value, Exception):
+                raise self._value
+            return self._value
+
+    class _FakeClusterServiceClient:
+        def __init__(self, sdk: object) -> None:
+            self.sdk = sdk
+
+        def get_by_name(self, request: object) -> _FakeRequest:
+            _ = request
+            return _FakeRequest(RuntimeError("dependency not found while checking IAM state"))
+
+    class _FakeGpuClusterServiceClient:
+        def __init__(self, sdk: object) -> None:
+            self.sdk = sdk
+
+    class _FakeSDK:
+        def sync_close(self) -> None:
+            return
+
+    monkeypatch.setattr("nebius_cxcli.mk8s_preflight.init_nebius_sdk", lambda **_: _FakeSDK())
+    monkeypatch.setattr(
+        "nebius_cxcli.mk8s_preflight.ClusterServiceClient",
+        _FakeClusterServiceClient,
+    )
+    monkeypatch.setattr(
+        "nebius_cxcli.mk8s_preflight.GpuClusterServiceClient",
+        _FakeGpuClusterServiceClient,
+    )
+
+    config = {
+        "version": "v1",
+        "client_info": {
+            "client_name": "client-a",
+            "nebius": {
+                "tenant_id": "tenant-123",
+                "project_id": "project-123",
+                "region_id": "us-central1",
+            },
+        },
+        "infra": {
+            "components": [
+                {
+                    "id": "mk8s",
+                    "enabled": True,
+                    "source": "../../platform-infra/modules/mk8s",
+                    "inputs": _gpu_mk8s_inputs(),
+                }
+            ]
+        },
+        "apps": {"charts": []},
+    }
+
+    with pytest.raises(RuntimeError, match="dependency not found"):
+        validate_mk8s_resource_name_preflight(config)
 
 
 def test_validate_vpc_networking_preflight_falls_back_to_client_project_id(
@@ -1453,7 +1519,7 @@ def test_validate_mk8s_resource_name_preflight_checks_only_referenced_gpu_cluste
 
         def get_by_name(self, request: object) -> _FakeRequest:
             _ = request
-            return _FakeRequest(RuntimeError("resource not found"))
+            return _FakeRequest(_FakeNebiusNotFoundError("resource not found"))
 
     class _FakeGpuClusterServiceClient:
         def __init__(self, sdk: object) -> None:
@@ -1461,7 +1527,7 @@ def test_validate_mk8s_resource_name_preflight_checks_only_referenced_gpu_cluste
 
         def get_by_name(self, request: object) -> _FakeRequest:
             checked_gpu_names.append(str(getattr(request, "name", "")))
-            return _FakeRequest(RuntimeError("resource not found"))
+            return _FakeRequest(_FakeNebiusNotFoundError("resource not found"))
 
     class _FakeSDK:
         def sync_close(self) -> None:
@@ -1530,7 +1596,7 @@ def test_validate_mk8s_resource_name_preflight_checks_referenced_gpu_cluster_wit
 
         def get_by_name(self, request: object) -> _FakeRequest:
             _ = request
-            return _FakeRequest(RuntimeError("resource not found"))
+            return _FakeRequest(_FakeNebiusNotFoundError("resource not found"))
 
     class _FakeGpuClusterServiceClient:
         def __init__(self, sdk: object) -> None:
@@ -1538,7 +1604,7 @@ def test_validate_mk8s_resource_name_preflight_checks_referenced_gpu_cluster_wit
 
         def get_by_name(self, request: object) -> _FakeRequest:
             checked_gpu_names.append(str(getattr(request, "name", "")))
-            return _FakeRequest(RuntimeError("resource not found"))
+            return _FakeRequest(_FakeNebiusNotFoundError("resource not found"))
 
     class _FakeSDK:
         def sync_close(self) -> None:

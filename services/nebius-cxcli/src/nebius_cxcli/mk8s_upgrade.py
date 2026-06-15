@@ -1603,7 +1603,7 @@ def _pdb_findings(
         desired_healthy = int(status.get("desiredHealthy") or 0)
         current_healthy = int(status.get("currentHealthy") or 0)
         expected_pods = int(status.get("expectedPods") or 0)
-        if expected_pods > 0 and disruptions_allowed <= 0 and desired_healthy >= current_healthy:
+        if expected_pods > 0 and disruptions_allowed <= 0:
             findings.append(
                 PreflightFinding(
                     kind=PDB_BLOCKER_KIND,

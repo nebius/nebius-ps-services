@@ -6,6 +6,17 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Tightened destructive/create-path guardrails and local credential writes:
+  MK8s live resource-name preflight now trusts only typed Nebius `NOT_FOUND`
+  status, Soperator node-group cleanup no longer swallows arbitrary errors
+  containing "not found", MK8s upgrade PDB preflight flags any zero-disruption
+  PDB with expected pods, WireGuard and runtime-auth private-key/cache files are
+  written atomically with `0600` permissions before content is persisted, Helm
+  repo search aliases are stable across processes, quota limit/usage values are
+  coerced before arithmetic, and Soperator child-chart value writes preserve
+  existing `-`/`_` key variants and explicit MysteryBox sync disables. The auth
+  docs now call out the intentional plaintext local runtime-auth cache and
+  rotation boundary.
 - Hardened cxcli safety paths: managed Terraform/Flux downloads now verify
   published SHA256 manifests, use bounded reads, atomically install cached
   binaries, and reject corrupted cache entries; local SMTP settings and

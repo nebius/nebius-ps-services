@@ -3054,9 +3054,9 @@ and `deploy`, `terraform apply`, or `flux apply` as appropriate.
   platform, OS image, GPU stack, CPU preset, and GPU preset choices are resolved
   from the live SDK-backed compatibility matrix, compute platform inventory,
   and compute preset inventory before falling back to manual input.
-- `--dry-run` performs live discovery and prints the plan plus a wrapped
-  repeat dry-run command without changing `config.yaml`, `generated/`,
-  Terraform backend state, or live Nebius resources.
+- `--dry-run` performs live discovery and prints the plan plus a
+  copy/paste-ready repeat dry-run command without changing `config.yaml`,
+  `generated/`, Terraform backend state, or live Nebius resources.
 - Kubernetes version downgrade targets are refused by the structured MK8s
   upgrade paths. Helm chart targets remain operator-controlled desired state:
   lower target versions are allowed with an explicit warning because they can
@@ -4177,6 +4177,7 @@ Terraform runtime auth behavior:
 - MysteryBox payload material is runtime-only. Generated Terraform roots expose `payload_values` as a sensitive root variable and pass it into the module, but do not write it to generated tfvars or manifests. Interactive local deploy/plan/apply commands ask for missing first-deploy payload values with hidden input; CI and other non-interactive runs should set `TF_VAR_mysterybox_payload_values` for the default `mysterybox` instance, or the rendered instance variable such as `TF_VAR_secretstore_alpha_payload_values`, with JSON/YAML shape `{"secret-name":{"PAYLOAD_KEY":"value"}}`. After the first versions exist, cxcli records their `mbsecver-...` IDs in source and generated artifacts so reruns do not need the sensitive payload values again, including reruns after a transient provider polling failure.
 - Local runtime auth can be auto-bootstrapped with a dedicated service account name: `nebius-cxcli-tf-sa`.
 - Auto-bootstrapped runtime auth material is cached under `~/.config/nebius-cxcli/<client_name>-<project-id>/` to avoid creating new key material every run.
+- The local runtime auth cache intentionally stores long-lived Terraform private-key material and Object Storage access keys in cleartext files protected by a `0700` profile directory and `0600` files. Keep this cache on local protected storage, avoid placing `NEBIUS_CXCLI_RUNTIME_AUTH_DIR` inside synced or backed-up folders, and use `nebius-cxcli auth --recreate ...` to rotate the cached keys when the local machine or cache location may be exposed.
 - ESO MysteryBox auth does not use a local cxcli auth cache. The in-cluster Kubernetes Subject Credentials Secret is the persisted ESO auth location; deploy/Flux commands create or replace it only when it is missing, invalid, or stale.
 - The Terraform runtime auth key flow is authorized-key based: the CLI generates keypair material, uploads the public key for `nebius-cxcli-tf-sa`, and stores private key material locally for Terraform runtime use. ESO uses the same Nebius authorized-key API pattern for `mysterybox-sa`, but stores the private key only in the configured Kubernetes Secret.
 - Terraform backend init uses AWS-compatible Object Storage keys (`AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`); the runtime auth profile cache auto-populates these for local runs.

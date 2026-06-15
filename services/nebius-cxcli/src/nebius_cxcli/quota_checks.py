@@ -351,10 +351,12 @@ def _format_console_amount(amount: int | None, unit: str) -> str:
     return f"{formatted} ({amount} byte)"
 
 
-def _available_quota(limit: int | None, usage: int | None) -> int | None:
-    if limit is None:
+def _available_quota(limit: Any, usage: Any) -> int | None:
+    limit_value = _positive_int(limit)
+    if limit_value is None:
         return None
-    return max(limit - int(usage or 0), 0)
+    usage_value = _positive_int(usage) or 0
+    return max(limit_value - usage_value, 0)
 
 
 def _is_not_found_error(exc: Exception) -> bool:
@@ -820,8 +822,8 @@ class _QuotaSession:
                 items[(name, region)] = QuotaRecord(
                     name=name,
                     region=region,
-                    limit=getattr(spec, "limit", None),
-                    usage=int(getattr(status, "usage", 0) or 0),
+                    limit=_positive_int(getattr(spec, "limit", None)),
+                    usage=_positive_int(getattr(status, "usage", 0)) or 0,
                     service=_as_text(getattr(status, "service", None)),
                     description=_as_text(getattr(status, "description", None)),
                     unit=_as_text(getattr(status, "unit", None)),

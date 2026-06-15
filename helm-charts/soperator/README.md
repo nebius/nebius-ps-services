@@ -478,17 +478,18 @@ helm-charts/soperator/scripts/verify-upstream-soperator-sync.sh --scope all --re
 
 Use this flow when upstream Soperator publishes a newer Helm chart release:
 
-1. From any clean working tree, run the latest-release sync:
+1. From any clean working tree, run the highest-release sync:
 
    ```bash
    helm-charts/soperator/scripts/verify-upstream-soperator-sync.sh --latest --sync --report
    ```
 
-   `--latest --sync` updates the lock pin to GitHub latest and derives all
+   `--latest --sync` updates the lock pin to the highest non-draft,
+   non-prerelease SemVer release published in GitHub releases and derives all
    upstream-owned version, dependency, script, CRD, image, and review-hash
    changes.
    Use plain `--sync` only when you want to refresh the release already pinned
-   in the lock; it does not query GitHub latest.
+   in the lock; it does not query GitHub releases.
    `--report` prints detailed per-import status and the changed-file list with
    readable status labels after sync validation.
    Sync validation seeds a temporary Helm repository config/cache from the
@@ -547,11 +548,12 @@ the intentional divergence is visible and reviewed.
 
 The repository CI runs the same verifier on chart changes. A daily scheduled
 workflow creates or updates an upstream-sync feature branch and PR when GitHub
-has a newer public Soperator release; local runs update the current feature
-branch and leave staging, commit, and PR creation to the user.
+has a newer public Soperator SemVer release; local runs update the current
+feature branch and leave staging, commit, and PR creation to the user.
 The scheduled sync compares release versions before writing files and fails
-early when the lock release is newer than GitHub's latest release, which helps
-catch lock typos without mutating chart files.
+early when the lock release is newer than every non-draft, non-prerelease
+SemVer GitHub release, which helps catch lock typos without mutating chart
+files.
 
 ## Local Kubernetes Learning Profile
 

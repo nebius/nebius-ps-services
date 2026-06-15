@@ -992,6 +992,39 @@ def test_kubernetes_preflight_inspection_failures_always_block_force_delete(
     )
 
 
+def test_pdb_findings_flags_zero_disruptions_even_when_current_exceeds_desired(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        upgrade,
+        "_kubectl_json",
+        lambda *_args, **_kwargs: {
+            "items": [
+                {
+                    "metadata": {"namespace": "app", "name": "api"},
+                    "status": {
+                        "disruptionsAllowed": 0,
+                        "desiredHealthy": 1,
+                        "currentHealthy": 2,
+                        "expectedPods": 2,
+                    },
+                }
+            ]
+        },
+    )
+
+    findings = upgrade._pdb_findings(kube_env={}, timeout_seconds=1)
+
+    assert findings == (
+        upgrade.PreflightFinding(
+            kind=upgrade.PDB_BLOCKER_KIND,
+            namespace="app",
+            name="api",
+            message="PDB allows zero disruptions (currentHealthy=2, desiredHealthy=1).",
+        ),
+    )
+
+
 def test_plan_orders_non_gpu_node_groups_before_gpu_node_groups() -> None:
     target = upgrade.parse_upgrade_selector("infra:mk8s@prod")
     source = {
