@@ -19997,22 +19997,20 @@ def test_run_mysterybox_eso_connectivity_validation_writes_deploy_report_detail(
     assert [item["name"] for item in report["checks"]] == [
         "Nebius API TLS",
         "ClusterSecretStore Ready",
-        "ExternalSecret Ready (app/app-config)",
+        "ExternalSecret Ready",
         "ESO controller log scan",
     ]
-    assert report["checks"][0]["details"]["summary_lines"] == [
-        '*  subjectAltName: host "api.nebius.cloud" matched cert\'s "api.nebius.cloud"',
-        "*  issuer: C=US; O=Let's Encrypt; CN=R13",
-        "*  SSL certificate verify ok.",
-    ]
-    assert report["checks"][3]["details"]["matched_line_count"] == 1
-    assert "matched_lines" not in report["checks"][3]["details"]
-    assert report["synced_resource_count"] == 1
+    assert all(set(item) == {"name", "passed"} for item in report["checks"])
+    assert "synced_resource_count" not in report
     assert "credentials_secret" not in report
     assert "external_secrets" not in report
     report_text = report_path.read_text(encoding="utf-8")
     assert "credentials.json" not in report_text
     assert "nebius-mysterybox-shared-creds" not in report_text
+    assert "nebius-mysterybox-shared" not in report_text
+    assert "external-secrets" not in report_text
+    assert "app-config" not in report_text
+    assert "api.nebius.cloud" not in report_text
     assert "provider nebiusmysterybox sync ok" not in report_text
     assert calls[0][-1] == "api.nebius.cloud:443"
 

@@ -28812,66 +28812,24 @@ def _mysterybox_eso_report_path(spec: Mapping[str, Any], *, reports_dir: Path) -
     return reports_dir / "mysterybox-eso-connectivity-report.json"
 
 
-def _mysterybox_eso_report_check(check: Mapping[str, Any]) -> dict[str, Any]:
-    details = check.get("details")
-    safe_details: dict[str, Any] = {}
-    if isinstance(details, Mapping):
-        for key in (
-            "resource",
-            "ready_status",
-            "reason",
-            "message",
-            "observed_generation",
-            "namespace",
-            "since_time",
-            "api_domain",
-            "summary_lines",
-            "image",
-        ):
-            if key in details:
-                safe_details[key] = details[key]
-        matched_lines = details.get("matched_lines")
-        if isinstance(matched_lines, list):
-            safe_details["matched_line_count"] = len(matched_lines)
-        failure_lines = details.get("failure_lines")
-        if isinstance(failure_lines, list):
-            safe_details["failure_line_count"] = len(failure_lines)
-    return {
-        "name": str(check.get("name") or "").strip(),
-        "passed": bool(check.get("passed")),
-        "summary": str(check.get("summary") or "").strip(),
-        "details": safe_details,
-    }
+def _mysterybox_eso_report_check(name: str, passed: bool) -> dict[str, Any]:
+    return {"name": name, "passed": bool(passed)}
 
 
 def _mysterybox_eso_write_report(
     path: Path,
     *,
-    validation_name: str,
-    target_ref: str,
-    api_domain: str,
-    store_name: str,
-    eso_namespace: str,
-    synced_resource_count: int,
     checked_at: datetime,
     passed: bool,
-    checks: Sequence[Mapping[str, Any]],
+    checks: Sequence[tuple[str, bool]],
 ) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     report = {
-        "validation": validation_name,
         "kind": MYSTERYBOX_ESO_CONNECTIVITY_VALIDATION_KIND,
-        "target_ref": target_ref,
-        "api_domain": api_domain,
-        "store_name": store_name,
-        "eso_namespace": eso_namespace,
-        "synced_resource_count": synced_resource_count,
         "checked_at": checked_at.isoformat(),
         "passed": bool(passed),
-        "checks": [_mysterybox_eso_report_check(check) for check in checks],
+        "checks": [_mysterybox_eso_report_check(name, check_passed) for name, check_passed in checks],
     }
-    # codeql[py/clear-text-storage-sensitive-data]
-    # Report is allow-listed above and excludes credential Secret specs, raw credentials, and controller log lines.
     path.write_text(json.dumps(report, indent=2, sort_keys=False) + "\n", encoding="utf-8")
 
 
@@ -29088,6 +29046,7 @@ def _run_mysterybox_eso_connectivity_validation(
         raise RuntimeError(f"{validation_name} spec is missing required connection fields")
     validation_started_at = datetime.now(UTC)
     checks: list[dict[str, Any]] = []
+    report_checks: list[tuple[str, bool]] = []
 
     if emit:
         emit(f"Checking ESO MysteryBox API TLS for https://{api_domain}.")
@@ -29104,6 +29063,7 @@ def _run_mysterybox_eso_connectivity_validation(
             details=tls_probe,
         )
     )
+    report_checks.append(("Nebius API TLS", bool(checks[-1].get("passed"))))
 
     if emit:
         emit(f"Checking ClusterSecretStore {store_name}.")
@@ -29115,6 +29075,7 @@ def _run_mysterybox_eso_connectivity_validation(
             extra_env=extra_env,
         )
     )
+    report_checks.append(("ClusterSecretStore Ready", bool(checks[-1].get("passed"))))
 
     for item in external_secrets:
         namespace = str(item.get("namespace") or "").strip()
@@ -29128,6 +29089,7 @@ def _run_mysterybox_eso_connectivity_validation(
                     details={"external_secret": item},
                 )
             )
+            report_checks.append(("ExternalSecret Ready", False))
             continue
         if emit:
             emit(f"Checking ExternalSecret {namespace}/{name}.")
@@ -29139,6 +29101,7 @@ def _run_mysterybox_eso_connectivity_validation(
                 extra_env=extra_env,
             )
         )
+        report_checks.append(("ExternalSecret Ready", bool(checks[-1].get("passed"))))
 
     if emit:
         emit(f"Scanning ESO controller logs in namespace {eso_namespace}.")
@@ -29149,20 +29112,15 @@ def _run_mysterybox_eso_connectivity_validation(
             since_time=validation_started_at,
         )
     )
+    report_checks.append(("ESO controller log scan", bool(checks[-1].get("passed"))))
 
     passed = all(bool(check.get("passed")) for check in checks)
     report_path = _mysterybox_eso_report_path(spec, reports_dir=reports_dir)
     _mysterybox_eso_write_report(
         report_path,
-        validation_name=validation_name,
-        target_ref=str(spec.get(TARGET_REF_FIELD) or "").strip(),
-        api_domain=api_domain,
-        store_name=store_name,
-        eso_namespace=eso_namespace,
-        synced_resource_count=len(external_secrets),
         checked_at=datetime.now(UTC),
         passed=passed,
-        checks=checks,
+        checks=report_checks,
     )
     if not passed:
         failures = [str(check.get("summary")) for check in checks if not bool(check.get("passed"))]
