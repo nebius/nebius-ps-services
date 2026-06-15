@@ -28870,7 +28870,8 @@ def _mysterybox_eso_write_report(
         "passed": bool(passed),
         "checks": [_mysterybox_eso_report_check(check) for check in checks],
     }
-    # codeql[py/clear-text-storage-sensitive-data] - report is allow-listed above and excludes credential Secret specs, raw credentials, and controller log lines.
+    # codeql[py/clear-text-storage-sensitive-data]
+    # Report is allow-listed above and excludes credential Secret specs, raw credentials, and controller log lines.
     path.write_text(json.dumps(report, indent=2, sort_keys=False) + "\n", encoding="utf-8")
 
 
