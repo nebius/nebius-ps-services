@@ -6890,9 +6890,10 @@ def _render_overwrite_warning(paths: ProjectPaths) -> str | None:
     if not existing_files:
         return None
     return (
-        "Render will overwrite existing generated artifacts under "
+        "Render will replace existing generated artifacts under "
         f"{paths.generated_dir}. Keep using `config.yaml` as the original render contract, "
-        "but treat the generated files as the deployable customer artifacts."
+        "treat the generated files as deployable customer artifacts, and keep lifecycle "
+        "reports under `generated/reports/` with their referenced JSON detail files."
     )
 
 
@@ -6909,11 +6910,11 @@ def _confirm_render_overwrite(paths: ProjectPaths, *, force: bool) -> bool:
         return True
     if not _can_prompt_for_render_overwrite():
         raise RuntimeError(
-            "Render would overwrite existing generated artifacts in a non-interactive session. "
-            "Re-run with `--force` to confirm the reset."
+            "Render would replace existing generated artifacts in a non-interactive session. "
+            "Re-run with `--force` to confirm the replacement."
         )
     return typer.confirm(
-        "Continue and overwrite the existing generated artifacts?",
+        "Continue and replace the existing generated artifacts?",
         default=False,
         show_default=True,
     )
@@ -41222,7 +41223,7 @@ def auth_command(
         "nebius-cxcli render ./deployments/tenant/project/config.yaml "
         "(re-renders generated/infra and generated/flux; transactional swap, prompts on existing artifacts); "
         "nebius-cxcli render ./deployments/tenant/project/config.yaml --force "
-        "(overwrites without prompting); "
+        "(replaces without prompting); "
         "nebius-cxcli --source-profile local render ./deployments/tenant/project/config.yaml "
         "(uses source.local Terraform/Helm paths from component_sources.yaml during development). "
         "Soperator render materializes catalog defaults: schedulingConfig + partitionConfiguration.partitions[].policy, "
@@ -41242,11 +41243,11 @@ def render_command(
         bool,
         typer.Option(
             "--force",
-            help="Overwrite an existing generated bundle without interactive confirmation.",
+            help="Replace an existing generated bundle without interactive confirmation.",
         ),
     ] = False,
 ) -> None:
-    """Render and transactionally replace generated artifacts from one project config.yaml, prompting before overwrite unless --force is provided."""
+    """Render and transactionally replace generated artifacts from one project config.yaml, prompting before replacement unless --force is provided."""
     try:
         config, paths = _load_runtime_context(config_path)
         if isinstance(config, dict):

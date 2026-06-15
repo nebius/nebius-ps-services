@@ -3331,7 +3331,32 @@ def test_first_render_from_create_scaffold_does_not_require_force(tmp_path: Path
     assert result.exit_code == 0, result.output
     normalized = " ".join(result.output.split())
     assert "Render will overwrite existing generated artifacts under" not in normalized
-    assert "Continue and overwrite the existing generated artifacts?" not in normalized
+    assert "Render will replace existing generated artifacts under" not in normalized
+    assert "Continue and replace the existing generated artifacts?" not in normalized
+
+
+def test_render_overwrite_warning_mentions_preserved_lifecycle_reports(tmp_path: Path) -> None:
+    deployments_root = tmp_path / "deployments"
+    deployments_root.mkdir(parents=True, exist_ok=True)
+
+    create_result = _create_non_interactive(deployments_root)
+    assert create_result.exit_code == 0, create_result.output
+
+    config_path = _project_config_path(deployments_root)
+    generated_file = config_path.parent / "generated" / "flux" / "stale.yaml"
+    generated_file.parent.mkdir(parents=True, exist_ok=True)
+    generated_file.write_text("apiVersion: v1\nkind: ConfigMap\n", encoding="utf-8")
+
+    result = runner.invoke(app, ["render", str(config_path)])
+
+    assert result.exit_code == 1, result.output
+    normalized = " ".join(result.output.split())
+    assert "Render will replace existing generated artifacts under" in normalized
+    assert "Render would replace existing generated artifacts in a non-interactive session." in normalized
+    assert "Render would overwrite existing generated artifacts" not in normalized
+    assert "keep lifecycle reports under `generated/reports/`" in normalized
+    assert "referenced JSON detail files" in normalized
+    assert "Re-run with `--force` to confirm the replacement." in normalized
 
 
 def test_render_rejects_generated_directory_when_config_yaml_is_required(tmp_path: Path) -> None:

@@ -3189,8 +3189,8 @@ The command boundary is intentional:
 - Writes `generated/nebius-cxcli-manifest.json`, which snapshots the runtime config and deployment metadata needed to operate on the generated bundle later.
 - Runs a best-effort live Nebius quota assessment for the rendered infra shape, discounts capacity already managed in the current sibling generated Terraform state when available, persists that report in the generated manifest, and warns instead of blocking when quota is insufficient or only partially known.
 - Keeps non-blocking coverage-gap detail in the persisted quota report, while routine `render` terminal output focuses on confirmed shortages and live lookup failures. The explicit `quota-check` command remains the verbose terminal surface for coverage gaps.
-- Warns before overwriting an existing generated bundle, because rerendering is the replace path back to the original `config.yaml` contract.
-- The overwrite warning should not trigger on the scaffold created by `create` alone; empty generated subdirectories are not treated as meaningful existing rendered artifacts.
+- Warns before replacing an existing generated bundle, because rerendering is the replace path back to the original `config.yaml` contract while preserving lifecycle reports under `generated/reports/` and their referenced JSON detail files.
+- The replacement warning should not trigger on the scaffold created by `create` alone; empty generated subdirectories are not treated as meaningful existing rendered artifacts.
 - Renders into a hidden sibling staging directory first and swaps it into `generated/` only after the replacement bundle is complete, so a failed rerender leaves the current bundle intact.
 - When Terraform is available from `PATH` or the managed download path, attempts backend-disabled `terraform init -backend=false` to produce/update `.terraform.lock.hcl`.
 - Removes transient `.terraform/` workdir state after lockfile generation so the canonical rendered bundle stays clean.
@@ -3306,7 +3306,7 @@ Modules that expose collection/object inputs, such as `mysterybox.secrets`, `ssh
   - Stages the replacement bundle under a hidden sibling directory and swaps it into `generated/` only after the staged bundle is complete.
   - Defaults to source profile `portable`; `--source-profile local` is explicit and produces non-portable generated Terraform sources for local testing.
   - If the target `generated/` bundle already exists, rerender is treated as a replace action:
-    - interactive terminal: prompt before overwrite
+    - interactive terminal: prompt before replacement
     - non-interactive context: require `--force`
 
 ## Customer-side Commands

@@ -1853,9 +1853,15 @@ In the customer private repo, keep both:
 - `config.yaml` as the original render/replace contract
 - `generated/` as the deploy contract used by day-2 operations and CI
 
-Rerendering from `config.yaml` is still supported, but it is a manual replace action. The CLI now renders into a hidden sibling staging directory and only swaps it into `generated/` after the new bundle is complete, so a failed rerender leaves the current bundle untouched. The replacement still removes stale or legacy content under `generated/`, including an old `generated/flux/flux-system` subtree. In an interactive terminal, `render` prompts for confirmation before overwrite. In non-interactive contexts, rerender requires `--force`.
+Rerendering from `config.yaml` is still supported, but it is a manual replace action. The CLI now renders into a hidden sibling staging directory and only swaps it into `generated/` after the new bundle is complete, so a failed rerender leaves the current bundle untouched. The replacement still removes stale or legacy content under `generated/`, including an old `generated/flux/flux-system` subtree. In an interactive terminal, `render` prompts for confirmation before replacement. In non-interactive contexts, rerender requires `--force`.
 
-The render overwrite is a local artifact replacement, not a live infrastructure
+Lifecycle reports under `generated/reports/` are carried forward during that
+bundle replacement: `deploy-report.md`, `migrate-report.md`,
+`upgrade-report.md`, `upgrade-report.json`, and JSON detail files referenced
+from those Markdown reports are preserved. Unreferenced stale report files are
+removed with the rest of the old generated bundle.
+
+The render replacement is a local artifact replacement, not a live infrastructure
 destroy. After rerender, `terraform apply`, `flux apply`, `flux bootstrap`, and
 `deploy` reconcile the generated desired state against Terraform state and the
 live cluster. They apply only the create/update/delete operations required by
@@ -3621,7 +3627,7 @@ nebius-cxcli render /path/to/config.yaml
   - Defaults to the global source profile `portable`, which rewrites active local module sources to their portable Git equivalents when available.
   - Use `--source-profile local` only for workstation testing against checked-out local Terraform modules; those generated artifacts are intentionally non-portable.
   - Use `--component-sources-file` or `NEBIUS_CXCLI_COMPONENT_SOURCES_FILE` only when you need to select a non-default catalog file.
-  - If `generated/` already contains files, `render` prompts before overwrite in an interactive terminal.
+  - If `generated/` already contains files, `render` prompts before replacement in an interactive terminal.
   - In non-interactive contexts, use `nebius-cxcli render --force <config.yaml>` to confirm the replacement explicitly.
   - On successful render, the final terminal line prints the copy-paste deploy helper: `Next step: nebius-cxcli deploy <config.yaml>`.
   - Example: `nebius-cxcli render ~/deployments/tenant-name-example/project-name-example/config.yaml`

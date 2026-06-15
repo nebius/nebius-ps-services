@@ -1490,6 +1490,99 @@ def test_write_checkpoint_preserves_existing_file_when_replace_fails(
     assert not list(tmp_path.glob(".checkpoint.json.*.tmp"))
 
 
+def test_write_checkpoint_uses_default_text_file_mode_for_new_file(tmp_path: Path) -> None:
+    baseline_path = tmp_path / "baseline.txt"
+    baseline_path.write_text("baseline\n", encoding="utf-8")
+    checkpoint_path = tmp_path / "checkpoint.json"
+
+    migration._write_checkpoint(
+        checkpoint_path,
+        {
+            "schema": migration.SOPERATOR_MIGRATION_EXECUTION_SCHEMA,
+            "status": "new",
+        },
+    )
+
+    assert checkpoint_path.stat().st_mode & 0o777 == baseline_path.stat().st_mode & 0o777
+
+
+def test_write_checkpoint_preserves_existing_file_mode(tmp_path: Path) -> None:
+    checkpoint_path = tmp_path / "checkpoint.json"
+    checkpoint_path.write_text("{}\n", encoding="utf-8")
+    checkpoint_path.chmod(0o640)
+
+    migration._write_checkpoint(
+        checkpoint_path,
+        {
+            "schema": migration.SOPERATOR_MIGRATION_EXECUTION_SCHEMA,
+            "status": "new",
+        },
+    )
+
+    assert checkpoint_path.stat().st_mode & 0o777 == 0o640
+
+
+def _write_minimal_migrate_report(config_path: Path) -> Path:
+    return migration._write_soperator_migrate_report(
+        config_path=config_path,
+        checkpoint_path=config_path.parent / ".nebius-cxcli" / "checkpoint.json",
+        checkpoint={"phase_state": {}, "events": []},
+        phase_ids=("discovery-and-plan",),
+        completed_phases=set(),
+        target_ref="external-cluster",
+        source_version="3.0.5",
+        target_version="4.0.2-ps.1",
+        pending_phase="customer-approval",
+        pending_reason="approval required",
+        mutation_performed=False,
+    )
+
+
+def test_write_migrate_report_uses_default_text_file_mode_for_new_file(tmp_path: Path) -> None:
+    baseline_path = tmp_path / "baseline.txt"
+    baseline_path.write_text("baseline\n", encoding="utf-8")
+    config_path = tmp_path / "config.yaml"
+
+    report_path = _write_minimal_migrate_report(config_path)
+
+    assert report_path.stat().st_mode & 0o777 == baseline_path.stat().st_mode & 0o777
+
+
+def test_write_migrate_report_preserves_existing_file_mode(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.yaml"
+    report_path = tmp_path / "generated" / "reports" / "migrate-report.md"
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text("# Existing Migration Report\n", encoding="utf-8")
+    report_path.chmod(0o640)
+
+    written_path = _write_minimal_migrate_report(config_path)
+
+    assert written_path == report_path
+    assert report_path.stat().st_mode & 0o777 == 0o640
+
+
+def test_write_migrate_report_preserves_existing_file_when_replace_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_path = tmp_path / "config.yaml"
+    report_path = tmp_path / "generated" / "reports" / "migrate-report.md"
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text("# Existing Migration Report\n", encoding="utf-8")
+    before = report_path.read_text(encoding="utf-8")
+
+    def _fail_replace(_source: object, _target: object) -> None:
+        raise OSError("replace failed")
+
+    monkeypatch.setattr(migration.os, "replace", _fail_replace)
+
+    with pytest.raises(OSError, match="replace failed"):
+        _write_minimal_migrate_report(config_path)
+
+    assert report_path.read_text(encoding="utf-8") == before
+    assert not list(report_path.parent.glob(".migrate-report.md.*.tmp"))
+
+
 def test_execute_quota_preflight_blocks_before_mutation(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

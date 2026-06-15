@@ -6057,7 +6057,8 @@ def test_render_overwrite_warning_never_mentions_flux_system(tmp_path: Path) -> 
     warning_without_bootstrap = cli._render_overwrite_warning(fake_paths)
 
     assert warning_without_bootstrap is not None
-    assert "Render will overwrite existing generated artifacts under" in warning_without_bootstrap
+    assert "Render will replace existing generated artifacts under" in warning_without_bootstrap
+    assert "referenced JSON detail files" in warning_without_bootstrap
     assert "generated/flux/flux-system" not in warning_without_bootstrap
 
     bootstrap_dir = fake_paths.flux_dir / "flux-system"
@@ -6085,7 +6086,8 @@ def test_render_overwrite_warning_treats_report_files_as_meaningful(
     warning = cli._render_overwrite_warning(fake_paths)
 
     assert warning is not None
-    assert "Render will overwrite existing generated artifacts under" in warning
+    assert "Render will replace existing generated artifacts under" in warning
+    assert "lifecycle reports under `generated/reports/`" in warning
 
 
 def test_validate_command_runs_strict_checks_by_default(
@@ -9144,7 +9146,7 @@ def test_render_command_prompts_before_overwrite_when_interactive(
     result = runner.invoke(cli.app, ["render", str(tmp_path / "config.yaml")], input="y\n")
 
     assert result.exit_code == 0, result.output
-    assert "Continue and overwrite the existing generated artifacts?" in _plain_output(
+    assert "Continue and replace the existing generated artifacts?" in _plain_output(
         result.output
     )
     assert calls["rendered"] is True
@@ -17744,7 +17746,7 @@ def test_help_text_aligns_render_and_apply_surfaces() -> None:
     assert "--all-regions" in quota_check_help
     assert "selected config region still" in quota_check_help
     assert "quota-only" in quota_check_help
-    assert "prompting before overwrite unless --force is provided" in render_help
+    assert "prompting before replacement unless --force is provided" in render_help
     assert "target cluster instance_id" in validate_dashboards_help
     assert "explicit kube context" in validate_dashboards_help
     assert "target_ref" not in validate_dashboards_help

@@ -9,6 +9,7 @@ import math
 import os
 import re
 import shutil
+import stat
 import subprocess
 import tempfile
 import threading
@@ -21,6 +22,7 @@ from datetime import UTC, datetime
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Protocol
+from uuid import uuid4
 
 import yaml
 
@@ -10354,11 +10356,10 @@ def _load_checkpoint(path: Path) -> dict[str, Any] | None:
     return payload
 
 
-def _write_checkpoint(path: Path, checkpoint: Mapping[str, Any]) -> None:
+def _write_text_atomic(path: Path, content: str, *, encoding: str = "utf-8") -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    content = (json.dumps(to_plain_data(checkpoint), indent=2, sort_keys=True) + "\n").encode(
-        "utf-8"
-    )
+    data = content.encode(encoding)
+    file_mode = _replacement_text_file_mode(path)
     fd = -1
     temp_path: Path | None = None
     try:
@@ -10370,7 +10371,8 @@ def _write_checkpoint(path: Path, checkpoint: Mapping[str, Any]) -> None:
         temp_path = Path(raw_temp_path)
         with os.fdopen(fd, "wb") as handle:
             fd = -1
-            handle.write(content)
+            os.fchmod(handle.fileno(), file_mode)
+            handle.write(data)
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(temp_path, path)
@@ -10379,6 +10381,32 @@ def _write_checkpoint(path: Path, checkpoint: Mapping[str, Any]) -> None:
             os.close(fd)
         if temp_path is not None:
             temp_path.unlink(missing_ok=True)
+
+
+def _replacement_text_file_mode(path: Path) -> int:
+    with suppress(OSError):
+        return stat.S_IMODE(path.stat().st_mode)
+    return _default_text_file_mode(path.parent, path.name)
+
+
+def _default_text_file_mode(parent: Path, name: str) -> int:
+    for _attempt in range(100):
+        probe_path = parent / f".{name}.{uuid4().hex}.mode"
+        fd = -1
+        try:
+            fd = os.open(probe_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666)
+            return stat.S_IMODE(os.fstat(fd).st_mode)
+        except FileExistsError:
+            continue
+        finally:
+            if fd >= 0:
+                os.close(fd)
+                probe_path.unlink(missing_ok=True)
+    return 0o644
+
+
+def _write_checkpoint(path: Path, checkpoint: Mapping[str, Any]) -> None:
+    _write_text_atomic(path, json.dumps(to_plain_data(checkpoint), indent=2, sort_keys=True) + "\n")
 
 
 def _clear_completed_pending_phase(checkpoint: dict[str, Any], phase_id: str) -> bool:
@@ -10605,7 +10633,7 @@ def _write_soperator_migrate_report(
     else:
         lines.append("- No checkpoint events recorded.")
     lines.append("")
-    report_path.write_text("\n".join(lines).rstrip() + "\n", encoding="utf-8")
+    _write_text_atomic(report_path, "\n".join(lines).rstrip() + "\n")
     return report_path
 
 
