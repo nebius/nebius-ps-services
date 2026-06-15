@@ -6,6 +6,22 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Removed confusing version-label wording from `upgrade` help and docs while
+  preserving the documented supported upgrade scope.
+- Added create/component-add Helm chart version overrides for app charts:
+  `component_sources.yaml` remains the default version source, interactive
+  `create` and `component add` prompt for `apps.charts[].version` before the
+  longer app config phase, and non-interactive `create` plus `component add`
+  accept `--app-version <app-id>=<chart-version>`. `component add` also accepts
+  `--app-namespace` and `--app-releasename` for app rows added by that
+  operation. With source validation enabled, cxcli resolves requested
+  non-catalog chart versions before writing `config.yaml`, so a published
+  rollback/test package such as `soperator=4.0.1-ps.2` can be selected
+  explicitly while unknown versions fail fast.
+- Aligned Soperator-created SFS defaults in the `create` wizard: after the
+  operator enters the MK8s cluster name, generated jail/controller/accounting
+  SFS filesystem `name` and `mount_tag` defaults use `<cluster-name>-<role>`
+  instead of the initial `mk8s` placeholder or role-only mount tags.
 - Tightened destructive/create-path guardrails and local credential writes:
   MK8s live resource-name preflight now trusts only typed Nebius `NOT_FOUND`
   status, Soperator node-group cleanup no longer swallows arbitrary errors

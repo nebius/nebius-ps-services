@@ -7966,7 +7966,7 @@ def test_create_field_wizard_uses_entered_cluster_name_for_app_defaults(
     cli_module._apply_soperator_profile_to_payload(payload, profile="nebius-cpu-v1")
     cli_module._materialize_soperator_component_defaults(payload)
 
-    decisions = iter([True, False, False, False])
+    decisions = iter([True, True, False, False])
     monkeypatch.setattr(
         cli_module,
         "_wizard_continue_phase",
@@ -7979,18 +7979,9 @@ def test_create_field_wizard_uses_entered_cluster_name_for_app_defaults(
         lambda **_kwargs: (set(), ()),
     )
 
-    def _prompt_scalar_override(path_label, current, **_kwargs):  # type: ignore[no-untyped-def]
-        if path_label.endswith(".inputs.cluster.cluster_name"):
-            return "soperator-cluster1", False
-        if path_label.endswith(".inputs.cluster.network_id"):
-            return "vpcnetwork-1", False
-        if path_label.endswith(".inputs.cluster.subnet_id"):
-            return "vpcsubnet-1", False
-        if path_label.endswith(".inputs.cluster.k8s_version"):
-            return "1.33", False
-        return current, False
-
     previewed_app_targets: list[tuple[str, str, str]] = []
+    sfs_name_prompt_defaults: dict[str, str] = {}
+    sfs_mount_tag_prompt_defaults: dict[str, str] = {}
 
     def _capture_app_defaults_preview(component_node, *, entry):  # type: ignore[no-untyped-def]
         if not isinstance(component_node, dict):
@@ -8004,6 +7995,21 @@ def test_create_field_wizard_uses_entered_cluster_name_for_app_defaults(
                 str(cluster_name),
             )
         )
+
+    def _prompt_scalar_override(path_label, current, **_kwargs):  # type: ignore[no-untyped-def]
+        if path_label.endswith(".inputs.cluster.cluster_name"):
+            return "soperator-cluster1", False
+        if path_label.endswith(".inputs.cluster.network_id"):
+            return "vpcnetwork-1", False
+        if path_label.endswith(".inputs.cluster.subnet_id"):
+            return "vpcsubnet-1", False
+        if path_label.endswith(".inputs.cluster.k8s_version"):
+            return "1.33", False
+        if ".inputs.filesystems." in path_label and path_label.endswith(".name"):
+            sfs_name_prompt_defaults[path_label] = str(current)
+        if ".inputs.filesystems." in path_label and path_label.endswith(".mount_tag"):
+            sfs_mount_tag_prompt_defaults[path_label] = str(current)
+        return current, False
 
     monkeypatch.setattr(cli_module, "_prompt_scalar_override", _prompt_scalar_override)
     monkeypatch.setattr(
@@ -8019,6 +8025,7 @@ def test_create_field_wizard_uses_entered_cluster_name_for_app_defaults(
         infra_entries=infra_entries,
         app_entries=app_entries,
         align_infra_resource_names_before_apps=True,
+        prompt_app_version_before_app_config=True,
     )
 
     assert completed is True
@@ -8037,6 +8044,25 @@ def test_create_field_wizard_uses_entered_cluster_name_for_app_defaults(
     assert charts["cert-manager"]["instance_id"] == "soperator-cluster1"
     assert ("soperator", "soperator-cluster1", "soperator-cluster1") in previewed_app_targets
     assert all(target != "mk8s" for _app_id, target, _cluster_name in previewed_app_targets)
+
+    sfs = next(row for row in updated["infra"]["components"] if row["id"] == "sfs")
+    sfs_filesystems = sfs["inputs"]["filesystems"]
+    assert sfs_filesystems["jail"]["name"] == "soperator-cluster1-jail"
+    assert sfs_filesystems["controller-spool"]["name"] == (
+        "soperator-cluster1-controller-spool"
+    )
+    assert sfs_filesystems["accounting"]["name"] == "soperator-cluster1-accounting"
+    assert sfs_filesystems["jail"]["mount_tag"] == "soperator-cluster1-jail"
+    assert sfs_filesystems["controller-spool"]["mount_tag"] == (
+        "soperator-cluster1-controller-spool"
+    )
+    assert sfs_filesystems["accounting"]["mount_tag"] == "soperator-cluster1-accounting"
+    assert sfs_name_prompt_defaults[
+        "infra.components[1].inputs.filesystems.accounting.name"
+    ] == "soperator-cluster1-accounting"
+    assert sfs_mount_tag_prompt_defaults[
+        "infra.components[1].inputs.filesystems.accounting.mount_tag"
+    ] == "soperator-cluster1-accounting"
 
 
 def test_create_auto_enables_observability_agent_when_wizard_turns_on_observability(
@@ -9191,6 +9217,241 @@ def test_create_app_namespace_and_releasename_overrides(tmp_path: Path) -> None:
     assert isinstance(n8n_row, dict)
     assert n8n_row.get("namespace") == "automation"
     assert n8n_row.get("release-name") == "workflow-core"
+
+
+def test_create_app_version_override_replaces_catalog_pin(tmp_path: Path) -> None:
+    deployments_root = tmp_path / "deployments"
+    deployments_root.mkdir(parents=True, exist_ok=True)
+
+    result = _create_non_interactive(
+        deployments_root,
+        "--infra",
+        "mk8s",
+        "--app",
+        "soperator",
+        "--app-version",
+        "soperator=4.0.1-ps.2",
+        "--no-validate-config",
+    )
+    assert result.exit_code == 0, result.output
+
+    payload = yaml.safe_load(_project_config_path(deployments_root).read_text(encoding="utf-8"))
+    soperator_row = next(
+        row
+        for row in payload["apps"]["charts"]
+        if isinstance(row, dict) and row.get("id") == "soperator"
+    )
+    assert soperator_row["version"] == "4.0.1-ps.2"
+
+
+def test_create_app_version_override_validates_requested_chart_before_write(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    deployments_root = tmp_path / "deployments"
+    deployments_root.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(cli_module, "_validate_component_sources_or_raise", lambda **_kwargs: None)
+
+    def _chart_issues(
+        *,
+        chart_name: str,
+        chart_repo: str,
+        chart_version: str,
+        chart_meta_cache=None,
+    ) -> tuple[str, ...]:
+        _ = chart_name, chart_repo, chart_meta_cache
+        if chart_version == "9.9.9-ps.9":
+            return ("could not be resolved by helm (soperator): not found",)
+        return ()
+
+    monkeypatch.setattr(cli_module, "_resolve_helm_chart_validation_issues", _chart_issues)
+
+    result = runner.invoke(
+        app,
+        [
+            "create",
+            str(deployments_root),
+            "--no-interactive",
+            "--client-name",
+            "client-a",
+            "--tenant-id",
+            "tenant-123",
+            "--project-id",
+            "project-456",
+            "--validate-sources",
+            "--no-validate-config",
+            "--infra",
+            "mk8s",
+            "--app",
+            "soperator",
+            "--app-version",
+            "soperator=9.9.9-ps.9",
+        ],
+    )
+
+    assert result.exit_code == 1, result.output
+    assert "Requested app chart version validation failed" in result.output
+    assert "apps.charts[soperator@mk8s]" in result.output
+    assert "9.9.9-ps.9" in result.output
+    assert not _project_config_path(deployments_root).exists()
+
+
+def test_app_field_wizard_prompts_for_chart_version(monkeypatch: pytest.MonkeyPatch) -> None:
+    app_entry = cli_module.ComponentEntry(
+        id="soperator",
+        scope="apps",
+        config_path="apps.charts.soperator",
+        description="Soperator",
+        chart_name="soperator",
+        version="4.0.2-ps.1",
+        default_namespace="soperator",
+        default_release_name="soperator",
+    )
+    payload = {
+        "version": "v1",
+        "infra": {"components": []},
+        "apps": {
+            "charts": [
+                {
+                    "id": "soperator",
+                    "instance_id": "soperator",
+                    "enabled": True,
+                    "repo": "oci://example.invalid/charts/soperator",
+                    "version": "4.0.2-ps.1",
+                    "namespace": "soperator",
+                    "release-name": "soperator",
+                    "values": {},
+                }
+            ]
+        },
+    }
+    prompted_paths: list[str] = []
+
+    monkeypatch.setattr(cli_module, "_wizard_continue_phase", lambda *_args, **_kwargs: True)
+
+    def _prompt_scalar(path_label: str, current: object, **_kwargs) -> tuple[object, bool]:
+        prompted_paths.append(path_label)
+        if path_label.endswith(".version"):
+            return "4.0.1-ps.2", False
+        return current, False
+
+    monkeypatch.setattr(cli_module, "_prompt_scalar_override", _prompt_scalar)
+
+    updated_yaml, completed = cli_module._run_component_field_wizard(
+        config_yaml=yaml.safe_dump(payload, sort_keys=False),
+        selected_infra=set(),
+        selected_apps={"soperator"},
+        infra_entries=(),
+        app_entries=(app_entry,),
+        prompt_app_version_before_app_config=True,
+    )
+
+    updated = yaml.safe_load(updated_yaml)
+    assert completed is True
+    assert "apps.charts[0].version" in prompted_paths
+    assert updated["apps"]["charts"][0]["version"] == "4.0.1-ps.2"
+
+
+def test_app_wizard_prompts_for_chart_version_before_full_app_config(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app_entry = cli_module.ComponentEntry(
+        id="soperator",
+        scope="apps",
+        config_path="apps.charts.soperator",
+        description="Soperator",
+        chart_name="soperator",
+        version="4.0.2-ps.1",
+        default_namespace="soperator",
+        default_release_name="soperator",
+    )
+    payload = {
+        "version": "v1",
+        "infra": {"components": []},
+        "apps": {
+            "charts": [
+                {
+                    "id": "soperator",
+                    "instance_id": "soperator",
+                    "enabled": True,
+                    "repo": "oci://example.invalid/charts/soperator",
+                    "version": "4.0.2-ps.1",
+                    "namespace": "soperator",
+                    "release-name": "soperator",
+                    "values": {},
+                }
+            ]
+        },
+    }
+    prompted_paths: list[str] = []
+
+    monkeypatch.setattr(cli_module, "_wizard_continue_phase", lambda *_args, **_kwargs: False)
+
+    def _prompt_scalar(path_label: str, current: object, **_kwargs) -> tuple[object, bool]:
+        prompted_paths.append(path_label)
+        if path_label.endswith(".version"):
+            return "4.0.1-ps.2", False
+        return current, False
+
+    monkeypatch.setattr(cli_module, "_prompt_scalar_override", _prompt_scalar)
+
+    updated_yaml, completed = cli_module._run_component_field_wizard(
+        config_yaml=yaml.safe_dump(payload, sort_keys=False),
+        selected_infra=set(),
+        selected_apps={"soperator"},
+        infra_entries=(),
+        app_entries=(app_entry,),
+        prompt_app_version_before_app_config=True,
+    )
+
+    updated = yaml.safe_load(updated_yaml)
+    assert completed is True
+    assert prompted_paths == ["apps.charts[0].version"]
+    assert updated["apps"]["charts"][0]["version"] == "4.0.1-ps.2"
+
+
+def test_changed_app_chart_version_detection_uses_exact_helm_version() -> None:
+    app_entry = cli_module.ComponentEntry(
+        id="soperator",
+        scope="apps",
+        config_path="apps.charts.soperator",
+        description="Soperator",
+        chart_name="soperator",
+        version="4.0.2-ps.1",
+        default_namespace="soperator",
+        default_release_name="soperator",
+    )
+    payload = {
+        "infra": {
+            "components": [
+                {
+                    "id": "mk8s",
+                    "instance_id": "mk8s",
+                    "enabled": True,
+                    "inputs": {},
+                }
+            ]
+        },
+        "apps": {
+            "charts": [
+                {
+                    "id": "soperator",
+                    "instance_id": "mk8s",
+                    "enabled": True,
+                    "repo": "oci://example.invalid/charts/soperator",
+                    "version": "v4.0.2-ps.1",
+                    "namespace": "soperator",
+                    "release-name": "soperator",
+                    "values": {},
+                }
+            ]
+        },
+    }
+
+    assert cli_module._app_chart_ids_with_non_catalog_versions(
+        payload=payload,
+        app_entries=(app_entry,),
+    ) == {"soperator"}
 
 
 def test_create_rejects_enabled_app_without_mk8s_target(tmp_path: Path) -> None:
@@ -11532,6 +11793,189 @@ def test_component_add_noninteractive_adds_app_chart_and_preserves_existing_valu
     assert gateway_refreshed["namespace"] == "edge"
     assert gateway_refreshed["release-name"] == "edge-gateway"
     assert n8n_row["enabled"] is True
+
+
+def test_component_add_app_release_overrides_apply_to_added_chart(tmp_path: Path) -> None:
+    deployments_root = tmp_path / "deployments"
+    deployments_root.mkdir(parents=True, exist_ok=True)
+
+    created = _create_non_interactive(
+        deployments_root,
+        "--infra",
+        "mk8s",
+        "--app",
+        "none",
+    )
+    assert created.exit_code == 0, created.output
+
+    config_path = _project_config_path(deployments_root)
+    result = _component_add(
+        config_path,
+        "n8n",
+        "--no-interactive",
+        "--app-namespace",
+        "n8n=automation",
+        "--app-releasename",
+        "n8n=workflow-core",
+        "--app-version",
+        "n8n=1.2.3-test.1",
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    charts = payload.get("apps", {}).get("charts", [])
+    assert isinstance(charts, list)
+    n8n_row = next(
+        row for row in charts if isinstance(row, dict) and row.get("id") == "n8n"
+    )
+    assert n8n_row["namespace"] == "automation"
+    assert n8n_row["release-name"] == "workflow-core"
+    assert n8n_row["version"] == "1.2.3-test.1"
+
+
+def test_component_add_app_release_overrides_apply_to_each_added_target(
+    tmp_path: Path,
+) -> None:
+    deployments_root = tmp_path / "deployments"
+    deployments_root.mkdir(parents=True, exist_ok=True)
+
+    created = _create_non_interactive(
+        deployments_root,
+        "--infra",
+        "mk8s",
+        "--app",
+        "none",
+    )
+    assert created.exit_code == 0, created.output
+
+    config_path = _project_config_path(deployments_root)
+    add_cluster = _component_add(config_path, "mk8s@mk8s-2", "--no-interactive")
+    assert add_cluster.exit_code == 0, add_cluster.output
+
+    result = _component_add(
+        config_path,
+        "n8n@mk8s",
+        "n8n@mk8s-2",
+        "--no-interactive",
+        "--app-version",
+        "n8n=1.2.3-test.1",
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    charts = payload.get("apps", {}).get("charts", [])
+    assert isinstance(charts, list)
+    n8n_rows = [
+        row for row in charts if isinstance(row, dict) and row.get("id") == "n8n"
+    ]
+    assert {
+        (row.get("instance_id"), row.get("version")) for row in n8n_rows
+    } == {
+        ("mk8s", "1.2.3-test.1"),
+        ("mk8s-2", "1.2.3-test.1"),
+    }
+
+
+def test_component_add_app_version_override_validates_requested_chart_before_write(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    deployments_root = tmp_path / "deployments"
+    deployments_root.mkdir(parents=True, exist_ok=True)
+
+    created = _create_non_interactive(
+        deployments_root,
+        "--infra",
+        "mk8s",
+        "--app",
+        "none",
+    )
+    assert created.exit_code == 0, created.output
+
+    monkeypatch.setattr(cli_module, "_validate_component_sources_or_raise", lambda **_kwargs: None)
+
+    def _chart_issues(
+        *,
+        chart_name: str,
+        chart_repo: str,
+        chart_version: str,
+        chart_meta_cache=None,
+    ) -> tuple[str, ...]:
+        _ = chart_name, chart_repo, chart_meta_cache
+        if chart_version == "9.9.9-test.9":
+            return ("could not be resolved by helm (n8n): not found",)
+        return ()
+
+    monkeypatch.setattr(cli_module, "_resolve_helm_chart_validation_issues", _chart_issues)
+
+    config_path = _project_config_path(deployments_root)
+    original_config = config_path.read_text(encoding="utf-8")
+    result = runner.invoke(
+        app,
+        [
+            "component",
+            "add",
+            "n8n",
+            "--config",
+            str(config_path),
+            "--no-interactive",
+            "--validate-sources",
+            "--app-version",
+            "n8n=9.9.9-test.9",
+        ],
+    )
+
+    assert result.exit_code == 1, result.output
+    assert "Requested app chart version validation failed" in result.output
+    assert "apps.charts[n8n@mk8s]" in result.output
+    assert "9.9.9-test.9" in result.output
+    assert config_path.read_text(encoding="utf-8") == original_config
+
+
+def test_component_add_wizard_prompts_for_chart_version_before_full_app_config(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    deployments_root = tmp_path / "deployments"
+    deployments_root.mkdir(parents=True, exist_ok=True)
+
+    created = _create_non_interactive(
+        deployments_root,
+        "--infra",
+        "mk8s",
+        "--app",
+        "none",
+    )
+    assert created.exit_code == 0, created.output
+
+    def _wizard_phase(label: str, *, default: bool = True, allow_back: bool = False) -> bool:
+        _ = default, allow_back
+        return label == "Add selected components to config.yaml now?"
+
+    monkeypatch.setattr(cli_module, "_wizard_continue_phase", _wizard_phase)
+
+    prompted_paths: list[str] = []
+
+    def _prompt_scalar(path_label: str, current: object, **_kwargs) -> tuple[object, bool]:
+        prompted_paths.append(path_label)
+        if path_label.endswith(".version"):
+            return "1.2.3-test.1", False
+        return current, False
+
+    monkeypatch.setattr(cli_module, "_prompt_scalar_override", _prompt_scalar)
+
+    config_path = _project_config_path(deployments_root)
+    result = _component_add(config_path, "n8n")
+
+    assert result.exit_code == 0, result.output
+    assert prompted_paths == ["apps.charts[0].version"]
+    payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    charts = payload.get("apps", {}).get("charts", [])
+    assert isinstance(charts, list)
+    n8n_row = next(
+        row for row in charts if isinstance(row, dict) and row.get("id") == "n8n"
+    )
+    assert n8n_row["version"] == "1.2.3-test.1"
 
 
 def test_component_add_reuses_noninteractive_scope_validation_for_existing_config(

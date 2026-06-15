@@ -24,6 +24,8 @@ For skill-specific release notes, see [CHANGELOG.md](CHANGELOG.md).
 - Global context management for long Codex tasks: `global-context-management`
 - Stack-aware `.gitignore` generation and cleanup: `gitignore`
 - Helm chart hardening and validation: `helmchart`
+- Grafana MCP setup for Nebius Observability in Codex:
+  `install-grafana-mcp-for-nebius`
 - Shell, Markdown, and Python linting: `linter`
 - Nebius cloud automation, quota, and MK8s GPU workflows: `nebius`
 - Nebius cxcli component onboarding: `onboard-nebius-cxcli`
@@ -185,6 +187,14 @@ VS Code defaults, then extends it for the detected stack.
 
 `helmchart` applies Helm chart best practices across metadata, values,
 templates, schema, and validation.
+
+### `install-grafana-mcp-for-nebius`
+
+`install-grafana-mcp-for-nebius` installs and configures the official Grafana
+MCP server for Codex, refreshes the Nebius-managed Grafana token file, keeps
+external Grafana service-account/static-key setup out of the default path, and
+guides agents through idempotent Codex MCP registration, datasource discovery,
+Prometheus, Loki, trace-tool checks, and read-only validation.
 
 ### `linter`
 
