@@ -28812,9 +28812,65 @@ def _mysterybox_eso_report_path(spec: Mapping[str, Any], *, reports_dir: Path) -
     return reports_dir / "mysterybox-eso-connectivity-report.json"
 
 
-def _mysterybox_eso_write_report(path: Path, payload: Mapping[str, Any]) -> None:
+def _mysterybox_eso_report_check(check: Mapping[str, Any]) -> dict[str, Any]:
+    details = check.get("details")
+    safe_details: dict[str, Any] = {}
+    if isinstance(details, Mapping):
+        for key in (
+            "resource",
+            "ready_status",
+            "reason",
+            "message",
+            "observed_generation",
+            "namespace",
+            "since_time",
+            "api_domain",
+            "summary_lines",
+            "image",
+        ):
+            if key in details:
+                safe_details[key] = details[key]
+        matched_lines = details.get("matched_lines")
+        if isinstance(matched_lines, list):
+            safe_details["matched_line_count"] = len(matched_lines)
+        failure_lines = details.get("failure_lines")
+        if isinstance(failure_lines, list):
+            safe_details["failure_line_count"] = len(failure_lines)
+    return {
+        "name": str(check.get("name") or "").strip(),
+        "passed": bool(check.get("passed")),
+        "summary": str(check.get("summary") or "").strip(),
+        "details": safe_details,
+    }
+
+
+def _mysterybox_eso_write_report(
+    path: Path,
+    *,
+    validation_name: str,
+    target_ref: str,
+    api_domain: str,
+    store_name: str,
+    eso_namespace: str,
+    synced_resource_count: int,
+    checked_at: datetime,
+    passed: bool,
+    checks: Sequence[Mapping[str, Any]],
+) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(dict(payload), indent=2, sort_keys=False) + "\n", encoding="utf-8")
+    report = {
+        "validation": validation_name,
+        "kind": MYSTERYBOX_ESO_CONNECTIVITY_VALIDATION_KIND,
+        "target_ref": target_ref,
+        "api_domain": api_domain,
+        "store_name": store_name,
+        "eso_namespace": eso_namespace,
+        "synced_resource_count": synced_resource_count,
+        "checked_at": checked_at.isoformat(),
+        "passed": bool(passed),
+        "checks": [_mysterybox_eso_report_check(check) for check in checks],
+    }
+    path.write_text(json.dumps(report, indent=2, sort_keys=False) + "\n", encoding="utf-8")
 
 
 def _mysterybox_eso_check(
@@ -29094,19 +29150,18 @@ def _run_mysterybox_eso_connectivity_validation(
 
     passed = all(bool(check.get("passed")) for check in checks)
     report_path = _mysterybox_eso_report_path(spec, reports_dir=reports_dir)
-    report = {
-        "validation": validation_name,
-        "kind": MYSTERYBOX_ESO_CONNECTIVITY_VALIDATION_KIND,
-        "target_ref": str(spec.get(TARGET_REF_FIELD) or "").strip(),
-        "api_domain": api_domain,
-        "store_name": store_name,
-        "eso_namespace": eso_namespace,
-        "synced_resource_count": len(external_secrets),
-        "checked_at": datetime.now(UTC).isoformat(),
-        "passed": passed,
-        "checks": checks,
-    }
-    _mysterybox_eso_write_report(report_path, report)
+    _mysterybox_eso_write_report(
+        report_path,
+        validation_name=validation_name,
+        target_ref=str(spec.get(TARGET_REF_FIELD) or "").strip(),
+        api_domain=api_domain,
+        store_name=store_name,
+        eso_namespace=eso_namespace,
+        synced_resource_count=len(external_secrets),
+        checked_at=datetime.now(UTC),
+        passed=passed,
+        checks=checks,
+    )
     if not passed:
         failures = [str(check.get("summary")) for check in checks if not bool(check.get("passed"))]
         raise RuntimeError(
