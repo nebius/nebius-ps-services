@@ -188,7 +188,10 @@ def assert_agent_delegation_context(context: str) -> None:
         raise AssertionError("non-read-only agent leaked into context")
     if "agents/alpha_mapper.toml" in context:
         raise AssertionError("agent config path leaked into context")
-    if "Local policy permits read-only subagent delegation" not in context:
+    if (
+        "Local policy requests bounded read-only subagent delegation"
+        not in context
+    ):
         raise AssertionError("delegation policy context missing")
     if "Available read-only roles:" not in context:
         raise AssertionError("read-only role list missing")
@@ -517,7 +520,7 @@ def validate_direct_hooks(root: Path, codex_home: Path, home: Path) -> None:
         raise AssertionError("UserPromptSubmit should not route sdlc-start")
     if "Apply the `global-context-management` skill" in context:
         raise AssertionError("UserPromptSubmit should not directly select skills")
-    if "Local policy permits read-only subagent delegation" in context:
+    if "Local policy requests bounded read-only subagent delegation" in context:
         raise AssertionError("delegation context appeared before policy opt-in")
     if "For every subagent you spawn" in context:
         raise AssertionError("UserPromptSubmit repeated subagent workflow detail")
@@ -576,7 +579,10 @@ def validate_direct_hooks(root: Path, codex_home: Path, home: Path) -> None:
     env_override_context = json.loads(env_override_result.stdout)["hookSpecificOutput"][
         "additionalContext"
     ]
-    if "Local policy permits read-only subagent delegation" in env_override_context:
+    if (
+        "Local policy requests bounded read-only subagent delegation"
+        in env_override_context
+    ):
         raise AssertionError("environment override unexpectedly enabled delegation")
 
     write_agent_fixture(codex_home, enable_policy=True)

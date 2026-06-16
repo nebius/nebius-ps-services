@@ -13608,13 +13608,39 @@ def _soperator_apply_profile_node_group_count_inputs(
         if isinstance(group, dict):
             default_node_count = _positive_int(raw_group.get("node_count"), default=1)
             scale_node_count = node_count if node_count is not None else default_node_count
+            default_autoscaling = raw_group.get("autoscaling")
+            default_autoscaling_min_node_count = scale_node_count
+            default_autoscaling_max_node_count = scale_node_count
+            if isinstance(default_autoscaling, Mapping):
+                default_autoscaling_min_node_count = _positive_int(
+                    default_autoscaling.get("min_node_count"),
+                    default=scale_node_count,
+                )
+                default_autoscaling_max_node_count = _positive_int(
+                    default_autoscaling.get("max_node_count"),
+                    default=max(default_autoscaling_min_node_count, scale_node_count),
+                )
             autoscaling = _soperator_profile_autoscaling_input(
                 inputs=inputs,
                 raw_group=raw_group,
-                default_min_node_count=scale_node_count,
-                default_max_node_count=scale_node_count,
+                default_min_node_count=default_autoscaling_min_node_count,
+                default_max_node_count=default_autoscaling_max_node_count,
                 min_max_node_count=1,
             )
+            autoscaling_input = _non_empty_text(raw_group.get("autoscaling_input"))
+            raw_autoscaling_input = (
+                _mapping_path_value(inputs, autoscaling_input) if autoscaling_input else None
+            )
+            if (
+                autoscaling is None
+                and node_count is None
+                and not isinstance(raw_autoscaling_input, Mapping)
+                and isinstance(default_autoscaling, Mapping)
+            ):
+                autoscaling = {
+                    "min_node_count": default_autoscaling_min_node_count,
+                    "max_node_count": default_autoscaling_max_node_count,
+                }
             _soperator_set_node_group_scale(
                 group,
                 node_count=scale_node_count,
@@ -15302,7 +15328,19 @@ def _materialize_soperator_component_defaults(payload: dict[str, Any]) -> bool:
                 if isinstance(sfs_values, dict):
                     filesystems_values = sfs_values.setdefault("filesystems", {})
                     if isinstance(filesystems_values, dict):
-                        _merge_missing_mapping(filesystems_values, soperator_filesystems)
+                        for filesystem_key, filesystem_spec in soperator_filesystems.items():
+                            if not isinstance(filesystem_spec, Mapping):
+                                filesystems_values[filesystem_key] = copy.deepcopy(
+                                    to_plain_data(filesystem_spec)
+                                )
+                                continue
+                            target_filesystem = filesystems_values.setdefault(filesystem_key, {})
+                            if isinstance(target_filesystem, dict):
+                                _merge_replace_mapping(target_filesystem, filesystem_spec)
+                            else:
+                                filesystems_values[filesystem_key] = copy.deepcopy(
+                                    to_plain_data(filesystem_spec)
+                                )
                 volume_values = values.setdefault("volume", {})
                 if isinstance(volume_values, dict):
                     jail_fs = soperator_filesystems.get("jail", {})
@@ -15310,37 +15348,29 @@ def _materialize_soperator_component_defaults(payload: dict[str, Any]) -> bool:
                         jail_values = volume_values.setdefault("jail", {})
                         if isinstance(jail_values, dict):
                             if "size_gib" in jail_fs:
-                                jail_values.setdefault("size", f"{jail_fs['size_gib']}Gi")
+                                jail_values["size"] = f"{jail_fs['size_gib']}Gi"
                             if str(jail_fs.get("mount_tag", "") or "").strip():
-                                jail_values.setdefault("filestoreDeviceName", jail_fs["mount_tag"])
+                                jail_values["filestoreDeviceName"] = jail_fs["mount_tag"]
                     controller_fs = soperator_filesystems.get("controller-spool", {})
                     if isinstance(controller_fs, Mapping):
                         controller_values = volume_values.setdefault("controllerSpool", {})
                         if isinstance(controller_values, dict):
                             if "size_gib" in controller_fs:
-                                controller_values.setdefault(
-                                    "size",
-                                    f"{controller_fs['size_gib']}Gi",
-                                )
+                                controller_values["size"] = f"{controller_fs['size_gib']}Gi"
                             if str(controller_fs.get("mount_tag", "") or "").strip():
-                                controller_values.setdefault(
-                                    "filestoreDeviceName",
-                                    controller_fs["mount_tag"],
-                                )
+                                controller_values["filestoreDeviceName"] = controller_fs[
+                                    "mount_tag"
+                                ]
                     accounting_fs = soperator_filesystems.get("accounting", {})
                     if isinstance(accounting_fs, Mapping):
                         accounting_values = volume_values.setdefault("accounting", {})
                         if isinstance(accounting_values, dict):
                             if "size_gib" in accounting_fs:
-                                accounting_values.setdefault(
-                                    "size",
-                                    f"{accounting_fs['size_gib']}Gi",
-                                )
+                                accounting_values["size"] = f"{accounting_fs['size_gib']}Gi"
                             if str(accounting_fs.get("mount_tag", "") or "").strip():
-                                accounting_values.setdefault(
-                                    "filestoreDeviceName",
-                                    accounting_fs["mount_tag"],
-                                )
+                                accounting_values["filestoreDeviceName"] = accounting_fs[
+                                    "mount_tag"
+                                ]
         if row != before:
             changed = True
     return changed

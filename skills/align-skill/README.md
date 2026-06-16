@@ -67,6 +67,24 @@ align-skill checks structure, safety, docs, and validation
   final-answer-only summaries.
 - Do not claim runtime activation unless the target Codex surface proves it.
 
+## Stateful Workflow Skills
+
+A stateful workflow skill is a skill that must resume, coordinate, or validate
+work from durable state or artifacts instead of only reacting to the current
+prompt. It usually reads a known state file, locked plan, checkpoint, or
+evidence bundle; writes updated state, evidence, or external progress; and
+defines how reruns avoid duplicate work.
+
+Use the stateful-workflow profile when a skill coordinates phases, selects the
+next skill, owns local run state, writes evidence, handles retries, or routes
+failures. Do not use it for simple instruction-only skills that can run from the
+prompt and current files alone.
+
+Concise example: `sdlc-start` is stateful because it reads the active SDLC run
+state, selects the next `sdlc-*` phase, writes checkpoints, and resumes safely
+after retries or compaction. A simple `.gitignore` cleanup skill is not
+stateful if it only inspects files, edits `.gitignore`, and reports the result.
+
 ## Files
 
 - `SKILL.md`: runtime alignment workflow for skills.

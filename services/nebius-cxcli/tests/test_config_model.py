@@ -270,7 +270,7 @@ def test_normalize_runtime_config_prunes_cpu_soperator_gpu_node_group_defaults()
                         "node_group_defaults": {
                             "cpu": {
                                 "platform": "cpu-d3",
-                                "preset": "8vcpu-32gb",
+                                "preset": "32vcpu-128gb",
                             },
                             "gpu": {
                                 "platform": "gpu-h100-sxm",
@@ -304,7 +304,7 @@ def test_normalize_runtime_config_prunes_cpu_soperator_gpu_node_group_defaults()
     assert normalize_runtime_config_payload(payload) is True
 
     defaults = payload["infra"]["components"][0]["inputs"]["node_group_defaults"]
-    assert defaults == {"cpu": {"platform": "cpu-d3", "preset": "8vcpu-32gb"}}
+    assert defaults == {"cpu": {"platform": "cpu-d3", "preset": "32vcpu-128gb"}}
     assert "gpu_clusters" not in payload["infra"]["components"][0]["inputs"]
 
 

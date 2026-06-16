@@ -72,9 +72,11 @@ global file.
   the parent thread.
 - Use bounded read-only subagents for noisy exploration when the user
   explicitly requests delegation, or when a user-enabled local hook policy
-  injects that request, and subagents are available and useful. Use a read-only
-  risk review before finalizing non-trivial changes only when
-  delegation is authorized and permitted.
+  injects that request, and subagents are useful, available, and permitted.
+  After authorization, choose targeted helper roles yourself instead of waiting
+  for the user to name an exact role. Use a read-only risk review before
+  finalizing non-trivial changes only when delegation is authorized, useful,
+  available, and permitted.
 - When subagents are used, ask them for concise final summaries, wait for the
   result, consolidate it in the parent thread, and close completed subagent
   threads when close controls are available and no follow-up is needed.
@@ -125,7 +127,9 @@ they do not count as authorization, and they do not guarantee a separate
 user-visible control in every Codex surface. Current public Codex docs say
 Codex only spawns subagents when explicitly asked. In this workflow, that
 explicit request can come from the prompt, or from the optional local hook
-policy below when active runtime instructions accept the hook context.
+policy below when active runtime instructions accept the hook context. Once
+delegation is authorized, Codex should choose targeted helper roles when they
+are useful; the prompt does not need to name a specific role.
 When delegation is authorized and useful but the active tool list does not show
 subagent controls, and `tool_search` is available, Codex should search for
 multi-agent/subagent tools before reporting delegation unavailable.
@@ -149,11 +153,12 @@ local-only policy file:
 Save it as `$CODEX_HOME/hooks/global_context_policy.json`. The hook will read
 `$CODEX_HOME/config.toml`, discover configured `[agents.<name>]` entries whose
 referenced configs under `$CODEX_HOME` have `sandbox_mode = "read-only"`, and
-add those read-only role names as a model-visible hint. It does not inject local
-agent config paths and does not directly call the subagent tool. The hint is
-local-policy context for that turn, so the main agent still uses read-only
-helpers only when useful, available, and permitted. The hint tells Codex not to
-spawn every configured role by default. The parent agent still owns
+add those read-only role names as a model-visible delegation request. It does
+not inject local agent config paths and does not directly call the subagent
+tool. The hint is local-policy context for that turn, so the main agent still
+uses targeted read-only helpers only when useful, available, and permitted. The
+hint tells Codex not to spawn every configured role by default. The parent
+agent still owns
 lifecycle cleanup: wait for returned summaries, consolidate them, and close
 completed subagent threads when close controls are available and no follow-up
 is needed. With multiple subagents, close each completed handle as its
@@ -231,14 +236,15 @@ If the probe does not spawn a subagent, check:
   can discover deferred multi-agent/subagent tools.
 - The user prompt explicitly asks Codex to use or spawn subagents, use
   delegation, or run parallel agents, or the enabled local hook policy adds a
-  delegation request for the prompt.
+  bounded read-only delegation request for the prompt.
 - The current user or developer instructions permit delegation for the task.
 
 If `$CODEX_HOME/hooks/global_context_policy.json` is enabled, also run a
 complex prompt without naming a specific subagent and confirm the hook-injected
-context discovers the configured read-only agent names. If it does not, check
-that the hook was trusted after the file changed and that each referenced
-agent config uses `sandbox_mode = "read-only"`.
+context discovers the configured read-only agent names and requests bounded
+read-only delegation. Codex may then choose useful targeted roles itself. If it
+does not, check that the hook was trusted after the file changed and that each
+referenced agent config uses `sandbox_mode = "read-only"`.
 
 Even when the probe succeeds, context can still grow quickly if broad command
 output, long logs, large file dumps, or repeated exploration are returned in

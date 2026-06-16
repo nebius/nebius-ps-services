@@ -62,9 +62,11 @@
   the parent thread.
 - Use bounded read-only subagents for noisy exploration when the user
   explicitly requests delegation, or when a user-enabled local hook policy
-  injects that request, and subagents are available and permitted. Ask helpers
-  for concise summaries, consolidate results, and close completed helpers when
-  close controls are available.
+  injects that request, and subagents are useful, available, and permitted.
+  After authorization, choose targeted helper roles yourself instead of waiting
+  for the user to name an exact role. Ask helpers for concise summaries,
+  consolidate results, and close completed helpers when close controls are
+  available.
 - After making code changes in a turn, before the final response, explicitly
   use `$align` for the changed scope unless the user says not to. If `$align`
   is unavailable, perform the equivalent local alignment checklist and say so.

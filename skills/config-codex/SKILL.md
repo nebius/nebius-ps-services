@@ -196,7 +196,10 @@ search for multi-agent/subagent tools before reporting delegation unavailable.
 If a local hook policy is enabled, verify it in a fresh trusted-hook session
 before claiming hook-assisted delegation works. Do not claim that hooks,
 skills, `multi_agent`, or `[agents.*]` config force automatic delegation; they
-only make delegation possible when the runtime policy allows it.
+only make delegation possible when the runtime policy allows it. After a prompt
+or local hook policy request authorizes delegation, the fresh session may choose
+targeted read-only helper roles itself; the prompt does not need to name the
+exact role.
 
 ## References
 

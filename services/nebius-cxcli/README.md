@@ -1333,7 +1333,9 @@ Wizard field behavior:
   and `component add` print explicit adjusted-selection reasons for those
   Soperator-owned additions. The Soperator create/component wizard uses
   `production-cluster` and creates the complete MK8s+SFS+Soperator five-role
-  bundle. Existing Nebius MK8s clusters use the dedicated
+  bundle with `system` autoscaling from 3 to 5 nodes, two fixed `controller`,
+  `login`, and `accounting` nodes, and one worker node by default. Existing
+  Nebius MK8s clusters use the dedicated
   [Soperator Commands](#soperator-commands) workflow: `ext-soperator onboard`
   registers the external target and `ext-soperator migrate` plans or executes
   approved source-cluster migration without Terraform-importing the cluster.
@@ -1346,9 +1348,9 @@ Wizard field behavior:
   chart-managed MariaDB accounting, and Slurm REST so worker NodeSets are
   registered before worker pods undrain themselves. It also mounts
   generated Slurm scripts into worker NodeSets and points Slurm at the plugin
-  directory used by the pinned images, which keeps basic `srun` jobs runnable
-  from the default chart values. For GPU NodeSets, the chart derives Slurm
-  `Gres=gpu:<count>` from `slurmd.resources.gpu`, so the profile does not
+  directory used by the selected chart images, which keeps basic `srun` jobs
+  runnable from the default chart values. For GPU NodeSets, the chart derives
+  Slurm `Gres=gpu:<count>` from `slurmd.resources.gpu`, so the profile does not
   duplicate GPU counts but GPU partitions still accept `--gres=gpu:*` jobs. For
   Soperator cert-manager and MariaDB webhook chart values, cxcli treats
   generated YAML `null` booleans as unset before render so optional wizard skips
@@ -1572,16 +1574,19 @@ Wizard field behavior:
   small external CPU pools can pass first install; production-cluster mode keeps
   the chart's production resource defaults, and operators can still override
   the rendered Helm values in `config.yaml`. Fresh production-cluster profiles
-  use `cpu-d3/8vcpu-32gb` for catalog-owned CPU role groups and taint the login
-  group with `slurm.nebius.ai/nodeset-name=login:NoSchedule` so the Soperator
-  login pod has enough dedicated capacity instead of competing with generic
-  cluster workloads. The production wizard now exposes curated service-role
+  use `cpu-d3/32vcpu-128gb` for catalog-owned CPU role groups and taint the
+  login group with `slurm.nebius.ai/nodeset-name=login:NoSchedule` so the
+  Soperator login pod has enough dedicated capacity instead of competing with
+  generic cluster workloads. The production wizard now exposes curated service-role
   node count helpers under `inputs.soperator.system_node_count`,
   `controller_node_count`, `login_node_count`, and `accounting_node_count`,
   plus per-role autoscaling helpers under
   `inputs.soperator.<role>_autoscaling.*` for `system`, `controller`,
-  `login`, `accounting`, and `worker`. Autoscaling helpers are disabled by
-  default. When one is enabled, cxcli materializes the matching concrete
+  `login`, `accounting`, and `worker`. Production profiles default the
+  `system` role to autoscaling from 3 to 5 nodes. `controller`, `login`, and
+  `accounting` default to two fixed nodes each, and worker capacity defaults to
+  one node. Other autoscaling helpers are disabled by default. When one is
+  enabled, cxcli materializes the matching concrete
   `inputs.node_groups.*.autoscaling` block and omits `node_count`; otherwise it
   writes the fixed count. Raw profile-owned `inputs.node_groups.*` prompts stay
   hidden.
@@ -1600,10 +1605,14 @@ Wizard field behavior:
   catalog-derived `values.partitionProfile` and `values.topologyProfile`
   choices for the selected worker profile. Those profiles fill or replace
   catalog-owned defaults only; repeated create/render materialization preserves
-  explicit operator edits to the same value paths. The production profiles seed
-  a catalog-owned CPU shape for `system`, `controller`, `login`, `accounting`,
-  and CPU worker node groups so every Terraform `node_groups` entry has the
-  required `platform` and `preset` fields before render. The opt-in
+  explicit operator edits to the same value paths. Profile-owned NodeSet values
+  intentionally leave worker `slurmd` and `munge` image selection to the
+  selected Soperator chart defaults, so bumping the app source version does not
+  require duplicating worker image tags in `component_cli_settings.yaml`. The
+  production profiles seed a catalog-owned CPU shape for `system`,
+  `controller`, `login`, `accounting`, and CPU worker node groups so every
+  Terraform `node_groups` entry has the required `platform` and `preset` fields
+  before render. The opt-in
   `with-qos-preemption` partition profile writes persistent Slurm
   `PreemptType=preempt/qos` config plus `debug`, `eval`, `train`, and `data`
   policy partitions and standard QOS object definitions. The bundled profile
@@ -1626,9 +1635,11 @@ Wizard field behavior:
   sharded by `worker_nodes_per_group`, minimum nodes are distributed across the
   generated groups, and NodeSet replicas reflect each shard's max, including an
   explicit `0..0` scale-to-zero worker range. CPU
-  service-role counts are independent of worker sharding and use the dedicated
-  `inputs.soperator.*_node_count` helpers unless that role's autoscaling helper
-  is enabled; service-role autoscaling must keep `max_node_count` at least `1`.
+  service-role counts are independent of worker sharding: `system` defaults to
+  autoscaling 3..5, and if that helper is disabled it falls back to fixed count
+  3; `controller`, `login`, and `accounting` default to fixed count 2 unless
+  their autoscaling helpers are enabled. Service-role autoscaling must keep
+  `max_node_count` at least `1`.
   NFS stays a VM-based sibling infra component, not an MK8s node
   group.
 - The five-role Nebius Soperator production shape and Slurm topology are separate concerns. The five role groups provide workload isolation and placement for `system`, `controller`, `login`, `accounting`, and `worker`. Slurm topology is an additional worker-placement optimization for distributed jobs that care about physical or fabric locality, especially multi-node GPU/NCCL jobs.
@@ -2139,8 +2150,12 @@ Helm values into `config.yaml`. Slurm users still own per-job choices such as
 `--qos`, `--nice`, `--time`, and `--requeue`.
 For production clusters, cxcli keeps raw profile-owned `inputs.node_groups.*`
 prompts hidden but exposes `inputs.soperator.*_node_count` helpers for CPU
-service-role counts and disabled-by-default `inputs.soperator.*_autoscaling`
-helpers for every Soperator-managed role. Worker fixed sizing stays on
+service-role counts and `inputs.soperator.*_autoscaling` helpers for every
+Soperator-managed role. The `system` service role defaults to autoscaling from
+3 to 5 nodes; disabling that helper falls back to three fixed nodes.
+`controller`, `login`, and `accounting` default to two fixed nodes each, with
+their autoscaling helpers disabled unless the operator enables them. Worker
+fixed sizing stays on
 `soperator.worker_total_nodes` and `worker_nodes_per_group`; worker autoscaling
 uses `worker_autoscaling.max_node_count` with the same shard size and preserves
 an explicit `0..0` scale-to-zero range. CPU service-role counts are independent
@@ -3937,7 +3952,9 @@ nebius-cxcli auth --project-config /path/to/config.yaml --validate-profile
     `production-cluster` and asks for the worker profile before MK8s/SFS field
     materialization so CPU-only, GPU-only, or mixed layout is known before
     shape/fabric helpers and target GPU validation prompts. `production-cluster`
-    creates the complete MK8s+SFS+Soperator five-role bundle and skips external
+    creates the complete MK8s+SFS+Soperator five-role bundle with `system`
+    autoscaling from 3 to 5 nodes, two fixed `controller`, `login`, and
+    `accounting` nodes, one worker node by default, and skips external
     role-mapping prompts. Existing external Nebius MK8s targets should use
     `nebius-cxcli ext-soperator onboard <config.yaml-or-deployments-root>`; see
     [Soperator Commands](#soperator-commands) for onboarding, migration, and

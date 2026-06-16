@@ -169,13 +169,14 @@ read-only subagents for complex prompts, create this local-only file:
 ```
 
 Save it as `$CODEX_HOME/hooks/global_context_policy.json`. The public templates
-do not hardcode agent names for this path. The hook reads `$CODEX_HOME/config.toml`,
-discovers `[agents.<name>]` entries whose referenced config files have
-`sandbox_mode = "read-only"`, and injects those agent names into model-visible
-context. It does not inject local agent config paths, and it does not directly
-call the subagent tool. The hint is local-policy context for that turn, so the
-main agent still uses read-only helpers only when useful, available, and
-permitted.
+do not hardcode agent names for this path. The hook reads
+`$CODEX_HOME/config.toml`, discovers `[agents.<name>]` entries whose referenced
+config files have `sandbox_mode = "read-only"`, and injects those agent names
+into model-visible context as a bounded read-only delegation request. It does
+not inject local agent config paths, and it does not directly call the subagent
+tool. The hint is local-policy context for that turn, so the main agent still
+uses targeted read-only helpers only when useful, available, and permitted.
+After authorization, the prompt does not need to name a specific helper role.
 The parent agent still owns lifecycle cleanup: wait for returned summaries,
 consolidate them, and close completed subagent threads when close controls are
 available and no follow-up is needed.
@@ -350,7 +351,9 @@ If that succeeds but ordinary complex prompts do not spawn subagents, the
 configuration is working; the remaining gate is delegation authorization. A
 prompt can explicitly ask for subagents, delegation, or parallel agents, and
 the optional local hook policy can inject that request for complex prompts
-after it is enabled and trusted in a fresh session.
+after it is enabled and trusted in a fresh session. Once authorization is
+present, Codex may choose useful targeted roles itself; the prompt does not
+need to name the exact role.
 
 If the explicit probe does not see subagent controls but `tool_search` is
 available, the agent should search for multi-agent/subagent tools before

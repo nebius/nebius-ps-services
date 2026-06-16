@@ -274,7 +274,7 @@ def subagent_context(home: Path) -> str:
     review: list[str] = []
     lines = [
         "",
-        "Local policy permits read-only subagent delegation for this prompt.",
+        "Local policy requests bounded read-only subagent delegation for this prompt when useful.",
         "Available read-only roles:",
     ]
     for agent in agents:
@@ -299,8 +299,8 @@ def subagent_context(home: Path) -> str:
     if role_hint_parts:
         lines.append("Suggested role timing: " + "; ".join(role_hint_parts) + ".")
     lines.append(
-        "Use only targeted roles when useful, available, and permitted; do not "
-        "spawn every role by default."
+        "Use targeted roles when useful, available, and permitted; do not spawn "
+        "every role by default."
     )
     return "\n".join(lines) + "\n"
 
@@ -337,8 +337,8 @@ creating a manual fallback path or repo-local state file.
 
 {task_state_context}
 Keep raw exploration output out of the parent context. Use configured read-only
-subagents only when delegation is authorized by the user prompt or local hook
-policy, the runtime exposes subagent tools, and active instructions permit it.
+subagents when delegation is authorized by the user prompt or local hook policy,
+the runtime exposes subagent tools, and active instructions permit it.
 This hook does not route SDLC phases, parse requirements, select workflow
 skills, create run state, or inject large documents.
 {subagent_context(home)}"""

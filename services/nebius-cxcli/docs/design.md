@@ -791,7 +791,7 @@ Production profiles also seed a catalog-owned CPU shape under
 `inputs.node_group_defaults.cpu` so the generated `system`, `controller`,
 `login`, `accounting`, and CPU worker groups all carry the MK8s module's
 required `platform` and `preset` fields before render. The built-in production
-profiles use `cpu-d3/8vcpu-32gb` for those CPU role groups so Soperator's
+profiles use `cpu-d3/32vcpu-128gb` for those CPU role groups so Soperator's
 production controller/login requests can schedule alongside Kubernetes daemon
 overhead. The `nebius-cpu-v1` profile maps Slurm workers only to `worker-cpu`,
 keeps the service groups out of the CPU partition, and disables the Soperator
@@ -1302,8 +1302,9 @@ If the operator answers `n` to the app field phase, cxcli keeps the catalog
 production chart config defaults: five-role GPU layout (`system`, `controller`,
 `login`, `accounting`, and GPU `worker`), SFS jail/controller-spool/accounting
 filesystems, Slurm accounting, SlurmDBD, and chart-managed MariaDB enabled with
-storage bound to the accounting SFS-backed `slurm-local-pv` class, one node in
-each generated role group by default, with
+storage bound to the accounting SFS-backed `slurm-local-pv` class, `system`
+autoscaling from 3 to 5 nodes, two fixed `controller`, `login`, and
+`accounting` nodes, one worker node by default, with
 ActiveChecks, checks controller, Soperator DCGM job mapping, notifier, backup,
 QoS reconcile, SSSD, and the NodeConfigurator rebooter disabled. Exact
 descendant wizard entries can still prompt under `values.*`; broad chart
@@ -1750,7 +1751,7 @@ Wizard field/option model:
 - The bundled `mk8s` source entry also sets `defaults.inputs.cluster.kube_network.service_cidrs: ["/20"]`. Nebius defaults omitted MK8s service CIDRs to `["/16"]`; on a single-pool `/16` subnet that can consume the entire pool and stall control-plane provisioning. `validate` and `deploy` now preflight that case against the live subnet before Terraform apply, and the same VPC networking preflight verifies that selected subnet IDs belong to the selected project VPC network.
 - The bundled `mk8s` source entry does not default `inputs.node_groups`; the wizard materializes explicit typed node groups from profile data or operator answers so the rendered config owns every node-group role, size, platform, preset, storage, reservation, service account, and SSH assignment. Node-group service-account assignment defaults to none; the wizard only writes `service_account` when the operator selects an existing service account ID or a create-by-name path.
 - For a plain MK8s-only target, the interactive flow enters a node-group creation loop after the cluster fields. Each loop iteration writes one concrete `inputs.node_groups.<name>` entry and asks for the node-group name, autoscaling or fixed size, CPU/GPU resource type, preemptible flag, platform, preset, optional GPU cluster fabric, GPU reservation policy and tenant Capacity Block Group IDs when relevant, OS, boot-disk type/size, same-session SFS attachment keys when available, SSH public-key attachment, and service-account attachment. The reservation policy prompt follows platform/preset/fabric selection because Capacity Block Groups are matched by region, service, platform, and fabric; if the selected live shape or fabric exposes reserved capacity, the default policy is `AUTO`, otherwise it is `FORBID`.
-- The bundled MK8s flow also treats effective node-group prerequisites as conditionally required: each concrete enabled `inputs.node_groups.*` entry must provide effective `platform` and `preset`, plus either `node_count` or enabled autoscaling. For a plain MK8s-only target, the default CPU baseline group name is `system`; `node_group_defaults.*` is a profile helper surface used only when another flow, such as Soperator `production-cluster`, materializes profile-owned groups into concrete `inputs.node_groups` and `inputs.gpu_clusters`. Runtime config normalization prunes inactive helper blocks for bundled MK8s-only configs, while preserving custom module/catalog entries that explicitly declare or seed that input. Profile-owned Soperator boot-disk defaults merge into concrete node groups and preserve cxcli-computed `size_gibibytes` values. The curated `inputs.soperator.*_node_count` helpers materialize CPU service-role fixed sizes for `system`, `controller`, `login`, and `accounting`; disabled-by-default `inputs.soperator.*_autoscaling` helpers materialize concrete node-group autoscaling blocks for those roles and `worker` when enabled, omitting fixed `node_count` so rendered Terraform node-group templates keep the provider-valid scale contract. When a Soperator autoscaling helper is disabled again, materialization restores the profile fixed count and removes any stale concrete `autoscaling` block.
+- The bundled MK8s flow also treats effective node-group prerequisites as conditionally required: each concrete enabled `inputs.node_groups.*` entry must provide effective `platform` and `preset`, plus either `node_count` or enabled autoscaling. For a plain MK8s-only target, the default CPU baseline group name is `system`; `node_group_defaults.*` is a profile helper surface used only when another flow, such as Soperator `production-cluster`, materializes profile-owned groups into concrete `inputs.node_groups` and `inputs.gpu_clusters`. Runtime config normalization prunes inactive helper blocks for bundled MK8s-only configs, while preserving custom module/catalog entries that explicitly declare or seed that input. Profile-owned Soperator boot-disk defaults merge into concrete node groups and preserve cxcli-computed `size_gibibytes` values. The curated `inputs.soperator.*_node_count` helpers materialize CPU service-role fixed sizes for `system`, `controller`, `login`, and `accounting`; `system` autoscaling defaults to enabled with a 3..5 node range, and disabling it restores fixed count 3. `controller`, `login`, `accounting`, and `worker` autoscaling helpers default to disabled; enabling any role helper materializes a concrete node-group autoscaling block and omits fixed `node_count` so rendered Terraform node-group templates keep the provider-valid scale contract. When a Soperator autoscaling helper is disabled again, materialization restores the profile fixed count and removes any stale concrete `autoscaling` block.
 - `component_sources.yaml` can declare consumer-side `input` bindings so component outputs feed other component inputs without adding hardcoded wiring to the CLI.
 - Interactive field prompting now offers all discoverable required and optional component fields for newly selected components.
 - Per-component field phases default to `y` for infra modules and `n` for app charts, because Helm/chart defaults still cover the app case unless the operator explicitly wants overrides.
@@ -2690,17 +2691,22 @@ Profile concepts:
   curated CPU service-role count helpers:
   `inputs.soperator.system_node_count`,
   `controller_node_count`, `login_node_count`, and `accounting_node_count`.
-  It also exposes disabled-by-default `inputs.soperator.*_autoscaling` helpers
-  for `system`, `controller`, `login`, `accounting`, and `worker`; enabling a
-  helper writes concrete `inputs.node_groups.*.autoscaling` and suppresses the
-  fixed count for that role. Disabling it restores that role's fixed profile
-  count and removes any stale concrete autoscaling block. Worker fixed capacity
+  It also exposes `inputs.soperator.*_autoscaling` helpers for `system`,
+  `controller`, `login`, `accounting`, and `worker`; `system` defaults to
+  autoscaling 3..5, while the other service-role and worker autoscaling helpers
+  default off. Enabling a helper writes concrete
+  `inputs.node_groups.*.autoscaling` and suppresses the fixed count for that
+  role. Disabling it restores that role's fixed profile count and removes any
+  stale concrete autoscaling block. Worker fixed capacity
   still uses `inputs.soperator.worker_total_nodes` and `worker_nodes_per_group`
   because workers can shard into multiple MK8s groups; worker autoscaling uses
   the same shard size with `max_node_count` as the desired upper capacity and
   preserves an explicit `0..0` scale-to-zero range. Service-role autoscaling
   must keep `max_node_count` at least `1` because those groups back required
   Soperator placement.
+  Profile-owned NodeSet values leave worker `slurmd` and `munge` image
+  selection to the selected Soperator chart defaults, so chart-version bumps do
+  not duplicate worker image tags in `component_cli_settings.yaml`.
 - Partition profile chooses Slurm queues and scheduling policy. `shape-default`
   creates the default worker partition. At render time, when ActiveChecks are
   enabled, cxcli can add an internal `hidden` partition for ActiveChecks
@@ -2863,7 +2869,8 @@ The command boundary is intentional:
 - For `apps:soperator`, the create/component wizard uses
   `production-cluster`, asks for the worker profile before MK8s/SFS
   materialization, materializes the complete MK8s+SFS+Soperator five-role
-  bundle with one node in each generated role group by default, and skips
+  bundle with `system` autoscaling from 3 to 5 nodes, two fixed `controller`,
+  `login`, and `accounting` nodes, one worker node by default, and skips
   role-mapping prompts.
   `nebius-cxcli ext-soperator onboard <config.yaml-or-deployments-root>` resolves
   the selected project, lists existing Nebius MK8s clusters, registers one

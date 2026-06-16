@@ -83,6 +83,13 @@ All notable changes to the reusable Codex skills are tracked here.
 
 ### Changed
 
+- Relaxed `global-context-management` subagent guidance so, after a prompt or
+  user-enabled local hook policy authorizes delegation, Codex should choose
+  useful targeted read-only helper roles instead of waiting for the prompt to
+  name them, while still treating runtime tool availability and active
+  instructions as hard gates; `SKILL.md` now also has explicit stateful
+  workflow sections for inputs, required reads, writes, idempotency, failure
+  handling, must-not rules, process, and completion criteria.
 - Renamed SDLC-only workflow skills and the coordinator to `sdlc-*` names, and
   made their front matter descriptions start with
   `Use only as part of the Agentic SDLC workflow;` so tool discovery separates
@@ -115,6 +122,8 @@ All notable changes to the reusable Codex skills are tracked here.
   state-machine skills that manage local state, locked plans, evidence,
   continuation, retries, or failure routing, including a reusable template and
   `--profile stateful-workflow` validator support.
+- Clarified the `align-skill` README definition of stateful workflow skills,
+  including when to use the profile and a concise SDLC coordinator example.
 - Updated `create-pr` and `review-pr` with Agentic SDLC handoff guidance so
   they can read local SDLC evidence when invoked in that workflow while
   preserving their general PR behavior.

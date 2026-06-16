@@ -263,16 +263,18 @@ monorepo-friendly workflow structure.
 recoverable by using durable task-state files, limiting noisy parent-thread
 exploration, delegating bounded read-only investigation when the user
 explicitly authorizes delegation or enables a local hook delegation policy and
-the runtime permits it, closing completed subagent threads after their results
-are consolidated when close controls are available, and reviewing risk before
-final answers. Its public skill files stay generic; local hooks, custom agent
-config, and task-state files belong under `$CODEX_HOME`. The hook setup
-advertises session-scoped task-state paths without creating missing state
-files; an existing file is meant to be read at task start, resume, or after
-compaction when prior context may matter, then updated with concise decisions,
-validation status, and next action. This non-SDLC setup owns `SessionStart`
-and `UserPromptSubmit` only; Agentic SDLC guardrails are separate `PreToolUse`
-and `Stop` hooks.
+the runtime permits it, choosing targeted helper roles after authorization
+instead of requiring the prompt to name them, closing completed subagent
+threads after their results are consolidated when close controls are available,
+and reviewing risk before final answers. Its public skill files stay generic;
+local hooks, custom agent config, and task-state files belong under
+`$CODEX_HOME`. The hook setup advertises session-scoped task-state paths
+without creating missing state files; an existing file is meant to be read at
+task start, resume, or after compaction when prior context may matter, then
+updated with concise decisions, validation status, and next action. This
+non-SDLC setup owns `SessionStart` and `UserPromptSubmit` only; Agentic SDLC
+skills and guardrails own SDLC phase selection, run state, `PreToolUse`, and
+`Stop`.
 
 ### `gitignore`
 

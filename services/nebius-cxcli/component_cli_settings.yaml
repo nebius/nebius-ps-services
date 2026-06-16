@@ -666,20 +666,23 @@ components:
                   node_group_defaults:
                     cpu:
                       platform: cpu-d3
-                      preset: 8vcpu-32gb
+                      preset: 32vcpu-128gb
                 node_groups:
                   system:
                     nodeset_name: system
                     workload: system
-                    node_count: 1
+                    node_count: 3
                     node_count_input: soperator.system_node_count
                     autoscaling_input: soperator.system_autoscaling
+                    autoscaling:
+                      min_node_count: 3
+                      max_node_count: 5
                     gpu: false
                     jail: true
                   controller:
                     nodeset_name: controller
                     workload: controller
-                    node_count: 1
+                    node_count: 2
                     node_count_input: soperator.controller_node_count
                     autoscaling_input: soperator.controller_autoscaling
                     gpu: false
@@ -693,7 +696,7 @@ components:
                   login:
                     nodeset_name: login
                     workload: login
-                    node_count: 1
+                    node_count: 2
                     node_count_input: soperator.login_node_count
                     autoscaling_input: soperator.login_autoscaling
                     gpu: false
@@ -705,7 +708,7 @@ components:
                   accounting:
                     nodeset_name: accounting
                     workload: accounting
-                    node_count: 1
+                    node_count: 2
                     node_count_input: soperator.accounting_node_count
                     autoscaling_input: soperator.accounting_autoscaling
                     gpu: false
@@ -896,10 +899,6 @@ components:
                         static: Boards=1 SocketsPerBoard=1 CoresPerSocket=8 ThreadsPerCore=1
                         dynamic: "InstanceId={{ .PodName }}"
                       slurmd:
-                        image:
-                          repository: cr.eu-north1.nebius.cloud/soperator/worker_slurmd
-                          tag: 3.0.5-slurm25.11.3
-                          pullPolicy: IfNotPresent
                         resources:
                           cpu: "4"
                           memory: 16Gi
@@ -917,10 +916,6 @@ components:
                           limitsConfig: ""
                           procMount: Default
                       munge:
-                        image:
-                          repository: cr.eu-north1.nebius.cloud/soperator/munge
-                          tag: 3.0.5-slurm25.11.3
-                          pullPolicy: IfNotPresent
                         resources:
                           cpu: 200m
                           memory: 512Mi
@@ -1180,7 +1175,7 @@ components:
                   node_group_defaults:
                     cpu:
                       platform: cpu-d3
-                      preset: 8vcpu-32gb
+                      preset: 32vcpu-128gb
                     gpu:
                       platform: gpu-h100-sxm
                       preset: 8gpu-128vcpu-1600gb
@@ -1194,15 +1189,18 @@ components:
                   system:
                     nodeset_name: system
                     workload: system
-                    node_count: 1
+                    node_count: 3
                     node_count_input: soperator.system_node_count
                     autoscaling_input: soperator.system_autoscaling
+                    autoscaling:
+                      min_node_count: 3
+                      max_node_count: 5
                     gpu: false
                     jail: true
                   controller:
                     nodeset_name: controller
                     workload: controller
-                    node_count: 1
+                    node_count: 2
                     node_count_input: soperator.controller_node_count
                     autoscaling_input: soperator.controller_autoscaling
                     gpu: false
@@ -1216,7 +1214,7 @@ components:
                   login:
                     nodeset_name: login
                     workload: login
-                    node_count: 1
+                    node_count: 2
                     node_count_input: soperator.login_node_count
                     autoscaling_input: soperator.login_autoscaling
                     gpu: false
@@ -1228,7 +1226,7 @@ components:
                   accounting:
                     nodeset_name: accounting
                     workload: accounting
-                    node_count: 1
+                    node_count: 2
                     node_count_input: soperator.accounting_node_count
                     autoscaling_input: soperator.accounting_autoscaling
                     gpu: false
@@ -1349,10 +1347,6 @@ components:
                         static: Boards=1 SocketsPerBoard=1 CoresPerSocket=8 ThreadsPerCore=1
                         dynamic: "InstanceId={{ .PodName }}"
                       slurmd:
-                        image:
-                          repository: cr.eu-north1.nebius.cloud/soperator/worker_slurmd
-                          tag: 3.0.5-slurm25.11.3
-                          pullPolicy: IfNotPresent
                         resources:
                           cpu: "4"
                           memory: 16Gi
@@ -1370,10 +1364,6 @@ components:
                           limitsConfig: ""
                           procMount: Default
                       munge:
-                        image:
-                          repository: cr.eu-north1.nebius.cloud/soperator/munge
-                          tag: 3.0.5-slurm25.11.3
-                          pullPolicy: IfNotPresent
                         resources:
                           cpu: 200m
                           memory: 512Mi
@@ -1406,10 +1396,6 @@ components:
                         gresConfig:
                           - AutoDetect=nvidia
                       slurmd:
-                        image:
-                          repository: cr.eu-north1.nebius.cloud/soperator/worker_slurmd
-                          tag: 3.0.5-slurm25.11.3
-                          pullPolicy: IfNotPresent
                         customEnv:
                           - name: NVIDIA_DRIVER_CAPABILITIES
                             value: compute,graphics,utility,video
@@ -1431,10 +1417,6 @@ components:
                           limitsConfig: ""
                           procMount: Default
                       munge:
-                        image:
-                          repository: cr.eu-north1.nebius.cloud/soperator/munge
-                          tag: 3.0.5-slurm25.11.3
-                          pullPolicy: IfNotPresent
                         resources:
                           cpu: 200m
                           memory: 512Mi
@@ -1706,10 +1688,6 @@ components:
                             static: Boards=1 SocketsPerBoard=1 CoresPerSocket=8 ThreadsPerCore=1
                             dynamic: "InstanceId={{ .PodName }}"
                           slurmd:
-                            image:
-                              repository: cr.eu-north1.nebius.cloud/soperator/worker_slurmd
-                              tag: 3.0.5-slurm25.11.3
-                              pullPolicy: IfNotPresent
                             resources:
                               cpu: "4"
                               memory: 16Gi
@@ -1727,10 +1705,6 @@ components:
                               limitsConfig: ""
                               procMount: Default
                           munge:
-                            image:
-                              repository: cr.eu-north1.nebius.cloud/soperator/munge
-                              tag: 3.0.5-slurm25.11.3
-                              pullPolicy: IfNotPresent
                             resources:
                               cpu: 200m
                               memory: 512Mi
@@ -1765,10 +1739,6 @@ components:
                             gresConfig:
                               - AutoDetect=nvidia
                           slurmd:
-                            image:
-                              repository: cr.eu-north1.nebius.cloud/soperator/worker_slurmd
-                              tag: 3.0.5-slurm25.11.3
-                              pullPolicy: IfNotPresent
                             customEnv:
                               - name: NVIDIA_DRIVER_CAPABILITIES
                                 value: compute,graphics,utility,video
@@ -1790,10 +1760,6 @@ components:
                               limitsConfig: ""
                               procMount: Default
                           munge:
-                            image:
-                              repository: cr.eu-north1.nebius.cloud/soperator/munge
-                              tag: 3.0.5-slurm25.11.3
-                              pullPolicy: IfNotPresent
                             resources:
                               cpu: 200m
                               memory: 512Mi
@@ -1866,7 +1832,7 @@ components:
                   node_group_defaults:
                     cpu:
                       platform: cpu-d3
-                      preset: 8vcpu-32gb
+                      preset: 32vcpu-128gb
                     gpu:
                       platform: gpu-h100-sxm
                       preset: 8gpu-128vcpu-1600gb
@@ -1880,15 +1846,18 @@ components:
                   system:
                     nodeset_name: system
                     workload: system
-                    node_count: 1
+                    node_count: 3
                     node_count_input: soperator.system_node_count
                     autoscaling_input: soperator.system_autoscaling
+                    autoscaling:
+                      min_node_count: 3
+                      max_node_count: 5
                     gpu: false
                     jail: true
                   controller:
                     nodeset_name: controller
                     workload: controller
-                    node_count: 1
+                    node_count: 2
                     node_count_input: soperator.controller_node_count
                     autoscaling_input: soperator.controller_autoscaling
                     gpu: false
@@ -1902,7 +1871,7 @@ components:
                   login:
                     nodeset_name: login
                     workload: login
-                    node_count: 1
+                    node_count: 2
                     node_count_input: soperator.login_node_count
                     autoscaling_input: soperator.login_autoscaling
                     gpu: false
@@ -1914,7 +1883,7 @@ components:
                   accounting:
                     nodeset_name: accounting
                     workload: accounting
-                    node_count: 1
+                    node_count: 2
                     node_count_input: soperator.accounting_node_count
                     autoscaling_input: soperator.accounting_autoscaling
                     gpu: false
@@ -1997,10 +1966,6 @@ components:
                         gresConfig:
                           - AutoDetect=nvidia
                       slurmd:
-                        image:
-                          repository: cr.eu-north1.nebius.cloud/soperator/worker_slurmd
-                          tag: 3.0.5-slurm25.11.3
-                          pullPolicy: IfNotPresent
                         customEnv:
                           - name: NVIDIA_DRIVER_CAPABILITIES
                             value: compute,graphics,utility,video
@@ -2022,10 +1987,6 @@ components:
                           limitsConfig: ""
                           procMount: Default
                       munge:
-                        image:
-                          repository: cr.eu-north1.nebius.cloud/soperator/munge
-                          tag: 3.0.5-slurm25.11.3
-                          pullPolicy: IfNotPresent
                         resources:
                           cpu: 200m
                           memory: 512Mi

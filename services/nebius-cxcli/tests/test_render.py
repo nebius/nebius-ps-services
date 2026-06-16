@@ -1681,7 +1681,7 @@ def test_render_project_materializes_soperator_profile_defaults(tmp_path: Path) 
     for group_name in ("system", "controller", "login", "accounting"):
         group = mk8s_inputs["node_groups"][group_name]
         assert group["platform"] == "cpu-d3"
-        assert group["preset"] == "8vcpu-32gb"
+        assert group["preset"] == "32vcpu-128gb"
     assert mk8s_inputs["node_groups"]["system"]["autoscaling"] == {
         "min_node_count": 1,
         "max_node_count": 4,
