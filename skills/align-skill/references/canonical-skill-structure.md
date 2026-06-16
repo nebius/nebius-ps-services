@@ -1,11 +1,13 @@
 # Canonical Skill Structure
 
 Use this structure unless the local repository has a clearer convention.
-This structure is based on the OpenAI Codex Agent Skills documentation and the
-open Agent Skills specification:
+This structure is based on the OpenAI Codex Agent Skills documentation, Codex
+best practices, and the open Agent Skills specification:
 
 - [OpenAI Codex Agent Skills](https://developers.openai.com/codex/skills)
+- [OpenAI Codex best practices](https://developers.openai.com/codex/learn/best-practices)
 - [Agent Skills specification](https://agentskills.io/specification)
+- [Agent Skills best practices](https://agentskills.io/skill-creation/best-practices)
 
 ```text
 skill-name/
@@ -13,6 +15,7 @@ skill-name/
 |-- agents/
 |   `-- openai.yaml
 |-- assets/
+|-- evals/
 |-- references/
 `-- scripts/
 ```
@@ -36,6 +39,9 @@ The `name` should match the parent folder.
   references loaded only when needed.
 - `assets/`: templates, examples, schemas, starter files, and static resources
   used as inputs or output scaffolds.
+- `evals/`: reusable trigger prompts or quality-evaluation examples. Use when
+  activation behavior needs repeatable evidence; keep examples public-safe and
+  free of secrets or customer data.
 - `agents/`: agent-specific metadata only when needed by the local repository
   convention. In this repository, use `agents/openai.yaml` for UI metadata.
 
@@ -63,6 +69,8 @@ description: Use this skill when...
 
 ## Guardrails
 
+## Learning Loop
+
 ## Validation
 
 ## Output Contract
@@ -72,6 +80,8 @@ description: Use this skill when...
 
 For larger skills, keep only core routing and workflow instructions in
 `SKILL.md`; move long checklists and examples into `references/` or `assets/`.
+For scaffolded skill folders, draft skill content, or update work, read
+`references/skill-authoring-best-practices.md` after target scope is known.
 
 ## Naming Rules
 
@@ -86,10 +96,13 @@ For larger skills, keep only core routing and workflow instructions in
 
 - Put always-needed routing, scope, workflow, guardrails, and output contract in
   `SKILL.md`.
+- Put the standard `## Learning Loop` section in every `SKILL.md` so durable
+  public-safe source learning is active whenever that skill loads.
 - Put long rubrics, policy details, vendor research rules, troubleshooting, and
   detailed examples in `references/`.
 - Put templates, starter files, report outlines, schemas, or sample payloads in
   `assets/`.
+- Put reusable trigger prompts and quality-evaluation examples in `evals/`.
 - Put deterministic checks or reusable helpers in `scripts/`.
 
 Avoid duplicating the same rule in multiple files. Link from `SKILL.md` to the
@@ -120,6 +133,8 @@ skill-name/
 |-- SKILL.md
 |-- assets/
 |   `-- report-template.md
+|-- evals/
+|   `-- trigger-prompts.csv
 |-- references/
 |   `-- policy.md
 `-- scripts/

@@ -18,6 +18,7 @@ Source basis:
 | Name and folder consistency | `name` is lowercase hyphenated, valid, and matches the parent folder. |
 | Description specificity | Description says what the skill does and when to use it. |
 | Trigger quality | Description includes realistic user intent terms and avoids over-broad claims. |
+| Authoring helper fit | For scaffolded skill folders or draft skill content, guidance defers initial scaffolding to `skill-creator` and then hardens trigger, structure, safety, speed, and validation. |
 | Scope and non-goals | Skill has a clear job and boundaries from adjacent skills. |
 | Progressive disclosure | `SKILL.md` stays focused; long material moves to `references/` or `assets/`. |
 | Official vendor evidence | Product-specific commands and claims are checked against official docs. |
@@ -25,11 +26,14 @@ Source basis:
 | Environment assumptions | Required tools, access, credentials, and test-environment assumptions are explicit. |
 | Live validation policy | Live tests require confirmed non-production context and report skipped work. |
 | Script quality | Scripts are self-contained where possible, documented with `--help`, and fail safely. |
+| Script speed and ergonomics | Scripts are non-interactive, idempotent where possible, version-pinned when using package runners, and produce bounded structured output. |
 | Reference quality | Reference files are focused, current, and loaded only when needed. |
 | Asset/template quality | Assets are reusable, generic, and free of secrets or environment-specific values. |
 | Output contract | Final answer shape is explicit and matches the task. |
 | Testability | Static checks, linting, dry runs, unit tests, or eval prompts are available where useful. |
 | Security posture | No secrets, private endpoints, customer data, or unsafe defaults are introduced. |
+| Learning loop coverage | Each target `SKILL.md` has a `## Learning Loop` section containing the validator-required public-safe source-learning text. |
+| Learning capture | Durable, reusable knowledge discovered during execution is captured in the local skill source materials when evidence-backed and in scope. |
 | Maintainability | Instructions are concise, non-duplicative, and easy to update. |
 | Repository conventions | Skill follows local folder, README, metadata, lint, and changelog conventions. |
 
@@ -50,9 +54,22 @@ Source basis:
 2. Validate structure before reading for style.
 3. Compare `description` against likely should-trigger and should-not-trigger
    prompts.
-4. Search the skill for vendor names, CLI commands, APIs, cloud services,
+4. For scaffolded skill folders, draft skill content, or update tasks, read
+   `references/skill-authoring-best-practices.md` and check the target against
+   safe, secure, and fast authoring guidance.
+5. Confirm the target `SKILL.md` has a `## Learning Loop` section, add the
+   standard section when missing, and repair variants that do not include the
+   validator-required snippets.
+6. Search the skill for vendor names, CLI commands, APIs, cloud services,
    package managers, auth flows, publishing steps, Kubernetes, Terraform, Helm,
    GitHub Actions, databases, and CI/CD behavior.
-5. Verify vendor-specific details against official docs.
-6. Apply only evidence-backed changes.
-7. Run safe validation and record remaining uncertainty.
+7. Verify vendor-specific details against official docs.
+8. Apply only evidence-backed changes.
+9. Capture newly learned durable patterns, decisions, best practices, or
+   relevant findings in the target skill's local sources when they are
+   reusable, public-safe, and in scope.
+10. Run safe validation and record remaining uncertainty.
+
+Do not capture raw logs, secrets, customer data, private URLs, transient local
+state, or one-off environment details. If a useful learning is not safe or
+appropriate to persist, report that the source update was skipped and why.

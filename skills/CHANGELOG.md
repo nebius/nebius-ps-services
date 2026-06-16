@@ -16,6 +16,10 @@ All notable changes to the reusable Codex skills are tracked here.
   Agent Skill folders, including `SKILL.md`, references, assets, scripts,
   official vendor-doc verification, safety guardrails, canonical structure, and
   validation evidence.
+- Added the `apply-security` Codex skill for security scans, remediation
+  plans, safe patching, verification, and explanation across Terraform,
+  Kubernetes, Helm, CI/CD, Bash, Python, Java, JavaScript, TypeScript, and Rust
+  codebases.
 - Added the `attach-ubuntu` Codex skill with a Bash helper that creates or
   reuses a per-project Ubuntu container, mounts the current project at
   `/workdir`, updates VS Code attached-container defaults, bootstraps Ubuntu
@@ -61,6 +65,24 @@ All notable changes to the reusable Codex skills are tracked here.
 
 ### Changed
 
+- Hardened `apply-security` validation guidance so lockfile maintenance,
+  cache/build directory writes, external registry submissions,
+  package-manager auto-install behavior, and live-credential checks require
+  explicit scope and safety review.
+- Updated `align-skill` so each alignment run captures evidence-backed,
+  public-safe reusable learnings back into the target skill's local source
+  materials before completion, and reports any source updates that were skipped.
+- Updated `align-skill` so it can be triggered as a helper for hardening
+  scaffolded or draft skills and applies safe, secure, fast authoring guidance
+  without replacing `skill-creator` for initial scaffolding.
+- Updated `align-skill` to recognize optional `evals/` folders for reusable
+  trigger or quality-evaluation prompts, matching the existing `helmchart`
+  trigger-eval convention, and added a validator self-test for the `evals/`
+  acceptance plus unknown-folder warning behavior.
+- Added a standard `## Learning Loop` rule to every reusable skill so durable,
+  public-safe, evidence-backed learnings can be captured by the task skill that
+  is already loaded, and taught `align-skill` validation to enforce the rule on
+  target skills while preserving read-only and report-only task contracts.
 - Tightened the `code-info` skill contract so invoking it is explicitly
   read-only information gathering: it reports from existing files only and does
   not edit, format, build, test, install, generate coverage, or stage files.

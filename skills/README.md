@@ -9,12 +9,21 @@ has a local `README.md` that explains what the skill does, its architecture,
 core concepts, workflow, and important files. `SKILL.md` remains the runtime
 instruction file Codex loads when the skill is used.
 
+Every reusable skill includes a `## Learning Loop` section in `SKILL.md`. When
+durable, public-safe, evidence-backed knowledge is discovered while using a
+skill, the agent should capture it in the narrowest appropriate source material
+for that skill when the task contract allows source edits. For read-only or
+report-only work, the agent should report why source capture was skipped.
+`align-skill` can add or repair this rule during skill alignment.
+
 For skill-specific release notes, see [CHANGELOG.md](CHANGELOG.md).
 
 ## Included Skills
 
 - End-to-end project alignment: `align`
-- Skill folder alignment and validation: `align-skill`
+- Skill folder hardening, alignment, and validation: `align-skill`
+- Security review and safe remediation across infra, CI/CD, shell, and app
+  code: `apply-security`
 - Disposable Ubuntu project container setup: `attach-ubuntu`
 - Commit and push the current feature branch: `commit-push`
 - Branch-safe GitHub pull request creation with safe check repair: `create-pr`
@@ -59,6 +68,10 @@ $review-pr Review PR #110 against the base branch, fix safe issues on the branch
 $review-pr Review https://github.com/example-org/example-repo/pull/42, resolve straightforward conflicts against main if the branch is writable, and report remaining blockers.
 
 $align-skill Review and standardize skills/foo against the canonical skill structure and official vendor docs.
+
+$align-skill Harden this scaffolded skill folder into a safe, secure, fast Codex skill, then validate it.
+
+$apply-security Scan this repository for infrastructure, CI/CD, shell, and application security issues, then produce a prioritized remediation plan with safe patch candidates.
 
 $code-info Gather read-only project info from this folder or a GitHub repo with LOC by language and component, repo size, test files, CLI commands, modules, artifacts, and coverage.
 ```
@@ -105,11 +118,21 @@ together as a cautious senior code-review style alignment pass.
 
 ### `align-skill`
 
-`align-skill` reviews and improves one or more Codex or Agent Skill folders.
-Use it for named skills, local skill folders, multi-skill parent folders,
-GitHub skill repositories, or GitHub tree URLs when `SKILL.md`, trigger
-metadata, references, assets, scripts, safety guardrails, official vendor-doc
-verification, canonical structure, and validation evidence need to be aligned.
+`align-skill` reviews and hardens one or more existing or newly scaffolded Codex
+or Agent Skill folders. Use it for named skills, local skill folders,
+multi-skill parent folders, GitHub skill repositories, or GitHub tree URLs when
+`SKILL.md`, trigger metadata, references, assets, scripts, safety guardrails,
+official vendor-doc verification, canonical structure, validation evidence, fast
+authoring practices, and reusable learning capture in local skill source
+materials need to be aligned.
+
+### `apply-security`
+
+`apply-security` reviews infrastructure, deployment, Helm, Kubernetes,
+Terraform, CI/CD, Bash, Python, Java, JavaScript, TypeScript, and Rust code for
+security issues, ranks findings by severity, confidence, exploitability, and
+blast radius, plans safe remediations, and applies minimal patches only when
+they preserve intended behavior or have explicit approval.
 
 ### `attach-ubuntu`
 

@@ -10,6 +10,25 @@
 
 - TBD
 
+## Learning Loop Coverage
+
+- Skills updated:
+- Skills already compliant:
+- Skills skipped or uncertain:
+
+## Source Materials Updated
+
+- Durable learnings captured:
+- Local skill sources updated:
+- Source updates skipped and why:
+
+## Skill Authoring Review
+
+- Scaffolded skill, draft skill, or update task:
+- Best-practice reference used:
+- Trigger quality changes:
+- Safe/secure/fast hardening guidance applied:
+
 ## Evidence Used
 
 - Repo evidence:

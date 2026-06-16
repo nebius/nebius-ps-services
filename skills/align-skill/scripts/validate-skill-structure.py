@@ -10,12 +10,24 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 
-KNOWN_OPTIONAL_DIRS = {"agents", "assets", "references", "scripts"}
+KNOWN_OPTIONAL_DIRS = {"agents", "assets", "evals", "references", "scripts"}
 NAME_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$")
 LOCAL_REF_RE = re.compile(
-    r"(?P<path>(?:agents|assets|references|scripts)/[A-Za-z0-9._/@%+=:,~/-]+)"
+    r"(?P<path>"
+    r"(?:agents|assets|evals|references|scripts)/[A-Za-z0-9._/@%+=:,~/-]+"
+    r")"
 )
 MARKDOWN_LINK_RE = re.compile(r"\[[^\]]+\]\((?P<target>[^)]+)\)")
+LEARNING_LOOP_HEADING = "\n## Learning Loop\n"
+LEARNING_LOOP_REQUIRED_SNIPPETS = (
+    "capture durable, reusable, public-safe learnings",
+    "contract allows source edits",
+    "narrowest appropriate surface",
+    "read-only/report-only",
+    "Do not capture secrets",
+    "unverified/vendor-specific claims",
+    "report that it was skipped",
+)
 
 
 @dataclass
@@ -116,7 +128,9 @@ def clean_reference(raw: str) -> str | None:
         return None
     if "#" in target:
         target = target.split("#", 1)[0]
-    if target.startswith(("agents/", "assets/", "references/", "scripts/")):
+    if target.startswith(
+        ("agents/", "assets/", "evals/", "references/", "scripts/")
+    ):
         name = target.rstrip("/").rsplit("/", 1)[-1]
         if not target.endswith("/") and "." not in name:
             return None
@@ -138,6 +152,18 @@ def referenced_paths(skill_md: Path) -> set[str]:
             refs.add(target)
 
     return refs
+
+
+def extract_learning_loop_section(skill_text: str) -> str | None:
+    start = skill_text.find(LEARNING_LOOP_HEADING)
+    if start == -1:
+        return None
+
+    section_start = start + len(LEARNING_LOOP_HEADING)
+    next_heading = skill_text.find("\n## ", section_start)
+    if next_heading == -1:
+        return skill_text[section_start:]
+    return skill_text[section_start:next_heading]
 
 
 def validate_skill(skill_dir: Path) -> SkillResult:
@@ -171,6 +197,22 @@ def validate_skill(skill_dir: Path) -> SkillResult:
         result.failures.append("front matter is missing description")
     elif len(description) > 1024:
         result.failures.append("description exceeds 1024 characters")
+
+    try:
+        skill_text = skill_md.read_text(encoding="utf-8")
+    except OSError as exc:
+        result.failures.append(f"cannot read SKILL.md for learning loop: {exc}")
+        skill_text = ""
+
+    learning_loop = extract_learning_loop_section(skill_text)
+    if skill_text and learning_loop is None:
+        result.failures.append("SKILL.md is missing ## Learning Loop")
+    elif learning_loop is not None:
+        for snippet in LEARNING_LOOP_REQUIRED_SNIPPETS:
+            if snippet not in learning_loop:
+                result.failures.append(
+                    f"## Learning Loop is missing required text: {snippet}"
+                )
 
     for child in sorted(skill_dir.iterdir()):
         if not child.is_dir() or child.name.startswith("."):
