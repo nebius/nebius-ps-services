@@ -1,6 +1,6 @@
 ---
 name: global-context-management
-description: "Use for complex Codex work: planning, implementation, debugging, refactoring, migration, architecture, reviews, tests, CI failures, or multi-file tasks. Keep parent context concise with durable task state, optional authorized read-only subagents, focused validation, and final risk review."
+description: "Use for complex Codex work: planning, implementation, debugging, refactoring, migration, architecture, reviews, tests, CI failures, or multi-file tasks. Keep parent context concise with durable task state, authorized read-only subagents when useful and permitted, focused validation, and final risk review."
 ---
 
 # Global Context Management
@@ -10,8 +10,8 @@ description: "Use for complex Codex work: planning, implementation, debugging, r
 Use this skill to keep long or complex Codex work focused and recoverable.
 The workflow keeps durable decisions outside the conversation, delegates noisy
 read-heavy investigation when authorized by the prompt or by a user-enabled
-local hook policy, and when delegation is available and useful. It keeps the
-parent thread centered on implementation and final judgment.
+local hook policy, useful for the task, and available in the current runtime.
+It keeps the parent thread centered on implementation and final judgment.
 
 ## Use This Skill For
 
@@ -38,7 +38,7 @@ and a short final summary.
 - Do not treat skill activation, generic hook context, or configured
   `[agents.*]` roles as delegation authorization. Authorization comes from the
   user prompt or from a user-enabled local hook policy that deliberately
-  injects a lightweight delegation hint for the current prompt; active runtime
+  injects a lightweight delegation request for the current prompt; active runtime
   policy may still deny delegation.
 - Do not claim runtime hook or skill activation is proven unless it was
   observed in the current Codex surface.
@@ -64,13 +64,13 @@ Treat the user prompt and a user-enabled local hook policy as the two valid
 authorization sources. A complex task, this skill's activation, or configured
 agent roles are not enough by themselves. The prompt must clearly ask Codex to
 use or spawn subagents, use delegation, or run parallel agents, unless a
-user-enabled local hook policy injects a delegation hint and the current runtime
+user-enabled local hook policy injects a delegation request and the current runtime
 accepts it.
 
 This skill's hook layer owns only non-SDLC global-context events:
 `SessionStart` for stable context and task-state path injection, and
 `UserPromptSubmit` for lightweight prompt-time context, safety, or opt-in
-delegation hints. Agentic SDLC guardrails are separate `PreToolUse` and `Stop`
+delegation requests. Agentic SDLC guardrails are separate `PreToolUse` and `Stop`
 hooks.
 
 - `SessionStart`: use for global conventions, workspace context, environment
@@ -86,6 +86,12 @@ Use the durable task-state path injected by global hooks. No legacy task-state
 path is created when the hook payload has no session id. If no path is
 available, continue without durable task state rather than creating a manual or
 repo-local fallback.
+
+The hook only advertises or reuses the path; the parent agent is responsible
+for creating and updating the file when continuity is useful. If a local
+PreToolUse write guard is installed, it must allow writes under
+`$CODEX_HOME/task-state` while continuing to block unrelated `$CODEX_HOME`
+runtime edits such as hook rewrites.
 
 At the start of a complex task, resume, or context transition, read the
 existing task-state file before planning when it may contain prior decisions,
@@ -141,7 +147,8 @@ Before running a noisy command in the parent thread, narrow it:
 
 ## Subagent Delegation
 
-For complex tasks, use bounded read-only subagents when they materially help,
+For complex tasks, prefer bounded read-only subagents for read-heavy sidecar
+work when they materially help,
 delegation is authorized by the prompt or a user-enabled local hook policy,
 and the current Codex surface permits delegation:
 

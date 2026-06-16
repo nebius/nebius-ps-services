@@ -10,10 +10,10 @@ selecting the next feature, and choosing exactly one next skill.
 
 ## Main Boundaries
 
-- Free-edit requirements or design.
-- Implement code directly.
-- Commit, push, create PRs, review PRs, or merge.
-- Bypass validation, tests, or evaluation.
+- Do not free-edit requirements or design.
+- Do not implement code directly.
+- Do not commit, push, create PRs, review PRs, or merge.
+- Do not bypass validation, tests, or evaluation.
 
 ## Primary Inputs
 
@@ -29,3 +29,39 @@ selecting the next feature, and choosing exactly one next skill.
 - Each state transition writes a checkpoint and history entry.
 - Repeated resumes without state changes do not duplicate history.
 - The loop can resume after context loss.
+
+## Optional Hook Bundle
+
+`sdlc-start/assets/hooks/` is the source bundle for optional Agentic SDLC
+runtime hooks:
+
+- `pre_tool_use_sdlc_policy.py`
+- `stop_sdlc_continue.py`
+- `lib/sdlc_policy.py`
+- `lib/sdlc_state.py`
+- `tests/test_sdlc_hooks.py`
+
+Patch these source files before touching installed runtime copies under
+`$CODEX_HOME/hooks`. The Stop hook must emit `sdlc-start` and canonical
+`sdlc-*` skill names, while still accepting short phase aliases as input. The
+PreToolUse hook should continue blocking out-of-scope edits, including
+unscoped edits to runtime hook files from unrelated project workspaces.
+
+Validate the source bundle from the `skills/` directory:
+
+```bash
+python3 sdlc-start/assets/hooks/tests/test_sdlc_hooks.py
+```
+
+To intentionally sync the source bundle into a local Codex runtime:
+
+```bash
+./install-skills.sh --install-all-hooks
+./install-skills.sh --install-hooks sdlc-start/assets/hooks
+```
+
+The all-hooks form syncs every reviewed hook-only bundle under the source skills
+folder. The single-source form copies only SDLC hook files into
+`${CODEX_HOME:-$HOME/.codex}/hooks`. Neither form updates `hooks.json` or
+trusts hooks. Restart Codex and review the PreToolUse and Stop entries in
+`/hooks` after syncing.

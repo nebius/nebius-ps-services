@@ -229,3 +229,23 @@ instructions, or UAT rerun requests. Convert durable product changes through
 A Stop hook may continue a run by injecting a continuation prompt. A PreToolUse
 hook may deny unsafe actions. Hooks enforce invariants only; `sdlc-start` owns
 workflow decisions.
+
+Optional Agentic SDLC hook source lives under
+`sdlc-start/assets/hooks/`. Installed copies under `$CODEX_HOME/hooks` are
+runtime artifacts and can drift, so maintainers should patch the source bundle
+first, run its hook tests, and then sync it intentionally with
+`install-skills.sh --install-all-hooks`, or with
+`install-skills.sh --install-hooks sdlc-start/assets/hooks` when only the SDLC
+hook bundle should be refreshed.
+
+The Stop hook continuation prompt must route through `sdlc-start` and emit
+canonical `sdlc-*` skill names. It may normalize short phase values when
+reading local state, but those aliases must not appear as emitted next-skill
+names. Steering text that pauses work or controls PR creation, including
+`Pause after the current feature. Do not create a PR.`, must be treated as
+coordinator input rather than ignored.
+
+The PreToolUse hook must continue blocking out-of-scope writes such as direct
+runtime hook edits from an unrelated project workspace. Use the explicit hook
+installer option for deliberate runtime sync instead of broadening the write
+allowlist.

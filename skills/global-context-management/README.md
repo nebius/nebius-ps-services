@@ -1,10 +1,10 @@
 # Global Context Management
 
-`global-context-management` is a reusable Codex skill plus optional local
-runtime setup for keeping long or complex coding sessions focused. It reduces
-context pollution by separating runtime policy, task-state persistence, and
-read-only exploration roles when the current Codex surface exposes them and
-delegation is authorized by the prompt or by a user-enabled local hook policy.
+`global-context-management` is a reusable Codex skill plus local runtime setup
+for keeping long or complex coding sessions focused.
+It reduces context pollution by separating runtime policy, task-state
+continuity, and authorized read-only exploration roles when the current Codex
+surface permits delegation.
 
 ## Design Goal
 
@@ -82,6 +82,13 @@ Synthetic complex-prompt hook probes that pass a made-up `session_id` against a
 live `$CODEX_HOME` should not create task-state files or directories. They
 validate hook path calculation and prompt-time hints only.
 
+The parent agent creates or updates the advertised file when durable continuity
+is useful. Any local PreToolUse write guard must explicitly allow
+`$CODEX_HOME/task-state` writes; otherwise the hook can advertise a valid path
+that later edits cannot persist. That allowlist is separate from broader
+runtime files such as `$CODEX_HOME/hooks`, which should remain protected unless
+the user intentionally syncs hook sources.
+
 Use the task-state file in three places:
 
 1. At task start, resume, or after compaction, read the current file when prior
@@ -121,10 +128,10 @@ skill is used. Detailed local setup lives in `references/local-setup.md`.
 
 ### Subagents
 
-Subagents are optional read-only helpers. They are useful when exploration is
-large enough that it would pollute the parent thread, delegation is authorized
-by the prompt or by a user-enabled local hook policy, and the current Codex
-surface permits delegation.
+Subagents are bounded read-only helpers for large sidecar exploration,
+validation planning, and risk review. Use them when the work would pollute the
+parent thread, delegation is authorized by the prompt or by a user-enabled
+local hook policy, and the current Codex surface permits delegation.
 
 - `repo_mapper`: maps relevant files, symbols, flows, and conventions.
 - `test_strategist`: finds focused tests, fixtures, and validation order.
@@ -152,7 +159,7 @@ enabling `multi_agent` makes the tools available but does not by itself count
 as a user request to use them. Current public Codex docs say Codex only spawns
 subagents when explicitly asked. In this workflow, that explicit request can
 come from the user prompt or from a user-enabled local hook policy that adds a
-lightweight delegation hint for complex prompts, when the active runtime and
+lightweight delegation request for complex prompts, when the active runtime and
 instruction policy accept that hook context. If delegation is authorized and
 useful but subagent controls are not visible, and `tool_search` is available,
 the main agent should first search for multi-agent/subagent tools before
@@ -176,13 +183,13 @@ referenced files under `$CODEX_HOME`. It injects agent names only by default,
 not local paths. This is still best-effort model-visible guidance; hooks do
 not directly call the subagent tool or repeat the full helper lifecycle. When
 this policy context is present, the main agent should treat it as an opt-in
-delegation hint for that turn, then use read-only helpers only when they are
+delegation request for that turn, then use read-only helpers only when they are
 useful, available, and permitted.
 
 This skill's local hook layer owns only the non-SDLC global-context events:
 `SessionStart` for stable global context and task-state path injection, and
 `UserPromptSubmit` for lightweight prompt-time context, safety, or opt-in
-delegation hints. Do not use this layer to run Agentic SDLC loops. SDLC
+delegation requests. Do not use this layer to run Agentic SDLC loops. SDLC
 guardrails belong in separate `PreToolUse` and `Stop` hooks.
 
 Use `SessionStart` for global conventions, workspace context, environment
@@ -241,7 +248,7 @@ For a complex task, the intended flow is:
 2. Identify the objective, constraints, likely files, and validation path.
 3. Read existing task state when prior context may matter, then update it with
    the current plan.
-4. Use read-only subagents only when they reduce parent-thread noise,
+4. Prefer read-only subagents when they reduce parent-thread noise,
    delegation is authorized by the prompt or local hook policy, and the current
    runtime permits delegation. Use `repo_mapper` and `test_strategist` early
    only when useful and independent; close completed helpers after

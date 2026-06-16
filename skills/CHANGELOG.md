@@ -20,6 +20,10 @@ All notable changes to the reusable Codex skills are tracked here.
 - Added SDLC templates for requirements, design, context packs, locked feature
   plans, validation/test/evaluation evidence, local commit evidence, and UAT
   reports, plus state-schema and failure-taxonomy references.
+- Added a source bundle for optional Agentic SDLC PreToolUse and Stop hooks
+  under `sdlc-start/assets/hooks/`, including shared hook helpers and local
+  unit tests for continuation, write-policy, authorization, steering, and
+  short-alias behavior.
 - Added this `skills/CHANGELOG.md` so reusable-skill release notes live with
   the skills instead of in the monorepo root changelog.
 - Added the `align` Codex skill for end-to-end project review and repair passes
@@ -79,10 +83,34 @@ All notable changes to the reusable Codex skills are tracked here.
 
 ### Changed
 
-- Renamed SDLC-only workflow skills to `sdlc-*` names, with `start-sdlc`
-  becoming `sdlc-start`, and made their front matter descriptions start with
+- Renamed SDLC-only workflow skills and the coordinator to `sdlc-*` names, and
+  made their front matter descriptions start with
   `Use only as part of the Agentic SDLC workflow;` so tool discovery separates
   SDLC phases from ordinary commands and general-purpose skills.
+- Hardened the Agentic SDLC Stop hook source so continuation prompts emit
+  `sdlc-start` and canonical `sdlc-*` next-skill names, normalize short
+  phase aliases only as input, and recognize pause or PR-control steering such as
+  `Pause after the current feature. Do not create a PR.`
+- Allowed the Agentic SDLC PreToolUse hook source to write
+  `$CODEX_HOME/task-state` files so `global-context-management` can persist
+  session-scoped continuity notes while unrelated `$CODEX_HOME/hooks` writes
+  remain blocked.
+- Updated `install-skills.sh` with an explicit
+  `--install-hooks <source_hook_dir>` option that copies hook files from a
+  selected hook source directory into `${CODEX_HOME:-$HOME/.codex}/hooks`,
+  keeping runtime hook sync separate from normal skill installation and from
+  `hooks.json` trust decisions.
+- Added `install-skills.sh --install-all-hooks` to install every reviewed
+  skill-owned hook bundle from `*/assets/hooks` under the source skills folder,
+  with destination collision checks and idempotent unchanged reporting for hook
+  files.
+- Aligned `config-codex` idempotency checks with the current local setup model:
+  exact global `AGENTS.md` parity when requested, required global hook
+  registrations as a `hooks.json` subset, and required public-safe MCP servers
+  while preserving extra workflow hooks and machine-specific MCP entries.
+- Strengthened `global-context-management` wording so authorized read-only
+  subagents are preferred for useful read-heavy sidecar work when the prompt or
+  local hook policy authorizes delegation and the current runtime permits it.
 - Updated `align-skill` with an optional stateful-workflow profile for
   state-machine skills that manage local state, locked plans, evidence,
   continuation, retries, or failure routing, including a reusable template and

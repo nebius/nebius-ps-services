@@ -39,10 +39,6 @@
 - For non-trivial planning, implementation, debugging, refactoring, migration,
   architecture, review, testing, CI failure, or multi-file coding tasks, use
   `global-context-management`.
-- For Codex runtime setup, config, hooks, custom agents, or `$CODEX_HOME`
-  layout work, use `config-codex`.
-- For `.gitignore`, shell/Bash automation, or Shell/Markdown/Python linting
-  work, use the matching `gitignore`, `shell-scripting`, and/or `linter` skill.
 - When skill guidance or reference code depends on a product, cloud, API, CLI,
   SDK, framework, or package manager, verify version-sensitive behavior against
   current official vendor documentation before changing or recommending it.
@@ -66,9 +62,9 @@
   the parent thread.
 - Use bounded read-only subagents for noisy exploration when the user
   explicitly requests delegation, or when a user-enabled local hook policy
-  adds a lightweight delegation hint, and subagents are available and
-  permitted. Ask helpers for concise summaries, consolidate results, and close
-  completed helpers when close controls are available.
+  injects that request, and subagents are available and permitted. Ask helpers
+  for concise summaries, consolidate results, and close completed helpers when
+  close controls are available.
 - After making code changes in a turn, before the final response, explicitly
   use `$align` for the changed scope unless the user says not to. If `$align`
   is unavailable, perform the equivalent local alignment checklist and say so.

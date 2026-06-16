@@ -343,6 +343,7 @@ def assert_doc_contracts(root: Path) -> None:
 
     required_skill = (
         "No legacy task-state",
+        "it must allow writes under\n`$CODEX_HOME/task-state`",
     )
     for needle in required_skill:
         if needle not in gcm_skill:
@@ -355,6 +356,7 @@ def assert_doc_contracts(root: Path) -> None:
         "hidden state automatically active",
         "continuity note",
         "should not create task-state files or directories",
+        "Any local PreToolUse write guard must explicitly allow\n`$CODEX_HOME/task-state` writes",
     )
     for needle in required_gcm:
         if needle not in gcm_readme:

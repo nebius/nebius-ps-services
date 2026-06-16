@@ -40,6 +40,8 @@ selecting the next feature, and choosing exactly one next skill.
 - `STEERING.md`.
 - Latest feature evidence and failure logs.
 - `references/state-schema.md` for state fields and transitions.
+- `assets/hooks/README.md` when maintaining optional SDLC PreToolUse or Stop
+  hooks.
 
 ## Writes
 
@@ -133,6 +135,11 @@ selecting the next feature, and choosing exactly one next skill.
 - Classify every failure before retrying or routing backward.
 - Use MCP servers for browser, GitHub, internal docs, Slack, Confluence, Jira, and other external systems when they are available and appropriate.
 - Treat hooks as invariant guardrails only; do not make hooks orchestrate the workflow.
+- Keep optional SDLC hook source under `assets/hooks/`. Patch that source first,
+  validate it with its local tests, then intentionally sync it to `$CODEX_HOME/hooks`
+  with `install-skills.sh --install-all-hooks`, or with
+  `install-skills.sh --install-hooks sdlc-start/assets/hooks` for an SDLC-only
+  hook sync.
 
 ## Learning Loop
 
@@ -164,3 +171,4 @@ Return a concise result with:
 ## References
 
 - Read `references/state-schema.md` when this skill needs that local policy or schema.
+- Read `assets/hooks/README.md` when maintaining or installing optional SDLC hooks.

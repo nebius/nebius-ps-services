@@ -72,8 +72,8 @@ global file.
   the parent thread.
 - Use bounded read-only subagents for noisy exploration when the user
   explicitly requests delegation, or when a user-enabled local hook policy
-  adds a lightweight delegation hint, and subagents are available and useful. Use a
-  read-only risk review before finalizing non-trivial changes only when
+  injects that request, and subagents are available and useful. Use a read-only
+  risk review before finalizing non-trivial changes only when
   delegation is authorized and permitted.
 - When subagents are used, ask them for concise final summaries, wait for the
   result, consolidate it in the parent thread, and close completed subagent
@@ -196,6 +196,13 @@ Then run a non-mutating Codex probe from a test repository and confirm the
 injected task-state path appears. Treat runtime activation as unverified until
 observed in the target Codex surface.
 
+For persistence, also confirm any installed PreToolUse write guard allows
+agent edits under `$CODEX_HOME/task-state`. The global-context hooks only
+advertise or reuse the session-scoped `current.md`; the parent agent creates
+and updates that file when continuity is useful. Keep broader runtime paths
+such as `$CODEX_HOME/hooks` protected unless the user deliberately syncs hook
+sources.
+
 Direct hook unit probes against a live `$CODEX_HOME` with synthetic
 `session_id` values should not create task-state files or directories. They
 validate hook path calculation and prompt-time hints, not active persistent
@@ -224,7 +231,7 @@ If the probe does not spawn a subagent, check:
   can discover deferred multi-agent/subagent tools.
 - The user prompt explicitly asks Codex to use or spawn subagents, use
   delegation, or run parallel agents, or the enabled local hook policy adds a
-  delegation hint for the prompt.
+  delegation request for the prompt.
 - The current user or developer instructions permit delegation for the task.
 
 If `$CODEX_HOME/hooks/global_context_policy.json` is enabled, also run a

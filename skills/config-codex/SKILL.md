@@ -112,9 +112,19 @@ For existing `$CODEX_HOME/config.toml`:
    - optional hook policy template
    - custom-agent TOML templates
    - task-state template
-   For hook and custom-agent assets, use replace-if-unmodified behavior:
+   For hook scripts, custom-agent assets, and optional policy assets, use
+   replace-if-unmodified behavior:
    copy missing files, leave matching files unchanged, and stop for review when
    an existing file differs from both the old and new expected content.
+   For `hooks.json`, verify the required global `SessionStart` and
+   `UserPromptSubmit` entries are present, but preserve additional workflow hook
+   entries such as SDLC `PreToolUse` and `Stop`.
+   The root `install-skills.sh --install-all-hooks` helper can perform a
+   direct sync of all reviewed hook-only bundles when that is explicitly
+   needed. Use `install-skills.sh --install-hooks config-codex/assets/hooks`
+   only for a single-bundle sync. Both paths strip `.template` from installed
+   hook file names, and neither path patches `hooks.json`, trusts hooks, patches
+   `config.toml`, or replaces this full setup workflow.
 9. Confirm `global-context-management` and `config-codex` are installed,
    discoverable, or explicitly enabled as skill folders. Do not add explicit
    skill entries if discovery already works.
@@ -164,7 +174,9 @@ not evidence-backed, or outside this skill's scope, report that it was skipped.
 Use the focused checks in `references/local-setup.md`. At minimum:
 
 - Run `python3 scripts/check-local-idempotency.py --strict-agents-template` for
-  a laptop already expected to match these templates. This script is read-only.
+  a laptop already expected to match the canonical global `AGENTS.md` template.
+  This script is read-only and allows extra reviewed hook registrations in
+  `hooks.json` when the required global hooks are present.
 - Python-compile hook scripts.
 - Parse `config.toml` with `tomllib`.
 - Parse `hooks.json` with `json`.

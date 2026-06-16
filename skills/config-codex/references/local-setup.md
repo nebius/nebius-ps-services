@@ -109,6 +109,12 @@ The `hooks.json` template intentionally uses
 `${CODEX_HOME:-$HOME/.codex}` directly, so the hook commands stay portable when
 the user sets `CODEX_HOME` in the shell before starting Codex.
 
+Treat `hooks.json` as a semantic merge target on existing machines. Ensure the
+global-context `SessionStart` and `UserPromptSubmit` entries from the template
+are present, but preserve additional reviewed workflow entries such as Agentic
+SDLC `PreToolUse` and `Stop` hooks. Do not replace `hooks.json` just to match
+the template byte-for-byte.
+
 If `$CODEX_HOME/AGENTS.md` is missing, create it from
 `assets/AGENTS.md.template`. If it exists, do not replace it. Append or update a
 small managed section for `config-codex`/`global-context-management` guidance
@@ -142,6 +148,13 @@ Do not silently relax approval or sandbox settings.
 Do not add template-only model defaults, app/plugin settings, MCP servers,
 project entries, skill entries, or writable roots to an existing config merely
 because they appear in `assets/config.toml.template`.
+
+For a missing config, the public-safe MCP baseline in the template restores the
+reusable MCP servers that can be expressed without private values. Existing
+configs may also contain plugin-managed or machine-specific MCP servers with
+absolute commands or private environment values. Preserve those entries during
+patching, but restore them through their owning plugin or setup skill rather
+than copying local values into public templates.
 
 ## Optional Hook-Assisted Subagent Policy
 
@@ -197,6 +210,9 @@ python3 config-codex/scripts/check-local-idempotency.py \
   --codex-home "$CODEX_HOME" \
   --strict-agents-template
 ```
+
+The preflight checks the required global hook registrations as a subset and
+allows extra reviewed workflow hooks to coexist in `hooks.json`.
 
 Compile hooks:
 
@@ -309,6 +325,10 @@ Expected evidence:
   context may matter, then keep checkpoint updates concise.
   If the optional policy is enabled, it should also mention the discovered
   configured read-only agents by name.
+- Sandbox configuration and any installed PreToolUse write guard allow
+  `$CODEX_HOME/task-state` so the parent agent can create and update the
+  advertised `current.md`, while broader runtime paths such as
+  `$CODEX_HOME/hooks` remain protected unless deliberately synced.
 
 Direct hook unit probes against a live `$CODEX_HOME` with synthetic
 `session_id` values should not create task-state files or directories. They

@@ -149,10 +149,15 @@ Optional global PreToolUse and Stop hooks can enforce SDLC invariants from that
 local state. Sensitive Git actions use short-lived local authorization files
 under the active run's `permissions/` directory; the skills create those files
 only immediately before the guarded action.
+The canonical source for those optional SDLC hooks is
+`sdlc-start/assets/hooks/`. Patch that source first, validate it with
+`sdlc-start/assets/hooks/tests/test_sdlc_hooks.py`, and sync reviewed hook
+bundles deliberately with `./install-skills.sh --install-all-hooks`; installed
+copies under `$CODEX_HOME/hooks` are runtime artifacts.
 Keep these SDLC hooks separate from the non-SDLC global-context hooks:
 `SessionStart` is for stable global context and task-state location, and
 `UserPromptSubmit` is only for lightweight prompt-time context, safety, or
-opt-in delegation hints.
+opt-in delegation requests.
 
 - `sdlc-create-requirements`: creates or updates `docs/requirements.md` from user
   prompts, tickets, or approved change requests while preserving stable
@@ -368,18 +373,29 @@ be removed with `--remove-skill` when they are not same-source managed.
 - `bash`
 - `rsync`
 - `git` for GitHub sources
+- standard POSIX-style utilities for hook installation: `install`, `find`,
+  `cmp`, `chmod`, `awk`, `cut`, `sort`, and `mktemp`
 
 ### Usage
 
 ```bash
 ./install-skills.sh [source] [destination_dir]
 ./install-skills.sh --remove-skill <skill_name> [destination_dir]
+./install-skills.sh --install-hooks <source_hook_dir>
+./install-skills.sh --install-all-hooks
 ./install-skills.sh --help
 ```
 
 With no arguments, `./install-skills.sh` uses the directory containing the
 script as the source and installs every sibling skill folder that contains
 `SKILL.md` into the default Codex target, `~/.agents/skills`.
+The `--install-hooks` option is deliberately separate from normal skill
+installation. It copies hook files from an explicit source hook directory into
+`${CODEX_HOME:-$HOME/.codex}/hooks`, stripping `.template` suffixes for
+installed files, without modifying `hooks.json` or trusting hooks.
+The `--install-all-hooks` option is also explicit, but discovers every reviewed
+hook-only `*/assets/hooks` directory under this source skills folder and syncs
+those payload files in one pass. It does not scan mixed `assets/` directories.
 
 ### Supported Sources
 
@@ -423,6 +439,18 @@ script as the source and installs every sibling skill folder that contains
 
 # Remove from a custom destination
 ./install-skills.sh --remove-skill vendor-nebius "~/custom-skills"
+
+# Copy optional Agentic SDLC hooks into the default local Codex home
+./install-skills.sh --install-hooks sdlc-start/assets/hooks
+
+# Copy global context-management hook templates into the default local Codex home
+./install-skills.sh --install-hooks config-codex/assets/hooks
+
+# Copy every reviewed hook-only bundle into the default local Codex home
+./install-skills.sh --install-all-hooks
+
+# Copy hooks into a non-default Codex home
+CODEX_HOME=~/custom-codex ./install-skills.sh --install-all-hooks
 ```
 
 ### Notes
@@ -456,3 +484,11 @@ script as the source and installs every sibling skill folder that contains
   back.
 - Stale skill cleanup only applies to skills previously installed from the same
   source.
+- `--install-hooks <source_hook_dir>` is opt-in because hooks are local runtime
+  guardrails, not skills. Use a hook-only source directory such as
+  `sdlc-start/assets/hooks` or `config-codex/assets/hooks`. After syncing them,
+  restart Codex and review/trust the hook entries in `/hooks`.
+- `--install-all-hooks` discovers only skill-owned hook-only directories named
+  `*/assets/hooks` under this source folder, checks for conflicting installed
+  file names, and syncs all reviewed hook bundles into
+  `${CODEX_HOME:-$HOME/.codex}/hooks`.
