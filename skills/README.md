@@ -21,6 +21,13 @@ For skill-specific release notes, see [CHANGELOG.md](CHANGELOG.md).
 ## Included Skills
 
 - End-to-end project alignment: `align`
+- Agentic SDLC workflow skills: `sdlc-create-requirements`, `sdlc-start`,
+  `sdlc-gather-context`, `sdlc-create-design`, `sdlc-create-plan`,
+  `sdlc-tdd`, `sdlc-implement-plan`, `sdlc-validate-codes`,
+  `sdlc-unit-tests`, `sdlc-evaluate`, `sdlc-classify-failure`,
+  `sdlc-gui-test`, `sdlc-tui-test`, `sdlc-align-specs`, `sdlc-commit`,
+  `sdlc-uat-tests`, `sdlc-merge-pr`, plus the reused `create-pr` and
+  `review-pr` handoff skills
 - Skill folder hardening, alignment, and validation: `align-skill`
 - Security review and safe remediation across infra, CI/CD, shell, and app
   code: `apply-security`
@@ -123,8 +130,67 @@ or Agent Skill folders. Use it for named skills, local skill folders,
 multi-skill parent folders, GitHub skill repositories, or GitHub tree URLs when
 `SKILL.md`, trigger metadata, references, assets, scripts, safety guardrails,
 official vendor-doc verification, canonical structure, validation evidence, fast
-authoring practices, and reusable learning capture in local skill source
-materials need to be aligned.
+authoring practices, optional stateful-workflow section profiles, and reusable
+learning capture in local skill source materials need to be aligned.
+
+### Agentic SDLC Skills
+
+The Agentic SDLC skills implement a skill-driven state machine for turning user
+ideas into requirements, design, locked local plans, test-first implementation,
+validation, evaluation, local commits, UAT, PR creation or reuse, PR review,
+and explicit final merge.
+Strictly SDLC-only skills use the `sdlc-` prefix, with the coordinator named
+`sdlc-start`, so tool discovery does not confuse workflow phases such as
+`sdlc-commit` with ordinary Git commands or general-purpose engineering skills.
+The committed product truth is `docs/requirements.md` and `docs/design.md`;
+private run state, plans, evidence, screenshots, transcripts, and steering live
+under `~/.codex/sdlc-runs/<project-id>/<run-id>/` and must not be committed.
+Optional global PreToolUse and Stop hooks can enforce SDLC invariants from that
+local state. Sensitive Git actions use short-lived local authorization files
+under the active run's `permissions/` directory; the skills create those files
+only immediately before the guarded action.
+Keep these SDLC hooks separate from the non-SDLC global-context hooks:
+`SessionStart` is for stable global context and task-state location, and
+`UserPromptSubmit` is only for lightweight prompt-time context, safety, or
+opt-in delegation hints.
+
+- `sdlc-create-requirements`: creates or updates `docs/requirements.md` from user
+  prompts, tickets, or approved change requests while preserving stable
+  `REQ-*` IDs.
+- `sdlc-start`: coordinates the active SDLC run, reads steering and local
+  checkpoints, selects the highest-priority incomplete feature, and chooses one
+  next skill without duplicating history on unchanged resumes.
+- `sdlc-gather-context`: builds compact feature context packs from official docs,
+  internal sources, code, and tests.
+- `sdlc-create-design`: creates or updates `docs/design.md`, maps requirements to
+  stable `FEAT-*` blocks, and defines validation, test, and evaluation plans.
+- `sdlc-create-plan`: creates locked private local execution plans for one feature.
+- `sdlc-tdd`: writes or maps tests before implementation.
+- `sdlc-implement-plan`: implements production code for the current locked feature
+  plan only.
+- `sdlc-validate-codes`: runs syntax, lint, type, import, config, dependency, and
+  build checks where configured.
+- `sdlc-unit-tests`: runs feature behavior, regression, integration, component,
+  contract, or mock-based tests.
+- `sdlc-evaluate`: observes feature behavior against acceptance criteria and routes
+  to GUI, TUI, API, service, or manual evaluation.
+- `sdlc-align-specs`: checks SDLC requirements, design, plans, tests,
+  implementation, and evidence for consistency before commit or PR readiness.
+- `sdlc-classify-failure`: classifies failed phases before retrying and routes to
+  the earliest responsible SDLC phase.
+- `sdlc-gui-test`: controls and evaluates browser UI flows with screenshots or
+  accessibility snapshots when available.
+- `sdlc-tui-test`: controls and evaluates terminal, CLI wizard, or TUI flows with
+  transcripts and exit-code evidence.
+- `sdlc-commit`: creates local feature-scoped Git commits after validation, tests,
+  and evaluation pass; it never pushes and does not replace `commit-push`.
+- `sdlc-uat-tests`: runs product-level user acceptance testing before PR creation.
+- `create-pr`: existing PR skill reused as the SDLC handoff after UAT passes;
+  it opens or reuses the PR and summarizes SDLC evidence.
+- `review-pr`: existing PR review skill reused for SDLC merge-readiness review
+  against specs, checks, reviews, and local evidence.
+- `sdlc-merge-pr`: merges a specific PR only after an explicit user request and
+  final readiness checks.
 
 ### `apply-security`
 
@@ -195,11 +261,13 @@ explicitly authorizes delegation or enables a local hook delegation policy and
 the runtime permits it, closing completed subagent threads after their results
 are consolidated when close controls are available, and reviewing risk before
 final answers. Its public skill files stay generic; local hooks, custom agent
-config, and task-state files belong under `$CODEX_HOME`. The hook setup creates
-task state lazily for complex prompts instead of scaffolding every session; the
-file is meant to be read at task start, resume, or after compaction when prior
-context may matter, then updated with concise decisions, validation status, and
-next action.
+config, and task-state files belong under `$CODEX_HOME`. The hook setup
+advertises session-scoped task-state paths without creating missing state
+files; an existing file is meant to be read at task start, resume, or after
+compaction when prior context may matter, then updated with concise decisions,
+validation status, and next action. This non-SDLC setup owns `SessionStart`
+and `UserPromptSubmit` only; Agentic SDLC guardrails are separate `PreToolUse`
+and `Stop` hooks.
 
 ### `gitignore`
 

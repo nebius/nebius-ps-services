@@ -38,7 +38,7 @@ and a short final summary.
 - Do not treat skill activation, generic hook context, or configured
   `[agents.*]` roles as delegation authorization. Authorization comes from the
   user prompt or from a user-enabled local hook policy that deliberately
-  injects a subagent delegation request for the current prompt; active runtime
+  injects a lightweight delegation hint for the current prompt; active runtime
   policy may still deny delegation.
 - Do not claim runtime hook or skill activation is proven unless it was
   observed in the current Codex surface.
@@ -64,8 +64,21 @@ Treat the user prompt and a user-enabled local hook policy as the two valid
 authorization sources. A complex task, this skill's activation, or configured
 agent roles are not enough by themselves. The prompt must clearly ask Codex to
 use or spawn subagents, use delegation, or run parallel agents, unless a
-user-enabled local hook policy injects that request and the current runtime
+user-enabled local hook policy injects a delegation hint and the current runtime
 accepts it.
+
+This skill's hook layer owns only non-SDLC global-context events:
+`SessionStart` for stable context and task-state path injection, and
+`UserPromptSubmit` for lightweight prompt-time context, safety, or opt-in
+delegation hints. Agentic SDLC guardrails are separate `PreToolUse` and `Stop`
+hooks.
+
+- `SessionStart`: use for global conventions, workspace context, environment
+  notes, coding standards, and stable task-state path hints. Do not select
+  SDLC phases, modify run state, or inject large documents.
+- `UserPromptSubmit`: use only for small global reminders, prompt safety, and
+  lightweight context hints. Do not route `sdlc-start`, parse requirements,
+  select workflow skills, create run state, or inject large documents.
 
 ## Task State
 

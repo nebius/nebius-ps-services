@@ -16,6 +16,9 @@ validation, or validation evidence aligned.
 - Verifies vendor-specific claims against official documentation when needed.
 - Adds guardrails for destructive actions, secrets, live systems, and external
   services.
+- Applies an optional stateful-workflow profile for coordinator or
+  state-machine skills that manage local state, locked plans, evidence,
+  retries, or failure routing.
 - Captures durable reusable learnings back into the skill's local source
   materials before completion.
 - Runs static skill validation before reporting readiness.
@@ -44,10 +47,13 @@ align-skill checks structure, safety, docs, and validation
 4. Add or repair the target skill's `## Learning Loop` section.
 5. Apply focused updates to metadata, instructions, references, assets, or
    scripts.
-6. Update local skill source materials with evidence-backed reusable learnings
+6. For stateful workflow skills, use
+   `assets/stateful-workflow-skill-template.md` and validate with
+   `scripts/validate-skill-structure.py --profile stateful-workflow`.
+7. Update local skill source materials with evidence-backed reusable learnings
    discovered during execution.
-7. Run `scripts/validate-skill-structure.py` when available.
-8. Report validation, learning-loop coverage, source-material updates, skipped
+8. Run `scripts/validate-skill-structure.py` when available.
+9. Report validation, learning-loop coverage, source-material updates, skipped
    live checks, and remaining uncertainty.
 
 ## Core Concepts
@@ -67,7 +73,7 @@ align-skill checks structure, safety, docs, and validation
 - `agents/openai.yaml`: UI metadata.
 - `references/`: canonical structure, authoring, safety, vendor, and trigger
   guidance.
-- `assets/`: report and plan templates.
+- `assets/`: report, plan, and stateful-workflow skill templates.
 - `scripts/validate-skill-structure.py`: static skill folder validator.
 - `scripts/test-validate-skill-structure.py`: local fixture self-test for the
   validator.

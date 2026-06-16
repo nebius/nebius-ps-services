@@ -53,7 +53,7 @@ They should say, in effect:
 ```text
 Here is the workspace root.
 Here is the durable task-state path.
-Create task state automatically only for complex prompts.
+Do not create task state from hooks.
 Read current task state when it already exists and prior context may matter.
 For complex work, use global-context-management.
 Keep the parent thread concise.
@@ -75,13 +75,12 @@ customer data, private URLs, or broad environment dumps.
 
 Task-state files are useful only when Codex reads and updates them. The
 `SessionStart` hook injects the path without creating a missing `current.md`;
-the `UserPromptSubmit` hook creates or reuses the file automatically only when
-the prompt looks complex. Hooks do not make hidden state automatically active in
-the model forever.
+the `UserPromptSubmit` hook only advertises or reuses the same path for complex
+prompts. Hooks do not create task-state files, SDLC run state, workflow state,
+or hidden state automatically active in the model forever.
 Synthetic complex-prompt hook probes that pass a made-up `session_id` against a
-live `$CODEX_HOME` can create scaffold-only directories named after that session
-ID. Those probe files are not active task context unless a real agent session
-later reads and updates that same path.
+live `$CODEX_HOME` should not create task-state files or directories. They
+validate hook path calculation and prompt-time hints only.
 
 Use the task-state file in three places:
 
@@ -152,8 +151,8 @@ agent roles, and the active instruction policy. In current Codex surfaces,
 enabling `multi_agent` makes the tools available but does not by itself count
 as a user request to use them. Current public Codex docs say Codex only spawns
 subagents when explicitly asked. In this workflow, that explicit request can
-come from the user prompt or from a user-enabled local hook policy that injects
-a delegation request for complex prompts, when the active runtime and
+come from the user prompt or from a user-enabled local hook policy that adds a
+lightweight delegation hint for complex prompts, when the active runtime and
 instruction policy accept that hook context. If delegation is authorized and
 useful but subagent controls are not visible, and `tool_search` is available,
 the main agent should first search for multi-agent/subagent tools before
@@ -175,10 +174,25 @@ When that policy is present at
 discovers configured read-only agents from `$CODEX_HOME/config.toml` and the
 referenced files under `$CODEX_HOME`. It injects agent names only by default,
 not local paths. This is still best-effort model-visible guidance; hooks do
-not directly call the subagent tool. When this policy context is present, the
-main agent should treat it as the local-policy delegation request for that turn
-and should not wait for another manual prompt phrase before using useful,
-available, and permitted read-only helpers.
+not directly call the subagent tool or repeat the full helper lifecycle. When
+this policy context is present, the main agent should treat it as an opt-in
+delegation hint for that turn, then use read-only helpers only when they are
+useful, available, and permitted.
+
+This skill's local hook layer owns only the non-SDLC global-context events:
+`SessionStart` for stable global context and task-state path injection, and
+`UserPromptSubmit` for lightweight prompt-time context, safety, or opt-in
+delegation hints. Do not use this layer to run Agentic SDLC loops. SDLC
+guardrails belong in separate `PreToolUse` and `Stop` hooks.
+
+Use `SessionStart` for global conventions, workspace context, environment
+notes, coding standards, and stable task-state path hints. Do not use it to
+select SDLC phases, modify run state, or inject large documents.
+
+Use `UserPromptSubmit` only for small global reminders, prompt safety, and
+lightweight context hints. Do not use it to route `sdlc-start`, parse
+requirements, select workflow skills, create run state, or inject large
+documents.
 
 ### Parent/Subagent Lifecycle
 
@@ -222,8 +236,8 @@ installed.
 
 For a complex task, the intended flow is:
 
-1. Receive prompt and injected task-state path; for complex prompts, create or
-   reuse the task-state file automatically.
+1. Receive prompt and injected task-state path; hooks only advertise or reuse
+   an existing file and do not create task-state.
 2. Identify the objective, constraints, likely files, and validation path.
 3. Read existing task state when prior context may matter, then update it with
    the current plan.
@@ -370,10 +384,13 @@ In the fresh session, open the hook review UI:
 /hooks
 ```
 
-Review the two configured hook commands. They should point to the local
-`$CODEX_HOME/hooks/session_start_context.py` and
-`$CODEX_HOME/hooks/user_prompt_context.py` scripts. Trust or enable those hooks
-from the `/hooks` UI only after confirming the paths are local and expected.
+Review the two configured global-context hook commands. They should point to
+the local `$CODEX_HOME/hooks/session_start_context.py` and
+`$CODEX_HOME/hooks/user_prompt_context.py` scripts. Trust or enable those
+hooks from the `/hooks` UI only after confirming the paths are local and
+expected.
+If other workflows add hooks, review those entries separately and keep their
+event ownership distinct.
 
 After trusting the hooks, start another fresh session and confirm a complex
 prompt receives an injected durable task-state path under:

@@ -83,6 +83,41 @@ For larger skills, keep only core routing and workflow instructions in
 For scaffolded skill folders, draft skill content, or update work, read
 `references/skill-authoring-best-practices.md` after target scope is known.
 
+## Stateful Workflow Skill Profile
+
+Use this opt-in profile for skills that manage local state, locked plans,
+evidence, continuation prompts, retries, or failure routing. Do not force this
+profile onto simple instruction-only skills.
+
+Template: `assets/stateful-workflow-skill-template.md`
+
+Required sections for the `stateful-workflow` validation profile:
+
+- `## Purpose`
+- `## When To Use`
+- `## When Not To Use`
+- `## Inputs`
+- `## Required Reads`
+- `## Writes`
+- `## Process`
+- `## Idempotency`
+- `## Failure Handling`
+- `## Must Not`
+- `## Completion Criteria`
+- `## Output Contract`
+
+For this profile:
+
+- State whether execution artifacts are committed project truth or private
+  local state.
+- Describe rerun behavior so agents do not duplicate plans, evidence, commits,
+  or external resources.
+- Classify failures before retrying or routing backward.
+- Keep hooks as invariant guardrails; do not make hooks own workflow
+  orchestration.
+- Use MCP servers for external capabilities when available, while preserving
+  explicit safety checks for write operations.
+
 ## Naming Rules
 
 - Use lowercase letters, numbers, and hyphens.
@@ -91,6 +126,15 @@ For scaffolded skill folders, draft skill content, or update work, read
 - Keep the folder name and front matter `name` identical.
 - Prefer specific names that describe the job, not broad names such as
   `helper`, `tools`, or `automation`.
+- For skills that are only valid inside the Agentic SDLC state machine, use an
+  `sdlc-` prefix in the folder and front matter name. The coordinator uses
+  `sdlc-start`, and phase skills use names such as `sdlc-commit` instead of
+  broad generic names like `commit`.
+- SDLC-only skill descriptions must start with
+  `Use only as part of the Agentic SDLC workflow;` so tool discovery makes the
+  workflow boundary explicit.
+- Do not keep unprefixed aliases or compatibility wrapper folders for renamed
+  SDLC-only skills unless the user explicitly requests a compatibility layer.
 
 ## Content Placement
 

@@ -28,6 +28,21 @@ LEARNING_LOOP_REQUIRED_SNIPPETS = (
     "unverified/vendor-specific claims",
     "report that it was skipped",
 )
+STATEFUL_WORKFLOW_REQUIRED_HEADINGS = (
+    "## Purpose",
+    "## When To Use",
+    "## When Not To Use",
+    "## Inputs",
+    "## Required Reads",
+    "## Writes",
+    "## Process",
+    "## Idempotency",
+    "## Failure Handling",
+    "## Must Not",
+    "## Completion Criteria",
+    "## Output Contract",
+)
+SDLC_ONLY_DESCRIPTION_PREFIX = "Use only as part of the Agentic SDLC workflow;"
 
 
 @dataclass
@@ -61,6 +76,16 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         nargs="+",
         type=Path,
         help="Skill folder or parent folder containing skill folders.",
+    )
+    parser.add_argument(
+        "--profile",
+        choices=("basic", "stateful-workflow"),
+        default="basic",
+        help=(
+            "Optional validation profile. The default basic profile checks "
+            "generic skill structure only. stateful-workflow additionally "
+            "requires the standard state-machine skill sections."
+        ),
     )
     return parser.parse_args(argv)
 
@@ -166,7 +191,15 @@ def extract_learning_loop_section(skill_text: str) -> str | None:
     return skill_text[section_start:next_heading]
 
 
-def validate_skill(skill_dir: Path) -> SkillResult:
+def validate_stateful_workflow_profile(skill_text: str, result: SkillResult) -> None:
+    for heading in STATEFUL_WORKFLOW_REQUIRED_HEADINGS:
+        if f"\n{heading}\n" not in f"\n{skill_text}\n":
+            result.failures.append(
+                f"stateful-workflow profile missing required heading: {heading}"
+            )
+
+
+def validate_skill(skill_dir: Path, *, profile: str = "basic") -> SkillResult:
     result = SkillResult(path=skill_dir)
     skill_md = skill_dir / "SKILL.md"
 
@@ -197,6 +230,19 @@ def validate_skill(skill_dir: Path) -> SkillResult:
         result.failures.append("front matter is missing description")
     elif len(description) > 1024:
         result.failures.append("description exceeds 1024 characters")
+    elif name.startswith("sdlc-") and not description.startswith(
+        SDLC_ONLY_DESCRIPTION_PREFIX
+    ):
+        result.failures.append(
+            "SDLC-only skills must start the description with: "
+            f"{SDLC_ONLY_DESCRIPTION_PREFIX}"
+        )
+    elif description.startswith(SDLC_ONLY_DESCRIPTION_PREFIX) and not name.startswith(
+        "sdlc-"
+    ):
+        result.failures.append(
+            "skills with the SDLC-only description prefix must use an sdlc-* name"
+        )
 
     try:
         skill_text = skill_md.read_text(encoding="utf-8")
@@ -213,6 +259,9 @@ def validate_skill(skill_dir: Path) -> SkillResult:
                 result.failures.append(
                     f"## Learning Loop is missing required text: {snippet}"
                 )
+
+    if profile == "stateful-workflow" and skill_text:
+        validate_stateful_workflow_profile(skill_text, result)
 
     for child in sorted(skill_dir.iterdir()):
         if not child.is_dir() or child.name.startswith("."):
@@ -279,7 +328,7 @@ def main(argv: list[str]) -> int:
     for target in args.targets:
         skills, warnings = discover_skills(target)
         discovery_warnings.extend(warnings)
-        all_results.extend(validate_skill(skill) for skill in skills)
+        all_results.extend(validate_skill(skill, profile=args.profile) for skill in skills)
 
     for warning in discovery_warnings:
         print(f"WARN: {warning}")

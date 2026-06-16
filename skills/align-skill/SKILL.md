@@ -31,6 +31,9 @@ alignment.
 - Checking skill guidance, commands, scripts, examples, and vendor-specific
   claims against current official documentation.
 - Adding or hardening safety guardrails before validation or live tests.
+- Applying the optional stateful-workflow skill profile for skills that manage
+  local state, locked plans, evidence, continuation, retries, or failure
+  routing.
 
 ## Inputs Accepted
 
@@ -119,6 +122,9 @@ scope.
 
 For skill draft, scaffold, or update tasks, also read
 `references/skill-authoring-best-practices.md` after the target scope is known.
+For coordinator or state-machine skills, also use
+`assets/stateful-workflow-skill-template.md` as the optional section template
+and validate with the `stateful-workflow` profile when appropriate.
 
 ## Skill Authoring Helper Workflow
 
@@ -135,7 +141,11 @@ newly scaffolded skill folder:
    with user intent, accepted inputs, and boundaries from adjacent skills.
 5. Apply safe, secure, and fast skill guidance from
    `references/skill-authoring-best-practices.md`.
-6. Validate locally with the narrowest relevant checks, then broaden only when
+6. For stateful workflow skills, add explicit `Required Reads`, `Writes`,
+   `Idempotency`, `Failure Handling`, `Must Not`, and `Completion Criteria`
+   sections. Keep private execution state out of committed project files and
+   keep hooks as invariant guardrails rather than workflow orchestrators.
+7. Validate locally with the narrowest relevant checks, then broaden only when
    the contract or shared validator changed.
 
 ## Learning Loop Enforcement
@@ -206,6 +216,10 @@ conventions when they are clearer or stricter than the generic structure. In
 this repository, `evals/` is an optional surface for reusable trigger or quality
 evaluation prompts.
 
+For stateful workflow skills, use the template in
+`assets/stateful-workflow-skill-template.md`. This profile is opt-in and should
+not be forced onto simple instruction-only skills.
+
 ## Alignment Workflow
 
 1. Detect target scope: single skill, multiple named skills, parent folder, or
@@ -241,9 +255,10 @@ Use the safe validation hierarchy:
 
 Use `python3 scripts/validate-skill-structure.py <target>` when this skill's
 validator is available, relevant, and script execution is permitted by the
-current user and repository policy. If script execution is not permitted,
-mirror the same static checks manually and report that the validator was
-skipped.
+current user and repository policy. For stateful workflow skills, add
+`--profile stateful-workflow` to check the optional state-machine section
+contract. If script execution is not permitted, mirror the same static checks
+manually and report that the validator was skipped.
 
 When changing the validator itself, also run
 `python3 scripts/test-validate-skill-structure.py`; it uses temporary local

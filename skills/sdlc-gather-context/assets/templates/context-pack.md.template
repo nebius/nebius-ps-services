@@ -1,0 +1,29 @@
+# FEAT-<id> Context Pack
+
+## Scope
+
+- Feature: FEAT-<id>
+- Requirements: REQ-<id>
+
+## Sources
+
+| Source | Type | Date Checked | Finding |
+| --- | --- | --- | --- |
+| <source> | <official-docs|internal-docs|code|tests> | <YYYY-MM-DD> | <summary> |
+
+## Facts That Affect Design Or Implementation
+
+- <fact>: <source>
+
+## Design Implications
+
+- <implication>
+
+## Open Context Questions
+
+- <question>
+
+## Fingerprint Inputs
+
+- Requirements fingerprint: <hash-or-summary>
+- Source fingerprint: <hash-or-summary>

@@ -72,7 +72,7 @@ global file.
   the parent thread.
 - Use bounded read-only subagents for noisy exploration when the user
   explicitly requests delegation, or when a user-enabled local hook policy
-  injects that request, and subagents are available and useful. Use a
+  adds a lightweight delegation hint, and subagents are available and useful. Use a
   read-only risk review before finalizing non-trivial changes only when
   delegation is authorized and permitted.
 - When subagents are used, ask them for concise final summaries, wait for the
@@ -149,12 +149,11 @@ local-only policy file:
 Save it as `$CODEX_HOME/hooks/global_context_policy.json`. The hook will read
 `$CODEX_HOME/config.toml`, discover configured `[agents.<name>]` entries whose
 referenced configs under `$CODEX_HOME` have `sandbox_mode = "read-only"`, and
-inject a request to use those read-only roles by name. It does not inject local
-agent config paths and does not directly call the subagent tool. The injected
-request is the local-policy delegation request for that turn, so the main
-agent should not wait for another manual prompt phrase before using useful,
-available, and permitted read-only helpers. The injected request tells Codex
-not to spawn every configured role by default. The parent agent still owns
+add those read-only role names as a model-visible hint. It does not inject local
+agent config paths and does not directly call the subagent tool. The hint is
+local-policy context for that turn, so the main agent still uses read-only
+helpers only when useful, available, and permitted. The hint tells Codex not to
+spawn every configured role by default. The parent agent still owns
 lifecycle cleanup: wait for returned summaries, consolidate them, and close
 completed subagent threads when close controls are available and no follow-up
 is needed. With multiple subagents, close each completed handle as its
@@ -198,9 +197,9 @@ injected task-state path appears. Treat runtime activation as unverified until
 observed in the target Codex surface.
 
 Direct hook unit probes against a live `$CODEX_HOME` with synthetic
-`session_id` values can create scaffold-only task-state directories named after
-those IDs when they exercise the complex-prompt hook. They validate hook path
-calculation, not active persistent model state. Prefer
+`session_id` values should not create task-state files or directories. They
+validate hook path calculation and prompt-time hints, not active persistent
+model state. Prefer
 `scripts/validate-local-templates.py` for hook-unit validation because it uses
 disposable temporary homes. If a hook payload has no `session_id`, task state is
 unavailable and no manual or legacy fallback path is created.
@@ -224,8 +223,8 @@ If the probe does not spawn a subagent, check:
 - If multi-agent tools are not exposed directly, `tool_search` is available and
   can discover deferred multi-agent/subagent tools.
 - The user prompt explicitly asks Codex to use or spawn subagents, use
-  delegation, or run parallel agents, or the enabled local hook policy injects
-  that request for the prompt.
+  delegation, or run parallel agents, or the enabled local hook policy adds a
+  delegation hint for the prompt.
 - The current user or developer instructions permit delegation for the task.
 
 If `$CODEX_HOME/hooks/global_context_policy.json` is enabled, also run a

@@ -132,18 +132,35 @@ The hook layer injects durable context before Codex starts work:
 ```text
 Here is the workspace root.
 Here is the task-state path.
-Create task state automatically only for complex prompts.
-Read current task state when it already exists and prior context may matter.
-Use global-context-management for complex work.
-Keep the parent thread concise.
+Do not create task state automatically.
+Read existing task state when prior context may matter.
+Keep raw logs and broad exploration output out of task state.
+Use skills for workflow-specific instructions.
 ```
 
 Hooks do not implement the task. They make the right context visible to Codex.
 If a user deliberately opts in by creating
 `$CODEX_HOME/hooks/global_context_policy.json`, the `UserPromptSubmit` hook can
 also discover configured read-only agents from `$CODEX_HOME/config.toml` and
-inject a request to use them for complex prompts. The hook injects agent names
-only by default and does not directly call subagent tools.
+add a lightweight delegation hint for complex prompts. The hook injects agent
+names only by default, does not directly call subagent tools, and leaves
+detailed helper lifecycle rules to `global-context-management`.
+
+This global-context setup owns only the non-SDLC hook events: `SessionStart`
+for stable global context and task-state path injection, and `UserPromptSubmit`
+for lightweight prompt-time context, safety, or opt-in delegation hints.
+Workflow-specific systems such as Agentic SDLC must use separate hook events,
+for example `PreToolUse` for hard guardrails and `Stop` for bounded
+continuation.
+
+Use `SessionStart` for global conventions, workspace context, environment
+notes, coding standards, and stable task-state path hints. Do not use it to
+select SDLC phases, modify run state, or inject large documents.
+
+Use `UserPromptSubmit` only for small global reminders, prompt safety, and
+lightweight context hints. Do not use it to route `sdlc-start`, parse
+requirements, select workflow skills, create run state, or inject large
+documents.
 
 ### Skills Provide Workflow
 
@@ -187,10 +204,10 @@ They may not appear as separate user-visible controls in every surface. In
 current Codex surfaces, this setup makes subagent tools available but does not
 force automatic delegation; prompts that need subagents should explicitly say
 to use or spawn subagents, use delegation, or run parallel agents, unless the
-local hook policy injects that request for the prompt. For users who want
-hook-assisted delegation, a private local policy file can opt in to injecting
-that request for complex prompts without hardcoding agent names in the public
-repo:
+local hook policy adds a lightweight delegation hint for the prompt. For users
+who want hook-assisted delegation, a private local policy file can opt in to
+adding that hint for complex prompts without hardcoding agent names in the
+public repo:
 
 When delegation is authorized and useful but subagent controls are not visible,
 and `tool_search` is available, Codex should search for multi-agent/subagent
@@ -323,8 +340,9 @@ setup.
    /hooks
    ```
 
-   Review the two local hook commands. They should resolve to the local hook
-   scripts, either directly or through `${CODEX_HOME:-$HOME/.codex}`:
+   Review the two global-context hook commands. They should resolve to the
+   local hook scripts, either directly or through
+   `${CODEX_HOME:-$HOME/.codex}`:
 
    ```text
    $CODEX_HOME/hooks/session_start_context.py
@@ -332,7 +350,8 @@ setup.
    ```
 
    Trust or enable the hooks only after the resolved paths are local and
-   expected.
+   expected. If other workflows add their own hooks, review those separately
+   and keep their event ownership distinct.
 
 10. Run a non-mutating probe:
 
@@ -360,16 +379,16 @@ setup.
    tools before reporting delegation unavailable.
 
    Direct hook unit probes against a live `$CODEX_HOME` with synthetic
-   `session_id` values create scaffold-only task-state directories named after
-   those IDs. They prove the hook path calculation, but they are not active
-   persistent model state unless an agent later reads and updates that exact
-   path. Prefer `global-context-management/scripts/validate-local-templates.py`
-   for hook-unit validation because it uses disposable temporary homes and
-   checks that `SessionStart` does not create missing scaffold files, an
-   existing nonempty `current.md` is preserved for the agent to read instead of
-   being overwritten or injected into hook context, and loose task-state file
-   permissions are repaired on reuse. No manual or legacy task-state path is
-   created when a hook payload lacks `session_id`.
+   `session_id` values should not create task-state files or directories. They
+   prove hook path calculation and prompt-time hints, not active persistent
+   model state. Prefer
+   `global-context-management/scripts/validate-local-templates.py` for
+   hook-unit validation because it uses disposable temporary homes and checks
+   that `SessionStart` and `UserPromptSubmit` do not create missing scaffold
+   files, an existing nonempty `current.md` is preserved for the agent to read
+   instead of being overwritten or injected into hook context, and loose
+   task-state file permissions are repaired on reuse. No manual or legacy
+   task-state path is created when a hook payload lacks `session_id`.
 
 ## File Responsibilities
 

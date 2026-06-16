@@ -32,6 +32,9 @@ Source basis:
 - The front matter `name` must match the folder and stay lowercase hyphen-case.
 - The `description` is the primary trigger surface. It must say what the skill
   does and when to use it.
+- Prefix skills that are strictly internal to the Agentic SDLC workflow with
+  `sdlc-`; use `sdlc-start` for the coordinator. Their descriptions must start
+  with `Use only as part of the Agentic SDLC workflow;`.
 - Front-load user intent terms because long descriptions may be shortened in
   large skill sets.
 - Include realistic inputs and near-boundaries, such as local folder, GitHub
@@ -53,6 +56,31 @@ Source basis:
 - Put reusable templates and starter artifacts in `assets/` instead of loading
   them into `SKILL.md`.
 - Do not duplicate the same rule across files. Link to the owner file.
+
+## Stateful Workflow Skills
+
+Use the optional stateful-workflow profile when a skill is part of a
+state-machine workflow, coordinates another skill, updates local run state,
+locks plans, writes evidence, consumes continuation prompts, or owns retry and
+failure routing. Use `assets/stateful-workflow-skill-template.md` as the
+template.
+
+For these skills:
+
+- Define `Required Reads` before `Writes` so the agent reloads durable state
+  instead of relying on conversation memory.
+- Make every write surface explicit: committed product files, private local
+  state, evidence, external systems, or Git state.
+- Describe idempotency for reruns, stale fingerprints, locked artifacts,
+  duplicated evidence, and external side effects.
+- Classify failures before retrying, and route to the earliest responsible
+  phase instead of repeatedly attempting the last command.
+- Keep private execution state out of committed repositories unless the user
+  explicitly requests a committed artifact.
+- Treat hooks as non-negotiable guardrails only; keep workflow decisions in the
+  skill.
+- Prefer MCP servers for external context or control when available, but keep
+  write operations behind explicit user authorization and safety checks.
 
 ## Safe And Secure Skills
 
@@ -98,6 +126,12 @@ Source basis:
 
   ```bash
   python3 align-skill/scripts/validate-skill-structure.py align-skill
+  ```
+
+- For stateful workflow skills, also run:
+
+  ```bash
+  python3 align-skill/scripts/validate-skill-structure.py --profile stateful-workflow <skill-or-parent>
   ```
 
 - When changing `align-skill` validator logic, run the self-test and a

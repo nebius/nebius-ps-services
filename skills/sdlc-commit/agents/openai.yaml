@@ -1,0 +1,4 @@
+interface:
+  display_name: "SDLC Commit"
+  short_description: "Create local feature commits"
+  default_prompt: "Use $sdlc-commit to create a local Agentic SDLC commit for one completed feature as a durable checkpoint without pushing."

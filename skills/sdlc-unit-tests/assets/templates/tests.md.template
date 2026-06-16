@@ -1,0 +1,15 @@
+# FEAT-<id> Test Evidence
+
+## Commands
+
+| Command | Scope | Result |
+| --- | --- | --- |
+| `<command>` | <unit|integration|component|regression> | <pass|fail|blocked> |
+
+## Acceptance Criteria Covered
+
+- REQ-<id> AC-<id>: <test path or command>
+
+## Failure Classification
+
+<classification or none>

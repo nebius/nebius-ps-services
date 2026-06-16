@@ -1,0 +1,4 @@
+interface:
+  display_name: "SDLC Validate Codes"
+  short_description: "Validate build and code health"
+  default_prompt: "Use $sdlc-validate-codes to answer whether the implemented Agentic SDLC feature can be built or run correctly before deeper behavior tests."

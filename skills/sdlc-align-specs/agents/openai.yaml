@@ -1,0 +1,4 @@
+interface:
+  display_name: "SDLC Align Specs"
+  short_description: "Check SDLC spec consistency"
+  default_prompt: "Use $sdlc-align-specs to verify that Agentic SDLC specs, plans, implementation, tests, and evidence tell one consistent story."

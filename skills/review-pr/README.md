@@ -9,6 +9,10 @@ merge-readiness when permissions allow.
 - Inspects base branch, checks, review state, conflicts, and open concerns.
 - Fixes safe issues on writable branches.
 - Resolves straightforward conflicts when safe.
+- For Agentic SDLC PRs, checks requirements, design, validation, tests,
+  evaluation, UAT, and commit evidence when available.
+- When Agentic SDLC local state is available, records readiness and blocker
+  summaries in run evidence.
 - Reports whether the PR is ready to merge and what blockers remain.
 
 ## Architecture
@@ -31,9 +35,10 @@ Review checks, diffs, conflicts, and comments
 1. Resolve the PR target and base branch.
 2. Inspect working tree state and branch ownership.
 3. Review checks, comments, diff, and conflicts.
-4. Apply relevant sibling skills for concrete file types.
-5. Fix safe issues and rerun focused validation.
-6. Report readiness, remaining blockers, and merge guidance.
+4. For Agentic SDLC PRs, inspect local SDLC specs and evidence summaries.
+5. Apply relevant sibling skills for concrete file types.
+6. Fix safe issues and rerun focused validation.
+7. Report readiness, remaining blockers, and merge guidance.
 
 ## Core Concepts
 

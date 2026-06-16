@@ -6,6 +6,20 @@ All notable changes to the reusable Codex skills are tracked here.
 
 ### Added
 
+- Added the Agentic SDLC skill set: `sdlc-create-requirements`, `sdlc-start`,
+  `sdlc-gather-context`, `sdlc-create-design`, `sdlc-create-plan`,
+  `sdlc-tdd`, `sdlc-implement-plan`, `sdlc-validate-codes`,
+  `sdlc-unit-tests`, `sdlc-evaluate`, `sdlc-classify-failure`,
+  `sdlc-gui-test`, `sdlc-tui-test`, `sdlc-commit`, `sdlc-uat-tests`,
+  `sdlc-merge-pr`, and `sdlc-align-specs`. These skills keep committed
+  product truth in `docs/requirements.md` and
+  `docs/design.md`, keep execution state under `~/.codex/sdlc-runs`, and
+  model the SDLC loop as skill-selected phases rather than a workflow CLI. The
+  SDLC flow reuses existing `create-pr` and `review-pr` as PR creation and
+  review handoff phases.
+- Added SDLC templates for requirements, design, context packs, locked feature
+  plans, validation/test/evaluation evidence, local commit evidence, and UAT
+  reports, plus state-schema and failure-taxonomy references.
 - Added this `skills/CHANGELOG.md` so reusable-skill release notes live with
   the skills instead of in the monorepo root changelog.
 - Added the `align` Codex skill for end-to-end project review and repair passes
@@ -65,6 +79,35 @@ All notable changes to the reusable Codex skills are tracked here.
 
 ### Changed
 
+- Renamed SDLC-only workflow skills to `sdlc-*` names, with `start-sdlc`
+  becoming `sdlc-start`, and made their front matter descriptions start with
+  `Use only as part of the Agentic SDLC workflow;` so tool discovery separates
+  SDLC phases from ordinary commands and general-purpose skills.
+- Updated `align-skill` with an optional stateful-workflow profile for
+  state-machine skills that manage local state, locked plans, evidence,
+  continuation, retries, or failure routing, including a reusable template and
+  `--profile stateful-workflow` validator support.
+- Updated `create-pr` and `review-pr` with Agentic SDLC handoff guidance so
+  they can read local SDLC evidence when invoked in that workflow while
+  preserving their general PR behavior.
+- Hardened `sdlc-start` so coordinator reruns resume from explicit
+  checkpoints, repair partial pointer writes from the newest complete
+  checkpoint, avoid duplicate history on unchanged resumes, and keep locked
+  plans append-only by superseding instead of editing in place.
+- Documented the runtime hook authorization handoff for Agentic SDLC:
+  `sdlc-commit`, `create-pr`, and `sdlc-merge-pr` now write short-lived local
+  authorization files under the active run before guarded Git actions, and
+  `sdlc-start` state schema records the `permissions/` directory contract.
+- Clarified hook ownership boundaries: non-SDLC global-context hooks own
+  `SessionStart` and lightweight `UserPromptSubmit` context, while Agentic
+  SDLC uses only separate `PreToolUse` and `Stop` hooks.
+- Tightened global-context hook rules so `SessionStart` is limited to stable
+  global context and `UserPromptSubmit` is limited to lightweight prompt-time
+  hints, with no SDLC routing, requirements parsing, workflow skill selection,
+  run-state creation, or large-document injection.
+- Reduced global-context hook payloads so `SessionStart` and `UserPromptSubmit`
+  no longer repeat detailed workflow or subagent lifecycle instructions already
+  owned by `global-context-management`.
 - Hardened `apply-security` validation guidance so lockfile maintenance,
   cache/build directory writes, external registry submissions,
   package-manager auto-install behavior, and live-credential checks require
@@ -175,10 +218,10 @@ All notable changes to the reusable Codex skills are tracked here.
   existing nonempty `current.md` task-state file is preserved for the agent to
   read instead of being overwritten or injected into hook context, and tightened
   hook templates so reused task-state files are chmod-repaired to `0600`.
-- Changed task-state hook behavior to lazy automatic creation: `SessionStart`
-  now injects the session-scoped path without creating a missing `current.md`,
-  while `UserPromptSubmit` creates or reuses task state only for prompts that
-  look complex.
+- Changed task-state hook behavior to advertise-only: `SessionStart` injects
+  the session-scoped path without creating a missing `current.md`, while
+  `UserPromptSubmit` only advertises or reuses the same path for complex
+  prompts and does not create task-state, SDLC run state, or workflow state.
 - Tightened the `global-context-management` `SKILL.md` non-goals so a missing
   global task-state path no longer permits repo-local or manual fallback state;
   repo-local task-state files remain explicit-user-request only.

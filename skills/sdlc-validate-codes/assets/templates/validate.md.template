@@ -1,0 +1,15 @@
+# FEAT-<id> Validation Evidence
+
+## Commands
+
+| Command | Purpose | Result |
+| --- | --- | --- |
+| `<command>` | <purpose> | <pass|fail|blocked> |
+
+## Summary
+
+<Validation result.>
+
+## Failure Classification
+
+<classification or none>

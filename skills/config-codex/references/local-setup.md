@@ -145,7 +145,7 @@ because they appear in `assets/config.toml.template`.
 
 ## Optional Hook-Assisted Subagent Policy
 
-To have the `UserPromptSubmit` hook inject a request to use configured
+To have the `UserPromptSubmit` hook add a lightweight hint about configured
 read-only subagents for complex prompts, create this local-only file:
 
 ```json
@@ -160,9 +160,9 @@ do not hardcode agent names for this path. The hook reads `$CODEX_HOME/config.to
 discovers `[agents.<name>]` entries whose referenced config files have
 `sandbox_mode = "read-only"`, and injects those agent names into model-visible
 context. It does not inject local agent config paths, and it does not directly
-call the subagent tool. The injected request is the local-policy delegation
-request for that turn, so the main agent should not wait for another manual
-prompt phrase before using useful, available, and permitted read-only helpers.
+call the subagent tool. The hint is local-policy context for that turn, so the
+main agent still uses read-only helpers only when useful, available, and
+permitted.
 The parent agent still owns lifecycle cleanup: wait for returned summaries,
 consolidate them, and close completed subagent threads when close controls are
 available and no follow-up is needed.
@@ -311,9 +311,9 @@ Expected evidence:
   configured read-only agents by name.
 
 Direct hook unit probes against a live `$CODEX_HOME` with synthetic
-`session_id` values can create scaffold-only task-state directories named after
-those IDs when they exercise the complex-prompt hook. They validate hook path
-calculation, not active persistent model state. Prefer
+`session_id` values should not create task-state files or directories. They
+validate hook path calculation and prompt-time hints, not active persistent
+model state. Prefer
 `global-context-management/scripts/validate-local-templates.py` for hook-unit
 validation because it uses disposable temporary homes. If a hook payload has no
 `session_id`, task state is unavailable and no manual or legacy fallback path is

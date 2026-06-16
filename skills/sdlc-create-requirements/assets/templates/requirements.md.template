@@ -1,0 +1,110 @@
+---
+schema: agentic-sdlc.requirements.v1
+project: "<project-name>"
+owner: "<owner-or-team>"
+status: "draft"
+created_at: "<YYYY-MM-DD>"
+updated_at: "<YYYY-MM-DD>"
+created_by_skill: "sdlc-create-requirements"
+updated_by_skill: "sdlc-create-requirements"
+user_edit_policy: "Do not edit manually. Update through sdlc-create-requirements from user prompts."
+id_policy: "Requirement IDs are stable. Never renumber existing IDs."
+---
+
+# Requirements
+
+## Product Summary
+
+### Source Prompt
+
+<The user prompt summarized by sdlc-create-requirements.>
+
+### Problem
+
+<Problem to solve.>
+
+### Desired Outcome
+
+<Final expected outcome.>
+
+### Primary Users
+
+- <user>: <need>
+
+### Success Definition
+
+<What must be true for success.>
+
+## Constraints
+
+### Must Do
+
+- <constraint>: <description>
+
+### Must Not Do
+
+- <constraint>: <description>
+
+### Assumptions
+
+- <assumption>: <reason>
+
+### Out Of Scope
+
+- <item>: <reason>
+
+## Environment
+
+### Runtime Environment
+
+<Language, framework, platform, OS, browser, terminal, deployment target.>
+
+### Development Constraints
+
+<Tooling, tests, linting, CI, package manager, dependency rules.>
+
+### External Systems
+
+- <system>: <purpose and access method>
+
+## Requirement Blocks
+
+<!-- REQUIREMENT: REQ-001 status=draft priority=P0 type=feature -->
+### REQ-001: <requirement name>
+
+#### User Story
+
+As a <user>, I want <capability>, so that <outcome>.
+
+#### Acceptance Criteria
+
+- AC-001: <observable pass condition>
+
+#### Negative Criteria
+
+- NC-001: <behavior that must not happen>
+
+#### Validation Method
+
+<syntax | lint | type-check | config-check | build | runtime-check>
+
+#### Test Method
+
+<unit | integration | component | mock-based | contract | regression>
+
+#### Evaluation Method
+
+<gui-uat | tui-uat | api-uat | performance | manual-review | production-like-check>
+
+<!-- /REQUIREMENT: REQ-001 -->
+
+## Open Questions
+
+- Q-001: <question>
+  - Status: open
+  - Blocks: <REQ-ID or none>
+  - Owner: <human | agent | team>
+
+## Decision Log
+
+## Change Log

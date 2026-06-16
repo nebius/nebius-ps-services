@@ -33,18 +33,21 @@ def write_skill(
     name: str,
     body: str = "",
     *,
+    description: str | None = None,
     include_learning_loop: bool = True,
 ) -> None:
     skill_dir.mkdir(parents=True, exist_ok=True)
     sections = [body]
     if include_learning_loop:
         sections.append(LEARNING_LOOP)
+    if description is None:
+        description = f"Test fixture for {name}."
     (skill_dir / "SKILL.md").write_text(
         "\n".join(
             [
                 "---",
                 f"name: {name}",
-                f"description: Test fixture for {name}.",
+                f"description: {description}",
                 "---",
                 "",
                 f"# {name}",
@@ -56,10 +59,18 @@ def write_skill(
     )
 
 
-def run_validator(target: Path) -> subprocess.CompletedProcess[str]:
+def run_validator(
+    target: Path,
+    *,
+    profile: str | None = None,
+) -> subprocess.CompletedProcess[str]:
     validator = Path(__file__).with_name("validate-skill-structure.py")
+    command = [sys.executable, "-B", str(validator)]
+    if profile:
+        command.extend(["--profile", profile])
+    command.append(str(target))
     return subprocess.run(
-        [sys.executable, "-B", str(validator), str(target)],
+        command,
         check=False,
         capture_output=True,
         text=True,
@@ -165,12 +176,146 @@ def test_heading_only_learning_loop_fails() -> None:
         )
 
 
+def stateful_workflow_body() -> str:
+    return """
+## Purpose
+
+Coordinate one stateful workflow step.
+
+## When To Use
+
+- Use for stateful workflow tasks.
+
+## When Not To Use
+
+- Do not use for simple one-shot tasks.
+
+## Inputs
+
+- Input state.
+
+## Required Reads
+
+- Current state.
+
+## Writes
+
+- Updated state.
+
+## Process
+
+- Read, act, record.
+
+## Idempotency
+
+- Reruns converge.
+
+## Failure Handling
+
+- Classify before retrying.
+
+## Must Not
+
+- Do not hide failures.
+
+## Completion Criteria
+
+- State and evidence are updated.
+
+## Output Contract
+
+- Report state, evidence, and next action.
+"""
+
+
+def test_stateful_workflow_profile_passes_complete_sections() -> None:
+    with TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        write_skill(
+            root / "workflow-skill",
+            "workflow-skill",
+            stateful_workflow_body(),
+        )
+
+        result = run_validator(root, profile="stateful-workflow")
+        output = result.stdout + result.stderr
+        if result.returncode != 0:
+            raise AssertionError(output)
+
+        assert_contains(output, "Validated 1 skill(s): 0 failure(s), 0 warning(s)")
+
+
+def test_stateful_workflow_profile_missing_heading_fails() -> None:
+    with TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        write_skill(
+            root / "workflow-skill",
+            "workflow-skill",
+            stateful_workflow_body().replace("## Writes\n\n- Updated state.\n\n", ""),
+        )
+
+        basic_result = run_validator(root)
+        basic_output = basic_result.stdout + basic_result.stderr
+        if basic_result.returncode != 0:
+            raise AssertionError(basic_output)
+
+        profile_result = run_validator(root, profile="stateful-workflow")
+        profile_output = profile_result.stdout + profile_result.stderr
+        if profile_result.returncode == 0:
+            raise AssertionError(f"expected profile failure\n{profile_output}")
+
+        assert_contains(
+            profile_output,
+            "stateful-workflow profile missing required heading: ## Writes",
+        )
+
+
+def test_sdlc_only_name_and_description_contract() -> None:
+    with TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        prefix = "Use only as part of the Agentic SDLC workflow;"
+
+        write_skill(
+            root / "sdlc-good",
+            "sdlc-good",
+            description=f"{prefix} use for a workflow phase.",
+        )
+        write_skill(
+            root / "plain-skill",
+            "plain-skill",
+            description=f"{prefix} use for a workflow phase.",
+        )
+        write_skill(
+            root / "sdlc-missing-prefix",
+            "sdlc-missing-prefix",
+            description="Use for a workflow phase.",
+        )
+
+        result = run_validator(root)
+        output = result.stdout + result.stderr
+        if result.returncode == 0:
+            raise AssertionError(f"expected validator failure\n{output}")
+
+        assert_contains(
+            output,
+            "skills with the SDLC-only description prefix must use an sdlc-* name",
+        )
+        assert_contains(
+            output,
+            "SDLC-only skills must start the description with: "
+            "Use only as part of the Agentic SDLC workflow;",
+        )
+
+
 def main() -> int:
     tests = [
         test_evals_folder_and_unknown_folder_warning,
         test_missing_evals_reference_fails,
         test_missing_learning_loop_fails,
         test_heading_only_learning_loop_fails,
+        test_stateful_workflow_profile_passes_complete_sections,
+        test_stateful_workflow_profile_missing_heading_fails,
+        test_sdlc_only_name_and_description_contract,
     ]
     for test in tests:
         test()

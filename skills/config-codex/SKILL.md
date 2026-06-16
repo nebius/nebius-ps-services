@@ -120,8 +120,10 @@ For existing `$CODEX_HOME/config.toml`:
    skill entries if discovery already works.
 10. Validate local hook scripts, TOML, JSON, feature flags, idempotency, and
    secret hygiene.
-11. Tell the user to restart Codex, open `/hooks`, review the two local hooks,
-   and trust them only after confirming the paths are expected.
+11. Tell the user to restart Codex, open `/hooks`, review the two
+    global-context hooks, and trust them only after confirming the paths are
+    expected. If other workflows add their own hooks, review those separately
+    and keep event ownership distinct.
 
 ## Template Rules
 
@@ -201,3 +203,18 @@ Return:
 - how to restart Codex and trust hooks
 - whether optional hook-assisted read-only subagent delegation was enabled
 - any remaining risk or unverified runtime behavior
+
+## Hook Event Boundary
+
+This skill's global-context setup owns only `SessionStart` and
+`UserPromptSubmit`.
+
+- `SessionStart`: use for global conventions, workspace context, environment
+  notes, coding standards, and stable task-state path hints. Do not select
+  SDLC phases, modify run state, or inject large documents.
+- `UserPromptSubmit`: use only for small global reminders, prompt safety, and
+  lightweight context hints. Do not route `sdlc-start`, parse requirements,
+  select workflow skills, create run state, or inject large documents.
+
+Workflow-specific guardrails such as Agentic SDLC must use separate event
+hooks, for example `PreToolUse` and `Stop`.

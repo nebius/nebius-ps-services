@@ -31,6 +31,9 @@ branch, and report the order the user should merge the PRs manually.
 - Honoring an explicit user-provided PR title or body instead of inventing one.
 - Returning PR numbers, URLs, readiness state, and merge order so the user can
   review or merge manually.
+- In an Agentic SDLC run, creating or reusing the PR only after `sdlc-uat-tests`
+  evidence says the product is ready for PR creation, unless the user
+  explicitly requests an early draft PR.
 
 ## Requirements
 
@@ -69,6 +72,8 @@ branch, and report the order the user should merge the PRs manually.
    - whether the current branch already has an upstream
    - whether the current branch is ahead of or behind `origin/<base>`
    - whether the user named target branches or expects current-branch fallback
+   - whether an Agentic SDLC UAT report exists for the current run and whether
+     it passed, when this skill is invoked from the SDLC workflow
 2. Resolve and commit the current feature-branch path before any branch
    creation or switching.
    - If `HEAD` is detached, stop and explain the problem.
@@ -151,6 +156,12 @@ branch, and report the order the user should merge the PRs manually.
    branch has fixable local test, lint, build, or CI failures. Commit and push
    the repair, then rerun the focused failing checks.
 9. Publish each branch.
+   In an Agentic SDLC run, write
+   `permissions/pr-authorization.json` in the active run directory immediately
+   before pushing or opening/reusing the PR. Include `allowed: true`,
+   `phase: "create-pr"`, the branch, UAT status, and a short `expires_at`
+   timestamp. If UAT failed or is missing, create this authorization only when
+   the user explicitly requested an early draft PR and record that scope.
    If a branch has no upstream yet, push it with upstream tracking. If conflict
    resolution created new commits, push those commits to the same branch.
 10. Avoid duplicate PRs.
@@ -174,6 +185,15 @@ branch, and report the order the user should merge the PRs manually.
    after the PR is opened and the failures are available and branch-caused,
    keep working on the same branch until the failures are resolved or clearly
    blocked by external state.
+   In an Agentic SDLC run, include requirements covered, feature list,
+   validation, tests, evaluation, and UAT evidence summary in the PR body when
+   that local evidence exists. If UAT failed or is missing, use a draft PR only
+   when the user explicitly requested early PR creation.
+   Record the PR URL and readiness summary in the active SDLC run evidence
+   when local run state is available; if local state cannot be updated, report
+   the missing write explicitly.
+   Remove or expire `permissions/pr-authorization.json` after publishing and
+   PR creation/reuse completes.
 12. Return the result.
    Report:
 

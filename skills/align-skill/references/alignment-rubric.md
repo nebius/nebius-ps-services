@@ -16,6 +16,7 @@ Source basis:
 | Area | Check |
 | --- | --- |
 | Name and folder consistency | `name` is lowercase hyphenated, valid, and matches the parent folder. |
+| SDLC-only naming | Skills used only inside the Agentic SDLC state machine use `sdlc-*` names and start descriptions with `Use only as part of the Agentic SDLC workflow;`. |
 | Description specificity | Description says what the skill does and when to use it. |
 | Trigger quality | Description includes realistic user intent terms and avoids over-broad claims. |
 | Authoring helper fit | For scaffolded skill folders or draft skill content, guidance defers initial scaffolding to `skill-creator` and then hardens trigger, structure, safety, speed, and validation. |
@@ -32,6 +33,9 @@ Source basis:
 | Output contract | Final answer shape is explicit and matches the task. |
 | Testability | Static checks, linting, dry runs, unit tests, or eval prompts are available where useful. |
 | Security posture | No secrets, private endpoints, customer data, or unsafe defaults are introduced. |
+| Stateful workflow profile | State-machine skills define required reads, writes, idempotency, failure handling, must-not rules, and completion criteria. |
+| Private state boundary | Workflow execution state, locked plans, evidence, screenshots, transcripts, and steering files are kept out of committed project files unless explicitly intended. |
+| Hook boundary | Hooks enforce invariants only and do not become the workflow orchestrator. |
 | Learning loop coverage | Each target `SKILL.md` has a `## Learning Loop` section containing the validator-required public-safe source-learning text. |
 | Learning capture | Durable, reusable knowledge discovered during execution is captured in the local skill source materials when evidence-backed and in scope. |
 | Maintainability | Instructions are concise, non-duplicative, and easy to update. |
@@ -57,18 +61,21 @@ Source basis:
 4. For scaffolded skill folders, draft skill content, or update tasks, read
    `references/skill-authoring-best-practices.md` and check the target against
    safe, secure, and fast authoring guidance.
-5. Confirm the target `SKILL.md` has a `## Learning Loop` section, add the
+5. For state-machine or coordinator skills, decide whether the optional
+   stateful-workflow profile applies. If it applies, check the profile sections
+   manually or run `validate-skill-structure.py --profile stateful-workflow`.
+6. Confirm the target `SKILL.md` has a `## Learning Loop` section, add the
    standard section when missing, and repair variants that do not include the
    validator-required snippets.
-6. Search the skill for vendor names, CLI commands, APIs, cloud services,
+7. Search the skill for vendor names, CLI commands, APIs, cloud services,
    package managers, auth flows, publishing steps, Kubernetes, Terraform, Helm,
    GitHub Actions, databases, and CI/CD behavior.
-7. Verify vendor-specific details against official docs.
-8. Apply only evidence-backed changes.
-9. Capture newly learned durable patterns, decisions, best practices, or
+8. Verify vendor-specific details against official docs.
+9. Apply only evidence-backed changes.
+10. Capture newly learned durable patterns, decisions, best practices, or
    relevant findings in the target skill's local sources when they are
    reusable, public-safe, and in scope.
-10. Run safe validation and record remaining uncertainty.
+11. Run safe validation and record remaining uncertainty.
 
 Do not capture raw logs, secrets, customer data, private URLs, transient local
 state, or one-off environment details. If a useful learning is not safe or

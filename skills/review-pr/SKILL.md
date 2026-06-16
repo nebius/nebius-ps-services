@@ -23,6 +23,9 @@ permissions allow, and leave it closer to merge-ready.
   the correct resolution is clear and push permissions allow it.
 - Reporting review findings and exact blockers when the branch cannot be
   updated safely.
+- In an Agentic SDLC run, checking the PR against requirements, design, local
+  validation, tests, evaluation, UAT, and commit evidence when that evidence is
+  available.
 
 ## Requirements
 
@@ -88,6 +91,9 @@ surfaces.
    Read the changed files, diff, existing review comments, and failing checks.
    Compare the branch locally against `origin/<base>`, not only against the PR
    summary UI.
+   If this PR belongs to an Agentic SDLC run, also inspect the relevant
+   `docs/requirements.md`, `docs/design.md`, and local evidence summaries
+   before calling the PR ready.
 3. Select sibling skills for the changed surface.
    Based on the files touched and the kind of breakage in the PR, explicitly
    apply the smallest relevant set of sibling skills from this repo. Keep
@@ -154,6 +160,11 @@ surfaces.
    - what validation ran
    - whether the PR is ready to merge
    - any remaining blockers
+   For Agentic SDLC PRs, include whether requirements, design, validation,
+   tests, evaluation, and UAT evidence all support merge readiness.
+   When Agentic SDLC local state is available, record the readiness summary and
+   remaining blockers in run evidence; if local state cannot be updated, report
+   that explicitly.
 
 ## Recommended Commands
 
