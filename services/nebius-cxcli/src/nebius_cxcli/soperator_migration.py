@@ -1100,6 +1100,11 @@ def _nebius_identity(payload: Mapping[str, Any]) -> tuple[str, str, str]:
 
 
 def _target_soperator_values(payload: Mapping[str, Any], target_ref: str) -> Mapping[str, Any]:
+    row = _target_soperator_row(payload, target_ref)
+    return _mapping(row.get("values")) if row else {}
+
+
+def _target_soperator_row(payload: Mapping[str, Any], target_ref: str) -> Mapping[str, Any]:
     apps = _mapping(payload.get("apps"))
     charts = apps.get("charts")
     if not isinstance(charts, Sequence) or isinstance(charts, (str, bytes, bytearray)):
@@ -1112,7 +1117,7 @@ def _target_soperator_values(payload: Mapping[str, Any], target_ref: str) -> Map
         instance_id = normalize_component_token(row.get("instance_id"))
         if instance_id != target_ref:
             continue
-        return _mapping(row.get("values"))
+        return row
     return {}
 
 
@@ -1177,20 +1182,27 @@ def _string_sequence(value: Any) -> tuple[str, ...]:
     return ()
 
 
-def _target_role_mapping(
+def _target_placements(
     payload: Mapping[str, Any], target_ref: str
 ) -> Mapping[str, tuple[str, ...]]:
-    values = _target_soperator_values(payload, target_ref)
-    raw_mapping = _mapping(values.get("nodeGroupMapping"))
+    row = _target_soperator_row(payload, target_ref)
+    raw_mapping = _mapping(row.get("placements"))
     result: dict[str, tuple[str, ...]] = {}
-    for role in (*_SOPERATOR_SERVICE_ROLES, "worker"):
-        result[role] = tuple(
+    for raw_placement, raw_groups in raw_mapping.items():
+        placement = normalize_component_token(raw_placement)
+        if not placement:
+            continue
+        groups = tuple(
             dict.fromkeys(
                 normalize_component_token(item)
-                for item in _string_sequence(raw_mapping.get(role))
+                for item in _string_sequence(raw_groups)
                 if normalize_component_token(item)
             )
         )
+        if groups:
+            result[placement] = groups
+    for role in (*_SOPERATOR_SERVICE_ROLES, "worker"):
+        result.setdefault(role, ())
     return result
 
 
@@ -1201,7 +1213,7 @@ def _approved_role_attachment_keys(
     worker_node_groups: Sequence[str],
     source_report: Mapping[str, Any] | None = None,
 ) -> Mapping[str, tuple[str, ...]]:
-    role_mapping = _target_role_mapping(payload, target_ref)
+    placements = _target_placements(payload, target_ref)
     result: dict[str, list[str]] = {}
     worker_groups = {
         group for group in (normalize_component_token(item) for item in worker_node_groups) if group
@@ -1209,7 +1221,7 @@ def _approved_role_attachment_keys(
     for group in worker_groups:
         result.setdefault(group, []).append("jail")
     for role in _SOPERATOR_SERVICE_ROLES:
-        for group in role_mapping.get(role, ()):
+        for group in placements.get(role, ()):
             if group in worker_groups:
                 continue
             keys = result.setdefault(group, [])
@@ -3126,10 +3138,10 @@ def _source_compute_group_names(
             "rolling-compute-migration requires at least one approved source worker node group."
         )
 
-    role_mapping = _target_role_mapping(payload, target_ref)
+    placements = _target_placements(payload, target_ref)
     cpu_candidates: list[str] = []
     for role in _SOPERATOR_SERVICE_ROLES:
-        for group in role_mapping.get(role, ()):
+        for group in placements.get(role, ()):
             resolved_group = alias_map.get(group, group)
             if resolved_group and resolved_group in inventory and resolved_group not in worker_set:
                 cpu_candidates.append(resolved_group)
@@ -3152,7 +3164,7 @@ def _source_compute_group_names(
         raise SoperatorMigrationPhasePending(
             "rolling-compute-migration could not identify a non-GPU source node group "
             "to clone for Soperator system/controller/login/accounting roles. Rerun "
-            "onboarding with explicit compute role mapping."
+            "onboarding with explicit compute placements."
         )
     return {"cpu": cpu_group, "gpu": worker_group}
 
@@ -5988,24 +6000,6 @@ def _apply_soperator_crds(
         )
 
 
-def _target_role_mapping_values(
-    worker_node_groups: Sequence[str],
-    *,
-    service_node_groups: Mapping[str, str] | None = None,
-) -> Mapping[str, list[str]]:
-    mapping: dict[str, list[str]] = {}
-    for role in _SOPERATOR_SERVICE_ROLES:
-        group_name = normalize_component_token(_mapping(service_node_groups or {}).get(role))
-        mapping[role] = [group_name or role]
-    preserved_workers = [
-        normalize_component_token(group)
-        for group in worker_node_groups
-        if normalize_component_token(group)
-    ]
-    mapping["worker"] = list(dict.fromkeys(preserved_workers)) or ["worker"]
-    return mapping
-
-
 def _role_match_expression(
     role: str, *, label_key: str = "slurm.nebius.ai/nodeset-name"
 ) -> dict[str, Any]:
@@ -6100,20 +6094,6 @@ def _patch_target_values_for_compute(
     _preserve_live_storage_sizes(values, live_snapshot=live_snapshot)
     rolling_state = _mapping(
         _mapping(checkpoint.get("phase_state")).get("rolling-compute-migration")
-    )
-    in_place_worker_groups = tuple(
-        str(group or "").strip()
-        for group in rolling_state.get("in_place_worker_node_groups", []) or []
-        if str(group or "").strip()
-    )
-    target_groups = _mapping(rolling_state.get("target_node_groups"))
-    service_node_groups = {
-        role: str(_mapping(target_groups.get(role)).get("name", "") or "").strip()
-        for role in _SOPERATOR_SERVICE_ROLES
-    }
-    values["nodeGroupMapping"] = _target_role_mapping_values(
-        in_place_worker_groups,
-        service_node_groups=service_node_groups,
     )
     values["k8sNodeFilters"] = _target_k8s_node_filters()
     _patch_target_operator_affinity(values)

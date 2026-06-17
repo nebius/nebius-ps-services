@@ -716,7 +716,9 @@ def test_soperator_docs_lock_production_training_child_chart_defaults() -> None:
         assert "Soperator host reboot after drain" in flat
         assert "already drained" in flat
         assert "values.sssd.enabled=false" in flat
-    assert "catalog-owned QOS overlays leave `PluginDir` unset by default" in design
+    assert "cxcli-managed Nebius Soperator profiles pin" in design
+    assert "catalog-owned QOS overlays leave that path unchanged" in design
+    assert "standalone chart default still leaves `PluginDir` unset" in design
     assert "pinned-image Slurm plugin directory override" not in chart_changelog
 
     changelog_flat = _squash(changelog)
@@ -957,11 +959,11 @@ def test_docs_define_component_selector_contract() -> None:
     assert "Non-interactive `component add apps:soperator@<target>`" in readme
     assert "canonical initial onboarding command" in readme_flat
     assert "does not create Terraform-managed MK8s/SFS rows" in readme_flat
-    assert "`values.nodeGroupMapping.*`" in readme
-    assert "worker` on GPU node groups" in readme_flat
+    assert "`apps.charts[].placements.*`" in readme
+    assert "worker` onto GPU node groups" in readme_flat
     assert "worker labels distinguish `worker-cpu` and `worker-gpu`" in readme_flat
-    assert "`values.nodeGroupMapping.worker-cpu`" in readme
-    assert "`values.nodeGroupMapping.worker-gpu`" in readme
+    assert "`apps.charts[].placements.worker-cpu`" in readme
+    assert "`apps.charts[].placements.worker-gpu`" in readme
     assert "make Pyxis optional and clear the importer path" in readme_flat
     assert "`nebius-cxcli ext-soperator onboard <config.yaml-or-deployments-root>`" in design
     assert "first-time onboarding can pass the deployments root" in design_flat
@@ -1007,10 +1009,10 @@ def test_docs_define_component_selector_contract() -> None:
     assert "advances supported external MK8s control-plane/node-template, target GPU stack reconciliation phase when paired with migration work, storage, copy, compute" in design_flat
     assert "discovered PVC/PV sizes as lower bounds" in design_flat
     assert "does not attempt a storage shrink" in design_flat
-    assert "persists `values.nodeGroupMapping.*` from discovered node-group ids" in design_flat
+    assert "persists `apps.charts[].placements.*` from discovered node-group ids" in design_flat
     assert "select the mixed Soperator profile" in design_flat
-    assert "`values.nodeGroupMapping.worker-cpu`" in design
-    assert "`values.nodeGroupMapping.worker-gpu`" in design
+    assert "`apps.charts[].placements.worker-cpu`" in design
+    assert "`apps.charts[].placements.worker-gpu`" in design
     assert "Pyxis to optional and clear the importer path" in design_flat
     assert "Chart-managed MariaDB adoption defaults to `compute-csi-default-sc`" in design_flat
     assert "Chart-managed MariaDB defaults to `compute-csi-default-sc`" in readme_flat
@@ -1096,7 +1098,7 @@ def test_docs_define_component_selector_contract() -> None:
     assert "compatibility path" in design_flat
     assert "`production-cluster` materializes the complete MK8s+SFS+Soperator" in design
     assert "ext-soperator onboard <config.yaml-or-deployments-root>` resolves the selected" in design_flat
-    assert "`values.nodeGroupMapping` from discovered inventory and the selected profile" in design
+    assert "`apps.charts[].placements` from discovered inventory and the selected profile" in design
     assert "day-2 app edits and Soperator Helm chart version edits do not invalidate" in design_flat
     assert "Soperator migration profiles are the compatibility source of truth" in design
     assert "release-scoped and component-scoped" in design_flat

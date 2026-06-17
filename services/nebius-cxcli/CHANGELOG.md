@@ -18,6 +18,33 @@ All notable changes to this project are tracked here. This changelog follows
   non-catalog chart versions before writing `config.yaml`, so a published
   rollback/test package such as `soperator=4.0.1-ps.2` can be selected
   explicitly while unknown versions fail fast.
+- Fixed source validation against Terraform 1.15 remote module probes: cxcli now
+  treats Terraform's post-download missing-required-argument diagnostic as a
+  successful module download for introspection, and resolves Git module
+  subdirectories such as `//platform-infra/modules/mk8s` before checking for
+  `.tf` files.
+- Fixed static Soperator Helm rendering from OCI chart sources so Helm status
+  lines such as `Pulled:` and `Digest:` are not carried into post-Flux
+  Kubernetes manifests or handed to `kubectl apply`.
+- Fixed first-install Soperator smoke validation timing by waiting for the
+  rendered SlurmCluster to become `Available` before checking Slurm pod
+  scheduling and login-pod commands.
+- Fixed cxcli-managed Soperator Slurm smoke checks on Nebius Slurm 25 images by
+  pinning `PluginDir=/usr/lib/x86_64-linux-gnu/slurm` in the managed Soperator
+  profiles while keeping the standalone Helm chart default unset for direct
+  Helm installs with different images.
+- Fixed cxcli-managed Soperator GPU NodeSet defaults so 8-GPU worker profiles
+  expose/request 32 Slurm CPUs, matching the chart's `DefCpuPerGPU=4` default
+  and avoiding impossible CPU under-reporting for GPU jobs.
+- Made the Soperator Slurm NCCL smoke validation probe the largest GPU count
+  Slurm can allocate on the selected nodes before running `all_reduce_perf_mpi`,
+  so the report reflects live Slurm policy instead of assuming every reported
+  GPU can be allocated by one task.
+- Fixed Soperator mixed-profile rematerialization so configs edited from the
+  generated GPU baseline to `nebius-mixed-v1` prune stale managed `worker`
+  state, materialize `worker-cpu` and `worker-gpu` MK8s groups, and render only
+  the matching `worker-cpu` / `worker-gpu` chart NodeSets instead of compound
+  names such as `worker-gpu-worker-cpu`.
 - Aligned Soperator-created SFS defaults in the `create` wizard: after the
   operator enters the MK8s cluster name, generated jail/controller/accounting
   SFS filesystem `name` and `mount_tag` defaults use `<cluster-name>-<role>`
@@ -47,8 +74,9 @@ All notable changes to this project are tracked here. This changelog follows
   `upgrade helm-chart apps:soperator@<target>` entry now redirects to the
   Soperator-aware flow, which validates the current bundle, runs live
   Soperator/Slurm preflight, updates and rerenders the chart version, applies
-  the selected target Flux bundle, verifies Helm readiness, reruns required
-  Soperator/Slurm validation, and refreshes `deploy-report.md`.
+  the selected target Flux bundle, verifies the static Soperator chart version
+  on live Kubernetes objects, reruns required Soperator/Slurm validation, and
+  refreshes `deploy-report.md`.
 - Clarified the README Soperator command map so the cxcli-managed
   `nebius-cxcli soperator` path is documented separately from
   `nebius-cxcli ext-soperator` external onboarding and migration, including
@@ -390,9 +418,10 @@ All notable changes to this project are tracked here. This changelog follows
 - Fixed `keep-existing-storage` external chart takeover so discovered live PVC
   request/capacity and PV capacity are treated as lower bounds, preventing
   onboarded Soperator storage from rendering a smaller PVC/PV size.
-- Fixed external Soperator chart takeover so live Soperator role labels produce
-  explicit `values.nodeGroupMapping.*`, preventing service-role operators from
-  being rescheduled onto an unrelated CPU worker group during adoption.
+- Fixed external Soperator chart takeover so live Soperator placement labels
+  produce explicit `apps.charts[].placements.*`, preventing service-role
+  operators from being rescheduled onto an unrelated CPU worker group during
+  adoption.
 - Fixed external Soperator onboarding to infer the mixed Soperator profile from
   live `worker-cpu`/`worker-gpu` labels, replace stale generic worker mappings,
   and remove stale generated `worker-<node-group-id>` NodeSets on rerender.
@@ -990,7 +1019,7 @@ All notable changes to this project are tracked here. This changelog follows
   portable source.
 - Fixed Soperator profile/policy rematerialization so wizard or direct
   `config.yaml` switches from the generated GPU baseline to CPU or mixed
-  profiles recompute profile-owned node groups, `nodeGroupMapping`, NodeSets,
+  profiles recompute profile-owned node groups, placements, NodeSets,
   partitions, and topology settings. Runtime config loading now materializes
   Soperator before MK8s GPU app normalization, so CPU-only Soperator configs no
   longer re-add or retain GPU Operator rows from stale GPU node-group defaults.
@@ -1016,11 +1045,12 @@ All notable changes to this project are tracked here. This changelog follows
 - Added explicit `create` and `component add` adjusted-selection notices for
   Soperator-owned dependencies, so auto-added `sfs` and `cert-manager` rows are
   explained alongside generic app `release.install_after` dependencies.
-- Removed the Soperator profile/chart default `PluginDir` override after live
-  H100 deployment showed Slurm 25.11 fails when a static multi-arch path
-  includes a directory absent from the selected image. Image-specific plugin
-  paths now stay image-owned unless an operator explicitly overrides
-  `customSlurmConfig`.
+- Removed the standalone Soperator chart default `PluginDir` override after
+  live H100 deployment showed Slurm 25.11 fails when a static path includes a
+  directory absent from the selected image. Direct Helm installs keep
+  image-specific plugin paths image-owned unless an operator explicitly
+  overrides `customSlurmConfig`; cxcli-managed Nebius profiles pin the known
+  Nebius image plugin directory.
 - Aligned omitted MK8s GPU stack-source behavior so cxcli and the MK8s
   Terraform module both default GPU node groups to the Nebius GPU image path.
 - Reworked the Soperator create wizard to stay on a concise guided surface:
@@ -1218,17 +1248,17 @@ All notable changes to this project are tracked here. This changelog follows
   Nebius GPU Soperator profile now produces the five logical node groups
   `system`, `controller`, `login`, `accounting`, and `worker`, while CPU/mixed
   variants remain catalog data.
-- Added Soperator `values.nodeGroupMapping` materialization for existing typed
-  MK8s node groups. The wizard now lists target node groups per Soperator role,
-  defaults workers to GPU groups and service roles to CPU groups, and renders
-  the selected mapping into chart-native filters, NodeSets, storage selectors,
-  partitions, SFS attachments, and NodeConfigurator rebooter tolerations
-  without creating extra role-named node groups.
+- Added Soperator `apps.charts[].placements` materialization for existing typed
+  MK8s node groups. The wizard now lists target node groups per Soperator
+  placement, defaults workers to GPU groups and service placements to CPU
+  groups, and renders the selected mapping into chart-native filters, NodeSets,
+  storage selectors, partitions, SFS attachments, and NodeConfigurator rebooter
+  tolerations without creating extra role-named node groups.
 - Added an explicit Soperator `install_mode` prompt. `production-cluster`
   creates the complete MK8s+SFS+Soperator five-role bundle, while
   `onboard-existing-cluster` registers an external Nebius MK8s target, records
   a read-only Soperator onboarding analysis and accepted action plan, and opens
-  the role-mapping wizard for discovered node groups without Terraform-managing
+  the placement wizard for discovered node groups without Terraform-managing
   the existing cluster.
 - Documented the Soperator onboarding workflow and ownership boundary:
   external MK8s clusters are made visible to cxcli for selected app/remediation
@@ -1244,9 +1274,9 @@ All notable changes to this project are tracked here. This changelog follows
   override catalog NodeSet template defaults for generated onboarding NodeSets.
   The generated external-target Terraform skeleton is also emitted in
   `terraform fmt` style.
-- Extended Soperator role mapping to chart-owned system helpers so the
-  operator manager, checks controller, and MariaDB operator pods follow the
-  selected `system` CPU node groups instead of landing on GPU workers.
+- Extended Soperator placements to chart-owned system helpers so the operator
+  manager, checks controller, and MariaDB operator pods follow the selected
+  `system` CPU node groups instead of landing on GPU workers.
 - For Nebius GPU-image Soperator targets, cxcli now disables the Soperator
   DCGM job-mapping exporter's GPU Operator toolkit init wait because those
   nodes already include the host NVIDIA runtime stack.
@@ -1260,16 +1290,16 @@ All notable changes to this project are tracked here. This changelog follows
   and strips generic Helm hook-only renders from the static manifest while
   keeping explicitly annotated hooks for cxcli's ordered post-Flux apply path.
 - Aligned `create` / `component add` command help and docs with Soperator's
-  target-scoped node-group role mapping, and added a command-help guard against
+  target-scoped placements, and added a command-help guard against
   reintroducing old MK8s shortcut input names.
 - Added the `nebius.com/node-group` Kubernetes node label to Soperator-created
   MK8s node groups so generated role filters and worker NodeSets can schedule
   on the five-role production profile without hand-authored labels.
-- Preserved explicit per-node-group SFS key selections during Soperator role
-  mapping so custom target-specific SFS filesystems are not mixed with default
-  profile keys.
-- Carried MK8s node-group taints into Soperator role filters, worker NodeSets,
-  and storage selectors when role mapping is used, so tainted controller,
+- Preserved explicit per-node-group SFS key selections during Soperator
+  placement mapping so custom target-specific SFS filesystems are not mixed
+  with default profile keys.
+- Carried MK8s node-group taints into Soperator placement filters, worker NodeSets,
+  and storage selectors when placement mapping is used, so tainted controller,
   accounting, and GPU worker groups can schedule their intended Soperator pods.
 - Fixed Soperator onboarding and MK8s nested-schema edge cases: MIG validation
   now reads component-row `inputs`, including profile helper and node-group

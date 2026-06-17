@@ -7,6 +7,7 @@ import os
 import re
 import shlex
 import subprocess
+import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -29,6 +30,8 @@ _NCCL_RUN_RE = re.compile(
     r"ranks=(?P<ranks>[0-9]+)"
 )
 _NCCL_LARGE_MESSAGE_BYTES = (2 * 1024**3, 4 * 1024**3, 8 * 1024**3)
+_SOPERATOR_CLUSTER_READY_WAIT_SECONDS = 20 * 60
+_SOPERATOR_CLUSTER_READY_POLL_SECONDS = 15.0
 
 
 def _smoke_script(*, partition: str = "") -> str:
@@ -64,17 +67,19 @@ def _nccl_script(*, partition: str) -> str:
         [
             "set -euo pipefail",
             f"partition={partition_value}",
-            'sinfo_output="$(sinfo -N -h -p "$partition" -o "%N|%t|%G" || true)"',
+            'sinfo_output="$(sinfo -N -h -p "$partition" -o "%N|%t|%G|%c" || true)"',
             "total_gpu_nodes=()",
             "idle_gpu_nodes=()",
-            'while IFS="|" read -r node state gres; do',
+            'while IFS="|" read -r node state gres cpus; do',
             '  [[ -n "${node:-}" ]] || continue',
             '  if [[ "${gres:-}" =~ gpu:([0-9]+) ]]; then',
             '    gpu_count="${BASH_REMATCH[1]}"',
-            '    total_gpu_nodes+=("$node|$gpu_count")',
+            '    cpu_count="${cpus:-0}"',
+            '    [[ "$cpu_count" =~ ^[0-9]+$ ]] || cpu_count=0',
+            '    total_gpu_nodes+=("$node|$gpu_count|$cpu_count")',
             '    state_lower="$(printf "%s" "${state:-}" | tr "[:upper:]" "[:lower:]")"',
             '    if [[ "$state_lower" == idle* ]]; then',
-            '      idle_gpu_nodes+=("$node|$gpu_count")',
+            '      idle_gpu_nodes+=("$node|$gpu_count|$cpu_count")',
             "    fi",
             "  fi",
             'done <<< "$sinfo_output"',
@@ -106,12 +111,15 @@ def _nccl_script(*, partition: str) -> str:
             "fi",
             "selected=()",
             "gpus_per_node=999999",
+            "cpus_per_node=999999",
             "for entry in \"${idle_gpu_nodes[@]:0:$target_nodes}\"; do",
-            '  node="${entry%%|*}"',
-            '  gpu_count="${entry##*|}"',
+            '  IFS="|" read -r node gpu_count cpu_count <<< "$entry"',
             '  selected+=("$node")',
             "  if (( gpu_count < gpus_per_node )); then",
             '    gpus_per_node="$gpu_count"',
+            "  fi",
+            "  if (( cpu_count > 0 && cpu_count < cpus_per_node )); then",
+            '    cpus_per_node="$cpu_count"',
             "  fi",
             "done",
             "if (( gpus_per_node < 1 || gpus_per_node == 999999 )); then",
@@ -119,6 +127,10 @@ def _nccl_script(*, partition: str) -> str:
             'resolve GPU count for selected nodes on partition $partition."',
             "  exit 0",
             "fi",
+            "if (( cpus_per_node == 999999 )); then",
+            "  cpus_per_node=$((gpus_per_node * 4))",
+            "fi",
+            'reported_gpus_per_node="$gpus_per_node"',
             'if (( target_nodes == 1 && gpus_per_node < 2 )); then',
             '  echo "cxcli-soperator-nccl-skipped: full Slurm NCCL benchmark requires '
             'at least 2 GPUs on the only GPU node in partition $partition; found '
@@ -126,18 +138,57 @@ def _nccl_script(*, partition: str) -> str:
             "  exit 0",
             "fi",
             'node_list="$(IFS=,; echo "${selected[*]}")"',
+            "allocatable_gpus_per_node=0",
+            "allocatable_cpus_per_task=0",
+            "probe_output=",
+            'probe_file="$(mktemp)"',
+            'trap \'rm -f "$probe_file"\' EXIT',
+            'candidate_gpus="$gpus_per_node"',
+            "while (( candidate_gpus >= 1 )); do",
+            "  candidate_cpus=$((candidate_gpus * 4))",
+            "  if (( cpus_per_node > 0 && candidate_cpus > cpus_per_node )); then",
+            "    candidate_gpus=$((candidate_gpus - 1))",
+            "    continue",
+            "  fi",
+            "  if salloc --job-name=cxcli-soperator-nccl-probe "
+            '--partition="$partition" --nodelist="$node_list" '
+            '--nodes="$target_nodes" --ntasks="$target_nodes" --ntasks-per-node=1 '
+            '--gres="gpu:$candidate_gpus" --cpus-per-task="$candidate_cpus" '
+            '--time=00:01:00 --immediate=10 bash -lc true >"$probe_file" 2>&1; then',
+            '    allocatable_gpus_per_node="$candidate_gpus"',
+            '    allocatable_cpus_per_task="$candidate_cpus"',
+            "    break",
+            "  fi",
+            '  probe_output="$(cat "$probe_file" 2>/dev/null || true)"',
+            "  candidate_gpus=$((candidate_gpus - 1))",
+            "done",
+            "if (( allocatable_gpus_per_node < 1 )); then",
+            '  echo "cxcli-soperator-nccl-allocation-failed: could not allocate any GPU '
+            'count on $target_nodes selected node(s) from reported $reported_gpus_per_node '
+            'GPU(s) per node. Last probe: ${probe_output:-empty}" >&2',
+            "  exit 1",
+            "fi",
+            'gpus_per_node="$allocatable_gpus_per_node"',
+            'cpus_per_task="$allocatable_cpus_per_task"',
+            'if (( target_nodes == 1 && gpus_per_node < 2 )); then',
+            '  echo "cxcli-soperator-nccl-skipped: full Slurm NCCL benchmark requires '
+            'at least 2 allocatable GPUs on the only GPU node in partition $partition; '
+            'reported $reported_gpus_per_node GPU(s), allocatable $gpus_per_node."',
+            "  exit 0",
+            "fi",
             "ranks=$((target_nodes * gpus_per_node))",
-            "cpus_per_task=$((gpus_per_node * 4))",
             'export CXCLI_NCCL_MODE="$benchmark_mode"',
             'export CXCLI_NCCL_PARTITION="$partition"',
             'export CXCLI_NCCL_NODES="$target_nodes"',
             'export CXCLI_NCCL_GPUS_PER_NODE="$gpus_per_node"',
+            'export CXCLI_NCCL_REPORTED_GPUS_PER_NODE="$reported_gpus_per_node"',
             'export CXCLI_NCCL_RANKS="$ranks"',
             "runner_script=$(cat <<'CXCLI_NCCL_RUNNER'",
             "set -euo pipefail",
             'echo "cxcli-soperator-nccl-ok mode=${CXCLI_NCCL_MODE} '
             'partition=${CXCLI_NCCL_PARTITION} nodes=${CXCLI_NCCL_NODES} '
-            'gpus_per_node=${CXCLI_NCCL_GPUS_PER_NODE} ranks=${CXCLI_NCCL_RANKS}"',
+            'gpus_per_node=${CXCLI_NCCL_GPUS_PER_NODE} ranks=${CXCLI_NCCL_RANKS} '
+            'reported_gpus_per_node=${CXCLI_NCCL_REPORTED_GPUS_PER_NODE}"',
             "export PATH=/usr/mpi/gcc/openmpi-4.1.7a1/bin:$PATH",
             "export OMPI_ALLOW_RUN_AS_ROOT=1",
             "export OMPI_ALLOW_RUN_AS_ROOT_CONFIRM=1",
@@ -158,15 +209,14 @@ def _nccl_script(*, partition: str) -> str:
             ")",
             "launcher_script=$(printf "
             "'srun --job-name=cxcli-soperator-nccl-launcher "
-            "--nodes=1 --ntasks=1 --cpus-per-task=%q --gpus=%q "
+            "--nodes=1 --ntasks=1 --cpus-per-task=%q --gres=gpu:%q "
             "--kill-on-bad-exit=1 bash -lc %q' "
             '"$cpus_per_task" "$gpus_per_node" "$runner_script")',
             "salloc --job-name=cxcli-soperator-nccl "
             "--partition=\"$partition\" --nodelist=\"$node_list\" "
             "--nodes=\"$target_nodes\" --ntasks=\"$target_nodes\" --ntasks-per-node=1 "
-            "--gpus-per-node=\"$gpus_per_node\" "
-            "--cpus-per-task=\"$cpus_per_task\" --mem=0 --time=00:30:00 "
-            "--exclusive --immediate=60 "
+            '--gres="gpu:$gpus_per_node" '
+            '--cpus-per-task="$cpus_per_task" --time=00:30:00 --immediate=60 '
             'bash -lc "$launcher_script"',
         ]
     )
@@ -356,6 +406,8 @@ def soperator_cluster_validation_specs(payload_or_config: Any) -> list[dict[str,
                 "target_version": _soperator_chart_version(row),
                 "kube_context": target_context_by_ref.get(target_ref, ""),
                 "report_file": _validation_report_file(target_ref),
+                "readiness_timeout_seconds": _SOPERATOR_CLUSTER_READY_WAIT_SECONDS,
+                "readiness_poll_seconds": _SOPERATOR_CLUSTER_READY_POLL_SECONDS,
                 "required": True,
             }
         )
@@ -385,6 +437,60 @@ def _json_command(
     except json.JSONDecodeError as exc:
         raise RuntimeError(f"{_command_text(args)} returned invalid JSON: {exc}") from exc
     return payload if isinstance(payload, Mapping) else {}
+
+
+def _float_setting(value: Any, *, default: float) -> float:
+    if isinstance(value, bool) or value is None:
+        return default
+    try:
+        return float(str(value).strip())
+    except ValueError:
+        return default
+
+
+def _target_slurmcluster_phase(
+    runner: SoperatorValidationCommandRunner,
+    spec: Mapping[str, Any],
+) -> str:
+    namespace = str(spec.get("namespace", "") or SOPERATOR_NAMESPACE).strip()
+    cluster_name = str(spec.get("cluster_name", "") or spec.get("target_ref") or "").strip()
+    payload = _json_command(
+        runner,
+        _kubectl_args(spec, "-n", namespace, "get", "slurmclusters", "-o", "json"),
+    )
+    for item in _as_sequence(payload.get("items")):
+        if not isinstance(item, Mapping):
+            continue
+        metadata = _as_mapping(item.get("metadata"))
+        name = str(metadata.get("name", "") or "").strip()
+        if name != cluster_name:
+            continue
+        return str(_as_mapping(item.get("status")).get("phase", "") or "present").strip()
+    return ""
+
+
+def _wait_for_slurmcluster_available(
+    runner: SoperatorValidationCommandRunner,
+    spec: Mapping[str, Any],
+) -> None:
+    timeout_seconds = _float_setting(spec.get("readiness_timeout_seconds"), default=0.0)
+    if timeout_seconds <= 0:
+        return
+    poll_seconds = _float_setting(
+        spec.get("readiness_poll_seconds"),
+        default=_SOPERATOR_CLUSTER_READY_POLL_SECONDS,
+    )
+    deadline = time.monotonic() + timeout_seconds
+    while True:
+        try:
+            if _target_slurmcluster_phase(runner, spec) == "Available":
+                return
+        except Exception:
+            pass
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return
+        time.sleep(min(max(poll_seconds, 0.1), remaining))
 
 
 def _pod_ready(item: Mapping[str, Any]) -> bool:
@@ -1035,6 +1141,7 @@ def run_soperator_cluster_validations(
         try:
             _check_rollout(runner, spec, checks)
             _check_old_source_flux_desired_state(runner, spec, checks)
+            _wait_for_slurmcluster_available(runner, spec)
             _check_soperator_pod_scheduling(runner, spec, checks)
             _check_slurmcluster(runner, spec, checks)
             _check_slurm_status(runner, spec, checks)

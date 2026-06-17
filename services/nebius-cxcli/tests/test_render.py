@@ -1152,7 +1152,7 @@ def test_load_config_materializes_soperator_before_gpu_app_rows_for_profile_swit
             "values": {},
         }
     )
-    assert soperator["values"]["nodeGroupMapping"]["worker"] == ["worker-gpu"]
+    assert soperator["placements"]["worker"] == ["worker-cpu", "worker-gpu"]
     assert any(row["id"] == "nvidia-gpu-operator" for row in payload["apps"]["charts"])
     assert any(row["id"] == "nvidia-network-operator" for row in payload["apps"]["charts"])
 
@@ -1182,8 +1182,9 @@ def test_load_config_materializes_soperator_before_gpu_app_rows_for_profile_swit
     node_groups = mk8s_inputs["node_groups"]
     assert sorted(node_groups) == ["accounting", "controller", "login", "system", "worker-cpu"]
     assert node_groups["worker-cpu"]["node_count"] == 1
-    values = next(row for row in persisted["apps"]["charts"] if row["id"] == "soperator")["values"]
-    assert values["nodeGroupMapping"]["worker"] == ["worker-cpu"]
+    soperator_row = next(row for row in persisted["apps"]["charts"] if row["id"] == "soperator")
+    values = soperator_row["values"]
+    assert soperator_row["placements"]["worker"] == ["worker-cpu"]
     assert [node["name"] for node in values["nodesets"]] == ["worker-cpu"]
     assert [item["name"] for item in values["partitionConfiguration"]["partitions"]] == [
         "cpu",
@@ -1253,7 +1254,10 @@ def test_render_local_soperator_chart_source_writes_static_manifest(tmp_path: Pa
     } == {"Always"}
     slurm_cluster = next(doc for doc in rendered_docs if doc.get("kind") == "SlurmCluster")
     assert slurm_cluster["spec"]["partitionConfiguration"]["configType"] == "structured"
-    assert "PluginDir=" not in slurm_cluster.get("spec", {}).get("customSlurmConfig", "")
+    assert (
+        "PluginDir=/usr/lib/x86_64-linux-gnu/slurm"
+        in slurm_cluster.get("spec", {}).get("customSlurmConfig", "")
+    )
     assert slurm_cluster["spec"]["slurmNodes"]["accounting"]["enabled"] is True
     assert slurm_cluster["spec"]["slurmNodes"]["rest"]["enabled"] is True
     assert slurm_cluster["spec"]["slurmNodes"]["accounting"]["mariadbOperator"]["enabled"] is True
@@ -1774,6 +1778,30 @@ def test_inject_local_chart_namespace_keeps_opted_in_hooks() -> None:
     docs = list(yaml.safe_load_all(_inject_local_chart_namespace(rendered, namespace="slurm")))
     assert docs[0]["metadata"]["namespace"] == "slurm"
     assert docs[0]["metadata"]["name"] == "qos-reconcile"
+
+
+def test_inject_local_chart_namespace_skips_helm_oci_status_output() -> None:
+    rendered = yaml.safe_dump_all(
+        [
+            {
+                "Pulled": "oci://example.invalid/charts/soperator:4.0.1-ps.2",
+                "Digest": "sha256:deadbeef",
+            },
+            {
+                "apiVersion": "v1",
+                "kind": "ConfigMap",
+                "metadata": {"name": "rendered-soperator"},
+            },
+        ],
+        sort_keys=False,
+    )
+
+    docs = list(yaml.safe_load_all(_inject_local_chart_namespace(rendered, namespace="slurm")))
+
+    assert len(docs) == 1
+    assert docs[0]["apiVersion"] == "v1"
+    assert docs[0]["kind"] == "ConfigMap"
+    assert docs[0]["metadata"] == {"name": "rendered-soperator", "namespace": "slurm"}
 
 
 def test_inject_local_chart_namespace_makes_cert_manager_rotation_policy_explicit() -> None:
@@ -2364,11 +2392,12 @@ def test_render_local_soperator_mixed_profile_writes_two_nodesets(tmp_path: Path
     assert set(node_sets) == {"worker-cpu", "worker-gpu"}
     assert "nvidia.com/gpu" not in node_sets["worker-cpu"]["spec"]["slurmd"]["resources"]
     assert node_sets["worker-gpu"]["spec"]["slurmd"]["resources"]["nvidia.com/gpu"] == 8
+    assert node_sets["worker-gpu"]["spec"]["slurmd"]["resources"]["cpu"] == "32"
     assert node_sets["worker-cpu"]["spec"]["nodeConfig"]["static"] == (
         "Boards=1 SocketsPerBoard=1 CoresPerSocket=8 ThreadsPerCore=1"
     )
     assert node_sets["worker-gpu"]["spec"]["nodeConfig"]["static"] == (
-        "Boards=1 SocketsPerBoard=1 CoresPerSocket=8 ThreadsPerCore=1 Gres=gpu:8"
+        "Boards=1 SocketsPerBoard=1 CoresPerSocket=32 ThreadsPerCore=1 Gres=gpu:8"
     )
 
     slurm_cluster = next(doc for doc in rendered_docs if doc.get("kind") == "SlurmCluster")

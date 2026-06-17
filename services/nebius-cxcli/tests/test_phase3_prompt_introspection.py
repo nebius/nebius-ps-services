@@ -708,13 +708,13 @@ def test_soperator_managed_mk8s_skips_raw_node_group_prompts() -> None:
     assert not _skip_soperator_install_mode_dependent_prompt(
         payload=payload,
         entry=app_entry,
-        full_path_label="apps.charts[0].values.nodeGroupMapping.worker",
+        full_path_label="apps.charts[0].placements.worker",
     )
     payload["apps"]["charts"][0]["install_mode"] = "production-cluster"
     assert _skip_soperator_install_mode_dependent_prompt(
         payload=payload,
         entry=app_entry,
-        full_path_label="apps.charts[0].values.nodeGroupMapping.worker",
+        full_path_label="apps.charts[0].placements.worker",
     )
     assert _skip_soperator_qos_configuration_prompt(
         payload=payload,

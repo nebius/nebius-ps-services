@@ -2228,13 +2228,13 @@ def test_soperator_node_group_mapping_choices_follow_profile_role() -> None:
         provider="soperator_node_groups",
         args={"role": "worker"},
         payload=payload,
-        field_path="apps.charts[0].values.nodeGroupMapping.worker",
+        field_path="apps.charts[0].placements.worker",
     )
     controller_choices = lookup.resolve(
         provider="soperator_node_groups",
         args={"role": "controller"},
         payload=payload,
-        field_path="apps.charts[0].values.nodeGroupMapping.controller",
+        field_path="apps.charts[0].placements.controller",
     )
 
     assert [choice.value for choice in worker_choices] == ["h100"]
@@ -2286,13 +2286,13 @@ def test_soperator_node_group_mapping_choices_use_external_target_inventory() ->
         provider="soperator_node_groups",
         args={"role": "worker"},
         payload=payload,
-        field_path="apps.charts[0].values.nodeGroupMapping.worker",
+        field_path="apps.charts[0].placements.worker",
     )
     controller_choices = lookup.resolve(
         provider="soperator_node_groups",
         args={"role": "controller"},
         payload=payload,
-        field_path="apps.charts[0].values.nodeGroupMapping.controller",
+        field_path="apps.charts[0].placements.controller",
     )
 
     assert [choice.value for choice in worker_choices] == ["h100"]

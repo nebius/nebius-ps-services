@@ -1210,6 +1210,8 @@ class ProviderOptionLookup:
     def _soperator_chart_row_path(field_path: str) -> str:
         if ".values." in field_path:
             return field_path.split(".values.", maxsplit=1)[0]
+        if ".placements." in field_path:
+            return field_path.split(".placements.", maxsplit=1)[0]
         if field_path.endswith(".profile"):
             return field_path.rsplit(".", maxsplit=1)[0]
         return field_path.rsplit(".", maxsplit=1)[0]
@@ -1283,11 +1285,10 @@ class ProviderOptionLookup:
         if not role:
             return "all"
         profile = self._soperator_profile_for_field(payload=payload, field_path=field_path)
-        role_mapping = profile.get("role_mapping")
-        roles = role_mapping.get("roles") if isinstance(role_mapping, Mapping) else None
-        raw_role = roles.get(role) if isinstance(roles, Mapping) else None
-        if isinstance(raw_role, Mapping):
-            return (_as_str(raw_role.get("default_node_group_kind")) or "all").lower()
+        placements = profile.get("placements")
+        raw_placement = placements.get(role) if isinstance(placements, Mapping) else None
+        if isinstance(raw_placement, Mapping):
+            return (_as_str(raw_placement.get("default_node_group_kind")) or "all").lower()
         return "all"
 
     @staticmethod

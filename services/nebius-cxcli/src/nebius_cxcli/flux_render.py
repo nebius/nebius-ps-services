@@ -135,6 +135,12 @@ def _local_chart_doc_is_helm_hook(doc: dict[str, Any]) -> bool:
     return bool(str(annotations.get("helm.sh/hook", "") or "").strip())
 
 
+def _is_kubernetes_manifest_doc(doc: object) -> bool:
+    if not isinstance(doc, dict):
+        return False
+    return bool(str(doc.get("apiVersion") or "").strip() and str(doc.get("kind") or "").strip())
+
+
 def _make_cert_manager_certificate_rotation_policy_explicit(doc: dict[str, Any]) -> None:
     if (
         doc.get("apiVersion") != _CERT_MANAGER_CERTIFICATE_API_VERSION
@@ -213,7 +219,7 @@ def _soperator_certificate_rotation_policy_post_render_patches(
 
 
 def _inject_local_chart_namespace(rendered: str, *, namespace: str) -> str:
-    rendered_docs = [doc for doc in yaml.safe_load_all(rendered) if isinstance(doc, dict)]
+    rendered_docs = [doc for doc in yaml.safe_load_all(rendered) if _is_kubernetes_manifest_doc(doc)]
     docs = [doc for doc in rendered_docs if not _local_chart_doc_is_helm_hook(doc)]
     if not docs:
         return ""

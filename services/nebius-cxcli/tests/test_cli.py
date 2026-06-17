@@ -71,6 +71,45 @@ def _soperator_test_app_version() -> str:
     return app_version
 
 
+def test_apply_post_flux_manifest_skips_helm_oci_status_output(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    configmap = {
+        "apiVersion": "v1",
+        "kind": "ConfigMap",
+        "metadata": {"name": "rendered-soperator", "namespace": "soperator"},
+    }
+    manifest_path = tmp_path / "post-flux-helmrender-slurm-soperator.yaml"
+    manifest_path.write_text(
+        yaml.safe_dump_all(
+            [
+                {
+                    "Pulled": "oci://example.invalid/charts/soperator:4.0.1-ps.2",
+                    "Digest": "sha256:deadbeef",
+                },
+                configmap,
+            ],
+            explicit_start=True,
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    applied_docs: list[list[dict[str, object]]] = []
+
+    def fake_run_post_flux_kubectl(cmd, **kwargs):
+        _ = kwargs
+        if cmd[:2] == ["kubectl", "apply"]:
+            docs = list(yaml.safe_load_all(Path(cmd[-1]).read_text(encoding="utf-8")))
+            applied_docs.append(docs)
+
+    monkeypatch.setattr(cli_module, "_run_post_flux_kubectl", fake_run_post_flux_kubectl)
+
+    cli_module._apply_post_flux_manifest(manifest_path, env={})
+
+    assert applied_docs == [[configmap]]
+
+
 def _empty_quota_report() -> cli_module.QuotaReport:
     return cli_module.QuotaReport(
         tenant_id="tenant-123",
@@ -3960,7 +3999,7 @@ def test_create_soperator_cpu_worker_count_prompt_updates_persisted_node_groups(
         for row in payload["apps"]["charts"]
         if isinstance(row, dict) and row.get("id") == "soperator"
     )
-    assert soperator["values"]["nodeGroupMapping"]["worker"] == [
+    assert soperator["placements"]["worker"] == [
         "worker-cpu-0",
         "worker-cpu-1",
     ]
@@ -6051,6 +6090,12 @@ def test_soperator_onboarding_preserves_live_adoption_values_after_materializati
                     "instance_id": "external-cluster",
                     "enabled": True,
                     "install_mode": "onboard-existing-cluster",
+                    "placements": {
+                        "worker": [
+                            "mk8snodegroup-worker-cpu",
+                            "mk8snodegroup-worker-gpu",
+                        ]
+                    },
                     "values": {
                         "customUserValue": "keep",
                         "volume": {
@@ -6067,12 +6112,6 @@ def test_soperator_onboarding_preserves_live_adoption_values_after_materializati
                                     }
                                 ]
                             }
-                        },
-                        "nodeGroupMapping": {
-                            "worker": [
-                                "mk8snodegroup-worker-cpu",
-                                "mk8snodegroup-worker-gpu",
-                            ]
                         },
                         "partitionConfiguration": {
                             "configType": "structured",
@@ -6160,11 +6199,11 @@ def test_soperator_onboarding_preserves_live_adoption_values_after_materializati
     assert values["customUserValue"] == "keep"
     assert values["nameOverride"] == "helm-soperator"
     assert values["clusterName"] == "legacy-slurm"
-    assert values["nodeGroupMapping"] == {
-        "system": ["mk8snodegroup-system"],
-        "controller": ["mk8snodegroup-controller"],
-        "login": ["mk8snodegroup-login"],
-        "accounting": ["mk8snodegroup-accounting"],
+    assert soperator["placements"] == {
+        "system": "mk8snodegroup-system",
+        "controller": "mk8snodegroup-controller",
+        "login": "mk8snodegroup-login",
+        "accounting": "mk8snodegroup-accounting",
         "worker-gpu": ["mk8snodegroup-worker-gpu"],
         "worker-cpu": ["mk8snodegroup-worker-cpu"],
     }
@@ -7105,8 +7144,8 @@ def test_soperator_migrate_execute_refreshes_config_after_completed_migration(
     soperator_row = next(row for row in refreshed["apps"]["charts"] if row["id"] == "soperator")
     values = soperator_row["values"]
     assert values["clusterName"] == "mk8s"
-    assert values["nodeGroupMapping"]["system"] == ["system-pool"]
-    assert values["nodeGroupMapping"]["worker-gpu"] == ["worker-gpu-pool"]
+    assert soperator_row["placements"]["system"] == "system-pool"
+    assert soperator_row["placements"]["worker-gpu"] == ["worker-gpu-pool"]
 
 
 def test_soperator_migrate_execute_auto_selects_worker_groups_for_approval(

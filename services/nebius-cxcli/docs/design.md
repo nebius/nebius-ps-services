@@ -822,11 +822,13 @@ discovery override rather than the default handoff mechanism. It records
 discovered live groups under
 `deploy.targets[].inventory.node_groups`, stores an accepted
 `deploy.targets[].soperator_onboarding` action plan, and derives
-`values.nodeGroupMapping` from discovered inventory and the selected profile
+`apps.charts[].placements` from discovered inventory and the selected profile
 instead of Terraform-owning the existing cluster or adding role-named host
-pools. Operators can still edit the materialized mapping in `config.yaml`
-before render; the onboarding command asks for the target cluster plus storage
-and compute intent. Generated onboarding NodeSets use live inventory-derived
+pools. Operators can still edit the materialized placements in `config.yaml`
+before render; render compiles those placements into Soperator chart-native
+`k8sNodeFilters`, `slurmNodes.*.k8sNodeFilterName`, storage selectors,
+partition refs, and worker `nodesets[]`. The onboarding command asks for the
+target cluster plus storage and compute intent. Generated onboarding NodeSets use live inventory-derived
 node counts, selectors, taints, and GPU allocatable data as authoritative
 scheduling/resource inputs over catalog template defaults. The full
 source-cluster discovery snapshot is written beside
@@ -858,12 +860,12 @@ in target Helm values so migration does not attempt immutable PV selector
 changes during chart takeover. It also treats discovered PVC/PV sizes as lower
 bounds, preserving the largest live PVC request, PVC capacity, and PV capacity
 for jail, controller-spool, and accounting storage so chart takeover does not
-attempt a storage shrink. When live Soperator role labels are present,
-onboarding persists `values.nodeGroupMapping.*` from discovered node-group ids
+attempt a storage shrink. When live Soperator placement labels are present,
+onboarding persists `apps.charts[].placements.*` from discovered node-group ids
 so service-role pods keep their adopted scheduling shape. Live worker labels
 such as `worker-cpu` and `worker-gpu` also select the mixed Soperator profile
-and persist worker-specific `values.nodeGroupMapping.worker-cpu` and
-`values.nodeGroupMapping.worker-gpu` entries, so render keeps the adopted
+and persist worker-specific `apps.charts[].placements.worker-cpu` and
+`apps.charts[].placements.worker-gpu` entries, so render keeps the adopted
 worker NodeSet names and partition references instead of creating synthetic
 worker NodeSets from raw node-group ids. Onboarding also samples `lscpu -J`
 from one running `slurmd` pod per worker NodeSet and preserves the normalized
@@ -911,7 +913,7 @@ workflow is explicit: run
 `nebius-cxcli ext-soperator onboard <config.yaml-or-deployments-root>` to register
 the external Nebius MK8s target in `config.yaml`, run the read-only analysis,
 inspect the discovery report and Soperator app/remediation/migration plan plus
-role mapping, then validate and render the accepted target. If the accepted
+placements, then validate and render the accepted target. If the accepted
 report says no migration-owned work is required, plain `deploy <config.yaml>`
 reconciles the generated desired state across every target; `deploy --target
 <target-id>` is only a narrowing selector for a deliberate one-target local run.
@@ -1359,10 +1361,12 @@ The bundled `partition_profiles` (CPU, GPU, Mixed) and their `with-debug-long`,
 `component_cli_settings.yaml` now populate these typed fields directly; the
 free-form `config` and `customSlurmConfig` paths remain available for tokens
 the typed surface does not model. The
-catalog-owned QOS overlays leave `PluginDir` unset by default; image-specific
-plugin paths stay owned by the selected Slurm image unless an operator
-explicitly supplies a known-good path through `customSlurmConfig`, because Slurm
-fails startup when any listed `PluginDir` directory is absent.
+cxcli-managed Nebius Soperator profiles pin
+`PluginDir=/usr/lib/x86_64-linux-gnu/slurm`; catalog-owned QOS overlays leave that path unchanged.
+The supported Nebius Slurm 25 images place SPANK plugins in that Debian
+multi-arch directory. The standalone chart default still leaves `PluginDir` unset, and direct Helm users should set it only when the
+selected image path is known because Slurm fails startup when any listed
+`PluginDir` directory is absent.
 See the Scheduling And Preemption section in the soperator chart design
 document for the full field-to-Slurm.conf mapping and operational patterns.
 
@@ -2871,7 +2875,7 @@ The command boundary is intentional:
   materialization, materializes the complete MK8s+SFS+Soperator five-role
   bundle with `system` autoscaling from 3 to 5 nodes, two fixed `controller`,
   `login`, and `accounting` nodes, one worker node by default, and skips
-  role-mapping prompts.
+  placement prompts.
   `nebius-cxcli ext-soperator onboard <config.yaml-or-deployments-root>` resolves
   the selected project, lists existing Nebius MK8s clusters, registers one
   chosen cluster as an external target with its `cluster_id`, reads that
@@ -2880,11 +2884,12 @@ The command boundary is intentional:
   `--cluster-id` access is available, and records independent storage and
   compute mode choices. `keep-existing-compute`
   preserves the discovered node groups and target-scoped
-  `values.nodeGroupMapping.*` choices. `create-aligned-node-groups` creates or
+  `apps.charts[].placements.*` choices. `create-aligned-node-groups` creates or
   reuses profile-aligned service-role node groups and maps profile worker
-  NodeSets onto the detected existing worker node groups. The default mapping
-  places `worker` on GPU node groups and `system`, `controller`, `login`, and
-  `accounting` on CPU node groups, while keeping every role editable. It does
+  NodeSets onto the detected existing worker node groups. The default placement
+  proposal maps `worker` onto GPU node groups and `system`, `controller`,
+  `login`, and `accounting` onto CPU node groups, while keeping every placement
+  editable. It does
   not create parallel worker node groups; migration-owned external node-group
   template changes, including Kubernetes version, node OS image, Nebius-image
   GPU stack, and aligned SFS filesystem attachments, use direct Nebius

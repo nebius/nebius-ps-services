@@ -534,7 +534,7 @@ Bundled infra component alignment:
   `<cluster-name>-accounting`.
 - `soperator` uses `wizard_profile: soperator` because its app wizard is a
   concise policy surface over `install_mode`, NodeSet profile, partition
-  profile, topology profile, role mapping, and optional child-chart gates rather
+  profile, topology profile, placements, and optional child-chart gates rather
   than a raw walk through parent chart values.
 - `mysterybox` uses `wizard_profile: mysterybox` to prompt the required `inputs.secrets` list and hide the runtime-only `inputs.payload_values` helper from prompts. The wizard requires the first MysteryBox Secret name, asks for the target Kubernetes Secret name with a Kubernetes-safe default derived from the MysteryBox name such as `db-credentials` for `db_credentials`, asks for the ESO version policy with `auto-primary-version-pinning` as the default, requires at least one payload key per Secret, stores entered keys such as `username` as uppercase keys such as `USERNAME`, and then uses blank prompts to finish the current Secret or the whole loop. Inside that guided Secret/policy/key loop, `q` backs up to the previous nested question before leaving the whole `inputs.secrets` field. It does not ask for payload values during `create`.
 - `mysterybox` keeps the Terraform-native MysteryBox product shape in `inputs.secrets`: a list of secret objects where each secret `name` is the stable identity. Every secret declares one `payload` map with one or more `text` or `file` payload entries, an optional `version_id` for the current primary MysteryBox version, and optional cxcli-only `kubernetes_secret_name` / `eso_version_policy` metadata for ESO target naming and version selection. Use `version_id: n/a` before the first deploy; after Terraform creates the initial primary version, cxcli writes the created `mbsecver-...` back to `config.yaml` and the generated bundle. Later rotations happen in Nebius MysteryBox, and operators update `version_id` to the new primary version ID when they want Terraform metadata and manual ESO pinning to follow that version. The CLI validates that list directly and rejects the old mapping/singular `version`/multi-version shapes instead of translating them.
@@ -1565,9 +1565,10 @@ Wizard field behavior:
   `accounting`, and `worker`, plus SFS jail/controller-spool/accounting
   filesystems. `onboard-existing-cluster` is written by
   `nebius-cxcli ext-soperator onboard <config.yaml-or-deployments-root>` for an
-  external Nebius MK8s target; it drives `values.nodeGroupMapping` from
+  external Nebius MK8s target; it writes `apps.charts[].placements` from
   `deploy.targets[].inventory.node_groups` and the selected profile instead of
-  creating Terraform-managed node groups. The operational onboarding, migration,
+  creating Terraform-managed node groups. Render then compiles those placements
+  into Soperator chart-native filters and NodeSets. The operational onboarding, migration,
   and managed-vs-external upgrade rules live in
   [Soperator Commands](#soperator-commands).
   The profile also applies onboarding-only service sizing for the login pod so
@@ -1721,7 +1722,7 @@ Wizard field behavior:
 - Profile-backed MK8s GPU flows also use `auto_select_first` for `inputs.node_group_defaults.gpu.infiniband_fabric` when the selected shape has live fabric choices, so non-interactive Soperator GPU creates use the same capacity-aware fabric recommendation as the wizard.
 - The bundled Soperator GPU and Mixed production profiles set `reservation.policy: AUTO` on GPU worker node groups. That lets reserved-capacity fabric recommendations consume matching reservations and then fall back to suitable capacity; set the worker node group's reservation policy to `FORBID` in `config.yaml` when a deployment must avoid reservations.
 - Helm chart default values discovered from the live chart are not copied into `config.yaml`; the app wizard can show them as prompt defaults, but only explicit overrides are written back.
-- Current built-in provider option sources include `mk8s_compatible_platforms` (mk8s platform fields), `mk8s_gpu_stack_presets` and `mk8s_node_group_os_values` (mk8s image selection from the compatibility matrix, including selected-OS filtering for GPU stack presets), `mk8s_infiniband_fabrics` (optional mk8s GPU-cluster fabric selection gated by the selected preset's live clustering capability and sourced from live Capacity Dashboard fabric rows when available), `capacity_block_groups` (tenant Capacity Block Groups filtered by region/platform/fabric for GPU reservations), `compute_boot_disk_types`, `compute_platforms`, `compute_platform_presets` (GPU preset labels/ranking are also enriched by live Capacity Dashboard advice for the selected platform/region/preset when tenant/region context is available), `project_subnets`, `project_networks`, `project_private_pools`, `project_private_allocations`, `project_filesystems`, `tenant_projects`, `mk8s_control_plane_versions`, `soperator_nodesets_profiles`, `soperator_partition_profiles`, `soperator_topology_profiles`, and `soperator_node_groups` for target-scoped Soperator role mapping.
+- Current built-in provider option sources include `mk8s_compatible_platforms` (mk8s platform fields), `mk8s_gpu_stack_presets` and `mk8s_node_group_os_values` (mk8s image selection from the compatibility matrix, including selected-OS filtering for GPU stack presets), `mk8s_infiniband_fabrics` (optional mk8s GPU-cluster fabric selection gated by the selected preset's live clustering capability and sourced from live Capacity Dashboard fabric rows when available), `capacity_block_groups` (tenant Capacity Block Groups filtered by region/platform/fabric for GPU reservations), `compute_boot_disk_types`, `compute_platforms`, `compute_platform_presets` (GPU preset labels/ranking are also enriched by live Capacity Dashboard advice for the selected platform/region/preset when tenant/region context is available), `project_subnets`, `project_networks`, `project_private_pools`, `project_private_allocations`, `project_filesystems`, `tenant_projects`, `mk8s_control_plane_versions`, `soperator_nodesets_profiles`, `soperator_partition_profiles`, `soperator_topology_profiles`, and `soperator_node_groups` for target-scoped Soperator placements.
 - For GPU presets, cxcli uses live preset metadata as the source of truth for whether the interconnect is Ethernet-only or InfiniBand-capable; it does not hardcode preset-name lists. Today that matches the public Nebius Compute docs: the supported GPU-cluster path is the listed 8-GPU preset set, while single-GPU presets are the testing/dev path with no GPUDirect-RDMA.
 - When the selected plain MK8s GPU shape or fabric has live reserved capacity, the wizard defaults `reservation.policy` to `AUTO`; otherwise it defaults to `FORBID`. The reservation prompt stays after platform/preset/fabric selection because tenant Capacity Block Groups are matched by region, service, platform, and fabric.
 - When live provider options are unavailable, optional wizard fields can still fall back to manual input. Required VPC network/subnet fields fail fast instead of accepting free text, because the selected subnet must be validated against the selected project network.
@@ -2002,14 +2003,14 @@ outside Terraform ownership.
 
 External onboarding is not a Terraform import. The MK8s cluster and its node
 groups remain outside Terraform ownership. cxcli records enough target
-metadata, Soperator analysis, role mapping, and accepted remediation decisions
+metadata, Soperator analysis, placements, and accepted remediation decisions
 to render/apply the Soperator app and to run guarded migration phases.
 
 ### Soperator Command Map
 
 | Command | Use it for | Mutation model |
 | --- | --- | --- |
-| `nebius-cxcli soperator upgrade <config.yaml> --target <target> --to-version <chart-version>` | Upgrade a cxcli-managed Soperator Helm chart row after it is already part of the generated bundle. Use this for cxcli-created Soperator targets and for external targets only after onboarding/migration has handed them back to the deploy-owned desired-state path. | Soperator-aware cxcli-managed upgrade: validates the current bundle, runs live Soperator/Slurm smoke preflight, updates the source app version, rerenders, validates, applies the target Flux bundle, verifies the live Helm release plus rendered workloads, reruns required Soperator/Slurm validation, writes `upgrade-report.md` / `upgrade-report.json` when checkpointed ActiveChecks handling is used, and refreshes `deploy-report.md`. |
+| `nebius-cxcli soperator upgrade <config.yaml> --target <target> --to-version <chart-version>` | Upgrade a cxcli-managed Soperator Helm chart row after it is already part of the generated bundle. Use this for cxcli-created Soperator targets and for external targets only after onboarding/migration has handed them back to the deploy-owned desired-state path. | Soperator-aware cxcli-managed upgrade: validates the current bundle, runs live Soperator/Slurm smoke preflight, updates the source app version, rerenders, validates, applies the target Flux bundle, verifies the static Soperator chart version on live Kubernetes objects, reruns required Soperator/Slurm validation, writes `upgrade-report.md` / `upgrade-report.json` when checkpointed ActiveChecks handling is used, and refreshes `deploy-report.md`. |
 | `nebius-cxcli upgrade helm-chart <config.yaml> apps:soperator@<target> --to-version <chart-version>` | Compatibility entry point for Soperator chart upgrades. | Redirects to the Soperator-aware cxcli-managed upgrade path instead of treating Soperator like a generic Helm chart. |
 | `nebius-cxcli ext-soperator onboard <config.yaml-or-deployments-root>` | Register one existing Nebius MK8s cluster by `cluster_id`, discover source Soperator state, choose storage/compute onboarding modes, and write the accepted onboarding plan. | Read-only against live cluster state; writes local `config.yaml` and `source-soperator-cluster-discovery-report.json`. Non-interactive runs use `--cluster-id` and optional `--target-id`; no-op reruns preserve stable discovery content so unchanged onboarding does not invalidate migration checkpoints. |
 | `nebius-cxcli ext-soperator migrate <config.yaml> --target <target> --dry-run` | Inspect the accepted external-cluster migration plan before any live mutation. | Read-only; validates accepted onboarding, refuses deploy-owned/no-migration action sets with render/deploy guidance, and prints a color-highlighted phase plan in interactive terminals. |
@@ -2045,7 +2046,7 @@ nebius-cxcli deploy <config.yaml>
 The Soperator create/component wizard uses `production-cluster` and materializes
 the complete MK8s+SFS+Soperator five-role bundle: `system`, `controller`,
 `login`, `accounting`, and `worker`, plus SFS jail, controller-spool, and
-accounting filesystems. It skips external role-mapping prompts because cxcli is
+accounting filesystems. It skips external placement prompts because cxcli is
 creating the target node groups itself.
 
 For day-2 upgrades of a cxcli-managed Soperator deployment:
@@ -2067,8 +2068,9 @@ For day-2 upgrades of a cxcli-managed Soperator deployment:
   mutation it validates the current generated bundle and runs the required live
   Soperator/Slurm smoke validation so a broken Slurm control plane, queue, or
   GPU/NCCL path blocks the upgrade instead of becoming a post-upgrade surprise.
-  After apply it verifies Helm readiness, reruns the same required
-  Soperator/Slurm validation, and refreshes `generated/reports/deploy-report.md`.
+  After apply it verifies the static Soperator chart version on live Kubernetes
+  objects, reruns the same required Soperator/Slurm validation, and refreshes
+  `generated/reports/deploy-report.md`.
   `nebius-cxcli upgrade helm-chart <config.yaml> apps:soperator@<target> --to-version <chart-version>`
   redirects to this Soperator-aware path.
   If the cxcli-managed Soperator app row has
@@ -2481,19 +2483,21 @@ Onboarding asks for two independent layers. Storage mode is
 `keep-existing-storage` or `create-aligned-sfs`; compute mode is
 `keep-existing-compute` or `create-aligned-node-groups`. Keeping existing
 storage means cxcli will not plan aligned SFS creation. Keeping existing
-compute preserves the discovered node groups and only maps Soperator roles onto
-them. The default role mapping proposes `worker` on GPU node groups and
-`system`, `controller`, `login`, and `accounting` on CPU node groups, then lets
-the operator override `values.nodeGroupMapping.*` before render. When existing
-Soperator role labels are present, onboarding writes `values.nodeGroupMapping.*`
+compute preserves the discovered node groups and only maps Soperator placements
+onto them. The default placement proposal maps `worker` onto GPU node groups and
+`system`, `controller`, `login`, and `accounting` onto CPU node groups, then lets
+the operator override `apps.charts[].placements.*` before render. When existing
+Soperator placement labels are present, onboarding writes `apps.charts[].placements.*`
 from the live node-group ids so service-role pods keep scheduling onto the
 adopted system, controller, login, accounting, and worker groups. If live
 worker labels distinguish `worker-cpu` and `worker-gpu`, onboarding selects the
 mixed Soperator profile and writes worker-specific
-`values.nodeGroupMapping.worker-cpu` and
-`values.nodeGroupMapping.worker-gpu` entries so render keeps the adopted worker
+`apps.charts[].placements.worker-cpu` and
+`apps.charts[].placements.worker-gpu` entries so render keeps the adopted worker
 NodeSet names and partition references instead of creating synthetic worker
-NodeSets from raw node-group ids. Onboarding also samples `lscpu -J` from one
+NodeSets from raw node-group ids. Render compiles those placements into
+chart-native `k8sNodeFilters`, `slurmNodes.*.k8sNodeFilterName`, storage
+selectors, partition refs, and worker `nodesets[]`. Onboarding also samples `lscpu -J` from one
 running `slurmd` pod per worker NodeSet and preserves the normalized
 CPU/socket/core/thread topology in the adopted `values.nodesets[].nodeConfig.static`
 values, while leaving chart-owned worker image tags to the target Soperator
@@ -2914,8 +2918,9 @@ nebius-cxcli soperator upgrade <config.yaml> \
 That path is a cxcli-managed chart upgrade. It validates the current generated
 bundle, runs live Soperator/Slurm smoke preflight, updates the Soperator app
 version in `config.yaml`, rerenders, validates the new bundle, applies the
-selected target Flux bundle, verifies Helm readiness, reruns the required
-Soperator/Slurm smoke validation, and refreshes `deploy-report.md`.
+selected target Flux bundle, verifies the static Soperator chart version on
+live Kubernetes objects, reruns the required Soperator/Slurm smoke validation,
+and refreshes `deploy-report.md`.
 `upgrade helm-chart <config.yaml> apps:soperator@<target> --to-version <chart-version>`
 redirects to this Soperator-aware path. The cxcli-managed upgrade path does not
 run the external source-cluster migration analyzer, does not use
@@ -3955,7 +3960,7 @@ nebius-cxcli auth --project-config /path/to/config.yaml --validate-profile
     creates the complete MK8s+SFS+Soperator five-role bundle with `system`
     autoscaling from 3 to 5 nodes, two fixed `controller`, `login`, and
     `accounting` nodes, one worker node by default, and skips external
-    role-mapping prompts. Existing external Nebius MK8s targets should use
+    placement prompts. Existing external Nebius MK8s targets should use
     `nebius-cxcli ext-soperator onboard <config.yaml-or-deployments-root>`; see
     [Soperator Commands](#soperator-commands) for onboarding, migration, and
     managed-vs-external upgrade rules.

@@ -534,7 +534,7 @@ def soperator_onboarding_effective_compute_mode(
 
     if (
         compute_mode == ONBOARDING_COMPUTE_MODE_CREATE_ALIGNED_NODE_GROUPS
-        and _report_has_finding(report, layer="role-mapping", status="target-compatible")
+        and _report_has_finding(report, layer="placements", status="target-compatible")
     ):
         return ONBOARDING_COMPUTE_MODE_KEEP_EXISTING
     return compute_mode
@@ -1384,7 +1384,7 @@ def _configured_soperator_action(
         ONBOARDING_ACTION_PLAN_COMPUTE_MIGRATION: SoperatorOnboardingAction(
             id=ONBOARDING_ACTION_PLAN_COMPUTE_MIGRATION,
             title="Plan in-place compute remediation without duplicating workers",
-            layer="role-mapping",
+            layer="placements",
             selected=True,
             disruptive=True,
             reason=(
@@ -2108,7 +2108,7 @@ def analyze_soperator_onboarding_snapshot(
         if missing_selector_labels:
             findings.append(
                 SoperatorOnboardingFinding(
-                    layer="role-mapping",
+                    layer="placements",
                     status="selector-required",
                     severity="required",
                     message=(
@@ -2132,7 +2132,7 @@ def analyze_soperator_onboarding_snapshot(
         if compute_layout_compatible:
             findings.append(
                 SoperatorOnboardingFinding(
-                    layer="role-mapping",
+                    layer="placements",
                     status="target-compatible",
                     severity="info",
                     message=(
@@ -2148,7 +2148,7 @@ def analyze_soperator_onboarding_snapshot(
             ]
             findings.append(
                 SoperatorOnboardingFinding(
-                    layer="role-mapping",
+                    layer="placements",
                     status="incomplete",
                     severity="recommended",
                     message=(
@@ -2169,7 +2169,7 @@ def analyze_soperator_onboarding_snapshot(
                 layer="gpu-rdma",
                 status="warning",
                 severity="recommended",
-                message="No GPU node group was discovered; worker role mapping will be CPU-only.",
+                message="No GPU node group was discovered; worker placement will be CPU-only.",
             )
         )
     else:
@@ -2754,7 +2754,7 @@ def analyze_soperator_onboarding_snapshot(
                         SoperatorOnboardingAction(
                             id=ONBOARDING_ACTION_PLAN_COMPUTE_MIGRATION,
                             title="Plan in-place compute remediation without duplicating workers",
-                            layer="role-mapping",
+                            layer="placements",
                             selected=True,
                             disruptive=True,
                             reason=(

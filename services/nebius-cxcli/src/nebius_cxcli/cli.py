@@ -1474,8 +1474,8 @@ soperator_app = typer.Typer(
         "CXCLI managed workflow: nebius-cxcli soperator upgrade <config.yaml> "
         "--target <target> --to-version <chart-version> --dry-run, then rerun "
         "without --dry-run to update config.yaml, rerender, apply the selected "
-        "target, verify Helm readiness, and run required Soperator/Slurm "
-        "validation. Existing external Soperator clusters still use "
+        "target, verify the static Soperator chart version, and run required "
+        "Soperator/Slurm validation. Existing external Soperator clusters still use "
         "ext-soperator onboard/migrate for adoption or migration-owned work."
     ),
 )
@@ -3515,7 +3515,7 @@ def _format_soperator_upgrade_plan(
             "- Soperator-aware gates:",
             "  - preflight runs the existing generated-bundle validation and a live Soperator/Slurm smoke validation before mutation.",
             "  - apply updates config.yaml, rerenders, validates the new bundle, and applies only the selected target Flux bundle.",
-            "  - postflight verifies Helm readiness and reruns the required Soperator/Slurm smoke validation, refreshing deploy-report.md.",
+            "  - postflight verifies the static Soperator chart version and reruns the required Soperator/Slurm smoke validation, refreshing deploy-report.md.",
         ]
     )
     lifecycle = _soperator_upgrade_activechecks_lifecycle(payload, plan.target)
@@ -3556,6 +3556,7 @@ def _verify_helm_chart_upgrade_ready(
             f"Cannot verify Helm chart upgrade for {plan.target.selector}: "
             f"target '{plan.target.target_ref}' was not found in the generated deploy manifest."
         )
+    _ensure_terraform_backend_ready(config, auto_auth_bootstrap=True)
     with ExitStack() as stack:
         kube_env = _prepare_cluster_handoff_kube_env(
             config,
@@ -3572,6 +3573,196 @@ def _verify_helm_chart_upgrade_ready(
             expected_version=plan.target_version,
         )
     console.print(f"[green]{result.summary()}[/green]")
+
+
+def _kubectl_json_for_upgrade(
+    args: Sequence[str],
+    *,
+    extra_env: Mapping[str, str],
+    description: str,
+    timeout_seconds: int = 120,
+) -> Mapping[str, Any]:
+    env = os.environ.copy()
+    env.update(extra_env)
+    completed = subprocess.run(
+        list(args),
+        check=False,
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=timeout_seconds,
+    )
+    if completed.returncode != 0:
+        detail = (completed.stderr or completed.stdout or "").strip()
+        raise RuntimeError(f"{description} failed: {detail or completed.returncode}")
+    try:
+        payload = json.loads(completed.stdout or "{}")
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"{description} did not return valid JSON.") from exc
+    if not isinstance(payload, Mapping):
+        raise RuntimeError(f"{description} did not return a JSON object.")
+    return payload
+
+
+def _soperator_upgrade_chart_label(version: str) -> str:
+    return f"soperator-{version}".replace("+", "_")
+
+
+def _resource_chart_label(payload: Mapping[str, Any]) -> str:
+    metadata = payload.get("metadata")
+    if not isinstance(metadata, Mapping):
+        return ""
+    labels = metadata.get("labels")
+    if not isinstance(labels, Mapping):
+        return ""
+    return str(labels.get("helm.sh/chart") or "").strip()
+
+
+def _reconcile_soperator_slurm_nodeaddrs(
+    *,
+    namespace: str,
+    cluster_name: str,
+    kube_env: Mapping[str, str],
+) -> tuple[str, ...]:
+    service_suffix = f"{cluster_name}-nodeset-svc.{namespace}.svc.cluster.local"
+    script = f"""
+set -euo pipefail
+service_suffix={shlex.quote(service_suffix)}
+scontrol reconfigure >/dev/null 2>&1 || true
+mapfile -t nodes < <(sinfo -N -h -o "%N" | awk 'NF && !seen[$1]++')
+for node in "${{nodes[@]}}"; do
+  expected="${{node}}.${{service_suffix}}"
+  current="$(scontrol show node "${{node}}" | tr '\\n' ' ' | sed -n 's/.* NodeAddr=\\([^ ]*\\).*/\\1/p')"
+  if [[ -n "${{current}}" && "${{current}}" != "${{expected}}" ]]; then
+    scontrol update NodeName="${{node}}" NodeAddr="${{expected}}"
+    printf '%s: %s -> %s\\n' "${{node}}" "${{current}}" "${{expected}}"
+  fi
+done
+"""
+    env = os.environ.copy()
+    env.update(kube_env)
+    completed = subprocess.run(
+        ["kubectl", "-n", namespace, "exec", "login-0", "--", "bash", "-lc", script],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=180,
+    )
+    if completed.returncode != 0:
+        detail = (completed.stderr or completed.stdout or "").strip()
+        raise RuntimeError(
+            "Could not reconcile Soperator Slurm worker NodeAddr values after "
+            f"static chart apply: {detail or completed.returncode}"
+        )
+    return tuple(line.strip() for line in completed.stdout.splitlines() if line.strip())
+
+
+def _verify_soperator_static_upgrade_ready(
+    config: Any,
+    paths: ProjectPaths,
+    manifest: Mapping[str, Any],
+    plan: _HelmChartUpgradePlan,
+) -> None:
+    selected_targets = _resolve_selected_deploy_targets(
+        manifest,
+        requested_target_ref=plan.target.target_ref,
+        all_targets=False,
+    )
+    target = selected_targets[0] if selected_targets else None
+    if target is None:
+        raise RuntimeError(
+            f"Cannot verify Soperator upgrade for {plan.target.selector}: "
+            f"target '{plan.target.target_ref}' was not found in the generated deploy manifest."
+        )
+    validation_specs = _soperator_upgrade_validation_specs(
+        manifest,
+        target_ref=plan.target.target_ref,
+    )
+    validation = validation_specs[0]
+    namespace = str(validation.get("namespace") or plan.namespace or "soperator").strip()
+    cluster_name = str(
+        validation.get("cluster_name") or plan.target.target_ref or "mk8s"
+    ).strip()
+    expected_label = _soperator_upgrade_chart_label(plan.target_version)
+
+    _ensure_terraform_backend_ready(config, auto_auth_bootstrap=True)
+    with ExitStack() as stack:
+        kube_env = _prepare_cluster_handoff_kube_env(
+            config,
+            paths,
+            stack=stack,
+            target=target,
+            persist_local_kubeconfig=False,
+            set_current_context=False,
+        )
+        env = os.environ.copy()
+        env.update(kube_env)
+        rollout = subprocess.run(
+            [
+                "kubectl",
+                "-n",
+                namespace,
+                "rollout",
+                "status",
+                "deployment/soperator-manager",
+                "--timeout=10m",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=660,
+        )
+        if rollout.returncode != 0:
+            detail = (rollout.stderr or rollout.stdout or "").strip()
+            raise RuntimeError(
+                "Soperator manager rollout did not become ready after static "
+                f"chart apply: {detail or rollout.returncode}"
+            )
+
+        checked: list[str] = []
+        for resource, name in (
+            ("deployment", "soperator-manager"),
+            ("slurmcluster.slurm.nebius.ai", cluster_name),
+        ):
+            payload = _kubectl_json_for_upgrade(
+                [
+                    "kubectl",
+                    "-n",
+                    namespace,
+                    "get",
+                    resource,
+                    name,
+                    "-o",
+                    "json",
+                ],
+                extra_env=kube_env,
+                description=f"kubectl get {resource}/{name}",
+            )
+            actual_label = _resource_chart_label(payload)
+            if actual_label != expected_label:
+                raise RuntimeError(
+                    f"Soperator static chart version check failed for {resource}/{name}: "
+                    f"expected helm.sh/chart={expected_label}, got "
+                    f"{actual_label or '<missing>'}."
+                )
+            checked.append(f"{resource}/{name}")
+        reconciled = _reconcile_soperator_slurm_nodeaddrs(
+            namespace=namespace,
+            cluster_name=cluster_name,
+            kube_env=kube_env,
+        )
+    console.print(
+        "[green]Soperator static chart version verified: "
+        f"{expected_label} on {', '.join(checked)}[/green]"
+    )
+    if reconciled:
+        console.print(
+            "[green]Reconciled Soperator Slurm worker NodeAddr values: "
+            f"{'; '.join(reconciled)}[/green]",
+            soft_wrap=True,
+        )
 
 
 def _soperator_upgrade_validation_specs(
@@ -6503,8 +6694,8 @@ def _run_helm_chart_upgrade_command(
             paths=paths,
         )
     if not plan.mutates and resume_checkpoint is None:
-        _verify_helm_chart_upgrade_ready(generated_config, paths, manifest, plan)
         if soperator_aware:
+            _verify_soperator_static_upgrade_ready(generated_config, paths, manifest, plan)
             _run_soperator_upgrade_validation_phase(
                 generated_config,
                 paths,
@@ -6532,6 +6723,8 @@ def _run_helm_chart_upgrade_command(
                 checkpoint,
             )
             console.print(f"Soperator upgrade report: {upgrade_report_path}", soft_wrap=True)
+        else:
+            _verify_helm_chart_upgrade_ready(generated_config, paths, manifest, plan)
         already_current_message = (
             f"Soperator target {target.target_ref} already uses version {target_version}."
             if soperator_aware
@@ -6592,7 +6785,7 @@ def _run_helm_chart_upgrade_command(
                 target_ref=target.target_ref,
                 all_targets=False,
             )
-            _verify_helm_chart_upgrade_ready(
+            _verify_soperator_static_upgrade_ready(
                 staged_config,
                 staged_paths,
                 staged_manifest,
@@ -10767,6 +10960,7 @@ def _soperator_onboarding_live_node_group_role(raw_group: Mapping[str, Any]) -> 
         labels.get("slurm.nebius.ai/nodeset")
         or labels.get("slurm.nebius.ai/nodeset-name")
         or raw_group.get("nodeset_name")
+        or raw_group.get("placement_name")
     )
 
 
@@ -10932,9 +11126,9 @@ def _soperator_onboarding_adoption_values_from_target_row(
     if cluster_name:
         values["clusterName"] = cluster_name
 
-    node_group_mapping = _soperator_onboarding_live_node_group_mapping(snapshot)
-    if node_group_mapping:
-        values["nodeGroupMapping"] = node_group_mapping
+    placements = _soperator_onboarding_live_node_group_mapping(snapshot)
+    if placements:
+        values["placements"] = placements
 
     source_report = {"snapshot": snapshot, "report": onboarding}
     worker_topology = (
@@ -11017,21 +11211,30 @@ def _merge_soperator_onboarding_adoption_values(
 ) -> bool:
     if not adoption_values:
         return False
+    before = copy.deepcopy(row)
     values = row.setdefault("values", {})
     if not isinstance(values, dict):
         values = {}
         row["values"] = values
-    before = copy.deepcopy(values)
     for key, value in adoption_values.items():
         plain_value = to_plain_data(value)
-        if key == "nodeGroupMapping":
-            values[key] = copy.deepcopy(plain_value)
+        if key == "placements":
+            if isinstance(plain_value, Mapping):
+                normalized_placements = {
+                    str(placement): _soperator_string_list(groups)
+                    for placement, groups in plain_value.items()
+                }
+                _soperator_set_app_placements(
+                    row,
+                    normalized_placements,
+                    replace=True,
+                )
             continue
         if isinstance(values.get(key), dict) and isinstance(plain_value, Mapping):
             _merge_replace_mapping(values[key], plain_value)
             continue
         values[key] = copy.deepcopy(plain_value)
-    return values != before
+    return row != before
 
 
 def _merge_soperator_onboarding_adoption_values_for_target(
@@ -12739,7 +12942,7 @@ def _soperator_all_profile_jail_node_group_keys() -> list[str]:
         for worker in _profile_list(mk8s_profile, "worker_nodesets"):
             if not isinstance(worker, Mapping) or worker.get("jail") is not True:
                 continue
-            _remember(worker.get("node_group_key_prefix"))
+            _remember(worker.get("node_group_prefix"))
             _remember(worker.get("name"))
     return selected
 
@@ -12827,7 +13030,10 @@ def _soperator_nodeset_group_keys(
             continue
         if (
             isinstance(group, Mapping)
-            and str(group.get("nodeset_name", "")).strip() == nodeset_name
+            and (
+                str(group.get("nodeset_name", "")).strip() == nodeset_name
+                or str(group.get("placement_name", "")).strip() == nodeset_name
+            )
         ):
             keys.append(key_text)
     return keys
@@ -12842,7 +13048,7 @@ def _soperator_profile_managed_node_group_keys(profile: Mapping[str, Any]) -> se
         nodeset_name = _non_empty_text(raw_worker.get("nodeset_name")) or _non_empty_text(
             raw_worker.get("name")
         )
-        key_prefix = _non_empty_text(raw_worker.get("node_group_key_prefix")) or nodeset_name
+        key_prefix = _non_empty_text(raw_worker.get("node_group_prefix")) or nodeset_name
         if key_prefix:
             managed.add(key_prefix)
     return managed
@@ -12960,7 +13166,7 @@ def _soperator_has_external_node_groups(
     present_keys = {str(key) for key in node_groups}
     if static_role_keys and not static_role_keys.issubset(present_keys):
         return True
-    managed_keys = _soperator_profile_managed_node_group_keys(profile)
+    managed_keys = _soperator_all_profile_managed_node_group_keys()
     for raw_key in node_groups:
         key = str(raw_key)
         if _soperator_node_group_key_matches_managed(key, managed_keys):
@@ -13071,11 +13277,14 @@ def _materialize_soperator_node_group_labels(group: dict[str, Any], *, group_key
     if not isinstance(node_labels, dict):
         return
     nodeset_name = _non_empty_text(group.get("nodeset_name"))
+    placement_name = _non_empty_text(group.get("placement_name"))
     workload = _non_empty_text(group.get("workload"))
     if group_key:
         node_labels.setdefault("nebius.com/node-group", group_key)
     if nodeset_name:
         node_labels.setdefault("slurm.nebius.ai/nodeset-name", nodeset_name)
+    elif placement_name:
+        node_labels.setdefault("slurm.nebius.ai/nodeset-name", placement_name)
     if workload:
         node_labels.setdefault("slurm.nebius.ai/workload", workload)
     if bool(group.get("jail", False)):
@@ -13105,29 +13314,43 @@ def _soperator_string_list(value: Any) -> list[str]:
     return []
 
 
-def _soperator_profile_role_mapping(profile: Mapping[str, Any]) -> Mapping[str, Any]:
-    raw = profile.get("role_mapping")
-    if not isinstance(raw, Mapping):
-        return {}
-    roles = raw.get("roles")
-    return roles if isinstance(roles, Mapping) else {}
+def _soperator_profile_placements(profile: Mapping[str, Any]) -> Mapping[str, Any]:
+    raw = profile.get("placements")
+    return raw if isinstance(raw, Mapping) else {}
 
 
-def _soperator_values_node_group_mapping(values: Mapping[str, Any]) -> dict[str, list[str]]:
-    raw = values.get("nodeGroupMapping")
+def _soperator_placement_list(value: Any) -> list[str]:
+    return list(dict.fromkeys(_soperator_string_list(value)))
+
+
+def _soperator_row_placements(row: Mapping[str, Any]) -> dict[str, list[str]]:
+    values = row.get("values")
+    if isinstance(values, Mapping) and "nodeGroupMapping" in values:
+        raise ValueError(
+            "apps.charts[] soperator values.nodeGroupMapping is no longer supported; "
+            "use apps.charts[].placements instead."
+        )
+    raw = row.get("placements")
     if not isinstance(raw, Mapping):
         return {}
     mapping: dict[str, list[str]] = {}
-    for raw_role, raw_groups in raw.items():
-        role = str(raw_role).strip()
-        groups = _soperator_string_list(raw_groups)
-        if role and groups:
-            mapping[role] = list(dict.fromkeys(groups))
+    for raw_placement, raw_groups in raw.items():
+        placement = str(raw_placement).strip()
+        groups = _soperator_placement_list(raw_groups)
+        if placement and groups:
+            mapping[placement] = groups
     return mapping
 
 
-def _soperator_set_node_group_mapping(
-    values: dict[str, Any],
+def _soperator_store_placement_value(placement: str, groups: Sequence[str]) -> str | list[str]:
+    normalized = [str(group).strip() for group in groups if str(group).strip()]
+    if len(normalized) == 1 and not placement.startswith("worker"):
+        return normalized[0]
+    return normalized
+
+
+def _soperator_set_app_placements(
+    row: dict[str, Any],
     mapping: Mapping[str, list[str]],
     *,
     replace: bool = False,
@@ -13135,26 +13358,28 @@ def _soperator_set_node_group_mapping(
     if not mapping:
         return
     if replace:
-        values["nodeGroupMapping"] = {
-            str(role): list(groups) for role, groups in mapping.items() if groups
+        row["placements"] = {
+            str(placement): _soperator_store_placement_value(str(placement), groups)
+            for placement, groups in mapping.items()
+            if groups
         }
         return
-    target = values.setdefault("nodeGroupMapping", {})
+    target = row.setdefault("placements", {})
     if not isinstance(target, dict):
         target = {}
-        values["nodeGroupMapping"] = target
-    for role, groups in mapping.items():
+        row["placements"] = target
+    for placement, groups in mapping.items():
         if (
-            role == "worker"
+            placement == "worker"
             and any(
-                str(existing_role).startswith("worker-")
-                for existing_role in target
-                if str(existing_role).strip()
+                str(existing_placement).startswith("worker-")
+                for existing_placement in target
+                if str(existing_placement).strip()
             )
         ):
             continue
-        if role not in target and groups:
-            target[role] = list(groups)
+        if placement not in target and groups:
+            target[placement] = _soperator_store_placement_value(placement, groups)
 
 
 def _soperator_node_group_keys_by_kind(
@@ -13191,7 +13416,7 @@ def _soperator_worker_nodeset_key_prefixes(profile: Mapping[str, Any]) -> dict[s
             raw_worker.get("name")
         )
         worker_name = _non_empty_text(raw_worker.get("name"))
-        key_prefix = _non_empty_text(raw_worker.get("node_group_key_prefix")) or nodeset_name
+        key_prefix = _non_empty_text(raw_worker.get("node_group_prefix")) or nodeset_name
         if nodeset_name and key_prefix:
             prefixes[nodeset_name] = key_prefix
         if worker_name and key_prefix:
@@ -13221,60 +13446,61 @@ def _soperator_node_group_keys_by_nodeset_templates(
     return list(dict.fromkeys(selected))
 
 
-def _soperator_infer_node_group_mapping(
+def _soperator_infer_placements(
     *,
     inputs: Mapping[str, Any],
     profile: Mapping[str, Any],
 ) -> dict[str, list[str]]:
-    role_mapping = _soperator_profile_role_mapping(profile)
-    if not role_mapping or not iter_mk8s_node_groups(inputs):
+    placements = _soperator_profile_placements(profile)
+    if not placements or not iter_mk8s_node_groups(inputs):
         return {}
 
     inferred: dict[str, list[str]] = {}
     all_keys = _soperator_node_group_keys_by_kind(inputs, kind="all")
-    for role, raw_role_config in role_mapping.items():
-        if not isinstance(raw_role_config, Mapping):
+    for placement, raw_placement_config in placements.items():
+        if not isinstance(raw_placement_config, Mapping):
             continue
-        role_name = str(role).strip()
-        if not role_name:
+        placement_name = str(placement).strip()
+        if not placement_name:
             continue
-        exact = [key for key in all_keys if key == role_name]
+        explicit_node_group = _non_empty_text(raw_placement_config.get("node_group"))
+        exact = [key for key in all_keys if key == (explicit_node_group or placement_name)]
         if exact:
-            inferred[role_name] = exact
+            inferred[placement_name] = exact
             continue
         template_selected = _soperator_node_group_keys_by_nodeset_templates(
             inputs,
             profile=profile,
-            template_names=_soperator_role_nodeset_template_names(raw_role_config),
+            template_names=_soperator_role_nodeset_template_names(raw_placement_config),
         )
         if template_selected:
-            inferred[role_name] = template_selected
+            inferred[placement_name] = template_selected
             continue
-        selector = _non_empty_text(raw_role_config.get("default_node_group_kind")) or "all"
+        selector = _non_empty_text(raw_placement_config.get("default_node_group_kind")) or "all"
         selected = _soperator_node_group_keys_by_kind(inputs, kind=selector)
         if not selected:
-            fallback_selector = _non_empty_text(raw_role_config.get("fallback_node_group_kind"))
+            fallback_selector = _non_empty_text(raw_placement_config.get("fallback_node_group_kind"))
             if fallback_selector:
                 selected = _soperator_node_group_keys_by_kind(inputs, kind=fallback_selector)
         if selected:
-            inferred[role_name] = selected
+            inferred[placement_name] = selected
     return inferred
 
 
-def _soperator_node_group_mapping_matches_generated_profile(
+def _soperator_placements_match_generated_profile(
     *,
-    values: Mapping[str, Any],
+    row: Mapping[str, Any],
     inputs: Mapping[str, Any],
 ) -> bool:
-    mapping = _soperator_values_node_group_mapping(values)
-    if not mapping:
+    placements = _soperator_row_placements(row)
+    if not placements:
         return False
     _default_profile, profiles = _soperator_nodesets_profiles()
     for profile in profiles.values():
         if not isinstance(profile, Mapping):
             continue
-        inferred = _soperator_infer_node_group_mapping(inputs=inputs, profile=profile)
-        if inferred and mapping == inferred:
+        inferred = _soperator_infer_placements(inputs=inputs, profile=profile)
+        if inferred and placements == inferred:
             return True
     return False
 
@@ -13384,20 +13610,20 @@ def _materialize_soperator_existing_node_group_mapping(
     node_groups = inputs.get("node_groups")
     if not isinstance(node_groups, dict):
         return
-    role_mapping = _soperator_profile_role_mapping(profile)
+    placements = _soperator_profile_placements(profile)
     groups_with_explicit_sfs_keys = {
         str(group_key)
         for group_key, group in node_groups.items()
         if isinstance(group, dict)
         and _soperator_string_list(group.get("sfs_filesystem_keys", group.get("filesystem_keys")))
     }
-    for role, group_keys in mapping.items():
-        raw_role_config = role_mapping.get(role)
-        if not isinstance(raw_role_config, Mapping) and str(role).startswith("worker"):
-            raw_role_config = role_mapping.get("worker")
-        if not isinstance(raw_role_config, Mapping):
+    for placement, group_keys in mapping.items():
+        raw_placement_config = placements.get(placement)
+        if not isinstance(raw_placement_config, Mapping) and str(placement).startswith("worker"):
+            raw_placement_config = placements.get("worker")
+        if not isinstance(raw_placement_config, Mapping):
             continue
-        filesystem_keys = _soperator_role_filesystem_keys(raw_role_config)
+        filesystem_keys = _soperator_role_filesystem_keys(raw_placement_config)
         for group_key in group_keys:
             group = node_groups.get(group_key)
             if isinstance(group, dict):
@@ -14314,14 +14540,14 @@ def _materialize_soperator_mapping_chart_values(
     values: dict[str, Any],
     profile: Mapping[str, Any],
     inputs: Mapping[str, Any],
+    placements: Mapping[str, list[str]],
     install_mode: str,
     preserve_existing_worker_nodesets: bool = False,
 ) -> None:
-    mapping = _soperator_values_node_group_mapping(values)
-    role_mapping = _soperator_profile_role_mapping(profile)
-    if not role_mapping:
+    profile_placements = _soperator_profile_placements(profile)
+    if not profile_placements:
         return
-    use_profile_filters = not mapping
+    use_profile_filters = not placements
 
     existing_filters = values.get("k8sNodeFilters")
     if isinstance(existing_filters, list):
@@ -14348,6 +14574,25 @@ def _materialize_soperator_mapping_chart_values(
     nodeset_ref_replacements: dict[str, list[str]] = {}
     storage_groups: dict[str, list[str]] = {}
     preserve_onboarded_worker_nodesets = preserve_existing_worker_nodesets
+
+    def _group_keys_for_template(
+        *,
+        template_name: str,
+        group_keys: Sequence[str],
+    ) -> list[str]:
+        normalized_template = normalize_component_token(template_name)
+        if not normalized_template:
+            return []
+        normalized_groups = [str(group_key).strip() for group_key in group_keys if group_key]
+        if len(normalized_groups) <= 1:
+            return normalized_groups
+        matched = [
+            group_key
+            for group_key in normalized_groups
+            if normalize_component_token(group_key) == normalized_template
+            or normalize_component_token(group_key).startswith(f"{normalized_template}-")
+        ]
+        return matched or normalized_groups
 
     def _generate_nodesets_from_template(
         *,
@@ -14419,12 +14664,12 @@ def _materialize_soperator_mapping_chart_values(
         if replacement_names:
             nodeset_ref_replacements[template_name] = replacement_names
 
-    for role, raw_role_config in role_mapping.items():
-        if not isinstance(raw_role_config, Mapping):
+    for placement, raw_placement_config in profile_placements.items():
+        if not isinstance(raw_placement_config, Mapping):
             continue
-        role_name = str(role).strip()
-        group_keys = mapping.get(role_name, [])
-        filter_name = _non_empty_text(raw_role_config.get("k8s_node_filter_name"))
+        placement_name = str(placement).strip()
+        group_keys = placements.get(placement_name, [])
+        filter_name = _non_empty_text(raw_placement_config.get("soperator_node_filter"))
         filter_item: dict[str, Any] | None = None
         if group_keys and filter_name:
             role_tolerations = _soperator_node_group_tolerations(inputs, group_keys)
@@ -14443,36 +14688,49 @@ def _materialize_soperator_mapping_chart_values(
             if isinstance(existing_filter, Mapping):
                 filter_item = dict(existing_filter)
         if filter_item is not None and filter_name:
-            for path in _soperator_string_list(raw_role_config.get("chart_filter_paths")):
-                _soperator_set_mapping_path(values, path, filter_name)
+            raw_bindings = raw_placement_config.get("soperator_value_bindings")
+            if isinstance(raw_bindings, Mapping):
+                for raw_path, raw_value in raw_bindings.items():
+                    path = _non_empty_text(raw_path)
+                    binding_value = _non_empty_text(raw_value) or filter_name
+                    if path:
+                        _soperator_set_mapping_path(values, path, binding_value)
         if filter_item is not None:
             affinity = filter_item.get("affinity")
             if isinstance(affinity, Mapping):
-                for path in _soperator_string_list(raw_role_config.get("chart_affinity_paths")):
+                for path in _soperator_string_list(
+                    raw_placement_config.get("soperator_affinity_bindings")
+                ):
                     _soperator_set_mapping_path(values, path, affinity)
         if not group_keys:
             continue
-        for filesystem_key in _soperator_role_filesystem_keys(raw_role_config):
+        for filesystem_key in _soperator_role_filesystem_keys(raw_placement_config):
             storage_groups.setdefault(filesystem_key, [])
             storage_groups[filesystem_key].extend(group_keys)
 
-        template_names = _soperator_string_list(raw_role_config.get("nodeset_templates"))
+        template_names = _soperator_string_list(raw_placement_config.get("nodeset_templates"))
         if not template_names:
-            template_name = _non_empty_text(raw_role_config.get("nodeset_template"))
+            template_name = _non_empty_text(raw_placement_config.get("nodeset_template"))
             template_names = [template_name] if template_name else []
         for template_name in template_names:
-            if preserve_onboarded_worker_nodesets and role_name == "worker":
+            if preserve_onboarded_worker_nodesets and placement_name == "worker":
                 continue
-            _generate_nodesets_from_template(template_name=template_name, group_keys=group_keys)
+            _generate_nodesets_from_template(
+                template_name=template_name,
+                group_keys=_group_keys_for_template(
+                    template_name=template_name,
+                    group_keys=group_keys,
+                ),
+            )
 
-    worker_role_config = role_mapping.get("worker")
+    worker_role_config = profile_placements.get("worker")
     worker_filesystem_keys = (
         _soperator_role_filesystem_keys(worker_role_config)
         if isinstance(worker_role_config, Mapping)
         else []
     )
-    for template_name, group_keys in mapping.items():
-        if template_name in role_mapping or not template_name.startswith("worker"):
+    for template_name, group_keys in placements.items():
+        if template_name in profile_placements or not template_name.startswith("worker"):
             continue
         if template_name not in template_nodesets:
             continue
@@ -14535,7 +14793,7 @@ def _materialize_soperator_mapping_chart_values(
         generated_names = {_non_empty_text(item.get("name")) for item in generated_nodesets}
         replaced_template_names = set(nodeset_ref_replacements)
         mapped_group_keys = {
-            group_key for group_keys in mapping.values() for group_key in group_keys if group_key
+            group_key for group_keys in placements.values() for group_key in group_keys if group_key
         }
 
         def _stale_onboarding_nodeset(item: Mapping[str, Any]) -> bool:
@@ -14558,6 +14816,31 @@ def _materialize_soperator_mapping_chart_values(
                     return True
             return False
 
+        def _stale_profile_generated_nodeset(item: Mapping[str, Any]) -> bool:
+            if install_mode == _SOPERATOR_INSTALL_MODE_ONBOARD_EXISTING_CLUSTER:
+                return False
+            name = _non_empty_text(item.get("name"))
+            if not name or name in generated_names:
+                return False
+            if not any(
+                name.startswith(f"{template_name}-")
+                for template_name in selected_template_names
+                if template_name.startswith("worker")
+            ):
+                return False
+            if any(group_key and group_key in name for group_key in mapped_group_keys):
+                return True
+            node_selector = item.get("nodeSelector")
+            if isinstance(node_selector, Mapping):
+                selector_values = {
+                    _non_empty_text(value)
+                    for value in node_selector.values()
+                    if _non_empty_text(value)
+                }
+                if selector_values.intersection(mapped_group_keys):
+                    return True
+            return False
+
         preserved = [
             item
             for item in existing_nodesets_list
@@ -14566,6 +14849,7 @@ def _materialize_soperator_mapping_chart_values(
             and _non_empty_text(item.get("name")) not in generated_names
             and _non_empty_text(item.get("name")) not in replaced_template_names
             and not _stale_onboarding_nodeset(item)
+            and not _stale_profile_generated_nodeset(item)
             and not (
                 _non_empty_text(item.get("name")) in all_profile_template_names
                 and _non_empty_text(item.get("name")) not in selected_template_names
@@ -14622,7 +14906,7 @@ def _materialize_soperator_worker_node_groups(
         )
         if not nodeset_name:
             continue
-        key_prefix = _non_empty_text(raw_worker.get("node_group_key_prefix")) or nodeset_name
+        key_prefix = _non_empty_text(raw_worker.get("node_group_prefix")) or nodeset_name
         default_total_nodes = _required_profile_positive_int(
             raw_worker.get("default_total_nodes"),
             field=f"worker_nodesets[{nodeset_name}].default_total_nodes",
@@ -14768,6 +15052,7 @@ def _materialize_soperator_mk8s_profile(
     inputs: dict[str, Any],
     profile: Mapping[str, Any],
     values: Mapping[str, Any],
+    placements: Mapping[str, list[str]],
     install_mode: str,
     replace_profile_managed_groups: bool = False,
 ) -> None:
@@ -14776,26 +15061,26 @@ def _materialize_soperator_mk8s_profile(
     _merge_missing_mapping(inputs, defaults)
 
     node_groups = inputs.setdefault("node_groups", {})
-    explicit_mapping = _soperator_values_node_group_mapping(values)
+    explicit_placements = dict(placements)
     existing_mode = install_mode == _SOPERATOR_INSTALL_MODE_ONBOARD_EXISTING_CLUSTER
     if not isinstance(node_groups, dict):
         return
-    if replace_profile_managed_groups and not existing_mode:
+    if not existing_mode:
         _soperator_prune_stale_profile_node_groups(inputs=inputs, profile=profile)
         _soperator_prune_stale_profile_gpu_clusters(inputs=inputs, profile=profile)
     if existing_mode or (
         not replace_profile_managed_groups
-        and explicit_mapping
+        and explicit_placements
         and _soperator_has_external_node_groups(
             inputs=inputs,
             profile=profile,
         )
     ):
-        if explicit_mapping:
+        if explicit_placements:
             _materialize_soperator_existing_node_group_mapping(
                 inputs=inputs,
                 profile=profile,
-                mapping=explicit_mapping,
+                mapping=explicit_placements,
             )
         return
 
@@ -15135,7 +15420,8 @@ def _materialize_soperator_component_defaults(payload: dict[str, Any]) -> bool:
     ]
 
     soperator_values_by_target: dict[str, dict[str, Any]] = {}
-    generated_node_group_mapping_by_target: dict[str, bool] = {}
+    soperator_placements_by_target: dict[str, dict[str, list[str]]] = {}
+    generated_placements_by_target: dict[str, bool] = {}
     for row in apps_rows:
         if not isinstance(row, dict) or not bool(row.get("enabled", False)):
             continue
@@ -15152,19 +15438,22 @@ def _materialize_soperator_component_defaults(payload: dict[str, Any]) -> bool:
             values.setdefault("partitionProfile", _default_soperator_partition_profile_name())
             values.setdefault("topologyProfile", _default_soperator_topology_profile_name())
             soperator_values_by_target[target_ref] = values
-            generated_mapping = _soperator_node_group_mapping_matches_generated_profile(
-                values=values,
+            placements = _soperator_row_placements(row)
+            soperator_placements_by_target[target_ref] = placements
+            generated_placements = _soperator_placements_match_generated_profile(
+                row=row,
                 inputs=mk8s_inputs_by_target.get(target_ref, {}),
             )
-            generated_node_group_mapping_by_target[target_ref] = generated_mapping
-            if not _soperator_values_node_group_mapping(values):
-                inferred_mapping = _soperator_infer_node_group_mapping(
+            generated_placements_by_target[target_ref] = generated_placements
+            if not placements:
+                inferred_placements = _soperator_infer_placements(
                     inputs=mk8s_inputs_by_target.get(target_ref, {}),
                     profile=profile_by_target.get(target_ref, {}),
                 )
-                _soperator_set_node_group_mapping(values, inferred_mapping)
-                if inferred_mapping:
-                    generated_node_group_mapping_by_target[target_ref] = True
+                _soperator_set_app_placements(row, inferred_placements)
+                if inferred_placements:
+                    soperator_placements_by_target[target_ref] = inferred_placements
+                    generated_placements_by_target[target_ref] = True
         if row != before:
             changed = True
 
@@ -15182,11 +15471,12 @@ def _materialize_soperator_component_defaults(payload: dict[str, Any]) -> bool:
                 inputs=inputs,
                 profile=profile_by_target.get(target_ref, {}),
                 values=soperator_values_by_target.get(target_ref, {}),
+                placements=soperator_placements_by_target.get(target_ref, {}),
                 install_mode=install_mode_by_target.get(
                     target_ref,
                     _default_soperator_install_mode(),
                 ),
-                replace_profile_managed_groups=generated_node_group_mapping_by_target.get(
+                replace_profile_managed_groups=generated_placements_by_target.get(
                     target_ref,
                     False,
                 ),
@@ -15219,15 +15509,17 @@ def _materialize_soperator_component_defaults(payload: dict[str, Any]) -> bool:
         values = row.setdefault("values", {})
         if isinstance(values, dict):
             _delete_mapping_path_value(values, _SOPERATOR_ACTIVECHECKS_READY_PARTITION_PATH)
-            inferred_mapping = _soperator_infer_node_group_mapping(
+            inferred_placements = _soperator_infer_placements(
                 inputs=mk8s_inputs_by_target.get(target_ref, {}),
                 profile=profile_by_target.get(target_ref, {}),
             )
-            _soperator_set_node_group_mapping(
-                values,
-                inferred_mapping,
-                replace=generated_node_group_mapping_by_target.get(target_ref, False),
+            _soperator_set_app_placements(
+                row,
+                inferred_placements,
+                replace=generated_placements_by_target.get(target_ref, False),
             )
+            placements = _soperator_row_placements(row)
+            soperator_placements_by_target[target_ref] = placements
             chart_profile = _profile_mapping(
                 _profile_mapping(profile_by_target.get(target_ref, {}), "chart"),
                 "values",
@@ -15296,6 +15588,7 @@ def _materialize_soperator_component_defaults(payload: dict[str, Any]) -> bool:
                 values=values,
                 profile=profile_by_target.get(target_ref, {}),
                 inputs=mk8s_inputs_by_target.get(target_ref, {}),
+                placements=placements,
                 install_mode=install_mode,
                 preserve_existing_worker_nodesets=preserve_adopted_worker_nodesets,
             )
@@ -19035,6 +19328,7 @@ _APP_SKIP_PREVIEW_TOP_LEVEL_KEYS = (
     "version",
     _SOPERATOR_INSTALL_MODE_FIELD,
     "profile",
+    "placements",
 )
 _APP_SKIP_PREVIEW_VALUES_PRIORITY = (
     "clusterName",
@@ -19042,7 +19336,6 @@ _APP_SKIP_PREVIEW_VALUES_PRIORITY = (
     "topologyProfile",
     "volume",
     "sfs",
-    "nodeGroupMapping",
     "nodesets",
     "slurmNodes",
     "k8sNodeFilters",
@@ -19492,7 +19785,7 @@ def _skip_soperator_install_mode_dependent_prompt(
         return False
     if full_path_label.endswith(f".{_SOPERATOR_INSTALL_MODE_FIELD}"):
         return True
-    if ".values.nodeGroupMapping." not in full_path_label:
+    if ".placements." not in full_path_label:
         return False
     component_prefix = _dynamic_component_prefix(entry=entry, full_path_label=full_path_label)
     if not component_prefix:
@@ -31347,6 +31640,12 @@ def _write_post_flux_docs(path: Path, docs: Sequence[Mapping[str, Any]]) -> None
     )
 
 
+def _is_kubernetes_manifest_doc(doc: object) -> bool:
+    if not isinstance(doc, Mapping):
+        return False
+    return bool(str(doc.get("apiVersion") or "").strip() and str(doc.get("kind") or "").strip())
+
+
 def _coerce_priority_class_value(value: Any) -> int | None:
     if isinstance(value, bool) or value is None:
         return None
@@ -31916,7 +32215,7 @@ def _apply_post_flux_manifest(manifest_path: Path, *, env: Mapping[str, str]) ->
     docs = [
         doc
         for doc in yaml.safe_load_all(manifest_path.read_text(encoding="utf-8"))
-        if isinstance(doc, dict)
+        if _is_kubernetes_manifest_doc(doc)
     ]
     if not docs:
         return

@@ -540,7 +540,11 @@ def _binding_output_expression(*, module_name: str, source_path: str, binding: A
 
 def _node_group_sfs_filesystem_keys(group_key: str, group: dict[str, Any]) -> list[str]:
     filesystem_keys: list[str] = []
-    workload = str(group.get("workload") or group.get("nodeset_name") or group_key).strip()
+    workload = str(
+        group.get("workload")
+        or group.get("placement_name")
+        or group_key
+    ).strip()
     if bool(group.get("jail", False)):
         filesystem_keys.append("jail")
     if workload == "controller" or group_key == "controller":

@@ -531,7 +531,7 @@ def test_soperator_onboarding_analyzer_accepts_fallback_selector_labels() -> Non
     )
 
     assert not any(
-        finding.layer == "role-mapping" and finding.status == "selector-required"
+        finding.layer == "placements" and finding.status == "selector-required"
         for finding in report.findings
     )
 
@@ -549,7 +549,7 @@ def test_soperator_onboarding_analyzer_accepts_nebius_node_group_id_selector_lab
     )
 
     assert not any(
-        finding.layer == "role-mapping" and finding.status == "selector-required"
+        finding.layer == "placements" and finding.status == "selector-required"
         for finding in report.findings
     )
 
@@ -777,7 +777,7 @@ def test_soperator_onboarding_analyzer_reuses_target_compatible_legacy_layout() 
         for finding in report.findings
     )
     assert any(
-        finding.layer == "role-mapping" and finding.status == "target-compatible"
+        finding.layer == "placements" and finding.status == "target-compatible"
         for finding in report.findings
     )
     assert [phase.id for phase in report.migration_plan] == [

@@ -151,7 +151,7 @@ _SOPERATOR_DISABLED_BOOL_WIZARD_FIELDS = (
     "values.sssd.enabled",
 )
 
-_SOPERATOR_NODE_GROUP_MAPPING_ROLES = (
+_SOPERATOR_PLACEMENT_ROLES = (
     "system",
     "controller",
     "login",
@@ -176,16 +176,16 @@ def _materialized_string_wizard_field(default: str) -> dict[str, Any]:
     }
 
 
-def _soperator_node_group_mapping_fields() -> dict[str, dict[str, Any]]:
+def _soperator_placement_fields() -> dict[str, dict[str, Any]]:
     fields: dict[str, dict[str, Any]] = {}
-    for role in _SOPERATOR_NODE_GROUP_MAPPING_ROLES:
+    for role in _SOPERATOR_PLACEMENT_ROLES:
         provider_spec = {
             "from": "soperator_node_groups",
             "args": {
                 "role": role,
             },
         }
-        fields[f"values.nodeGroupMapping.{role}"] = {
+        fields[f"placements.{role}"] = {
             "write_default_to_config": True,
             "type_hint": "list(string)",
             "default_from": copy.deepcopy(provider_spec),
@@ -297,7 +297,7 @@ def _soperator_wizard_profile() -> dict[str, dict[str, Any]]:
         "values.soperator-backup-config.prune.schedule": _materialized_string_wizard_field(
             "@daily-random"
         ),
-        **_soperator_node_group_mapping_fields(),
+        **_soperator_placement_fields(),
     }
     fields.update(
         {

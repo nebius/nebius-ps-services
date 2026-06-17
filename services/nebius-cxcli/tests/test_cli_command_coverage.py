@@ -3133,8 +3133,8 @@ def test_soperator_upgrade_apply_runs_soperator_preflight_and_postflight(
     )
     monkeypatch.setattr(
         cli,
-        "_verify_helm_chart_upgrade_ready",
-        lambda *_args, **_kwargs: calls.append("helm-ready"),
+        "_verify_soperator_static_upgrade_ready",
+        lambda *_args, **_kwargs: calls.append("soperator-static-ready"),
     )
     monkeypatch.setattr(
         cli,
@@ -3166,7 +3166,7 @@ def test_soperator_upgrade_apply_runs_soperator_preflight_and_postflight(
             (paths.generated_dir,),
             {"auto_auth_bootstrap": True, "target_ref": "mk8s", "all_targets": False},
         ),
-        "helm-ready",
+        "soperator-static-ready",
         ("soperator-validation", "Postflight"),
     ]
 
@@ -3233,8 +3233,8 @@ def test_soperator_upgrade_checkpoints_activechecks_suspend_and_restore(
     )
     monkeypatch.setattr(
         cli,
-        "_verify_helm_chart_upgrade_ready",
-        lambda *_args, **_kwargs: calls.append("helm-ready"),
+        "_verify_soperator_static_upgrade_ready",
+        lambda *_args, **_kwargs: calls.append("soperator-static-ready"),
     )
     monkeypatch.setattr(
         cli,
@@ -3271,7 +3271,7 @@ def test_soperator_upgrade_checkpoints_activechecks_suspend_and_restore(
             (paths.generated_dir,),
             {"auto_auth_bootstrap": True, "target_ref": "mk8s", "all_targets": False},
         ),
-        "helm-ready",
+        "soperator-static-ready",
         "live-activechecks-suspend",
         ("soperator-validation", "Preflight"),
         "render",
@@ -3281,7 +3281,7 @@ def test_soperator_upgrade_checkpoints_activechecks_suspend_and_restore(
             (paths.generated_dir,),
             {"auto_auth_bootstrap": True, "target_ref": "mk8s", "all_targets": False},
         ),
-        "helm-ready",
+        "soperator-static-ready",
         ("soperator-validation", "Postflight"),
         "render",
         ("validate", "Validate rendered Soperator ActiveChecks restore"),
@@ -3290,7 +3290,7 @@ def test_soperator_upgrade_checkpoints_activechecks_suspend_and_restore(
             (paths.generated_dir,),
             {"auto_auth_bootstrap": True, "target_ref": "mk8s", "all_targets": False},
         ),
-        "helm-ready",
+        "soperator-static-ready",
     ]
     checkpoint_path = (
         paths.project_dir
@@ -3391,8 +3391,8 @@ def test_soperator_upgrade_restores_activechecks_after_failed_upgrade(
     )
     monkeypatch.setattr(
         cli,
-        "_verify_helm_chart_upgrade_ready",
-        lambda *_args, **_kwargs: calls.append("helm-ready"),
+        "_verify_soperator_static_upgrade_ready",
+        lambda *_args, **_kwargs: calls.append("soperator-static-ready"),
     )
     monkeypatch.setattr(cli, "_run_soperator_upgrade_validation_phase", validation_phase)
     monkeypatch.setattr(
@@ -3424,7 +3424,7 @@ def test_soperator_upgrade_restores_activechecks_after_failed_upgrade(
             (paths.generated_dir,),
             {"auto_auth_bootstrap": True, "target_ref": "mk8s", "all_targets": False},
         ),
-        "helm-ready",
+        "soperator-static-ready",
     ]
     checkpoint_path = (
         paths.project_dir
@@ -3513,8 +3513,8 @@ def test_soperator_upgrade_restores_activechecks_after_suspend_validation_failur
     )
     monkeypatch.setattr(
         cli,
-        "_verify_helm_chart_upgrade_ready",
-        lambda *_args, **_kwargs: calls.append("helm-ready"),
+        "_verify_soperator_static_upgrade_ready",
+        lambda *_args, **_kwargs: calls.append("soperator-static-ready"),
     )
     monkeypatch.setattr(
         cli,
@@ -3548,7 +3548,7 @@ def test_soperator_upgrade_restores_activechecks_after_suspend_validation_failur
             (paths.generated_dir,),
             {"auto_auth_bootstrap": True, "target_ref": "mk8s", "all_targets": False},
         ),
-        "helm-ready",
+        "soperator-static-ready",
     ]
     checkpoint_path = (
         paths.project_dir
@@ -3673,8 +3673,8 @@ def test_soperator_upgrade_resumes_pending_activechecks_restore_from_checkpoint(
     )
     monkeypatch.setattr(
         cli,
-        "_verify_helm_chart_upgrade_ready",
-        lambda *_args, **_kwargs: calls.append("helm-ready"),
+        "_verify_soperator_static_upgrade_ready",
+        lambda *_args, **_kwargs: calls.append("soperator-static-ready"),
     )
     monkeypatch.setattr(
         cli,
@@ -3711,7 +3711,7 @@ def test_soperator_upgrade_resumes_pending_activechecks_restore_from_checkpoint(
             (paths.generated_dir,),
             {"auto_auth_bootstrap": True, "target_ref": "mk8s", "all_targets": False},
         ),
-        "helm-ready",
+        "soperator-static-ready",
         "live-activechecks-suspend",
         ("soperator-validation", "Preflight"),
         ("soperator-validation", "Postflight"),
@@ -3722,7 +3722,7 @@ def test_soperator_upgrade_resumes_pending_activechecks_restore_from_checkpoint(
             (paths.generated_dir,),
             {"auto_auth_bootstrap": True, "target_ref": "mk8s", "all_targets": False},
         ),
-        "helm-ready",
+        "soperator-static-ready",
     ]
     checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
     event_names = [event["event"] for event in checkpoint["events"]]
@@ -3842,8 +3842,8 @@ def test_soperator_upgrade_resumed_activechecks_restore_survives_preflight_failu
     )
     monkeypatch.setattr(
         cli,
-        "_verify_helm_chart_upgrade_ready",
-        lambda *_args, **_kwargs: calls.append("helm-ready"),
+        "_verify_soperator_static_upgrade_ready",
+        lambda *_args, **_kwargs: calls.append("soperator-static-ready"),
     )
     monkeypatch.setattr(
         cli,
@@ -3881,7 +3881,7 @@ def test_soperator_upgrade_resumed_activechecks_restore_survives_preflight_failu
             (paths.generated_dir,),
             {"auto_auth_bootstrap": True, "target_ref": "mk8s", "all_targets": False},
         ),
-        "helm-ready",
+        "soperator-static-ready",
     ]
     checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
     assert checkpoint["status"] == "failed"
@@ -4332,6 +4332,11 @@ def test_soperator_upgrade_postflight_refreshes_deploy_report(
 
     monkeypatch.setattr(
         cli,
+        "_ensure_terraform_backend_ready",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        cli,
         "_prepare_cluster_handoff_kube_env",
         lambda *_args, **_kwargs: {"KUBECONFIG": "fake"},
     )
@@ -4420,6 +4425,102 @@ def test_upgrade_helm_chart_readiness_requires_generated_target(
             {"deploy": {"targets": []}},
             plan,
         )
+
+
+def test_soperator_static_upgrade_readiness_uses_chart_labels_without_helm(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    paths = _fake_paths(tmp_path)
+    manifest = {
+        "deploy": {
+            "targets": [_mk8s_target(paths)],
+            "validations": [
+                {
+                    "kind": cli.SOPERATOR_CLUSTER_VALIDATION_KIND,
+                    "target_ref": "mk8s",
+                    "namespace": "soperator",
+                    "cluster_name": "mk8s",
+                }
+            ],
+        }
+    }
+    plan = cli._HelmChartUpgradePlan(
+        target=cli._HelmChartUpgradeTarget(
+            selector="apps:soperator@mk8s",
+            chart_id="soperator",
+            target_ref="mk8s",
+        ),
+        instance_id="mk8s",
+        namespace="soperator",
+        release_name="soperator",
+        current_version="4.0.1-ps.2",
+        target_version="4.0.2-ps.1",
+    )
+    calls: list[list[str]] = []
+
+    monkeypatch.setattr(
+        cli,
+        "_ensure_terraform_backend_ready",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        cli,
+        "_prepare_cluster_handoff_kube_env",
+        lambda *_args, **_kwargs: {"KUBECONFIG": "fake"},
+    )
+
+    def fake_run(args: list[str], **_kwargs: Any) -> subprocess.CompletedProcess[str]:
+        calls.append(list(args))
+        if "rollout" in args:
+            return subprocess.CompletedProcess(args, 0, "deployment rolled out", "")
+        payload = {
+            "metadata": {
+                "labels": {
+                    "helm.sh/chart": "soperator-4.0.2-ps.1",
+                }
+            }
+        }
+        return subprocess.CompletedProcess(args, 0, json.dumps(payload), "")
+
+    monkeypatch.setattr(cli.subprocess, "run", fake_run)
+
+    cli._verify_soperator_static_upgrade_ready(SimpleNamespace(), paths, manifest, plan)
+
+    assert calls[:3] == [
+        [
+            "kubectl",
+            "-n",
+            "soperator",
+            "rollout",
+            "status",
+            "deployment/soperator-manager",
+            "--timeout=10m",
+        ],
+        [
+            "kubectl",
+            "-n",
+            "soperator",
+            "get",
+            "deployment",
+            "soperator-manager",
+            "-o",
+            "json",
+        ],
+        [
+            "kubectl",
+            "-n",
+            "soperator",
+            "get",
+            "slurmcluster.slurm.nebius.ai",
+            "mk8s",
+            "-o",
+            "json",
+        ],
+    ]
+    assert calls[3][:7] == ["kubectl", "-n", "soperator", "exec", "login-0", "--", "bash"]
+    assert "scontrol update" in calls[3][-1]
+    assert not any(call and call[0] == "helm" for call in calls)
 
 
 def test_upgrade_os_image_config_only_guided_vm_dry_run_prompts_target_and_image(
@@ -18301,7 +18402,7 @@ def test_command_help_usage_labels_positional_target_types() -> None:
         normalized_create_help
     )
     assert "use `ext-soperator onboard` for existing Nebius MK8s targets" in normalized_create_help
-    assert "onboard-existing-cluster role-mapping install" not in normalized_create_help
+    assert "onboard-existing-cluster" not in normalized_create_help
     assert "complete production MK8s+SFS+Soperator cluster" in normalized_create_help
     assert "soperator [OPTIONS] COMMAND [ARGS]" in managed_soperator_help
     assert "Manage cxcli-managed Soperator deployments" in (
@@ -20636,7 +20737,8 @@ def test_soperator_selection_seeds_required_infra_and_defaults() -> None:
         assert filesystem["block_size_kib"] == 4
         assert filesystem["forbid_deletion"] is False
     assert payload["apps"]["charts"][0]["install_mode"] == "production-cluster"
-    soperator_values = payload["apps"]["charts"][0]["values"]
+    soperator_row = payload["apps"]["charts"][0]
+    soperator_values = soperator_row["values"]
     assert soperator_values["clusterName"] == "cluster1"
     assert soperator_values["mariadb-operator"]["installOperator"] is True
     assert soperator_values["populateJail"]["k8sNodeFilterName"] == "system"
@@ -20660,7 +20762,7 @@ def test_soperator_selection_seeds_required_infra_and_defaults() -> None:
     assert soperator_values["volume"]["controllerSpool"]["filestoreDeviceName"] == (
         "cluster1-controller-spool"
     )
-    assert soperator_values["nodeGroupMapping"]["worker"] == ["worker"]
+    assert soperator_row["placements"]["worker"] == ["worker"]
 
 
 def test_soperator_sfs_defaults_are_target_scoped_for_multi_target_rows() -> None:
@@ -21158,8 +21260,9 @@ def test_soperator_production_worker_count_shards_mk8s_groups_and_nodesets() -> 
         for group_key in worker_group_keys
     )
 
-    values = payload["apps"]["charts"][0]["values"]
-    assert values["nodeGroupMapping"]["worker"] == worker_group_keys
+    app_row = payload["apps"]["charts"][0]
+    values = app_row["values"]
+    assert app_row["placements"]["worker"] == worker_group_keys
     worker_nodesets = [
         item for item in values["nodesets"] if str(item.get("name", "")).startswith("worker-")
     ]
@@ -21236,8 +21339,9 @@ def test_soperator_production_worker_autoscaling_shards_mk8s_groups_and_nodesets
     }
     assert all("node_count" not in node_groups[group_key] for group_key in worker_group_keys)
 
-    values = payload["apps"]["charts"][0]["values"]
-    assert values["nodeGroupMapping"]["worker"] == worker_group_keys
+    app_row = payload["apps"]["charts"][0]
+    values = app_row["values"]
+    assert app_row["placements"]["worker"] == worker_group_keys
     worker_nodesets = [
         item for item in values["nodesets"] if str(item.get("name", "")).startswith("worker-")
     ]
@@ -21297,8 +21401,9 @@ def test_soperator_production_worker_autoscaling_allows_scale_to_zero() -> None:
     }
     assert "node_count" not in node_groups["worker"]
 
-    values = payload["apps"]["charts"][0]["values"]
-    assert values["nodeGroupMapping"]["worker"] == ["worker"]
+    app_row = payload["apps"]["charts"][0]
+    values = app_row["values"]
+    assert app_row["placements"]["worker"] == ["worker"]
     worker_nodeset = next(item for item in values["nodesets"] if item["name"] == "worker")
     assert worker_nodeset["replicas"] == 0
 
@@ -21358,8 +21463,9 @@ def test_soperator_production_disabled_worker_autoscaling_clears_stale_shards() 
     assert [key for key in node_groups if str(key).startswith("worker")] == ["worker"]
     assert node_groups["worker"]["node_count"] == 1
     assert "autoscaling" not in node_groups["worker"]
-    values = payload["apps"]["charts"][0]["values"]
-    assert values["nodeGroupMapping"]["worker"] == ["worker"]
+    app_row = payload["apps"]["charts"][0]
+    values = app_row["values"]
+    assert app_row["placements"]["worker"] == ["worker"]
     worker_nodeset = next(item for item in values["nodesets"] if item["name"] == "worker")
     assert worker_nodeset["replicas"] == 1
 
@@ -21762,16 +21868,17 @@ def test_soperator_cpu_profile_materializes_only_cpu_worker_nodeset() -> None:
     assert mk8s_inputs["node_groups"]["worker-cpu"]["node_count"] == 1
     assert mk8s_inputs["node_groups"]["worker-cpu"]["jail"] is True
 
-    soperator_values = payload["apps"]["charts"][0]["values"]
+    soperator_row = payload["apps"]["charts"][0]
+    soperator_values = soperator_row["values"]
     assert soperator_values["mariadb-operator"]["installOperator"] is True
     assert soperator_values["clusterType"] == "cpu"
     assert soperator_values["slurmNodes"]["accounting"]["enabled"] is True
     assert soperator_values["slurmNodes"]["accounting"]["mariadbOperator"]["enabled"] is True
-    assert soperator_values["nodeGroupMapping"] == {
-        "system": ["system"],
-        "controller": ["controller"],
-        "login": ["login"],
-        "accounting": ["accounting"],
+    assert soperator_row["placements"] == {
+        "system": "system",
+        "controller": "controller",
+        "login": "login",
+        "accounting": "accounting",
         "worker": ["worker-cpu"],
     }
     assert [node["name"] for node in soperator_values["nodesets"]] == ["worker-cpu"]
@@ -21854,6 +21961,10 @@ def test_soperator_mixed_profile_materializes_cpu_and_gpu_workers() -> None:
     assert soperator_values["clusterType"] == "gpu"
     assert soperator_values["slurmNodes"]["accounting"]["enabled"] is True
     assert soperator_values["slurmNodes"]["accounting"]["mariadbOperator"]["enabled"] is True
+    assert payload["apps"]["charts"][0]["placements"]["worker"] == [
+        "worker-cpu",
+        "worker-gpu",
+    ]
     assert [node["name"] for node in soperator_values["nodesets"]] == [
         "worker-cpu",
         "worker-gpu",
@@ -21959,8 +22070,9 @@ def test_soperator_onboarding_maps_external_mk8s_node_groups_without_creating_ro
     assert "gpu_clusters" not in mk8s_inputs
     assert payload["apps"]["charts"][0]["install_mode"] == "onboard-existing-cluster"
 
-    values = payload["apps"]["charts"][0]["values"]
-    assert values["nodeGroupMapping"] == {
+    app_row = payload["apps"]["charts"][0]
+    values = app_row["values"]
+    assert app_row["placements"] == {
         "system": ["cpu-a", "cpu-b"],
         "controller": ["cpu-a", "cpu-b"],
         "login": ["cpu-a", "cpu-b"],
@@ -22083,9 +22195,9 @@ def test_soperator_onboarding_preserves_live_mk8s_cluster_name_only_for_adoption
                     "instance_id": "cluster1",
                     "enabled": True,
                     "install_mode": "onboard-existing-cluster",
+                    "placements": {"worker": ["h100"]},
                     "values": {
                         "clusterName": "mk8s",
-                        "nodeGroupMapping": {"worker": ["h100"]},
                     },
                 }
             ]
@@ -22205,15 +22317,15 @@ def test_soperator_onboarding_preserves_adopted_worker_nodesets_with_partition_r
                     "instance_id": "cluster1",
                     "enabled": True,
                     "install_mode": "onboard-existing-cluster",
+                    "placements": {
+                        "system": "cpu-a",
+                        "controller": "cpu-a",
+                        "login": "cpu-a",
+                        "accounting": "cpu-a",
+                        "worker": ["gpu-a", "gpu-b"],
+                    },
                     "values": {
                         "clusterName": "mk8s",
-                        "nodeGroupMapping": {
-                            "system": ["cpu-a"],
-                            "controller": ["cpu-a"],
-                            "login": ["cpu-a"],
-                            "accounting": ["cpu-a"],
-                            "worker": ["gpu-a", "gpu-b"],
-                        },
                         "nodesets": [
                             {
                                 "name": "worker-cpu",
@@ -22466,7 +22578,8 @@ def test_soperator_onboarding_uses_discovered_selector_labels_for_external_group
                     "instance_id": "cluster1",
                     "enabled": True,
                     "install_mode": "onboard-existing-cluster",
-                    "values": {"nodeGroupMapping": {"worker": ["h100"]}},
+                    "placements": {"worker": ["h100"]},
+                    "values": {},
                 }
             ]
         },
@@ -22518,7 +22631,8 @@ def test_soperator_onboarding_uses_fallback_live_labels_when_selector_is_absent(
                     "instance_id": "cluster1",
                     "enabled": True,
                     "install_mode": "onboard-existing-cluster",
-                    "values": {"nodeGroupMapping": {"worker": ["fallback"]}},
+                    "placements": {"worker": ["fallback"]},
+                    "values": {},
                 }
             ]
         },
@@ -22572,7 +22686,8 @@ def test_soperator_onboarding_uses_live_resource_labels_for_external_groups() ->
                     "instance_id": "cluster1",
                     "enabled": True,
                     "install_mode": "onboard-existing-cluster",
-                    "values": {"nodeGroupMapping": {"worker": ["h100"]}},
+                    "placements": {"worker": ["h100"]},
+                    "values": {},
                 }
             ]
         },
@@ -22748,7 +22863,7 @@ def test_soperator_guided_sssd_helper_is_render_only_profile_value() -> None:
     )
 
 
-def test_soperator_role_mapping_derives_tolerations_from_mk8s_taints() -> None:
+def test_soperator_placements_derive_tolerations_from_mk8s_taints() -> None:
     payload = {
         "infra": {
             "components": [
@@ -22820,25 +22935,25 @@ def test_soperator_role_mapping_derives_tolerations_from_mk8s_taints() -> None:
                     "id": "soperator",
                     "instance_id": "cluster1",
                     "enabled": True,
-                    "values": {
-                        "rebooter": {
-                            "tolerations": [
-                                {
-                                    "key": "custom.nebius.ai/reboot",
+                        "placements": {
+                            "system": "system",
+                            "controller": "controller",
+                            "login": "login",
+                            "accounting": "accounting",
+                            "worker": ["worker"],
+                        },
+                        "values": {
+                            "rebooter": {
+                                "tolerations": [
+                                    {
+                                        "key": "custom.nebius.ai/reboot",
                                     "operator": "Exists",
                                     "effect": "NoSchedule",
                                 }
                             ]
+                            },
                         },
-                        "nodeGroupMapping": {
-                            "system": ["system"],
-                            "controller": ["controller"],
-                            "login": ["login"],
-                            "accounting": ["accounting"],
-                            "worker": ["worker"],
-                        },
-                    },
-                }
+                    }
             ]
         },
     }
@@ -22907,7 +23022,7 @@ def test_soperator_role_mapping_derives_tolerations_from_mk8s_taints() -> None:
     ]
 
 
-def test_soperator_role_mapping_preserves_explicit_node_group_sfs_keys() -> None:
+def test_soperator_placements_preserve_explicit_node_group_sfs_keys() -> None:
     payload = {
         "infra": {
             "components": [
@@ -22948,18 +23063,17 @@ def test_soperator_role_mapping_preserves_explicit_node_group_sfs_keys() -> None
         "apps": {
             "charts": [
                 {
-                    "id": "soperator",
-                    "instance_id": "cluster1",
-                    "enabled": True,
-                    "values": {
-                        "nodeGroupMapping": {
-                            "controller": ["controller"],
+                        "id": "soperator",
+                        "instance_id": "cluster1",
+                        "enabled": True,
+                        "placements": {
+                            "controller": "controller",
                             "worker": ["worker"],
-                        }
-                    },
-                }
-            ]
-        },
+                        },
+                        "values": {},
+                    }
+                ]
+            },
     }
 
     assert cli._materialize_soperator_component_defaults(payload) is True
@@ -23276,11 +23390,12 @@ def test_soperator_profile_switch_replaces_generated_default_profile_values() ->
     assert app_row["profile"] == "nebius-gpu-v1"
     assert app_row["values"]["partitionProfile"] == "shape-default"
     assert app_row["values"]["topologyProfile"] == "disabled"
-    assert app_row["values"]["nodeGroupMapping"]["worker"] == ["worker"]
+    assert app_row["placements"]["worker"] == ["worker"]
 
     app_row["profile"] = "nebius-mixed-v1"
     app_row["values"]["partitionProfile"] = "with-h100-infiniband-debug-long"
     app_row["values"]["topologyProfile"] = "nebius-nvl-rack-v1"
+    app_row["placements"]["worker"] = ["worker-cpu", "worker-gpu"]
 
     assert cli._materialize_soperator_component_defaults(payload) is True
 
@@ -23294,11 +23409,16 @@ def test_soperator_profile_switch_replaces_generated_default_profile_values() ->
         "worker-gpu",
     }
     values = app_row["values"]
-    assert values["nodeGroupMapping"]["worker"] == ["worker-gpu"]
+    assert app_row["placements"]["worker"] == ["worker-cpu", "worker-gpu"]
     assert [node["name"] for node in values["nodesets"]] == [
         "worker-cpu",
         "worker-gpu",
     ]
+    assert "worker" not in {node["name"] for node in values["nodesets"]}
+    assert not any(
+        str(node["name"]).startswith(("worker-cpu-worker-", "worker-gpu-worker-"))
+        for node in values["nodesets"]
+    )
     assert [partition["name"] for partition in values["partitionConfiguration"]["partitions"]] == [
         "cpu",
         "gpu",

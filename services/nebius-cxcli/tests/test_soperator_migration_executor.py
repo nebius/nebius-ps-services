@@ -183,14 +183,21 @@ def test_node_group_rollout_timeout_uses_live_status_count() -> None:
     )
 
 
-def _payload(*, include_role_mapping: bool = False) -> dict[str, Any]:
+def _payload(*, include_placements: bool = False) -> dict[str, Any]:
     values: dict[str, Any] = {}
-    if include_role_mapping:
-        values["nodeGroupMapping"] = {
-            "system": ["cpu-pool"],
-            "controller": ["cpu-pool"],
-            "login": ["cpu-pool"],
-            "accounting": ["cpu-pool"],
+    soperator_row: dict[str, Any] = {
+        "id": "soperator",
+        "instance_id": "external-cluster",
+        "enabled": True,
+        "install_mode": "onboard-existing-cluster",
+        "values": values,
+    }
+    if include_placements:
+        soperator_row["placements"] = {
+            "system": "cpu-pool",
+            "controller": "cpu-pool",
+            "login": "cpu-pool",
+            "accounting": "cpu-pool",
             "worker": ["gpu-pool"],
         }
     payload: dict[str, Any] = {
@@ -203,13 +210,7 @@ def _payload(*, include_role_mapping: bool = False) -> dict[str, Any]:
         },
         "apps": {
             "charts": [
-                {
-                    "id": "soperator",
-                    "instance_id": "external-cluster",
-                    "enabled": True,
-                    "install_mode": "onboard-existing-cluster",
-                    "values": values,
-                },
+                soperator_row,
                 {
                     "id": "nvidia-gpu-operator",
                     "instance_id": "external-cluster",
@@ -1654,7 +1655,7 @@ def test_execute_quota_preflight_blocks_before_mutation(
         execute_soperator_migration(
             config_path=tmp_path / "config.yaml",
             target_ref="external-cluster",
-            payload=_payload(include_role_mapping=True),
+            payload=_payload(include_placements=True),
             source_report=_source_report(snapshot),
             snapshot_collector=lambda *, kube_context: snapshot,
             approved=True,
@@ -1685,7 +1686,7 @@ def test_quota_preflight_does_not_count_preserved_worker_groups(
     monkeypatch.setattr(migration, "estimate_mk8s_quota_requirements", _record_quota_inputs)
 
     requirements, gaps, lines = migration._new_target_node_group_quota_requirements(
-        payload=_payload(include_role_mapping=True),
+        payload=_payload(include_placements=True),
         target_ref="external-cluster",
         source_report=_source_report(snapshot),
         worker_node_groups=("gpu-pool",),
@@ -1716,7 +1717,7 @@ def test_worker_safe_surge_quota_preflight_counts_active_wave(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     snapshot = _snapshot_with_compute_source()
-    payload = _payload(include_role_mapping=True)
+    payload = _payload(include_placements=True)
     onboarding = payload["deploy"]["targets"][0]["soperator_onboarding"]  # type: ignore[index]
     assert isinstance(onboarding, dict)
     rollout = migration.resolve_external_node_template_rollout(
@@ -4361,7 +4362,7 @@ def test_execute_external_node_template_blocks_nonempty_slurm_queue_before_mutat
         execute_soperator_migration(
             config_path=tmp_path / "config.yaml",
             target_ref="external-cluster",
-            payload=_payload(include_role_mapping=True),
+            payload=_payload(include_placements=True),
             source_report=_source_report(snapshot),
             snapshot_collector=lambda *, kube_context: snapshot,
             approved=True,
@@ -4619,7 +4620,7 @@ def test_execute_auto_selects_console_worker_node_group_names_from_live_inventor
         _source_worker_nodeset("worker-gpu", gpu=True),
     ]
     source_report = _source_report(snapshot)
-    payload = _payload(include_role_mapping=True)
+    payload = _payload(include_placements=True)
     target = payload["deploy"]["targets"][0]  # type: ignore[index]
     assert isinstance(target, dict)
     target["cluster_id"] = "cluster-123"
@@ -5539,7 +5540,7 @@ def test_final_cutover_reconcile_checks_preserved_worker_node_config() -> None:
             }
         }
     }
-    payload = _payload(include_role_mapping=True)
+    payload = _payload(include_placements=True)
     source_report = _source_report(snapshot)
     stale_runner = _FakeCommandRunner(
         live_nodesets={
@@ -5709,7 +5710,7 @@ def test_execute_emits_phase_aware_status_for_storage_and_compute(tmp_path: Path
     result = execute_soperator_migration(
         config_path=tmp_path / "config.yaml",
         target_ref="external-cluster",
-        payload=_payload(include_role_mapping=True),
+        payload=_payload(include_placements=True),
         source_report=source_report,
         snapshot_collector=lambda *, kube_context: snapshot,
         approved=True,
@@ -6120,7 +6121,7 @@ def test_execute_does_not_attach_sfs_to_unmapped_node_groups(tmp_path: Path) -> 
     execute_soperator_migration(
         config_path=tmp_path / "config.yaml",
         target_ref="external-cluster",
-        payload=_payload(include_role_mapping=True),
+        payload=_payload(include_placements=True),
         source_report=_source_report(snapshot),
         snapshot_collector=lambda *, kube_context: snapshot,
         approved=True,
@@ -6303,7 +6304,7 @@ def test_execute_migrates_compute_when_slurm_resources_exist(tmp_path: Path) -> 
         },
     ]
     source_report = _source_report(snapshot)
-    payload = _payload(include_role_mapping=True)
+    payload = _payload(include_placements=True)
     chart_values = payload["apps"]["charts"][0]["values"]  # type: ignore[index]
     assert isinstance(chart_values, dict)
     chart_values["nodesets"] = [
@@ -6645,7 +6646,7 @@ def test_execute_recovers_partial_cutover_without_login_pod(tmp_path: Path) -> N
     result = execute_soperator_migration(
         config_path=tmp_path / "config.yaml",
         target_ref="external-cluster",
-        payload=_payload(include_role_mapping=True),
+        payload=_payload(include_placements=True),
         source_report=source_report,
         snapshot_collector=lambda *, kube_context: snapshot,
         approved=True,
@@ -6700,7 +6701,7 @@ def test_execute_blocks_incompatible_existing_target_node_group(tmp_path: Path) 
     result = execute_soperator_migration(
         config_path=tmp_path / "config.yaml",
         target_ref="external-cluster",
-        payload=_payload(include_role_mapping=True),
+        payload=_payload(include_placements=True),
         source_report=source_report,
         snapshot_collector=lambda *, kube_context: snapshot,
         approved=True,
@@ -6786,7 +6787,7 @@ def test_completed_compute_reconcile_blocks_until_worker_nodesets_are_ready(
     ):
         migration._reconcile_completed_compute_cutover(
             checkpoint=checkpoint,
-            payload=_payload(include_role_mapping=True),
+            payload=_payload(include_placements=True),
             source_report=_source_report(snapshot),
             live_snapshot=snapshot,
             target_ref="external-cluster",
@@ -6828,7 +6829,7 @@ def test_execute_clears_interrupted_pending_helm_operation(tmp_path: Path) -> No
     result = execute_soperator_migration(
         config_path=tmp_path / "config.yaml",
         target_ref="external-cluster",
-        payload=_payload(include_role_mapping=True),
+        payload=_payload(include_placements=True),
         source_report=_source_report(snapshot),
         snapshot_collector=lambda *, kube_context: snapshot,
         approved=True,
@@ -6898,7 +6899,7 @@ def test_execute_retries_soperator_helm_upgrade_while_webhook_starts(
     result = execute_soperator_migration(
         config_path=tmp_path / "config.yaml",
         target_ref="external-cluster",
-        payload=_payload(include_role_mapping=True),
+        payload=_payload(include_placements=True),
         source_report=_source_report(snapshot),
         snapshot_collector=lambda *, kube_context: snapshot,
         approved=True,
@@ -6939,7 +6940,7 @@ def test_execute_reconciles_completed_compute_cutover_cleanup(tmp_path: Path) ->
     execute_soperator_migration(
         config_path=config_path,
         target_ref="external-cluster",
-        payload=_payload(include_role_mapping=True),
+        payload=_payload(include_placements=True),
         source_report=source_report,
         snapshot_collector=lambda *, kube_context: snapshot,
         approved=True,
@@ -6959,7 +6960,7 @@ def test_execute_reconciles_completed_compute_cutover_cleanup(tmp_path: Path) ->
     result = execute_soperator_migration(
         config_path=config_path,
         target_ref="external-cluster",
-        payload=_payload(include_role_mapping=True),
+        payload=_payload(include_placements=True),
         source_report=source_report,
         snapshot_collector=lambda *, kube_context: snapshot,
         command_runner=runner,
@@ -7039,7 +7040,7 @@ def test_execute_adopts_existing_helm_owned_resource_conflict(tmp_path: Path) ->
     result = execute_soperator_migration(
         config_path=tmp_path / "config.yaml",
         target_ref="external-cluster",
-        payload=_payload(include_role_mapping=True),
+        payload=_payload(include_placements=True),
         source_report=_source_report(snapshot),
         snapshot_collector=lambda *, kube_context: snapshot,
         approved=True,
@@ -7109,7 +7110,7 @@ def test_execute_checkpoints_created_node_groups_before_helm_failure(tmp_path: P
         execute_soperator_migration(
             config_path=config_path,
             target_ref="external-cluster",
-            payload=_payload(include_role_mapping=True),
+            payload=_payload(include_placements=True),
             source_report=_source_report(snapshot),
             snapshot_collector=lambda *, kube_context: snapshot,
             approved=True,
@@ -7166,7 +7167,7 @@ def test_execute_allows_target_version_after_mutating_checkpoint_progress(tmp_pa
         execute_soperator_migration(
             config_path=config_path,
             target_ref="external-cluster",
-            payload=_payload(include_role_mapping=True),
+            payload=_payload(include_placements=True),
             source_report=source_report,
             snapshot_collector=lambda *, kube_context: snapshot,
             approved=True,
@@ -7180,7 +7181,7 @@ def test_execute_allows_target_version_after_mutating_checkpoint_progress(tmp_pa
     result = execute_soperator_migration(
         config_path=config_path,
         target_ref="external-cluster",
-        payload=_payload(include_role_mapping=True),
+        payload=_payload(include_placements=True),
         source_report=source_report,
         snapshot_collector=lambda *, kube_context: live_snapshot,
         approved=True,

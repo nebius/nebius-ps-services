@@ -19,6 +19,7 @@ The short version:
 - [Big Picture Flow](#big-picture-flow)
 - [Core Concepts And Architecture](#core-concepts-and-architecture)
   - [Control And Reconcile Model](#control-and-reconcile-model)
+  - [Resource Ownership Model](#resource-ownership-model)
   - [Runtime Components And Roles](#runtime-components-and-roles)
   - [Dependency Chart Responsibilities](#dependency-chart-responsibilities)
   - [Standard SFS Filesystems](#standard-sfs-filesystems)
@@ -52,7 +53,7 @@ The short version:
   - [Slurm Partitions And Features](#slurm-partitions-and-features)
     - [Partition Examples](#partition-examples)
     - [Feature Examples](#feature-examples)
-  - [cxcli Profile Design](#cxcli-profile-design)
+  - [Direct Helm Placement](#direct-helm-placement)
   - [Scheduling And Preemption](#scheduling-and-preemption)
   - [Validation Rules](#validation-rules)
 - [Production Operations](#production-operations)
@@ -241,8 +242,8 @@ The chart has three layers:
    custom resources.
 2. The Soperator manager reconciles those custom resources into Slurm runtime
    objects.
-3. Slurm daemons run on the Kubernetes node groups selected by chart values and
-   cxcli role mapping.
+3. Slurm daemons run on the Kubernetes node groups selected by chart-native
+   placement values.
 
 The important boundary is that Helm does not create Nebius infrastructure. MK8s
 node groups and SFS filesystems come from Terraform or from an existing
@@ -269,6 +270,45 @@ The parent chart renders these Soperator custom resources:
 The Soperator manager watches these resources and creates the lower-level
 runtime objects. Users should normally edit chart values or cxcli profile data,
 not the generated child objects directly.
+
+### Resource Ownership Model
+
+The chart separates Slurm services, worker capacity, scheduling policy, and
+host preparation into different value surfaces and Soperator resources:
+
+| Layer | Chart Values | Rendered Resource | Owns |
+| --- | --- | --- | --- |
+| Cluster root and Slurm service roles | `slurmNodes.*`, `populateJail`, `sConfigController`, `k8sNodeFilters`, `partitionConfiguration`, `volumeSources` | One `SlurmCluster` | Controller, login, accounting, REST, exporter, populate-jail, shared volumes, Slurm config, and partitions. |
+| Worker capacity | `nodesets[]` | One `NodeSet` per list entry | Worker `slurmd`, worker MUNGE, worker resources, GPU/GRES metadata, worker features, worker volumes, node selectors, and tolerations. |
+| Host preparation and maintenance helper | `customContainer`, `initContainers`, `rebooter` | One `NodeConfigurator` | Host sysctl/init setup plus optional rebooter helper behavior. |
+
+`slurmNodes` is a chart value namespace, not a separate Soperator custom
+resource. Its entries render into the `SlurmCluster` spec for Slurm service
+pods: controller, login, accounting, exporter, and REST. These service roles
+use `k8sNodeFilterName` to select a named entry from `k8sNodeFilters[]`.
+
+Worker capacity is different. Worker pods come from `NodeSet` resources, and
+each `nodesets[]` entry renders one `NodeSet`. A worker `NodeSet` schedules
+through its own `nodeSelector`, optional affinity, and tolerations. It does not
+consume `k8sNodeFilters[]` and does not use `slurmNodes.*.k8sNodeFilterName`.
+
+Partitions are scheduling queues on the `SlurmCluster`. In structured mode,
+`partitionConfiguration.partitions[].nodeSetRefs` references `nodesets[].name`
+values only. A partition does not reference Kubernetes node groups,
+`k8sNodeFilters`, `slurmNodes` service roles, or `NodeConfigurator`. If a queue
+needs different hardware, create or select the matching worker `NodeSet`; if a
+queue needs different policy, point it at the same worker `NodeSet` with
+different partition policy.
+
+`NodeConfigurator` is also separate from partitions. It prepares Kubernetes
+hosts and can run the optional rebooter helper, but it does not define Slurm
+worker capacity and Slurm jobs never target it directly. When worker nodes are
+tainted, `rebooter.tolerations` and any `customContainer` placement must be
+kept compatible with the worker hosts that need host preparation.
+
+Direct Helm users configure these chart-native values directly. cxcli owns a
+higher-level placement intent outside Helm values and compiles that intent into
+the same chart-native values during render.
 
 ### Runtime Components And Roles
 
@@ -1669,95 +1709,67 @@ The `gpu` partition can point at both H100 and A100 NodeSets. A user can request
 `--constraint=h100` filters eligible nodes by Slurm feature; `--gres=gpu:1`
 requests one GPU from the selected node.
 
-#### cxcli Profile Design
+#### Direct Helm Placement
 
-cxcli should expose Soperator worker shape as catalog data, not Python
-hardcoding. The profile set should look like this:
-
-```text
-nebius-cpu-v1    -> system, controller, login, accounting, worker-cpu
-nebius-gpu-v1    -> system, controller, login, accounting, worker
-nebius-mixed-v1  -> system, controller, login, accounting, worker-cpu, worker-gpu
-```
-
-Each worker profile entry should own its own sizing fields. CPU and GPU workers
-must not share shortcut-derived MK8s inputs.
-
-For an existing MK8s cluster, cxcli uses the same profile data as a role map
-instead of assuming the physical node groups are named after the Soperator
-roles. The persisted app value is:
+For an existing MK8s cluster, direct Helm users should declare chart-native
+filters and NodeSets instead of assuming the physical node groups are named
+after Soperator roles. A compact example is:
 
 ```yaml
-values:
-  nodeGroupMapping:
-    system: [cpu-a]
-    controller: [cpu-a]
-    login: [cpu-a]
-    accounting: [cpu-a]
-    worker: [h100]
+k8sNodeFilters:
+  - name: system
+    affinity:
+      nodeAffinity:
+        requiredDuringSchedulingIgnoredDuringExecution:
+          nodeSelectorTerms:
+            - matchExpressions:
+                - key: nebius.com/node-group
+                  operator: In
+                  values: [cpu-a]
+
+populateJail:
+  k8sNodeFilterName: system
+
+slurmNodes:
+  controller:
+    k8sNodeFilterName: system
+  login:
+    k8sNodeFilterName: system
+  accounting:
+    k8sNodeFilterName: system
+
+nodesets:
+  - name: worker
+    gpu:
+      enabled: true
+    nodeSelector:
+      nebius.com/node-group: h100
+    tolerations:
+      - key: nvidia.com/gpu
+        operator: Exists
+        effect: NoSchedule
+
+partitionConfiguration:
+  configType: structured
+  partitions:
+    - name: gpu
+      nodeSetRefs:
+        - worker
+      policy:
+        default: true
+        state: UP
+        maxTime: INFINITE
 ```
 
-The renderer converts that map into chart-native values: role
-`k8sNodeFilters[]` select `nebius.com/node-group`, worker `nodesets[]` select
-the mapped worker groups, storage `matchExpressions` select the same mapped
-node groups for jail, controller-spool, and accounting mounts, and partitions
-reference the generated NodeSet names. The mapped `system` filter also feeds
-the Soperator manager, checks controller, and MariaDB operator affinities so
-chart-owned helper pods stay on system/CPU nodes.
-The map is a cxcli convenience layer; direct Helm users can set
-`k8sNodeFilters[]`, `nodesets[]`, `storage.*`, and
-`partitionConfiguration` directly.
+The important split is that service roles use `k8sNodeFilters[]`, while worker
+capacity uses `nodesets[].nodeSelector`, optional affinity, and tolerations.
+Structured partitions then reference worker NodeSet names through
+`partitionConfiguration.partitions[].nodeSetRefs`. They do not reference
+`k8sNodeFilters[]` names.
 
-Conceptual profile data:
-
-```yaml
-worker_nodesets:
-  - name: worker-cpu
-    nodeset_name: worker-cpu
-    node_group_key_prefix: worker-cpu
-    workload: worker
-    gpu: false
-    jail: true
-    default_total_nodes: 4
-    default_nodes_per_group: 4
-    max_nodes_per_group: 100
-
-  - name: worker-gpu
-    nodeset_name: worker-gpu
-    node_group_key_prefix: worker-gpu
-    workload: worker
-    gpu: true
-    jail: true
-    default_total_nodes: 1
-    default_nodes_per_group: 1
-    max_nodes_per_group: 100
-```
-
-The selected profile should materialize into:
-
-- Terraform `mk8s.inputs.node_groups`.
-- Terraform `sfs.inputs.filesystems`.
-- Helm `nodesets[]`.
-- Helm `partitionConfiguration.partitions[]`.
-- Helm `k8sNodeFilters[]` for service pods only; worker pods use NodeSet
-  selectors and tolerations.
-
-cxcli also exposes a small partition profile selector. The default
-`shape-default` leaves the shape partitions from the selected nodesets profile.
-The `with-debug-long` profile adds policy partitions:
-
-```yaml
-values:
-  partitionProfile: with-debug-long
-```
-
-That value is materialized into `SlurmCluster.spec.partitionConfiguration`, so
-the persisted Soperator custom resource contains real Slurm partition data. It
-does not invent another in-cluster resource or require Terraform changes.
-
-Terraform stays generic. It should never contain fixed Soperator names such as
-`worker-gpu`, `worker-cpu`, `controller`, or `login` in module logic. Those
-names belong to cxcli profile data and direct Terraform caller input.
+The same underlying Kubernetes labels and taints can also be reused by
+`storage.*` node affinity, helper workload affinities, and
+`rebooter.tolerations` when the install needs tighter placement control.
 
 #### Scheduling And Preemption
 

@@ -612,7 +612,7 @@ components:
         # profile is documented inline below.
         soperator_nodesets_profile:
           # NodeSet profile = capacity shape. It declares the Soperator
-          # worker NodeSets and their role mapping; partition selection
+          # worker NodeSets and placement defaults; partition selection
           # (queue + policy) is a separate later choice. Per the Slurm
           # guide: "NodeSet = capacity, Partition = policy".
           default: nebius-gpu-v1
@@ -623,44 +623,52 @@ components:
                 # data ETL, or controller-side workloads. One worker
                 # NodeSet (worker-cpu) plus one Slurm partition (cpu).
                 label: "CPU-only workers: worker-cpu NodeSet, cpu Slurm partition, accounting DB enabled"
-              role_mapping:
-                roles:
-                  system:
-                    default_node_group_kind: cpu
-                    filesystem_keys: [jail]
-                    k8s_node_filter_name: system
-                    chart_filter_paths:
-                      - populateJail.k8sNodeFilterName
-                    chart_affinity_paths:
-                      - controllerManager.affinity
-                      - soperator-checks.checks.affinity
-                      - mariadb-operator.affinity
-                      - mariadb-operator.webhook.affinity
-                  controller:
-                    default_node_group_kind: cpu
-                    filesystem_keys: [jail, controller-spool]
-                    k8s_node_filter_name: controller
-                    chart_filter_paths:
-                      - slurmNodes.controller.k8sNodeFilterName
-                      - slurmNodes.rest.k8sNodeFilterName
-                      - sConfigController.node.k8sNodeFilterName
-                  login:
-                    default_node_group_kind: cpu
-                    filesystem_keys: [jail]
-                    k8s_node_filter_name: login
-                    chart_filter_paths:
-                      - slurmNodes.login.k8sNodeFilterName
-                  accounting:
-                    default_node_group_kind: cpu
-                    filesystem_keys: [jail, accounting]
-                    k8s_node_filter_name: accounting
-                    chart_filter_paths:
-                      - slurmNodes.accounting.k8sNodeFilterName
-                  worker:
-                    default_node_group_kind: cpu
-                    filesystem_keys: [jail]
-                    nodeset_templates:
-                      - worker-cpu
+              placements:
+                system:
+                  kind: platform-support
+                  node_group: system
+                  default_node_group_kind: cpu
+                  filesystem_keys: [jail]
+                  soperator_node_filter: system
+                  soperator_value_bindings:
+                    populateJail.k8sNodeFilterName: system
+                  soperator_affinity_bindings:
+                    - controllerManager.affinity
+                    - soperator-checks.checks.affinity
+                    - mariadb-operator.affinity
+                    - mariadb-operator.webhook.affinity
+                controller:
+                  kind: slurm-service
+                  node_group: controller
+                  default_node_group_kind: cpu
+                  filesystem_keys: [jail, controller-spool]
+                  soperator_node_filter: controller
+                  soperator_value_bindings:
+                    slurmNodes.controller.k8sNodeFilterName: controller
+                    slurmNodes.rest.k8sNodeFilterName: controller
+                    sConfigController.node.k8sNodeFilterName: controller
+                login:
+                  kind: slurm-service
+                  node_group: login
+                  default_node_group_kind: cpu
+                  filesystem_keys: [jail]
+                  soperator_node_filter: login
+                  soperator_value_bindings:
+                    slurmNodes.login.k8sNodeFilterName: login
+                accounting:
+                  kind: slurm-service
+                  node_group: accounting
+                  default_node_group_kind: cpu
+                  filesystem_keys: [jail, accounting]
+                  soperator_node_filter: accounting
+                  soperator_value_bindings:
+                    slurmNodes.accounting.k8sNodeFilterName: accounting
+                worker:
+                  kind: slurm-worker-nodeset
+                  default_node_group_kind: cpu
+                  filesystem_keys: [jail]
+                  nodeset_templates:
+                    - worker-cpu
               mk8s:
                 inputs:
                   node_group_defaults:
@@ -669,7 +677,7 @@ components:
                       preset: 32vcpu-128gb
                 node_groups:
                   system:
-                    nodeset_name: system
+                    placement_name: system
                     workload: system
                     node_count: 3
                     node_count_input: soperator.system_node_count
@@ -680,7 +688,7 @@ components:
                     gpu: false
                     jail: true
                   controller:
-                    nodeset_name: controller
+                    placement_name: controller
                     workload: controller
                     node_count: 2
                     node_count_input: soperator.controller_node_count
@@ -694,7 +702,7 @@ components:
                         value: controller
                         effect: NO_SCHEDULE
                   login:
-                    nodeset_name: login
+                    placement_name: login
                     workload: login
                     node_count: 2
                     node_count_input: soperator.login_node_count
@@ -706,7 +714,7 @@ components:
                         value: login
                         effect: NO_SCHEDULE
                   accounting:
-                    nodeset_name: accounting
+                    placement_name: accounting
                     workload: accounting
                     node_count: 2
                     node_count_input: soperator.accounting_node_count
@@ -722,7 +730,7 @@ components:
                 worker_nodesets:
                   - name: worker-cpu
                     nodeset_name: worker-cpu
-                    node_group_key_prefix: worker-cpu
+                    node_group_prefix: worker-cpu
                     workload: worker
                     gpu: false
                     jail: true
@@ -847,6 +855,11 @@ components:
                   mariadb-operator:
                     installOperator: true
                   clusterType: cpu
+                  # cxcli-managed Soperator profiles use Nebius-published
+                  # Debian-based Slurm 25 images whose SPANK plugins live under
+                  # the multi-arch directory. Keep the standalone chart default
+                  # unset; direct Helm users may choose a different image path.
+                  customSlurmConfig: &soperator_nebius_slurm_plugin_dir "PluginDir=/usr/lib/x86_64-linux-gnu/slurm"
                   soperator-activechecks:
                     checks:
                       all-reduce-perf-nccl-in-docker:
@@ -1132,44 +1145,53 @@ components:
                 # and operators can apply different policies (PriorityTier,
                 # PreemptMode, AllowAccounts) per partition.
                 label: "Mixed CPU+GPU workers: worker-cpu and worker-gpu NodeSets with cpu/gpu partitions, accounting DB enabled"
-              role_mapping:
-                roles:
-                  system:
-                    default_node_group_kind: cpu
-                    filesystem_keys: [jail]
-                    k8s_node_filter_name: system
-                    chart_filter_paths:
-                      - populateJail.k8sNodeFilterName
-                    chart_affinity_paths:
-                      - controllerManager.affinity
-                      - soperator-checks.checks.affinity
-                      - mariadb-operator.affinity
-                      - mariadb-operator.webhook.affinity
-                  controller:
-                    default_node_group_kind: cpu
-                    filesystem_keys: [jail, controller-spool]
-                    k8s_node_filter_name: controller
-                    chart_filter_paths:
-                      - slurmNodes.controller.k8sNodeFilterName
-                      - slurmNodes.rest.k8sNodeFilterName
-                      - sConfigController.node.k8sNodeFilterName
-                  login:
-                    default_node_group_kind: cpu
-                    filesystem_keys: [jail]
-                    k8s_node_filter_name: login
-                    chart_filter_paths:
-                      - slurmNodes.login.k8sNodeFilterName
-                  accounting:
-                    default_node_group_kind: cpu
-                    filesystem_keys: [jail, accounting]
-                    k8s_node_filter_name: accounting
-                    chart_filter_paths:
-                      - slurmNodes.accounting.k8sNodeFilterName
-                  worker:
-                    default_node_group_kind: gpu
-                    filesystem_keys: [jail]
-                    nodeset_templates:
-                      - worker-gpu
+              placements:
+                system:
+                  kind: platform-support
+                  node_group: system
+                  default_node_group_kind: cpu
+                  filesystem_keys: [jail]
+                  soperator_node_filter: system
+                  soperator_value_bindings:
+                    populateJail.k8sNodeFilterName: system
+                  soperator_affinity_bindings:
+                    - controllerManager.affinity
+                    - soperator-checks.checks.affinity
+                    - mariadb-operator.affinity
+                    - mariadb-operator.webhook.affinity
+                controller:
+                  kind: slurm-service
+                  node_group: controller
+                  default_node_group_kind: cpu
+                  filesystem_keys: [jail, controller-spool]
+                  soperator_node_filter: controller
+                  soperator_value_bindings:
+                    slurmNodes.controller.k8sNodeFilterName: controller
+                    slurmNodes.rest.k8sNodeFilterName: controller
+                    sConfigController.node.k8sNodeFilterName: controller
+                login:
+                  kind: slurm-service
+                  node_group: login
+                  default_node_group_kind: cpu
+                  filesystem_keys: [jail]
+                  soperator_node_filter: login
+                  soperator_value_bindings:
+                    slurmNodes.login.k8sNodeFilterName: login
+                accounting:
+                  kind: slurm-service
+                  node_group: accounting
+                  default_node_group_kind: cpu
+                  filesystem_keys: [jail, accounting]
+                  soperator_node_filter: accounting
+                  soperator_value_bindings:
+                    slurmNodes.accounting.k8sNodeFilterName: accounting
+                worker:
+                  kind: slurm-worker-nodeset
+                  default_node_group_kind: gpu
+                  filesystem_keys: [jail]
+                  nodeset_templates:
+                    - worker-cpu
+                    - worker-gpu
               mk8s:
                 inputs:
                   node_group_defaults:
@@ -1187,7 +1209,7 @@ components:
                 gpu_cluster_key: workers
                 node_groups:
                   system:
-                    nodeset_name: system
+                    placement_name: system
                     workload: system
                     node_count: 3
                     node_count_input: soperator.system_node_count
@@ -1198,7 +1220,7 @@ components:
                     gpu: false
                     jail: true
                   controller:
-                    nodeset_name: controller
+                    placement_name: controller
                     workload: controller
                     node_count: 2
                     node_count_input: soperator.controller_node_count
@@ -1212,7 +1234,7 @@ components:
                         value: controller
                         effect: NO_SCHEDULE
                   login:
-                    nodeset_name: login
+                    placement_name: login
                     workload: login
                     node_count: 2
                     node_count_input: soperator.login_node_count
@@ -1224,7 +1246,7 @@ components:
                         value: login
                         effect: NO_SCHEDULE
                   accounting:
-                    nodeset_name: accounting
+                    placement_name: accounting
                     workload: accounting
                     node_count: 2
                     node_count_input: soperator.accounting_node_count
@@ -1240,7 +1262,7 @@ components:
                 worker_nodesets:
                   - name: worker-cpu
                     nodeset_name: worker-cpu
-                    node_group_key_prefix: worker-cpu
+                    node_group_prefix: worker-cpu
                     workload: worker
                     gpu: false
                     jail: true
@@ -1252,7 +1274,7 @@ components:
                     max_nodes_per_group: 100
                   - name: worker-gpu
                     nodeset_name: worker-gpu
-                    node_group_key_prefix: worker-gpu
+                    node_group_prefix: worker-gpu
                     workload: worker
                     gpu: true
                     jail: true
@@ -1309,6 +1331,7 @@ components:
                   mariadb-operator:
                     installOperator: true
                   clusterType: gpu
+                  customSlurmConfig: *soperator_nebius_slurm_plugin_dir
                   soperator-activechecks:
                     checks:
                       ensure-healthy-nodes:
@@ -1391,7 +1414,7 @@ components:
                         features:
                           - gpu
                           - cuda
-                        static: Boards=1 SocketsPerBoard=1 CoresPerSocket=8 ThreadsPerCore=1
+                        static: Boards=1 SocketsPerBoard=1 CoresPerSocket=32 ThreadsPerCore=1
                         dynamic: "InstanceId={{ .PodName }}"
                         gresConfig:
                           - AutoDetect=nvidia
@@ -1400,7 +1423,7 @@ components:
                           - name: NVIDIA_DRIVER_CAPABILITIES
                             value: compute,graphics,utility,video
                         resources:
-                          cpu: "4"
+                          cpu: "32"
                           memory: 16Gi
                           ephemeralStorage: 10Gi
                           gpu: 8
@@ -1734,7 +1757,7 @@ components:
                               - cuda
                               - h100
                               - infiniband
-                            static: Boards=1 SocketsPerBoard=1 CoresPerSocket=8 ThreadsPerCore=1
+                            static: Boards=1 SocketsPerBoard=1 CoresPerSocket=32 ThreadsPerCore=1
                             dynamic: "InstanceId={{ .PodName }}"
                             gresConfig:
                               - AutoDetect=nvidia
@@ -1743,7 +1766,7 @@ components:
                               - name: NVIDIA_DRIVER_CAPABILITIES
                                 value: compute,graphics,utility,video
                             resources:
-                              cpu: "4"
+                              cpu: "32"
                               memory: 16Gi
                               ephemeralStorage: 10Gi
                               gpu: 8
@@ -1789,44 +1812,52 @@ components:
                 # placement, pair with the `nebius-nvl-rack-v1` topology
                 # profile so Slurm reads NVL rack labels.
                 label: "Production GPU layout: system/controller/login/accounting CPU groups, GPU worker NodeSet, accounting DB enabled"
-              role_mapping:
-                roles:
-                  system:
-                    default_node_group_kind: cpu
-                    filesystem_keys: [jail]
-                    k8s_node_filter_name: system
-                    chart_filter_paths:
-                      - populateJail.k8sNodeFilterName
-                    chart_affinity_paths:
-                      - controllerManager.affinity
-                      - soperator-checks.checks.affinity
-                      - mariadb-operator.affinity
-                      - mariadb-operator.webhook.affinity
-                  controller:
-                    default_node_group_kind: cpu
-                    filesystem_keys: [jail, controller-spool]
-                    k8s_node_filter_name: controller
-                    chart_filter_paths:
-                      - slurmNodes.controller.k8sNodeFilterName
-                      - slurmNodes.rest.k8sNodeFilterName
-                      - sConfigController.node.k8sNodeFilterName
-                  login:
-                    default_node_group_kind: cpu
-                    filesystem_keys: [jail]
-                    k8s_node_filter_name: login
-                    chart_filter_paths:
-                      - slurmNodes.login.k8sNodeFilterName
-                  accounting:
-                    default_node_group_kind: cpu
-                    filesystem_keys: [jail, accounting]
-                    k8s_node_filter_name: accounting
-                    chart_filter_paths:
-                      - slurmNodes.accounting.k8sNodeFilterName
-                  worker:
-                    default_node_group_kind: gpu
-                    filesystem_keys: [jail]
-                    nodeset_templates:
-                      - worker
+              placements:
+                system:
+                  kind: platform-support
+                  node_group: system
+                  default_node_group_kind: cpu
+                  filesystem_keys: [jail]
+                  soperator_node_filter: system
+                  soperator_value_bindings:
+                    populateJail.k8sNodeFilterName: system
+                  soperator_affinity_bindings:
+                    - controllerManager.affinity
+                    - soperator-checks.checks.affinity
+                    - mariadb-operator.affinity
+                    - mariadb-operator.webhook.affinity
+                controller:
+                  kind: slurm-service
+                  node_group: controller
+                  default_node_group_kind: cpu
+                  filesystem_keys: [jail, controller-spool]
+                  soperator_node_filter: controller
+                  soperator_value_bindings:
+                    slurmNodes.controller.k8sNodeFilterName: controller
+                    slurmNodes.rest.k8sNodeFilterName: controller
+                    sConfigController.node.k8sNodeFilterName: controller
+                login:
+                  kind: slurm-service
+                  node_group: login
+                  default_node_group_kind: cpu
+                  filesystem_keys: [jail]
+                  soperator_node_filter: login
+                  soperator_value_bindings:
+                    slurmNodes.login.k8sNodeFilterName: login
+                accounting:
+                  kind: slurm-service
+                  node_group: accounting
+                  default_node_group_kind: cpu
+                  filesystem_keys: [jail, accounting]
+                  soperator_node_filter: accounting
+                  soperator_value_bindings:
+                    slurmNodes.accounting.k8sNodeFilterName: accounting
+                worker:
+                  kind: slurm-worker-nodeset
+                  default_node_group_kind: gpu
+                  filesystem_keys: [jail]
+                  nodeset_templates:
+                    - worker
               mk8s:
                 inputs:
                   node_group_defaults:
@@ -1844,7 +1875,7 @@ components:
                 gpu_cluster_key: workers
                 node_groups:
                   system:
-                    nodeset_name: system
+                    placement_name: system
                     workload: system
                     node_count: 3
                     node_count_input: soperator.system_node_count
@@ -1855,7 +1886,7 @@ components:
                     gpu: false
                     jail: true
                   controller:
-                    nodeset_name: controller
+                    placement_name: controller
                     workload: controller
                     node_count: 2
                     node_count_input: soperator.controller_node_count
@@ -1869,7 +1900,7 @@ components:
                         value: controller
                         effect: NO_SCHEDULE
                   login:
-                    nodeset_name: login
+                    placement_name: login
                     workload: login
                     node_count: 2
                     node_count_input: soperator.login_node_count
@@ -1881,7 +1912,7 @@ components:
                         value: login
                         effect: NO_SCHEDULE
                   accounting:
-                    nodeset_name: accounting
+                    placement_name: accounting
                     workload: accounting
                     node_count: 2
                     node_count_input: soperator.accounting_node_count
@@ -1897,7 +1928,7 @@ components:
                 worker_nodesets:
                   - name: worker
                     nodeset_name: worker
-                    node_group_key_prefix: worker
+                    node_group_prefix: worker
                     workload: worker
                     gpu: true
                     jail: true
@@ -1931,6 +1962,7 @@ components:
                 values:
                   mariadb-operator:
                     installOperator: true
+                  customSlurmConfig: *soperator_nebius_slurm_plugin_dir
                   soperator-activechecks:
                     checks:
                       ensure-healthy-nodes:
@@ -1961,7 +1993,7 @@ components:
                         features:
                           - gpu
                           - cuda
-                        static: Boards=1 SocketsPerBoard=1 CoresPerSocket=8 ThreadsPerCore=1
+                        static: Boards=1 SocketsPerBoard=1 CoresPerSocket=32 ThreadsPerCore=1
                         dynamic: "InstanceId={{ .PodName }}"
                         gresConfig:
                           - AutoDetect=nvidia
@@ -1970,7 +2002,7 @@ components:
                           - name: NVIDIA_DRIVER_CAPABILITIES
                             value: compute,graphics,utility,video
                         resources:
-                          cpu: "4"
+                          cpu: "32"
                           memory: 16Gi
                           ephemeralStorage: 10Gi
                           gpu: 8
