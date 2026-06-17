@@ -109,11 +109,26 @@ and `config-codex` are already discoverable from the installed skills
 directory, explicit `[[skills.config]]` entries are optional and should not be
 added just to match the template.
 
+The public-safe MCP baseline in `assets/config.toml.template` covers reusable
+servers such as Context7, Playwright, Terraform, MarkItDown, Microsoft Learn,
+GitHub, and OpenAI developer docs. Existing local configs may also contain
+plugin-managed or machine-specific MCP servers with absolute commands, private
+environment values, or tool-specific installers. Preserve those entries when
+patching an existing `config.toml`; do not copy their private values into this
+public skill. Restore those integrations through their owning plugin or setup
+skill.
+
 Hook scripts, custom-agent TOML files, and optional policy files are template
 assets rather than semantic patch targets. Copy them when missing. If an
 existing file byte-matches the previous template, replacing it with the current
 template is idempotent and safe. If it differs from the expected template, stop
 and show the diff instead of overwriting local customizations.
+
+`hooks.json` is a semantic merge target, not a byte-for-byte payload template.
+The required global-context `SessionStart` and `UserPromptSubmit` entries must
+be present, but additional reviewed workflow hooks, such as Agentic SDLC
+`PreToolUse` and `Stop`, should be preserved and reviewed under their owning
+workflow.
 
 ### Secrets Stay Out Of Config
 
@@ -132,18 +147,40 @@ The hook layer injects durable context before Codex starts work:
 ```text
 Here is the workspace root.
 Here is the task-state path.
-Create task state automatically only for complex prompts.
-Read current task state when it already exists and prior context may matter.
-Use global-context-management for complex work.
-Keep the parent thread concise.
+Do not create task state automatically.
+Read existing task state when prior context may matter.
+Keep raw logs and broad exploration output out of task state.
+Use skills for workflow-specific instructions.
 ```
 
 Hooks do not implement the task. They make the right context visible to Codex.
+The parent agent creates and updates the advertised task-state file when
+continuity is useful. The config template allows sandbox writes under
+`$CODEX_HOME/task-state`; any installed PreToolUse guard should allow that
+same path while continuing to protect unrelated runtime files such as
+`$CODEX_HOME/hooks`.
 If a user deliberately opts in by creating
 `$CODEX_HOME/hooks/global_context_policy.json`, the `UserPromptSubmit` hook can
 also discover configured read-only agents from `$CODEX_HOME/config.toml` and
-inject a request to use them for complex prompts. The hook injects agent names
-only by default and does not directly call subagent tools.
+add a lightweight bounded delegation request for complex prompts. The hook
+injects agent names only by default, does not directly call subagent tools, and
+leaves detailed helper lifecycle rules to `global-context-management`.
+
+This global-context setup owns only the non-SDLC hook events: `SessionStart`
+for stable global context and task-state path injection, and `UserPromptSubmit`
+for lightweight prompt-time context, safety, or opt-in delegation requests.
+Workflow-specific systems such as Agentic SDLC must use separate hook events,
+for example `PreToolUse` for hard guardrails and `Stop` for bounded
+continuation.
+
+Use `SessionStart` for global conventions, workspace context, environment
+notes, coding standards, and stable task-state path hints. Do not use it to
+select SDLC phases, modify run state, or inject large documents.
+
+Use `UserPromptSubmit` only for small global reminders, prompt safety, and
+lightweight context hints. Do not use it to route `sdlc-start`, parse
+requirements, select workflow skills, create run state, or inject large
+documents.
 
 ### Skills Provide Workflow
 
@@ -151,7 +188,9 @@ only by default and does not directly call subagent tools.
 state path. It tells Codex when to read and update task state, how to avoid
 parent-thread noise, when to use read-only subagents if delegation is
 authorized by the prompt or a user-enabled local hook policy and the current
-runtime permits it, and how to validate and review risk.
+runtime permits it, and how to validate and review risk. Once delegation is
+authorized, Codex should choose targeted helper roles when useful; the prompt
+does not need to name a specific role.
 
 ### Custom Agents Are Read-Only Helpers
 
@@ -187,10 +226,11 @@ They may not appear as separate user-visible controls in every surface. In
 current Codex surfaces, this setup makes subagent tools available but does not
 force automatic delegation; prompts that need subagents should explicitly say
 to use or spawn subagents, use delegation, or run parallel agents, unless the
-local hook policy injects that request for the prompt. For users who want
-hook-assisted delegation, a private local policy file can opt in to injecting
-that request for complex prompts without hardcoding agent names in the public
-repo:
+local hook policy adds a lightweight bounded delegation request for the prompt.
+After either source authorizes delegation, Codex should choose the useful
+targeted role instead of waiting for the prompt to name one. For users who want
+hook-assisted delegation, a private local policy file can opt in to adding that
+request for complex prompts without hardcoding agent names in the public repo:
 
 When delegation is authorized and useful but subagent controls are not visible,
 and `tool_search` is available, Codex should search for multi-agent/subagent
@@ -323,8 +363,9 @@ setup.
    /hooks
    ```
 
-   Review the two local hook commands. They should resolve to the local hook
-   scripts, either directly or through `${CODEX_HOME:-$HOME/.codex}`:
+   Review the two global-context hook commands. They should resolve to the
+   local hook scripts, either directly or through
+   `${CODEX_HOME:-$HOME/.codex}`:
 
    ```text
    $CODEX_HOME/hooks/session_start_context.py
@@ -332,7 +373,8 @@ setup.
    ```
 
    Trust or enable the hooks only after the resolved paths are local and
-   expected.
+   expected. If other workflows add their own hooks, review those separately
+   and keep their event ownership distinct.
 
 10. Run a non-mutating probe:
 
@@ -360,16 +402,16 @@ setup.
    tools before reporting delegation unavailable.
 
    Direct hook unit probes against a live `$CODEX_HOME` with synthetic
-   `session_id` values create scaffold-only task-state directories named after
-   those IDs. They prove the hook path calculation, but they are not active
-   persistent model state unless an agent later reads and updates that exact
-   path. Prefer `global-context-management/scripts/validate-local-templates.py`
-   for hook-unit validation because it uses disposable temporary homes and
-   checks that `SessionStart` does not create missing scaffold files, an
-   existing nonempty `current.md` is preserved for the agent to read instead of
-   being overwritten or injected into hook context, and loose task-state file
-   permissions are repaired on reuse. No manual or legacy task-state path is
-   created when a hook payload lacks `session_id`.
+   `session_id` values should not create task-state files or directories. They
+   prove hook path calculation and prompt-time hints, not active persistent
+   model state. Prefer
+   `global-context-management/scripts/validate-local-templates.py` for
+   hook-unit validation because it uses disposable temporary homes and checks
+   that `SessionStart` and `UserPromptSubmit` do not create missing scaffold
+   files, an existing nonempty `current.md` is preserved for the agent to read
+   instead of being overwritten or injected into hook context, and loose
+   task-state file permissions are repaired on reuse. No manual or legacy
+   task-state path is created when a hook payload lacks `session_id`.
 
 ## File Responsibilities
 
@@ -388,7 +430,22 @@ setup.
 - `assets/task-state-template.md`: initial durable task-state document.
 - `scripts/check-local-idempotency.py`: read-only preflight that checks the
   minimal no-change contract for an already configured Codex home without
-  printing config values.
+  printing config values. It checks required global hook registrations as a
+  subset so extra reviewed workflow hooks can coexist.
+
+Low-level hook file sync can use the root installer:
+
+```bash
+./install-skills.sh --install-all-hooks
+./install-skills.sh --install-hooks config-codex/assets/hooks
+```
+
+The first command syncs every reviewed hook-only bundle under the source skills
+folder. The second command syncs only this skill's hook payload templates. Both
+copy into `$CODEX_HOME/hooks` with `.template` stripped from installed file
+names. Neither updates `$CODEX_HOME/hooks.json`, trusts hooks, patches
+`config.toml`, or replaces the full `config-codex` setup workflow.
+
 - `agents/openai.yaml`: UI metadata and implicit invocation policy.
 
 ## Validation For This Skill

@@ -20610,7 +20610,14 @@ def test_soperator_selection_seeds_required_infra_and_defaults() -> None:
     assert mk8s_inputs["node_groups"]["login"]["gpu"] is False
     assert mk8s_inputs["node_groups"]["accounting"]["gpu"] is False
     assert mk8s_inputs["node_groups"]["worker"]["nodeset_name"] == "worker"
-    assert mk8s_inputs["node_groups"]["system"]["node_count"] == 1
+    assert mk8s_inputs["node_groups"]["system"]["autoscaling"] == {
+        "min_node_count": 3,
+        "max_node_count": 5,
+    }
+    assert "node_count" not in mk8s_inputs["node_groups"]["system"]
+    assert mk8s_inputs["node_groups"]["controller"]["node_count"] == 2
+    assert mk8s_inputs["node_groups"]["login"]["node_count"] == 2
+    assert mk8s_inputs["node_groups"]["accounting"]["node_count"] == 2
     assert mk8s_inputs["node_groups"]["worker"]["node_count"] == 1
     assert mk8s_inputs["node_groups"]["worker"]["gpu"] is True
     assert mk8s_inputs["node_groups"]["worker"]["reservation"] == {"policy": "AUTO"}
@@ -20735,6 +20742,109 @@ def test_soperator_sfs_defaults_are_target_scoped_for_multi_target_rows() -> Non
     assert values_by_target["cluster-b"]["volume"]["jail"]["filestoreDeviceName"] == "jail-b"
     assert values_by_target["cluster-b"]["sfs"]["filesystems"]["jail"]["block_size_kib"] == 4
     assert values_by_target["cluster-b"]["sfs"]["filesystems"]["jail"]["forbid_deletion"] is False
+
+
+def test_soperator_sfs_mirror_values_replace_stale_generated_values() -> None:
+    payload = {
+        "infra": {
+            "components": [
+                {
+                    "id": "mk8s",
+                    "instance_id": "cxcli-slurm",
+                    "enabled": True,
+                    "inputs": {},
+                },
+                {
+                    "id": "sfs",
+                    "instance_id": "cxcli-slurm",
+                    "enabled": True,
+                    "inputs": {
+                        "filesystems": {
+                            "jail": {
+                                "name": "cxcli-slurm-jail",
+                                "size_gib": 1024,
+                                "block_size_kib": 4,
+                                "mount_tag": "cxcli-slurm-jail",
+                                "forbid_deletion": False,
+                            },
+                            "controller-spool": {
+                                "name": "cxcli-slurm-controller-spool",
+                                "size_gib": 128,
+                                "block_size_kib": 4,
+                                "mount_tag": "cxcli-slurm-controller-spool",
+                                "forbid_deletion": False,
+                            },
+                            "accounting": {
+                                "name": "cxcli-slurm-accounting",
+                                "size_gib": 128,
+                                "block_size_kib": 4,
+                                "mount_tag": "cxcli-slurm-accounting",
+                                "forbid_deletion": False,
+                            },
+                        }
+                    },
+                },
+            ]
+        },
+        "apps": {
+            "charts": [
+                {
+                    "id": "soperator",
+                    "instance_id": "cxcli-slurm",
+                    "enabled": True,
+                    "install_mode": "production-cluster",
+                    "values": {
+                        "sfs": {
+                            "filesystems": {
+                                "jail": {"name": "mk8s-jail", "mount_tag": "mk8s-jail"},
+                                "controller-spool": {
+                                    "name": "mk8s-controller-spool",
+                                    "mount_tag": "mk8s-controller-spool",
+                                },
+                                "accounting": {
+                                    "name": "mk8s-accounting",
+                                    "mount_tag": "mk8s-accounting",
+                                },
+                            }
+                        },
+                        "volume": {
+                            "jail": {
+                                "size": "1Gi",
+                                "filestoreDeviceName": "mk8s-jail",
+                            },
+                            "controllerSpool": {
+                                "size": "1Gi",
+                                "filestoreDeviceName": "mk8s-controller-spool",
+                            },
+                            "accounting": {
+                                "size": "1Gi",
+                                "filestoreDeviceName": "mk8s-accounting",
+                            },
+                        },
+                    },
+                }
+            ]
+        },
+    }
+
+    assert cli._materialize_soperator_component_defaults(payload) is True
+
+    values = payload["apps"]["charts"][0]["values"]
+    assert values["sfs"]["filesystems"]["jail"]["name"] == "cxcli-slurm-jail"
+    assert (
+        values["sfs"]["filesystems"]["controller-spool"]["mount_tag"]
+        == "cxcli-slurm-controller-spool"
+    )
+    assert values["sfs"]["filesystems"]["accounting"]["name"] == "cxcli-slurm-accounting"
+    assert values["volume"]["jail"] == {
+        "size": "1024Gi",
+        "filestoreDeviceName": "cxcli-slurm-jail",
+    }
+    assert values["volume"]["controllerSpool"] == {
+        "size": "128Gi",
+        "filestoreDeviceName": "cxcli-slurm-controller-spool",
+    }
+    assert values["volume"]["accounting"]["filestoreDeviceName"] == "cxcli-slurm-accounting"
 
 
 def test_soperator_profiles_share_complete_sfs_filesystem_defaults() -> None:
@@ -20941,7 +21051,7 @@ def test_soperator_production_disabled_service_autoscaling_clears_stale_group_sc
     assert cli._materialize_soperator_component_defaults(payload) is True
 
     system_group = mk8s_inputs["node_groups"]["system"]
-    assert system_group["node_count"] == 1
+    assert system_group["node_count"] == 3
     assert "autoscaling" not in system_group
 
 
@@ -20969,7 +21079,7 @@ def test_soperator_production_disabled_service_autoscaling_clears_first_render_s
                                 },
                                 "gpu": False,
                                 "platform": "cpu-d3",
-                                "preset": "8vcpu-32gb",
+                                "preset": "32vcpu-128gb",
                             },
                         },
                     },
@@ -20998,7 +21108,7 @@ def test_soperator_production_disabled_service_autoscaling_clears_first_render_s
     assert cli._materialize_soperator_component_defaults(payload) is True
 
     system_group = payload["infra"]["components"][0]["inputs"]["node_groups"]["system"]
-    assert system_group["node_count"] == 1
+    assert system_group["node_count"] == 3
     assert "autoscaling" not in system_group
 
 
@@ -21444,7 +21554,7 @@ def test_mk8s_image_defaults_replace_stale_soperator_gpu_stack_default() -> None
                         "node_group_defaults": {
                             "cpu": {
                                 "platform": "cpu-d3",
-                                "preset": "8vcpu-32gb",
+                                "preset": "32vcpu-128gb",
                                 "os": "ubuntu24.04",
                             },
                             "gpu": {
@@ -21638,7 +21748,15 @@ def test_soperator_cpu_profile_materializes_only_cpu_worker_nodeset() -> None:
         "accounting",
         "worker-cpu",
     }
-    assert all(group["node_count"] == 1 for group in mk8s_inputs["node_groups"].values())
+    assert mk8s_inputs["node_groups"]["system"]["autoscaling"] == {
+        "min_node_count": 3,
+        "max_node_count": 5,
+    }
+    assert "node_count" not in mk8s_inputs["node_groups"]["system"]
+    assert mk8s_inputs["node_groups"]["controller"]["node_count"] == 2
+    assert mk8s_inputs["node_groups"]["login"]["node_count"] == 2
+    assert mk8s_inputs["node_groups"]["accounting"]["node_count"] == 2
+    assert mk8s_inputs["node_groups"]["worker-cpu"]["node_count"] == 1
     assert all(group["gpu"] is False for group in mk8s_inputs["node_groups"].values())
     assert mk8s_inputs["node_groups"]["worker-cpu"]["nodeset_name"] == "worker-cpu"
     assert mk8s_inputs["node_groups"]["worker-cpu"]["node_count"] == 1
@@ -21713,10 +21831,14 @@ def test_soperator_mixed_profile_materializes_cpu_and_gpu_workers() -> None:
     assert "gpu_enabled" not in mk8s_inputs
     assert "gpu_node_groups" not in mk8s_inputs
     assert "gpu_nodes_count_per_group" not in mk8s_inputs
-    assert mk8s_inputs["node_groups"]["system"]["node_count"] == 1
-    assert mk8s_inputs["node_groups"]["controller"]["node_count"] == 1
-    assert mk8s_inputs["node_groups"]["login"]["node_count"] == 1
-    assert mk8s_inputs["node_groups"]["accounting"]["node_count"] == 1
+    assert mk8s_inputs["node_groups"]["system"]["autoscaling"] == {
+        "min_node_count": 3,
+        "max_node_count": 5,
+    }
+    assert "node_count" not in mk8s_inputs["node_groups"]["system"]
+    assert mk8s_inputs["node_groups"]["controller"]["node_count"] == 2
+    assert mk8s_inputs["node_groups"]["login"]["node_count"] == 2
+    assert mk8s_inputs["node_groups"]["accounting"]["node_count"] == 2
     assert mk8s_inputs["node_groups"]["worker-cpu"]["nodeset_name"] == "worker-cpu"
     assert mk8s_inputs["node_groups"]["worker-cpu"]["node_count"] == 1
     assert mk8s_inputs["node_groups"]["worker-cpu"]["gpu"] is False

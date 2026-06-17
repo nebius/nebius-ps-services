@@ -1,0 +1,127 @@
+---
+schema: agentic-sdlc.design.v1
+project: "<project-name>"
+owner: "<owner-or-team>"
+status: "draft"
+created_at: "<YYYY-MM-DD>"
+updated_at: "<YYYY-MM-DD>"
+created_by_skill: "sdlc-create-design"
+updated_by_skill: "sdlc-create-design"
+source_requirements: "docs/requirements.md"
+user_edit_policy: "Do not edit manually. Update through sdlc-create-design from requirements and gathered context."
+execution_plan_policy: "Execution plans are local runtime artifacts and must not be committed."
+id_policy: "Feature IDs are stable. Never renumber existing IDs."
+---
+
+# Design
+
+## Design Summary
+
+### Source Inputs
+
+- Requirements: docs/requirements.md
+- Context packs: local sdlc-gather-context outputs
+
+### Architecture Goal
+
+<Architecture goal.>
+
+### Product Behavior Summary
+
+<User-visible behavior.>
+
+## Technology Choices
+
+<Chosen stack, runtime, external dependencies, and internal dependencies.>
+
+## Architecture
+
+### Components
+
+- <component>: <responsibility>
+
+### Data Flow
+
+<Data movement.>
+
+### Control Flow
+
+<Trigger and execution flow.>
+
+### State Model
+
+<Persisted, generated, cached, and runtime state.>
+
+### Error Model
+
+<Failure handling and recovery.>
+
+### Security Model
+
+<Auth, authorization, secrets, input validation, network boundary.>
+
+### Observability Model
+
+<Logs, metrics, traces, screenshots, transcripts, evidence.>
+
+## Feature Designs
+
+<!-- FEATURE: FEAT-001 reqs=REQ-001 status=ready priority=P0 version=1 -->
+### FEAT-001: <feature name>
+
+#### Requirements Covered
+
+- REQ-001: <requirement name>
+
+#### Context Evidence
+
+- Official docs: <summary>
+- Internal docs: <summary>
+- Codebase evidence: <files, modules, tests, patterns>
+
+#### Design
+
+<Concrete design.>
+
+#### Implementation Boundaries
+
+- Must change: <file/module/component>
+- Must not change: <file/module/component>
+
+#### Test-First Success Criteria
+
+- TDD-001: <test expected to fail before implementation and pass after>
+
+#### Validation Plan
+
+<Syntax, lint, type, config, dependency, security, build.>
+
+#### Test Plan
+
+<Unit, integration, component, mock, regression.>
+
+#### Evaluation Plan
+
+<sdlc-gui-test | sdlc-tui-test | api-uat | performance | manual-review>
+
+#### Done Definition
+
+Requirement coverage: <REQ IDs>
+Validation: passing
+Tests: passing
+Evaluation: passing
+Commit: required
+UAT impact: included
+<!-- /FEATURE: FEAT-001 -->
+
+## Cross-Cutting Validation Strategy
+
+## UAT Strategy
+
+## Risks
+
+## Open Design Questions
+
+## Decision Log
+
+## Change Log

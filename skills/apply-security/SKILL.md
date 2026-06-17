@@ -1,0 +1,186 @@
+---
+name: apply-security
+description: "Use when reviewing or fixing security issues in infrastructure, deployment, Helm, Kubernetes, Terraform, CI/CD workflows, Bash scripts, and application code in Python, Java, JavaScript, TypeScript, or Rust. Use for security scan reports, remediation plans, safe patching, verification, SARIF/JSON/Markdown findings, secret leakage, public exposure, IAM/RBAC, injection, deserialization, crypto, and supply-chain risks."
+---
+
+# Apply Security
+
+## Purpose
+
+Review codebases for practical security risk and apply minimal,
+behavior-preserving remediations. Prefer secure defaults, controlled opt-ins,
+and clear exceptions over removing features or rewriting unrelated code.
+
+## Use This Skill For
+
+- Security scans across Terraform, Kubernetes manifests, Helm charts, CI/CD
+  workflows, shell scripts, and application code.
+- Remediation plans that identify exact files, risk, fix strategy, expected
+  feature impact, and validation.
+- Safe patching for small, reviewable changes such as redaction, least
+  privilege workflow permissions, non-breaking Helm values, compatible
+  security contexts, and obvious shell quoting fixes.
+- Verification of security patches with repository-native checks.
+- Explaining findings, tradeoffs, exceptions, and safe override designs.
+
+## Non-Goals
+
+- Do not treat this skill as a replacement for threat modeling, penetration
+  testing, formal compliance attestation, or project-specific security policy.
+- Do not rotate credentials, rewrite history, delete resources, disable
+  features, change auth flows, or alter externally visible behavior without
+  explicit user approval.
+- Do not invent cloud, framework, CLI, package-manager, or scanner behavior.
+  Verify version-sensitive behavior against current official docs or mark it
+  unverified.
+
+## Inputs Accepted
+
+- A repository, branch, PR, diff, directory, file list, chart, module, workflow,
+  or pasted code.
+- Optional mode: `scan`, `plan`, `patch`, `verify`, or `explain`.
+- Optional output format: Markdown, JSON, or SARIF-style findings.
+- Optional constraints: target environment, production sensitivity, approved
+  scanners, files to exclude, or changes the user explicitly approves.
+
+Default to `scan` when the user asks for a review and does not ask for edits.
+Default to `plan` when the user asks what should be fixed. Use `patch` only
+when the user asks to fix, harden, remediate, or apply changes.
+
+## Required References
+
+- Read `references/rulebook.md` before scanning, planning, or patching.
+- Read `references/examples.md` before writing remediations that need concrete
+  implementation patterns or before explaining safe alternatives.
+- Read `references/reporting-and-validation.md` before producing JSON/SARIF,
+  running verification, listing limitations, or giving the final merge
+  checklist.
+
+If a finding or fix depends on a product, cloud, API, CLI, framework, package
+manager, or version-specific behavior, verify the current official vendor
+documentation before recommending or changing it. If the repository evidence or
+official docs do not confirm the behavior, lower confidence and explain what is
+missing.
+
+## Workflow
+
+1. Establish scope and mode.
+   - Inspect the requested paths, current diff, relevant manifests, lockfiles,
+     package manifests, workflow files, and existing scanner configuration.
+   - Preserve unrelated user changes. Do not refactor unrelated code.
+   - Do not print, persist, or copy secrets. Redact suspicious values.
+
+2. Review by risk area.
+   - Use stable finding IDs such as `TF-IAM-001`, `K8S-RUN-001`,
+     `HELM-IMG-001`, `CI-PERM-001`, `PY-CMD-001`, `JAVA-DESER-001`,
+     `JS-EVAL-001`, `TS-TYPE-001`, `RS-UNSAFE-001`, and `SH-EVAL-001`.
+   - Classify each finding by severity, confidence, exploitability, and blast
+     radius.
+   - When runtime context matters, mark confidence `Medium` or `Low` and name
+     the missing evidence.
+
+3. Choose the safest remediation path.
+   - Prefer minimal diffs that remove or reduce risk without changing intended
+     behavior.
+   - Replace unsafe hardcoded behavior with secure configurable defaults,
+     explicit opt-ins, and documented exceptions.
+   - Keep public APIs, auth flows, serialization formats, schemas, externally
+     visible routes, and production availability unchanged unless the user
+     explicitly approves a breaking change.
+   - Do not add dependencies, scanners, new services, or compatibility shims
+     unless the repository already uses them or the user approves them.
+
+4. Apply changes only inside the approved boundary.
+   - Safe to patch directly: obvious log redaction, missing
+     `sensitive = true`, least-privilege workflow `permissions` when compatible,
+     non-breaking Helm values, compatible pod/container security contexts,
+     simple path validation, and Bash quoting where no word splitting is
+     intended.
+   - Plan first: public exposure, IAM/RBAC narrowing, NetworkPolicy default
+     deny, TypeScript strictness, crypto, auth, CORS, deserialization, data
+     retention, external network access, shell strict mode, or anything that
+     may affect availability.
+   - Never auto-fix without explicit approval: credential rotation, git history
+     rewriting, deleting resources, disabling features, changing public APIs,
+     changing database schemas, replacing serialization protocols, changing
+     auth algorithms, or changing externally visible routes.
+
+5. Verify and report.
+   - Run the narrowest repository-native checks available. Missing tools are a
+     limitation, not an automatic failure.
+   - Avoid validation commands that mutate files, create cache/build
+     directories, contact external registries, install missing tools, or use
+     live credentials unless that behavior is explicitly approved and safe for
+     the target scope.
+   - Do not claim a finding is fixed unless validation passed or the limitation
+     is explicitly documented.
+   - Explain every change with risk, change, compatibility note, verification,
+     remaining risk, and safe override where applicable.
+
+## Safe Override Design
+
+When risky behavior is required, prefer an explicit, narrow exception:
+
+- explicit opt-in value such as `allowPrivileged`, `allowPublicExposure`,
+  `allowUnsafeDeserialization`, `allowShellExecution`, or `allowInsecureTls`
+- `securityException.owner`
+- `securityException.reason`
+- `securityException.scope`
+- `securityException.reviewBy`
+- visible warning in scan reports
+
+Do not hide exceptions in broad global toggles. Apply exceptions only to the
+specific resource, function, workflow, or chart value.
+
+## Output Contract
+
+For `scan`, return prioritized findings with:
+
+- finding ID
+- area
+- file and line
+- severity
+- confidence
+- exploitability
+- blast radius
+- risk
+- root cause
+- recommended fix
+- feature impact
+- safe override
+
+For `patch`, return:
+
+- summary of each change
+- reason and risk addressed
+- compatibility note
+- verification commands and results
+- remaining risks
+
+Use Markdown by default. Provide JSON or SARIF-style output when requested.
+
+## Learning Loop
+
+When using this skill, capture durable, reusable, public-safe learnings back
+into this skill's local source materials before completion when the current task
+contract allows source edits. Update the narrowest appropriate surface:
+`SKILL.md` for runtime rules, `references/` for detailed guidance, `assets/`
+for reusable templates, `scripts/` for deterministic helpers, and README or
+changelog entries for human-facing or release-note updates.
+
+If the current task is explicitly read-only/report-only, or source writes are
+outside this skill's task contract, do not edit skill sources; report why source
+capture was skipped.
+
+Do not capture secrets, private URLs, customer data, raw logs, one-off local
+state, or unverified/vendor-specific claims. If a useful learning is not safe,
+not evidence-backed, or outside this skill's scope, report that it was skipped.
+
+## Resources
+
+- `references/rulebook.md`: review areas, severity guidance, auto-fix policy,
+  safe override requirements, and no-auto-fix boundaries.
+- `references/examples.md`: before/after remediation snippets for Terraform,
+  Kubernetes, Helm, CI/CD, Python, Java, JavaScript, TypeScript, Rust, and Bash.
+- `references/reporting-and-validation.md`: output schemas, validation command
+  selection, limitations, staged rollout guidance, and final merge checklist.

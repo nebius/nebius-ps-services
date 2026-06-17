@@ -1,0 +1,4 @@
+interface:
+  display_name: "SDLC Start"
+  short_description: "Coordinate SDLC run state"
+  default_prompt: "Use $sdlc-start to coordinate the Agentic SDLC loop by reading specs and local state, selecting the next feature, and choosing exactly one next skill."

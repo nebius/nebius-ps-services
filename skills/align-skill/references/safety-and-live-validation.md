@@ -54,6 +54,18 @@ acceptable blast radius.
 - If a validation command would expose secrets in output, do not run it. Explain
   the safer alternative.
 
+## Skill Authoring Safety
+
+- Generated or revised skills must remain public-safe and reusable; use
+  placeholders for environment-specific values.
+- Do not add scripts that prompt for secrets, persist credentials, call external
+  write APIs, publish artifacts, or mutate production systems unless the skill
+  also requires explicit user authorization and a confirmed safe target.
+- Require dry-run, plan, local validation, or static inspection paths before
+  live external operations.
+- Keep high-output scripts bounded by default so validation output cannot bury
+  important warnings or leak unexpected data.
+
 ## Safe Validation Hierarchy
 
 1. Static checks.

@@ -48,6 +48,23 @@ Apply repository-native GitHub Actions patterns instead of inventing one-off wor
    - If a paired script/template exists, run `bash -n`.
    - Run the same lint/test/build path the workflow expects when the target service can be validated locally.
 
+## Learning Loop
+
+When using this skill, capture durable, reusable, public-safe learnings back
+into this skill's local source materials before completion when the current task
+contract allows source edits. Update the narrowest appropriate surface:
+`SKILL.md` for runtime rules, `references/` for detailed guidance, `assets/`
+for reusable templates, `scripts/` for deterministic helpers, and README or
+changelog entries for human-facing or release-note updates.
+
+If the current task is explicitly read-only/report-only, or source writes are
+outside this skill's task contract, do not edit skill sources; report the
+skipped source update instead.
+
+Do not capture secrets, private URLs, customer data, raw logs, one-off local
+state, or unverified/vendor-specific claims. If a useful learning is not safe,
+not evidence-backed, or outside this skill's scope, report that it was skipped.
+
 ## Guardrails
 
 - Do not use `pull_request_target` for untrusted PR code execution.

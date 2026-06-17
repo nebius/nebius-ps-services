@@ -112,16 +112,28 @@ For existing `$CODEX_HOME/config.toml`:
    - optional hook policy template
    - custom-agent TOML templates
    - task-state template
-   For hook and custom-agent assets, use replace-if-unmodified behavior:
+   For hook scripts, custom-agent assets, and optional policy assets, use
+   replace-if-unmodified behavior:
    copy missing files, leave matching files unchanged, and stop for review when
    an existing file differs from both the old and new expected content.
+   For `hooks.json`, verify the required global `SessionStart` and
+   `UserPromptSubmit` entries are present, but preserve additional workflow hook
+   entries such as SDLC `PreToolUse` and `Stop`.
+   The root `install-skills.sh --install-all-hooks` helper can perform a
+   direct sync of all reviewed hook-only bundles when that is explicitly
+   needed. Use `install-skills.sh --install-hooks config-codex/assets/hooks`
+   only for a single-bundle sync. Both paths strip `.template` from installed
+   hook file names, and neither path patches `hooks.json`, trusts hooks, patches
+   `config.toml`, or replaces this full setup workflow.
 9. Confirm `global-context-management` and `config-codex` are installed,
    discoverable, or explicitly enabled as skill folders. Do not add explicit
    skill entries if discovery already works.
 10. Validate local hook scripts, TOML, JSON, feature flags, idempotency, and
    secret hygiene.
-11. Tell the user to restart Codex, open `/hooks`, review the two local hooks,
-   and trust them only after confirming the paths are expected.
+11. Tell the user to restart Codex, open `/hooks`, review the two
+    global-context hooks, and trust them only after confirming the paths are
+    expected. If other workflows add their own hooks, review those separately
+    and keep event ownership distinct.
 
 ## Template Rules
 
@@ -140,12 +152,31 @@ rendered files. Treat full-file templates as source material for missing files;
 for existing `AGENTS.md` and `config.toml`, extract and patch only the missing
 sections or keys.
 
+## Learning Loop
+
+When using this skill, capture durable, reusable, public-safe learnings back
+into this skill's local source materials before completion when the current task
+contract allows source edits. Update the narrowest appropriate surface:
+`SKILL.md` for runtime rules, `references/` for detailed guidance, `assets/`
+for reusable templates, `scripts/` for deterministic helpers, and README or
+changelog entries for human-facing or release-note updates.
+
+If the current task is explicitly read-only/report-only, or source writes are
+outside this skill's task contract, do not edit skill sources; report the
+skipped source update instead.
+
+Do not capture secrets, private URLs, customer data, raw logs, one-off local
+state, or unverified/vendor-specific claims. If a useful learning is not safe,
+not evidence-backed, or outside this skill's scope, report that it was skipped.
+
 ## Validation
 
 Use the focused checks in `references/local-setup.md`. At minimum:
 
 - Run `python3 scripts/check-local-idempotency.py --strict-agents-template` for
-  a laptop already expected to match these templates. This script is read-only.
+  a laptop already expected to match the canonical global `AGENTS.md` template.
+  This script is read-only and allows extra reviewed hook registrations in
+  `hooks.json` when the required global hooks are present.
 - Python-compile hook scripts.
 - Parse `config.toml` with `tomllib`.
 - Parse `hooks.json` with `json`.
@@ -165,7 +196,10 @@ search for multi-agent/subagent tools before reporting delegation unavailable.
 If a local hook policy is enabled, verify it in a fresh trusted-hook session
 before claiming hook-assisted delegation works. Do not claim that hooks,
 skills, `multi_agent`, or `[agents.*]` config force automatic delegation; they
-only make delegation possible when the runtime policy allows it.
+only make delegation possible when the runtime policy allows it. After a prompt
+or local hook policy request authorizes delegation, the fresh session may choose
+targeted read-only helper roles itself; the prompt does not need to name the
+exact role.
 
 ## References
 
@@ -184,3 +218,18 @@ Return:
 - how to restart Codex and trust hooks
 - whether optional hook-assisted read-only subagent delegation was enabled
 - any remaining risk or unverified runtime behavior
+
+## Hook Event Boundary
+
+This skill's global-context setup owns only `SessionStart` and
+`UserPromptSubmit`.
+
+- `SessionStart`: use for global conventions, workspace context, environment
+  notes, coding standards, and stable task-state path hints. Do not select
+  SDLC phases, modify run state, or inject large documents.
+- `UserPromptSubmit`: use only for small global reminders, prompt safety, and
+  lightweight context hints. Do not route `sdlc-start`, parse requirements,
+  select workflow skills, create run state, or inject large documents.
+
+Workflow-specific guardrails such as Agentic SDLC must use separate event
+hooks, for example `PreToolUse` and `Stop`.

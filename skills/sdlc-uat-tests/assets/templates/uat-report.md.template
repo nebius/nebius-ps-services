@@ -1,0 +1,25 @@
+# UAT Report
+
+## Scope
+
+- Branch: <branch>
+- Requirements: <REQ IDs>
+- Features: <FEAT IDs>
+
+## Matrix
+
+| Requirement | Flow | Harness | Result | Evidence |
+| --- | --- | --- | --- | --- |
+| REQ-<id> | <journey> | <gui|tui|api|service> | <pass|fail> | <path> |
+
+## Cross-Feature Findings
+
+- <finding>
+
+## Negative Criteria
+
+- <criterion>: <pass|fail>
+
+## Final Result
+
+<ready-for-pr | blocked>

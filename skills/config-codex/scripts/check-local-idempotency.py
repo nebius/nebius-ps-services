@@ -3,8 +3,8 @@
 
 The check intentionally validates the minimal config-codex contract instead of
 diffing config.toml against the public template. Existing local config files
-often contain app, plugin, project, hook-trust, desktop, or MCP settings that
-must be preserved and are not part of this skill's convergence target.
+often contain app, plugin, project, hook-trust, desktop, or extra MCP settings
+that must be preserved and are not part of this skill's convergence target.
 """
 
 from __future__ import annotations
@@ -22,7 +22,6 @@ REQUIRED_AGENT_NAMES = ("repo_mapper", "test_strategist", "risk_reviewer")
 MANAGED_BEGIN = "<!-- BEGIN config-codex managed context -->"
 MANAGED_END = "<!-- END config-codex managed context -->"
 TEMPLATE_ASSETS = {
-    "hooks.json": "hooks.json.template",
     "hooks/session_start_context.py": "hooks/session_start_context.py.template",
     "hooks/user_prompt_context.py": "hooks/user_prompt_context.py.template",
     "agents/repo_mapper.toml": "agents/repo_mapper.toml.template",
@@ -79,6 +78,21 @@ def load_toml(path: Path, label: str, failures: list[str]) -> dict:
     return {}
 
 
+def load_json(path: Path, label: str, failures: list[str]) -> dict:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        fail(f"{label} is missing", failures)
+        return {}
+    except json.JSONDecodeError as exc:
+        fail(f"{label} is not valid JSON: {exc}", failures)
+        return {}
+    if isinstance(data, dict):
+        return data
+    fail(f"{label} must contain a JSON object", failures)
+    return {}
+
+
 def check_agents_md(codex_home: Path, strict: bool, failures: list[str]) -> None:
     agents_path = codex_home / "AGENTS.md"
     template_path = skill_root() / "assets" / "AGENTS.md.template"
@@ -105,6 +119,11 @@ def check_config_toml(codex_home: Path, failures: list[str]) -> None:
     config = load_toml(config_path, "config.toml", failures)
     if not config:
         return
+    template = load_toml(
+        skill_root() / "assets" / "config.toml.template",
+        "config.toml.template",
+        failures,
+    )
 
     features = config.get("features", {})
     for key in ("hooks", "multi_agent"):
@@ -146,6 +165,29 @@ def check_config_toml(codex_home: Path, failures: list[str]) -> None:
         else:
             fail(f"agents.{name} is not read-only", failures)
 
+    check_required_mcp_servers(config, template, failures)
+
+
+def check_required_mcp_servers(config: dict, template: dict, failures: list[str]) -> None:
+    required = template.get("mcp_servers", {})
+    actual = config.get("mcp_servers", {})
+    if not isinstance(required, dict) or not required:
+        fail("config.toml.template has no required MCP server definitions", failures)
+        return
+    if not isinstance(actual, dict):
+        fail("config.toml mcp_servers table is missing", failures)
+        return
+
+    for name, expected_spec in sorted(required.items()):
+        actual_spec = actual.get(name)
+        if not isinstance(actual_spec, dict):
+            fail(f"mcp_servers.{name} is missing", failures)
+            continue
+        if actual_spec == expected_spec:
+            ok(f"mcp_servers.{name} matches template")
+        else:
+            fail(f"mcp_servers.{name} differs from template and needs review", failures)
+
 
 def check_template_asset(relative: str, template_relative: str, codex_home: Path, failures: list[str]) -> None:
     actual_path = codex_home / relative
@@ -170,14 +212,7 @@ def check_runtime_files(codex_home: Path, failures: list[str]) -> None:
     for relative, template_relative in TEMPLATE_ASSETS.items():
         check_template_asset(relative, template_relative, codex_home, failures)
 
-    hooks_json = codex_home / "hooks.json"
-    try:
-        json.loads(hooks_json.read_text(encoding="utf-8"))
-        ok("hooks.json is valid JSON")
-    except FileNotFoundError:
-        fail("hooks.json is missing", failures)
-    except json.JSONDecodeError as exc:
-        fail(f"hooks.json is not valid JSON: {exc}", failures)
+    check_hooks_json(codex_home, failures)
 
     task_state = codex_home / "task-state"
     if not task_state.is_dir():
@@ -191,11 +226,45 @@ def check_runtime_files(codex_home: Path, failures: list[str]) -> None:
 
     policy = codex_home / "hooks/global_context_policy.json"
     if policy.exists():
-        try:
-            json.loads(policy.read_text(encoding="utf-8"))
+        if load_json(policy, "global_context_policy.json", failures):
             ok("optional global_context_policy.json is valid JSON")
-        except json.JSONDecodeError as exc:
-            fail(f"global_context_policy.json is not valid JSON: {exc}", failures)
+
+
+def check_hooks_json(codex_home: Path, failures: list[str]) -> None:
+    actual = load_json(codex_home / "hooks.json", "hooks.json", failures)
+    if not actual:
+        return
+    expected = load_json(
+        skill_root() / "assets" / "hooks.json.template",
+        "hooks.json.template",
+        failures,
+    )
+    if not expected:
+        return
+    ok("hooks.json is valid JSON")
+
+    actual_hooks = actual.get("hooks")
+    expected_hooks = expected.get("hooks")
+    if not isinstance(actual_hooks, dict):
+        fail("hooks.json hooks table is missing", failures)
+        return
+    if not isinstance(expected_hooks, dict):
+        fail("hooks.json.template hooks table is missing", failures)
+        return
+
+    for event_name, expected_entries in sorted(expected_hooks.items()):
+        actual_entries = actual_hooks.get(event_name)
+        if not isinstance(expected_entries, list) or not expected_entries:
+            fail(f"hooks.json.template {event_name} entries are invalid", failures)
+            continue
+        if not isinstance(actual_entries, list):
+            fail(f"hooks.json missing required {event_name} hook registration", failures)
+            continue
+        for expected_entry in expected_entries:
+            if expected_entry in actual_entries:
+                ok(f"hooks.json includes required {event_name} hook registration")
+            else:
+                fail(f"hooks.json missing required {event_name} hook registration", failures)
 
 
 def main(argv: list[str]) -> int:

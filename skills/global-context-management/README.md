@@ -1,10 +1,10 @@
 # Global Context Management
 
-`global-context-management` is a reusable Codex skill plus optional local
-runtime setup for keeping long or complex coding sessions focused. It reduces
-context pollution by separating runtime policy, task-state persistence, and
-read-only exploration roles when the current Codex surface exposes them and
-delegation is authorized by the prompt or by a user-enabled local hook policy.
+`global-context-management` is a reusable Codex skill plus local runtime setup
+for keeping long or complex coding sessions focused.
+It reduces context pollution by separating runtime policy, task-state
+continuity, and authorized read-only exploration roles when the current Codex
+surface exposes delegation tools.
 
 ## Design Goal
 
@@ -53,7 +53,7 @@ They should say, in effect:
 ```text
 Here is the workspace root.
 Here is the durable task-state path.
-Create task state automatically only for complex prompts.
+Do not create task state from hooks.
 Read current task state when it already exists and prior context may matter.
 For complex work, use global-context-management.
 Keep the parent thread concise.
@@ -75,13 +75,19 @@ customer data, private URLs, or broad environment dumps.
 
 Task-state files are useful only when Codex reads and updates them. The
 `SessionStart` hook injects the path without creating a missing `current.md`;
-the `UserPromptSubmit` hook creates or reuses the file automatically only when
-the prompt looks complex. Hooks do not make hidden state automatically active in
-the model forever.
+the `UserPromptSubmit` hook only advertises or reuses the same path for complex
+prompts. Hooks do not create task-state files, SDLC run state, workflow state,
+or hidden state automatically active in the model forever.
 Synthetic complex-prompt hook probes that pass a made-up `session_id` against a
-live `$CODEX_HOME` can create scaffold-only directories named after that session
-ID. Those probe files are not active task context unless a real agent session
-later reads and updates that same path.
+live `$CODEX_HOME` should not create task-state files or directories. They
+validate hook path calculation and prompt-time hints only.
+
+The parent agent creates or updates the advertised file when durable continuity
+is useful. Any local PreToolUse write guard must explicitly allow
+`$CODEX_HOME/task-state` writes; otherwise the hook can advertise a valid path
+that later edits cannot persist. That allowlist is separate from broader
+runtime files such as `$CODEX_HOME/hooks`, which should remain protected unless
+the user intentionally syncs hook sources.
 
 Use the task-state file in three places:
 
@@ -108,8 +114,8 @@ Understand the task.
 Read current task state when continuity may matter.
 Update task state.
 Use targeted reads.
-Delegate bounded read-only exploration when authorization comes from the prompt
-or a user-enabled local hook policy, and delegation is available and useful.
+Use bounded read-only exploration when authorization comes from the prompt or a
+user-enabled local hook policy, and delegation is available and useful.
 Plan the smallest coherent change.
 Edit in focused patches.
 Validate narrowly first.
@@ -122,10 +128,10 @@ skill is used. Detailed local setup lives in `references/local-setup.md`.
 
 ### Subagents
 
-Subagents are optional read-only helpers. They are useful when exploration is
-large enough that it would pollute the parent thread, delegation is authorized
-by the prompt or by a user-enabled local hook policy, and the current Codex
-surface permits delegation.
+Subagents are bounded read-only helpers for large sidecar exploration,
+validation planning, and risk review. Use them when the work would pollute the
+parent thread, delegation is authorized by the prompt or by a user-enabled
+local hook policy, and the current Codex surface exposes delegation tools.
 
 - `repo_mapper`: maps relevant files, symbols, flows, and conventions.
 - `test_strategist`: finds focused tests, fixtures, and validation order.
@@ -152,14 +158,16 @@ agent roles, and the active instruction policy. In current Codex surfaces,
 enabling `multi_agent` makes the tools available but does not by itself count
 as a user request to use them. Current public Codex docs say Codex only spawns
 subagents when explicitly asked. In this workflow, that explicit request can
-come from the user prompt or from a user-enabled local hook policy that injects
-a delegation request for complex prompts, when the active runtime and
-instruction policy accept that hook context. If delegation is authorized and
-useful but subagent controls are not visible, and `tool_search` is available,
-the main agent should first search for multi-agent/subagent tools before
-reporting delegation unavailable. If a session still cannot spawn a subagent,
-the main agent should keep working with narrower reads and report that
-delegation was unavailable or not permitted.
+come from the user prompt or from a user-enabled local hook policy that adds a
+lightweight delegation request for complex prompts, when the active runtime and
+instruction policy accept that hook context. Once either source authorizes
+delegation, the main agent should choose targeted helper roles itself; the user
+does not need to name `repo_mapper`, `test_strategist`, or `risk_reviewer`. If
+delegation is authorized and useful but subagent controls are not visible, and
+`tool_search` is available, the main agent should first search for
+multi-agent/subagent tools before reporting delegation unavailable. If a
+session still cannot spawn a subagent, the main agent should keep working with
+narrower reads and report that delegation was unavailable or not permitted.
 
 The optional hook policy lives only under `$CODEX_HOME`:
 
@@ -175,10 +183,31 @@ When that policy is present at
 discovers configured read-only agents from `$CODEX_HOME/config.toml` and the
 referenced files under `$CODEX_HOME`. It injects agent names only by default,
 not local paths. This is still best-effort model-visible guidance; hooks do
-not directly call the subagent tool. When this policy context is present, the
-main agent should treat it as the local-policy delegation request for that turn
-and should not wait for another manual prompt phrase before using useful,
-available, and permitted read-only helpers.
+not directly call the subagent tool or repeat the full helper lifecycle. When
+this policy context is present, the main agent should treat it as an explicit
+request to consider bounded read-only delegation for that turn, then use
+targeted helpers when they are useful, available, and permitted.
+
+This skill's local hook layer owns only the non-SDLC global-context events:
+`SessionStart` for stable global context and task-state path injection, and
+`UserPromptSubmit` for lightweight prompt-time context, safety, or opt-in
+delegation requests. Do not use this layer to run Agentic SDLC loops. SDLC
+guardrails belong in separate `PreToolUse` and `Stop` hooks.
+
+Use `SessionStart` for global conventions, workspace context, environment
+notes, coding standards, and stable task-state path hints. Do not use it to
+select SDLC phases, modify run state, or inject large documents.
+
+Use `UserPromptSubmit` only for small global reminders, prompt safety, and
+lightweight context hints. Do not use it to route `sdlc-start`, parse
+requirements, select workflow skills, create run state, or inject large
+documents.
+
+If an Agentic SDLC task also needs long-task context management, use
+`global-context-management` only to manage parent-thread noise, task-state
+continuity, and optional read-only helpers. Keep phase selection, SDLC run
+state, requirements and design updates, authorization files, and SDLC write
+policy in the `sdlc-*` skills and their dedicated hooks.
 
 ### Parent/Subagent Lifecycle
 
@@ -206,7 +235,7 @@ What it can do is change future behavior:
 - keep task state in a durable file instead of re-explaining it in chat
 - keep raw logs and broad file listings out of the parent thread
 - delegate broad read-only mapping and validation planning when authorized by
-  the prompt or local hook policy, and available
+  the prompt or local hook policy, useful, and available
 - require concise summaries from subagents
 - close completed subagent threads after their results are consolidated, when
   close controls are available
@@ -222,16 +251,16 @@ installed.
 
 For a complex task, the intended flow is:
 
-1. Receive prompt and injected task-state path; for complex prompts, create or
-   reuse the task-state file automatically.
+1. Receive prompt and injected task-state path; hooks only advertise or reuse
+   an existing file and do not create task-state.
 2. Identify the objective, constraints, likely files, and validation path.
 3. Read existing task state when prior context may matter, then update it with
    the current plan.
-4. Use read-only subagents only when they reduce parent-thread noise,
-   delegation is authorized by the prompt or local hook policy, and the current
-   runtime permits delegation. Use `repo_mapper` and `test_strategist` early
-   only when useful and independent; close completed helpers after
-   consolidation. Do not spawn every configured role by default.
+4. Use read-only subagents when they reduce parent-thread noise, delegation is
+   authorized by the prompt or local hook policy, and the current runtime
+   permits delegation. Use `repo_mapper` and `test_strategist` early only when
+   useful and independent; close completed helpers after consolidation. Do not
+   spawn every configured role by default.
 5. Implement the smallest coherent change in the main thread.
 6. Inspect the diff and run focused validation.
 7. Use `risk_reviewer` near the end only for non-trivial or risky changes.
@@ -248,7 +277,7 @@ The hook does this:
 Before Codex starts working:
   "Here is the repo.
    Here is the task-state path.
-   Create it automatically only when the prompt looks complex.
+   Advertise it for complex prompts; do not create it automatically.
    Read it when it already exists and prior context may matter.
    Use the global workflow for complex work."
 
@@ -280,8 +309,9 @@ multi-agent tools, the active instructions must permit delegation for the task,
 and current public Codex docs say Codex only spawns subagents when explicitly
 asked. A prompt can explicitly ask for subagents, delegation, or parallel
 agents; a user-enabled local hook policy can also inject that explicit request
-for complex prompts. Either way, spawning remains subject to active runtime and
-instruction policy.
+for complex prompts. After either source authorizes delegation, Codex should
+choose useful targeted roles instead of waiting for the prompt to name one.
+Either way, spawning remains subject to active runtime and instruction policy.
 
 ## File Responsibilities
 
@@ -370,10 +400,13 @@ In the fresh session, open the hook review UI:
 /hooks
 ```
 
-Review the two configured hook commands. They should point to the local
-`$CODEX_HOME/hooks/session_start_context.py` and
-`$CODEX_HOME/hooks/user_prompt_context.py` scripts. Trust or enable those hooks
-from the `/hooks` UI only after confirming the paths are local and expected.
+Review the two configured global-context hook commands. They should point to
+the local `$CODEX_HOME/hooks/session_start_context.py` and
+`$CODEX_HOME/hooks/user_prompt_context.py` scripts. Trust or enable those
+hooks from the `/hooks` UI only after confirming the paths are local and
+expected.
+If other workflows add hooks, review those entries separately and keep their
+event ownership distinct.
 
 After trusting the hooks, start another fresh session and confirm a complex
 prompt receives an injected durable task-state path under:
@@ -397,4 +430,6 @@ To test policy-driven injection without hardcoding agent names into the public
 repo, create `$CODEX_HOME/hooks/global_context_policy.json` locally, restart
 Codex, trust the updated hook in `/hooks`, and run a complex prompt that does
 not mention a specific subagent. The hook should discover read-only agents from
-`$CODEX_HOME/config.toml` and request them by configured name.
+`$CODEX_HOME/config.toml` and request bounded read-only delegation by
+configured name. Codex should then choose targeted roles when useful, or state
+the active runtime/tool reason it cannot spawn them.

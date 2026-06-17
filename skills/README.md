@@ -9,12 +9,28 @@ has a local `README.md` that explains what the skill does, its architecture,
 core concepts, workflow, and important files. `SKILL.md` remains the runtime
 instruction file Codex loads when the skill is used.
 
+Every reusable skill includes a `## Learning Loop` section in `SKILL.md`. When
+durable, public-safe, evidence-backed knowledge is discovered while using a
+skill, the agent should capture it in the narrowest appropriate source material
+for that skill when the task contract allows source edits. For read-only or
+report-only work, the agent should report why source capture was skipped.
+`align-skill` can add or repair this rule during skill alignment.
+
 For skill-specific release notes, see [CHANGELOG.md](CHANGELOG.md).
 
 ## Included Skills
 
 - End-to-end project alignment: `align`
-- Skill folder alignment and validation: `align-skill`
+- Agentic SDLC workflow skills: `sdlc-create-requirements`, `sdlc-start`,
+  `sdlc-gather-context`, `sdlc-create-design`, `sdlc-create-plan`,
+  `sdlc-tdd`, `sdlc-implement-plan`, `sdlc-validate-codes`,
+  `sdlc-unit-tests`, `sdlc-evaluate`, `sdlc-classify-failure`,
+  `sdlc-gui-test`, `sdlc-tui-test`, `sdlc-align-specs`, `sdlc-commit`,
+  `sdlc-uat-tests`, `sdlc-merge-pr`, plus the reused `create-pr` and
+  `review-pr` handoff skills
+- Skill folder hardening, alignment, and validation: `align-skill`
+- Security review and safe remediation across infra, CI/CD, shell, and app
+  code: `apply-security`
 - Disposable Ubuntu project container setup: `attach-ubuntu`
 - Commit and push the current feature branch: `commit-push`
 - Branch-safe GitHub pull request creation with safe check repair: `create-pr`
@@ -59,6 +75,10 @@ $review-pr Review PR #110 against the base branch, fix safe issues on the branch
 $review-pr Review https://github.com/example-org/example-repo/pull/42, resolve straightforward conflicts against main if the branch is writable, and report remaining blockers.
 
 $align-skill Review and standardize skills/foo against the canonical skill structure and official vendor docs.
+
+$align-skill Harden this scaffolded skill folder into a safe, secure, fast Codex skill, then validate it.
+
+$apply-security Scan this repository for infrastructure, CI/CD, shell, and application security issues, then produce a prioritized remediation plan with safe patch candidates.
 
 $code-info Gather read-only project info from this folder or a GitHub repo with LOC by language and component, repo size, test files, CLI commands, modules, artifacts, and coverage.
 ```
@@ -105,11 +125,85 @@ together as a cautious senior code-review style alignment pass.
 
 ### `align-skill`
 
-`align-skill` reviews and improves one or more Codex or Agent Skill folders.
-Use it for named skills, local skill folders, multi-skill parent folders,
-GitHub skill repositories, or GitHub tree URLs when `SKILL.md`, trigger
-metadata, references, assets, scripts, safety guardrails, official vendor-doc
-verification, canonical structure, and validation evidence need to be aligned.
+`align-skill` reviews and hardens one or more existing or newly scaffolded Codex
+or Agent Skill folders. Use it for named skills, local skill folders,
+multi-skill parent folders, GitHub skill repositories, or GitHub tree URLs when
+`SKILL.md`, trigger metadata, references, assets, scripts, safety guardrails,
+official vendor-doc verification, canonical structure, validation evidence, fast
+authoring practices, optional stateful-workflow section profiles, and reusable
+learning capture in local skill source materials need to be aligned.
+
+### Agentic SDLC Skills
+
+The Agentic SDLC skills implement a skill-driven state machine for turning user
+ideas into requirements, design, locked local plans, test-first implementation,
+validation, evaluation, local commits, UAT, PR creation or reuse, PR review,
+and explicit final merge.
+Strictly SDLC-only skills use the `sdlc-` prefix, with the coordinator named
+`sdlc-start`, so tool discovery does not confuse workflow phases such as
+`sdlc-commit` with ordinary Git commands or general-purpose engineering skills.
+The committed product truth is `docs/requirements.md` and `docs/design.md`;
+private run state, plans, evidence, screenshots, transcripts, and steering live
+under `~/.codex/sdlc-runs/<project-id>/<run-id>/` and must not be committed.
+Optional global PreToolUse and Stop hooks can enforce SDLC invariants from that
+local state. Sensitive Git actions use short-lived local authorization files
+under the active run's `permissions/` directory; the skills create those files
+only immediately before the guarded action.
+The canonical source for those optional SDLC hooks is
+`sdlc-start/assets/hooks/`. Patch that source first, validate it with
+`sdlc-start/assets/hooks/tests/test_sdlc_hooks.py`, and sync reviewed hook
+bundles deliberately with `./install-skills.sh --install-all-hooks`; installed
+copies under `$CODEX_HOME/hooks` are runtime artifacts.
+Keep these SDLC hooks separate from the non-SDLC global-context hooks:
+`SessionStart` is for stable global context and task-state location, and
+`UserPromptSubmit` is only for lightweight prompt-time context, safety, or
+opt-in delegation requests.
+
+- `sdlc-create-requirements`: creates or updates `docs/requirements.md` from user
+  prompts, tickets, or approved change requests while preserving stable
+  `REQ-*` IDs.
+- `sdlc-start`: coordinates the active SDLC run, reads steering and local
+  checkpoints, selects the highest-priority incomplete feature, and chooses one
+  next skill without duplicating history on unchanged resumes.
+- `sdlc-gather-context`: builds compact feature context packs from official docs,
+  internal sources, code, and tests.
+- `sdlc-create-design`: creates or updates `docs/design.md`, maps requirements to
+  stable `FEAT-*` blocks, and defines validation, test, and evaluation plans.
+- `sdlc-create-plan`: creates locked private local execution plans for one feature.
+- `sdlc-tdd`: writes or maps tests before implementation.
+- `sdlc-implement-plan`: implements production code for the current locked feature
+  plan only.
+- `sdlc-validate-codes`: runs syntax, lint, type, import, config, dependency, and
+  build checks where configured.
+- `sdlc-unit-tests`: runs feature behavior, regression, integration, component,
+  contract, or mock-based tests.
+- `sdlc-evaluate`: observes feature behavior against acceptance criteria and routes
+  to GUI, TUI, API, service, or manual evaluation.
+- `sdlc-align-specs`: checks SDLC requirements, design, plans, tests,
+  implementation, and evidence for consistency before commit or PR readiness.
+- `sdlc-classify-failure`: classifies failed phases before retrying and routes to
+  the earliest responsible SDLC phase.
+- `sdlc-gui-test`: controls and evaluates browser UI flows with screenshots or
+  accessibility snapshots when available.
+- `sdlc-tui-test`: controls and evaluates terminal, CLI wizard, or TUI flows with
+  transcripts and exit-code evidence.
+- `sdlc-commit`: creates local feature-scoped Git commits after validation, tests,
+  and evaluation pass; it never pushes and does not replace `commit-push`.
+- `sdlc-uat-tests`: runs product-level user acceptance testing before PR creation.
+- `create-pr`: existing PR skill reused as the SDLC handoff after UAT passes;
+  it opens or reuses the PR and summarizes SDLC evidence.
+- `review-pr`: existing PR review skill reused for SDLC merge-readiness review
+  against specs, checks, reviews, and local evidence.
+- `sdlc-merge-pr`: merges a specific PR only after an explicit user request and
+  final readiness checks.
+
+### `apply-security`
+
+`apply-security` reviews infrastructure, deployment, Helm, Kubernetes,
+Terraform, CI/CD, Bash, Python, Java, JavaScript, TypeScript, and Rust code for
+security issues, ranks findings by severity, confidence, exploitability, and
+blast radius, plans safe remediations, and applies minimal patches only when
+they preserve intended behavior or have explicit approval.
 
 ### `attach-ubuntu`
 
@@ -169,14 +263,18 @@ monorepo-friendly workflow structure.
 recoverable by using durable task-state files, limiting noisy parent-thread
 exploration, delegating bounded read-only investigation when the user
 explicitly authorizes delegation or enables a local hook delegation policy and
-the runtime permits it, closing completed subagent threads after their results
-are consolidated when close controls are available, and reviewing risk before
-final answers. Its public skill files stay generic; local hooks, custom agent
-config, and task-state files belong under `$CODEX_HOME`. The hook setup creates
-task state lazily for complex prompts instead of scaffolding every session; the
-file is meant to be read at task start, resume, or after compaction when prior
-context may matter, then updated with concise decisions, validation status, and
-next action.
+the runtime permits it, choosing targeted helper roles after authorization
+instead of requiring the prompt to name them, closing completed subagent
+threads after their results are consolidated when close controls are available,
+and reviewing risk before final answers. Its public skill files stay generic;
+local hooks, custom agent config, and task-state files belong under
+`$CODEX_HOME`. The hook setup advertises session-scoped task-state paths
+without creating missing state files; an existing file is meant to be read at
+task start, resume, or after compaction when prior context may matter, then
+updated with concise decisions, validation status, and next action. This
+non-SDLC setup owns `SessionStart` and `UserPromptSubmit` only; Agentic SDLC
+skills and guardrails own SDLC phase selection, run state, `PreToolUse`, and
+`Stop`.
 
 ### `gitignore`
 
@@ -277,18 +375,29 @@ be removed with `--remove-skill` when they are not same-source managed.
 - `bash`
 - `rsync`
 - `git` for GitHub sources
+- standard POSIX-style utilities for hook installation: `install`, `find`,
+  `cmp`, `chmod`, `awk`, `cut`, `sort`, and `mktemp`
 
 ### Usage
 
 ```bash
 ./install-skills.sh [source] [destination_dir]
 ./install-skills.sh --remove-skill <skill_name> [destination_dir]
+./install-skills.sh --install-hooks <source_hook_dir>
+./install-skills.sh --install-all-hooks
 ./install-skills.sh --help
 ```
 
 With no arguments, `./install-skills.sh` uses the directory containing the
 script as the source and installs every sibling skill folder that contains
 `SKILL.md` into the default Codex target, `~/.agents/skills`.
+The `--install-hooks` option is deliberately separate from normal skill
+installation. It copies hook files from an explicit source hook directory into
+`${CODEX_HOME:-$HOME/.codex}/hooks`, stripping `.template` suffixes for
+installed files, without modifying `hooks.json` or trusting hooks.
+The `--install-all-hooks` option is also explicit, but discovers every reviewed
+hook-only `*/assets/hooks` directory under this source skills folder and syncs
+those payload files in one pass. It does not scan mixed `assets/` directories.
 
 ### Supported Sources
 
@@ -332,6 +441,18 @@ script as the source and installs every sibling skill folder that contains
 
 # Remove from a custom destination
 ./install-skills.sh --remove-skill vendor-nebius "~/custom-skills"
+
+# Copy optional Agentic SDLC hooks into the default local Codex home
+./install-skills.sh --install-hooks sdlc-start/assets/hooks
+
+# Copy global context-management hook templates into the default local Codex home
+./install-skills.sh --install-hooks config-codex/assets/hooks
+
+# Copy every reviewed hook-only bundle into the default local Codex home
+./install-skills.sh --install-all-hooks
+
+# Copy hooks into a non-default Codex home
+CODEX_HOME=~/custom-codex ./install-skills.sh --install-all-hooks
 ```
 
 ### Notes
@@ -365,3 +486,11 @@ script as the source and installs every sibling skill folder that contains
   back.
 - Stale skill cleanup only applies to skills previously installed from the same
   source.
+- `--install-hooks <source_hook_dir>` is opt-in because hooks are local runtime
+  guardrails, not skills. Use a hook-only source directory such as
+  `sdlc-start/assets/hooks` or `config-codex/assets/hooks`. After syncing them,
+  restart Codex and review/trust the hook entries in `/hooks`.
+- `--install-all-hooks` discovers only skill-owned hook-only directories named
+  `*/assets/hooks` under this source folder, checks for conflicting installed
+  file names, and syncs all reviewed hook bundles into
+  `${CODEX_HOME:-$HOME/.codex}/hooks`.

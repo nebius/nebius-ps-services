@@ -1,0 +1,23 @@
+# FEAT-<id> Commit Evidence
+
+## Preconditions
+
+- Validation: <pass>
+- Tests: <pass>
+- Evaluation: <pass>
+- Branch: <branch>
+
+## Commit
+
+- Hash: <hash>
+- Message: <message>
+- Requirements: REQ-<id>
+- Feature: FEAT-<id>
+
+## Files Included
+
+- <path>: <reason>
+
+## Files Excluded
+
+- <path>: <reason>

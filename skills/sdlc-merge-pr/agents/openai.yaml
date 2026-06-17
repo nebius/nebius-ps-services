@@ -1,0 +1,4 @@
+interface:
+  display_name: "SDLC Merge PR"
+  short_description: "Explicit final PR merge"
+  default_prompt: "Use $sdlc-merge-pr to merge an Agentic SDLC pull request only after explicit human instruction and final readiness verification."

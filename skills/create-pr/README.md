@@ -15,6 +15,10 @@ and GitHub steps.
   failures before presenting PR creation as handled.
 - Opens or reuses GitHub pull requests.
 - Preserves explicit user-supplied PR titles and bodies.
+- When invoked from Agentic SDLC, checks local UAT evidence and summarizes
+  requirements, features, validation, tests, evaluation, and UAT in the PR body.
+- When Agentic SDLC local state is available, records the PR URL and readiness
+  summary in run evidence.
 - Reports PR URLs, readiness, and merge order for multi-branch work.
 
 ## Architecture
@@ -55,9 +59,11 @@ Report PR number, URL, and blockers
 5. Run focused validation and repair safe branch-owned failures.
 6. Push the branch.
 7. Open or reuse the PR with the requested title and body.
-8. Keep repairing available branch-caused check failures when safe, or mark a
+8. For Agentic SDLC runs, include available SDLC evidence and use a draft PR
+   for explicitly requested early PRs when UAT is missing or failed.
+9. Keep repairing available branch-caused check failures when safe, or mark a
    real blocker.
-9. Return PR details, validation state, and remaining blockers.
+10. Return PR details, validation state, and remaining blockers.
 
 ## Core Concepts
 

@@ -116,6 +116,23 @@ Implement Nebius IAM/Object Storage, VPC networking, quota-management, and MK8s 
    - aggregate shared quota consumers before comparing against available capacity
    - treat unresolved limits as warnings or coverage gaps, not as proof that quota is sufficient
 
+## Learning Loop
+
+When using this skill, capture durable, reusable, public-safe learnings back
+into this skill's local source materials before completion when the current task
+contract allows source edits. Update the narrowest appropriate surface:
+`SKILL.md` for runtime rules, `references/` for detailed guidance, `assets/`
+for reusable templates, `scripts/` for deterministic helpers, and README or
+changelog entries for human-facing or release-note updates.
+
+If the current task is explicitly read-only/report-only, or source writes are
+outside this skill's task contract, do not edit skill sources; report the
+skipped source update instead.
+
+Do not capture secrets, private URLs, customer data, raw logs, one-off local
+state, or unverified/vendor-specific claims. If a useful learning is not safe,
+not evidence-backed, or outside this skill's scope, report that it was skipped.
+
 ## Guardrails
 
 - Never print or commit private keys, tokens, or access key secrets.
