@@ -94,6 +94,10 @@ def assert_no_prompt_leak(state_file: Path) -> None:
 def assert_missing_state_path(state_file: Path, codex_home: Path) -> None:
     if state_file.exists():
         raise AssertionError(f"hook unexpectedly created task-state file: {state_file}")
+    if state_file.parent.exists():
+        raise AssertionError(
+            f"hook unexpectedly created task-state directory: {state_file.parent}"
+        )
     try:
         state_file.relative_to(codex_home)
     except ValueError as exc:
@@ -173,6 +177,8 @@ config_file = "agents/write_worker.toml"
 
 
 def assert_agent_delegation_context(context: str) -> None:
+    if len(context) > 1200:
+        raise AssertionError("delegation context is too large for a lightweight hint")
     expected = ("alpha_mapper", "beta_test_planner", "gamma_risk_reviewer")
     for name in expected:
         if f"`{name}`" not in context:
@@ -182,29 +188,28 @@ def assert_agent_delegation_context(context: str) -> None:
         raise AssertionError("non-read-only agent leaked into context")
     if "agents/alpha_mapper.toml" in context:
         raise AssertionError("agent config path leaked into context")
-    if "Hook-assisted read-only subagent delegation is enabled" not in context:
+    if (
+        "Local policy requests bounded read-only subagent delegation"
+        not in context
+    ):
         raise AssertionError("delegation policy context missing")
-    if "local-policy delegation request for this turn" not in context:
-        raise AssertionError("local-policy delegation request guidance missing")
-    if "another manual user request" not in context:
-        raise AssertionError("manual delegation prompt fallback guidance missing")
-    if "explicitly use all discovered read-only roles" in context:
-        raise AssertionError("over-broad all-role subagent guidance returned")
-    if "Do not spawn every configured role by default" not in context:
+    if "Available read-only roles:" not in context:
+        raise AssertionError("read-only role list missing")
+    if "Suggested role timing:" not in context:
+        raise AssertionError("role timing hint missing")
+    if "do not spawn every role by default" not in context:
         raise AssertionError("bounded subagent selection guidance missing")
-    if "parallel only when their work is independent and useful" not in context:
-        raise AssertionError("useful early exploration guidance missing")
-    if "near the end for non-trivial or risky changes" not in context:
-        raise AssertionError("late risk-review guidance missing")
-    if "close the completed subagent thread" not in context:
-        raise AssertionError("subagent cleanup guidance missing")
-    if "continue waiting on the remaining handles" not in context:
-        raise AssertionError("multi-subagent cleanup guidance missing")
-    if "`wait_agent` completions" not in context:
-        raise AssertionError("wait_agent cleanup guidance missing")
-    if "asynchronous subagent completion notifications" not in context:
-        raise AssertionError("async subagent cleanup guidance missing")
-    assert_tool_search_discovery_guidance(context, "delegation context")
+    forbidden = (
+        "For every subagent you spawn",
+        "close the completed subagent thread",
+        "continue waiting on the remaining handles",
+        "`wait_agent` completions",
+        "asynchronous subagent completion notifications",
+        "`tool_search` is available",
+    )
+    for needle in forbidden:
+        if needle in context:
+            raise AssertionError(f"delegation context repeats workflow detail: {needle}")
 
 
 def assert_no_default_agent_names(context: str) -> None:
@@ -341,6 +346,7 @@ def assert_doc_contracts(root: Path) -> None:
 
     required_skill = (
         "No legacy task-state",
+        "it must allow writes under\n`$CODEX_HOME/task-state`",
     )
     for needle in required_skill:
         if needle not in gcm_skill:
@@ -352,7 +358,8 @@ def assert_doc_contracts(root: Path) -> None:
         "manual or legacy fallback path",
         "hidden state automatically active",
         "continuity note",
-        "Synthetic complex-prompt hook probes that pass a made-up `session_id`",
+        "should not create task-state files or directories",
+        "Any local PreToolUse write guard must explicitly allow\n`$CODEX_HOME/task-state` writes",
     )
     for needle in required_gcm:
         if needle not in gcm_readme:
@@ -362,8 +369,8 @@ def assert_doc_contracts(root: Path) -> None:
         "Treat runtime activation as unverified",
         "task-state path under",
         "Direct hook unit probes against a live `$CODEX_HOME`",
-        "checks that `SessionStart` does not create missing scaffold files",
-        "manual or legacy task-state path",
+        "do not create missing scaffold",
+        "No manual or legacy",
     )
     for needle in required_config:
         if needle not in config_readme:
@@ -420,10 +427,17 @@ def validate_direct_hooks(root: Path, codex_home: Path, home: Path) -> None:
         "additionalContext"
     ]
     assert_no_default_agent_names(session_context)
-    assert_tool_search_discovery_guidance(session_context, "SessionStart")
     state_file = extract_state_path(session_result.stdout)
     if not str(state_file).startswith(str(codex_home / "task-state") + os.sep):
         raise AssertionError(f"state file is outside CODEX_HOME: {state_file}")
+    if len(session_context) > 800:
+        raise AssertionError("SessionStart context is too large")
+    if "Apply the `global-context-management` skill" in session_context:
+        raise AssertionError("SessionStart should not directly select skills")
+    if "subagent" in session_context.lower():
+        raise AssertionError("SessionStart should not inject subagent workflow detail")
+    if "sdlc-start" in session_context:
+        raise AssertionError("SessionStart should not route SDLC")
     assert_missing_state_path(state_file, codex_home)
     preserved_state = (
         "# Current Codex task state\n\n"
@@ -498,10 +512,18 @@ def validate_direct_hooks(root: Path, codex_home: Path, home: Path) -> None:
         state_file=state_file,
         expected_text=preserved_state,
     )
-    if "Apply the `global-context-management` skill" not in context:
-        raise AssertionError("complex prompt did not request the skill")
-    if "Hook-assisted read-only subagent delegation is enabled" in context:
+    if "Global context hint for a complex prompt." not in context:
+        raise AssertionError("complex prompt did not provide global context hint")
+    if len(context) > 900:
+        raise AssertionError("non-delegated UserPromptSubmit context is too large")
+    if "sdlc-start" in context:
+        raise AssertionError("UserPromptSubmit should not route sdlc-start")
+    if "Apply the `global-context-management` skill" in context:
+        raise AssertionError("UserPromptSubmit should not directly select skills")
+    if "Local policy requests bounded read-only subagent delegation" in context:
         raise AssertionError("delegation context appeared before policy opt-in")
+    if "For every subagent you spawn" in context:
+        raise AssertionError("UserPromptSubmit repeated subagent workflow detail")
     if SENTINEL_MARKER in context:
         raise AssertionError("hook echoed prompt content into model context")
     assert_no_prompt_leak(state_file)
@@ -526,12 +548,7 @@ def validate_direct_hooks(root: Path, codex_home: Path, home: Path) -> None:
             "fresh complex prompt used unexpected state path: "
             f"{fresh_complex_state} != {expected_fresh_complex_state}"
         )
-    if not fresh_complex_state.exists():
-        raise AssertionError(
-            f"fresh complex prompt did not create: {fresh_complex_state}"
-        )
-    assert_private_file(fresh_complex_state)
-    assert_no_prompt_leak(fresh_complex_state)
+    assert_missing_state_path(fresh_complex_state, codex_home)
 
     missing_session_complex_payload = {
         "cwd": cwd,
@@ -562,7 +579,10 @@ def validate_direct_hooks(root: Path, codex_home: Path, home: Path) -> None:
     env_override_context = json.loads(env_override_result.stdout)["hookSpecificOutput"][
         "additionalContext"
     ]
-    if "Hook-assisted read-only subagent delegation is enabled" in env_override_context:
+    if (
+        "Local policy requests bounded read-only subagent delegation"
+        in env_override_context
+    ):
         raise AssertionError("environment override unexpectedly enabled delegation")
 
     write_agent_fixture(codex_home, enable_policy=True)

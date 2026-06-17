@@ -16,6 +16,12 @@
 - Optional folders present:
 - Repository conventions:
 
+## Learning Loop Coverage
+
+- Skills missing `## Learning Loop`:
+- Skills with equivalent wording:
+- Skills needing repair:
+
 ## Risks
 
 - Destructive operations:
@@ -31,6 +37,19 @@
 ## Proposed Changes
 
 - TBD
+
+## Skill Authoring Guidance
+
+- Scaffolded skill, draft skill, or update task:
+- Best-practice reference loaded:
+- Trigger prompt examples to add or revise:
+- Safe/secure/fast hardening concerns:
+
+## Source Materials To Update
+
+- Durable learnings to capture:
+- Local skill sources likely to change:
+- Source updates to skip:
 
 ## Validation Plan
 

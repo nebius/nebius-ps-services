@@ -107,6 +107,12 @@ All notable changes to this project are tracked here. This changelog follows
   or recovery.
 - Changed the bundled Soperator portable app source to the published Nebius OCI
   chart at version `4.0.2-ps.1`.
+- Changed bundled Soperator production profiles to leave worker `slurmd` and
+  `munge` image selection to the selected chart defaults instead of duplicating
+  image tags in `component_cli_settings.yaml`. The same profiles now default
+  `system` to autoscaling from 3 to 5 nodes, and default `controller`, `login`,
+  and `accounting` to two fixed nodes each. Their catalog-owned CPU role shape
+  now uses `cpu-d3/32vcpu-128gb` as the production minimum.
 - Clarified external Soperator safe-surge rollout output so the dry-run/execute
   plan says the spare worker quota and capacity gate runs during `--execute`
   preflight before any cluster mutation, and pinned that gate with executor
@@ -707,9 +713,7 @@ All notable changes to this project are tracked here. This changelog follows
 - Updated the bundled Soperator app catalog pin to chart version
   `3.0.5-ps.1`, and made local-profile Helm chart sources derive missing
   chart name/version metadata from their checked-out `Chart.yaml` so generated
-  `config.yaml` rows show the active local chart version. The bundled
-  Soperator profile defaults now use the matching `3.0.5-slurm25.11.3`
-  worker and Munge image tags.
+  `config.yaml` rows show the active local chart version.
 - Added live VPC network/subnet selection for subnet-attached infra in `create`
   and `component add`. `mk8s`, `vm`, `nfs`, `wireguard-gw`, and
   `ssh-jumphost` now list project VPC networks first, list only subnets in the
@@ -1100,7 +1104,7 @@ All notable changes to this project are tracked here. This changelog follows
   defaults are applied to the `system`, `controller`, `login`, `accounting`,
   and CPU worker MK8s node groups before Terraform render.
 - Raised the built-in Soperator production CPU role baseline to
-  `cpu-d3/8vcpu-32gb` and added the catalog-owned login role taint so fresh
+  `cpu-d3/32vcpu-128gb` and added the catalog-owned login role taint so fresh
   production clusters have schedulable controller/login capacity while cxcli
   still derives the matching Soperator tolerations from node-group taints.
 - Fixed Soperator MK8s node-group boot-disk materialization so profile-owned

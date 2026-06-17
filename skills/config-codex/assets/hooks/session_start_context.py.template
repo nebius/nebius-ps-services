@@ -95,45 +95,17 @@ without creating a manual fallback path or repo-local state file.
     else:
         task_state_context = f"""Durable task-state file: `{state_file}`
 
-SessionStart only advertises this path; it does not create a scaffold file for
-every session. For complex prompts, the prompt hook creates or reuses this file
-automatically. If the file already exists, read it at the start of complex work
-when it may contain prior decisions, validation status, or next action. Use it
-instead of creating repo-local state files.
+SessionStart only advertises this path; it does not create task-state, SDLC run
+state, or workflow state. If the file already exists, read it when prior
+decisions may matter.
 """
 
-    context = f"""Global context management is enabled.
+    context = f"""Global context is available.
 
 Workspace root: `{root}`
 {task_state_context}
-
-For non-trivial planning, implementation, debugging, refactoring, migration,
-architecture, review, testing, CI failure, or multi-file work, apply the
-`global-context-management` skill.
-
-Use bounded read-only subagents when delegation is authorized by the user
-prompt or by a user-enabled local hook policy, when they are useful, the
-current runtime exposes subagent tools, and the current instructions permit
-delegation. When hook-assisted delegation is enabled, the prompt hook
-discovers configured read-only subagent roles from the local Codex config and
-requests them by configured name.
-
-If delegation was not authorized by the prompt or local hook policy, or
-subagents are unavailable or not permitted, continue with narrow local reads and
-state that limitation.
-If delegation is authorized and useful but subagent controls are not visible,
-and `tool_search` is available, first search for multi-agent/subagent tools
-before reporting delegation unavailable.
-
-When subagents are used, ask them for concise final summaries, wait for their
-results, consolidate them in the parent thread, and close completed subagent
-threads when close controls are available and no follow-up is needed.
-With multiple subagents, close each completed handle as its terminal result
-arrives, then continue waiting on the remaining handles.
-
-Keep the parent thread concise and update the task-state file before
-implementation, after major edits, after tests, before compaction, and before
-the final response.
+Keep raw logs, secrets, and broad exploration output out of durable task state.
+Use project skills for workflow-specific instructions.
 """
 
     print(

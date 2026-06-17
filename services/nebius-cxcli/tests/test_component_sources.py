@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Iterator
 from copy import deepcopy
 from dataclasses import asdict
 from pathlib import Path
@@ -83,6 +84,16 @@ def _deep_merge_mapping(base: dict, override: dict) -> dict:
         else:
             merged[key] = deepcopy(value)
     return merged
+
+
+def _walk_mappings(value: object) -> Iterator[dict]:
+    if isinstance(value, dict):
+        yield value
+        for item in value.values():
+            yield from _walk_mappings(item)
+    elif isinstance(value, list):
+        for item in value:
+            yield from _walk_mappings(item)
 
 
 def setup_function() -> None:
@@ -557,7 +568,7 @@ def test_bundled_catalog_exposes_soperator_and_nfs_local_sources() -> None:
         profile = soperator.soperator_nodesets.profiles[profile_name]
         assert profile["mk8s"]["inputs"]["node_group_defaults"]["cpu"] == {
             "platform": "cpu-d3",
-            "preset": "8vcpu-32gb",
+            "preset": "32vcpu-128gb",
         }
         for role in ("system", "controller", "login", "accounting"):
             assert profile["mk8s"]["node_groups"][role]["autoscaling_input"] == (
@@ -2860,6 +2871,47 @@ def test_component_sources_rejects_invalid_observability_gpu_node_label_stack_so
         load_component_sources(explicit=sources_file)
 
 
+def _repo_soperator_nodesets_profiles() -> dict:
+    profiles = (
+        _repo_component_cli_settings_payload()["components"]["apps"]["soperator"]["cli"][
+            "soperator_nodesets_profile"
+        ]["profiles"]
+    )
+    assert isinstance(profiles, dict)
+    return profiles
+
+
+def test_bundled_soperator_profile_service_role_defaults_are_consistent() -> None:
+    profiles = _repo_soperator_nodesets_profiles()
+
+    for profile_name in ("nebius-cpu-v1", "nebius-mixed-v1", "nebius-gpu-v1"):
+        node_groups = profiles[profile_name]["mk8s"]["node_groups"]
+        assert node_groups["system"]["node_count"] == 3
+        assert node_groups["system"]["autoscaling"] == {
+            "min_node_count": 3,
+            "max_node_count": 5,
+        }
+        assert node_groups["system"]["node_count_input"] == "soperator.system_node_count"
+        assert (
+            node_groups["system"]["autoscaling_input"] == "soperator.system_autoscaling"
+        )
+        for role in ("controller", "login", "accounting"):
+            assert node_groups[role]["node_count"] == 2
+            assert node_groups[role]["node_count_input"] == f"soperator.{role}_node_count"
+            assert node_groups[role]["autoscaling_input"] == f"soperator.{role}_autoscaling"
+
+
+def test_bundled_soperator_profiles_leave_worker_images_to_chart_defaults() -> None:
+    profiles = _repo_soperator_nodesets_profiles()
+
+    for profile_name in ("nebius-cpu-v1", "nebius-mixed-v1", "nebius-gpu-v1"):
+        for item in _walk_mappings(profiles[profile_name]):
+            for container_key in ("slurmd", "munge"):
+                container = item.get(container_key)
+                if isinstance(container, dict):
+                    assert "image" not in container
+
+
 def test_bundled_mk8s_declares_optional_wizard_field_override() -> None:
     loaded = load_component_sources(
         explicit=Path(__file__).resolve().parents[1] / "component_sources.yaml"
@@ -2947,18 +2999,33 @@ def test_bundled_mk8s_declares_optional_wizard_field_override() -> None:
         "write_default_to_config": True,
         "type_hint": "number",
     }
-    for field in (
-        "system_node_count",
-        "controller_node_count",
-        "login_node_count",
-        "accounting_node_count",
-    ):
+    assert mk8s_wizard_fields["inputs.soperator.system_node_count"] == {
+        "default": 3,
+        "write_default_to_config": True,
+        "type_hint": "number",
+    }
+    for field in ("controller_node_count", "login_node_count", "accounting_node_count"):
         assert mk8s_wizard_fields[f"inputs.soperator.{field}"] == {
-            "default": 1,
+            "default": 2,
             "write_default_to_config": True,
             "type_hint": "number",
         }
-    for role in ("system", "controller", "login", "accounting", "worker"):
+    assert mk8s_wizard_fields["inputs.soperator.system_autoscaling.enabled"] == {
+        "default": True,
+        "write_default_to_config": True,
+        "type_hint": "bool",
+    }
+    assert mk8s_wizard_fields["inputs.soperator.system_autoscaling.min_node_count"] == {
+        "default": 3,
+        "write_default_to_config": True,
+        "type_hint": "number",
+    }
+    assert mk8s_wizard_fields["inputs.soperator.system_autoscaling.max_node_count"] == {
+        "default": 5,
+        "write_default_to_config": True,
+        "type_hint": "number",
+    }
+    for role in ("controller", "login", "accounting", "worker"):
         assert mk8s_wizard_fields[f"inputs.soperator.{role}_autoscaling.enabled"] == {
             "default": False,
             "write_default_to_config": True,

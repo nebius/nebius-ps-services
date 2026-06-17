@@ -1,0 +1,4 @@
+interface:
+  display_name: "SDLC Classify Failure"
+  short_description: "Route SDLC failures"
+  default_prompt: "Use $sdlc-classify-failure to classify Agentic SDLC failures and select the correct retry or stop route before any loop retry."

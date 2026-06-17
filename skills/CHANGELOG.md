@@ -6,6 +6,24 @@ All notable changes to the reusable Codex skills are tracked here.
 
 ### Added
 
+- Added the Agentic SDLC skill set: `sdlc-create-requirements`, `sdlc-start`,
+  `sdlc-gather-context`, `sdlc-create-design`, `sdlc-create-plan`,
+  `sdlc-tdd`, `sdlc-implement-plan`, `sdlc-validate-codes`,
+  `sdlc-unit-tests`, `sdlc-evaluate`, `sdlc-classify-failure`,
+  `sdlc-gui-test`, `sdlc-tui-test`, `sdlc-commit`, `sdlc-uat-tests`,
+  `sdlc-merge-pr`, and `sdlc-align-specs`. These skills keep committed
+  product truth in `docs/requirements.md` and
+  `docs/design.md`, keep execution state under `~/.codex/sdlc-runs`, and
+  model the SDLC loop as skill-selected phases rather than a workflow CLI. The
+  SDLC flow reuses existing `create-pr` and `review-pr` as PR creation and
+  review handoff phases.
+- Added SDLC templates for requirements, design, context packs, locked feature
+  plans, validation/test/evaluation evidence, local commit evidence, and UAT
+  reports, plus state-schema and failure-taxonomy references.
+- Added a source bundle for optional Agentic SDLC PreToolUse and Stop hooks
+  under `sdlc-start/assets/hooks/`, including shared hook helpers and local
+  unit tests for continuation, write-policy, authorization, steering, and
+  short-alias behavior.
 - Added this `skills/CHANGELOG.md` so reusable-skill release notes live with
   the skills instead of in the monorepo root changelog.
 - Added the `align` Codex skill for end-to-end project review and repair passes
@@ -16,6 +34,10 @@ All notable changes to the reusable Codex skills are tracked here.
   Agent Skill folders, including `SKILL.md`, references, assets, scripts,
   official vendor-doc verification, safety guardrails, canonical structure, and
   validation evidence.
+- Added the `apply-security` Codex skill for security scans, remediation
+  plans, safe patching, verification, and explanation across Terraform,
+  Kubernetes, Helm, CI/CD, Bash, Python, Java, JavaScript, TypeScript, and Rust
+  codebases.
 - Added the `attach-ubuntu` Codex skill with a Bash helper that creates or
   reuses a per-project Ubuntu container, mounts the current project at
   `/workdir`, updates VS Code attached-container defaults, bootstraps Ubuntu
@@ -61,6 +83,86 @@ All notable changes to the reusable Codex skills are tracked here.
 
 ### Changed
 
+- Relaxed `global-context-management` subagent guidance so, after a prompt or
+  user-enabled local hook policy authorizes delegation, Codex should choose
+  useful targeted read-only helper roles instead of waiting for the prompt to
+  name them, while still treating runtime tool availability and active
+  instructions as hard gates; `SKILL.md` now also has explicit stateful
+  workflow sections for inputs, required reads, writes, idempotency, failure
+  handling, must-not rules, process, and completion criteria.
+- Renamed SDLC-only workflow skills and the coordinator to `sdlc-*` names, and
+  made their front matter descriptions start with
+  `Use only as part of the Agentic SDLC workflow;` so tool discovery separates
+  SDLC phases from ordinary commands and general-purpose skills.
+- Hardened the Agentic SDLC Stop hook source so continuation prompts emit
+  `sdlc-start` and canonical `sdlc-*` next-skill names, normalize short
+  phase aliases only as input, and recognize pause or PR-control steering such as
+  `Pause after the current feature. Do not create a PR.`
+- Allowed the Agentic SDLC PreToolUse hook source to write
+  `$CODEX_HOME/task-state` files so `global-context-management` can persist
+  session-scoped continuity notes while unrelated `$CODEX_HOME/hooks` writes
+  remain blocked.
+- Updated `install-skills.sh` with an explicit
+  `--install-hooks <source_hook_dir>` option that copies hook files from a
+  selected hook source directory into `${CODEX_HOME:-$HOME/.codex}/hooks`,
+  keeping runtime hook sync separate from normal skill installation and from
+  `hooks.json` trust decisions.
+- Added `install-skills.sh --install-all-hooks` to install every reviewed
+  skill-owned hook bundle from `*/assets/hooks` under the source skills folder,
+  with destination collision checks and idempotent unchanged reporting for hook
+  files.
+- Aligned `config-codex` idempotency checks with the current local setup model:
+  exact global `AGENTS.md` parity when requested, required global hook
+  registrations as a `hooks.json` subset, and required public-safe MCP servers
+  while preserving extra workflow hooks and machine-specific MCP entries.
+- Strengthened `global-context-management` wording so authorized read-only
+  subagents are preferred for useful read-heavy sidecar work when the prompt or
+  local hook policy authorizes delegation and the current runtime permits it.
+- Updated `align-skill` with an optional stateful-workflow profile for
+  state-machine skills that manage local state, locked plans, evidence,
+  continuation, retries, or failure routing, including a reusable template and
+  `--profile stateful-workflow` validator support.
+- Clarified the `align-skill` README definition of stateful workflow skills,
+  including when to use the profile and a concise SDLC coordinator example.
+- Updated `create-pr` and `review-pr` with Agentic SDLC handoff guidance so
+  they can read local SDLC evidence when invoked in that workflow while
+  preserving their general PR behavior.
+- Hardened `sdlc-start` so coordinator reruns resume from explicit
+  checkpoints, repair partial pointer writes from the newest complete
+  checkpoint, avoid duplicate history on unchanged resumes, and keep locked
+  plans append-only by superseding instead of editing in place.
+- Documented the runtime hook authorization handoff for Agentic SDLC:
+  `sdlc-commit`, `create-pr`, and `sdlc-merge-pr` now write short-lived local
+  authorization files under the active run before guarded Git actions, and
+  `sdlc-start` state schema records the `permissions/` directory contract.
+- Clarified hook ownership boundaries: non-SDLC global-context hooks own
+  `SessionStart` and lightweight `UserPromptSubmit` context, while Agentic
+  SDLC uses only separate `PreToolUse` and `Stop` hooks.
+- Tightened global-context hook rules so `SessionStart` is limited to stable
+  global context and `UserPromptSubmit` is limited to lightweight prompt-time
+  hints, with no SDLC routing, requirements parsing, workflow skill selection,
+  run-state creation, or large-document injection.
+- Reduced global-context hook payloads so `SessionStart` and `UserPromptSubmit`
+  no longer repeat detailed workflow or subagent lifecycle instructions already
+  owned by `global-context-management`.
+- Hardened `apply-security` validation guidance so lockfile maintenance,
+  cache/build directory writes, external registry submissions,
+  package-manager auto-install behavior, and live-credential checks require
+  explicit scope and safety review.
+- Updated `align-skill` so each alignment run captures evidence-backed,
+  public-safe reusable learnings back into the target skill's local source
+  materials before completion, and reports any source updates that were skipped.
+- Updated `align-skill` so it can be triggered as a helper for hardening
+  scaffolded or draft skills and applies safe, secure, fast authoring guidance
+  without replacing `skill-creator` for initial scaffolding.
+- Updated `align-skill` to recognize optional `evals/` folders for reusable
+  trigger or quality-evaluation prompts, matching the existing `helmchart`
+  trigger-eval convention, and added a validator self-test for the `evals/`
+  acceptance plus unknown-folder warning behavior.
+- Added a standard `## Learning Loop` rule to every reusable skill so durable,
+  public-safe, evidence-backed learnings can be captured by the task skill that
+  is already loaded, and taught `align-skill` validation to enforce the rule on
+  target skills while preserving read-only and report-only task contracts.
 - Tightened the `code-info` skill contract so invoking it is explicitly
   read-only information gathering: it reports from existing files only and does
   not edit, format, build, test, install, generate coverage, or stage files.
@@ -153,10 +255,10 @@ All notable changes to the reusable Codex skills are tracked here.
   existing nonempty `current.md` task-state file is preserved for the agent to
   read instead of being overwritten or injected into hook context, and tightened
   hook templates so reused task-state files are chmod-repaired to `0600`.
-- Changed task-state hook behavior to lazy automatic creation: `SessionStart`
-  now injects the session-scoped path without creating a missing `current.md`,
-  while `UserPromptSubmit` creates or reuses task state only for prompts that
-  look complex.
+- Changed task-state hook behavior to advertise-only: `SessionStart` injects
+  the session-scoped path without creating a missing `current.md`, while
+  `UserPromptSubmit` only advertises or reuses the same path for complex
+  prompts and does not create task-state, SDLC run state, or workflow state.
 - Tightened the `global-context-management` `SKILL.md` non-goals so a missing
   global task-state path no longer permits repo-local or manual fallback state;
   repo-local task-state files remain explicit-user-request only.

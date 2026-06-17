@@ -23,6 +23,9 @@ permissions allow, and leave it closer to merge-ready.
   the correct resolution is clear and push permissions allow it.
 - Reporting review findings and exact blockers when the branch cannot be
   updated safely.
+- In an Agentic SDLC run, checking the PR against requirements, design, local
+  validation, tests, evaluation, UAT, and commit evidence when that evidence is
+  available.
 
 ## Requirements
 
@@ -88,6 +91,9 @@ surfaces.
    Read the changed files, diff, existing review comments, and failing checks.
    Compare the branch locally against `origin/<base>`, not only against the PR
    summary UI.
+   If this PR belongs to an Agentic SDLC run, also inspect the relevant
+   `docs/requirements.md`, `docs/design.md`, and local evidence summaries
+   before calling the PR ready.
 3. Select sibling skills for the changed surface.
    Based on the files touched and the kind of breakage in the PR, explicitly
    apply the smallest relevant set of sibling skills from this repo. Keep
@@ -154,6 +160,11 @@ surfaces.
    - what validation ran
    - whether the PR is ready to merge
    - any remaining blockers
+   For Agentic SDLC PRs, include whether requirements, design, validation,
+   tests, evaluation, and UAT evidence all support merge readiness.
+   When Agentic SDLC local state is available, record the readiness summary and
+   remaining blockers in run evidence; if local state cannot be updated, report
+   that explicitly.
 
 ## Recommended Commands
 
@@ -180,6 +191,23 @@ surfaces.
     `git push <head-remote> HEAD:<head-branch>`
   - after an intentional safe rebase:
     `git push --force-with-lease <head-remote> HEAD:<head-branch>`
+
+## Learning Loop
+
+When using this skill, capture durable, reusable, public-safe learnings back
+into this skill's local source materials before completion when the current task
+contract allows source edits. Update the narrowest appropriate surface:
+`SKILL.md` for runtime rules, `references/` for detailed guidance, `assets/`
+for reusable templates, `scripts/` for deterministic helpers, and README or
+changelog entries for human-facing or release-note updates.
+
+If the current task is explicitly read-only/report-only, or source writes are
+outside this skill's task contract, do not edit skill sources; report the
+skipped source update instead.
+
+Do not capture secrets, private URLs, customer data, raw logs, one-off local
+state, or unverified/vendor-specific claims. If a useful learning is not safe,
+not evidence-backed, or outside this skill's scope, report that it was skipped.
 
 ## Guardrails
 

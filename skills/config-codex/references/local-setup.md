@@ -109,6 +109,12 @@ The `hooks.json` template intentionally uses
 `${CODEX_HOME:-$HOME/.codex}` directly, so the hook commands stay portable when
 the user sets `CODEX_HOME` in the shell before starting Codex.
 
+Treat `hooks.json` as a semantic merge target on existing machines. Ensure the
+global-context `SessionStart` and `UserPromptSubmit` entries from the template
+are present, but preserve additional reviewed workflow entries such as Agentic
+SDLC `PreToolUse` and `Stop` hooks. Do not replace `hooks.json` just to match
+the template byte-for-byte.
+
 If `$CODEX_HOME/AGENTS.md` is missing, create it from
 `assets/AGENTS.md.template`. If it exists, do not replace it. Append or update a
 small managed section for `config-codex`/`global-context-management` guidance
@@ -143,9 +149,16 @@ Do not add template-only model defaults, app/plugin settings, MCP servers,
 project entries, skill entries, or writable roots to an existing config merely
 because they appear in `assets/config.toml.template`.
 
+For a missing config, the public-safe MCP baseline in the template restores the
+reusable MCP servers that can be expressed without private values. Existing
+configs may also contain plugin-managed or machine-specific MCP servers with
+absolute commands or private environment values. Preserve those entries during
+patching, but restore them through their owning plugin or setup skill rather
+than copying local values into public templates.
+
 ## Optional Hook-Assisted Subagent Policy
 
-To have the `UserPromptSubmit` hook inject a request to use configured
+To have the `UserPromptSubmit` hook add a lightweight hint about configured
 read-only subagents for complex prompts, create this local-only file:
 
 ```json
@@ -156,13 +169,14 @@ read-only subagents for complex prompts, create this local-only file:
 ```
 
 Save it as `$CODEX_HOME/hooks/global_context_policy.json`. The public templates
-do not hardcode agent names for this path. The hook reads `$CODEX_HOME/config.toml`,
-discovers `[agents.<name>]` entries whose referenced config files have
-`sandbox_mode = "read-only"`, and injects those agent names into model-visible
-context. It does not inject local agent config paths, and it does not directly
-call the subagent tool. The injected request is the local-policy delegation
-request for that turn, so the main agent should not wait for another manual
-prompt phrase before using useful, available, and permitted read-only helpers.
+do not hardcode agent names for this path. The hook reads
+`$CODEX_HOME/config.toml`, discovers `[agents.<name>]` entries whose referenced
+config files have `sandbox_mode = "read-only"`, and injects those agent names
+into model-visible context as a bounded read-only delegation request. It does
+not inject local agent config paths, and it does not directly call the subagent
+tool. The hint is local-policy context for that turn, so the main agent still
+uses targeted read-only helpers only when useful, available, and permitted.
+After authorization, the prompt does not need to name a specific helper role.
 The parent agent still owns lifecycle cleanup: wait for returned summaries,
 consolidate them, and close completed subagent threads when close controls are
 available and no follow-up is needed.
@@ -197,6 +211,9 @@ python3 config-codex/scripts/check-local-idempotency.py \
   --codex-home "$CODEX_HOME" \
   --strict-agents-template
 ```
+
+The preflight checks the required global hook registrations as a subset and
+allows extra reviewed workflow hooks to coexist in `hooks.json`.
 
 Compile hooks:
 
@@ -309,11 +326,15 @@ Expected evidence:
   context may matter, then keep checkpoint updates concise.
   If the optional policy is enabled, it should also mention the discovered
   configured read-only agents by name.
+- Sandbox configuration and any installed PreToolUse write guard allow
+  `$CODEX_HOME/task-state` so the parent agent can create and update the
+  advertised `current.md`, while broader runtime paths such as
+  `$CODEX_HOME/hooks` remain protected unless deliberately synced.
 
 Direct hook unit probes against a live `$CODEX_HOME` with synthetic
-`session_id` values can create scaffold-only task-state directories named after
-those IDs when they exercise the complex-prompt hook. They validate hook path
-calculation, not active persistent model state. Prefer
+`session_id` values should not create task-state files or directories. They
+validate hook path calculation and prompt-time hints, not active persistent
+model state. Prefer
 `global-context-management/scripts/validate-local-templates.py` for hook-unit
 validation because it uses disposable temporary homes. If a hook payload has no
 `session_id`, task state is unavailable and no manual or legacy fallback path is
@@ -330,7 +351,9 @@ If that succeeds but ordinary complex prompts do not spawn subagents, the
 configuration is working; the remaining gate is delegation authorization. A
 prompt can explicitly ask for subagents, delegation, or parallel agents, and
 the optional local hook policy can inject that request for complex prompts
-after it is enabled and trusted in a fresh session.
+after it is enabled and trusted in a fresh session. Once authorization is
+present, Codex may choose useful targeted roles itself; the prompt does not
+need to name the exact role.
 
 If the explicit probe does not see subagent controls but `tool_search` is
 available, the agent should search for multi-agent/subagent tools before

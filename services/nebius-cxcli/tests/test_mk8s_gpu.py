@@ -821,7 +821,7 @@ def test_prune_inactive_mk8s_gpu_app_rows_removes_stale_operator_only_apps() -> 
                                 "node_count": 1,
                                 "gpu": False,
                                 "platform": "cpu-d3",
-                                "preset": "8vcpu-32gb",
+                                "preset": "32vcpu-128gb",
                             }
                         }
                     },
@@ -879,7 +879,7 @@ def test_prune_inactive_mk8s_gpu_app_rows_removes_stripped_soperator_policy_apps
                                 "node_count": 1,
                                 "gpu": False,
                                 "platform": "cpu-d3",
-                                "preset": "8vcpu-32gb",
+                                "preset": "32vcpu-128gb",
                             }
                         }
                     },

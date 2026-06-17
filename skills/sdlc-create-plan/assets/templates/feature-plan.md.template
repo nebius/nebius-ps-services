@@ -1,0 +1,48 @@
+# FEAT-<id> Plan v<N>
+
+## Scope
+
+- Feature: FEAT-<id>
+- Requirements: REQ-<id>
+- Plan status: locked when matching `.lock` exists
+
+## Files To Inspect
+
+- <path>: <reason>
+
+## Files To Change
+
+- <path>: <expected change>
+
+## Files To Avoid
+
+- <path>: <reason>
+
+## TDD Steps
+
+1. <test-first step>
+
+## Implementation Steps
+
+1. <implementation step>
+
+## Validation Commands
+
+- `<command>`: <purpose>
+
+## Evaluation Procedure
+
+<How to observe acceptance behavior.>
+
+## Rollback
+
+<Safe revert or disablement path.>
+
+## Stop Conditions
+
+- <condition>
+
+## Fingerprints
+
+- Design: <hash-or-summary>
+- Context: <hash-or-summary>

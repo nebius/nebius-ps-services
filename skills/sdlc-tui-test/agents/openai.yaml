@@ -1,0 +1,4 @@
+interface:
+  display_name: "SDLC TUI Test"
+  short_description: "Evaluate terminal flows"
+  default_prompt: "Use $sdlc-tui-test to control terminal applications like a user during Agentic SDLC testing and capture prompts, inputs, outputs, exit codes, and side effects."

@@ -198,14 +198,22 @@ def _mk8s_soperator_autoscaling_fields() -> dict[str, dict[str, Any]]:
     fields: dict[str, dict[str, Any]] = {}
     for role in ("system", "controller", "login", "accounting", "worker"):
         prefix = f"inputs.soperator.{role}_autoscaling"
-        fields[f"{prefix}.enabled"] = _disabled_bool_wizard_field()
+        fields[f"{prefix}.enabled"] = (
+            {
+                "default": True,
+                "write_default_to_config": True,
+                "type_hint": "bool",
+            }
+            if role == "system"
+            else _disabled_bool_wizard_field()
+        )
         fields[f"{prefix}.min_node_count"] = {
-            "default": 1,
+            "default": 3 if role == "system" else 1,
             "write_default_to_config": True,
             "type_hint": "number",
         }
         fields[f"{prefix}.max_node_count"] = {
-            "default": 1,
+            "default": 5 if role == "system" else 1,
             "write_default_to_config": True,
             "type_hint": "number",
         }
@@ -546,22 +554,22 @@ BUILTIN_WIZARD_PROFILES: dict[str, dict[str, dict[str, Any]]] = {
             "required": False,
         },
         "inputs.soperator.system_node_count": {
-            "default": 1,
+            "default": 3,
             "write_default_to_config": True,
             "type_hint": "number",
         },
         "inputs.soperator.controller_node_count": {
-            "default": 1,
+            "default": 2,
             "write_default_to_config": True,
             "type_hint": "number",
         },
         "inputs.soperator.login_node_count": {
-            "default": 1,
+            "default": 2,
             "write_default_to_config": True,
             "type_hint": "number",
         },
         "inputs.soperator.accounting_node_count": {
-            "default": 1,
+            "default": 2,
             "write_default_to_config": True,
             "type_hint": "number",
         },

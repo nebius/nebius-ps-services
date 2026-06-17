@@ -846,7 +846,7 @@ def test_prune_gpu_node_group_defaults_for_cpu_only_soperator_profile() -> None:
                         "node_group_defaults": {
                             "cpu": {
                                 "platform": "cpu-d3",
-                                "preset": "8vcpu-32gb",
+                                "preset": "32vcpu-128gb",
                             },
                             "gpu": {
                                 "platform": "gpu-h100-sxm",
@@ -880,7 +880,7 @@ def test_prune_gpu_node_group_defaults_for_cpu_only_soperator_profile() -> None:
     _prune_mk8s_node_group_defaults_without_soperator(payload, infra_entries=(entry,))
 
     defaults = payload["infra"]["components"][0]["inputs"]["node_group_defaults"]
-    assert defaults == {"cpu": {"platform": "cpu-d3", "preset": "8vcpu-32gb"}}
+    assert defaults == {"cpu": {"platform": "cpu-d3", "preset": "32vcpu-128gb"}}
 
 
 def test_prune_mk8s_node_group_defaults_for_soperator_onboarding_target() -> None:

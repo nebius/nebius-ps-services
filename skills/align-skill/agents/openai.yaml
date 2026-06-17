@@ -1,4 +1,4 @@
 interface:
   display_name: "Align Skill"
-  short_description: "Review and standardize Codex skill folders"
-  default_prompt: "Use $align-skill to review Codex or Agent skill folders, verify vendor guidance against official docs, apply safe structure fixes, run local validation, and report uncertainty."
+  short_description: "Review and harden Codex skill folders"
+  default_prompt: "Use $align-skill to review, harden, validate, or align an existing or newly scaffolded Codex or Agent skill folder, refine draft SKILL.md content, apply safe, secure, and fast authoring practices, verify vendor guidance against official docs, run local validation, and report uncertainty."

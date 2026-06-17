@@ -1,0 +1,4 @@
+interface:
+  display_name: "SDLC GUI Test"
+  short_description: "Evaluate browser UI flows"
+  default_prompt: "Use $sdlc-gui-test to control, observe, and evaluate browser UI behavior during Agentic SDLC work with durable local evidence."

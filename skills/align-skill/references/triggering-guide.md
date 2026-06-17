@@ -10,6 +10,8 @@ Docs reviewed:
 - [OpenAI Codex IDE extension](https://developers.openai.com/codex/ide)
 - [OpenAI Codex app](https://developers.openai.com/codex/app)
 - [Agent Skills specification](https://agentskills.io/specification)
+- [Agent Skills best practices](https://agentskills.io/skill-creation/best-practices)
+- [Optimizing skill descriptions](https://agentskills.io/skill-creation/optimizing-descriptions)
 
 ## Confirmed Behavior
 
@@ -36,8 +38,10 @@ The best trigger strategy is a precise, trigger-rich `description` field:
 - Include user phrases that should activate the skill.
 - Include accepted inputs such as skill names, local folders, multi-skill
   folders, GitHub repositories, and GitHub tree URLs.
+- Include authoring-helper intents such as refining, hardening, validating, or
+  updating a draft or scaffolded skill.
 - Include boundaries so the skill does not steal general codebase alignment
-  tasks from `align`.
+  tasks from `align` or initial scaffolding tasks from `skill-creator`.
 
 ## Codex CLI
 
@@ -100,10 +104,12 @@ report trigger readiness from metadata inspection only.
 
 ```text
 Use align-skill to review and align `skills/foo`.
+Use align-skill as a helper after skill-creator scaffolded a release-triage skill.
 Align these skills against the canonical structure and official vendor docs.
 Review all skills under this folder and produce an alignment report.
 Validate this GitHub skills repo and propose safe changes.
 Fix the `SKILL.md` for this skill so it follows Codex Skill best practices.
+Help me harden this draft `SKILL.md` into a safe, secure, fast Codex skill.
 Check whether this skill has safe guardrails before live validation.
 Standardize this multi-skill folder and add missing references, assets, or scripts.
 Review this skill's vendor-specific commands against official documentation.

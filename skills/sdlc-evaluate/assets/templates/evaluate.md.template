@@ -1,0 +1,23 @@
+# FEAT-<id> Evaluation Evidence
+
+## Route
+
+<sdlc-gui-test | sdlc-tui-test | api | service | manual-review>
+
+## Control
+
+<How the product was controlled.>
+
+## Observation
+
+<What was observed.>
+
+## Acceptance Result
+
+| Criterion | Result | Evidence |
+| --- | --- | --- |
+| REQ-<id> AC-<id> | <pass|fail> | <path-or-summary> |
+
+## Failure Classification
+
+<classification or none>
