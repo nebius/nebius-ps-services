@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import re
 from contextlib import suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from .sdk_auth import init_nebius_sdk, suppress_deleted_key_refresh_logs
@@ -22,9 +22,9 @@ class CIBootstrapResult:
     roles_created: list[str]
     roles_already_present: list[str]
     auth_public_key_id: str
-    auth_private_key_pem: str
+    auth_private_key_pem: str = field(repr=False)
     s3_access_key_id: str
-    s3_secret_access_key: str
+    s3_secret_access_key: str = field(repr=False)
 
 
 @dataclass(frozen=True)
@@ -38,7 +38,7 @@ class ServiceAccountAuthKeyResult:
     roles_created: list[str]
     roles_already_present: list[str]
     auth_public_key_id: str
-    auth_private_key_pem: str
+    auth_private_key_pem: str = field(repr=False)
 
 
 @dataclass(frozen=True)
@@ -64,7 +64,7 @@ class StaticKeyIssueResult:
     roles_created: list[str]
     roles_already_present: list[str]
     static_key_id: str
-    token: str
+    token: str = field(repr=False)
 
 
 def _close_sdk(sdk: object) -> None:

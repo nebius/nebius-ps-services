@@ -34,7 +34,7 @@ def test_mk8s_deployment_target_resolves_enabled_cluster() -> None:
                 {
                     "id": "mk8s",
                     "enabled": True,
-                        "inputs": {"cluster": {"cluster_name": "clust1"}},
+                    "inputs": {"cluster": {"cluster_name": "clust1"}},
                 }
             ]
         },
@@ -68,7 +68,7 @@ def test_deployment_status_reporting_falls_back_to_heartbeat_on_sdk_init_error(
                 {
                     "id": "mk8s",
                     "enabled": True,
-                        "inputs": {"cluster": {"cluster_name": "clust1"}},
+                    "inputs": {"cluster": {"cluster_name": "clust1"}},
                 }
             ]
         },
@@ -114,7 +114,7 @@ def test_deployment_status_reporter_merges_terraform_and_api_status(monkeypatch)
                 {
                     "id": "mk8s",
                     "enabled": True,
-                        "inputs": {"cluster": {"cluster_name": "clust1"}},
+                    "inputs": {"cluster": {"cluster_name": "clust1"}},
                 }
             ]
         },
@@ -181,7 +181,7 @@ def test_deployment_status_reporter_includes_node_group_alerts(monkeypatch) -> N
                 {
                     "id": "mk8s",
                     "enabled": True,
-                        "inputs": {"cluster": {"cluster_name": "clust1"}},
+                    "inputs": {"cluster": {"cluster_name": "clust1"}},
                 }
             ]
         },
@@ -719,7 +719,7 @@ def test_deployment_status_reporter_exposes_terminal_api_failure(monkeypatch) ->
                 {
                     "id": "mk8s",
                     "enabled": True,
-                        "inputs": {"cluster": {"cluster_name": "clust1"}},
+                    "inputs": {"cluster": {"cluster_name": "clust1"}},
                 }
             ]
         },
@@ -783,13 +783,11 @@ def test_deployment_status_reporter_escapes_plain_notices(monkeypatch) -> None:
         reporter.close()
 
     assert any(
-        "Watching Terraform + Nebius status" in message
-        and "\\[green]sharedfs\\[/green]" in message
+        "Watching Terraform + Nebius status" in message and "\\[green]sharedfs\\[/green]" in message
         for message in messages
     )
     assert any(
-        "[bold cyan]API[/bold cyan] api summary \\[green]should stay plain\\[/green]"
-        in message
+        "[bold cyan]API[/bold cyan] api summary \\[green]should stay plain\\[/green]" in message
         for message in messages
     )
     assert any(
@@ -904,8 +902,7 @@ def test_composite_status_poller_reports_terminal_check_errors_without_abort() -
     assert "managed-postgresql pgsql1 (pg-123): RUNNING" in summary
     assert "sfs sharedfs (fs-123): READY" in summary
     assert (
-        "managed-postgresql 'pgsql1': terminal check unavailable "
-        "(operation API unavailable)"
+        "managed-postgresql 'pgsql1': terminal check unavailable (operation API unavailable)"
     ) in summary
 
 
@@ -1589,6 +1586,21 @@ def test_mysterybox_secret_status_watcher_kind_is_registered() -> None:
         deployment_status_module._STATUS_POLLER_FACTORIES["nebius.mysterybox.secret"]
         is deployment_status_module._MysteryBoxSecretStatusPoller
     )
+
+
+def test_deployment_status_reporter_emits_distinct_terminal_failures() -> None:
+    emitted: list[str] = []
+    reporter = DeploymentStatusReporter.__new__(DeploymentStatusReporter)
+    reporter._emit = emitted.append
+    reporter._last_emitted_terminal_failure = None
+
+    reporter._emit_terminal_failure_notice("first failure")
+    reporter._emit_terminal_failure_notice("first failure")
+    reporter._emit_terminal_failure_notice("second failure")
+
+    assert len(emitted) == 2
+    assert "first failure" in emitted[0]
+    assert "second failure" in emitted[1]
 
 
 def test_enum_field_name_supports_python_enum_values() -> None:

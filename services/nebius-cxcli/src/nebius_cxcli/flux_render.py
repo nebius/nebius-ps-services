@@ -219,7 +219,9 @@ def _soperator_certificate_rotation_policy_post_render_patches(
 
 
 def _inject_local_chart_namespace(rendered: str, *, namespace: str) -> str:
-    rendered_docs = [doc for doc in yaml.safe_load_all(rendered) if _is_kubernetes_manifest_doc(doc)]
+    rendered_docs = [
+        doc for doc in yaml.safe_load_all(rendered) if _is_kubernetes_manifest_doc(doc)
+    ]
     docs = [doc for doc in rendered_docs if not _local_chart_doc_is_helm_hook(doc)]
     if not docs:
         return ""
@@ -374,7 +376,22 @@ def _requires_static_helm_render(*, entry_id: str, source_kind: str) -> bool:
 
 
 def _file_slug(value: str) -> str:
-    return "".join(ch if ch.isalnum() or ch in "-." else "-" for ch in value)
+    raw = str(value)
+    if any(part in {".", ".."} for part in re.split(r"[\\/]+", raw)):
+        raise ValueError(f"path component must not contain dot segments: {value!r}")
+    slug = "".join(ch if ch.isalnum() or ch in "-." else "-" for ch in raw)
+    if slug in {"", ".", ".."}:
+        raise ValueError(f"path component did not produce a safe file name: {value!r}")
+    return slug
+
+
+def _assert_path_inside(base: Path, candidate: Path) -> None:
+    base_path = base.resolve()
+    candidate_path = candidate.resolve()
+    try:
+        candidate_path.relative_to(base_path)
+    except ValueError as exc:
+        raise ValueError(f"render path escapes {base}: {candidate}") from exc
 
 
 def _nested_mapping(node: dict[str, Any], key: str) -> dict[str, Any]:
@@ -784,7 +801,10 @@ def _configured_app_release_specs(
                         source_kind=source_kind,
                     ):
                         source_kind = _SOPERATOR_STATIC_SOURCE_KIND
-                if source_kind in {"helm_repository", _SOPERATOR_STATIC_SOURCE_KIND} and not chart_version:
+                if (
+                    source_kind in {"helm_repository", _SOPERATOR_STATIC_SOURCE_KIND}
+                    and not chart_version
+                ):
                     raise ValueError(
                         f"apps.charts[{entry_id}].version is required for enabled chart '{entry_id}'"
                     )
@@ -860,8 +880,7 @@ def _configured_app_release_specs(
         target_ref = str(release.get("target_ref", "")).strip()
         dependency_ids = tuple(
             dict.fromkeys(
-                tuple(release.get("install_after") or ())
-                + tuple(dependency_map.get(entry_id, ()))
+                tuple(release.get("install_after") or ()) + tuple(dependency_map.get(entry_id, ()))
             )
         )
         depends_on: list[dict[str, str]] = []
@@ -1027,9 +1046,10 @@ def _externalize_dashboard_json_values(
                 state.paths.generated_dir
                 / "grafana_dashboards"
                 / target_dir
-                / folder_key
+                / _file_slug(folder_key)
                 / file_name
             )
+            _assert_path_inside(state.paths.generated_dir, dashboard_path)
             _write_text(dashboard_path, dashboard_json)
             state.files.append(dashboard_path)
             configmap_data[file_name] = dashboard_json
@@ -1262,7 +1282,13 @@ def _render_local_helm_chart(
     rendered = result.stdout.strip()
     if not rendered:
         raise ValueError(f"local Helm chart render produced no manifests for {chart_path}")
-    return _inject_local_chart_namespace(rendered, namespace=namespace)
+    injected = _inject_local_chart_namespace(rendered, namespace=namespace)
+    if not injected.strip():
+        raise ValueError(
+            f"local Helm chart render produced only hook manifests for {chart_path}; "
+            "mark required hooks with nebius-cxcli.nebius.ai/include-local-render=true"
+        )
+    return injected
 
 
 def _remote_helm_template_chart_arg(*, source_url: str, chart_ref: str) -> str:
@@ -1319,8 +1345,17 @@ def _render_remote_helm_chart_static(
     rendered = result.stdout.strip()
     if not rendered:
         source_label = source_url.strip() or chart_ref
-        raise ValueError(f"remote Helm chart static render produced no manifests for {source_label}")
-    return _inject_local_chart_namespace(rendered, namespace=namespace)
+        raise ValueError(
+            f"remote Helm chart static render produced no manifests for {source_label}"
+        )
+    injected = _inject_local_chart_namespace(rendered, namespace=namespace)
+    if not injected.strip():
+        source_label = source_url.strip() or chart_ref
+        raise ValueError(
+            f"remote Helm chart static render produced only hook manifests for {source_label}; "
+            "mark required hooks with nebius-cxcli.nebius.ai/include-local-render=true"
+        )
+    return injected
 
 
 def _local_chart_metadata(chart_path: str | Path) -> dict[str, Any]:
@@ -1432,9 +1467,7 @@ def _local_chart_remote_dependency_repositories(chart_dir: Path) -> list[str]:
     seen: set[str] = set()
     for dependency in _local_chart_dependency_metadata(chart_dir):
         repository = str(dependency.get("repository") or "").strip()
-        if not (
-            repository.startswith("http://") or repository.startswith("https://")
-        ):
+        if not (repository.startswith("http://") or repository.startswith("https://")):
             continue
         if repository in seen:
             continue
@@ -1523,11 +1556,7 @@ def _helm_repository_entries(config_path: Path) -> dict[str, str]:
 
 
 def _helm_output(result: subprocess.CompletedProcess[str]) -> str:
-    return (
-        result.stderr.strip()
-        or result.stdout.strip()
-        or "helm exited without diagnostic output"
-    )
+    return result.stderr.strip() or result.stdout.strip() or "helm exited without diagnostic output"
 
 
 def _next_helm_repository_name(index: int, used_names: set[str]) -> str:
@@ -1615,8 +1644,7 @@ def _run_local_helm_dependency_build(
     )
     if result.returncode != 0:
         raise ValueError(
-            "local Helm chart dependency build failed for "
-            f"{chart_path}: {_helm_output(result)}"
+            f"local Helm chart dependency build failed for {chart_path}: {_helm_output(result)}"
         )
 
 

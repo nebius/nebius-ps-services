@@ -7,6 +7,8 @@ import pytest
 
 from nebius_cxcli.helm_readiness import (
     HelmCommandResult,
+    HelmReleaseRecord,
+    _release_matches_expected_version,
     verify_helm_chart_ready,
 )
 
@@ -101,3 +103,15 @@ def test_verify_helm_chart_ready_fails_when_workload_not_ready() -> None:
             namespace="apps",
             expected_version="1.2.3",
         )
+
+
+def test_release_version_match_rejects_chart_name_suffix_only_match() -> None:
+    release = HelmReleaseRecord(
+        name="demo",
+        namespace="apps",
+        chart="foo-bar-1.2.3",
+        app_version="1.2.3",
+        status="deployed",
+    )
+
+    assert not _release_matches_expected_version(release, "bar-1.2.3")

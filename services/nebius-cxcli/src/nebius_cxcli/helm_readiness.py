@@ -290,10 +290,7 @@ def _release_matches_expected_version(release: HelmReleaseRecord, expected_versi
         if not text:
             continue
         text_norm = text.removeprefix("v")
-        text_chart_norm = text_norm.replace("-v", "-")
         if text == expected or text_norm == expected_norm:
-            return True
-        if text_chart_norm.endswith(f"-{expected_norm}"):
             return True
     return False
 

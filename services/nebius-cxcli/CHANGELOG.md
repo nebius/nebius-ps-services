@@ -6,6 +6,10 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Hardened live-operation failure handling across Soperator migration, MK8s
+  destroy recovery, Terraform streaming, runtime secret checks, Grafana token
+  probing, Helm readiness, and SDK auth fallback so unsafe or ambiguous states
+  fail fast instead of silently proceeding.
 - Made MK8s GPU fabric single-source: Soperator GPU profiles now write
   `inputs.gpu_clusters.<key>.infiniband_fabric` directly, validation rejects
   stale `inputs.node_group_defaults.gpu.infiniband_fabric`, and raw fabric drift

@@ -11,6 +11,7 @@ from nebius.api.nebius.common.v1 import GetByNameRequest, GetOperationRequest, L
 from nebius.api.nebius.mk8s.v1 import (
     ClusterServiceClient,
     DeleteNodeGroupRequest,
+    GetNodeGroupRequest,
     ListNodeGroupsRequest,
     NodeGroupServiceClient,
     NodeGroupStatus,
@@ -113,6 +114,52 @@ class Mk8sNodeGroupDestroyCandidate:
     reason: str
 
 
+def _operation_failed(operation: Any) -> bool:
+    done = getattr(operation, "done", None)
+    successful = getattr(operation, "successful", None)
+    if not callable(done) or not callable(successful):
+        return False
+    return bool(done()) and not bool(successful())
+
+
+def _destroy_recovery_failure(
+    item: Any,
+    operation_service: Any,
+    *,
+    expected_operation_id: str = "",
+) -> tuple[str, str] | None:
+    status = getattr(item, "status", None)
+    state_name = _node_group_state_name(getattr(status, "state", None)).upper()
+    if state_name not in {"PROVISIONING", "CREATING"}:
+        return None
+    ready = getattr(status, "ready_node_count", None)
+    target = getattr(status, "target_node_count", None)
+    if isinstance(ready, int) and isinstance(target, int) and target > 0 and ready >= target:
+        return None
+    reason = _terminal_event_reason(item)
+    if not reason:
+        return None
+    metadata = getattr(item, "metadata", None)
+    node_group_id = _as_text(getattr(metadata, "id", None) or getattr(item, "id", None))
+    if not node_group_id:
+        return None
+    latest_operation = _latest_operation(operation_service, node_group_id)
+    if latest_operation is None:
+        return None
+    description = _as_text(getattr(latest_operation, "description", None)).lower()
+    if "create node group" not in description:
+        return None
+    operation_id = _as_text(getattr(latest_operation, "id", None))
+    if not operation_id:
+        return None
+    if expected_operation_id and operation_id != expected_operation_id:
+        return None
+    full = operation_service.get(GetOperationRequest(id=operation_id)).wait()
+    if not _operation_failed(full):
+        return None
+    return operation_id, reason
+
+
 def find_stuck_node_groups(
     *,
     project_id: str,
@@ -135,36 +182,12 @@ def find_stuck_node_groups(
         candidates: list[Mk8sNodeGroupDestroyCandidate] = []
         for item in items:
             metadata = getattr(item, "metadata", None)
-            status = getattr(item, "status", None)
             node_group_id = _as_text(getattr(metadata, "id", None) or getattr(item, "id", None))
             node_group_name = _as_text(getattr(metadata, "name", None)) or node_group_id
-            state_name = _node_group_state_name(getattr(status, "state", None)).upper()
-            if state_name not in {"PROVISIONING", "CREATING"}:
+            failure = _destroy_recovery_failure(item, operation_service)
+            if failure is None:
                 continue
-            ready = getattr(status, "ready_node_count", None)
-            target = getattr(status, "target_node_count", None)
-            if (
-                isinstance(ready, int)
-                and isinstance(target, int)
-                and target > 0
-                and ready >= target
-            ):
-                continue
-            reason = _terminal_event_reason(item)
-            if not reason:
-                continue
-            latest_operation = _latest_operation(operation_service, node_group_id)
-            if latest_operation is None:
-                continue
-            description = _as_text(getattr(latest_operation, "description", None)).lower()
-            if "create node group" not in description:
-                continue
-            operation_id = _as_text(getattr(latest_operation, "id", None))
-            if not operation_id:
-                continue
-            full = operation_service.get(GetOperationRequest(id=operation_id)).wait()
-            if full.done():
-                continue
+            operation_id, reason = failure
             candidates.append(
                 Mk8sNodeGroupDestroyCandidate(
                     project_id=project_id,
@@ -190,6 +213,21 @@ def delete_node_group(
     sdk = init_nebius_sdk(parent_id=candidate.project_id, context="mk8s destroy recovery")
     try:
         client = NodeGroupServiceClient(sdk)
+        operation_service = client.operation_service()
+        node_group = client.get(GetNodeGroupRequest(id=candidate.node_group_id)).wait()
+        if (
+            _destroy_recovery_failure(
+                node_group,
+                operation_service,
+                expected_operation_id=candidate.create_operation_id,
+            )
+            is None
+        ):
+            raise RuntimeError(
+                "Refusing to delete MK8s node group because it no longer matches "
+                "the destroy-recovery stuck-create condition: "
+                f"{candidate.node_group_name} ({candidate.node_group_id})"
+            )
         operation = client.delete(DeleteNodeGroupRequest(id=candidate.node_group_id)).wait()
         operation_id = _as_text(getattr(operation, "id", None))
         sync_wait = getattr(operation, "sync_wait", None)

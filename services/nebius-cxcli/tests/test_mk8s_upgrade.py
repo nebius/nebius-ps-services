@@ -652,6 +652,20 @@ def test_node_group_rollout_complete_requires_no_outdated_or_surge_nodes() -> No
     assert upgrade.node_group_rollout_complete(complete, version="1.33")
 
 
+def test_node_group_rollout_complete_requires_positive_target_count() -> None:
+    zero_target = _node_group(id="ng-system", name="system", version="1.33")
+    zero_target.status = SimpleNamespace(
+        version="v1.33.7-nebius-node.64",
+        ready_node_count=0,
+        target_node_count=0,
+        node_count=0,
+        outdated_node_count=0,
+        reconciling=False,
+    )
+
+    assert not upgrade.node_group_rollout_complete(zero_target, version="1.33")
+
+
 def test_blocking_preflight_findings_respect_disruption_policy() -> None:
     pdb = upgrade.PreflightFinding(
         kind=upgrade.PDB_BLOCKER_KIND,
@@ -1080,7 +1094,9 @@ def test_plan_mutates_when_control_plane_is_target_but_node_group_is_old() -> No
     assert plan.mutates
 
 
-def test_format_node_template_upgrade_plan_summarizes_emptydir_findings_and_repeat_command() -> None:
+def test_format_node_template_upgrade_plan_summarizes_emptydir_findings_and_repeat_command() -> (
+    None
+):
     group = _node_group(id="ng-system", name="system", version="1.31")
     planned_group = upgrade.LiveNodeGroup(
         id="ng-system",
@@ -1150,8 +1166,7 @@ def test_format_node_template_upgrade_plan_summarizes_emptydir_findings_and_repe
     assert all("metrics-server-def" not in line for line in lines)
     assert "- repeat dry-run command:" in lines
     assert (
-        "nebius-cxcli upgrade node-template config.yaml infra:mk8s@prod "
-        "--to-version 1.33 --dry-run"
+        "nebius-cxcli upgrade node-template config.yaml infra:mk8s@prod --to-version 1.33 --dry-run"
     ) in lines
 
 
@@ -1223,9 +1238,7 @@ def test_wait_for_node_template_rollout_uses_sdk_status_without_sdk_updates() ->
         planned_group=plan.node_groups[0],
     )
 
-    assert fake.calls == [
-        ("wait-node-template", "cluster-1:ng-system:1.33:ubuntu24.04:None:3600")
-    ]
+    assert fake.calls == [("wait-node-template", "cluster-1:ng-system:1.33:ubuntu24.04:None:3600")]
 
 
 def test_force_delete_drain_timeout_does_not_shorten_rollout_wait() -> None:
@@ -1294,9 +1307,7 @@ def test_force_delete_drain_timeout_does_not_shorten_rollout_wait() -> None:
         planned_group=group,
     )
 
-    assert fake.calls == [
-        ("wait-node-template", "cluster-1:ng-system:1.33:ubuntu24.04:None:60000")
-    ]
+    assert fake.calls == [("wait-node-template", "cluster-1:ng-system:1.33:ubuntu24.04:None:60000")]
 
 
 def test_node_group_rollout_wait_uses_source_target_size_when_status_is_absent() -> None:

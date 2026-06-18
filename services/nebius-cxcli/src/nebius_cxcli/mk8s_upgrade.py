@@ -1399,6 +1399,8 @@ def _node_group_status_ready(node_group: Any) -> bool:
     outdated = getattr(status, "outdated_node_count", None)
     if not all(isinstance(value, int) for value in (ready, target, node_count, outdated)):
         return False
+    if not isinstance(target, int) or target <= 0:
+        return False
     if isinstance(ready, int) and isinstance(target, int) and ready < target:
         return False
     if isinstance(node_count, int) and isinstance(target, int) and node_count != target:

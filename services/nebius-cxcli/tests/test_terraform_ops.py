@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import subprocess
 import threading
 from pathlib import Path
 from types import SimpleNamespace
@@ -480,6 +481,50 @@ def test_stream_json_events_aborts_early_when_abort_check_requests_it(
         )
 
     assert process.terminated is True
+
+
+def test_stream_json_events_times_out_after_streams_close_when_process_stays_alive(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    class _ClosedStream:
+        def readline(self) -> str:
+            return ""
+
+        def close(self) -> None:
+            return
+
+    class _FakeProcess:
+        def __init__(self) -> None:
+            self.stdout = _ClosedStream()
+            self.stderr = _ClosedStream()
+            self.killed = False
+
+        def kill(self) -> None:
+            self.killed = True
+
+        def poll(self) -> int | None:
+            return None
+
+        def wait(self, timeout=None) -> int:
+            if self.killed:
+                return 1
+            raise subprocess.TimeoutExpired(["terraform"], timeout)
+
+    process = _FakeProcess()
+    monkeypatch.setattr(
+        "nebius_cxcli.terraform_ops.subprocess.Popen",
+        lambda *args, **kwargs: process,
+    )
+
+    with pytest.raises(RuntimeError, match="timed out"):
+        _stream_json_events(
+            ["terraform", "apply", "-json"],
+            cwd=tmp_path,
+            timeout=0.01,
+        )
+
+    assert process.killed is True
 
 
 def test_terraform_apply_passes_abort_check_to_streaming_runner(monkeypatch) -> None:

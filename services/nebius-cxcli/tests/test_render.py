@@ -30,7 +30,7 @@ from nebius_cxcli.flux_render import (
     _stage_local_helm_chart,
     render_flux,
 )
-from nebius_cxcli.infra_render import _build_module_plans, _render_module_block
+from nebius_cxcli.infra_render import _build_module_plans, _hcl_value, _render_module_block
 from nebius_cxcli.mk8s_gpu import ensure_mk8s_gpu_app_rows, materialize_mk8s_gpu_app_values
 from nebius_cxcli.mysterybox_eso import materialize_mysterybox_eso_app_values
 from nebius_cxcli.nfs_csi import ensure_nfs_csi_app_rows
@@ -201,9 +201,7 @@ def _repo_component_cli_settings_payload() -> dict:
     return payload
 
 
-def _app_entry(
-    component_id: str, source_profile: SourceProfile | None = None
-) -> ComponentEntry:
+def _app_entry(component_id: str, source_profile: SourceProfile | None = None) -> ComponentEntry:
     return next(
         entry
         for entry in component_entries("apps", source_profile=source_profile)
@@ -1253,9 +1251,8 @@ def test_render_local_soperator_chart_source_writes_static_manifest(tmp_path: Pa
     } == {"Always"}
     slurm_cluster = next(doc for doc in rendered_docs if doc.get("kind") == "SlurmCluster")
     assert slurm_cluster["spec"]["partitionConfiguration"]["configType"] == "structured"
-    assert (
-        "PluginDir=/usr/lib/x86_64-linux-gnu/slurm"
-        in slurm_cluster.get("spec", {}).get("customSlurmConfig", "")
+    assert "PluginDir=/usr/lib/x86_64-linux-gnu/slurm" in slurm_cluster.get("spec", {}).get(
+        "customSlurmConfig", ""
     )
     assert slurm_cluster["spec"]["slurmNodes"]["accounting"]["enabled"] is True
     assert slurm_cluster["spec"]["slurmNodes"]["rest"]["enabled"] is True
@@ -1758,6 +1755,50 @@ def test_inject_local_chart_namespace_skips_hooks_only_render() -> None:
     assert _inject_local_chart_namespace(rendered, namespace="slurm") == ""
 
 
+def test_local_helm_chart_render_rejects_hooks_only_output(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    chart_dir = tmp_path / "chart"
+    chart_dir.mkdir()
+    rendered = yaml.safe_dump(
+        {
+            "apiVersion": "batch/v1",
+            "kind": "Job",
+            "metadata": {
+                "name": "cleanup",
+                "annotations": {"helm.sh/hook": "pre-delete"},
+            },
+        },
+        sort_keys=False,
+    )
+
+    monkeypatch.setattr(
+        flux_render_module, "_stage_local_helm_chart", lambda _chart, _tmp: chart_dir
+    )
+    monkeypatch.setattr(
+        flux_render_module, "_build_local_helm_chart_dependencies", lambda _chart: None
+    )
+    monkeypatch.setattr(
+        flux_render_module.subprocess,
+        "run",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess(
+            args=("helm", "template"),
+            returncode=0,
+            stdout=rendered,
+            stderr="",
+        ),
+    )
+
+    with pytest.raises(ValueError, match="produced only hook manifests"):
+        flux_render_module._render_local_helm_chart(
+            release_name="demo",
+            namespace="slurm",
+            chart_path=str(chart_dir),
+            values={},
+        )
+
+
 def test_inject_local_chart_namespace_keeps_opted_in_hooks() -> None:
     rendered = yaml.safe_dump(
         {
@@ -1777,6 +1818,19 @@ def test_inject_local_chart_namespace_keeps_opted_in_hooks() -> None:
     docs = list(yaml.safe_load_all(_inject_local_chart_namespace(rendered, namespace="slurm")))
     assert docs[0]["metadata"]["namespace"] == "slurm"
     assert docs[0]["metadata"]["name"] == "qos-reconcile"
+
+
+def test_file_slug_rejects_dot_segments() -> None:
+    with pytest.raises(ValueError, match="dot segments"):
+        flux_render_module._file_slug("../dashboards")
+
+
+def test_hcl_value_escapes_template_sequences() -> None:
+    rendered = _hcl_value({"literal": "keep ${not.hcl} and %{not a directive}"})
+
+    assert "$${not.hcl}" in rendered
+    assert "%%{not a directive}" in rendered
+    assert "${not.hcl}" not in rendered.replace("$${not.hcl}", "")
 
 
 def test_inject_local_chart_namespace_skips_helm_oci_status_output() -> None:
@@ -3660,8 +3714,12 @@ def test_render_instance_resets_generated_bundle_and_removes_stale_files(
     deploy_report = paths.reports_dir / "deploy-report.md"
     deploy_detail_report = paths.reports_dir / "gpu-visibility-report-mk8s.json"
     migrate_report = paths.reports_dir / "migrate-report.md"
-    migration_detail_report = paths.reports_dir / "soperator-cluster-validation-report-external.json"
-    unreferenced_migration_like_report = paths.reports_dir / "soperator-cluster-validation-report-old.json"
+    migration_detail_report = (
+        paths.reports_dir / "soperator-cluster-validation-report-external.json"
+    )
+    unreferenced_migration_like_report = (
+        paths.reports_dir / "soperator-cluster-validation-report-old.json"
+    )
     upgrade_report = paths.reports_dir / "upgrade-report.md"
     upgrade_report_json = paths.reports_dir / "upgrade-report.json"
     stale_top_level = paths.generated_dir / "obsolete.txt"

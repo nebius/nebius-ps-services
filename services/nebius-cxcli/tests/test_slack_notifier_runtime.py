@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from typing import Any
 from urllib.parse import parse_qs
 
@@ -95,6 +96,51 @@ def test_ensure_existing_webhook_creates_runtime_secret(monkeypatch: pytest.Monk
             "string_data": {"url": "https://hooks.slack.com/services/example"},
         }
     ]
+
+
+def test_secret_has_keys_treats_explicit_kubernetes_not_found_as_absent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        slack_runtime.subprocess,
+        "run",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess(
+            args=("kubectl",),
+            returncode=1,
+            stdout=json.dumps({"kind": "Status", "reason": "NotFound"}),
+            stderr="",
+        ),
+    )
+
+    assert not slack_runtime._secret_has_keys(
+        namespace="soperator",
+        name="soperator-slack",
+        keys=("url",),
+        extra_env={},
+    )
+
+
+def test_secret_has_keys_does_not_treat_free_text_not_found_as_absent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        slack_runtime.subprocess,
+        "run",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess(
+            args=("kubectl",),
+            returncode=1,
+            stdout="",
+            stderr='Error from server (Forbidden): secrets "not found" is forbidden',
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="Forbidden"):
+        slack_runtime._secret_has_keys(
+            namespace="soperator",
+            name="soperator-slack",
+            keys=("url",),
+            extra_env={},
+        )
 
 
 def test_target_kube_context_reads_process_env(monkeypatch: pytest.MonkeyPatch) -> None:
