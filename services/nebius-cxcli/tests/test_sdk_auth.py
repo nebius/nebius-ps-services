@@ -275,7 +275,35 @@ def test_init_nebius_sdk_falls_back_to_sdk_config(
     assert config.kwargs == {"profile": "dev", "endpoint": "api.example.invalid"}
 
 
-def test_init_nebius_sdk_prefer_operator_auth_uses_sdk_config_before_service_account(
+def test_init_nebius_sdk_prefer_operator_auth_uses_iam_token_before_runtime_auth(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _install_fake_nebius_modules(monkeypatch)
+    private_key_file = tmp_path / "auth-private.pem"
+    private_key_file.write_text("PRIVATE-KEY", encoding="utf-8")
+    monkeypatch.delenv("NEBIUS_AUTH_CREDENTIALS_FILE", raising=False)
+    monkeypatch.setenv("NEBIUS_SA_ID", "sa-1")
+    monkeypatch.setenv("NEBIUS_AUTH_PUBLIC_KEY_ID", "pub-1")
+    monkeypatch.setenv("NEBIUS_AUTH_PRIVATE_KEY_FILE", str(private_key_file))
+    monkeypatch.setenv("NEBIUS_IAM_TOKEN", "operator-token-123")
+    monkeypatch.setattr(
+        sdk_auth.subprocess,
+        "run",
+        lambda *args, **kwargs: pytest.fail("CLI token should not be needed"),
+    )
+
+    sdk: Any = sdk_auth.init_nebius_sdk(
+        parent_id="project-1",
+        context="quota assessment",
+        prefer_operator_auth=True,
+    )
+
+    assert sdk.kwargs["credentials"] == "operator-token-123"
+    assert "service_account_id" not in sdk.kwargs
+    assert sdk.kwargs["parent_id"] == "project-1"
+
+
+def test_init_nebius_sdk_prefer_operator_auth_uses_sdk_config_before_runtime_auth(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _install_fake_nebius_modules(monkeypatch)
@@ -299,6 +327,7 @@ def test_init_nebius_sdk_prefer_operator_auth_uses_sdk_config_before_service_acc
     )
 
     assert "config_reader" in sdk.kwargs
+    assert "service_account_id" not in sdk.kwargs
     assert sdk.kwargs["parent_id"] == "project-1"
 
 
@@ -335,10 +364,9 @@ def test_init_nebius_sdk_prefer_operator_auth_falls_back_to_service_account(
     assert sdk.kwargs["parent_id"] == "project-1"
 
 
-def test_init_nebius_sdk_prefer_operator_auth_uses_cli_token_before_service_account_when_config_fails(
+def test_init_nebius_sdk_prefer_operator_auth_uses_cli_token_before_runtime_auth(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    caplog: pytest.LogCaptureFixture,
 ) -> None:
     _install_fake_nebius_modules(monkeypatch)
 
@@ -361,16 +389,39 @@ def test_init_nebius_sdk_prefer_operator_auth_uses_cli_token_before_service_acco
         lambda *args, **kwargs: type("CP", (), {"stdout": "cli-token-789\n"})(),
     )
 
-    with caplog.at_level(logging.DEBUG, logger="nebius_cxcli.sdk_auth"):
-        sdk: Any = sdk_auth.init_nebius_sdk(
-            parent_id="project-1",
-            context="quota assessment",
-            prefer_operator_auth=True,
-        )
+    sdk: Any = sdk_auth.init_nebius_sdk(
+        parent_id="project-1",
+        context="quota assessment",
+        prefer_operator_auth=True,
+    )
 
     assert sdk.kwargs["credentials"] == "cli-token-789"
     assert "service_account_id" not in sdk.kwargs
-    assert (
-        "Nebius SDK config auth attempt failed for quota assessment: config boom"
-        in caplog.text
-    )
+
+
+def test_init_nebius_sdk_chains_failed_config_attempt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_fake_nebius_modules(monkeypatch)
+
+    class FailingConfig:
+        def __init__(self, **_kwargs):  # type: ignore[no-untyped-def]
+            raise RuntimeError("config boom")
+
+    cli_config_module = sys.modules["nebius.aio.cli_config"]
+    monkeypatch.setattr(cli_config_module, "Config", FailingConfig)
+    monkeypatch.delenv("NEBIUS_AUTH_CREDENTIALS_FILE", raising=False)
+    monkeypatch.delenv("NEBIUS_SA_ID", raising=False)
+    monkeypatch.delenv("NEBIUS_AUTH_PUBLIC_KEY_ID", raising=False)
+    monkeypatch.delenv("NEBIUS_AUTH_PRIVATE_KEY_FILE", raising=False)
+    monkeypatch.delenv("NEBIUS_IAM_TOKEN", raising=False)
+
+    with pytest.raises(RuntimeError, match="Failed to initialize") as exc_info:
+        sdk_auth.init_nebius_sdk(
+            parent_id="project-1",
+            context="quota assessment",
+            allow_cli_token=False,
+        )
+
+    assert isinstance(exc_info.value.__cause__, RuntimeError)
+    assert str(exc_info.value.__cause__) == "config boom"

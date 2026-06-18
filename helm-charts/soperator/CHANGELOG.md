@@ -4,6 +4,13 @@ All notable changes to this chart are tracked here.
 
 ## [Unreleased]
 
+- Clarified the design guide's Soperator resource model: `slurmNodes.*`
+  renders Slurm service roles inside `SlurmCluster`, `nodesets[]` renders
+  worker `NodeSet` resources, structured partitions reference only NodeSet
+  names, and `NodeConfigurator` remains the host-preparation and optional
+  rebooter layer. The direct Helm placement example now uses chart-native
+  `nodesets[].nodeSelector` and partition `nodeSetRefs` instead of implying
+  worker NodeSets consume `k8sNodeFilters`.
 - Made upstream `--latest` sync select the highest non-draft, non-prerelease
   SemVer release from GitHub releases instead of GitHub's mutable `Latest`
   marker, so maintenance-branch latest labels do not make automation reject an
@@ -192,12 +199,12 @@ All notable changes to this chart are tracked here.
   node-group inventory: the default GPU profile now uses the logical `worker`
   NodeSet alongside `system`, `controller`, `login`, and `accounting`, while
   direct Helm installs can still define any valid NodeSet layout.
-- Documented cxcli's `nodeGroupMapping` convenience layer for existing MK8s
-  clusters; the chart remains driven by native `k8sNodeFilters[]`,
-  `nodesets[]`, `storage.*`, and `partitionConfiguration` values.
-- Aligned cxcli-generated role mappings with chart-owned system helpers so the
-  Soperator manager, checks controller, and MariaDB operator pods can inherit
-  the selected `system` node affinity.
+- Documented chart-native placement for existing MK8s clusters through
+  `k8sNodeFilters[]`, `slurmNodes.*.k8sNodeFilterName`, `nodesets[]`,
+  `storage.*`, and `partitionConfiguration` values.
+- Documented how chart-owned system helpers such as the Soperator manager,
+  checks controller, and MariaDB operator can inherit a selected `system` node
+  affinity.
 - Taught cxcli-generated Nebius GPU-image installs to disable the Soperator
   DCGM job-mapping exporter's toolkit validation init wait.
 - Fixed the storage mount helper scripts so failed virtiofs or glusterfs

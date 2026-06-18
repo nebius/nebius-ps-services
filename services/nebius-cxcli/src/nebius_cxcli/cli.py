@@ -129,6 +129,7 @@ from .deploy_validation_report import (
     build_deploy_validation_report,
     clear_deploy_validation_artifacts,
     status_label,
+    validation_section_lines,
 )
 from .deployment_status import deployment_status_reporting
 from .discover_ops import discover_configs
@@ -264,46 +265,38 @@ from .mk8s_upgrade import (
     DISRUPTION_POLICY_FORCE_DELETE,
     DISRUPTION_POLICY_SAFE,
     MK8S_COMPONENT_ID,
+    SAFE_SURGE_DEFAULT_MAX_SURGE_COUNT,
     DrainTimeout,
+    LiveNodeGroup,
     Mk8sKubernetesVersionExecutor,
-    NodeLayerUpgradeSpec,
+    Mk8sNodeTemplateUpgradePlan,
+    Mk8sUpgradeReadinessResult,
     blocking_preflight_findings,
     collect_kubernetes_preflight_findings,
     find_source_mk8s_component,
-    format_node_layer_upgrade_plan,
     format_node_template_upgrade_plan,
-    format_os_image_upgrade_plan,
-    format_upgrade_plan,
-    node_group_layer_rollout_complete,
     node_group_node_template_rollout_complete,
-    node_group_os_rollout_complete,
+    node_group_uses_nebius_gpu_image,
     node_template_target_drivers_preset,
     parse_k8s_version,
     parse_upgrade_selector,
-    plan_k8s_upgrade,
-    plan_node_layer_upgrade,
     plan_node_template_upgrade,
-    plan_os_image_upgrade,
     render_updated_source_payload,
     resolve_drain_timeout,
+    resolve_strategy_max_surge_count,
+    select_live_node_groups_for_node_template,
     set_source_node_group_strategies,
     source_mk8s_cluster_name,
     source_node_group_strategy_snapshot,
     source_node_group_versions_for_groups,
-    source_node_group_versions_for_plan,
     terraform_node_group_strategy_for_policy,
     update_source_k8s_versions,
-    update_source_node_group_field,
-    update_source_node_group_os,
     update_source_node_template,
     validate_disruption_policy,
-    validate_node_layer_value,
+    validate_node_template_field_value,
     validate_os_image_value,
     verify_mk8s_upgrade_plan_ready,
-    wait_for_node_group_rollout,
-    wait_for_node_layer_rollout,
     wait_for_node_template_rollout,
-    wait_for_os_image_rollout,
 )
 from .mysterybox_eso import (
     EXTERNAL_SECRETS_APP_ID,
@@ -338,16 +331,6 @@ from .observability_validation import (
     OBSERVABILITY_INGESTION_VALIDATION_KIND,
     run_observability_validations,
 )
-from .os_image_upgrade import (
-    VM_COMPONENT_ID,
-    find_source_vm_component,
-    format_vm_os_image_upgrade_plan,
-    plan_vm_os_image_upgrade,
-    source_vm_image_family,
-    source_vm_platform,
-    source_vm_uses_managed_image_family,
-    update_source_vm_image_family,
-)
 from .paths import (
     ProjectPaths,
     normalize_project_folder_name,
@@ -368,7 +351,10 @@ from .provider_options import (
 from .quota_checks import (
     QuotaCheck,
     QuotaContributor,
+    QuotaCoverageGap,
     QuotaReport,
+    QuotaRequirement,
+    assess_live_quota_requirements,
     assess_live_quotas,
     estimate_mk8s_quota_requirements,
     format_quota_report_lines,
@@ -442,6 +428,7 @@ from .soperator_onboarding import (
     soperator_onboarding_report_for_modes,
     soperator_onboarding_target,
     soperator_onboarding_target_refs,
+    source_soperator_discovery_report_path,
     validate_soperator_onboarding_acceptance,
     write_soperator_onboarding_reports,
     write_source_soperator_discovery_report,
@@ -460,7 +447,7 @@ from .ssh_jumphost import (
 )
 from .ssh_public_keys import discover_ssh_public_key_files, normalize_ssh_public_key_value
 from .templates import customer_workflow_yaml, default_cli_ref
-from .terminal_styles import error_markup, warning_markup
+from .terminal_styles import copy_paste_command_markup, error_markup, warning_markup
 from .terraform_backend import (
     TerraformStateLockInfo,
     backend_settings_from_config,
@@ -482,8 +469,9 @@ from .terraform_ops import (
 )
 from .terraform_provider import build_provider_module_name
 from .upgrade_wizard import (
-    mk8s_os_image_choices,
-    node_layer_value_choices,
+    live_node_groups_from_sdk,
+    node_template_gpu_stack_choices,
+    node_template_os_choices,
     recommended_choice_value,
 )
 from .wireguard_clients import (
@@ -575,7 +563,7 @@ def _print_live_quota_report(report: QuotaReport, *, phase: str) -> None:
 def _print_copy_paste_command(command: str) -> None:
     normalized = str(command or "").strip()
     if normalized:
-        console.print(normalized, highlight=False, soft_wrap=True)
+        console.print(copy_paste_command_markup(normalized), highlight=False, soft_wrap=True)
 
 
 def _quota_check_all_regions_command(config_path: Path) -> str:
@@ -723,6 +711,7 @@ def _raise_on_config_live_quota_issues(
 
 
 _TERRAFORM_STATE_MODULE_RE = re.compile(r"^module\.([A-Za-z0-9_]+)(?:\.|$)")
+_TERRAFORM_GPU_CLUSTER_KEY_RE = re.compile(r'nebius_compute_v1_gpu_cluster\.this\["([^"]+)"\]')
 
 
 def _terraform_state_module_name(address: str) -> str:
@@ -883,6 +872,323 @@ def _generated_bundle_mk8s_module_index(
         and item.get("module_name")
         and item.get("instance_id")
     }
+
+
+@dataclass(frozen=True)
+class _Mk8sGpuFabricSpec:
+    instance_id: str
+    gpu_cluster_key: str
+    fabric: str
+    node_groups: tuple[str, ...]
+    cluster_name: str = ""
+
+
+@dataclass(frozen=True)
+class _Mk8sGpuFabricDriftFinding:
+    instance_id: str
+    gpu_cluster_key: str
+    node_groups: tuple[str, ...]
+    current_fabric: str
+    desired_fabric: str
+    source: str
+
+
+def _enabled_mk8s_rows_from_config(config: Any) -> tuple[Mapping[str, Any], ...]:
+    payload = to_plain_data(config)
+    if not isinstance(payload, Mapping):
+        return ()
+    infra = _state_mapping(payload.get("infra"))
+    rows: list[Mapping[str, Any]] = []
+    for item in _state_list(infra.get("components")):
+        if not isinstance(item, Mapping):
+            continue
+        if not bool(item.get("enabled", False)):
+            continue
+        if component_type_id(item) != "mk8s":
+            continue
+        rows.append(item)
+    return tuple(rows)
+
+
+def _mk8s_gpu_fabric_specs_from_config(config: Any) -> dict[tuple[str, str], _Mk8sGpuFabricSpec]:
+    specs: dict[tuple[str, str], _Mk8sGpuFabricSpec] = {}
+    for row in _enabled_mk8s_rows_from_config(config):
+        instance_id = component_instance_id(row)
+        if not instance_id:
+            continue
+        inputs = _state_mapping(row.get("inputs"))
+        gpu_clusters = _state_mapping(inputs.get("gpu_clusters"))
+        if not gpu_clusters:
+            continue
+        node_groups_by_cluster: dict[str, list[str]] = {}
+        for raw_group_key, raw_group in _state_mapping(inputs.get("node_groups")).items():
+            if not isinstance(raw_group, Mapping) or raw_group.get("enabled") is False:
+                continue
+            if not bool(raw_group.get("gpu", False)):
+                continue
+            gpu_cluster_key = _state_text(raw_group.get("gpu_cluster_key"))
+            if not gpu_cluster_key:
+                continue
+            node_groups_by_cluster.setdefault(gpu_cluster_key, []).append(str(raw_group_key))
+        for raw_cluster_key, raw_cluster in gpu_clusters.items():
+            cluster_key = str(raw_cluster_key).strip()
+            node_groups = tuple(sorted(node_groups_by_cluster.get(cluster_key, ())))
+            if not cluster_key or not node_groups or not isinstance(raw_cluster, Mapping):
+                continue
+            fabric = _state_text(raw_cluster.get("infiniband_fabric"))
+            if not fabric:
+                continue
+            specs[(instance_id, cluster_key)] = _Mk8sGpuFabricSpec(
+                instance_id=instance_id,
+                gpu_cluster_key=cluster_key,
+                fabric=fabric,
+                node_groups=node_groups,
+                cluster_name=_state_text(raw_cluster.get("name")),
+            )
+    return specs
+
+
+def _terraform_gpu_cluster_key(resource: Mapping[str, Any]) -> str:
+    index = resource.get("index")
+    if isinstance(index, str):
+        return index.strip()
+    address = _state_text(resource.get("address"))
+    match = _TERRAFORM_GPU_CLUSTER_KEY_RE.search(address)
+    return match.group(1).strip() if match is not None else ""
+
+
+def _mk8s_gpu_fabric_specs_from_terraform_state(
+    *,
+    paths: ProjectPaths,
+    manifest: Mapping[str, Any],
+    runtime_env: Mapping[str, str] | None,
+    initialize: bool,
+) -> dict[tuple[str, str], _Mk8sGpuFabricSpec]:
+    module_index = _generated_bundle_mk8s_module_index(manifest)
+    if not module_index:
+        return {}
+    try:
+        state_payload = terraform_show_json(
+            paths.infra_dir,
+            extra_env=dict(runtime_env or {}),
+            initialize=initialize,
+        )
+    except Exception:
+        return {}
+    specs: dict[tuple[str, str], _Mk8sGpuFabricSpec] = {}
+    for resource in _terraform_state_resources(state_payload):
+        if _state_text(resource.get("type")) != "nebius_compute_v1_gpu_cluster":
+            continue
+        address = _state_text(resource.get("address"))
+        module_name = _terraform_state_module_name(address)
+        component_identity = module_index.get(module_name)
+        if component_identity is None:
+            continue
+        _component_id, instance_id = component_identity
+        values = _state_mapping(resource.get("values"))
+        fabric = _state_text(values.get("infiniband_fabric"))
+        cluster_key = _terraform_gpu_cluster_key(resource)
+        if not fabric or not cluster_key:
+            continue
+        specs[(instance_id, cluster_key)] = _Mk8sGpuFabricSpec(
+            instance_id=instance_id,
+            gpu_cluster_key=cluster_key,
+            fabric=fabric,
+            node_groups=(),
+            cluster_name=_state_text(values.get("name")),
+        )
+    return specs
+
+
+def _mk8s_gpu_fabric_drift_findings(
+    *,
+    desired_config: Any,
+    current_specs: Mapping[tuple[str, str], _Mk8sGpuFabricSpec],
+    source: str,
+) -> tuple[_Mk8sGpuFabricDriftFinding, ...]:
+    desired_specs = _mk8s_gpu_fabric_specs_from_config(desired_config)
+    findings: list[_Mk8sGpuFabricDriftFinding] = []
+    for key, desired in sorted(desired_specs.items()):
+        current = current_specs.get(key)
+        if current is None:
+            continue
+        if current.fabric == desired.fabric:
+            continue
+        findings.append(
+            _Mk8sGpuFabricDriftFinding(
+                instance_id=desired.instance_id,
+                gpu_cluster_key=desired.gpu_cluster_key,
+                node_groups=desired.node_groups,
+                current_fabric=current.fabric,
+                desired_fabric=desired.fabric,
+                source=source,
+            )
+        )
+    return tuple(findings)
+
+
+def _gpu_fabric_upgrade_dry_run_command(
+    *,
+    config_path: Path,
+    finding: _Mk8sGpuFabricDriftFinding,
+) -> str:
+    command = (
+        "nebius-cxcli upgrade node-group "
+        f"{shlex.quote(str(config_path))} "
+        f"infra:mk8s@{shlex.quote(finding.instance_id)}"
+    )
+    if finding.node_groups:
+        command += f" --node-group {shlex.quote(finding.node_groups[0])}"
+    command += f" --to-fabric {shlex.quote(finding.desired_fabric)} --dry-run"
+    return command
+
+
+def _format_mk8s_gpu_fabric_drift_message(
+    findings: Sequence[_Mk8sGpuFabricDriftFinding],
+    *,
+    config_path: Path,
+    action: str,
+) -> str:
+    rendered: list[str] = [
+        (
+            f"{action} would change an existing MK8s GPU cluster fabric. "
+            "Nebius cannot change the GPU cluster of an existing node group in place; "
+            "use the approved fabric migration command instead."
+        )
+    ]
+    for finding in findings:
+        node_group_text = ", ".join(finding.node_groups) or "(unknown GPU node group)"
+        rendered.append(
+            "  - "
+            f"infra:mk8s@{finding.instance_id} gpu_clusters."
+            f"{finding.gpu_cluster_key}: {finding.current_fabric} -> "
+            f"{finding.desired_fabric} ({node_group_text}; source={finding.source})"
+        )
+        rendered.append(
+            "    dry run: "
+            + _gpu_fabric_upgrade_dry_run_command(
+                config_path=config_path,
+                finding=finding,
+            )
+        )
+    return "\n".join(rendered)
+
+
+def _raise_on_render_gpu_fabric_drift(config: Any, paths: ProjectPaths) -> None:
+    manifest_path = manifest_path_for_generated_dir(paths.generated_dir)
+    if not manifest_path.exists():
+        return
+    try:
+        manifest = load_generated_manifest(paths.generated_dir)
+        previous_config = runtime_config_from_manifest(manifest)
+    except Exception:
+        return
+    findings = list(
+        _mk8s_gpu_fabric_drift_findings(
+            desired_config=config,
+            current_specs=_mk8s_gpu_fabric_specs_from_config(previous_config),
+            source="generated manifest",
+        )
+    )
+    with suppress(Exception):
+        findings.extend(
+            _terraform_gpu_fabric_drift_findings(
+                config,
+                paths,
+                manifest,
+                runtime_env=_terraform_runtime_env(previous_config),
+                initialize=False,
+            )
+        )
+    if not findings:
+        return
+    raise RuntimeError(
+        _format_mk8s_gpu_fabric_drift_message(
+            tuple(findings),
+            config_path=paths.config_path,
+            action="Render",
+        )
+    )
+
+
+def _terraform_gpu_fabric_drift_findings(
+    config: Any,
+    paths: ProjectPaths,
+    manifest: Mapping[str, Any] | None,
+    *,
+    runtime_env: Mapping[str, str] | None,
+    initialize: bool,
+) -> tuple[_Mk8sGpuFabricDriftFinding, ...]:
+    if not manifest:
+        return ()
+    current_specs = _mk8s_gpu_fabric_specs_from_terraform_state(
+        paths=paths,
+        manifest=manifest,
+        runtime_env=runtime_env,
+        initialize=initialize,
+    )
+    if not current_specs:
+        return ()
+    return _mk8s_gpu_fabric_drift_findings(
+        desired_config=config,
+        current_specs=current_specs,
+        source="Terraform state",
+    )
+
+
+def _warn_on_terraform_gpu_fabric_drift(
+    config: Any,
+    paths: ProjectPaths,
+    manifest: Mapping[str, Any] | None,
+    *,
+    runtime_env: Mapping[str, str] | None,
+    initialize: bool,
+) -> None:
+    findings = _terraform_gpu_fabric_drift_findings(
+        config,
+        paths,
+        manifest,
+        runtime_env=runtime_env,
+        initialize=initialize,
+    )
+    if not findings:
+        return
+    console.print(
+        warning_markup(
+            _format_mk8s_gpu_fabric_drift_message(
+                findings,
+                config_path=paths.config_path,
+                action="Terraform plan",
+            )
+        ),
+        soft_wrap=True,
+    )
+
+
+def _raise_on_terraform_gpu_fabric_drift(
+    config: Any,
+    paths: ProjectPaths,
+    manifest: Mapping[str, Any] | None,
+    *,
+    runtime_env: Mapping[str, str] | None,
+    initialize: bool,
+) -> None:
+    findings = _terraform_gpu_fabric_drift_findings(
+        config,
+        paths,
+        manifest,
+        runtime_env=runtime_env,
+        initialize=initialize,
+    )
+    if not findings:
+        return
+    raise RuntimeError(
+        _format_mk8s_gpu_fabric_drift_message(
+            findings,
+            config_path=paths.config_path,
+            action="Terraform apply",
+        )
+    )
 
 
 def _managed_mk8s_quota_requirements_from_terraform_state(
@@ -1320,70 +1626,38 @@ def _require_component_config_option(config_path: Path | None) -> Path:
 _UPGRADE_EXAMPLE_CONFIG = "~/deployments/tenant-name-example/project-name-example/config.yaml"
 _UPGRADE_GROUP_EPILOG = (
     "Examples: "
-    f"nebius-cxcli upgrade k8s-version {_UPGRADE_EXAMPLE_CONFIG} "
+    f"nebius-cxcli upgrade node-template {_UPGRADE_EXAMPLE_CONFIG} "
     "(guided wizard)  |  "
-    f"nebius-cxcli upgrade k8s-version {_UPGRADE_EXAMPLE_CONFIG} "
-    "infra:mk8s@mk8s --to-version 1.33 --dry-run  |  "
-    f"nebius-cxcli upgrade os-image {_UPGRADE_EXAMPLE_CONFIG} "
-    "(guided wizard)  |  "
-    f"nebius-cxcli upgrade os-image {_UPGRADE_EXAMPLE_CONFIG} "
-    "infra:mk8s@mk8s --to-os ubuntu24.04 --dry-run  |  "
-    f"nebius-cxcli upgrade os-image {_UPGRADE_EXAMPLE_CONFIG} "
-    "infra:vm@worker --to-os ubuntu24.04-driverless --dry-run  |  "
-    f"nebius-cxcli upgrade k8s-version {_UPGRADE_EXAMPLE_CONFIG} "
-    "infra:mk8s@mk8s --to-version 1.33 --strategy zero-surge  |  "
-    "nebius-cxcli upgrade node-template <config.yaml> infra:mk8s@<target> --to-version 1.33 --to-os ubuntu24.04 --to-gpu-stack-preset cuda13.0  |  "
-    "nebius-cxcli upgrade gpu-stack-preset <config.yaml> infra:mk8s@<target> --to-gpu-stack-preset cuda13.0  |  "
-    "nebius-cxcli upgrade platform <config.yaml> infra:mk8s@<target> --to-platform cpu-d3  |  "
-    "nebius-cxcli upgrade cpu-preset <config.yaml> infra:mk8s@<target> --to-preset <preset>  |  "
-    "nebius-cxcli upgrade gpu-preset <config.yaml> infra:mk8s@<target> --to-preset <preset>  |  "
+    "nebius-cxcli upgrade node-template <config.yaml> infra:mk8s@<target> "
+    "--to-version 1.33 --to-os ubuntu24.04 --to-gpu-stack-preset cuda13.0 "
+    "--dry-run  |  "
+    "nebius-cxcli upgrade node-template <config.yaml> infra:mk8s@<target> "
+    "--to-os ubuntu24.04 --node-group system --dry-run  |  "
+    "nebius-cxcli upgrade node-group <config.yaml> infra:mk8s@<target> --node-group worker --to-platform gpu-b200-sxm --to-preset 8gpu-160vcpu-1792gb --to-fabric fabric-6 --dry-run  |  "
+    "nebius-cxcli upgrade node-group <config.yaml> infra:mk8s@<target> --node-group system --to-platform cpu-d3 --to-preset <preset> --dry-run  |  "
     "nebius-cxcli upgrade helm-chart <config.yaml> apps:<chart>@<target> --to-version <chart-version>."
 )
-_UPGRADE_K8S_EPILOG = (
-    "Examples: "
-    f"Guided wizard: nebius-cxcli upgrade k8s-version {_UPGRADE_EXAMPLE_CONFIG}  |  "
-    f"Dry-run plan: nebius-cxcli upgrade k8s-version {_UPGRADE_EXAMPLE_CONFIG} "
-    "infra:mk8s@mk8s --to-version 1.33 --dry-run  |  "
-    f"Default zero-surge: nebius-cxcli upgrade k8s-version {_UPGRADE_EXAMPLE_CONFIG} "
-    "infra:mk8s@mk8s --to-version 1.33  |  "
-    f"Capacity-preserving safe-surge: nebius-cxcli upgrade k8s-version {_UPGRADE_EXAMPLE_CONFIG} "
-    "infra:mk8s@mk8s --to-version 1.33 --strategy safe-surge  |  "
-    f"Custom drain timeout: nebius-cxcli upgrade k8s-version {_UPGRADE_EXAMPLE_CONFIG} "
-    "infra:mk8s@mk8s --to-version 1.33 --strategy zero-surge "
-    "--drain-timeout 45m  |  "
-    f"Last-resort force-delete: nebius-cxcli upgrade k8s-version {_UPGRADE_EXAMPLE_CONFIG} "
-    "infra:mk8s@mk8s --to-version 1.33 --strategy force-delete. "
-    "Defaults: zero-surge -> 30m, safe-surge -> 30m, force-delete -> 10m. "
-    "force-delete never deletes PVC/PV objects. Non-dry runs finish with a "
-    "final MK8s readiness check against the live control plane and selected "
-    "node groups."
-)
-_UPGRADE_OS_IMAGE_EPILOG = (
-    "Examples: "
-    f"Guided wizard: nebius-cxcli upgrade os-image {_UPGRADE_EXAMPLE_CONFIG}  |  "
-    f"Dry-run plan: nebius-cxcli upgrade os-image {_UPGRADE_EXAMPLE_CONFIG} "
-    "infra:mk8s@mk8s --to-os ubuntu24.04 --dry-run  |  "
-    f"VM dry-run plan: nebius-cxcli upgrade os-image {_UPGRADE_EXAMPLE_CONFIG} "
-    "infra:vm@worker --to-os ubuntu24.04-driverless --dry-run  |  "
-    f"One node group: nebius-cxcli upgrade os-image {_UPGRADE_EXAMPLE_CONFIG} "
-    "infra:mk8s@mk8s --to-os ubuntu24.04 --node-group system  |  "
-    f"Allow unavailable: nebius-cxcli upgrade os-image {_UPGRADE_EXAMPLE_CONFIG} "
-    "infra:mk8s@mk8s --to-os ubuntu24.04 --strategy zero-surge. "
-    "Defaults: zero-surge -> 30m, safe-surge -> 30m, force-delete -> 10m. "
-    "This changes the MK8s node template OS through Terraform and Managed "
-    "Kubernetes rolling node replacement, or a generic VM source_image_family "
-    "through Terraform replacement; it does not SSH to nodes or run apt. "
-    "Non-dry MK8s runs finish with a final MK8s readiness check against the "
-    "live selected node groups."
-)
 _UPGRADE_NODE_TEMPLATE_EPILOG = (
-    "Example: nebius-cxcli upgrade node-template <config.yaml> "
+    "Examples: "
+    f"Guided wizard: nebius-cxcli upgrade node-template {_UPGRADE_EXAMPLE_CONFIG}  |  "
+    "Dry-run plan: nebius-cxcli upgrade node-template <config.yaml> "
     "infra:mk8s@<target> --to-version 1.33 --to-os ubuntu24.04 "
     "--to-gpu-stack-preset cuda13.0 --dry-run. "
-    "This non-interactive command upgrades the control plane first, then writes "
-    "node-group version, OS, and Nebius-image GPU stack changes together so each "
-    "selected node group rolls once. Non-dry runs finish with a final MK8s "
-    "readiness check against the live control plane and selected node groups."
+    "Omitted --to-version, --to-os, and --to-gpu-stack-preset values keep the "
+    "selected live node-group value when it is unambiguous and compatible. "
+    "This command upgrades the control plane first when --to-version changes, "
+    "then writes selected node-group version, OS, and Nebius-image GPU stack "
+    "changes together so each selected node group rolls once. It does not change "
+    "hardware platform, hardware preset, CPU/GPU kind, GPU cluster, or fabric; "
+    "use upgrade node-group for those migrations. Use --no-interactive for "
+    "automation; keep --auto-auth-bootstrap enabled for generated-bundle "
+    "validation unless automation provides auth another way. "
+    "Safe-surge count: "
+    "--strategy-max-surge-count <n> sets temporary extra nodes per active node "
+    "group; default 1. Non-dry runs finish with a final MK8s readiness check "
+    "against the live control plane and selected node groups, then write "
+    "generated/reports/upgrade-node-template-report.md and "
+    "generated/reports/upgrade-node-template-report.json."
 )
 app = typer.Typer(
     add_completion=False,
@@ -1419,9 +1693,9 @@ app = typer.Typer(
         "nebius-cxcli component add apps:soperator --config ./deployments/tenant/project/config.yaml  |  "
         "nebius-cxcli render ./deployments/tenant/project/config.yaml  |  "
         "nebius-cxcli deploy ./deployments/tenant/project/config.yaml. "
-        f"Upgrade example: nebius-cxcli upgrade k8s-version {_UPGRADE_EXAMPLE_CONFIG} "
+        f"Upgrade example: nebius-cxcli upgrade node-template {_UPGRADE_EXAMPLE_CONFIG} "
         "infra:mk8s@mk8s --to-version 1.33 --dry-run. "
-        "Run `nebius-cxcli upgrade --help` for strategy and node-layer examples. "
+        "Run `nebius-cxcli upgrade --help` for strategy and node-group examples. "
         "Soperator wizards expose schedulingConfig, partitionConfiguration.partitions[].policy, "
         "qosConfiguration plus catalog choices for partition_profile and topology_profile "
         "(nebius-nvl-rack-v1 covers GB300/NVL)."
@@ -1474,15 +1748,15 @@ soperator_app = typer.Typer(
         "CXCLI managed workflow: nebius-cxcli soperator upgrade <config.yaml> "
         "--target <target> --to-version <chart-version> --dry-run, then rerun "
         "without --dry-run to update config.yaml, rerender, apply the selected "
-        "target, verify Helm readiness, and run required Soperator/Slurm "
-        "validation. Existing external Soperator clusters still use "
+        "target, verify the static Soperator chart version, and run required "
+        "Soperator/Slurm validation. Existing external Soperator clusters still use "
         "ext-soperator onboard/migrate for adoption or migration-owned work."
     ),
 )
 upgrade_app = typer.Typer(
     help=(
-        "Run day-2 lifecycle upgrades from config.yaml. Supports MK8s "
-        "Kubernetes version, combined node-template, OS-image, node-layer, and "
+        "Run day-2 lifecycle upgrades from config.yaml. Supports MK8s node-template "
+        "rolling updates, MK8s node-group migration, and non-Soperator "
         "target-scoped Helm chart upgrades with dry-run planning and guardrails."
     ),
     epilog=_UPGRADE_GROUP_EPILOG,
@@ -1743,35 +2017,6 @@ def _managed_mk8s_upgrade_target_choices(manifest: Mapping[str, Any]) -> list[Op
 
 
 @dataclass(frozen=True)
-class _OsImageUpgradeTarget:
-    selector: str
-    component_id: str
-    instance_id: str
-
-
-@dataclass(frozen=True)
-class _OsImageUpgradeRequest:
-    target: _OsImageUpgradeTarget
-    target_os: str
-    node_group: str
-    dry_run: bool
-    disruption_policy: str
-    drain_timeout: DrainTimeout
-    guided: bool
-
-
-@dataclass(frozen=True)
-class _NodeLayerUpgradeRequest:
-    target_selector: str
-    target_value: str
-    node_group: str
-    dry_run: bool
-    disruption_policy: str
-    drain_timeout: DrainTimeout
-    guided: bool
-
-
-@dataclass(frozen=True)
 class _HelmChartUpgradeTarget:
     selector: str
     chart_id: str
@@ -1812,79 +2057,16 @@ class _SoperatorActiveChecksLifecycle:
 
 SOPERATOR_UPGRADE_CHECKPOINT_SCHEMA = "nebius-cxcli-soperator-upgrade/v1"
 SOPERATOR_UPGRADE_CHECKPOINT_DIR = ".nebius-cxcli/soperator-upgrades"
-UPGRADE_REPORT_FILENAME = "upgrade-report.md"
-UPGRADE_REPORT_JSON_FILENAME = "upgrade-report.json"
+UPGRADE_NODE_TEMPLATE_REPORT_FILENAME = "upgrade-node-template-report.md"
+UPGRADE_NODE_TEMPLATE_REPORT_JSON_FILENAME = "upgrade-node-template-report.json"
+UPGRADE_NODE_GROUP_REPORT_FILENAME = "upgrade-node-group-report.md"
+UPGRADE_NODE_GROUP_REPORT_JSON_FILENAME = "upgrade-node-group-report.json"
+SOPERATOR_UPGRADE_REPORT_FILENAME = "soperator-upgrade-report.md"
+SOPERATOR_UPGRADE_REPORT_JSON_FILENAME = "soperator-upgrade-report.json"
 _SOPERATOR_ACTIVECHECKS_UPGRADE_PATHS = (
     "values.soperator-activechecks.enabled",
     "values.soperator-activechecks.waitForChecks.enabled",
 )
-
-
-_NODE_LAYER_UPGRADE_SPECS: dict[str, NodeLayerUpgradeSpec] = {
-    "gpu-stack-preset": NodeLayerUpgradeSpec(
-        command="gpu-stack-preset",
-        title="MK8s GPU stack preset",
-        source_field="gpu_stack_preset",
-        live_field="drivers_preset",
-        target_label="GPU stack preset",
-        group_filter="gpu",
-    ),
-    "platform": NodeLayerUpgradeSpec(
-        command="platform",
-        title="MK8s node platform",
-        source_field="platform",
-        live_field="platform",
-        target_label="platform",
-        group_filter="all",
-    ),
-    "cpu-preset": NodeLayerUpgradeSpec(
-        command="cpu-preset",
-        title="MK8s CPU preset",
-        source_field="preset",
-        live_field="preset",
-        target_label="CPU preset",
-        group_filter="cpu",
-    ),
-    "gpu-preset": NodeLayerUpgradeSpec(
-        command="gpu-preset",
-        title="MK8s GPU preset",
-        source_field="preset",
-        live_field="preset",
-        target_label="GPU preset",
-        group_filter="gpu",
-    ),
-}
-
-
-def _parse_os_image_upgrade_selector(selector: str) -> _OsImageUpgradeTarget:
-    raw = _non_empty_text(selector)
-    if not raw:
-        raise ValueError(
-            "Target selector is required. Use infra:mk8s@<cluster-instance-id> "
-            "or infra:vm@<vm-instance-id>."
-        )
-    if not raw.startswith("infra:") or "@" not in raw:
-        raise ValueError(
-            "OS-image upgrades require an explicit infra target selector: "
-            "infra:mk8s@<cluster-instance-id> or infra:vm@<vm-instance-id>."
-        )
-    component_raw, instance_raw = raw[len("infra:") :].split("@", maxsplit=1)
-    component_id = normalize_component_token(component_raw)
-    instance_id = normalize_component_token(instance_raw)
-    if component_id not in {MK8S_COMPONENT_ID, VM_COMPONENT_ID}:
-        raise ValueError("OS-image upgrades support infra:mk8s and infra:vm targets only.")
-    if not instance_id:
-        raise ValueError(
-            f"Missing {component_id} target instance id. Use infra:{component_id}@<instance-id>."
-        )
-    if any(char.isspace() for char in raw):
-        raise ValueError("OS-image target selector must not contain whitespace.")
-    selector_text = f"infra:{component_id}@{instance_id}"
-    return _OsImageUpgradeTarget(
-        selector=selector_text,
-        component_id=component_id,
-        instance_id=instance_id,
-    )
 
 
 def _parse_helm_chart_upgrade_selector(selector: str) -> _HelmChartUpgradeTarget:
@@ -2065,9 +2247,7 @@ def _parse_soperator_upgrade_target(target_ref: str) -> _HelmChartUpgradeTarget:
         else _parse_helm_chart_upgrade_selector(f"apps:{_SOPERATOR_APP_ID}@{raw}")
     )
     if target.chart_id != _SOPERATOR_APP_ID:
-        raise ValueError(
-            "Soperator upgrades require apps:soperator@<target> or --target <target>."
-        )
+        raise ValueError("Soperator upgrades require apps:soperator@<target> or --target <target>.")
     return target
 
 
@@ -2106,83 +2286,33 @@ def _prompt_soperator_upgrade_target_if_needed(
 def _prompt_soperator_upgrade_to_version_if_needed(
     *,
     to_version: str | None,
+    current_version: str | None,
+    catalog_default_version: str | None,
 ) -> str:
     current = _non_empty_text(to_version)
     if current:
         return _validate_helm_chart_version_value(current)
+    current_hint = _non_empty_text(current_version) or "unset"
+    default_version = _non_empty_text(catalog_default_version)
     value = _prompt_upgrade_scalar(
         "soperator.upgrade.to_version",
-        "",
+        default_version,
         type_hint="string",
         missing="--to-version <chart-version>",
+        prompt_hint=f"current: {current_hint}",
     )
     return _validate_helm_chart_version_value(str(value))
 
 
-def _source_vm_os_image_upgrade_target_choices(
-    source_payload: Mapping[str, Any],
-) -> list[OptionChoice]:
-    infra = source_payload.get("infra")
-    components = infra.get("components") if isinstance(infra, Mapping) else None
-    if not isinstance(components, list):
-        return []
-    choices: list[OptionChoice] = []
-    for row in components:
-        if not isinstance(row, Mapping) or row.get("enabled") is False:
-            continue
-        if component_type_id(row) != VM_COMPONENT_ID:
-            continue
-        if not source_vm_uses_managed_image_family(row):
-            continue
-        current = source_vm_image_family(row)
-        if not current:
-            continue
-        instance_id = component_instance_id(row)
-        if not instance_id:
-            continue
-        selector = f"infra:{VM_COMPONENT_ID}@{instance_id}"
-        label = f"{selector}  (VM source image family: {current})"
-        choices.append(
-            OptionChoice(
-                value=selector,
-                label=label,
-                recommended=False,
-            )
-        )
-    return choices
-
-
-def _os_image_upgrade_target_choices(
-    *,
-    source_payload: Mapping[str, Any],
-    manifest: Mapping[str, Any],
-) -> list[OptionChoice]:
-    choices: list[OptionChoice] = []
-    for choice in _managed_mk8s_upgrade_target_choices(manifest):
-        choices.append(
-            OptionChoice(
-                value=choice.value,
-                label=f"{choice.value}  (MK8s node-group OS image)",
-                recommended=not choices,
-            )
-        )
-    for choice in _source_vm_os_image_upgrade_target_choices(source_payload):
-        choices.append(
-            OptionChoice(
-                value=choice.value,
-                label=choice.label,
-                recommended=not choices and choice.recommended,
-            )
-        )
-    if choices and not any(choice.recommended for choice in choices):
-        first = choices[0]
-        choices[0] = OptionChoice(
-            value=first.value,
-            label=first.label,
-            recommended=True,
-            metadata=first.metadata,
-        )
-    return choices
+def _soperator_upgrade_catalog_to_version_default() -> str:
+    chart = helm_chart_source_by_id(_SOPERATOR_APP_ID)
+    if chart is None:
+        return ""
+    portable_source = getattr(chart, "portable_source", None)
+    portable_version = _non_empty_text(getattr(portable_source, "version", ""))
+    if portable_version:
+        return portable_version
+    return _non_empty_text(getattr(chart, "version", ""))
 
 
 def _prompt_upgrade_choice(
@@ -2193,6 +2323,26 @@ def _prompt_upgrade_choice(
     required: bool = True,
     missing: str,
 ) -> str:
+    value = _prompt_upgrade_choice_or_back(
+        path_label,
+        current,
+        choices=choices,
+        required=required,
+        missing=missing,
+    )
+    if _wizard_backtrack_requested(value):
+        raise RuntimeError("Upgrade wizard cancelled.")
+    return str(value or "").strip()
+
+
+def _prompt_upgrade_choice_or_back(
+    path_label: str,
+    current: object,
+    *,
+    choices: list[OptionChoice],
+    required: bool = True,
+    missing: str,
+) -> str | object:
     _require_upgrade_interactive_prompts(missing=missing)
     value, should_stop = _prompt_scalar_override(
         path_label,
@@ -2200,8 +2350,10 @@ def _prompt_upgrade_choice(
         choices=choices,
         required=required,
     )
-    if should_stop or _wizard_backtrack_requested(value):
+    if should_stop:
         raise RuntimeError("Upgrade wizard cancelled.")
+    if _wizard_backtrack_requested(value):
+        return _WIZARD_BACKTRACK
     return str(value or "").strip()
 
 
@@ -2212,6 +2364,29 @@ def _prompt_upgrade_scalar(
     type_hint: str | None = None,
     required: bool = True,
     missing: str,
+    prompt_hint: str | None = None,
+) -> object:
+    value = _prompt_upgrade_scalar_or_back(
+        path_label,
+        current,
+        type_hint=type_hint,
+        required=required,
+        missing=missing,
+        prompt_hint=prompt_hint,
+    )
+    if _wizard_backtrack_requested(value):
+        raise RuntimeError("Upgrade wizard cancelled.")
+    return value
+
+
+def _prompt_upgrade_scalar_or_back(
+    path_label: str,
+    current: object,
+    *,
+    type_hint: str | None = None,
+    required: bool = True,
+    missing: str,
+    prompt_hint: str | None = None,
 ) -> object:
     _require_upgrade_interactive_prompts(missing=missing)
     value, should_stop = _prompt_scalar_override(
@@ -2219,46 +2394,19 @@ def _prompt_upgrade_scalar(
         current,
         type_hint=type_hint,
         required=required,
+        prompt_hint=prompt_hint,
     )
-    if should_stop or _wizard_backtrack_requested(value):
+    if should_stop:
         raise RuntimeError("Upgrade wizard cancelled.")
     return value
 
 
-def _prompt_upgrade_os_image_target_selector_if_needed(
-    *,
-    source_payload: Mapping[str, Any],
-    manifest: Mapping[str, Any],
-    target_selector: str | None,
-) -> _OsImageUpgradeTarget:
-    current = _non_empty_text(target_selector)
-    if current:
-        return _parse_os_image_upgrade_selector(current)
-    choices = _os_image_upgrade_target_choices(
-        source_payload=source_payload,
-        manifest=manifest,
-    )
-    if not choices:
-        raise RuntimeError(
-            "No Terraform-managed infra:mk8s targets or generic infra:vm components "
-            "with source_image_family are declared in this generated bundle. Run render "
-            "first and choose a managed OS-image target."
-        )
-    selector = _prompt_upgrade_choice(
-        "upgrade.os_image.target",
-        recommended_choice_value(choices),
-        choices=choices,
-        missing="upgrade target selector",
-    )
-    return _parse_os_image_upgrade_selector(selector)
-
-
-def _prompt_upgrade_k8s_target_selector_if_needed(
+def _prompt_upgrade_mk8s_target_selector_or_back_if_needed(
     *,
     manifest: Mapping[str, Any],
     target_selector: str | None,
-    path_label: str = "upgrade.k8s_version.target",
-) -> str:
+    path_label: str = "upgrade.node_template.target",
+) -> str | object:
     current = _non_empty_text(target_selector)
     if current:
         return current
@@ -2268,7 +2416,7 @@ def _prompt_upgrade_k8s_target_selector_if_needed(
             "No Terraform-managed infra:mk8s targets are declared in the generated bundle. "
             "Run render first and choose a managed MK8s target."
         )
-    return _prompt_upgrade_choice(
+    return _prompt_upgrade_choice_or_back(
         path_label,
         recommended_choice_value(choices),
         choices=choices,
@@ -2287,7 +2435,74 @@ def _cluster_control_plane_minor_version(cluster: Any, *, cluster_id: str) -> st
     return parse_k8s_version(version).minor_text
 
 
-def _upgrade_k8s_version_choices(
+def _selected_node_template_live_groups(
+    *,
+    source_component: Mapping[str, Any],
+    live_node_groups: Sequence[Any],
+    node_group: str,
+) -> tuple[LiveNodeGroup, ...]:
+    groups = live_node_groups_from_sdk(
+        source_component=source_component,
+        live_node_groups=live_node_groups,
+    )
+    return select_live_node_groups_for_node_template(groups, node_group=node_group)
+
+
+def _single_selected_live_value(
+    groups: Sequence[LiveNodeGroup],
+    *,
+    attr: str,
+    option_name: str,
+    value_label: str,
+) -> str:
+    values = tuple(
+        dict.fromkeys(
+            _non_empty_text(getattr(group, attr, None))
+            for group in groups
+            if _non_empty_text(getattr(group, attr, None))
+        )
+    )
+    if len(values) == 1:
+        return values[0]
+    if not values:
+        raise RuntimeError(
+            f"Could not resolve the current live {value_label} for selected node groups. "
+            f"Pass {option_name} explicitly."
+        )
+    raise RuntimeError(
+        f"Selected node groups have multiple live {value_label} values "
+        f"({', '.join(values)}). Pass {option_name} explicitly."
+    )
+
+
+def _default_node_template_gpu_stack_preset(
+    groups: Sequence[LiveNodeGroup],
+    *,
+    to_gpu_stack_preset: str | None,
+    prompt_gpu_stack: bool,
+) -> str:
+    current = _non_empty_text(to_gpu_stack_preset)
+    if current:
+        return validate_node_template_field_value(current, flag_name="--to-gpu-stack-preset")
+    if prompt_gpu_stack:
+        return ""
+    nebius_image_groups = tuple(
+        group for group in groups if node_group_uses_nebius_gpu_image(group)
+    )
+    if not nebius_image_groups:
+        return ""
+    return validate_node_template_field_value(
+        _single_selected_live_value(
+            nebius_image_groups,
+            attr="drivers_preset",
+            option_name="--to-gpu-stack-preset",
+            value_label="Nebius-image GPU stack preset",
+        ),
+        flag_name="--to-gpu-stack-preset",
+    )
+
+
+def _node_template_version_choices(
     *,
     current_version: str,
     supported_versions: tuple[str, ...],
@@ -2326,35 +2541,130 @@ def _upgrade_k8s_version_choices(
     return choices
 
 
-def _prompt_upgrade_k8s_to_version_if_needed(
+def _prompt_upgrade_node_template_to_version_if_needed(
     *,
     cluster: Any,
     cluster_id: str,
     supported_versions: tuple[str, ...],
     to_version: str | None,
+    path_label: str = "upgrade.node_template.to_version",
 ) -> str:
+    value = _prompt_upgrade_node_template_to_version_or_back_if_needed(
+        cluster=cluster,
+        cluster_id=cluster_id,
+        supported_versions=supported_versions,
+        to_version=to_version,
+        path_label=path_label,
+    )
+    if _wizard_backtrack_requested(value):
+        raise RuntimeError("Upgrade wizard cancelled.")
+    return str(value or "").strip()
+
+
+def _prompt_upgrade_node_template_to_version_or_back_if_needed(
+    *,
+    cluster: Any,
+    cluster_id: str,
+    supported_versions: tuple[str, ...],
+    to_version: str | None,
+    path_label: str = "upgrade.node_template.to_version",
+) -> str | object:
     current = _non_empty_text(to_version)
     if current:
         return parse_k8s_version(current).minor_text
     live_version = _cluster_control_plane_minor_version(cluster, cluster_id=cluster_id)
-    choices = _upgrade_k8s_version_choices(
+    choices = _node_template_version_choices(
         current_version=live_version,
         supported_versions=supported_versions,
     )
     if choices:
-        return _prompt_upgrade_choice(
-            "upgrade.k8s_version.to_version",
+        return _prompt_upgrade_choice_or_back(
+            path_label,
             recommended_choice_value(choices),
             choices=choices,
             missing="--to-version <major.minor>",
         )
-    value = _prompt_upgrade_scalar(
-        "upgrade.k8s_version.to_version",
+    value = _prompt_upgrade_scalar_or_back(
+        path_label,
         "",
         type_hint="string",
         missing="--to-version <major.minor>",
     )
+    if _wizard_backtrack_requested(value):
+        return _WIZARD_BACKTRACK
     return parse_k8s_version(str(value)).minor_text
+
+
+def _upgrade_auto_drain_timeout_prompt_hint(disruption_policy: str) -> str:
+    try:
+        validate_disruption_policy(disruption_policy)
+    except ValueError:
+        return "auto = strategy default"
+    return "auto = 30m for zero-surge/safe-surge; 10m for force-delete"
+
+
+def _coerce_strategy_max_surge_count(value: object) -> int:
+    if isinstance(value, bool):
+        raise ValueError("--strategy-max-surge-count must be an integer.")
+    try:
+        return int(str(value).strip())
+    except (TypeError, ValueError) as exc:
+        raise ValueError("--strategy-max-surge-count must be an integer.") from exc
+
+
+def _prompt_upgrade_strategy_max_surge_count_if_needed(
+    *,
+    path_prefix: str,
+    guided: bool,
+    disruption_policy: str,
+    strategy_max_surge_count: int | None,
+    allow_backtrack: bool = False,
+) -> object:
+    if disruption_policy != DISRUPTION_POLICY_SAFE:
+        if strategy_max_surge_count is not None:
+            resolve_strategy_max_surge_count(
+                disruption_policy,
+                strategy_max_surge_count,
+            )
+        return None
+    if strategy_max_surge_count is not None:
+        return resolve_strategy_max_surge_count(
+            disruption_policy,
+            strategy_max_surge_count,
+        )
+    if not guided:
+        return resolve_strategy_max_surge_count(disruption_policy, None)
+    prompt_func = _prompt_upgrade_scalar_or_back if allow_backtrack else _prompt_upgrade_scalar
+    prompted_count = prompt_func(
+        f"{path_prefix}.strategy_max_surge_count",
+        SAFE_SURGE_DEFAULT_MAX_SURGE_COUNT,
+        type_hint="integer",
+        required=True,
+        missing="--strategy-max-surge-count",
+        prompt_hint="temporary extra nodes per active node group",
+    )
+    if _wizard_backtrack_requested(prompted_count):
+        return _WIZARD_BACKTRACK
+    return resolve_strategy_max_surge_count(
+        disruption_policy,
+        _coerce_strategy_max_surge_count(prompted_count),
+    )
+
+
+def _upgrade_node_group_blank_prompt_text(path_prefix: str) -> str:
+    if path_prefix == "upgrade.node_template":
+        return "blank = all managed node groups"
+    return "blank = all eligible managed node groups"
+
+
+@contextmanager
+def _upgrade_discovery_status(message: str) -> Iterator[None]:
+    if getattr(console, "is_terminal", False) and hasattr(console, "status"):
+        with console.status(message, spinner="dots"):
+            yield
+        return
+    console.print(f"[dim]{message}[/dim]", soft_wrap=True)
+    yield
 
 
 def _prompt_upgrade_disruption_options_if_guided(
@@ -2364,109 +2674,221 @@ def _prompt_upgrade_disruption_options_if_guided(
     dry_run: bool,
     disruption_policy: str,
     drain_timeout: str,
+    strategy_max_surge_count: int | None,
     skip_validations: bool,
-) -> tuple[bool, str, str, bool]:
+    allow_outer_backtrack: bool = False,
+) -> tuple[bool, str, str, int | None, bool] | object:
     if not guided:
-        return dry_run, disruption_policy, drain_timeout, skip_validations
-    if not dry_run:
-        prompted_dry_run = _prompt_upgrade_scalar(
-            f"{path_prefix}.dry_run",
-            True,
-            type_hint="bool",
-            required=True,
-            missing="--dry-run choice",
+        resolved_max_surge_count = _prompt_upgrade_strategy_max_surge_count_if_needed(
+            path_prefix=path_prefix,
+            guided=False,
+            disruption_policy=disruption_policy,
+            strategy_max_surge_count=strategy_max_surge_count,
         )
-        dry_run = bool(prompted_dry_run)
-    if disruption_policy == DISRUPTION_POLICY_ALLOW_UNAVAILABLE:
-        disruption_policy = _prompt_upgrade_choice(
-            f"{path_prefix}.strategy",
-            DISRUPTION_POLICY_ALLOW_UNAVAILABLE,
-            choices=[
-                OptionChoice(
-                    value=DISRUPTION_POLICY_ALLOW_UNAVAILABLE,
-                    label="zero-surge  (default; no spare node quota; capacity can drop)",
-                    recommended=True,
-                ),
-                OptionChoice(
-                    value=DISRUPTION_POLICY_SAFE,
-                    label="safe-surge  (needs spare quota; preserves active capacity)",
-                ),
-                OptionChoice(
-                    value=DISRUPTION_POLICY_FORCE_DELETE,
-                    label="force-delete  (last resort; default drain timeout 10m)",
-                ),
-            ],
-            missing="--strategy",
-        )
-    if drain_timeout == "auto":
-        prompted_timeout = _prompt_upgrade_scalar(
-            f"{path_prefix}.drain_timeout",
-            "auto",
-            type_hint="string",
-            required=True,
-            missing="--drain-timeout",
-        )
-        drain_timeout = str(prompted_timeout or "auto").strip() or "auto"
-    if not skip_validations:
-        run_validations = _prompt_upgrade_scalar(
-            f"{path_prefix}.run_post_upgrade_validations",
-            True,
-            type_hint="bool",
-            required=True,
-            missing="post-upgrade validation choice",
-        )
-        skip_validations = not bool(run_validations)
-    if not dry_run:
-        confirm_apply = _prompt_upgrade_scalar(
-            f"{path_prefix}.confirm_apply",
-            False,
-            type_hint="bool",
-            required=True,
-            missing="live apply confirmation",
-        )
-        if not bool(confirm_apply):
-            raise RuntimeError("Upgrade wizard cancelled before applying live changes.")
-    return dry_run, disruption_policy, drain_timeout, skip_validations
+        return dry_run, disruption_policy, drain_timeout, resolved_max_surge_count, skip_validations
 
-
-def _prompt_upgrade_k8s_options_if_guided(
-    *,
-    guided: bool,
-    dry_run: bool,
-    disruption_policy: str,
-    drain_timeout: str,
-    skip_validations: bool,
-) -> tuple[bool, str, str, bool]:
-    return _prompt_upgrade_disruption_options_if_guided(
-        path_prefix="upgrade.k8s_version",
-        guided=guided,
-        dry_run=dry_run,
-        disruption_policy=disruption_policy,
-        drain_timeout=drain_timeout,
-        skip_validations=skip_validations,
+    prompt_dry_run = not dry_run
+    prompt_strategy = disruption_policy == DISRUPTION_POLICY_ALLOW_UNAVAILABLE
+    prompt_strategy_max_surge_count = strategy_max_surge_count is None
+    prompt_drain_timeout = drain_timeout == "auto"
+    prompt_validations = not skip_validations
+    prompted_steps: list[str] = []
+    steps = (
+        "dry_run",
+        "strategy",
+        "strategy_max_surge_count",
+        "drain_timeout",
+        "run_post_upgrade_validations",
+        "confirm_apply",
     )
+    step_index = 0
+    outer_backtrack = False
 
+    def _backtrack() -> None:
+        nonlocal outer_backtrack, step_index
+        if not prompted_steps:
+            if allow_outer_backtrack:
+                outer_backtrack = True
+                step_index = len(steps)
+                return
+            raise RuntimeError("Upgrade wizard cancelled.")
+        previous_step = prompted_steps.pop()
+        step_index = steps.index(previous_step)
 
-def _prompt_upgrade_os_image_node_group_if_guided(
-    *,
-    guided: bool,
-    node_group: str,
-) -> str:
-    current = _non_empty_text(node_group)
-    if current or not guided:
-        return current
-
-    _require_upgrade_interactive_prompts(missing="--node-group <source-key-or-live-name>")
-    value, should_stop = _prompt_scalar_override(
-        "upgrade.os_image.node_group",
-        None,
-        type_hint="string",
-        required=False,
-        unset_on_skip=True,
-    )
-    if should_stop or _wizard_backtrack_requested(value):
-        raise RuntimeError("Upgrade wizard cancelled.")
-    return _non_empty_text(value)
+    while step_index < len(steps):
+        step = steps[step_index]
+        try:
+            if step == "dry_run":
+                if not prompt_dry_run:
+                    step_index += 1
+                    continue
+                prompted_dry_run = _prompt_upgrade_scalar_or_back(
+                    f"{path_prefix}.dry_run",
+                    True,
+                    type_hint="bool",
+                    required=True,
+                    missing="--dry-run choice",
+                )
+                if _wizard_backtrack_requested(prompted_dry_run):
+                    _backtrack()
+                    if outer_backtrack:
+                        break
+                    continue
+                dry_run = bool(prompted_dry_run)
+                prompted_steps.append(step)
+                step_index += 1
+                continue
+            if step == "strategy":
+                if not prompt_strategy:
+                    step_index += 1
+                    continue
+                prompted_policy = _prompt_upgrade_choice_or_back(
+                    f"{path_prefix}.strategy",
+                    disruption_policy,
+                    choices=[
+                        OptionChoice(
+                            value=DISRUPTION_POLICY_ALLOW_UNAVAILABLE,
+                            label="zero-surge  (default; no spare node quota; capacity can drop)",
+                            recommended=True,
+                        ),
+                        OptionChoice(
+                            value=DISRUPTION_POLICY_SAFE,
+                            label=(
+                                "safe-surge  (default 1 spare node per active node group; "
+                                "preserves active capacity)"
+                            ),
+                        ),
+                        OptionChoice(
+                            value=DISRUPTION_POLICY_FORCE_DELETE,
+                            label=(
+                                "force-delete  (last resort; auto=10m, then deletes remaining "
+                                "Pods and node)"
+                            ),
+                        ),
+                    ],
+                    missing="--strategy",
+                )
+                if _wizard_backtrack_requested(prompted_policy):
+                    _backtrack()
+                    if outer_backtrack:
+                        break
+                    continue
+                disruption_policy = str(prompted_policy or "").strip()
+                if disruption_policy != DISRUPTION_POLICY_SAFE:
+                    strategy_max_surge_count = None
+                prompted_steps.append(step)
+                step_index += 1
+                continue
+            if step == "strategy_max_surge_count":
+                should_prompt_count = (
+                    disruption_policy == DISRUPTION_POLICY_SAFE and prompt_strategy_max_surge_count
+                )
+                if should_prompt_count:
+                    prompted_count = _prompt_upgrade_scalar_or_back(
+                        f"{path_prefix}.strategy_max_surge_count",
+                        (
+                            strategy_max_surge_count
+                            if strategy_max_surge_count is not None
+                            else SAFE_SURGE_DEFAULT_MAX_SURGE_COUNT
+                        ),
+                        type_hint="integer",
+                        required=True,
+                        missing="--strategy-max-surge-count",
+                        prompt_hint="temporary extra nodes per active node group",
+                    )
+                else:
+                    prompted_count = _prompt_upgrade_strategy_max_surge_count_if_needed(
+                        path_prefix=path_prefix,
+                        guided=guided,
+                        disruption_policy=disruption_policy,
+                        strategy_max_surge_count=strategy_max_surge_count,
+                        allow_backtrack=True,
+                    )
+                if _wizard_backtrack_requested(prompted_count):
+                    _backtrack()
+                    if outer_backtrack:
+                        break
+                    continue
+                if should_prompt_count:
+                    strategy_max_surge_count = resolve_strategy_max_surge_count(
+                        disruption_policy,
+                        _coerce_strategy_max_surge_count(prompted_count),
+                    )
+                    prompted_steps.append(step)
+                else:
+                    strategy_max_surge_count = (
+                        int(prompted_count) if prompted_count is not None else None
+                    )
+                step_index += 1
+                continue
+            if step == "drain_timeout":
+                if not prompt_drain_timeout:
+                    step_index += 1
+                    continue
+                prompted_timeout = _prompt_upgrade_scalar_or_back(
+                    f"{path_prefix}.drain_timeout",
+                    "auto",
+                    type_hint="string",
+                    required=True,
+                    missing="--drain-timeout",
+                    prompt_hint=_upgrade_auto_drain_timeout_prompt_hint(disruption_policy),
+                )
+                if _wizard_backtrack_requested(prompted_timeout):
+                    _backtrack()
+                    if outer_backtrack:
+                        break
+                    continue
+                drain_timeout = str(prompted_timeout or "auto").strip() or "auto"
+                prompted_steps.append(step)
+                step_index += 1
+                continue
+            if step == "run_post_upgrade_validations":
+                if not prompt_validations:
+                    step_index += 1
+                    continue
+                run_validations = _prompt_upgrade_scalar_or_back(
+                    f"{path_prefix}.run_post_upgrade_validations",
+                    True,
+                    type_hint="bool",
+                    required=True,
+                    missing="post-upgrade validation choice",
+                )
+                if _wizard_backtrack_requested(run_validations):
+                    _backtrack()
+                    if outer_backtrack:
+                        break
+                    continue
+                skip_validations = not bool(run_validations)
+                prompted_steps.append(step)
+                step_index += 1
+                continue
+            if step == "confirm_apply":
+                if dry_run:
+                    step_index += 1
+                    continue
+                confirm_apply = _prompt_upgrade_scalar_or_back(
+                    f"{path_prefix}.confirm_apply",
+                    False,
+                    type_hint="bool",
+                    required=True,
+                    missing="live apply confirmation",
+                )
+                if _wizard_backtrack_requested(confirm_apply):
+                    _backtrack()
+                    if outer_backtrack:
+                        break
+                    continue
+                if not bool(confirm_apply):
+                    raise RuntimeError("Upgrade wizard cancelled before applying live changes.")
+                prompted_steps.append(step)
+                step_index += 1
+                continue
+            step_index += 1
+        except RuntimeError:
+            raise
+    if outer_backtrack:
+        return _WIZARD_BACKTRACK
+    return dry_run, disruption_policy, drain_timeout, strategy_max_surge_count, skip_validations
 
 
 def _prompt_upgrade_node_group_if_guided(
@@ -2474,7 +2896,8 @@ def _prompt_upgrade_node_group_if_guided(
     path_prefix: str,
     guided: bool,
     node_group: str,
-) -> str:
+    allow_backtrack: bool = False,
+) -> str | object:
     current = _non_empty_text(node_group)
     if current or not guided:
         return current
@@ -2486,157 +2909,86 @@ def _prompt_upgrade_node_group_if_guided(
         type_hint="string",
         required=False,
         unset_on_skip=True,
+        blank_text=_upgrade_node_group_blank_prompt_text(path_prefix),
     )
-    if should_stop or _wizard_backtrack_requested(value):
+    if should_stop:
+        raise RuntimeError("Upgrade wizard cancelled.")
+    if _wizard_backtrack_requested(value):
+        if allow_backtrack:
+            return _WIZARD_BACKTRACK
         raise RuntimeError("Upgrade wizard cancelled.")
     return _non_empty_text(value)
 
 
-def _prompt_upgrade_node_layer_target_value_if_needed(
+def _prompt_upgrade_node_template_field_value_if_needed(
     *,
     path_label: str,
     value: str | None,
     option_name: str,
     choices: list[OptionChoice] | None = None,
-) -> str:
+    allow_backtrack: bool = False,
+) -> str | object:
     current = _non_empty_text(value)
     if current:
-        return validate_node_layer_value(current, flag_name=option_name)
+        return validate_node_template_field_value(current, flag_name=option_name)
     if choices:
-        selected = _prompt_upgrade_choice(
+        selected = _prompt_upgrade_choice_or_back(
             path_label,
             recommended_choice_value(choices),
             choices=choices,
             missing=f"{option_name} <value>",
         )
-        return validate_node_layer_value(selected, flag_name=option_name)
-    prompted = _prompt_upgrade_scalar(
+        if _wizard_backtrack_requested(selected):
+            if allow_backtrack:
+                return _WIZARD_BACKTRACK
+            raise RuntimeError("Upgrade wizard cancelled.")
+        return validate_node_template_field_value(selected, flag_name=option_name)
+    prompted = _prompt_upgrade_scalar_or_back(
         path_label,
         "",
         type_hint="string",
         missing=f"{option_name} <value>",
     )
-    return validate_node_layer_value(str(prompted), flag_name=option_name)
+    if _wizard_backtrack_requested(prompted):
+        if allow_backtrack:
+            return _WIZARD_BACKTRACK
+        raise RuntimeError("Upgrade wizard cancelled.")
+    return validate_node_template_field_value(str(prompted), flag_name=option_name)
 
 
-def _vm_os_image_choices(
-    *,
-    source_payload: dict[str, Any],
-    source_component: Mapping[str, Any],
-    instance_id: str,
-) -> list[OptionChoice]:
-    platform = source_vm_platform(source_component)
-    component_path = _dynamic_infra_component_path(
-        source_payload,
-        VM_COMPONENT_ID,
-        instance_id=instance_id,
-    )
-    if component_path is None:
-        return []
-    field_path = f"{_format_payload_path(component_path)}.inputs.source_image_family"
-    choices = ProviderOptionLookup().resolve(
-        provider="compute_public_image_families",
-        args={"platform_path": f"{_format_payload_path(component_path)}.inputs.platform"},
-        payload=source_payload,
-        field_path=field_path,
-    )
-    current = source_vm_image_family(source_component)
-    resolved: list[OptionChoice] = []
-    for choice in choices:
-        label = choice.label
-        if choice.value == current:
-            label = f"{choice.label}  (current)"
-        resolved.append(
-            OptionChoice(
-                value=choice.value,
-                label=label,
-                recommended=choice.recommended and choice.value != current,
-                metadata=choice.metadata,
-            )
-        )
-    if platform and not resolved:
-        return []
-    return resolved
-
-
-def _prompt_upgrade_os_image_to_os_if_needed(
+def _prompt_upgrade_node_template_to_os_if_needed(
     *,
     path_label: str,
     to_os: str | None,
     choices: list[OptionChoice],
-) -> str:
+    allow_backtrack: bool = False,
+) -> str | object:
     current = _non_empty_text(to_os)
     if current:
         return validate_os_image_value(current)
     if choices:
-        selected = _prompt_upgrade_choice(
+        selected = _prompt_upgrade_choice_or_back(
             path_label,
             recommended_choice_value(choices),
             choices=choices,
             missing="--to-os <os>",
         )
+        if _wizard_backtrack_requested(selected):
+            if allow_backtrack:
+                return _WIZARD_BACKTRACK
+            raise RuntimeError("Upgrade wizard cancelled.")
         return validate_os_image_value(selected)
-    value = _prompt_upgrade_scalar(
+    value = _prompt_upgrade_scalar_or_back(
         path_label,
         "",
         type_hint="string",
         missing="--to-os <os>",
     )
+    if _wizard_backtrack_requested(value):
+        if allow_backtrack:
+            return _WIZARD_BACKTRACK
+        raise RuntimeError("Upgrade wizard cancelled.")
     return validate_os_image_value(str(value))
-
-
-def _resolve_os_image_disruption_request(
-    *,
-    guided: bool,
-    dry_run: bool,
-    disruption_policy: str,
-    drain_timeout: str,
-    path_prefix: str = "upgrade.os_image",
-) -> tuple[bool, str, DrainTimeout]:
-    dry_run, disruption_policy, drain_timeout, _skip_validations = (
-        _prompt_upgrade_disruption_options_if_guided(
-            path_prefix=path_prefix,
-            guided=guided,
-            dry_run=dry_run,
-            disruption_policy=disruption_policy,
-            drain_timeout=drain_timeout,
-            skip_validations=True,
-        )
-    )
-    policy = validate_disruption_policy(disruption_policy)
-    resolved_timeout = resolve_drain_timeout(policy, drain_timeout)
-    return dry_run, policy, resolved_timeout
-
-
-def _resolve_vm_os_image_request_options(
-    *,
-    guided: bool,
-    dry_run: bool,
-    disruption_policy: str,
-    drain_timeout: str,
-) -> tuple[bool, str, DrainTimeout]:
-    policy = validate_disruption_policy(disruption_policy)
-    resolved_timeout = resolve_drain_timeout(policy, drain_timeout)
-    if guided and not dry_run:
-        prompted_dry_run = _prompt_upgrade_scalar(
-            "upgrade.os_image.dry_run",
-            True,
-            type_hint="bool",
-            required=True,
-            missing="--dry-run choice",
-        )
-        dry_run = bool(prompted_dry_run)
-    if guided and not dry_run:
-        confirm_apply = _prompt_upgrade_scalar(
-            "upgrade.os_image.confirm_apply",
-            False,
-            type_hint="bool",
-            required=True,
-            missing="live apply confirmation",
-        )
-        if not bool(confirm_apply):
-            raise RuntimeError("Upgrade wizard cancelled before applying live changes.")
-    return dry_run, policy, resolved_timeout
 
 
 def _resolve_helm_chart_upgrade_options(
@@ -2667,57 +3019,39 @@ def _resolve_helm_chart_upgrade_options(
     return dry_run
 
 
-def _upgrade_k8s_dry_run_command(
+def _append_strategy_max_surge_count_arg(
+    args: list[str],
     *,
-    config_path: Path,
-    target_selector: str,
-    to_version: str,
     disruption_policy: str,
-    drain_timeout: DrainTimeout,
-) -> str:
-    args = [
-        "nebius-cxcli",
-        "upgrade",
-        "k8s-version",
-        str(config_path),
-        target_selector,
-        "--to-version",
-        to_version,
-        "--strategy",
+    strategy_max_surge_count: int | None,
+) -> None:
+    resolved_count = resolve_strategy_max_surge_count(
         disruption_policy,
-    ]
-    if str(drain_timeout.raw).strip().lower() not in {"", "auto"}:
-        args.extend(["--drain-timeout", drain_timeout.raw])
-    args.append("--dry-run")
-    return shlex.join(args)
+        strategy_max_surge_count,
+    )
+    if disruption_policy == DISRUPTION_POLICY_SAFE:
+        args.extend(["--strategy-max-surge-count", str(resolved_count)])
 
 
-def _upgrade_os_image_dry_run_command(
+def _append_drain_timeout_arg(args: list[str], drain_timeout: DrainTimeout) -> None:
+    raw_timeout = str(drain_timeout.raw).strip()
+    if raw_timeout:
+        args.extend(["--drain-timeout", raw_timeout])
+
+
+def _append_upgrade_validation_args(
+    args: list[str],
     *,
-    config_path: Path,
-    target_selector: str,
-    to_os: str,
-    node_group: str,
-    disruption_policy: str,
-    drain_timeout: DrainTimeout,
-) -> str:
-    args = [
-        "nebius-cxcli",
-        "upgrade",
-        "os-image",
-        str(config_path),
-        target_selector,
-        "--to-os",
-        to_os,
-        "--strategy",
-        disruption_policy,
-    ]
-    if node_group:
-        args.extend(["--node-group", node_group])
-    if str(drain_timeout.raw).strip().lower() not in {"", "auto"}:
-        args.extend(["--drain-timeout", drain_timeout.raw])
-    args.append("--dry-run")
-    return shlex.join(args)
+    auto_auth_bootstrap: bool = True,
+    skip_validations: bool = False,
+    skip_validation: Sequence[str] | None = None,
+) -> None:
+    if not auto_auth_bootstrap:
+        args.append("--no-auto-auth-bootstrap")
+    if skip_validations:
+        args.append("--skip-validations")
+    for kind in skip_validation or ():
+        args.extend(["--skip-validation", kind])
 
 
 def _upgrade_node_template_dry_run_command(
@@ -2730,6 +3064,10 @@ def _upgrade_node_template_dry_run_command(
     node_group: str,
     disruption_policy: str,
     drain_timeout: DrainTimeout,
+    strategy_max_surge_count: int | None = None,
+    auto_auth_bootstrap: bool = True,
+    skip_validations: bool = False,
+    skip_validation: Sequence[str] | None = None,
 ) -> str:
     args = [
         "nebius-cxcli",
@@ -2744,72 +3082,533 @@ def _upgrade_node_template_dry_run_command(
         "--strategy",
         disruption_policy,
     ]
+    _append_strategy_max_surge_count_arg(
+        args,
+        disruption_policy=disruption_policy,
+        strategy_max_surge_count=strategy_max_surge_count,
+    )
     if to_gpu_stack_preset:
         args.extend(["--to-gpu-stack-preset", to_gpu_stack_preset])
     if node_group:
         args.extend(["--node-group", node_group])
-    if str(drain_timeout.raw).strip().lower() not in {"", "auto"}:
-        args.extend(["--drain-timeout", drain_timeout.raw])
+    _append_drain_timeout_arg(args, drain_timeout)
+    _append_upgrade_validation_args(
+        args,
+        auto_auth_bootstrap=auto_auth_bootstrap,
+        skip_validations=skip_validations,
+        skip_validation=skip_validation,
+    )
+    args.append("--no-interactive")
     args.append("--dry-run")
     return shlex.join(args)
 
 
-def _upgrade_node_layer_path_label(path_prefix: str, option_name: str) -> str:
-    if option_name == "--to-platform":
-        return f"{path_prefix}.to_platform"
-    if option_name == "--to-gpu-stack-preset":
-        return f"{path_prefix}.to_gpu_stack_preset"
-    return f"{path_prefix}.to_preset"
-
-
-def _upgrade_node_layer_dry_run_command(
+def _upgrade_node_group_command(
     *,
     config_path: Path,
-    command: str,
     target_selector: str,
-    option_name: str,
-    target_value: str,
     node_group: str,
-    disruption_policy: str,
-    drain_timeout: DrainTimeout,
+    to_platform: str = "",
+    to_preset: str = "",
+    to_os: str = "",
+    to_gpu_stack_preset: str = "",
+    to_fabric: str = "",
+    execute: bool = False,
+    approve: bool = False,
 ) -> str:
     args = [
         "nebius-cxcli",
         "upgrade",
-        command,
+        "node-group",
         str(config_path),
         target_selector,
-        option_name,
-        target_value,
-        "--strategy",
-        disruption_policy,
+        "--node-group",
+        node_group,
     ]
-    if node_group:
-        args.extend(["--node-group", node_group])
-    if str(drain_timeout.raw).strip().lower() not in {"", "auto"}:
-        args.extend(["--drain-timeout", drain_timeout.raw])
-    args.append("--dry-run")
+    if to_platform:
+        args.extend(["--to-platform", to_platform])
+    if to_preset:
+        args.extend(["--to-preset", to_preset])
+    if to_os:
+        args.extend(["--to-os", to_os])
+    if to_gpu_stack_preset:
+        args.extend(["--to-gpu-stack-preset", to_gpu_stack_preset])
+    if to_fabric:
+        args.extend(["--to-fabric", to_fabric])
+    args.append("--execute" if execute else "--dry-run")
+    if approve:
+        args.append("--approve")
     return shlex.join(args)
 
 
-def _upgrade_vm_os_image_dry_run_command(
+@dataclass(frozen=True)
+class _NodeGroupMigrationPlan:
+    target_selector: str
+    instance_id: str
+    cluster_name: str
+    node_group: str
+    node_group_kind: str
+    gpu_cluster_key: str
+    current_config_fabric: str
+    current_state_fabric: str
+    requested_target_fabric: str
+    effective_target_fabric: str
+    fabric_status: str
+    current_platform: str
+    target_platform: str
+    current_preset: str
+    target_preset: str
+    current_os: str
+    target_os: str
+    current_gpu_stack_preset: str
+    target_gpu_stack_preset: str
+    reservation_policy: str
+    sfs_evidence: tuple[str, ...]
+    soperator_managed: bool
+    quota_report: QuotaReport | None = None
+
+    @property
+    def mutates_hardware_or_fabric(self) -> bool:
+        return (
+            self.current_platform != self.target_platform
+            or self.current_preset != self.target_preset
+            or self.current_config_fabric != self.effective_target_fabric
+        )
+
+    @property
+    def mutates_template_only(self) -> bool:
+        return (
+            self.current_os != self.target_os
+            or self.current_gpu_stack_preset != self.target_gpu_stack_preset
+        )
+
+
+def _node_group_migration_checkpoint_path(
+    paths: ProjectPaths,
+    *,
+    instance_id: str,
+    node_group: str,
+) -> Path:
+    return (
+        paths.project_dir
+        / ".nebius-cxcli"
+        / "node-group-migrations"
+        / normalize_component_token(instance_id)
+        / normalize_component_token(node_group)
+        / "checkpoint.json"
+    )
+
+
+def _node_group_migration_sfs_evidence(group: Mapping[str, Any]) -> tuple[str, ...]:
+    evidence: list[str] = []
+    sfs_keys = group.get("sfs_filesystem_keys")
+    if isinstance(sfs_keys, Sequence) and not isinstance(sfs_keys, (str, bytes)):
+        for item in sfs_keys:
+            text = _non_empty_text(item)
+            if text:
+                evidence.append(f"sfs_filesystem_keys:{text}")
+    filesystems = group.get("filesystems")
+    if isinstance(filesystems, Sequence) and not isinstance(filesystems, (str, bytes)):
+        for index, item in enumerate(filesystems):
+            if isinstance(item, Mapping):
+                name = _non_empty_text(item.get("name")) or _non_empty_text(item.get("mount_tag"))
+                evidence.append(f"filesystems[{index}]" + (f":{name}" if name else ""))
+    return tuple(evidence)
+
+
+def _node_group_migration_replacement_inputs(
+    *,
+    group: Mapping[str, Any],
+    target_platform: str,
+    target_preset: str,
+    target_os: str,
+    target_gpu_stack_preset: str,
+    gpu_cluster_key: str,
+    effective_target_fabric: str,
+) -> dict[str, Any]:
+    replacement_group = copy.deepcopy(to_plain_data(group))
+    if not isinstance(replacement_group, dict):
+        replacement_group = {}
+    replacement_group["enabled"] = True
+    if target_platform:
+        replacement_group["platform"] = target_platform
+    if target_preset:
+        replacement_group["preset"] = target_preset
+    if target_os:
+        replacement_group["os"] = target_os
+    if target_gpu_stack_preset:
+        replacement_group["gpu_stack_preset"] = target_gpu_stack_preset
+    if gpu_cluster_key:
+        replacement_group["gpu_cluster_key"] = gpu_cluster_key
+    inputs: dict[str, Any] = {"node_groups": {"replacement": replacement_group}}
+    if gpu_cluster_key and effective_target_fabric:
+        inputs["gpu_clusters"] = {gpu_cluster_key: {"infiniband_fabric": effective_target_fabric}}
+    return inputs
+
+
+def _node_group_migration_quota_report(
+    *,
+    source_payload: Mapping[str, Any],
+    generated_config: Any,
+    instance_id: str,
+    group: Mapping[str, Any],
+    target_platform: str,
+    target_preset: str,
+    target_os: str,
+    target_gpu_stack_preset: str,
+    gpu_cluster_key: str,
+    effective_target_fabric: str,
+) -> QuotaReport | None:
+    tenant_id, project_id, region_id = _quota_identity_from_payload(
+        source_payload, generated_config
+    )
+    if not tenant_id or not project_id or not region_id:
+        return None
+    requirements, gaps = estimate_mk8s_quota_requirements(
+        project_id=project_id,
+        region=region_id,
+        instance_id=f"{instance_id}-node-group-migration",
+        inputs=_node_group_migration_replacement_inputs(
+            group=group,
+            target_platform=target_platform,
+            target_preset=target_preset,
+            target_os=target_os,
+            target_gpu_stack_preset=target_gpu_stack_preset,
+            gpu_cluster_key=gpu_cluster_key,
+            effective_target_fabric=effective_target_fabric,
+        ),
+        context="node-group migration replacement group",
+    )
+    if not requirements and not gaps:
+        return None
+    return assess_live_quota_requirements(
+        tenant_id=tenant_id,
+        project_id=project_id,
+        region_id=region_id,
+        requirements=requirements,
+        coverage_gaps=gaps,
+        context="node-group migration replacement group",
+    )
+
+
+def _node_group_migration_fabric_status(
+    *,
+    current_config_fabric: str,
+    effective_target_fabric: str,
+) -> str:
+    if not effective_target_fabric:
+        return "not applicable"
+    if not current_config_fabric:
+        return f"target fabric required: {effective_target_fabric}"
+    if current_config_fabric == effective_target_fabric:
+        return "unchanged"
+    return f"changing {current_config_fabric} -> {effective_target_fabric}"
+
+
+def _node_group_migration_quota_blocks(plan: _NodeGroupMigrationPlan) -> bool:
+    report = plan.quota_report
+    if report is None:
+        return False
+    return bool(
+        report.has_confirmed_insufficiency
+        or report.unknown_checks
+        or report.coverage_gaps
+        or report.errors
+    )
+
+
+def _plan_node_group_migration(
+    *,
+    source_payload: Mapping[str, Any],
+    generated_config: Any,
+    paths: ProjectPaths,
+    manifest: Mapping[str, Any],
+    target_selector: str,
+    node_group: str,
+    to_platform: str = "",
+    to_preset: str = "",
+    to_os: str = "",
+    to_gpu_stack_preset: str = "",
+    to_fabric: str = "",
+) -> _NodeGroupMigrationPlan:
+    target = parse_upgrade_selector(target_selector)
+    source_component = find_source_mk8s_component(source_payload, target.instance_id)
+    inputs = source_component.get("inputs")
+    if not isinstance(inputs, Mapping):
+        raise ValueError(f"{target.selector} has no inputs mapping in config.yaml.")
+    node_group_defaults = inputs.get("node_group_defaults")
+    gpu_defaults = (
+        node_group_defaults.get("gpu") if isinstance(node_group_defaults, Mapping) else None
+    )
+    if isinstance(gpu_defaults, Mapping) and "infiniband_fabric" in gpu_defaults:
+        raise ValueError(
+            "inputs.node_group_defaults.gpu.infiniband_fabric is no longer supported; "
+            "move the value to inputs.gpu_clusters.<key>.infiniband_fabric before "
+            "running upgrade node-group."
+        )
+    raw_group = _state_mapping(inputs.get("node_groups")).get(node_group)
+    if not isinstance(raw_group, Mapping):
+        raise ValueError(f"{target.selector} has no node group '{node_group}' in config.yaml.")
+    if raw_group.get("enabled") is False:
+        raise ValueError(f"{target.selector} node group '{node_group}' is disabled.")
+
+    current_platform = _non_empty_text(raw_group.get("platform"))
+    current_preset = _non_empty_text(raw_group.get("preset"))
+    current_os = _non_empty_text(raw_group.get("os"))
+    current_gpu_stack_preset = _non_empty_text(raw_group.get("gpu_stack_preset"))
+    if not current_platform or not current_preset:
+        raise ValueError(
+            f"{target.selector} node group '{node_group}' requires platform and preset."
+        )
+
+    target_platform = _non_empty_text(to_platform) or current_platform
+    target_preset = _non_empty_text(to_preset) or current_preset
+    target_os = _non_empty_text(to_os) or current_os
+    target_gpu_stack_preset = _non_empty_text(to_gpu_stack_preset) or current_gpu_stack_preset
+    is_gpu_group = bool(raw_group.get("gpu", False))
+    node_group_kind = "gpu" if is_gpu_group else "cpu/system"
+    gpu_cluster_key = _non_empty_text(raw_group.get("gpu_cluster_key"))
+    target_fabric = _non_empty_text(to_fabric)
+    current_config_fabric = ""
+    if gpu_cluster_key:
+        gpu_clusters = inputs.get("gpu_clusters")
+        cluster = gpu_clusters.get(gpu_cluster_key) if isinstance(gpu_clusters, Mapping) else None
+        if not isinstance(cluster, Mapping):
+            raise ValueError(
+                f"{target.selector} node group '{node_group}' references gpu_cluster_key "
+                f"'{gpu_cluster_key}', but inputs.gpu_clusters.{gpu_cluster_key} is missing."
+            )
+        current_config_fabric = _non_empty_text(cluster.get("infiniband_fabric"))
+
+    if not is_gpu_group and target_fabric:
+        raise ValueError("--to-fabric is valid only for GPU-cluster/InfiniBand node groups.")
+    if is_gpu_group and not gpu_cluster_key and target_fabric:
+        raise ValueError(
+            "--to-fabric was provided, but the selected GPU node group is not on the "
+            "GPU-cluster/InfiniBand path. Add an explicit GPU-cluster migration design "
+            "before binding this node group to a fabric."
+        )
+
+    runtime_env = _terraform_runtime_env(generated_config)
+    state_specs = _mk8s_gpu_fabric_specs_from_terraform_state(
+        paths=paths,
+        manifest=manifest,
+        runtime_env=runtime_env,
+        initialize=False,
+    )
+    state_spec = state_specs.get((target.instance_id, gpu_cluster_key)) if gpu_cluster_key else None
+    current_state_fabric = state_spec.fabric if state_spec is not None else ""
+    effective_target_fabric = ""
+    if gpu_cluster_key:
+        effective_target_fabric = target_fabric or current_config_fabric or current_state_fabric
+        if not effective_target_fabric:
+            raise ValueError(
+                f"{target.selector} node group '{node_group}' uses GPU-cluster/InfiniBand, "
+                "but no current fabric could be resolved. Pass --to-fabric explicitly."
+            )
+
+    if (
+        is_gpu_group
+        and target_gpu_stack_preset != current_gpu_stack_preset
+        and target_platform == current_platform
+        and target_preset == current_preset
+        and effective_target_fabric == current_config_fabric
+    ):
+        raise ValueError(
+            "Use upgrade node-template for Nebius-image GPU stack changes that do not "
+            "also change node-group hardware platform, hardware preset, or GPU fabric."
+        )
+    if (
+        target_os != current_os
+        and target_platform == current_platform
+        and target_preset == current_preset
+        and effective_target_fabric == current_config_fabric
+        and target_gpu_stack_preset == current_gpu_stack_preset
+    ):
+        raise ValueError(
+            "Use upgrade node-template for OS changes that do not also change node-group "
+            "hardware platform, hardware preset, or GPU fabric."
+        )
+
+    reservation = raw_group.get("reservation")
+    reservation_policy = (
+        _non_empty_text(reservation.get("policy")).upper()
+        if isinstance(reservation, Mapping)
+        else ""
+    )
+    quota_report = _node_group_migration_quota_report(
+        source_payload=source_payload,
+        generated_config=generated_config,
+        instance_id=target.instance_id,
+        group=raw_group,
+        target_platform=target_platform,
+        target_preset=target_preset,
+        target_os=target_os,
+        target_gpu_stack_preset=target_gpu_stack_preset,
+        gpu_cluster_key=gpu_cluster_key,
+        effective_target_fabric=effective_target_fabric,
+    )
+    return _NodeGroupMigrationPlan(
+        target_selector=target.selector,
+        instance_id=target.instance_id,
+        cluster_name=source_mk8s_cluster_name(source_component, fallback=target.instance_id),
+        node_group=node_group,
+        node_group_kind=node_group_kind,
+        gpu_cluster_key=gpu_cluster_key,
+        current_config_fabric=current_config_fabric,
+        current_state_fabric=current_state_fabric,
+        requested_target_fabric=target_fabric,
+        effective_target_fabric=effective_target_fabric,
+        fabric_status=_node_group_migration_fabric_status(
+            current_config_fabric=current_config_fabric,
+            effective_target_fabric=effective_target_fabric,
+        ),
+        current_platform=current_platform,
+        target_platform=target_platform,
+        current_preset=current_preset,
+        target_preset=target_preset,
+        current_os=current_os,
+        target_os=target_os,
+        current_gpu_stack_preset=current_gpu_stack_preset,
+        target_gpu_stack_preset=target_gpu_stack_preset,
+        reservation_policy=reservation_policy or "AUTO",
+        sfs_evidence=_node_group_migration_sfs_evidence(raw_group),
+        soperator_managed=target.instance_id in set(_soperator_app_target_refs(source_payload)),
+        quota_report=quota_report,
+    )
+
+
+def _format_node_group_migration_plan(
+    plan: _NodeGroupMigrationPlan,
     *,
     config_path: Path,
-    target_selector: str,
-    to_os: str,
-) -> str:
-    return shlex.join(
+    dry_run: bool,
+) -> list[str]:
+    lines = [
+        "MK8s node-group migration plan",
+        f"- target: {plan.target_selector}",
+        f"- cluster: {plan.cluster_name}",
+        f"- node group: {plan.node_group} ({plan.node_group_kind})",
+        f"- platform: {plan.current_platform} -> {plan.target_platform}",
+        f"- hardware preset: {plan.current_preset} -> {plan.target_preset}",
+        f"- OS image: {plan.current_os or '(unset)'} -> {plan.target_os or '(unchanged/unset)'}",
+    ]
+    if plan.node_group_kind == "gpu":
+        lines.append(
+            "- GPU stack preset: "
+            f"{plan.current_gpu_stack_preset or '(operator-managed/driverless)'} -> "
+            f"{plan.target_gpu_stack_preset or '(operator-managed/driverless)'}"
+        )
+    lines.extend(
         [
-            "nebius-cxcli",
-            "upgrade",
-            "os-image",
-            str(config_path),
-            target_selector,
-            "--to-os",
-            to_os,
-            "--dry-run",
+            f"- gpu cluster key: {plan.gpu_cluster_key or '(not applicable)'}",
+            f"- current config fabric: {plan.current_config_fabric or '(not applicable)'}",
+            f"- current Terraform state fabric: {plan.current_state_fabric or '(not found)'}",
+            "- requested target fabric: "
+            + (
+                plan.requested_target_fabric
+                if plan.requested_target_fabric
+                else "(not provided; using current fabric when applicable)"
+            ),
+            f"- effective target fabric: {plan.effective_target_fabric or '(not applicable)'}",
+            f"- fabric status: {plan.fabric_status}",
+            f"- reservation policy: {plan.reservation_policy}",
+            "- shared storage evidence: "
+            + (", ".join(plan.sfs_evidence) if plan.sfs_evidence else "not found"),
+            "- managed Soperator target: " + ("yes" if plan.soperator_managed else "no"),
+            "- migration class: "
+            + (
+                "cross-fabric replacement"
+                if plan.current_config_fabric
+                and plan.effective_target_fabric
+                and plan.current_config_fabric != plan.effective_target_fabric
+                else "same-fabric replacement"
+                if plan.effective_target_fabric
+                else "shape replacement"
+            ),
+            "- execution gates:",
+            "  - target shape and effective fabric must have replacement-group quota/capacity",
+            "  - replacement nodes must be Ready and schedulable before old nodes are drained",
+            "  - GPU groups must expose GPU resources before cutover",
+            "  - InfiniBand groups must also expose RDMA resources and pass Network Operator checks",
+            "  - Soperator worker groups require quiet Slurm state and PVC/SFS-backed workload data",
+            "- staged phases:",
+            "  - approval checkpoint",
+            "  - preserve old Terraform-managed node-group state",
+            "  - create the canonical replacement node group on the target shape",
+            "  - validate CPU/GPU/RDMA/Soperator readiness as applicable",
+            "  - cordon/drain old nodes only after replacement readiness",
+            "  - retire old resources and reconcile config/Terraform state to a no-op final plan",
+            (
+                "- implementation status: execute currently writes an approved pre-mutation "
+                "checkpoint and stops before live replacement/cutover/retirement; the live "
+                "executor is not enabled yet"
+            ),
         ]
     )
+    if plan.quota_report is not None:
+        quota_lines = format_quota_report_lines(
+            plan.quota_report,
+            phase="node-group migration",
+            include_confirmed_components=True,
+            markup=False,
+        )
+        if quota_lines:
+            lines.append("- target quota/capacity preflight:")
+            lines.extend(f"  {line}" for line in quota_lines)
+    if _node_group_migration_quota_blocks(plan):
+        lines.append(
+            "- warning: target quota/capacity preflight is not clean; execute will fail before "
+            "any checkpoint, config rewrite, render, Terraform plan/apply, or live mutation."
+        )
+    if plan.node_group_kind == "gpu" and plan.effective_target_fabric and not plan.sfs_evidence:
+        lines.append(
+            "- warning: no SFS/PVC evidence was found on the selected GPU node group; "
+            "Soperator worker execute will fail before mutation until shared-storage "
+            "evidence is present."
+        )
+    lines.append("- repeat dry-run command:")
+    lines.append(
+        _upgrade_node_group_command(
+            config_path=config_path,
+            target_selector=plan.target_selector,
+            node_group=plan.node_group,
+            to_platform=plan.target_platform
+            if plan.target_platform != plan.current_platform
+            else "",
+            to_preset=plan.target_preset if plan.target_preset != plan.current_preset else "",
+            to_os=plan.target_os if plan.target_os != plan.current_os else "",
+            to_gpu_stack_preset=plan.target_gpu_stack_preset
+            if plan.target_gpu_stack_preset != plan.current_gpu_stack_preset
+            else "",
+            to_fabric=plan.requested_target_fabric,
+        )
+    )
+    lines.append("- approved execute command:")
+    lines.append(
+        _upgrade_node_group_command(
+            config_path=config_path,
+            target_selector=plan.target_selector,
+            node_group=plan.node_group,
+            to_platform=plan.target_platform
+            if plan.target_platform != plan.current_platform
+            else "",
+            to_preset=plan.target_preset if plan.target_preset != plan.current_preset else "",
+            to_os=plan.target_os if plan.target_os != plan.current_os else "",
+            to_gpu_stack_preset=plan.target_gpu_stack_preset
+            if plan.target_gpu_stack_preset != plan.current_gpu_stack_preset
+            else "",
+            to_fabric=plan.requested_target_fabric,
+            execute=True,
+            approve=True,
+        )
+    )
+    if dry_run:
+        lines.append(
+            "Dry run only: no config.yaml write, generated bundle render, Terraform plan/apply, "
+            "checkpoint, or live node mutation was performed."
+        )
+    return lines
 
 
 def _upgrade_helm_chart_dry_run_command(
@@ -2827,6 +3626,7 @@ def _upgrade_helm_chart_dry_run_command(
             target_selector,
             "--to-version",
             to_version,
+            "--no-interactive",
             "--dry-run",
         ]
     )
@@ -2848,6 +3648,7 @@ def _soperator_upgrade_dry_run_command(
             target_ref,
             "--to-version",
             to_version,
+            "--no-interactive",
             "--dry-run",
         ]
     )
@@ -2952,7 +3753,7 @@ def _format_helm_chart_upgrade_plan(
     if dry_run:
         if repeat_dry_run_command:
             lines.append("- repeat dry-run command:")
-            lines.append(f"  {repeat_dry_run_command}")
+            lines.append(repeat_dry_run_command)
         lines.append(
             "Dry run only: no config.yaml write, generated bundle render, "
             "or Flux apply was performed."
@@ -3027,12 +3828,7 @@ def _soperator_upgrade_restore_activechecks_values(
 
 def _soperator_upgrade_checkpoint_path(config_path: Path, target_ref: str) -> Path:
     normalized = normalize_component_token(target_ref) or "mk8s"
-    return (
-        config_path.parent
-        / SOPERATOR_UPGRADE_CHECKPOINT_DIR
-        / normalized
-        / "checkpoint.json"
-    )
+    return config_path.parent / SOPERATOR_UPGRADE_CHECKPOINT_DIR / normalized / "checkpoint.json"
 
 
 def _soperator_upgrade_relative_path(path: Path, *, root: Path) -> str:
@@ -3040,6 +3836,10 @@ def _soperator_upgrade_relative_path(path: Path, *, root: Path) -> str:
         return str(path.resolve().relative_to(root.resolve()))
     except ValueError:
         return str(path)
+
+
+def _soperator_upgrade_relative_paths(paths: ProjectPaths, reports: Iterable[Path]) -> list[str]:
+    return [_soperator_upgrade_relative_path(report, root=paths.project_dir) for report in reports]
 
 
 def _soperator_upgrade_now_iso() -> str:
@@ -3071,6 +3871,253 @@ def _write_text_atomic(path: Path, content: str, *, encoding: str = "utf-8") -> 
             temp_path.unlink(missing_ok=True)
 
 
+def _validation_report_payload(
+    validations: Sequence[Mapping[str, Any]],
+    *,
+    reports_dir: Path,
+) -> dict[str, Any]:
+    if not validations:
+        return {
+            "overall_status": "not_run",
+            "total_count": 0,
+            "completed_count": 0,
+            "passed_count": 0,
+            "failed_count": 0,
+            "not_run_count": 0,
+            "results": [],
+        }
+    report = build_deploy_validation_report(validations, reports_dir=reports_dir)
+    return {
+        "overall_status": report.overall_status,
+        "total_count": report.total_count,
+        "completed_count": report.completed_count,
+        "passed_count": report.passed_count,
+        "failed_count": report.failed_count,
+        "not_run_count": report.not_run_count,
+        "results": [
+            {
+                "kind": item.kind,
+                "name": item.name,
+                "target_ref": item.target_ref,
+                "status": item.status,
+                "summary": item.summary,
+                "report_file": item.report_path.name,
+                "report_exists": item.report_exists,
+            }
+            for item in report.results
+        ],
+    }
+
+
+def _validation_report_markdown_lines(
+    validations: Sequence[Mapping[str, Any]],
+    *,
+    reports_dir: Path,
+) -> list[str]:
+    if not validations:
+        return [
+            "## Validations",
+            "",
+            "- No post-upgrade validations were configured or selected.",
+            "",
+        ]
+    report = build_deploy_validation_report(validations, reports_dir=reports_dir)
+    lines = validation_section_lines(report)
+    lines.append("")
+    return lines
+
+
+def _write_upgrade_node_template_report(
+    paths: ProjectPaths,
+    *,
+    plan: Mk8sNodeTemplateUpgradePlan,
+    readiness: Mk8sUpgradeReadinessResult,
+    validations: Sequence[Mapping[str, Any]],
+) -> tuple[Path, Path]:
+    paths.reports_dir.mkdir(parents=True, exist_ok=True)
+    markdown_path = paths.reports_dir / UPGRADE_NODE_TEMPLATE_REPORT_FILENAME
+    json_path = paths.reports_dir / UPGRADE_NODE_TEMPLATE_REPORT_JSON_FILENAME
+    generated_at = _soperator_upgrade_now_iso()
+    node_groups = [
+        {
+            "id": str(getattr(group, "id", "") or ""),
+            "name": str(getattr(group, "name", "") or ""),
+            "ready": bool(getattr(group, "ready", False)),
+            "summary": str(getattr(group, "summary", "") or ""),
+        }
+        for group in getattr(readiness, "node_groups", ()) or ()
+    ]
+    validation_payload = _validation_report_payload(validations, reports_dir=paths.reports_dir)
+    payload = {
+        "schema": "nebius-cxcli-upgrade-node-template-report/v1",
+        "generated_at": generated_at,
+        "status": "passed",
+        "target": str(getattr(getattr(plan, "target", None), "selector", "") or ""),
+        "cluster_id": str(getattr(plan, "cluster_id", "") or ""),
+        "cluster_name": str(getattr(plan, "cluster_name", "") or ""),
+        "current_version": str(getattr(plan, "current_version", "") or ""),
+        "target_version": str(getattr(plan, "target_version", "") or ""),
+        "target_os": str(getattr(plan, "target_os", "") or ""),
+        "target_gpu_stack_preset": str(getattr(plan, "target_gpu_stack_preset", "") or ""),
+        "readiness_summary": readiness.summary() if hasattr(readiness, "summary") else "",
+        "node_groups": node_groups,
+        "validations": validation_payload,
+    }
+    _write_text_atomic(json_path, json.dumps(payload, indent=2, sort_keys=True) + "\n")
+    lines = [
+        "# MK8s Node Template Upgrade Report",
+        "",
+        f"- Target: `{payload['target']}`",
+        f"- Cluster: `{payload['cluster_name'] or payload['cluster_id']}`",
+        f"- Kubernetes version: `{payload['current_version'] or 'unknown'}` -> `{payload['target_version'] or 'unchanged'}`",
+        f"- OS image: `{payload['target_os'] or 'unchanged'}`",
+        f"- GPU stack preset: `{payload['target_gpu_stack_preset'] or 'unchanged/operator-managed'}`",
+        f"- Status: `{status_label(payload['status'])}`",
+        f"- Generated at: `{generated_at}`",
+        f"- JSON report: `{json_path.name}`",
+        "",
+        "## Readiness",
+        "",
+        f"- {payload['readiness_summary'] or 'No readiness summary recorded.'}",
+    ]
+    for group in node_groups:
+        lines.append(
+            f"- `{group['name'] or group['id']}`: "
+            f"`{status_label('passed' if group['ready'] else 'failed')}` - "
+            f"{group['summary'] or 'No summary recorded.'}"
+        )
+    lines.extend(
+        ["", *_validation_report_markdown_lines(validations, reports_dir=paths.reports_dir)]
+    )
+    _write_text_atomic(markdown_path, "\n".join(lines).rstrip() + "\n")
+    return markdown_path, json_path
+
+
+def _node_group_migration_report_payload(
+    *,
+    plan: _NodeGroupMigrationPlan,
+    checkpoint_path: Path,
+    status: str,
+) -> dict[str, Any]:
+    return {
+        "schema": "nebius-cxcli-upgrade-node-group-report/v1",
+        "generated_at": _soperator_upgrade_now_iso(),
+        "status": status,
+        "checkpoint": str(checkpoint_path),
+        "target": plan.target_selector,
+        "instance_id": plan.instance_id,
+        "cluster": plan.cluster_name,
+        "node_group": plan.node_group,
+        "node_group_kind": plan.node_group_kind,
+        "platform": {
+            "from": plan.current_platform,
+            "to": plan.target_platform,
+        },
+        "hardware_preset": {
+            "from": plan.current_preset,
+            "to": plan.target_preset,
+        },
+        "os": {
+            "from": plan.current_os,
+            "to": plan.target_os,
+        },
+        "gpu_stack_preset": {
+            "from": plan.current_gpu_stack_preset,
+            "to": plan.target_gpu_stack_preset,
+        },
+        "fabric": {
+            "gpu_cluster_key": plan.gpu_cluster_key,
+            "current_config": plan.current_config_fabric,
+            "current_terraform_state": plan.current_state_fabric,
+            "requested": plan.requested_target_fabric,
+            "effective_target": plan.effective_target_fabric,
+            "status": plan.fabric_status,
+        },
+        "reservation_policy": plan.reservation_policy,
+        "managed_soperator_target": plan.soperator_managed,
+        "shared_storage_evidence": list(plan.sfs_evidence),
+        "quota_blocks_execute": _node_group_migration_quota_blocks(plan),
+        "quota_report_lines": (
+            format_quota_report_lines(
+                plan.quota_report,
+                phase="node-group migration",
+                include_confirmed_components=True,
+                markup=False,
+            )
+            if plan.quota_report is not None
+            else []
+        ),
+    }
+
+
+def _write_upgrade_node_group_report(
+    paths: ProjectPaths,
+    *,
+    plan: _NodeGroupMigrationPlan,
+    checkpoint_path: Path,
+    status: str,
+) -> tuple[Path, Path]:
+    paths.reports_dir.mkdir(parents=True, exist_ok=True)
+    markdown_path = paths.reports_dir / UPGRADE_NODE_GROUP_REPORT_FILENAME
+    json_path = paths.reports_dir / UPGRADE_NODE_GROUP_REPORT_JSON_FILENAME
+    payload = _node_group_migration_report_payload(
+        plan=plan,
+        checkpoint_path=checkpoint_path,
+        status=status,
+    )
+    _write_text_atomic(json_path, json.dumps(payload, indent=2, sort_keys=True) + "\n")
+    lines = [
+        "# MK8s Node-Group Upgrade Report",
+        "",
+        f"- Target: `{plan.target_selector}`",
+        f"- Cluster: `{plan.cluster_name}`",
+        f"- Node group: `{plan.node_group}` ({plan.node_group_kind})",
+        f"- Status: `{status_label(status)}`",
+        f"- Generated at: `{payload['generated_at']}`",
+        f"- Checkpoint: `{checkpoint_path}`",
+        f"- JSON report: `{json_path.name}`",
+        "",
+        "## Planned Change",
+        "",
+        f"- Platform: `{plan.current_platform}` -> `{plan.target_platform}`",
+        f"- Hardware preset: `{plan.current_preset}` -> `{plan.target_preset}`",
+        f"- OS image: `{plan.current_os or '(unset)'}` -> `{plan.target_os or '(unchanged/unset)'}`",
+    ]
+    if plan.node_group_kind == "gpu":
+        lines.append(
+            "- GPU stack preset: "
+            f"`{plan.current_gpu_stack_preset or '(operator-managed/driverless)'}` -> "
+            f"`{plan.target_gpu_stack_preset or '(operator-managed/driverless)'}`"
+        )
+    lines.extend(
+        [
+            f"- GPU cluster key: `{plan.gpu_cluster_key or '(not applicable)'}`",
+            f"- Effective target fabric: `{plan.effective_target_fabric or '(not applicable)'}`",
+            f"- Fabric status: `{plan.fabric_status}`",
+            f"- Reservation policy: `{plan.reservation_policy}`",
+            "- Shared storage evidence: "
+            + (
+                ", ".join(f"`{item}`" for item in plan.sfs_evidence)
+                if plan.sfs_evidence
+                else "not found"
+            ),
+            "",
+            "## Execution State",
+            "",
+            "- Current executor status: approved pre-mutation checkpoint only; live replacement/cutover/retirement is not enabled yet.",
+            "- Quota/capacity blocks execute: `"
+            + ("yes" if payload["quota_blocks_execute"] else "no")
+            + "`",
+        ]
+    )
+    quota_lines = payload["quota_report_lines"]
+    if quota_lines:
+        lines.extend(["", "## Quota/Capacity Preflight", ""])
+        lines.extend(f"- {line}" for line in quota_lines)
+    _write_text_atomic(markdown_path, "\n".join(lines).rstrip() + "\n")
+    return markdown_path, json_path
+
+
 def _new_soperator_upgrade_checkpoint(
     *,
     plan: _HelmChartUpgradePlan,
@@ -3093,11 +4140,11 @@ def _new_soperator_upgrade_checkpoint(
         ),
         "reports": {
             "upgrade": _soperator_upgrade_relative_path(
-                paths.reports_dir / UPGRADE_REPORT_FILENAME,
+                paths.reports_dir / SOPERATOR_UPGRADE_REPORT_FILENAME,
                 root=paths.project_dir,
             ),
-            "deploy": _soperator_upgrade_relative_path(
-                paths.reports_dir / DEPLOY_REPORT_FILENAME,
+            "upgrade_json": _soperator_upgrade_relative_path(
+                paths.reports_dir / SOPERATOR_UPGRADE_REPORT_JSON_FILENAME,
                 root=paths.project_dir,
             ),
         },
@@ -3156,9 +4203,7 @@ def _soperator_upgrade_checkpoint_has_pending_activechecks_restore(
     if "activechecks-restored" in events or "activechecks-restored-after-failure" in events:
         return False
     failure = checkpoint.get("failure")
-    return not (
-        isinstance(failure, Mapping) and failure.get("activechecks_restore") == "restored"
-    )
+    return not (isinstance(failure, Mapping) and failure.get("activechecks_restore") == "restored")
 
 
 def _soperator_upgrade_checkpoint_lifecycle(
@@ -3243,11 +4288,11 @@ def _soperator_upgrade_resume_checkpoint(
     )
     checkpoint["reports"] = {
         "upgrade": _soperator_upgrade_relative_path(
-            paths.reports_dir / UPGRADE_REPORT_FILENAME,
+            paths.reports_dir / SOPERATOR_UPGRADE_REPORT_FILENAME,
             root=paths.project_dir,
         ),
-        "deploy": _soperator_upgrade_relative_path(
-            paths.reports_dir / DEPLOY_REPORT_FILENAME,
+        "upgrade_json": _soperator_upgrade_relative_path(
+            paths.reports_dir / SOPERATOR_UPGRADE_REPORT_JSON_FILENAME,
             root=paths.project_dir,
         ),
     }
@@ -3283,8 +4328,8 @@ def _write_soperator_upgrade_report(
     checkpoint: Mapping[str, Any],
 ) -> tuple[Path, Path]:
     paths.reports_dir.mkdir(parents=True, exist_ok=True)
-    json_path = paths.reports_dir / UPGRADE_REPORT_JSON_FILENAME
-    markdown_path = paths.reports_dir / UPGRADE_REPORT_FILENAME
+    json_path = paths.reports_dir / SOPERATOR_UPGRADE_REPORT_JSON_FILENAME
+    markdown_path = paths.reports_dir / SOPERATOR_UPGRADE_REPORT_FILENAME
     _write_text_atomic(json_path, json.dumps(dict(checkpoint), indent=2, sort_keys=True) + "\n")
 
     activechecks = checkpoint.get("activechecks")
@@ -3311,7 +4356,19 @@ def _write_soperator_upgrade_report(
                 continue
             event = str(item.get("event") or "event")
             when = str(item.get("time") or "")
-            event_lines.append(f"{index}. `{event}`" + (f" at `{when}`" if when else ""))
+            report_refs = item.get("validation_reports")
+            report_text = ""
+            if isinstance(report_refs, list):
+                report_names = [str(report) for report in report_refs if str(report or "").strip()]
+                if report_names:
+                    report_text = (
+                        " (validation reports: "
+                        + ", ".join(f"`{report}`" for report in report_names)
+                        + ")"
+                    )
+            event_lines.append(
+                f"{index}. `{event}`" + (f" at `{when}`" if when else "") + report_text
+            )
     if not event_lines:
         event_lines.append("1. `planned`")
 
@@ -3324,7 +4381,7 @@ def _write_soperator_upgrade_report(
             f"- Chart version: `{checkpoint.get('current_version') or 'unset'}` -> `{checkpoint.get('target_version') or 'unset'}`",
             f"- Status: `{checkpoint.get('status', 'unknown')}`",
             f"- Checkpoint: `{checkpoint.get('checkpoint_path', '')}`",
-            f"- Deploy report: `{_soperator_upgrade_relative_path(paths.reports_dir / DEPLOY_REPORT_FILENAME, root=paths.project_dir)}`",
+            f"- JSON report: `{SOPERATOR_UPGRADE_REPORT_JSON_FILENAME}`",
             "",
             "## ActiveChecks Lifecycle",
             "",
@@ -3482,9 +4539,7 @@ def _soperator_upgrade_optional_service_notes(
     target: _HelmChartUpgradeTarget,
 ) -> tuple[str, ...]:
     row = _source_helm_chart_row(payload, target)
-    activechecks_enabled = (
-        read_component_path(row, "values.soperator-activechecks.enabled") is True
-    )
+    activechecks_enabled = read_component_path(row, "values.soperator-activechecks.enabled") is True
     checks_enabled = read_component_path(row, "values.soperator-checks.enabled") is True
     notes: list[str] = []
     if checks_enabled and not activechecks_enabled:
@@ -3515,7 +4570,11 @@ def _format_soperator_upgrade_plan(
             "- Soperator-aware gates:",
             "  - preflight runs the existing generated-bundle validation and a live Soperator/Slurm smoke validation before mutation.",
             "  - apply updates config.yaml, rerenders, validates the new bundle, and applies only the selected target Flux bundle.",
-            "  - postflight verifies Helm readiness and reruns the required Soperator/Slurm smoke validation, refreshing deploy-report.md.",
+            (
+                "  - postflight verifies the static Soperator chart version, reruns "
+                "the required Soperator/Slurm smoke validation, and writes "
+                "soperator-upgrade-report.md and soperator-upgrade-report.json."
+            ),
         ]
     )
     lifecycle = _soperator_upgrade_activechecks_lifecycle(payload, plan.target)
@@ -3556,6 +4615,7 @@ def _verify_helm_chart_upgrade_ready(
             f"Cannot verify Helm chart upgrade for {plan.target.selector}: "
             f"target '{plan.target.target_ref}' was not found in the generated deploy manifest."
         )
+    _ensure_terraform_backend_ready(config, auto_auth_bootstrap=True)
     with ExitStack() as stack:
         kube_env = _prepare_cluster_handoff_kube_env(
             config,
@@ -3572,6 +4632,194 @@ def _verify_helm_chart_upgrade_ready(
             expected_version=plan.target_version,
         )
     console.print(f"[green]{result.summary()}[/green]")
+
+
+def _kubectl_json_for_upgrade(
+    args: Sequence[str],
+    *,
+    extra_env: Mapping[str, str],
+    description: str,
+    timeout_seconds: int = 120,
+) -> Mapping[str, Any]:
+    env = os.environ.copy()
+    env.update(extra_env)
+    completed = subprocess.run(
+        list(args),
+        check=False,
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=timeout_seconds,
+    )
+    if completed.returncode != 0:
+        detail = (completed.stderr or completed.stdout or "").strip()
+        raise RuntimeError(f"{description} failed: {detail or completed.returncode}")
+    try:
+        payload = json.loads(completed.stdout or "{}")
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"{description} did not return valid JSON.") from exc
+    if not isinstance(payload, Mapping):
+        raise RuntimeError(f"{description} did not return a JSON object.")
+    return payload
+
+
+def _soperator_upgrade_chart_label(version: str) -> str:
+    return f"soperator-{version}".replace("+", "_")
+
+
+def _resource_chart_label(payload: Mapping[str, Any]) -> str:
+    metadata = payload.get("metadata")
+    if not isinstance(metadata, Mapping):
+        return ""
+    labels = metadata.get("labels")
+    if not isinstance(labels, Mapping):
+        return ""
+    return str(labels.get("helm.sh/chart") or "").strip()
+
+
+def _reconcile_soperator_slurm_nodeaddrs(
+    *,
+    namespace: str,
+    cluster_name: str,
+    kube_env: Mapping[str, str],
+) -> tuple[str, ...]:
+    service_suffix = f"{cluster_name}-nodeset-svc.{namespace}.svc.cluster.local"
+    script = f"""
+set -euo pipefail
+service_suffix={shlex.quote(service_suffix)}
+scontrol reconfigure >/dev/null 2>&1 || true
+mapfile -t nodes < <(sinfo -N -h -o "%N" | awk 'NF && !seen[$1]++')
+for node in "${{nodes[@]}}"; do
+  expected="${{node}}.${{service_suffix}}"
+  current="$(scontrol show node "${{node}}" | tr '\\n' ' ' | sed -n 's/.* NodeAddr=\\([^ ]*\\).*/\\1/p')"
+  if [[ -n "${{current}}" && "${{current}}" != "${{expected}}" ]]; then
+    scontrol update NodeName="${{node}}" NodeAddr="${{expected}}"
+    printf '%s: %s -> %s\\n' "${{node}}" "${{current}}" "${{expected}}"
+  fi
+done
+"""
+    env = os.environ.copy()
+    env.update(kube_env)
+    completed = subprocess.run(
+        ["kubectl", "-n", namespace, "exec", "login-0", "--", "bash", "-lc", script],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=180,
+    )
+    if completed.returncode != 0:
+        detail = (completed.stderr or completed.stdout or "").strip()
+        raise RuntimeError(
+            "Could not reconcile Soperator Slurm worker NodeAddr values after "
+            f"static chart apply: {detail or completed.returncode}"
+        )
+    return tuple(line.strip() for line in completed.stdout.splitlines() if line.strip())
+
+
+def _verify_soperator_static_upgrade_ready(
+    config: Any,
+    paths: ProjectPaths,
+    manifest: Mapping[str, Any],
+    plan: _HelmChartUpgradePlan,
+) -> None:
+    selected_targets = _resolve_selected_deploy_targets(
+        manifest,
+        requested_target_ref=plan.target.target_ref,
+        all_targets=False,
+    )
+    target = selected_targets[0] if selected_targets else None
+    if target is None:
+        raise RuntimeError(
+            f"Cannot verify Soperator upgrade for {plan.target.selector}: "
+            f"target '{plan.target.target_ref}' was not found in the generated deploy manifest."
+        )
+    validation_specs = _soperator_upgrade_validation_specs(
+        manifest,
+        target_ref=plan.target.target_ref,
+    )
+    validation = validation_specs[0]
+    namespace = str(validation.get("namespace") or plan.namespace or "soperator").strip()
+    cluster_name = str(validation.get("cluster_name") or plan.target.target_ref or "mk8s").strip()
+    expected_label = _soperator_upgrade_chart_label(plan.target_version)
+
+    _ensure_terraform_backend_ready(config, auto_auth_bootstrap=True)
+    with ExitStack() as stack:
+        kube_env = _prepare_cluster_handoff_kube_env(
+            config,
+            paths,
+            stack=stack,
+            target=target,
+            persist_local_kubeconfig=False,
+            set_current_context=False,
+        )
+        env = os.environ.copy()
+        env.update(kube_env)
+        rollout = subprocess.run(
+            [
+                "kubectl",
+                "-n",
+                namespace,
+                "rollout",
+                "status",
+                "deployment/soperator-manager",
+                "--timeout=10m",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=660,
+        )
+        if rollout.returncode != 0:
+            detail = (rollout.stderr or rollout.stdout or "").strip()
+            raise RuntimeError(
+                "Soperator manager rollout did not become ready after static "
+                f"chart apply: {detail or rollout.returncode}"
+            )
+
+        checked: list[str] = []
+        for resource, name in (
+            ("deployment", "soperator-manager"),
+            ("slurmcluster.slurm.nebius.ai", cluster_name),
+        ):
+            payload = _kubectl_json_for_upgrade(
+                [
+                    "kubectl",
+                    "-n",
+                    namespace,
+                    "get",
+                    resource,
+                    name,
+                    "-o",
+                    "json",
+                ],
+                extra_env=kube_env,
+                description=f"kubectl get {resource}/{name}",
+            )
+            actual_label = _resource_chart_label(payload)
+            if actual_label != expected_label:
+                raise RuntimeError(
+                    f"Soperator static chart version check failed for {resource}/{name}: "
+                    f"expected helm.sh/chart={expected_label}, got "
+                    f"{actual_label or '<missing>'}."
+                )
+            checked.append(f"{resource}/{name}")
+        reconciled = _reconcile_soperator_slurm_nodeaddrs(
+            namespace=namespace,
+            cluster_name=cluster_name,
+            kube_env=kube_env,
+        )
+    console.print(
+        "[green]Soperator static chart version verified: "
+        f"{expected_label} on {', '.join(checked)}[/green]"
+    )
+    if reconciled:
+        console.print(
+            "[green]Reconciled Soperator Slurm worker NodeAddr values: "
+            f"{'; '.join(reconciled)}[/green]",
+            soft_wrap=True,
+        )
 
 
 def _soperator_upgrade_validation_specs(
@@ -3605,8 +4853,8 @@ def _run_soperator_upgrade_validation_phase(
     plan: _HelmChartUpgradePlan,
     *,
     phase_label: str,
-    refresh_deploy_report: bool,
-) -> DeployValidationReport | None:
+    persist_reports: bool,
+) -> tuple[Path, ...]:
     selected_targets = _resolve_selected_deploy_targets(
         manifest,
         requested_target_ref=plan.target.target_ref,
@@ -3644,31 +4892,26 @@ def _run_soperator_upgrade_validation_phase(
                     console.print(message)
                 last_validation_phase = message
 
-            if refresh_deploy_report:
+            if persist_reports:
                 paths.reports_dir.mkdir(parents=True, exist_ok=True)
-                clear_deploy_validation_artifacts(validations, reports_dir=paths.reports_dir)
+                clear_deploy_validation_artifacts(
+                    validations,
+                    reports_dir=paths.reports_dir,
+                    include_markdown=False,
+                )
                 reports_dir = paths.reports_dir
             else:
                 temp_dir = stack.enter_context(
-                    tempfile.TemporaryDirectory(
-                        prefix="nebius-cxcli-soperator-upgrade-preflight-"
-                    )
+                    tempfile.TemporaryDirectory(prefix="nebius-cxcli-soperator-upgrade-preflight-")
                 )
                 reports_dir = Path(temp_dir)
-            _run_deploy_validations(
+            written_reports = _run_deploy_validations(
                 validations,
                 reports_dir=reports_dir,
                 extra_env=kube_env,
                 emit=_emit_validation_phase,
             )
-    if not refresh_deploy_report:
-        return None
-    artifacts = write_inventory(config, paths, validations=validations)
-    return build_deploy_validation_report(
-        validations,
-        reports_dir=paths.reports_dir,
-        markdown_path=artifacts.markdown,
-    )
+    return tuple(written_reports) if persist_reports else ()
 
 
 def _raise_if_soperator_upgrade_would_bypass_migration(
@@ -3708,26 +4951,26 @@ def _status_watchers_for_component(
 
 def _print_upgrade_plan_lines(lines: Sequence[str]) -> None:
     in_warnings = False
-    in_repeat_dry_run_command = False
+    in_copy_paste_command = False
     for line in lines:
         if line == "- warnings:":
             in_warnings = True
-            in_repeat_dry_run_command = False
+            in_copy_paste_command = False
             console.print(f"- {warning_markup('warnings:', bold=True)}")
             continue
         if in_warnings and line.startswith("  - "):
             console.print(f"  - {warning_markup(line[4:])}")
             continue
-        if line == "- repeat dry-run command:":
+        if line in {"- repeat dry-run command:", "- approved execute command:"}:
             in_warnings = False
-            in_repeat_dry_run_command = True
+            in_copy_paste_command = True
             console.print(line)
             continue
-        if in_repeat_dry_run_command and line.strip().startswith("nebius-cxcli "):
+        if in_copy_paste_command and line.strip().startswith("nebius-cxcli "):
             _print_copy_paste_command(line)
             continue
         in_warnings = False
-        in_repeat_dry_run_command = False
+        in_copy_paste_command = False
         console.print(line)
 
 
@@ -3782,140 +5025,297 @@ def _upgrade_final_stage_title(
     return source_sync_title
 
 
-def _run_vm_os_image_upgrade(
-    *,
-    config_path: Path,
-    source_payload: dict[str, Any],
+def _quota_identity_from_payload(
+    payload: Mapping[str, Any],
     generated_config: Any,
-    paths: ProjectPaths,
-    manifest: Mapping[str, Any],
-    request: _OsImageUpgradeRequest,
-) -> None:
-    if request.node_group:
-        raise RuntimeError("--node-group is supported only for infra:mk8s OS-image upgrades.")
-    if request.disruption_policy == DISRUPTION_POLICY_FORCE_DELETE:
-        raise RuntimeError(
-            "--strategy force-delete is supported only for infra:mk8s OS-image upgrades."
-        )
+) -> tuple[str, str, str]:
+    client_info = payload.get("client_info")
+    nebius = client_info.get("nebius") if isinstance(client_info, Mapping) else None
+    generated_nebius = getattr(getattr(generated_config, "client_info", None), "nebius", None)
+    tenant_id = _non_empty_text(
+        nebius.get("tenant_id") if isinstance(nebius, Mapping) else None
+    ) or _non_empty_text(getattr(generated_nebius, "tenant_id", None))
+    project_id = _non_empty_text(
+        nebius.get("project_id") if isinstance(nebius, Mapping) else None
+    ) or _non_empty_text(getattr(generated_nebius, "project_id", None))
+    region_id = _non_empty_text(
+        nebius.get("region_id") if isinstance(nebius, Mapping) else None
+    ) or _non_empty_text(getattr(generated_nebius, "region_id", None))
+    return tenant_id, project_id, region_id
 
-    source_component = find_source_vm_component(
-        source_payload,
-        request.target.instance_id,
-    )
-    plan = plan_vm_os_image_upgrade(
-        selector=request.target.selector,
-        source_component=source_component,
-        target_image_family=request.target_os,
-    )
-    repeat_dry_run_command = (
-        _upgrade_vm_os_image_dry_run_command(
-            config_path=config_path,
-            target_selector=request.target.selector,
-            to_os=request.target_os,
+
+def _max_quota_requirements_by_name_region_shape(
+    requirements: Sequence[QuotaRequirement],
+) -> tuple[QuotaRequirement, ...]:
+    by_key: dict[tuple[str, str, Any], QuotaRequirement] = {}
+    for item in requirements:
+        key = (item.quota_name, item.region, item.gpu_capacity_shape)
+        existing = by_key.get(key)
+        if existing is None or item.required > existing.required:
+            by_key[key] = item
+    return tuple(
+        by_key[key]
+        for key in sorted(
+            by_key,
+            key=lambda value: (value[1], value[0], str(value[2])),
         )
-        if request.dry_run
+    )
+
+
+def _node_template_safe_surge_group_payload(
+    source_component: Mapping[str, Any],
+    group: LiveNodeGroup,
+    *,
+    max_surge_count: int,
+) -> dict[str, Any]:
+    inputs = source_component.get("inputs")
+    source_groups = inputs.get("node_groups") if isinstance(inputs, Mapping) else None
+    raw_group = (
+        source_groups.get(group.source.key)
+        if isinstance(source_groups, Mapping) and group.source is not None
         else None
     )
-    _print_upgrade_plan_lines(
-        format_vm_os_image_upgrade_plan(
-            plan,
-            dry_run=request.dry_run,
-            repeat_dry_run_command=repeat_dry_run_command,
+    payload = copy.deepcopy(to_plain_data(raw_group)) if isinstance(raw_group, Mapping) else {}
+    payload["enabled"] = True
+    payload["node_count"] = max_surge_count
+    payload.pop("autoscaling", None)
+    payload.setdefault("gpu", group.gpu)
+    payload.setdefault("platform", group.platform)
+    payload.setdefault("preset", group.preset)
+    if group.source is not None:
+        if group.source.gpu_cluster_key and not payload.get("gpu_cluster_key"):
+            payload["gpu_cluster_key"] = group.source.gpu_cluster_key
+        if group.source.gpu_stack_source and not payload.get("gpu_stack_source"):
+            payload["gpu_stack_source"] = group.source.gpu_stack_source
+        reservation = payload.get("reservation")
+        if not isinstance(reservation, Mapping):
+            reservation = {}
+        else:
+            reservation = copy.deepcopy(to_plain_data(reservation))
+        if group.source.reservation_policy and not reservation.get("policy"):
+            reservation["policy"] = group.source.reservation_policy
+        if group.source.reservation_ids and not reservation.get("reservation_ids"):
+            reservation["reservation_ids"] = list(group.source.reservation_ids)
+        if reservation:
+            payload["reservation"] = reservation
+    return payload
+
+
+def _node_template_safe_surge_group_fabric(
+    source_component: Mapping[str, Any],
+    group: LiveNodeGroup,
+) -> str:
+    if group.source is None or not group.source.gpu_cluster_key:
+        return ""
+    source_inputs = source_component.get("inputs")
+    gpu_clusters = source_inputs.get("gpu_clusters") if isinstance(source_inputs, Mapping) else None
+    cluster = (
+        gpu_clusters.get(group.source.gpu_cluster_key)
+        if isinstance(gpu_clusters, Mapping)
+        else None
+    )
+    if not isinstance(cluster, Mapping):
+        return ""
+    return _non_empty_text(cluster.get("infiniband_fabric"))
+
+
+def _node_template_safe_surge_reservation_policy(planned_group: Mapping[str, Any]) -> str:
+    reservation = planned_group.get("reservation")
+    if isinstance(reservation, Mapping):
+        return _non_empty_text(reservation.get("policy")).upper()
+    return ""
+
+
+def _node_template_safe_surge_quota_requirements(
+    *,
+    source_component: Mapping[str, Any],
+    plan: Mk8sNodeTemplateUpgradePlan,
+    project_id: str,
+    region_id: str,
+    max_surge_count: int,
+    request_groups: Sequence[LiveNodeGroup],
+) -> tuple[tuple[QuotaRequirement, ...], tuple[QuotaCoverageGap, ...], tuple[str, ...]]:
+    requirements: list[QuotaRequirement] = []
+    coverage_gaps: list[QuotaCoverageGap] = []
+    lines: list[str] = []
+    source_inputs = source_component.get("inputs")
+    shared_inputs: dict[str, Any] = {}
+    if isinstance(source_inputs, Mapping):
+        for key in ("gpu_clusters", "node_group_defaults"):
+            value = source_inputs.get(key)
+            if isinstance(value, Mapping):
+                shared_inputs[key] = copy.deepcopy(to_plain_data(value))
+    for group in request_groups:
+        if group.source is None:
+            continue
+        planned_name = (
+            f"{plan.cluster_name or plan.target.instance_id}-{group.source.key}-safe-surge"
         )
+        planned_group = _node_template_safe_surge_group_payload(
+            source_component,
+            group,
+            max_surge_count=max_surge_count,
+        )
+        fabric = _node_template_safe_surge_group_fabric(source_component, group)
+        has_gpu_cluster = bool(group.source.gpu_cluster_key or group.source.gpu_cluster_id)
+        if group.gpu and has_gpu_cluster and not fabric:
+            instance_id = f"{plan.target.instance_id}-node-template-surge-{group.source.key}"
+            fabric_source = (
+                f"inputs.gpu_clusters.{group.source.gpu_cluster_key}.infiniband_fabric"
+                if group.source.gpu_cluster_key
+                else f"gpu_cluster_id {group.source.gpu_cluster_id}"
+            )
+            coverage_gaps.append(
+                QuotaCoverageGap(
+                    component_id=MK8S_COMPONENT_ID,
+                    instance_id=instance_id,
+                    component_label=component_instance_label(MK8S_COMPONENT_ID, instance_id),
+                    message=(
+                        "safe-surge cannot verify GPU Capacity Dashboard availability on the "
+                        f"same fabric for node group '{group.name}' because "
+                        f"{fabric_source} does not resolve to an infiniband_fabric in config"
+                    ),
+                )
+            )
+            continue
+        estimate_inputs = {
+            **shared_inputs,
+            "node_groups": {planned_name: planned_group},
+        }
+        group_requirements, group_gaps = estimate_mk8s_quota_requirements(
+            project_id=project_id,
+            region=region_id,
+            instance_id=f"{plan.target.instance_id}-node-template-surge-{group.source.key}",
+            inputs=estimate_inputs,
+            context="node-template safe-surge quota preflight",
+        )
+        requirements.extend(
+            item for item in group_requirements if item.quota_name != "mk8s.cluster.count"
+        )
+        coverage_gaps.extend(group_gaps)
+        role = "gpu" if group.gpu else "cpu/system"
+        fabric_suffix = f", fabric {fabric}" if group.gpu and fabric else ""
+        reservation_policy = _node_template_safe_surge_reservation_policy(planned_group)
+        reservation_suffix = (
+            f", reservation policy {reservation_policy}" if group.gpu and reservation_policy else ""
+        )
+        lines.append(
+            "Safe-surge quota preflight: "
+            f"{group.name} requires {max_surge_count} temporary surge node(s) "
+            f"at {group.platform or 'unknown-platform'}/{group.preset or 'unknown-preset'}"
+            f"{fabric_suffix}{reservation_suffix} "
+            f"({role})."
+        )
+    return (
+        _max_quota_requirements_by_name_region_shape(requirements),
+        tuple(coverage_gaps),
+        tuple(lines),
     )
 
-    if request.dry_run:
-        return
-    if not plan.mutates:
-        console.print(
-            f"VM target {request.target.selector} already uses source image family "
-            f"{request.target_os}."
-        )
-        return
 
-    _run_generated_bundle_validation(
-        generated_config,
-        paths,
-        auto_auth_bootstrap=True,
-        title="VM OS image upgrade preflight",
-        quota_phase="upgrade",
-        flux_command_name="upgrade",
-        manifest=manifest,
-        prompt_mysterybox_payload_values=False,
+def _node_template_safe_surge_quota_failure_message(report: QuotaReport) -> str:
+    detail_lines = format_quota_report_lines(
+        report,
+        phase="node-template safe-surge",
+        include_coverage_gaps=True,
+        include_confirmed_components=True,
+        markup=False,
+    )
+    details = "\n".join(detail_lines).strip()
+    if not details:
+        details = "live quota/capacity could not be confirmed for the safe-surge plan"
+    return (
+        "Node-template safe-surge quota preflight failed before any staged mutation. "
+        "Resolve confirmed quota/capacity shortages, unresolved quota/capacity limits, "
+        "quota coverage gaps, or lookup errors before rerunning upgrade node-template. "
+        "GPU safe-surge capacity is checked on the same fabric and reservation policy "
+        "as the selected node group; use capacity on that fabric, use zero-surge, or "
+        "migrate to a new GPU node group/fabric before retrying.\n" + details
     )
 
-    changed = update_source_vm_image_family(
+
+def _run_node_template_safe_surge_quota_preflight(
+    *,
+    source_payload: Mapping[str, Any],
+    generated_config: Any,
+    source_component: Mapping[str, Any],
+    plan: Mk8sNodeTemplateUpgradePlan,
+    max_surge_count: int,
+    request_groups: Sequence[LiveNodeGroup],
+) -> QuotaReport:
+    tenant_id, project_id, region_id = _quota_identity_from_payload(
         source_payload,
-        instance_id=request.target.instance_id,
-        target_image_family=request.target_os,
+        generated_config,
     )
-    if not changed:
-        console.print(
-            f"VM target {request.target.selector} already uses source image family "
-            f"{request.target_os}."
+    if not request_groups:
+        report = QuotaReport(
+            tenant_id=tenant_id,
+            project_id=project_id,
+            region_id=region_id,
+            checked_at=datetime.now(UTC).isoformat(),
         )
-        return
-    config_path.write_text(render_updated_source_payload(source_payload), encoding="utf-8")
-    console.print(
-        f"Updated {config_path} for VM OS image upgrade to {request.target_os}.",
-        soft_wrap=True,
+        console.print("Safe-surge quota preflight: no new node-group surge quota is required.")
+        return report
+    requirements, coverage_gaps, plan_lines = _node_template_safe_surge_quota_requirements(
+        source_component=source_component,
+        plan=plan,
+        project_id=project_id,
+        region_id=region_id,
+        max_surge_count=max_surge_count,
+        request_groups=request_groups,
     )
-    _run_internal_render_command(config_path, force=True)
-    staged_config, staged_paths, staged_manifest = _load_deploy_context(config_path)
-    mysterybox_payload_env = _run_generated_bundle_validation(
-        staged_config,
-        staged_paths,
-        auto_auth_bootstrap=True,
-        title=f"Validate rendered VM OS image upgrade to {request.target_os}",
-        quota_phase="upgrade",
-        flux_command_name="upgrade",
-        manifest=staged_manifest,
-        prompt_mysterybox_payload_values=False,
-    )
-    status_watchers = _status_watchers_for_component(
-        _manifest_status_watchers(staged_manifest) or _enabled_status_watcher_specs(staged_config),
-        component_id=VM_COMPONENT_ID,
-        instance_id=request.target.instance_id,
-    )
-    apply_kwargs: dict[str, Any] = {
-        "initialize": False,
-        "run_mk8s_preflight": False,
-    }
-    if status_watchers:
-        apply_kwargs["status_watchers"] = status_watchers
-    if mysterybox_payload_env:
-        apply_kwargs["extra_env"] = mysterybox_payload_env
-    plan_env = _terraform_runtime_env(staged_config)
-    if mysterybox_payload_env:
-        plan_env.update(mysterybox_payload_env)
-    console.print(
-        f"Planning Terraform VM OS image upgrade to {request.target_os}.",
-        soft_wrap=True,
-    )
-    terraform_plan(staged_paths.infra_dir, extra_env=plan_env, quiet=True)
-    console.print(
-        f"Applying Terraform VM OS image upgrade to {request.target_os}.",
-        soft_wrap=True,
-    )
-    _run_terraform_apply_with_status(staged_config, staged_paths, **apply_kwargs)
-    console.print(
-        f"[green]VM OS image upgrade completed[/green]: "
-        f"{request.target.selector} -> {request.target_os}"
-    )
+    for line in plan_lines:
+        console.print(line)
+    if not requirements and not coverage_gaps:
+        report = QuotaReport(
+            tenant_id=tenant_id,
+            project_id=project_id,
+            region_id=region_id,
+            checked_at=datetime.now(UTC).isoformat(),
+        )
+    else:
+        report = assess_live_quota_requirements(
+            tenant_id=tenant_id,
+            project_id=project_id,
+            region_id=region_id,
+            requirements=requirements,
+            coverage_gaps=coverage_gaps,
+            context="node-template safe-surge quota preflight",
+        )
+    if (
+        report.has_confirmed_insufficiency
+        or report.unknown_checks
+        or report.coverage_gaps
+        or report.errors
+    ):
+        raise RuntimeError(_node_template_safe_surge_quota_failure_message(report))
+    for line in format_quota_report_lines(
+        report,
+        phase="node-template safe-surge",
+        include_coverage_gaps=True,
+        include_confirmed_components=True,
+    ):
+        console.print(line)
+    if report.sufficient_checks:
+        console.print(
+            "Safe-surge quota preflight: all checked temporary surge quota/capacity "
+            "requirements are sufficient."
+        )
+    return report
 
 
 @upgrade_app.command(
-    "k8s-version",
-    short_help="Upgrade a Terraform-managed MK8s target one Kubernetes minor version.",
-    epilog=_UPGRADE_K8S_EPILOG,
+    "node-template",
+    short_help=(
+        "Upgrade MK8s Kubernetes version, OS image, or GPU stack values through "
+        "one node-template rolling-update path."
+    ),
+    epilog=_UPGRADE_NODE_TEMPLATE_EPILOG,
 )
-def upgrade_k8s_version_command(
+def upgrade_node_template_command(
     config_path: Annotated[
         Path,
-        typer.Argument(
-            metavar="CONFIG_YAML",
-            help=_CONFIG_YAML_ARGUMENT_HELP,
-        ),
+        typer.Argument(metavar="CONFIG_YAML", help=_CONFIG_YAML_ARGUMENT_HELP),
     ],
     target_selector: Annotated[
         str | None,
@@ -3927,523 +5327,6 @@ def upgrade_k8s_version_command(
             ),
         ),
     ] = None,
-    to_version: Annotated[
-        str | None,
-        typer.Option(
-            "--to-version",
-            help=(
-                "Target Kubernetes major.minor version, for example 1.33. "
-                "Omit with TARGET to choose interactively."
-            ),
-        ),
-    ] = None,
-    dry_run: Annotated[
-        bool,
-        typer.Option(
-            "--dry-run",
-            help="Print the live upgrade plan without writing config/generated files or applying Terraform.",
-        ),
-    ] = False,
-    disruption_policy: Annotated[
-        str,
-        typer.Option(
-            "--strategy",
-            help="Upgrade strategy: zero-surge, safe-surge, or force-delete.",
-        ),
-    ] = DISRUPTION_POLICY_ALLOW_UNAVAILABLE,
-    drain_timeout: Annotated[
-        str,
-        typer.Option(
-            "--drain-timeout",
-            help="Node drain timeout: auto, none, or a Go-style duration such as 10m, 30m, 1h.",
-        ),
-    ] = "auto",
-    auto_auth_bootstrap: Annotated[
-        bool,
-        typer.Option(
-            "--auto-auth-bootstrap/--no-auto-auth-bootstrap",
-            help="Automatically bootstrap runtime auth material for generated-bundle validation.",
-        ),
-    ] = True,
-    skip_validations: Annotated[
-        bool,
-        typer.Option(
-            "--skip-validations",
-            help="Skip optional post-upgrade deploy validations; required generated validations still run.",
-        ),
-    ] = False,
-    skip_validation: Annotated[
-        list[str] | None,
-        typer.Option(
-            "--skip-validation",
-            help="Skip one optional post-upgrade validation kind; repeatable.",
-        ),
-    ] = None,
-    interactive: Annotated[
-        bool,
-        typer.Option(
-            "--interactive/--no-interactive",
-            help="Prompt for missing upgrade target/version/options when running from a terminal.",
-        ),
-    ] = True,
-) -> None:
-    """Upgrade a Terraform-managed MK8s cluster and node groups to a Kubernetes version."""
-
-    sdk: Any | None = None
-    warning_cache_token = _DEPLOY_VALIDATION_WARNING_CACHE.set(set())
-    try:
-        guided = not _non_empty_text(target_selector) or not _non_empty_text(to_version)
-        if guided and not interactive:
-            missing = []
-            if not _non_empty_text(target_selector):
-                missing.append("target selector")
-            if not _non_empty_text(to_version):
-                missing.append("--to-version <major.minor>")
-            raise RuntimeError(
-                "Missing "
-                + " and ".join(missing)
-                + ". Pass explicit upgrade options or allow interactive prompting."
-            )
-        if not guided:
-            initial_policy = validate_disruption_policy(disruption_policy)
-            resolve_drain_timeout(initial_policy, drain_timeout)
-
-        source_payload = _load_source_payload(config_path)
-        generated_config, paths, manifest = _load_deploy_context_readonly(config_path)
-        target_selector = _prompt_upgrade_k8s_target_selector_if_needed(
-            manifest=manifest,
-            target_selector=target_selector,
-        )
-        target = parse_upgrade_selector(target_selector)
-        source_component = find_source_mk8s_component(source_payload, target.instance_id)
-        selected_target = _resolve_managed_mk8s_upgrade_target(
-            manifest,
-            target_instance_id=target.instance_id,
-        )
-
-        project_id = str(generated_config.client_info.nebius.project_id).strip()
-        sdk = init_nebius_sdk(
-            parent_id=project_id or None,
-            endpoint=_non_empty_text(os.environ.get("NEBIUS_ENDPOINT")) or None,
-            context="MK8s Kubernetes version upgrade",
-            prefer_operator_auth=True,
-        )
-        executor = Mk8sKubernetesVersionExecutor(sdk)
-        cluster_name = source_mk8s_cluster_name(source_component, fallback=target.instance_id)
-        try:
-            cluster = executor.get_cluster_by_name(project_id=project_id, name=cluster_name)
-        except Exception as exc:
-            raise RuntimeError(
-                f"Could not find live MK8s cluster '{cluster_name}' in project '{project_id}'. "
-                "Deploy the generated MK8s infrastructure before running upgrade k8s-version."
-            ) from exc
-        cluster_id = _live_mk8s_cluster_id(cluster, cluster_name=cluster_name)
-        selected_target = _managed_mk8s_target_with_cluster_id(
-            selected_target,
-            cluster_id=cluster_id,
-        )
-        supported_versions = tuple(executor.control_plane_versions())
-        normalized_to_version = _prompt_upgrade_k8s_to_version_if_needed(
-            cluster=cluster,
-            cluster_id=cluster_id,
-            supported_versions=supported_versions,
-            to_version=to_version,
-        )
-        dry_run, disruption_policy, drain_timeout, skip_validations = (
-            _prompt_upgrade_k8s_options_if_guided(
-                guided=guided,
-                dry_run=dry_run,
-                disruption_policy=disruption_policy,
-                drain_timeout=drain_timeout,
-                skip_validations=skip_validations,
-            )
-        )
-        policy = validate_disruption_policy(disruption_policy)
-        resolved_timeout = resolve_drain_timeout(policy, drain_timeout)
-        supported_minors = {parse_k8s_version(version).minor_text for version in supported_versions}
-        if supported_minors and normalized_to_version not in supported_minors:
-            raise RuntimeError(
-                f"Kubernetes {normalized_to_version} is not currently listed by the Nebius "
-                "MK8s control-plane version API. Available versions: "
-                + ", ".join(sorted(supported_minors))
-            )
-
-        live_node_groups = executor.list_node_groups(cluster_id)
-        with ExitStack() as stack:
-            kube_env = _prepare_cluster_handoff_kube_env(
-                generated_config,
-                paths,
-                stack=stack,
-                target=selected_target,
-                persist_local_kubeconfig=False,
-                set_current_context=False,
-            )
-            preflight_findings = collect_kubernetes_preflight_findings(kube_env=kube_env)
-            plan = plan_k8s_upgrade(
-                config_path=str(config_path),
-                target=target,
-                cluster=cluster,
-                cluster_id=cluster_id,
-                source_component=source_component,
-                target_version=normalized_to_version,
-                disruption_policy=policy,
-                drain_timeout=resolved_timeout,
-                live_node_groups=live_node_groups,
-                compatibility_lookup=executor.compatibility_choices,
-                preflight_findings=preflight_findings,
-            )
-            repeat_dry_run_command = (
-                _upgrade_k8s_dry_run_command(
-                    config_path=config_path,
-                    target_selector=target.selector,
-                    to_version=normalized_to_version,
-                    disruption_policy=policy,
-                    drain_timeout=resolved_timeout,
-                )
-                if dry_run
-                else None
-            )
-            _print_upgrade_plan_lines(
-                format_upgrade_plan(
-                    plan,
-                    dry_run=dry_run,
-                    repeat_dry_run_command=repeat_dry_run_command,
-                )
-            )
-
-            if dry_run:
-                return
-            unmanaged_live_groups = tuple(
-                group.name for group in plan.node_groups if group.source is None
-            )
-            if unmanaged_live_groups:
-                raise RuntimeError(
-                    "Live MK8s node groups are not declared in config.yaml, so cxcli cannot "
-                    "safely upgrade them through Terraform: " + ", ".join(unmanaged_live_groups)
-                )
-            if plan.compatibility_failures:
-                raise RuntimeError(
-                    "Kubernetes version upgrade is blocked by OS/GPU stack compatibility. "
-                    "Apply the listed node-layer follow-up first, then rerun upgrade k8s-version."
-                )
-            current_group_versions = source_node_group_versions_for_plan(plan)
-            desired_group_versions = dict(current_group_versions)
-            final_group_versions = source_node_group_versions_for_plan(
-                plan,
-                default_version=normalized_to_version,
-            )
-            source_sync_payload = copy.deepcopy(source_payload)
-            source_sync_required = update_source_k8s_versions(
-                source_sync_payload,
-                instance_id=target.instance_id,
-                target_version=normalized_to_version,
-                node_group_versions=final_group_versions,
-            )
-            if plan.mutates:
-                blockers = blocking_preflight_findings(
-                    plan.preflight_findings,
-                    disruption_policy=policy,
-                )
-                if blockers:
-                    blocker_labels = ", ".join(
-                        f"{finding.kind}:{finding.namespace}/{finding.name}" for finding in blockers
-                    )
-                    raise RuntimeError(
-                        f"Upgrade preflight blockers must be resolved first: {blocker_labels}"
-                    )
-            if not plan.mutates and not plan.rollout_incomplete and not source_sync_required:
-                readiness = verify_mk8s_upgrade_plan_ready(
-                    executor=executor,
-                    plan=plan,
-                    label="MK8s Kubernetes upgrade",
-                )
-                console.print(f"[green]{readiness.summary()}[/green]")
-                console.print(
-                    f"MK8s target {target.selector} is already on Kubernetes {normalized_to_version}."
-                )
-                return
-            if not plan.mutates and not plan.rollout_incomplete and source_sync_required:
-                console.print(
-                    "Live MK8s resources are already on the requested Kubernetes version; "
-                    "reconciling config.yaml and generated Terraform so desired state stays authoritative."
-                )
-            if not plan.mutates and plan.rollout_incomplete:
-                console.print(
-                    "MK8s Kubernetes version is already requested on the live resources; "
-                    "waiting for the in-progress node-group rollout to finish."
-                )
-            _run_generated_bundle_validation(
-                generated_config,
-                paths,
-                auto_auth_bootstrap=auto_auth_bootstrap,
-                title="Upgrade preflight",
-                quota_phase="upgrade",
-                flux_command_name="upgrade",
-                manifest=manifest,
-                prompt_mysterybox_payload_values=False,
-            )
-
-            original_strategies = source_node_group_strategy_snapshot(
-                source_payload,
-                instance_id=target.instance_id,
-            )
-            temporary_strategy = terraform_node_group_strategy_for_policy(policy, resolved_timeout)
-            strategy_restore_after_wait = _upgrade_strategy_restore_after_wait(
-                temporary_strategy=temporary_strategy,
-                rollout_incomplete=plan.rollout_incomplete,
-                source_sync_required=source_sync_required,
-            )
-            node_group_stage_count = sum(
-                1
-                for planned_group in plan.node_groups
-                if planned_group.source is not None
-                and current_group_versions.get(planned_group.source.key) != normalized_to_version
-            )
-            planned_stage_count, extra_stage_summaries = _upgrade_planned_stage_count(
-                control_plane_stage_count=len(plan.hops),
-                node_group_stage_count=node_group_stage_count,
-                source_sync_required=source_sync_required,
-                strategy_restore_after_wait=strategy_restore_after_wait,
-                temporary_strategy=temporary_strategy,
-            )
-            if planned_stage_count:
-                stage_summaries = [
-                    f"{len(plan.hops)} control-plane stage(s)",
-                    f"{node_group_stage_count} node-group stage(s)",
-                    *extra_stage_summaries,
-                ]
-                console.print(
-                    "Upgrade execution stages are per control-plane hop and per node group, "
-                    "not per node: " + ", ".join(stage_summaries) + ".",
-                    soft_wrap=True,
-                )
-            stage_number = 0
-            stage_applied = False
-            waited_for_existing_rollout = False
-
-            def _stage_strategy(active_group_key: str | None = None) -> bool:
-                if temporary_strategy is None:
-                    return False
-                strategies = dict(original_strategies)
-                if active_group_key:
-                    strategies[active_group_key] = temporary_strategy
-                return set_source_node_group_strategies(
-                    source_payload,
-                    instance_id=target.instance_id,
-                    strategies=strategies,
-                )
-
-            def _render_validate_apply_stage(
-                title: str,
-            ) -> tuple[Any, ProjectPaths, Mapping[str, Any]]:
-                nonlocal stage_applied, stage_number
-                stage_number += 1
-                stage_label = (
-                    f"stage {stage_number}/{planned_stage_count}"
-                    if planned_stage_count
-                    else f"stage {stage_number}"
-                )
-                config_path.write_text(
-                    render_updated_source_payload(source_payload), encoding="utf-8"
-                )
-                console.print(f"Updated {config_path} for {stage_label}: {title}.", soft_wrap=True)
-                _run_internal_render_command(config_path, force=True)
-                staged_config, staged_paths, staged_manifest = _load_deploy_context(config_path)
-                mysterybox_payload_env = _run_generated_bundle_validation(
-                    staged_config,
-                    staged_paths,
-                    auto_auth_bootstrap=auto_auth_bootstrap,
-                    title=f"Validate rendered {stage_label}: {title}",
-                    quota_phase="upgrade",
-                    flux_command_name="upgrade",
-                    manifest=staged_manifest,
-                    prompt_mysterybox_payload_values=False,
-                )
-                status_watchers = _manifest_status_watchers(
-                    staged_manifest
-                ) or _enabled_status_watcher_specs(staged_config)
-                apply_kwargs: dict[str, Any] = {
-                    "initialize": False,
-                    "run_mk8s_preflight": False,
-                }
-                if status_watchers:
-                    apply_kwargs["status_watchers"] = status_watchers
-                if mysterybox_payload_env:
-                    apply_kwargs["extra_env"] = mysterybox_payload_env
-                plan_env = _terraform_runtime_env(staged_config)
-                if mysterybox_payload_env:
-                    plan_env.update(mysterybox_payload_env)
-                console.print(f"Planning Terraform {stage_label}: {title}.", soft_wrap=True)
-                terraform_plan(staged_paths.infra_dir, extra_env=plan_env, quiet=True)
-                console.print(f"Applying Terraform {stage_label}: {title}.", soft_wrap=True)
-                _run_terraform_apply_with_status(staged_config, staged_paths, **apply_kwargs)
-                stage_applied = True
-                return staged_config, staged_paths, staged_manifest
-
-            def _restore_temporary_strategy_files_after_error() -> None:
-                if temporary_strategy is None:
-                    return
-                try:
-                    restored = set_source_node_group_strategies(
-                        source_payload,
-                        instance_id=target.instance_id,
-                        strategies=original_strategies,
-                    )
-                    if restored:
-                        config_path.write_text(
-                            render_updated_source_payload(source_payload),
-                            encoding="utf-8",
-                        )
-                        _run_internal_render_command(config_path, force=True)
-                        console.print(
-                            "Restored temporary node-group upgrade strategy in config.yaml "
-                            "and generated/ after failed upgrade stage."
-                        )
-                except Exception as cleanup_exc:
-                    console.print(
-                        "[yellow]Could not restore temporary node-group upgrade strategy "
-                        f"after failed stage:[/yellow] {cleanup_exc}"
-                    )
-
-            try:
-                for hop in plan.hops:
-                    update_source_k8s_versions(
-                        source_payload,
-                        instance_id=target.instance_id,
-                        target_version=hop.to_version,
-                        node_group_versions=desired_group_versions,
-                    )
-                    _stage_strategy(None)
-                    generated_config, paths, manifest = _render_validate_apply_stage(
-                        f"control-plane upgrade to Kubernetes {hop.to_version}"
-                    )
-                    executor.wait_cluster_version(
-                        cluster_id=plan.cluster_id,
-                        version=hop.to_version,
-                    )
-
-                for planned_group in plan.node_groups:
-                    if planned_group.source is None:
-                        raise RuntimeError(
-                            f"Live node group '{planned_group.name}' is not declared in config.yaml; "
-                            "cxcli cannot safely upgrade it through Terraform."
-                        )
-                    group_key = planned_group.source.key
-                    if current_group_versions.get(group_key) == normalized_to_version:
-                        if plan.rollout_incomplete:
-                            wait_for_node_group_rollout(
-                                executor=executor,
-                                plan=plan,
-                                planned_group=planned_group,
-                            )
-                            waited_for_existing_rollout = True
-                        desired_group_versions[group_key] = normalized_to_version
-                        continue
-                    desired_group_versions[group_key] = normalized_to_version
-                    update_source_k8s_versions(
-                        source_payload,
-                        instance_id=target.instance_id,
-                        target_version=normalized_to_version,
-                        node_group_versions=desired_group_versions,
-                    )
-                    _stage_strategy(group_key)
-                    generated_config, paths, manifest = _render_validate_apply_stage(
-                        f"node-group {planned_group.name} upgrade to Kubernetes {normalized_to_version}"
-                    )
-                    wait_for_node_group_rollout(
-                        executor=executor,
-                        plan=plan,
-                        planned_group=planned_group,
-                    )
-
-                final_versions_changed = False
-                if final_group_versions:
-                    final_versions_changed = update_source_k8s_versions(
-                        source_payload,
-                        instance_id=target.instance_id,
-                        target_version=normalized_to_version,
-                        node_group_versions=final_group_versions,
-                    )
-                strategy_restored = _stage_strategy(None)
-                strategy_restore_required = _upgrade_strategy_restore_required(
-                    strategy_restore_after_wait=strategy_restore_after_wait,
-                    waited_for_existing_rollout=waited_for_existing_rollout,
-                    stage_applied=stage_applied,
-                )
-                if (
-                    final_versions_changed
-                    or strategy_restored
-                    or strategy_restore_required
-                    or (source_sync_required and not stage_applied)
-                ):
-                    stage_title = _upgrade_final_stage_title(
-                        strategy_restored=strategy_restored,
-                        strategy_restore_required=strategy_restore_required,
-                        source_sync_title=f"source version sync to Kubernetes {normalized_to_version}",
-                    )
-                    generated_config, paths, manifest = _render_validate_apply_stage(stage_title)
-            except Exception:
-                _restore_temporary_strategy_files_after_error()
-                raise
-
-            validations = _filter_validations_for_target(
-                _manifest_deploy_validations(manifest),
-                target_ref=target.instance_id,
-            )
-            skip_kinds = _resolve_deploy_validation_skip_kinds(tuple(skip_validation or ()))
-            validations = _filter_deploy_validations(
-                validations,
-                skip_validations=skip_validations,
-                skip_kinds=skip_kinds,
-            )
-            if validations:
-                _run_deploy_validations(
-                    validations,
-                    reports_dir=paths.reports_dir,
-                    extra_env=kube_env,
-                    emit=lambda message: console.print(message, highlight=False),
-                )
-            readiness = verify_mk8s_upgrade_plan_ready(
-                executor=executor,
-                plan=plan,
-                label="MK8s Kubernetes upgrade",
-            )
-            console.print(f"[green]{readiness.summary()}[/green]")
-            console.print(
-                f"[green]MK8s Kubernetes upgrade completed[/green]: "
-                f"{target.selector} -> {normalized_to_version}"
-            )
-    except typer.Exit:
-        raise
-    except Exception as exc:  # pragma: no cover - CLI surface
-        _exit_with_error(exc)
-    finally:
-        _DEPLOY_VALIDATION_WARNING_CACHE.reset(warning_cache_token)
-        if sdk is not None:
-            with suppress(Exception):
-                sdk.sync_close()
-
-
-@upgrade_app.command(
-    "node-template",
-    short_help=(
-        "Upgrade MK8s Kubernetes version, OS image, and GPU stack together in "
-        "one non-interactive command; see examples below."
-    ),
-    epilog=_UPGRADE_NODE_TEMPLATE_EPILOG,
-)
-def upgrade_node_template_command(
-    config_path: Annotated[
-        Path,
-        typer.Argument(metavar="CONFIG_YAML", help=_CONFIG_YAML_ARGUMENT_HELP),
-    ],
-    target_selector: Annotated[
-        str,
-        typer.Argument(
-            metavar="TARGET",
-            help="Target selector, for example infra:mk8s@mk8s.",
-        ),
-    ],
     to_version: Annotated[
         str | None,
         typer.Option(
@@ -4490,6 +5373,15 @@ def upgrade_node_template_command(
             help="Node drain timeout: auto, none, or a Go-style duration such as 10m.",
         ),
     ] = "auto",
+    strategy_max_surge_count: Annotated[
+        int | None,
+        typer.Option(
+            "--strategy-max-surge-count",
+            help=(
+                "Temporary extra nodes per active node group for --strategy safe-surge. Default: 1."
+            ),
+        ),
+    ] = None,
     auto_auth_bootstrap: Annotated[
         bool,
         typer.Option(
@@ -4511,50 +5403,47 @@ def upgrade_node_template_command(
             help="Skip one optional post-upgrade validation kind; repeatable.",
         ),
     ] = None,
+    interactive: Annotated[
+        bool,
+        typer.Option(
+            "--interactive/--no-interactive",
+            help="Prompt for missing node-template upgrade flags when running from a terminal.",
+        ),
+    ] = True,
 ) -> None:
-    """Upgrade MK8s Kubernetes version, OS image, and GPU stack together in one
-    non-interactive command; see the example below.
-    """
+    """Upgrade MK8s Kubernetes version, OS image, or GPU stack values."""
 
     sdk: Any | None = None
     warning_cache_token = _DEPLOY_VALIDATION_WARNING_CACHE.set(set())
     try:
-        missing = []
-        if not _non_empty_text(target_selector):
-            missing.append("target selector")
-        if not _non_empty_text(to_version):
-            missing.append("--to-version <major.minor>")
-        if not _non_empty_text(to_os):
-            missing.append("--to-os <os>")
-        if missing:
-            raise RuntimeError(
-                "Missing "
-                + " and ".join(missing)
-                + ". `upgrade node-template` is non-interactive; pass all required options."
-            )
-
-        target = parse_upgrade_selector(target_selector)
-        normalized_to_version = parse_k8s_version(str(to_version)).minor_text
-        target_os = validate_os_image_value(str(to_os))
-        target_gpu_stack_preset = (
-            validate_node_layer_value(
-                str(to_gpu_stack_preset),
-                flag_name="--to-gpu-stack-preset",
-            )
-            if _non_empty_text(to_gpu_stack_preset)
-            else ""
+        target_missing = not _non_empty_text(target_selector)
+        requested_template_change = any(
+            _non_empty_text(value) for value in (to_version, to_os, to_gpu_stack_preset)
         )
-        policy = validate_disruption_policy(disruption_policy)
-        resolved_timeout = resolve_drain_timeout(policy, drain_timeout)
+        prompt_all_template_fields = interactive and not requested_template_change
+        guided = target_missing or prompt_all_template_fields
+        if not interactive:
+            missing = []
+            if target_missing:
+                missing.append("target selector")
+            if not requested_template_change:
+                missing.append(
+                    "one of --to-version <major.minor>, --to-os <os>, or "
+                    "--to-gpu-stack-preset <preset>"
+                )
+            if missing:
+                raise RuntimeError(
+                    "Missing "
+                    + " and ".join(missing)
+                    + ". Pass explicit upgrade options or allow interactive prompting."
+                )
+        if not guided:
+            initial_policy = validate_disruption_policy(disruption_policy)
+            resolve_drain_timeout(initial_policy, drain_timeout)
+            resolve_strategy_max_surge_count(initial_policy, strategy_max_surge_count)
 
         source_payload = _load_source_payload(config_path)
         generated_config, paths, manifest = _load_deploy_context_readonly(config_path)
-        source_component = find_source_mk8s_component(source_payload, target.instance_id)
-        selected_target = _resolve_managed_mk8s_upgrade_target(
-            manifest,
-            target_instance_id=target.instance_id,
-        )
-
         project_id = str(generated_config.client_info.nebius.project_id).strip()
         sdk = init_nebius_sdk(
             parent_id=project_id or None,
@@ -4563,70 +5452,303 @@ def upgrade_node_template_command(
             prefer_operator_auth=True,
         )
         executor = Mk8sKubernetesVersionExecutor(sdk)
-        cluster_name = source_mk8s_cluster_name(source_component, fallback=target.instance_id)
-        try:
-            cluster = executor.get_cluster_by_name(project_id=project_id, name=cluster_name)
-        except Exception as exc:
-            raise RuntimeError(
-                f"Could not find live MK8s cluster '{cluster_name}' in project '{project_id}'. "
-                "Deploy the generated MK8s infrastructure before running upgrade node-template."
-            ) from exc
-        cluster_id = _live_mk8s_cluster_id(cluster, cluster_name=cluster_name)
-        selected_target = _managed_mk8s_target_with_cluster_id(
-            selected_target,
-            cluster_id=cluster_id,
-        )
-        supported_minors = {
-            parse_k8s_version(version).minor_text
-            for version in tuple(executor.control_plane_versions())
-        }
-        if supported_minors and normalized_to_version not in supported_minors:
-            raise RuntimeError(
-                f"Kubernetes {normalized_to_version} is not currently listed by the Nebius "
-                "MK8s control-plane version API. Available versions: "
-                + ", ".join(sorted(supported_minors))
-            )
 
-        live_node_groups = executor.list_node_groups(cluster_id)
+        prompt_target = target_missing
+        prompt_to_version = prompt_all_template_fields and not _non_empty_text(to_version)
+        prompt_node_group = guided and not _non_empty_text(node_group)
+        prompt_to_os = prompt_all_template_fields and not _non_empty_text(to_os)
+        prompted_setup_steps: list[str] = []
+        setup_steps = (
+            "target",
+            "to_version",
+            "node_group",
+            "to_os",
+            "to_gpu_stack_preset",
+            "disruption",
+        )
+        setup_step_index = 0
+
+        resolved_selector = ""
+        target: Any | None = None
+        source_component: Mapping[str, Any] | None = None
+        selected_target: Mapping[str, Any] | None = None
+        cluster: Any | None = None
+        cluster_id = ""
+        supported_versions: tuple[str, ...] = ()
+        live_node_groups: tuple[Any, ...] = ()
+        normalized_to_version = ""
+        target_os = ""
+        target_gpu_stack_preset = (
+            validate_node_template_field_value(
+                str(to_gpu_stack_preset),
+                flag_name="--to-gpu-stack-preset",
+            )
+            if _non_empty_text(to_gpu_stack_preset)
+            else ""
+        )
+
+        def _setup_backtrack() -> None:
+            nonlocal setup_step_index
+            if not prompted_setup_steps:
+                raise RuntimeError("Upgrade wizard cancelled.")
+            previous_step = prompted_setup_steps.pop()
+            setup_step_index = setup_steps.index(previous_step)
+
+        while setup_step_index < len(setup_steps):
+            setup_step = setup_steps[setup_step_index]
+            if setup_step == "target":
+                prompted_selector = _prompt_upgrade_mk8s_target_selector_or_back_if_needed(
+                    manifest=manifest,
+                    target_selector=target_selector,
+                    path_label="upgrade.node_template.target",
+                )
+                if _wizard_backtrack_requested(prompted_selector):
+                    _setup_backtrack()
+                    continue
+                resolved_selector = str(prompted_selector or "").strip()
+                target = parse_upgrade_selector(resolved_selector)
+                source_component = find_source_mk8s_component(source_payload, target.instance_id)
+                selected_target = _resolve_managed_mk8s_upgrade_target(
+                    manifest,
+                    target_instance_id=target.instance_id,
+                )
+                cluster_name = source_mk8s_cluster_name(
+                    source_component,
+                    fallback=target.instance_id,
+                )
+                try:
+                    cluster = executor.get_cluster_by_name(project_id=project_id, name=cluster_name)
+                except Exception as exc:
+                    raise RuntimeError(
+                        f"Could not find live MK8s cluster '{cluster_name}' in project "
+                        f"'{project_id}'. Deploy the generated MK8s infrastructure before "
+                        "running upgrade node-template."
+                    ) from exc
+                cluster_id = _live_mk8s_cluster_id(cluster, cluster_name=cluster_name)
+                selected_target = _managed_mk8s_target_with_cluster_id(
+                    selected_target,
+                    cluster_id=cluster_id,
+                )
+                supported_versions = tuple(executor.control_plane_versions())
+                if prompt_target:
+                    prompted_setup_steps.append(setup_step)
+                setup_step_index += 1
+                continue
+            if setup_step == "to_version":
+                if cluster is None:
+                    raise RuntimeError("Upgrade wizard did not resolve a live MK8s cluster.")
+                if prompt_to_version:
+                    prompted_version = _prompt_upgrade_node_template_to_version_or_back_if_needed(
+                        cluster=cluster,
+                        cluster_id=cluster_id,
+                        supported_versions=supported_versions,
+                        to_version=to_version,
+                        path_label="upgrade.node_template.to_version",
+                    )
+                    if _wizard_backtrack_requested(prompted_version):
+                        _setup_backtrack()
+                        continue
+                    normalized_to_version = str(prompted_version or "").strip()
+                elif _non_empty_text(to_version):
+                    normalized_to_version = parse_k8s_version(str(to_version)).minor_text
+                else:
+                    normalized_to_version = _cluster_control_plane_minor_version(
+                        cluster,
+                        cluster_id=cluster_id,
+                    )
+                supported_minors = {
+                    parse_k8s_version(version).minor_text for version in supported_versions
+                }
+                if supported_minors and normalized_to_version not in supported_minors:
+                    raise RuntimeError(
+                        f"Kubernetes {normalized_to_version} is not currently listed by the Nebius "
+                        "MK8s control-plane version API. Available versions: "
+                        + ", ".join(sorted(supported_minors))
+                    )
+                if prompt_to_version:
+                    prompted_setup_steps.append(setup_step)
+                setup_step_index += 1
+                continue
+            if setup_step == "node_group":
+                live_node_groups = executor.list_node_groups(cluster_id)
+                prompted_node_group = _prompt_upgrade_node_group_if_guided(
+                    path_prefix="upgrade.node_template",
+                    guided=prompt_node_group,
+                    node_group="" if prompt_node_group else node_group,
+                    allow_backtrack=True,
+                )
+                if _wizard_backtrack_requested(prompted_node_group):
+                    _setup_backtrack()
+                    continue
+                node_group = _non_empty_text(prompted_node_group)
+                if prompt_node_group:
+                    prompted_setup_steps.append(setup_step)
+                setup_step_index += 1
+                continue
+            if setup_step == "to_os":
+                if source_component is None:
+                    raise RuntimeError("Upgrade wizard did not resolve a source MK8s component.")
+                if not _non_empty_text(to_gpu_stack_preset):
+                    target_gpu_stack_preset = ""
+                selected_live_groups = _selected_node_template_live_groups(
+                    source_component=source_component,
+                    live_node_groups=live_node_groups,
+                    node_group=node_group,
+                )
+                if prompt_to_os:
+                    os_choices = node_template_os_choices(
+                        source_component=source_component,
+                        target_version=normalized_to_version,
+                        target_gpu_stack_preset=target_gpu_stack_preset,
+                        live_node_groups=live_node_groups,
+                        node_group=node_group,
+                        compatibility_lookup=executor.compatibility_choices,
+                    )
+                    prompted_os = _prompt_upgrade_node_template_to_os_if_needed(
+                        path_label="upgrade.node_template.to_os",
+                        to_os=to_os,
+                        choices=os_choices,
+                        allow_backtrack=True,
+                    )
+                    if _wizard_backtrack_requested(prompted_os):
+                        _setup_backtrack()
+                        continue
+                    target_os = str(prompted_os or "").strip()
+                    prompted_setup_steps.append(setup_step)
+                elif _non_empty_text(to_os):
+                    target_os = validate_os_image_value(str(to_os))
+                else:
+                    target_os = validate_os_image_value(
+                        _single_selected_live_value(
+                            selected_live_groups,
+                            attr="os",
+                            option_name="--to-os",
+                            value_label="OS image",
+                        )
+                    )
+                setup_step_index += 1
+                continue
+            if setup_step == "to_gpu_stack_preset":
+                if source_component is None:
+                    raise RuntimeError("Upgrade wizard did not resolve a source MK8s component.")
+                selected_live_groups = _selected_node_template_live_groups(
+                    source_component=source_component,
+                    live_node_groups=live_node_groups,
+                    node_group=node_group,
+                )
+                gpu_stack_required = any(
+                    node_group_uses_nebius_gpu_image(group) for group in selected_live_groups
+                )
+                prompt_gpu_stack = (
+                    prompt_all_template_fields
+                    and gpu_stack_required
+                    and not _non_empty_text(to_gpu_stack_preset)
+                )
+                if prompt_gpu_stack:
+                    prompted_gpu_stack = _prompt_upgrade_node_template_field_value_if_needed(
+                        path_label="upgrade.node_template.to_gpu_stack_preset",
+                        value=to_gpu_stack_preset,
+                        option_name="--to-gpu-stack-preset",
+                        choices=node_template_gpu_stack_choices(
+                            source_component=source_component,
+                            target_version=normalized_to_version,
+                            target_os=target_os,
+                            live_node_groups=live_node_groups,
+                            node_group=node_group,
+                            compatibility_lookup=executor.compatibility_choices,
+                        ),
+                        allow_backtrack=True,
+                    )
+                    if _wizard_backtrack_requested(prompted_gpu_stack):
+                        _setup_backtrack()
+                        continue
+                    target_gpu_stack_preset = str(prompted_gpu_stack or "").strip()
+                    prompted_setup_steps.append(setup_step)
+                else:
+                    target_gpu_stack_preset = _default_node_template_gpu_stack_preset(
+                        selected_live_groups,
+                        to_gpu_stack_preset=to_gpu_stack_preset,
+                        prompt_gpu_stack=prompt_gpu_stack,
+                    )
+                setup_step_index += 1
+                continue
+            if setup_step == "disruption":
+                prompted_disruption = _prompt_upgrade_disruption_options_if_guided(
+                    path_prefix="upgrade.node_template",
+                    guided=guided,
+                    dry_run=dry_run,
+                    disruption_policy=disruption_policy,
+                    drain_timeout=drain_timeout,
+                    strategy_max_surge_count=strategy_max_surge_count,
+                    skip_validations=skip_validations,
+                    allow_outer_backtrack=True,
+                )
+                if _wizard_backtrack_requested(prompted_disruption):
+                    _setup_backtrack()
+                    continue
+                (
+                    dry_run,
+                    disruption_policy,
+                    drain_timeout,
+                    strategy_max_surge_count,
+                    skip_validations,
+                ) = prompted_disruption
+                setup_step_index += 1
+                continue
+            setup_step_index += 1
+
+        if target is None or source_component is None or selected_target is None or cluster is None:
+            raise RuntimeError("Upgrade wizard did not resolve the MK8s node-template target.")
+        policy = validate_disruption_policy(disruption_policy)
+        resolved_timeout = resolve_drain_timeout(policy, drain_timeout)
+        resolved_max_surge_count = strategy_max_surge_count
         with ExitStack() as stack:
-            kube_env = _prepare_cluster_handoff_kube_env(
-                generated_config,
-                paths,
-                stack=stack,
-                target=selected_target,
-                persist_local_kubeconfig=False,
-                set_current_context=False,
-            )
-            preflight_findings = collect_kubernetes_preflight_findings(kube_env=kube_env)
-            plan = plan_node_template_upgrade(
-                target=target,
-                cluster=cluster,
-                cluster_id=cluster_id,
-                source_component=source_component,
-                target_version=normalized_to_version,
-                target_os=target_os,
-                target_gpu_stack_preset=target_gpu_stack_preset,
-                disruption_policy=policy,
-                drain_timeout=resolved_timeout,
-                live_node_groups=live_node_groups,
-                compatibility_lookup=executor.compatibility_choices,
-                node_group=_non_empty_text(node_group),
-                preflight_findings=preflight_findings,
-            )
-            repeat_dry_run_command = (
-                _upgrade_node_template_dry_run_command(
-                    config_path=config_path,
-                    target_selector=target.selector,
-                    to_version=normalized_to_version,
-                    to_os=target_os,
-                    to_gpu_stack_preset=target_gpu_stack_preset,
-                    node_group=_non_empty_text(node_group),
+            with _upgrade_discovery_status(
+                "[cyan]Discovering live MK8s state and preparing node-template upgrade plan...[/cyan]"
+            ):
+                kube_env = _prepare_cluster_handoff_kube_env(
+                    generated_config,
+                    paths,
+                    stack=stack,
+                    target=selected_target,
+                    persist_local_kubeconfig=False,
+                    set_current_context=False,
+                )
+                preflight_findings = collect_kubernetes_preflight_findings(kube_env=kube_env)
+                plan = plan_node_template_upgrade(
+                    target=target,
+                    cluster=cluster,
+                    cluster_id=cluster_id,
+                    source_component=source_component,
+                    target_version=normalized_to_version,
+                    target_os=target_os,
+                    target_gpu_stack_preset=target_gpu_stack_preset,
                     disruption_policy=policy,
                     drain_timeout=resolved_timeout,
+                    strategy_max_surge_count=resolved_max_surge_count,
+                    live_node_groups=live_node_groups,
+                    compatibility_lookup=executor.compatibility_choices,
+                    node_group=_non_empty_text(node_group),
+                    preflight_findings=preflight_findings,
                 )
-                if dry_run
-                else None
-            )
+                repeat_dry_run_command = (
+                    _upgrade_node_template_dry_run_command(
+                        config_path=config_path,
+                        target_selector=target.selector,
+                        to_version=normalized_to_version,
+                        to_os=target_os,
+                        to_gpu_stack_preset=target_gpu_stack_preset,
+                        node_group=_non_empty_text(node_group),
+                        disruption_policy=policy,
+                        drain_timeout=resolved_timeout,
+                        strategy_max_surge_count=resolved_max_surge_count,
+                        auto_auth_bootstrap=auto_auth_bootstrap,
+                        skip_validations=skip_validations,
+                        skip_validation=skip_validation,
+                    )
+                    if dry_run
+                    else None
+                )
             _print_upgrade_plan_lines(
                 format_node_template_upgrade_plan(
                     plan,
@@ -4664,6 +5786,22 @@ def upgrade_node_template_command(
                 node_group_keys=selected_group_keys,
                 node_group_versions=final_group_versions,
             )
+
+            def _node_template_request_needed(planned_group: LiveNodeGroup) -> bool:
+                target_drivers_preset = node_template_target_drivers_preset(
+                    planned_group,
+                    target_gpu_stack_preset=target_gpu_stack_preset,
+                )
+                live_driver_matches = (
+                    target_drivers_preset is None
+                    or planned_group.drivers_preset == target_drivers_preset
+                )
+                return (
+                    parse_k8s_version(planned_group.version).minor_text != normalized_to_version
+                    or planned_group.os != target_os
+                    or not live_driver_matches
+                )
+
             if plan.mutates:
                 blockers = blocking_preflight_findings(
                     plan.preflight_findings,
@@ -4676,13 +5814,36 @@ def upgrade_node_template_command(
                     raise RuntimeError(
                         f"Upgrade preflight blockers must be resolved first: {blocker_labels}"
                     )
+                if policy == DISRUPTION_POLICY_SAFE:
+                    _run_node_template_safe_surge_quota_preflight(
+                        source_payload=source_payload,
+                        generated_config=generated_config,
+                        source_component=source_component,
+                        plan=plan,
+                        max_surge_count=resolve_strategy_max_surge_count(
+                            policy,
+                            resolved_max_surge_count,
+                        ),
+                        request_groups=tuple(
+                            group
+                            for group in plan.node_groups
+                            if group.source is not None and _node_template_request_needed(group)
+                        ),
+                    )
             if not plan.mutates and not plan.rollout_incomplete and not source_sync_required:
                 readiness = verify_mk8s_upgrade_plan_ready(
                     executor=executor,
                     plan=plan,
                     label="MK8s node-template upgrade",
                 )
+                report_path, _report_json_path = _write_upgrade_node_template_report(
+                    paths,
+                    plan=plan,
+                    readiness=readiness,
+                    validations=[],
+                )
                 console.print(f"[green]{readiness.summary()}[/green]")
+                console.print(f"MK8s node-template upgrade report: {report_path}", soft_wrap=True)
                 console.print(
                     f"MK8s target {target.selector} is already on Kubernetes "
                     f"{normalized_to_version}, OS {target_os}, and the requested GPU stack."
@@ -4715,28 +5876,16 @@ def upgrade_node_template_command(
                 source_payload,
                 instance_id=target.instance_id,
             )
-            temporary_strategy = terraform_node_group_strategy_for_policy(policy, resolved_timeout)
+            temporary_strategy = terraform_node_group_strategy_for_policy(
+                policy,
+                resolved_timeout,
+                max_surge_count=resolved_max_surge_count,
+            )
             strategy_restore_after_wait = _upgrade_strategy_restore_after_wait(
                 temporary_strategy=temporary_strategy,
                 rollout_incomplete=plan.rollout_incomplete,
                 source_sync_required=source_sync_required,
             )
-
-            def _node_template_request_needed(planned_group: Any) -> bool:
-                target_drivers_preset = node_template_target_drivers_preset(
-                    planned_group,
-                    target_gpu_stack_preset=target_gpu_stack_preset,
-                )
-                live_driver_matches = (
-                    target_drivers_preset is None
-                    or planned_group.drivers_preset == target_drivers_preset
-                )
-                return (
-                    parse_k8s_version(planned_group.version).minor_text
-                    != normalized_to_version
-                    or planned_group.os != target_os
-                    or not live_driver_matches
-                )
 
             node_group_stage_count = sum(
                 1
@@ -4967,7 +6116,14 @@ def upgrade_node_template_command(
                 plan=plan,
                 label="MK8s node-template upgrade",
             )
+            report_path, _report_json_path = _write_upgrade_node_template_report(
+                paths,
+                plan=plan,
+                readiness=readiness,
+                validations=validations,
+            )
             console.print(f"[green]{readiness.summary()}[/green]")
+            console.print(f"MK8s node-template upgrade report: {report_path}", soft_wrap=True)
             console.print(
                 f"[green]MK8s node-template upgrade completed[/green]: "
                 f"{target.selector} -> Kubernetes {normalized_to_version}, OS {target_os}"
@@ -4984,1269 +6140,195 @@ def upgrade_node_template_command(
 
 
 @upgrade_app.command(
-    "os-image",
-    short_help="Upgrade MK8s node-group or generic VM OS images.",
-    epilog=_UPGRADE_OS_IMAGE_EPILOG,
+    "node-group",
+    short_help="Plan an MK8s node-group hardware, preset, or fabric migration.",
+    epilog=(
+        "Example: nebius-cxcli upgrade node-group <config.yaml> infra:mk8s@<target> "
+        "--node-group worker --to-platform gpu-b200-sxm --to-preset 8gpu-160vcpu-1792gb "
+        "--to-fabric fabric-6 --dry-run. Omit --to-fabric for a GPU-cluster node group "
+        "to keep its current fabric. Use upgrade node-template instead for Kubernetes "
+        "version, OS, or Nebius-image GPU stack rolling updates that do not change "
+        "hardware platform, hardware preset, CPU/GPU kind, GPU cluster, or fabric. "
+        "Current --execute --approve writes "
+        "generated/reports/upgrade-node-group-report.md and "
+        "generated/reports/upgrade-node-group-report.json at the approved "
+        "pre-mutation gate."
+    ),
 )
-def upgrade_os_image_command(
+def upgrade_node_group_command(
     config_path: Annotated[
         Path,
         typer.Argument(metavar="CONFIG_YAML", help=_CONFIG_YAML_ARGUMENT_HELP),
     ],
     target_selector: Annotated[
-        str | None,
+        str,
         typer.Argument(
             metavar="TARGET",
-            help=(
-                "Optional target selector, for example infra:mk8s@mk8s or infra:vm@worker. "
-                "Omit to choose interactively."
-            ),
+            help="Target selector, for example infra:mk8s@mk8s.",
         ),
-    ] = None,
+    ],
+    node_group: Annotated[
+        str,
+        typer.Option(
+            "--node-group",
+            help="Concrete MK8s node-group key to migrate.",
+        ),
+    ],
+    to_platform: Annotated[
+        str,
+        typer.Option(
+            "--to-platform",
+            help="Target Compute platform for the replacement node group.",
+        ),
+    ] = "",
+    to_preset: Annotated[
+        str,
+        typer.Option(
+            "--to-preset",
+            help="Target hardware preset for the replacement node group.",
+        ),
+    ] = "",
     to_os: Annotated[
-        str | None,
+        str,
         typer.Option(
             "--to-os",
-            help=(
-                "Target OS image value. For MK8s this is a node template OS such as "
-                "ubuntu24.04; for VM this is source_image_family."
-            ),
+            help="Target OS image for the replacement node group.",
         ),
-    ] = None,
-    node_group: Annotated[
-        str,
-        typer.Option("--node-group", help="Optional concrete node-group name to upgrade."),
     ] = "",
-    dry_run: Annotated[
-        bool,
-        typer.Option(
-            "--dry-run", help="Print the live upgrade plan without writing files or applying."
-        ),
-    ] = False,
-    disruption_policy: Annotated[
-        str,
-        typer.Option(
-            "--strategy",
-            help="Upgrade strategy: zero-surge, safe-surge, or force-delete.",
-        ),
-    ] = DISRUPTION_POLICY_ALLOW_UNAVAILABLE,
-    drain_timeout: Annotated[
-        str,
-        typer.Option(
-            "--drain-timeout",
-            help="Node drain timeout: auto, none, or a Go-style duration such as 10m.",
-        ),
-    ] = "auto",
-    interactive: Annotated[
-        bool,
-        typer.Option(
-            "--interactive/--no-interactive",
-            help="Prompt for missing OS-image target/options when running from a terminal.",
-        ),
-    ] = True,
-) -> None:
-    """Upgrade MK8s node-group or generic VM OS images through Terraform desired state."""
-
-    sdk: Any | None = None
-    warning_cache_token = _DEPLOY_VALIDATION_WARNING_CACHE.set(set())
-    try:
-        guided = not _non_empty_text(target_selector) or not _non_empty_text(to_os)
-        if guided and not interactive:
-            missing = []
-            if not _non_empty_text(target_selector):
-                missing.append("target selector")
-            if not _non_empty_text(to_os):
-                missing.append("--to-os <os>")
-            raise RuntimeError(
-                "Missing "
-                + " and ".join(missing)
-                + ". Pass explicit upgrade options or allow interactive prompting."
-            )
-        if not guided:
-            _resolve_os_image_disruption_request(
-                guided=False,
-                dry_run=dry_run,
-                disruption_policy=disruption_policy,
-                drain_timeout=drain_timeout,
-            )
-
-        source_payload = _load_source_payload(config_path)
-        generated_config, paths, manifest = _load_deploy_context_readonly(config_path)
-        os_target = _prompt_upgrade_os_image_target_selector_if_needed(
-            source_payload=source_payload,
-            manifest=manifest,
-            target_selector=target_selector,
-        )
-        if os_target.component_id == VM_COMPONENT_ID:
-            source_component = find_source_vm_component(source_payload, os_target.instance_id)
-            target_os = _prompt_upgrade_os_image_to_os_if_needed(
-                path_label="upgrade.os_image.to_os",
-                to_os=to_os,
-                choices=_vm_os_image_choices(
-                    source_payload=source_payload,
-                    source_component=source_component,
-                    instance_id=os_target.instance_id,
-                ),
-            )
-            dry_run, policy, resolved_timeout = _resolve_vm_os_image_request_options(
-                guided=guided,
-                dry_run=dry_run,
-                disruption_policy=disruption_policy,
-                drain_timeout=drain_timeout,
-            )
-            request = _OsImageUpgradeRequest(
-                target=os_target,
-                target_os=target_os,
-                node_group=_non_empty_text(node_group),
-                dry_run=dry_run,
-                disruption_policy=policy,
-                drain_timeout=resolved_timeout,
-                guided=guided,
-            )
-            _run_vm_os_image_upgrade(
-                config_path=config_path,
-                source_payload=source_payload,
-                generated_config=generated_config,
-                paths=paths,
-                manifest=manifest,
-                request=request,
-            )
-            return
-
-        target = parse_upgrade_selector(os_target.selector)
-        source_component = find_source_mk8s_component(source_payload, target.instance_id)
-        selected_target = _resolve_managed_mk8s_upgrade_target(
-            manifest,
-            target_instance_id=target.instance_id,
-        )
-
-        project_id = str(generated_config.client_info.nebius.project_id).strip()
-        sdk = init_nebius_sdk(
-            parent_id=project_id or None,
-            endpoint=_non_empty_text(os.environ.get("NEBIUS_ENDPOINT")) or None,
-            context="MK8s OS image upgrade",
-            prefer_operator_auth=True,
-        )
-        executor = Mk8sKubernetesVersionExecutor(sdk)
-        cluster_name = source_mk8s_cluster_name(source_component, fallback=target.instance_id)
-        try:
-            cluster = executor.get_cluster_by_name(project_id=project_id, name=cluster_name)
-        except Exception as exc:
-            raise RuntimeError(
-                f"Could not find live MK8s cluster '{cluster_name}' in project '{project_id}'. "
-                "Deploy the generated MK8s infrastructure before running upgrade os-image."
-            ) from exc
-        cluster_id = _live_mk8s_cluster_id(cluster, cluster_name=cluster_name)
-        selected_target = _managed_mk8s_target_with_cluster_id(
-            selected_target,
-            cluster_id=cluster_id,
-        )
-        live_node_groups = executor.list_node_groups(cluster_id)
-        node_group = _prompt_upgrade_os_image_node_group_if_guided(
-            guided=guided,
-            node_group=node_group,
-        )
-        k8s_version = _cluster_control_plane_minor_version(
-            cluster,
-            cluster_id=cluster_id,
-        )
-        component_path = _dynamic_infra_component_path(
-            source_payload,
-            MK8S_COMPONENT_ID,
-            instance_id=target.instance_id,
-        )
-        component_path_label = _format_payload_path(component_path) if component_path else ""
-        target_os = _prompt_upgrade_os_image_to_os_if_needed(
-            path_label="upgrade.os_image.to_os",
-            to_os=to_os,
-            choices=mk8s_os_image_choices(
-                provider_lookup=ProviderOptionLookup(),
-                source_payload=source_payload,
-                source_component=source_component,
-                component_path_label=component_path_label,
-                k8s_version=k8s_version,
-                live_node_groups=live_node_groups,
-                node_group=node_group,
-            ),
-        )
-        dry_run, policy, resolved_timeout = _resolve_os_image_disruption_request(
-            guided=guided,
-            dry_run=dry_run,
-            disruption_policy=disruption_policy,
-            drain_timeout=drain_timeout,
-        )
-        with ExitStack() as stack:
-            kube_env = _prepare_cluster_handoff_kube_env(
-                generated_config,
-                paths,
-                stack=stack,
-                target=selected_target,
-                persist_local_kubeconfig=False,
-                set_current_context=False,
-            )
-            preflight_findings = collect_kubernetes_preflight_findings(kube_env=kube_env)
-            plan = plan_os_image_upgrade(
-                target=target,
-                cluster=cluster,
-                cluster_id=cluster_id,
-                source_component=source_component,
-                target_os=target_os,
-                disruption_policy=policy,
-                drain_timeout=resolved_timeout,
-                live_node_groups=live_node_groups,
-                compatibility_lookup=executor.compatibility_choices,
-                node_group=node_group,
-                preflight_findings=preflight_findings,
-            )
-            repeat_dry_run_command = (
-                _upgrade_os_image_dry_run_command(
-                    config_path=config_path,
-                    target_selector=target.selector,
-                    to_os=target_os,
-                    node_group=node_group,
-                    disruption_policy=policy,
-                    drain_timeout=resolved_timeout,
-                )
-                if dry_run
-                else None
-            )
-            _print_upgrade_plan_lines(
-                format_os_image_upgrade_plan(
-                    plan,
-                    dry_run=dry_run,
-                    repeat_dry_run_command=repeat_dry_run_command,
-                )
-            )
-
-            if dry_run:
-                return
-            if plan.compatibility_failures:
-                raise RuntimeError(
-                    "OS image upgrade is blocked by the live Nebius MK8s "
-                    "compatibility matrix. Apply the listed node-layer follow-up, "
-                    "then rerun upgrade os-image."
-                )
-
-            source_group_keys = tuple(
-                group.source.key for group in plan.node_groups if group.source is not None
-            )
-            source_sync_payload = copy.deepcopy(source_payload)
-            source_sync_required = update_source_node_group_os(
-                source_sync_payload,
-                instance_id=target.instance_id,
-                target_os=target_os,
-                node_group_keys=source_group_keys,
-            )
-            if plan.mutates:
-                blockers = blocking_preflight_findings(
-                    plan.preflight_findings,
-                    disruption_policy=policy,
-                )
-                if blockers:
-                    blocker_labels = ", ".join(
-                        f"{finding.kind}:{finding.namespace}/{finding.name}" for finding in blockers
-                    )
-                    raise RuntimeError(
-                        f"Upgrade preflight blockers must be resolved first: {blocker_labels}"
-                    )
-            if not plan.mutates and not plan.rollout_incomplete and not source_sync_required:
-                readiness = verify_mk8s_upgrade_plan_ready(
-                    executor=executor,
-                    plan=plan,
-                    label="MK8s OS image upgrade",
-                )
-                console.print(f"[green]{readiness.summary()}[/green]")
-                console.print(f"MK8s target {target.selector} is already on OS image {target_os}.")
-                return
-            if not plan.mutates and not plan.rollout_incomplete and source_sync_required:
-                console.print(
-                    "Live MK8s node groups are already on the requested OS image; "
-                    "reconciling config.yaml and generated Terraform so desired state "
-                    "stays authoritative."
-                )
-            if not plan.mutates and plan.rollout_incomplete:
-                console.print(
-                    "MK8s OS image is already requested on the live node groups; "
-                    "waiting for the in-progress node-group rollout to finish."
-                )
-
-            _run_generated_bundle_validation(
-                generated_config,
-                paths,
-                auto_auth_bootstrap=True,
-                title="OS image upgrade preflight",
-                quota_phase="upgrade",
-                flux_command_name="upgrade",
-                manifest=manifest,
-                prompt_mysterybox_payload_values=False,
-            )
-
-            original_strategies = source_node_group_strategy_snapshot(
-                source_payload,
-                instance_id=target.instance_id,
-            )
-            temporary_strategy = terraform_node_group_strategy_for_policy(
-                policy,
-                resolved_timeout,
-            )
-            strategy_restore_after_wait = _upgrade_strategy_restore_after_wait(
-                temporary_strategy=temporary_strategy,
-                rollout_incomplete=plan.rollout_incomplete,
-                source_sync_required=source_sync_required,
-            )
-            node_group_stage_count = sum(
-                1 for planned_group in plan.node_groups if planned_group.os != target_os
-            )
-            planned_stage_count, extra_stage_summaries = _upgrade_planned_stage_count(
-                node_group_stage_count=node_group_stage_count,
-                source_sync_required=source_sync_required,
-                strategy_restore_after_wait=strategy_restore_after_wait,
-                temporary_strategy=temporary_strategy,
-            )
-            if planned_stage_count:
-                stage_summaries = [
-                    f"{node_group_stage_count} node-group stage(s)",
-                    *extra_stage_summaries,
-                ]
-                console.print(
-                    "OS image upgrade execution stages are per node group, not per node: "
-                    + ", ".join(stage_summaries)
-                    + ".",
-                    soft_wrap=True,
-                )
-            stage_number = 0
-            stage_applied = False
-            waited_for_existing_rollout = False
-
-            def _stage_strategy(active_group_key: str | None = None) -> bool:
-                if temporary_strategy is None:
-                    return False
-                strategies = dict(original_strategies)
-                if active_group_key:
-                    strategies[active_group_key] = temporary_strategy
-                return set_source_node_group_strategies(
-                    source_payload,
-                    instance_id=target.instance_id,
-                    strategies=strategies,
-                )
-
-            def _render_validate_apply_stage(
-                title: str,
-            ) -> tuple[Any, ProjectPaths, Mapping[str, Any]]:
-                nonlocal stage_applied, stage_number
-                stage_number += 1
-                stage_label = (
-                    f"stage {stage_number}/{planned_stage_count}"
-                    if planned_stage_count
-                    else f"stage {stage_number}"
-                )
-                config_path.write_text(
-                    render_updated_source_payload(source_payload),
-                    encoding="utf-8",
-                )
-                console.print(f"Updated {config_path} for {stage_label}: {title}.", soft_wrap=True)
-                _run_internal_render_command(config_path, force=True)
-                staged_config, staged_paths, staged_manifest = _load_deploy_context(config_path)
-                mysterybox_payload_env = _run_generated_bundle_validation(
-                    staged_config,
-                    staged_paths,
-                    auto_auth_bootstrap=True,
-                    title=f"Validate rendered {stage_label}: {title}",
-                    quota_phase="upgrade",
-                    flux_command_name="upgrade",
-                    manifest=staged_manifest,
-                    prompt_mysterybox_payload_values=False,
-                )
-                status_watchers = _manifest_status_watchers(
-                    staged_manifest
-                ) or _enabled_status_watcher_specs(staged_config)
-                apply_kwargs: dict[str, Any] = {
-                    "initialize": False,
-                    "run_mk8s_preflight": False,
-                }
-                if status_watchers:
-                    apply_kwargs["status_watchers"] = status_watchers
-                if mysterybox_payload_env:
-                    apply_kwargs["extra_env"] = mysterybox_payload_env
-                plan_env = _terraform_runtime_env(staged_config)
-                if mysterybox_payload_env:
-                    plan_env.update(mysterybox_payload_env)
-                console.print(f"Planning Terraform {stage_label}: {title}.", soft_wrap=True)
-                terraform_plan(staged_paths.infra_dir, extra_env=plan_env, quiet=True)
-                console.print(f"Applying Terraform {stage_label}: {title}.", soft_wrap=True)
-                _run_terraform_apply_with_status(staged_config, staged_paths, **apply_kwargs)
-                stage_applied = True
-                return staged_config, staged_paths, staged_manifest
-
-            def _restore_temporary_strategy_files_after_error() -> None:
-                if temporary_strategy is None:
-                    return
-                try:
-                    restored = set_source_node_group_strategies(
-                        source_payload,
-                        instance_id=target.instance_id,
-                        strategies=original_strategies,
-                    )
-                    if restored:
-                        config_path.write_text(
-                            render_updated_source_payload(source_payload),
-                            encoding="utf-8",
-                        )
-                        _run_internal_render_command(config_path, force=True)
-                        console.print(
-                            "Restored temporary node-group upgrade strategy in config.yaml "
-                            "and generated/ after failed OS image stage."
-                        )
-                except Exception as cleanup_exc:
-                    console.print(
-                        "[yellow]Could not restore temporary node-group upgrade strategy "
-                        f"after failed OS image stage:[/yellow] {cleanup_exc}"
-                    )
-
-            try:
-                for planned_group in plan.node_groups:
-                    if planned_group.source is None:
-                        raise RuntimeError(
-                            f"Live node group '{planned_group.name}' is not declared in config.yaml; "
-                            "cxcli cannot safely upgrade it through Terraform."
-                        )
-                    group_key = planned_group.source.key
-                    if planned_group.os == target_os:
-                        if not node_group_os_rollout_complete(
-                            planned_group.raw,
-                            os=target_os,
-                        ):
-                            wait_for_os_image_rollout(
-                                executor=executor,
-                                plan=plan,
-                                planned_group=planned_group,
-                            )
-                            waited_for_existing_rollout = True
-                        continue
-                    update_source_node_group_os(
-                        source_payload,
-                        instance_id=target.instance_id,
-                        target_os=target_os,
-                        node_group_keys=(group_key,),
-                    )
-                    _stage_strategy(group_key)
-                    generated_config, paths, manifest = _render_validate_apply_stage(
-                        f"node-group {planned_group.name} OS image upgrade to {target_os}"
-                    )
-                    wait_for_os_image_rollout(
-                        executor=executor,
-                        plan=plan,
-                        planned_group=planned_group,
-                    )
-
-                final_os_changed = update_source_node_group_os(
-                    source_payload,
-                    instance_id=target.instance_id,
-                    target_os=target_os,
-                    node_group_keys=source_group_keys,
-                )
-                strategy_restored = _stage_strategy(None)
-                strategy_restore_required = _upgrade_strategy_restore_required(
-                    strategy_restore_after_wait=strategy_restore_after_wait,
-                    waited_for_existing_rollout=waited_for_existing_rollout,
-                    stage_applied=stage_applied,
-                )
-                if (
-                    final_os_changed
-                    or strategy_restored
-                    or strategy_restore_required
-                    or (source_sync_required and not stage_applied)
-                ):
-                    stage_title = _upgrade_final_stage_title(
-                        strategy_restored=strategy_restored,
-                        strategy_restore_required=strategy_restore_required,
-                        source_sync_title=f"source OS image sync to {target_os}",
-                    )
-                    generated_config, paths, manifest = _render_validate_apply_stage(stage_title)
-            except Exception:
-                _restore_temporary_strategy_files_after_error()
-                raise
-
-            readiness = verify_mk8s_upgrade_plan_ready(
-                executor=executor,
-                plan=plan,
-                label="MK8s OS image upgrade",
-            )
-            console.print(f"[green]{readiness.summary()}[/green]")
-            console.print(
-                f"[green]MK8s OS image upgrade completed[/green]: {target.selector} -> {target_os}"
-            )
-    except typer.Exit:
-        raise
-    except Exception as exc:  # pragma: no cover - CLI surface
-        _exit_with_error(exc)
-    finally:
-        _DEPLOY_VALIDATION_WARNING_CACHE.reset(warning_cache_token)
-        if sdk is not None:
-            with suppress(Exception):
-                sdk.sync_close()
-
-
-def _run_mk8s_node_layer_upgrade_command(
-    *,
-    config_path: Path,
-    spec: NodeLayerUpgradeSpec,
-    target_selector: str | None,
-    target_value: str | None,
-    option_name: str,
-    path_prefix: str,
-    node_group: str,
-    dry_run: bool,
-    disruption_policy: str,
-    drain_timeout: str,
-    interactive: bool,
-) -> None:
-    """Run one MK8s node-template layer upgrade command."""
-
-    sdk: Any | None = None
-    warning_cache_token = _DEPLOY_VALIDATION_WARNING_CACHE.set(set())
-    try:
-        guided = not _non_empty_text(target_selector) or not _non_empty_text(target_value)
-        if guided and not interactive:
-            missing = []
-            if not _non_empty_text(target_selector):
-                missing.append("target selector")
-            if not _non_empty_text(target_value):
-                missing.append(f"{option_name} <value>")
-            raise RuntimeError(
-                "Missing "
-                + " and ".join(missing)
-                + ". Pass explicit upgrade options or allow interactive prompting."
-            )
-        if not guided:
-            _resolve_os_image_disruption_request(
-                guided=False,
-                dry_run=dry_run,
-                disruption_policy=disruption_policy,
-                drain_timeout=drain_timeout,
-                path_prefix=path_prefix,
-            )
-
-        source_payload = _load_source_payload(config_path)
-        generated_config, paths, manifest = _load_deploy_context_readonly(config_path)
-        resolved_selector = _prompt_upgrade_k8s_target_selector_if_needed(
-            manifest=manifest,
-            target_selector=target_selector,
-            path_label=f"{path_prefix}.target",
-        )
-        target = parse_upgrade_selector(resolved_selector)
-        source_component = find_source_mk8s_component(source_payload, target.instance_id)
-        selected_target = _resolve_managed_mk8s_upgrade_target(
-            manifest,
-            target_instance_id=target.instance_id,
-        )
-
-        project_id = str(generated_config.client_info.nebius.project_id).strip()
-        sdk = init_nebius_sdk(
-            parent_id=project_id or None,
-            endpoint=_non_empty_text(os.environ.get("NEBIUS_ENDPOINT")) or None,
-            context=f"MK8s {spec.target_label} upgrade",
-            prefer_operator_auth=True,
-        )
-        executor = Mk8sKubernetesVersionExecutor(sdk)
-        cluster_name = source_mk8s_cluster_name(source_component, fallback=target.instance_id)
-        try:
-            cluster = executor.get_cluster_by_name(project_id=project_id, name=cluster_name)
-        except Exception as exc:
-            raise RuntimeError(
-                f"Could not find live MK8s cluster '{cluster_name}' in project '{project_id}'. "
-                f"Deploy the generated MK8s infrastructure before running upgrade {spec.command}."
-            ) from exc
-        cluster_id = _live_mk8s_cluster_id(cluster, cluster_name=cluster_name)
-        selected_target = _managed_mk8s_target_with_cluster_id(
-            selected_target,
-            cluster_id=cluster_id,
-        )
-        live_node_groups = executor.list_node_groups(cluster_id)
-        node_group = _prompt_upgrade_node_group_if_guided(
-            path_prefix=path_prefix,
-            guided=guided,
-            node_group=node_group,
-        )
-        k8s_version = _cluster_control_plane_minor_version(
-            cluster,
-            cluster_id=cluster_id,
-        )
-        component_path = _dynamic_infra_component_path(
-            source_payload,
-            MK8S_COMPONENT_ID,
-            instance_id=target.instance_id,
-        )
-        component_path_label = _format_payload_path(component_path) if component_path else ""
-        nebius_info = getattr(generated_config.client_info, "nebius", None)
-        choices = node_layer_value_choices(
-            provider_lookup=ProviderOptionLookup(),
-            source_payload=source_payload,
-            source_component=source_component,
-            component_path_label=component_path_label,
-            project_id=project_id,
-            tenant_id=_non_empty_text(getattr(nebius_info, "tenant_id", None)),
-            region_id=_non_empty_text(getattr(nebius_info, "region_id", None)),
-            k8s_version=k8s_version,
-            spec=spec,
-            live_node_groups=live_node_groups,
-            node_group=node_group,
-        )
-        resolved_value = _prompt_upgrade_node_layer_target_value_if_needed(
-            path_label=_upgrade_node_layer_path_label(path_prefix, option_name),
-            value=target_value,
-            option_name=option_name,
-            choices=choices,
-        )
-        dry_run, policy, resolved_timeout = _resolve_os_image_disruption_request(
-            guided=guided,
-            dry_run=dry_run,
-            disruption_policy=disruption_policy,
-            drain_timeout=drain_timeout,
-            path_prefix=path_prefix,
-        )
-        request = _NodeLayerUpgradeRequest(
-            target_selector=target.selector,
-            target_value=resolved_value,
-            node_group=node_group,
-            dry_run=dry_run,
-            disruption_policy=policy,
-            drain_timeout=resolved_timeout,
-            guided=guided,
-        )
-
-        with ExitStack() as stack:
-            kube_env = _prepare_cluster_handoff_kube_env(
-                generated_config,
-                paths,
-                stack=stack,
-                target=selected_target,
-                persist_local_kubeconfig=False,
-                set_current_context=False,
-            )
-            preflight_findings = collect_kubernetes_preflight_findings(kube_env=kube_env)
-            plan = plan_node_layer_upgrade(
-                target=target,
-                cluster=cluster,
-                cluster_id=cluster_id,
-                source_component=source_component,
-                spec=spec,
-                target_value=request.target_value,
-                disruption_policy=request.disruption_policy,
-                drain_timeout=request.drain_timeout,
-                live_node_groups=live_node_groups,
-                compatibility_lookup=executor.compatibility_choices,
-                node_group=request.node_group,
-                preflight_findings=preflight_findings,
-            )
-            repeat_dry_run_command = (
-                _upgrade_node_layer_dry_run_command(
-                    config_path=config_path,
-                    command=spec.command,
-                    target_selector=request.target_selector,
-                    option_name=option_name,
-                    target_value=request.target_value,
-                    node_group=request.node_group,
-                    disruption_policy=request.disruption_policy,
-                    drain_timeout=request.drain_timeout,
-                )
-                if request.dry_run
-                else None
-            )
-            _print_upgrade_plan_lines(
-                format_node_layer_upgrade_plan(
-                    plan,
-                    dry_run=request.dry_run,
-                    repeat_dry_run_command=repeat_dry_run_command,
-                )
-            )
-
-            if request.dry_run:
-                return
-            if plan.compatibility_failures:
-                raise RuntimeError(
-                    f"{spec.target_label} upgrade is blocked by the live Nebius MK8s "
-                    "compatibility matrix. Apply the listed node-layer follow-up, "
-                    f"then rerun upgrade {spec.command}."
-                )
-
-            source_group_keys = tuple(
-                group.source.key for group in plan.node_groups if group.source is not None
-            )
-            source_sync_payload = copy.deepcopy(source_payload)
-            source_sync_required = update_source_node_group_field(
-                source_sync_payload,
-                instance_id=target.instance_id,
-                field=spec.source_field,
-                value=request.target_value,
-                node_group_keys=source_group_keys,
-            )
-            if plan.mutates:
-                blockers = blocking_preflight_findings(
-                    plan.preflight_findings,
-                    disruption_policy=request.disruption_policy,
-                )
-                if blockers:
-                    blocker_labels = ", ".join(
-                        f"{finding.kind}:{finding.namespace}/{finding.name}" for finding in blockers
-                    )
-                    raise RuntimeError(
-                        f"Upgrade preflight blockers must be resolved first: {blocker_labels}"
-                    )
-            if not plan.mutates and not plan.rollout_incomplete and not source_sync_required:
-                readiness = verify_mk8s_upgrade_plan_ready(
-                    executor=executor,
-                    plan=plan,
-                    label=f"MK8s {spec.target_label} upgrade",
-                )
-                console.print(f"[green]{readiness.summary()}[/green]")
-                console.print(
-                    f"MK8s target {target.selector} is already on {spec.target_label} "
-                    f"{request.target_value}."
-                )
-                return
-            if not plan.mutates and not plan.rollout_incomplete and source_sync_required:
-                console.print(
-                    f"Live MK8s node groups already use the requested {spec.target_label}; "
-                    "reconciling config.yaml and generated Terraform so desired state "
-                    "stays authoritative."
-                )
-            if not plan.mutates and plan.rollout_incomplete:
-                console.print(
-                    f"MK8s {spec.target_label} is already requested on the live node groups; "
-                    "waiting for the in-progress node-group rollout to finish."
-                )
-
-            _run_generated_bundle_validation(
-                generated_config,
-                paths,
-                auto_auth_bootstrap=True,
-                title=f"{spec.target_label} upgrade preflight",
-                quota_phase="upgrade",
-                flux_command_name="upgrade",
-                manifest=manifest,
-                prompt_mysterybox_payload_values=False,
-            )
-
-            original_strategies = source_node_group_strategy_snapshot(
-                source_payload,
-                instance_id=target.instance_id,
-            )
-            temporary_strategy = terraform_node_group_strategy_for_policy(
-                request.disruption_policy,
-                request.drain_timeout,
-            )
-            strategy_restore_after_wait = _upgrade_strategy_restore_after_wait(
-                temporary_strategy=temporary_strategy,
-                rollout_incomplete=plan.rollout_incomplete,
-                source_sync_required=source_sync_required,
-            )
-            node_group_stage_count = sum(
-                1
-                for planned_group in plan.node_groups
-                if (
-                    planned_group.source is not None
-                    and _non_empty_text(getattr(planned_group, spec.live_field, ""))
-                    != request.target_value
-                )
-            )
-            planned_stage_count, extra_stage_summaries = _upgrade_planned_stage_count(
-                node_group_stage_count=node_group_stage_count,
-                source_sync_required=source_sync_required,
-                strategy_restore_after_wait=strategy_restore_after_wait,
-                temporary_strategy=temporary_strategy,
-            )
-            if planned_stage_count:
-                stage_summaries = [
-                    f"{node_group_stage_count} node-group stage(s)",
-                    *extra_stage_summaries,
-                ]
-                console.print(
-                    f"{spec.target_label} upgrade execution stages are per node group, "
-                    "not per node: " + ", ".join(stage_summaries) + ".",
-                    soft_wrap=True,
-                )
-            stage_number = 0
-            stage_applied = False
-            waited_for_existing_rollout = False
-
-            def _stage_strategy(active_group_key: str | None = None) -> bool:
-                if temporary_strategy is None:
-                    return False
-                strategies = dict(original_strategies)
-                if active_group_key:
-                    strategies[active_group_key] = temporary_strategy
-                return set_source_node_group_strategies(
-                    source_payload,
-                    instance_id=target.instance_id,
-                    strategies=strategies,
-                )
-
-            def _render_validate_apply_stage(
-                title: str,
-            ) -> tuple[Any, ProjectPaths, Mapping[str, Any]]:
-                nonlocal stage_applied, stage_number
-                stage_number += 1
-                stage_label = (
-                    f"stage {stage_number}/{planned_stage_count}"
-                    if planned_stage_count
-                    else f"stage {stage_number}"
-                )
-                config_path.write_text(
-                    render_updated_source_payload(source_payload),
-                    encoding="utf-8",
-                )
-                console.print(f"Updated {config_path} for {stage_label}: {title}.", soft_wrap=True)
-                _run_internal_render_command(config_path, force=True)
-                staged_config, staged_paths, staged_manifest = _load_deploy_context(config_path)
-                mysterybox_payload_env = _run_generated_bundle_validation(
-                    staged_config,
-                    staged_paths,
-                    auto_auth_bootstrap=True,
-                    title=f"Validate rendered {stage_label}: {title}",
-                    quota_phase="upgrade",
-                    flux_command_name="upgrade",
-                    manifest=staged_manifest,
-                    prompt_mysterybox_payload_values=False,
-                )
-                status_watchers = _manifest_status_watchers(
-                    staged_manifest
-                ) or _enabled_status_watcher_specs(staged_config)
-                apply_kwargs: dict[str, Any] = {
-                    "initialize": False,
-                    "run_mk8s_preflight": False,
-                }
-                if status_watchers:
-                    apply_kwargs["status_watchers"] = status_watchers
-                if mysterybox_payload_env:
-                    apply_kwargs["extra_env"] = mysterybox_payload_env
-                plan_env = _terraform_runtime_env(staged_config)
-                if mysterybox_payload_env:
-                    plan_env.update(mysterybox_payload_env)
-                console.print(f"Planning Terraform {stage_label}: {title}.", soft_wrap=True)
-                terraform_plan(staged_paths.infra_dir, extra_env=plan_env, quiet=True)
-                console.print(f"Applying Terraform {stage_label}: {title}.", soft_wrap=True)
-                _run_terraform_apply_with_status(staged_config, staged_paths, **apply_kwargs)
-                stage_applied = True
-                return staged_config, staged_paths, staged_manifest
-
-            def _restore_temporary_strategy_files_after_error() -> None:
-                if temporary_strategy is None:
-                    return
-                try:
-                    restored = set_source_node_group_strategies(
-                        source_payload,
-                        instance_id=target.instance_id,
-                        strategies=original_strategies,
-                    )
-                    if restored:
-                        config_path.write_text(
-                            render_updated_source_payload(source_payload),
-                            encoding="utf-8",
-                        )
-                        _run_internal_render_command(config_path, force=True)
-                        console.print(
-                            "Restored temporary node-group upgrade strategy in config.yaml "
-                            f"and generated/ after failed {spec.target_label} stage."
-                        )
-                except Exception as cleanup_exc:
-                    console.print(
-                        "[yellow]Could not restore temporary node-group upgrade strategy "
-                        f"after failed {spec.target_label} stage:[/yellow] {cleanup_exc}"
-                    )
-
-            try:
-                for planned_group in plan.node_groups:
-                    if planned_group.source is None:
-                        raise RuntimeError(
-                            f"Live node group '{planned_group.name}' is not declared in config.yaml; "
-                            "cxcli cannot safely upgrade it through Terraform."
-                        )
-                    group_key = planned_group.source.key
-                    if node_group_layer_rollout_complete(
-                        planned_group.raw,
-                        field=spec.live_field,
-                        value=request.target_value,
-                    ):
-                        continue
-                    if (
-                        _non_empty_text(getattr(planned_group, spec.live_field, ""))
-                        == request.target_value
-                    ):
-                        wait_for_node_layer_rollout(
-                            executor=executor,
-                            plan=plan,
-                            planned_group=planned_group,
-                        )
-                        waited_for_existing_rollout = True
-                        continue
-                    update_source_node_group_field(
-                        source_payload,
-                        instance_id=target.instance_id,
-                        field=spec.source_field,
-                        value=request.target_value,
-                        node_group_keys=(group_key,),
-                    )
-                    _stage_strategy(group_key)
-                    generated_config, paths, manifest = _render_validate_apply_stage(
-                        f"node-group {planned_group.name} {spec.target_label} upgrade to "
-                        f"{request.target_value}"
-                    )
-                    wait_for_node_layer_rollout(
-                        executor=executor,
-                        plan=plan,
-                        planned_group=planned_group,
-                    )
-
-                final_changed = update_source_node_group_field(
-                    source_payload,
-                    instance_id=target.instance_id,
-                    field=spec.source_field,
-                    value=request.target_value,
-                    node_group_keys=source_group_keys,
-                )
-                strategy_restored = _stage_strategy(None)
-                strategy_restore_required = _upgrade_strategy_restore_required(
-                    strategy_restore_after_wait=strategy_restore_after_wait,
-                    waited_for_existing_rollout=waited_for_existing_rollout,
-                    stage_applied=stage_applied,
-                )
-                if (
-                    final_changed
-                    or strategy_restored
-                    or strategy_restore_required
-                    or (source_sync_required and not stage_applied)
-                ):
-                    stage_title = _upgrade_final_stage_title(
-                        strategy_restored=strategy_restored,
-                        strategy_restore_required=strategy_restore_required,
-                        source_sync_title=f"source {spec.target_label} sync to {request.target_value}",
-                    )
-                    generated_config, paths, manifest = _render_validate_apply_stage(stage_title)
-            except Exception:
-                _restore_temporary_strategy_files_after_error()
-                raise
-
-            readiness = verify_mk8s_upgrade_plan_ready(
-                executor=executor,
-                plan=plan,
-                label=f"MK8s {spec.target_label} upgrade",
-            )
-            console.print(f"[green]{readiness.summary()}[/green]")
-            console.print(
-                f"[green]MK8s {spec.target_label} upgrade completed[/green]: "
-                f"{target.selector} -> {request.target_value}"
-            )
-    except typer.Exit:
-        raise
-    except Exception as exc:  # pragma: no cover - CLI surface
-        _exit_with_error(exc)
-    finally:
-        _DEPLOY_VALIDATION_WARNING_CACHE.reset(warning_cache_token)
-        if sdk is not None:
-            with suppress(Exception):
-                sdk.sync_close()
-
-
-@upgrade_app.command(
-    "gpu-stack-preset",
-    short_help="Upgrade MK8s GPU node-group GPU stack presets.",
-    epilog=(
-        "Example: nebius-cxcli upgrade gpu-stack-preset <config.yaml> "
-        "infra:mk8s@<target> --to-gpu-stack-preset cuda13.0 --dry-run. "
-        "Non-dry runs finish with a final MK8s readiness check against the live "
-        "selected node groups."
-    ),
-)
-def upgrade_gpu_stack_preset_command(
-    config_path: Annotated[
-        Path,
-        typer.Argument(metavar="CONFIG_YAML", help=_CONFIG_YAML_ARGUMENT_HELP),
-    ],
-    target_selector: Annotated[
-        str | None,
-        typer.Argument(
-            metavar="TARGET",
-            help="Optional target selector, for example infra:mk8s@mk8s.",
-        ),
-    ] = None,
     to_gpu_stack_preset: Annotated[
-        str | None,
+        str,
         typer.Option(
             "--to-gpu-stack-preset",
-            help="Target Nebius GPU stack/drivers_preset value, for example cuda13.0.",
+            help=(
+                "Target Nebius-image GPU stack preset when hardware migration should also "
+                "change the replacement GPU node image."
+            ),
         ),
-    ] = None,
-    node_group: Annotated[
-        str,
-        typer.Option("--node-group", help="Optional concrete GPU node-group name to upgrade."),
     ] = "",
-    dry_run: Annotated[
-        bool,
-        typer.Option("--dry-run", help="Print the upgrade plan without writing files or applying."),
-    ] = False,
-    disruption_policy: Annotated[
+    to_fabric: Annotated[
         str,
         typer.Option(
-            "--strategy",
-            help="Upgrade strategy: zero-surge, safe-surge, or force-delete.",
+            "--to-fabric",
+            help=(
+                "Optional target InfiniBand fabric. Omit for GPU-cluster node groups to "
+                "keep the current fabric; CPU and non-InfiniBand GPU groups reject it."
+            ),
         ),
-    ] = DISRUPTION_POLICY_ALLOW_UNAVAILABLE,
-    drain_timeout: Annotated[
-        str,
-        typer.Option(
-            "--drain-timeout",
-            help="Node drain timeout: auto, none, or a Go-style duration such as 10m.",
-        ),
-    ] = "auto",
-    interactive: Annotated[
-        bool,
-        typer.Option(
-            "--interactive/--no-interactive",
-            help="Prompt for missing GPU stack preset upgrade flags when running from a terminal.",
-        ),
-    ] = True,
-) -> None:
-    _run_mk8s_node_layer_upgrade_command(
-        config_path=config_path,
-        spec=_NODE_LAYER_UPGRADE_SPECS["gpu-stack-preset"],
-        target_selector=target_selector,
-        target_value=to_gpu_stack_preset,
-        option_name="--to-gpu-stack-preset",
-        path_prefix="upgrade.gpu_stack_preset",
-        node_group=node_group,
-        dry_run=dry_run,
-        disruption_policy=disruption_policy,
-        drain_timeout=drain_timeout,
-        interactive=interactive,
-    )
-
-
-@upgrade_app.command(
-    "platform",
-    short_help="Upgrade MK8s node-group platforms.",
-    epilog=(
-        "Example: nebius-cxcli upgrade platform <config.yaml> "
-        "infra:mk8s@<target> --to-platform cpu-d3 --node-group worker --dry-run. "
-        "Non-dry runs finish with a final MK8s readiness check against the live "
-        "selected node groups."
-    ),
-)
-def upgrade_platform_command(
-    config_path: Annotated[
-        Path,
-        typer.Argument(metavar="CONFIG_YAML", help=_CONFIG_YAML_ARGUMENT_HELP),
-    ],
-    target_selector: Annotated[
-        str | None,
-        typer.Argument(
-            metavar="TARGET",
-            help="Optional target selector, for example infra:mk8s@mk8s.",
-        ),
-    ] = None,
-    to_platform: Annotated[
-        str | None,
-        typer.Option("--to-platform", help="Target node platform, for example cpu-d3."),
-    ] = None,
-    node_group: Annotated[
-        str,
-        typer.Option("--node-group", help="Optional concrete node-group name to migrate."),
     ] = "",
     dry_run: Annotated[
         bool,
         typer.Option(
-            "--dry-run", help="Print the migration plan without writing files or applying."
-        ),
-    ] = False,
-    disruption_policy: Annotated[
-        str,
-        typer.Option(
-            "--strategy",
-            help="Upgrade strategy: zero-surge, safe-surge, or force-delete.",
-        ),
-    ] = DISRUPTION_POLICY_ALLOW_UNAVAILABLE,
-    drain_timeout: Annotated[
-        str,
-        typer.Option(
-            "--drain-timeout",
-            help="Node drain timeout: auto, none, or a Go-style duration such as 10m.",
-        ),
-    ] = "auto",
-    interactive: Annotated[
-        bool,
-        typer.Option(
-            "--interactive/--no-interactive",
-            help="Prompt for missing platform upgrade flags when running from a terminal.",
+            "--dry-run/--execute",
+            help=(
+                "Use --dry-run for the read-only migration plan. Use --execute --approve only "
+                "after accepting that plan; current execute writes an approved pre-mutation "
+                "checkpoint and stops before live replacement/cutover/retirement."
+            ),
         ),
     ] = True,
-) -> None:
-    _run_mk8s_node_layer_upgrade_command(
-        config_path=config_path,
-        spec=_NODE_LAYER_UPGRADE_SPECS["platform"],
-        target_selector=target_selector,
-        target_value=to_platform,
-        option_name="--to-platform",
-        path_prefix="upgrade.platform",
-        node_group=node_group,
-        dry_run=dry_run,
-        disruption_policy=disruption_policy,
-        drain_timeout=drain_timeout,
-        interactive=interactive,
-    )
-
-
-@upgrade_app.command(
-    "cpu-preset",
-    short_help="Upgrade MK8s CPU/system node-group presets.",
-    epilog=(
-        "Example: nebius-cxcli upgrade cpu-preset <config.yaml> "
-        "infra:mk8s@<target> --to-preset <preset> --node-group system --dry-run. "
-        "Non-dry runs finish with a final MK8s readiness check against the live "
-        "selected node groups."
-    ),
-)
-def upgrade_cpu_preset_command(
-    config_path: Annotated[
-        Path,
-        typer.Argument(metavar="CONFIG_YAML", help=_CONFIG_YAML_ARGUMENT_HELP),
-    ],
-    target_selector: Annotated[
-        str | None,
-        typer.Argument(
-            metavar="TARGET",
-            help="Optional target selector, for example infra:mk8s@mk8s.",
-        ),
-    ] = None,
-    to_preset: Annotated[
-        str | None,
-        typer.Option("--to-preset", help="Target CPU hardware preset."),
-    ] = None,
-    node_group: Annotated[
-        str,
-        typer.Option("--node-group", help="Optional concrete CPU node-group name to migrate."),
-    ] = "",
-    dry_run: Annotated[
+    approve: Annotated[
         bool,
         typer.Option(
-            "--dry-run", help="Print the migration plan without writing files or applying."
+            "--approve/--no-approve",
+            help="Required with --execute before the approved pre-mutation checkpoint is written.",
         ),
     ] = False,
-    disruption_policy: Annotated[
-        str,
-        typer.Option(
-            "--strategy",
-            help="Upgrade strategy: zero-surge, safe-surge, or force-delete.",
-        ),
-    ] = DISRUPTION_POLICY_ALLOW_UNAVAILABLE,
-    drain_timeout: Annotated[
-        str,
-        typer.Option(
-            "--drain-timeout",
-            help="Node drain timeout: auto, none, or a Go-style duration such as 10m.",
-        ),
-    ] = "auto",
-    interactive: Annotated[
-        bool,
-        typer.Option(
-            "--interactive/--no-interactive",
-            help="Prompt for missing CPU preset upgrade flags when running from a terminal.",
-        ),
-    ] = True,
 ) -> None:
-    _run_mk8s_node_layer_upgrade_command(
-        config_path=config_path,
-        spec=_NODE_LAYER_UPGRADE_SPECS["cpu-preset"],
-        target_selector=target_selector,
-        target_value=to_preset,
-        option_name="--to-preset",
-        path_prefix="upgrade.cpu_preset",
-        node_group=node_group,
-        dry_run=dry_run,
-        disruption_policy=disruption_policy,
-        drain_timeout=drain_timeout,
-        interactive=interactive,
-    )
+    """Plan an explicit Terraform-managed node-group migration."""
 
-
-@upgrade_app.command(
-    "gpu-preset",
-    short_help="Upgrade MK8s GPU node-group hardware presets.",
-    epilog=(
-        "Example: nebius-cxcli upgrade gpu-preset <config.yaml> "
-        "infra:mk8s@<target> --to-preset <preset> --node-group worker --dry-run. "
-        "Non-dry runs finish with a final MK8s readiness check against the live "
-        "selected node groups."
-    ),
-)
-def upgrade_gpu_preset_command(
-    config_path: Annotated[
-        Path,
-        typer.Argument(metavar="CONFIG_YAML", help=_CONFIG_YAML_ARGUMENT_HELP),
-    ],
-    target_selector: Annotated[
-        str | None,
-        typer.Argument(
-            metavar="TARGET",
-            help="Optional target selector, for example infra:mk8s@mk8s.",
-        ),
-    ] = None,
-    to_preset: Annotated[
-        str | None,
-        typer.Option("--to-preset", help="Target GPU hardware preset."),
-    ] = None,
-    node_group: Annotated[
-        str,
-        typer.Option("--node-group", help="Optional concrete GPU node-group name to migrate."),
-    ] = "",
-    dry_run: Annotated[
-        bool,
-        typer.Option(
-            "--dry-run", help="Print the migration plan without writing files or applying."
-        ),
-    ] = False,
-    disruption_policy: Annotated[
-        str,
-        typer.Option(
-            "--strategy",
-            help="Upgrade strategy: zero-surge, safe-surge, or force-delete.",
-        ),
-    ] = DISRUPTION_POLICY_ALLOW_UNAVAILABLE,
-    drain_timeout: Annotated[
-        str,
-        typer.Option(
-            "--drain-timeout",
-            help="Node drain timeout: auto, none, or a Go-style duration such as 10m.",
-        ),
-    ] = "auto",
-    interactive: Annotated[
-        bool,
-        typer.Option(
-            "--interactive/--no-interactive",
-            help="Prompt for missing GPU preset upgrade flags when running from a terminal.",
-        ),
-    ] = True,
-) -> None:
-    _run_mk8s_node_layer_upgrade_command(
-        config_path=config_path,
-        spec=_NODE_LAYER_UPGRADE_SPECS["gpu-preset"],
-        target_selector=target_selector,
-        target_value=to_preset,
-        option_name="--to-preset",
-        path_prefix="upgrade.gpu_preset",
-        node_group=node_group,
-        dry_run=dry_run,
-        disruption_policy=disruption_policy,
-        drain_timeout=drain_timeout,
-        interactive=interactive,
-    )
+    try:
+        if not _non_empty_text(node_group):
+            raise RuntimeError("--node-group is required for upgrade node-group.")
+        source_payload = _load_source_payload(config_path)
+        generated_config, paths, manifest = _load_deploy_context_readonly(config_path)
+        plan = _plan_node_group_migration(
+            source_payload=source_payload,
+            generated_config=generated_config,
+            paths=paths,
+            manifest=manifest,
+            target_selector=target_selector,
+            node_group=node_group,
+            to_platform=to_platform,
+            to_preset=to_preset,
+            to_os=to_os,
+            to_gpu_stack_preset=to_gpu_stack_preset,
+            to_fabric=to_fabric,
+        )
+        _print_upgrade_plan_lines(
+            _format_node_group_migration_plan(
+                plan,
+                config_path=config_path,
+                dry_run=dry_run,
+            )
+        )
+        if dry_run:
+            return
+        if not approve:
+            raise RuntimeError("upgrade node-group --execute requires --approve.")
+        if _node_group_migration_quota_blocks(plan):
+            raise RuntimeError(
+                "upgrade node-group --execute requires clean target quota/capacity preflight "
+                "before checkpoint or mutation."
+            )
+        if plan.soperator_managed and plan.node_group_kind == "gpu" and not plan.sfs_evidence:
+            raise RuntimeError(
+                "upgrade node-group --execute requires SFS/PVC-backed Soperator worker data "
+                "evidence before mutation. Local node disks and emptyDir are not preserved."
+            )
+        checkpoint_path = _node_group_migration_checkpoint_path(
+            paths,
+            instance_id=plan.instance_id,
+            node_group=plan.node_group,
+        )
+        checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+        checkpoint_path.write_text(
+            json.dumps(
+                {
+                    "phase": "approved-pre-mutation",
+                    "target": plan.target_selector,
+                    "node_group": plan.node_group,
+                    "node_group_kind": plan.node_group_kind,
+                    "gpu_cluster_key": plan.gpu_cluster_key,
+                    "from_platform": plan.current_platform,
+                    "to_platform": plan.target_platform,
+                    "from_preset": plan.current_preset,
+                    "to_preset": plan.target_preset,
+                    "from_fabric": plan.current_config_fabric,
+                    "to_fabric": plan.effective_target_fabric,
+                    "approved": True,
+                    "updated_at": datetime.now(UTC).isoformat(),
+                },
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        report_path, _report_json_path = _write_upgrade_node_group_report(
+            paths,
+            plan=plan,
+            checkpoint_path=checkpoint_path,
+            status="approved-pre-mutation",
+        )
+        raise RuntimeError(
+            "upgrade node-group --execute reached the approved pre-mutation gate and wrote "
+            f"{checkpoint_path}. Node-group upgrade report: {report_path}. "
+            "The live replacement/cutover/retirement executor is not enabled yet, so cxcli "
+            "stopped before making changes."
+        )
+    except typer.Exit:
+        raise
+    except Exception as exc:  # pragma: no cover - CLI surface
+        _exit_with_error(exc)
 
 
 @upgrade_app.command(
     "helm-chart",
-    short_help="Upgrade a target-scoped app Helm chart version.",
+    short_help="Upgrade a non-Soperator target-scoped app Helm chart version.",
     epilog=(
         "Example: nebius-cxcli upgrade helm-chart <config.yaml> "
-        "apps:soperator@mk8s --to-version <chart-version> --dry-run."
+        "apps:<chart>@mk8s --to-version <chart-version> --dry-run. "
+        "Use nebius-cxcli soperator upgrade for Soperator chart upgrades."
     ),
 )
 def upgrade_helm_chart_command(
@@ -6258,7 +6340,7 @@ def upgrade_helm_chart_command(
         str | None,
         typer.Argument(
             metavar="TARGET",
-            help="Optional app selector, for example apps:soperator@mk8s.",
+            help="Optional non-Soperator app selector, for example apps:grafana@mk8s.",
         ),
     ] = None,
     to_version: Annotated[
@@ -6371,7 +6453,15 @@ def _run_soperator_upgrade_command(
             "Missing --to-version <chart-version>. Pass explicit Soperator upgrade "
             "options or allow interactive prompting."
         )
-    target_version = _prompt_soperator_upgrade_to_version_if_needed(to_version=to_version)
+    current_version = _non_empty_text(_source_helm_chart_row(source_payload, target).get("version"))
+    catalog_default_version = (
+        _soperator_upgrade_catalog_to_version_default() if version_missing else ""
+    )
+    target_version = _prompt_soperator_upgrade_to_version_if_needed(
+        to_version=to_version,
+        current_version=current_version,
+        catalog_default_version=catalog_default_version,
+    )
     guided = version_missing or (target_missing and interactive)
     dry_run = _resolve_helm_chart_upgrade_options(
         guided=guided,
@@ -6421,31 +6511,20 @@ def _run_helm_chart_upgrade_command(
     )
     if soperator_aware and target.chart_id != _SOPERATOR_APP_ID:
         raise RuntimeError(
-            "Soperator upgrades require apps:soperator@<target>. "
-            f"Received {target.selector}."
+            f"Soperator upgrades require apps:soperator@<target>. Received {target.selector}."
+        )
+    if target.chart_id == _SOPERATOR_APP_ID and not soperator_aware:
+        raise RuntimeError(
+            "Soperator chart upgrades use the canonical command "
+            f"`nebius-cxcli soperator upgrade {config_path} "
+            f"--target {target.target_ref} --to-version {target_version}`. "
+            "`nebius-cxcli upgrade helm-chart` only upgrades non-Soperator app charts."
         )
     dry_run = _resolve_helm_chart_upgrade_options(
         guided=guided,
         dry_run=dry_run,
         path_prefix="soperator.upgrade" if soperator_aware else "upgrade.helm_chart",
     )
-    if target.chart_id == _SOPERATOR_APP_ID and not soperator_aware:
-        console.print(
-            "Soperator Helm chart upgrades use the Soperator-aware command; "
-            "redirecting to "
-            f"`nebius-cxcli soperator upgrade {config_path} "
-            f"--target {target.target_ref} --to-version {target_version}`.",
-            soft_wrap=True,
-        )
-        _run_helm_chart_upgrade_command(
-            config_path=config_path,
-            target_selector=target.selector,
-            to_version=target_version,
-            dry_run=dry_run,
-            interactive=interactive,
-            soperator_aware=True,
-        )
-        return
     plan = _plan_helm_chart_upgrade(
         payload=source_payload,
         target=target,
@@ -6503,19 +6582,15 @@ def _run_helm_chart_upgrade_command(
             paths=paths,
         )
     if not plan.mutates and resume_checkpoint is None:
-        _verify_helm_chart_upgrade_ready(generated_config, paths, manifest, plan)
         if soperator_aware:
-            _run_soperator_upgrade_validation_phase(
+            _verify_soperator_static_upgrade_ready(generated_config, paths, manifest, plan)
+            postflight_reports = _run_soperator_upgrade_validation_phase(
                 generated_config,
                 paths,
                 manifest,
                 plan,
                 phase_label="Postflight",
-                refresh_deploy_report=True,
-            )
-            console.print(
-                f"Soperator upgrade validation report: {paths.reports_dir / DEPLOY_REPORT_FILENAME}",
-                soft_wrap=True,
+                persist_reports=True,
             )
             lifecycle = _soperator_upgrade_activechecks_lifecycle(source_payload, target)
             checkpoint_path = _soperator_upgrade_checkpoint_path(config_path, target.target_ref)
@@ -6525,13 +6600,20 @@ def _run_helm_chart_upgrade_command(
                 checkpoint_path=checkpoint_path,
                 paths=paths,
             )
-            _append_soperator_upgrade_event(checkpoint, "completed", reason="already-current")
+            _append_soperator_upgrade_event(
+                checkpoint,
+                "completed",
+                reason="already-current",
+                validation_reports=_soperator_upgrade_relative_paths(paths, postflight_reports),
+            )
             _write_soperator_upgrade_checkpoint(checkpoint_path, checkpoint)
             upgrade_report_path, _upgrade_report_json_path = _write_soperator_upgrade_report(
                 paths,
                 checkpoint,
             )
             console.print(f"Soperator upgrade report: {upgrade_report_path}", soft_wrap=True)
+        else:
+            _verify_helm_chart_upgrade_ready(generated_config, paths, manifest, plan)
         already_current_message = (
             f"Soperator target {target.target_ref} already uses version {target_version}."
             if soperator_aware
@@ -6592,7 +6674,7 @@ def _run_helm_chart_upgrade_command(
                 target_ref=target.target_ref,
                 all_targets=False,
             )
-            _verify_helm_chart_upgrade_ready(
+            _verify_soperator_static_upgrade_ready(
                 staged_config,
                 staged_paths,
                 staged_manifest,
@@ -6642,7 +6724,7 @@ def _run_helm_chart_upgrade_command(
                 manifest,
                 plan,
                 phase_label="Preflight",
-                refresh_deploy_report=False,
+                persist_reports=False,
             )
             _checkpoint("preflight-soperator-validation-completed")
 
@@ -6674,15 +6756,21 @@ def _run_helm_chart_upgrade_command(
                     )
                 )
                 _checkpoint("upgrade-applied")
-            _run_soperator_upgrade_validation_phase(
+            postflight_reports = _run_soperator_upgrade_validation_phase(
                 staged_config,
                 staged_paths,
                 staged_manifest,
                 plan,
                 phase_label="Postflight",
-                refresh_deploy_report=True,
+                persist_reports=True,
             )
-            _checkpoint("postflight-soperator-validation-completed")
+            _checkpoint(
+                "postflight-soperator-validation-completed",
+                validation_reports=_soperator_upgrade_relative_paths(
+                    staged_paths,
+                    postflight_reports,
+                ),
+            )
 
             if lifecycle.required:
                 _checkpoint("activechecks-restore-started")
@@ -6705,10 +6793,6 @@ def _run_helm_chart_upgrade_command(
             upgrade_report_path, _upgrade_report_json_path = _write_soperator_upgrade_report(
                 staged_paths,
                 checkpoint,
-            )
-            console.print(
-                f"Soperator upgrade validation report: {staged_paths.reports_dir / DEPLOY_REPORT_FILENAME}",
-                soft_wrap=True,
             )
             console.print(f"Soperator upgrade report: {upgrade_report_path}", soft_wrap=True)
             console.print(
@@ -6780,9 +6864,7 @@ def _run_helm_chart_upgrade_command(
         target_version=target_version,
     )
     if not changed:
-        console.print(
-            f"Helm chart target {target.selector} already uses version {target_version}."
-        )
+        console.print(f"Helm chart target {target.selector} already uses version {target_version}.")
         return
     _write_text_atomic(config_path, render_updated_source_payload(source_payload))
     console.print(
@@ -6957,7 +7039,10 @@ def _exit_with_soperator_deploy_owned_route(exc: _SoperatorDeployOwnedRoute) -> 
         raise typer.Exit(code=1) from exc
     console.print(f"{warning_markup('NOTE:', bold=True)} {escape(exc.lines[0])}", soft_wrap=True)
     for line in exc.lines[1:]:
-        if line:
+        text = str(line or "").strip()
+        if text.startswith("nebius-cxcli "):
+            _print_copy_paste_command(text)
+        elif line:
             console.print(escape(line), soft_wrap=True)
         else:
             console.print()
@@ -8973,14 +9058,20 @@ def _apply_app_release_overrides(
         chart_id = normalize_component_token(item.get("id"))
         if not chart_id or chart_id not in selected_app_ids:
             continue
-        if selected_identities is not None and (
-            chart_id,
-            component_instance_id(item),
-        ) not in selected_identities:
+        if (
+            selected_identities is not None
+            and (
+                chart_id,
+                component_instance_id(item),
+            )
+            not in selected_identities
+        ):
             continue
         by_id.setdefault(chart_id, []).append(item)
 
-    target_ids = set(namespace_overrides) | set(release_name_overrides) | set(chart_version_overrides)
+    target_ids = (
+        set(namespace_overrides) | set(release_name_overrides) | set(chart_version_overrides)
+    )
     for chart_id in sorted(target_ids):
         chart_id = normalize_component_token(chart_id)
         if chart_id not in selected_app_ids:
@@ -9961,9 +10052,7 @@ def _print_soperator_onboarding_report_summary(report: Any) -> None:
     if migration_profile_id:
         console.print(f"[dim]Migration profile: {migration_profile_id}[/dim]")
     for finding in report.findings:
-        print_info_finding = (
-            finding.layer == "gpu-stack" and finding.status == "verified"
-        )
+        print_info_finding = finding.layer == "gpu-stack" and finding.status == "verified"
         if finding.severity in {"required", "recommended"} or print_info_finding:
             console.print(f"[dim]- {finding.layer}: {finding.status} - {finding.message}[/dim]")
     if getattr(report, "migration_plan", ()):
@@ -10632,9 +10721,7 @@ def _soperator_onboarding_live_pvc_size(
         namespace = _soperator_onboarding_resource_namespace(pvc)
         if namespace and namespace != "soperator":
             continue
-        request_size = _non_empty_text(
-            _mapping_path_value(pvc, "spec.resources.requests.storage")
-        )
+        request_size = _non_empty_text(_mapping_path_value(pvc, "spec.resources.requests.storage"))
         status_size = _non_empty_text(_mapping_path_value(pvc, "status.capacity.storage"))
         return _soperator_onboarding_larger_storage_size(request_size, status_size)
     return ""
@@ -10701,9 +10788,7 @@ def _soperator_onboarding_live_name_override(snapshot: Mapping[str, Any]) -> str
 def _soperator_onboarding_live_slurm_cluster_name(snapshot: Mapping[str, Any]) -> str:
     clusters: list[Mapping[str, Any]] = []
     ready_nodesets: set[str] = set()
-    for resource in _soperator_onboarding_sequence_of_mappings(
-        snapshot.get("soperator_resources")
-    ):
+    for resource in _soperator_onboarding_sequence_of_mappings(snapshot.get("soperator_resources")):
         kind = _non_empty_text(resource.get("kind"))
         if kind == "NodeSet":
             name = normalize_component_token(_soperator_onboarding_resource_name(resource))
@@ -10737,7 +10822,9 @@ def _soperator_onboarding_live_slurm_cluster_name(snapshot: Mapping[str, Any]) -
                 for raw_ref in _soperator_string_list(partition.get("nodeSetRefs")):
                     refs.add(normalize_component_token(raw_ref))
         matched_ready_refs = len(refs & ready_nodesets)
-        ready_login = 1 if _non_empty_text(_mapping_path_value(resource, "status.readyLogin")) else 0
+        ready_login = (
+            1 if _non_empty_text(_mapping_path_value(resource, "status.readyLogin")) else 0
+        )
         ready_sconfig = (
             1
             if _non_empty_text(_mapping_path_value(resource, "status.readySConfigController"))
@@ -10767,6 +10854,7 @@ def _soperator_onboarding_live_node_group_role(raw_group: Mapping[str, Any]) -> 
         labels.get("slurm.nebius.ai/nodeset")
         or labels.get("slurm.nebius.ai/nodeset-name")
         or raw_group.get("nodeset_name")
+        or raw_group.get("placement_name")
     )
 
 
@@ -10786,9 +10874,7 @@ def _soperator_onboarding_live_worker_roles(snapshot: Mapping[str, Any]) -> set[
             )
             if workload == "worker":
                 roles.add("worker-gpu" if bool(raw_group.get("gpu", False)) else "worker-cpu")
-    for resource in _soperator_onboarding_sequence_of_mappings(
-        snapshot.get("soperator_resources")
-    ):
+    for resource in _soperator_onboarding_sequence_of_mappings(snapshot.get("soperator_resources")):
         if _non_empty_text(resource.get("kind")) != "NodeSet":
             continue
         name = normalize_component_token(_soperator_onboarding_resource_name(resource))
@@ -10856,17 +10942,11 @@ def _soperator_onboarding_mariadb_storage_from_snapshot(
         storage_class = _non_empty_text(_mapping_path_value(pvc, "spec.storageClassName"))
         raw_access_modes = _mapping_path_value(pvc, "spec.accessModes")
         access_modes = (
-            [
-                _non_empty_text(mode)
-                for mode in raw_access_modes
-                if _non_empty_text(mode)
-            ]
+            [_non_empty_text(mode) for mode in raw_access_modes if _non_empty_text(mode)]
             if isinstance(raw_access_modes, list)
             else []
         )
-        request_size = _non_empty_text(
-            _mapping_path_value(pvc, "spec.resources.requests.storage")
-        )
+        request_size = _non_empty_text(_mapping_path_value(pvc, "spec.resources.requests.storage"))
         status_size = _non_empty_text(_mapping_path_value(pvc, "status.capacity.storage"))
         size = _soperator_onboarding_larger_storage_size(request_size, status_size)
         phase = _non_empty_text(_mapping_path_value(pvc, "status.phase"))
@@ -10932,9 +11012,9 @@ def _soperator_onboarding_adoption_values_from_target_row(
     if cluster_name:
         values["clusterName"] = cluster_name
 
-    node_group_mapping = _soperator_onboarding_live_node_group_mapping(snapshot)
-    if node_group_mapping:
-        values["nodeGroupMapping"] = node_group_mapping
+    placements = _soperator_onboarding_live_node_group_mapping(snapshot)
+    if placements:
+        values["placements"] = placements
 
     source_report = {"snapshot": snapshot, "report": onboarding}
     worker_topology = (
@@ -11017,21 +11097,30 @@ def _merge_soperator_onboarding_adoption_values(
 ) -> bool:
     if not adoption_values:
         return False
+    before = copy.deepcopy(row)
     values = row.setdefault("values", {})
     if not isinstance(values, dict):
         values = {}
         row["values"] = values
-    before = copy.deepcopy(values)
     for key, value in adoption_values.items():
         plain_value = to_plain_data(value)
-        if key == "nodeGroupMapping":
-            values[key] = copy.deepcopy(plain_value)
+        if key == "placements":
+            if isinstance(plain_value, Mapping):
+                normalized_placements = {
+                    str(placement): _soperator_string_list(groups)
+                    for placement, groups in plain_value.items()
+                }
+                _soperator_set_app_placements(
+                    row,
+                    normalized_placements,
+                    replace=True,
+                )
             continue
         if isinstance(values.get(key), dict) and isinstance(plain_value, Mapping):
             _merge_replace_mapping(values[key], plain_value)
             continue
         values[key] = copy.deepcopy(plain_value)
-    return values != before
+    return row != before
 
 
 def _merge_soperator_onboarding_adoption_values_for_target(
@@ -12474,9 +12563,7 @@ def _soperator_onboarding_action_ids_by_target(payload: Mapping[str, Any]) -> di
             result[target_ref] = set()
             continue
         result[target_ref] = {
-            action_id
-            for raw_action in actions
-            if (action_id := _non_empty_text(raw_action))
+            action_id for raw_action in actions if (action_id := _non_empty_text(raw_action))
         }
     return result
 
@@ -12739,7 +12826,7 @@ def _soperator_all_profile_jail_node_group_keys() -> list[str]:
         for worker in _profile_list(mk8s_profile, "worker_nodesets"):
             if not isinstance(worker, Mapping) or worker.get("jail") is not True:
                 continue
-            _remember(worker.get("node_group_key_prefix"))
+            _remember(worker.get("node_group_prefix"))
             _remember(worker.get("name"))
     return selected
 
@@ -12825,9 +12912,9 @@ def _soperator_nodeset_group_keys(
         if key_text == key_prefix or re.fullmatch(rf"{re.escape(key_prefix)}-[0-9]+", key_text):
             keys.append(key_text)
             continue
-        if (
-            isinstance(group, Mapping)
-            and str(group.get("nodeset_name", "")).strip() == nodeset_name
+        if isinstance(group, Mapping) and (
+            str(group.get("nodeset_name", "")).strip() == nodeset_name
+            or str(group.get("placement_name", "")).strip() == nodeset_name
         ):
             keys.append(key_text)
     return keys
@@ -12842,7 +12929,7 @@ def _soperator_profile_managed_node_group_keys(profile: Mapping[str, Any]) -> se
         nodeset_name = _non_empty_text(raw_worker.get("nodeset_name")) or _non_empty_text(
             raw_worker.get("name")
         )
-        key_prefix = _non_empty_text(raw_worker.get("node_group_key_prefix")) or nodeset_name
+        key_prefix = _non_empty_text(raw_worker.get("node_group_prefix")) or nodeset_name
         if key_prefix:
             managed.add(key_prefix)
     return managed
@@ -12960,7 +13047,7 @@ def _soperator_has_external_node_groups(
     present_keys = {str(key) for key in node_groups}
     if static_role_keys and not static_role_keys.issubset(present_keys):
         return True
-    managed_keys = _soperator_profile_managed_node_group_keys(profile)
+    managed_keys = _soperator_all_profile_managed_node_group_keys()
     for raw_key in node_groups:
         key = str(raw_key)
         if _soperator_node_group_key_matches_managed(key, managed_keys):
@@ -13071,11 +13158,14 @@ def _materialize_soperator_node_group_labels(group: dict[str, Any], *, group_key
     if not isinstance(node_labels, dict):
         return
     nodeset_name = _non_empty_text(group.get("nodeset_name"))
+    placement_name = _non_empty_text(group.get("placement_name"))
     workload = _non_empty_text(group.get("workload"))
     if group_key:
         node_labels.setdefault("nebius.com/node-group", group_key)
     if nodeset_name:
         node_labels.setdefault("slurm.nebius.ai/nodeset-name", nodeset_name)
+    elif placement_name:
+        node_labels.setdefault("slurm.nebius.ai/nodeset-name", placement_name)
     if workload:
         node_labels.setdefault("slurm.nebius.ai/workload", workload)
     if bool(group.get("jail", False)):
@@ -13105,29 +13195,43 @@ def _soperator_string_list(value: Any) -> list[str]:
     return []
 
 
-def _soperator_profile_role_mapping(profile: Mapping[str, Any]) -> Mapping[str, Any]:
-    raw = profile.get("role_mapping")
-    if not isinstance(raw, Mapping):
-        return {}
-    roles = raw.get("roles")
-    return roles if isinstance(roles, Mapping) else {}
+def _soperator_profile_placements(profile: Mapping[str, Any]) -> Mapping[str, Any]:
+    raw = profile.get("placements")
+    return raw if isinstance(raw, Mapping) else {}
 
 
-def _soperator_values_node_group_mapping(values: Mapping[str, Any]) -> dict[str, list[str]]:
-    raw = values.get("nodeGroupMapping")
+def _soperator_placement_list(value: Any) -> list[str]:
+    return list(dict.fromkeys(_soperator_string_list(value)))
+
+
+def _soperator_row_placements(row: Mapping[str, Any]) -> dict[str, list[str]]:
+    values = row.get("values")
+    if isinstance(values, Mapping) and "nodeGroupMapping" in values:
+        raise ValueError(
+            "apps.charts[] soperator values.nodeGroupMapping is no longer supported; "
+            "use apps.charts[].placements instead."
+        )
+    raw = row.get("placements")
     if not isinstance(raw, Mapping):
         return {}
     mapping: dict[str, list[str]] = {}
-    for raw_role, raw_groups in raw.items():
-        role = str(raw_role).strip()
-        groups = _soperator_string_list(raw_groups)
-        if role and groups:
-            mapping[role] = list(dict.fromkeys(groups))
+    for raw_placement, raw_groups in raw.items():
+        placement = str(raw_placement).strip()
+        groups = _soperator_placement_list(raw_groups)
+        if placement and groups:
+            mapping[placement] = groups
     return mapping
 
 
-def _soperator_set_node_group_mapping(
-    values: dict[str, Any],
+def _soperator_store_placement_value(placement: str, groups: Sequence[str]) -> str | list[str]:
+    normalized = [str(group).strip() for group in groups if str(group).strip()]
+    if len(normalized) == 1 and not placement.startswith("worker"):
+        return normalized[0]
+    return normalized
+
+
+def _soperator_set_app_placements(
+    row: dict[str, Any],
     mapping: Mapping[str, list[str]],
     *,
     replace: bool = False,
@@ -13135,26 +13239,25 @@ def _soperator_set_node_group_mapping(
     if not mapping:
         return
     if replace:
-        values["nodeGroupMapping"] = {
-            str(role): list(groups) for role, groups in mapping.items() if groups
+        row["placements"] = {
+            str(placement): _soperator_store_placement_value(str(placement), groups)
+            for placement, groups in mapping.items()
+            if groups
         }
         return
-    target = values.setdefault("nodeGroupMapping", {})
+    target = row.setdefault("placements", {})
     if not isinstance(target, dict):
         target = {}
-        values["nodeGroupMapping"] = target
-    for role, groups in mapping.items():
-        if (
-            role == "worker"
-            and any(
-                str(existing_role).startswith("worker-")
-                for existing_role in target
-                if str(existing_role).strip()
-            )
+        row["placements"] = target
+    for placement, groups in mapping.items():
+        if placement == "worker" and any(
+            str(existing_placement).startswith("worker-")
+            for existing_placement in target
+            if str(existing_placement).strip()
         ):
             continue
-        if role not in target and groups:
-            target[role] = list(groups)
+        if placement not in target and groups:
+            target[placement] = _soperator_store_placement_value(placement, groups)
 
 
 def _soperator_node_group_keys_by_kind(
@@ -13191,7 +13294,7 @@ def _soperator_worker_nodeset_key_prefixes(profile: Mapping[str, Any]) -> dict[s
             raw_worker.get("name")
         )
         worker_name = _non_empty_text(raw_worker.get("name"))
-        key_prefix = _non_empty_text(raw_worker.get("node_group_key_prefix")) or nodeset_name
+        key_prefix = _non_empty_text(raw_worker.get("node_group_prefix")) or nodeset_name
         if nodeset_name and key_prefix:
             prefixes[nodeset_name] = key_prefix
         if worker_name and key_prefix:
@@ -13221,60 +13324,63 @@ def _soperator_node_group_keys_by_nodeset_templates(
     return list(dict.fromkeys(selected))
 
 
-def _soperator_infer_node_group_mapping(
+def _soperator_infer_placements(
     *,
     inputs: Mapping[str, Any],
     profile: Mapping[str, Any],
 ) -> dict[str, list[str]]:
-    role_mapping = _soperator_profile_role_mapping(profile)
-    if not role_mapping or not iter_mk8s_node_groups(inputs):
+    placements = _soperator_profile_placements(profile)
+    if not placements or not iter_mk8s_node_groups(inputs):
         return {}
 
     inferred: dict[str, list[str]] = {}
     all_keys = _soperator_node_group_keys_by_kind(inputs, kind="all")
-    for role, raw_role_config in role_mapping.items():
-        if not isinstance(raw_role_config, Mapping):
+    for placement, raw_placement_config in placements.items():
+        if not isinstance(raw_placement_config, Mapping):
             continue
-        role_name = str(role).strip()
-        if not role_name:
+        placement_name = str(placement).strip()
+        if not placement_name:
             continue
-        exact = [key for key in all_keys if key == role_name]
+        explicit_node_group = _non_empty_text(raw_placement_config.get("node_group"))
+        exact = [key for key in all_keys if key == (explicit_node_group or placement_name)]
         if exact:
-            inferred[role_name] = exact
+            inferred[placement_name] = exact
             continue
         template_selected = _soperator_node_group_keys_by_nodeset_templates(
             inputs,
             profile=profile,
-            template_names=_soperator_role_nodeset_template_names(raw_role_config),
+            template_names=_soperator_role_nodeset_template_names(raw_placement_config),
         )
         if template_selected:
-            inferred[role_name] = template_selected
+            inferred[placement_name] = template_selected
             continue
-        selector = _non_empty_text(raw_role_config.get("default_node_group_kind")) or "all"
+        selector = _non_empty_text(raw_placement_config.get("default_node_group_kind")) or "all"
         selected = _soperator_node_group_keys_by_kind(inputs, kind=selector)
         if not selected:
-            fallback_selector = _non_empty_text(raw_role_config.get("fallback_node_group_kind"))
+            fallback_selector = _non_empty_text(
+                raw_placement_config.get("fallback_node_group_kind")
+            )
             if fallback_selector:
                 selected = _soperator_node_group_keys_by_kind(inputs, kind=fallback_selector)
         if selected:
-            inferred[role_name] = selected
+            inferred[placement_name] = selected
     return inferred
 
 
-def _soperator_node_group_mapping_matches_generated_profile(
+def _soperator_placements_match_generated_profile(
     *,
-    values: Mapping[str, Any],
+    row: Mapping[str, Any],
     inputs: Mapping[str, Any],
 ) -> bool:
-    mapping = _soperator_values_node_group_mapping(values)
-    if not mapping:
+    placements = _soperator_row_placements(row)
+    if not placements:
         return False
     _default_profile, profiles = _soperator_nodesets_profiles()
     for profile in profiles.values():
         if not isinstance(profile, Mapping):
             continue
-        inferred = _soperator_infer_node_group_mapping(inputs=inputs, profile=profile)
-        if inferred and mapping == inferred:
+        inferred = _soperator_infer_placements(inputs=inputs, profile=profile)
+        if inferred and placements == inferred:
             return True
     return False
 
@@ -13384,20 +13490,20 @@ def _materialize_soperator_existing_node_group_mapping(
     node_groups = inputs.get("node_groups")
     if not isinstance(node_groups, dict):
         return
-    role_mapping = _soperator_profile_role_mapping(profile)
+    placements = _soperator_profile_placements(profile)
     groups_with_explicit_sfs_keys = {
         str(group_key)
         for group_key, group in node_groups.items()
         if isinstance(group, dict)
         and _soperator_string_list(group.get("sfs_filesystem_keys", group.get("filesystem_keys")))
     }
-    for role, group_keys in mapping.items():
-        raw_role_config = role_mapping.get(role)
-        if not isinstance(raw_role_config, Mapping) and str(role).startswith("worker"):
-            raw_role_config = role_mapping.get("worker")
-        if not isinstance(raw_role_config, Mapping):
+    for placement, group_keys in mapping.items():
+        raw_placement_config = placements.get(placement)
+        if not isinstance(raw_placement_config, Mapping) and str(placement).startswith("worker"):
+            raw_placement_config = placements.get("worker")
+        if not isinstance(raw_placement_config, Mapping):
             continue
-        filesystem_keys = _soperator_role_filesystem_keys(raw_role_config)
+        filesystem_keys = _soperator_role_filesystem_keys(raw_placement_config)
         for group_key in group_keys:
             group = node_groups.get(group_key)
             if isinstance(group, dict):
@@ -14225,9 +14331,8 @@ def _soperator_profile_values_for_install_mode(
     install_mode: str,
     values: Mapping[str, Any],
 ) -> Mapping[str, Any]:
-    if (
-        install_mode == _SOPERATOR_INSTALL_MODE_ONBOARD_EXISTING_CLUSTER
-        and isinstance(values.get("nodesets"), list)
+    if install_mode == _SOPERATOR_INSTALL_MODE_ONBOARD_EXISTING_CLUSTER and isinstance(
+        values.get("nodesets"), list
     ):
         return _soperator_without_nodesets(value)
     return value
@@ -14239,9 +14344,8 @@ def _soperator_profile_value_sets_for_install_mode(
     install_mode: str,
     values: Mapping[str, Any],
 ) -> tuple[Mapping[str, Any], ...]:
-    if (
-        install_mode == _SOPERATOR_INSTALL_MODE_ONBOARD_EXISTING_CLUSTER
-        and isinstance(values.get("nodesets"), list)
+    if install_mode == _SOPERATOR_INSTALL_MODE_ONBOARD_EXISTING_CLUSTER and isinstance(
+        values.get("nodesets"), list
     ):
         return tuple(_soperator_without_nodesets(value) for value in value_sets)
     return tuple(value_sets)
@@ -14314,14 +14418,14 @@ def _materialize_soperator_mapping_chart_values(
     values: dict[str, Any],
     profile: Mapping[str, Any],
     inputs: Mapping[str, Any],
+    placements: Mapping[str, list[str]],
     install_mode: str,
     preserve_existing_worker_nodesets: bool = False,
 ) -> None:
-    mapping = _soperator_values_node_group_mapping(values)
-    role_mapping = _soperator_profile_role_mapping(profile)
-    if not role_mapping:
+    profile_placements = _soperator_profile_placements(profile)
+    if not profile_placements:
         return
-    use_profile_filters = not mapping
+    use_profile_filters = not placements
 
     existing_filters = values.get("k8sNodeFilters")
     if isinstance(existing_filters, list):
@@ -14349,6 +14453,25 @@ def _materialize_soperator_mapping_chart_values(
     storage_groups: dict[str, list[str]] = {}
     preserve_onboarded_worker_nodesets = preserve_existing_worker_nodesets
 
+    def _group_keys_for_template(
+        *,
+        template_name: str,
+        group_keys: Sequence[str],
+    ) -> list[str]:
+        normalized_template = normalize_component_token(template_name)
+        if not normalized_template:
+            return []
+        normalized_groups = [str(group_key).strip() for group_key in group_keys if group_key]
+        if len(normalized_groups) <= 1:
+            return normalized_groups
+        matched = [
+            group_key
+            for group_key in normalized_groups
+            if normalize_component_token(group_key) == normalized_template
+            or normalize_component_token(group_key).startswith(f"{normalized_template}-")
+        ]
+        return matched or normalized_groups
+
     def _generate_nodesets_from_template(
         *,
         template_name: str,
@@ -14374,8 +14497,7 @@ def _materialize_soperator_mapping_chart_values(
                     for group in iter_mk8s_node_groups(inputs)
                     if group.key == group_key
                     and (
-                        group.node_count is not None
-                        or group.autoscaling_max_node_count is not None
+                        group.node_count is not None or group.autoscaling_max_node_count is not None
                     )
                 ),
                 None,
@@ -14419,12 +14541,12 @@ def _materialize_soperator_mapping_chart_values(
         if replacement_names:
             nodeset_ref_replacements[template_name] = replacement_names
 
-    for role, raw_role_config in role_mapping.items():
-        if not isinstance(raw_role_config, Mapping):
+    for placement, raw_placement_config in profile_placements.items():
+        if not isinstance(raw_placement_config, Mapping):
             continue
-        role_name = str(role).strip()
-        group_keys = mapping.get(role_name, [])
-        filter_name = _non_empty_text(raw_role_config.get("k8s_node_filter_name"))
+        placement_name = str(placement).strip()
+        group_keys = placements.get(placement_name, [])
+        filter_name = _non_empty_text(raw_placement_config.get("soperator_node_filter"))
         filter_item: dict[str, Any] | None = None
         if group_keys and filter_name:
             role_tolerations = _soperator_node_group_tolerations(inputs, group_keys)
@@ -14443,36 +14565,49 @@ def _materialize_soperator_mapping_chart_values(
             if isinstance(existing_filter, Mapping):
                 filter_item = dict(existing_filter)
         if filter_item is not None and filter_name:
-            for path in _soperator_string_list(raw_role_config.get("chart_filter_paths")):
-                _soperator_set_mapping_path(values, path, filter_name)
+            raw_bindings = raw_placement_config.get("soperator_value_bindings")
+            if isinstance(raw_bindings, Mapping):
+                for raw_path, raw_value in raw_bindings.items():
+                    path = _non_empty_text(raw_path)
+                    binding_value = _non_empty_text(raw_value) or filter_name
+                    if path:
+                        _soperator_set_mapping_path(values, path, binding_value)
         if filter_item is not None:
             affinity = filter_item.get("affinity")
             if isinstance(affinity, Mapping):
-                for path in _soperator_string_list(raw_role_config.get("chart_affinity_paths")):
+                for path in _soperator_string_list(
+                    raw_placement_config.get("soperator_affinity_bindings")
+                ):
                     _soperator_set_mapping_path(values, path, affinity)
         if not group_keys:
             continue
-        for filesystem_key in _soperator_role_filesystem_keys(raw_role_config):
+        for filesystem_key in _soperator_role_filesystem_keys(raw_placement_config):
             storage_groups.setdefault(filesystem_key, [])
             storage_groups[filesystem_key].extend(group_keys)
 
-        template_names = _soperator_string_list(raw_role_config.get("nodeset_templates"))
+        template_names = _soperator_string_list(raw_placement_config.get("nodeset_templates"))
         if not template_names:
-            template_name = _non_empty_text(raw_role_config.get("nodeset_template"))
+            template_name = _non_empty_text(raw_placement_config.get("nodeset_template"))
             template_names = [template_name] if template_name else []
         for template_name in template_names:
-            if preserve_onboarded_worker_nodesets and role_name == "worker":
+            if preserve_onboarded_worker_nodesets and placement_name == "worker":
                 continue
-            _generate_nodesets_from_template(template_name=template_name, group_keys=group_keys)
+            _generate_nodesets_from_template(
+                template_name=template_name,
+                group_keys=_group_keys_for_template(
+                    template_name=template_name,
+                    group_keys=group_keys,
+                ),
+            )
 
-    worker_role_config = role_mapping.get("worker")
+    worker_role_config = profile_placements.get("worker")
     worker_filesystem_keys = (
         _soperator_role_filesystem_keys(worker_role_config)
         if isinstance(worker_role_config, Mapping)
         else []
     )
-    for template_name, group_keys in mapping.items():
-        if template_name in role_mapping or not template_name.startswith("worker"):
+    for template_name, group_keys in placements.items():
+        if template_name in profile_placements or not template_name.startswith("worker"):
             continue
         if template_name not in template_nodesets:
             continue
@@ -14535,7 +14670,7 @@ def _materialize_soperator_mapping_chart_values(
         generated_names = {_non_empty_text(item.get("name")) for item in generated_nodesets}
         replaced_template_names = set(nodeset_ref_replacements)
         mapped_group_keys = {
-            group_key for group_keys in mapping.values() for group_key in group_keys if group_key
+            group_key for group_keys in placements.values() for group_key in group_keys if group_key
         }
 
         def _stale_onboarding_nodeset(item: Mapping[str, Any]) -> bool:
@@ -14558,6 +14693,31 @@ def _materialize_soperator_mapping_chart_values(
                     return True
             return False
 
+        def _stale_profile_generated_nodeset(item: Mapping[str, Any]) -> bool:
+            if install_mode == _SOPERATOR_INSTALL_MODE_ONBOARD_EXISTING_CLUSTER:
+                return False
+            name = _non_empty_text(item.get("name"))
+            if not name or name in generated_names:
+                return False
+            if not any(
+                name.startswith(f"{template_name}-")
+                for template_name in selected_template_names
+                if template_name.startswith("worker")
+            ):
+                return False
+            if any(group_key and group_key in name for group_key in mapped_group_keys):
+                return True
+            node_selector = item.get("nodeSelector")
+            if isinstance(node_selector, Mapping):
+                selector_values = {
+                    _non_empty_text(value)
+                    for value in node_selector.values()
+                    if _non_empty_text(value)
+                }
+                if selector_values.intersection(mapped_group_keys):
+                    return True
+            return False
+
         preserved = [
             item
             for item in existing_nodesets_list
@@ -14566,6 +14726,7 @@ def _materialize_soperator_mapping_chart_values(
             and _non_empty_text(item.get("name")) not in generated_names
             and _non_empty_text(item.get("name")) not in replaced_template_names
             and not _stale_onboarding_nodeset(item)
+            and not _stale_profile_generated_nodeset(item)
             and not (
                 _non_empty_text(item.get("name")) in all_profile_template_names
                 and _non_empty_text(item.get("name")) not in selected_template_names
@@ -14622,7 +14783,7 @@ def _materialize_soperator_worker_node_groups(
         )
         if not nodeset_name:
             continue
-        key_prefix = _non_empty_text(raw_worker.get("node_group_key_prefix")) or nodeset_name
+        key_prefix = _non_empty_text(raw_worker.get("node_group_prefix")) or nodeset_name
         default_total_nodes = _required_profile_positive_int(
             raw_worker.get("default_total_nodes"),
             field=f"worker_nodesets[{nodeset_name}].default_total_nodes",
@@ -14768,6 +14929,7 @@ def _materialize_soperator_mk8s_profile(
     inputs: dict[str, Any],
     profile: Mapping[str, Any],
     values: Mapping[str, Any],
+    placements: Mapping[str, list[str]],
     install_mode: str,
     replace_profile_managed_groups: bool = False,
 ) -> None:
@@ -14776,26 +14938,26 @@ def _materialize_soperator_mk8s_profile(
     _merge_missing_mapping(inputs, defaults)
 
     node_groups = inputs.setdefault("node_groups", {})
-    explicit_mapping = _soperator_values_node_group_mapping(values)
+    explicit_placements = dict(placements)
     existing_mode = install_mode == _SOPERATOR_INSTALL_MODE_ONBOARD_EXISTING_CLUSTER
     if not isinstance(node_groups, dict):
         return
-    if replace_profile_managed_groups and not existing_mode:
+    if not existing_mode:
         _soperator_prune_stale_profile_node_groups(inputs=inputs, profile=profile)
         _soperator_prune_stale_profile_gpu_clusters(inputs=inputs, profile=profile)
     if existing_mode or (
         not replace_profile_managed_groups
-        and explicit_mapping
+        and explicit_placements
         and _soperator_has_external_node_groups(
             inputs=inputs,
             profile=profile,
         )
     ):
-        if explicit_mapping:
+        if explicit_placements:
             _materialize_soperator_existing_node_group_mapping(
                 inputs=inputs,
                 profile=profile,
-                mapping=explicit_mapping,
+                mapping=explicit_placements,
             )
         return
 
@@ -14804,16 +14966,6 @@ def _materialize_soperator_mk8s_profile(
         target_gpu_clusters = inputs.setdefault("gpu_clusters", {})
         if isinstance(target_gpu_clusters, dict):
             _merge_missing_mapping(target_gpu_clusters, gpu_clusters)
-
-    gpu_cluster_key = _non_empty_text(mk8s_profile.get("gpu_cluster_key"))
-    gpu_defaults = _soperator_node_group_shape_defaults(inputs=inputs, gpu=True)
-    infiniband_fabric = _non_empty_text(gpu_defaults.get("infiniband_fabric"))
-    if gpu_cluster_key and infiniband_fabric:
-        target_gpu_clusters = inputs.setdefault("gpu_clusters", {})
-        if isinstance(target_gpu_clusters, dict):
-            cluster = target_gpu_clusters.setdefault(gpu_cluster_key, {})
-            if isinstance(cluster, dict):
-                cluster.setdefault("infiniband_fabric", infiniband_fabric)
 
     profile_node_groups = _profile_mapping(mk8s_profile, "node_groups")
     _merge_missing_mapping(
@@ -14887,7 +15039,11 @@ def _soperator_sfs_rows_for_target(
     if exact_rows:
         return exact_rows
     soperator_targets = _soperator_app_target_refs(payload)
-    if len(enabled_sfs_rows) == 1 and len(soperator_targets) == 1 and target_ref in soperator_targets:
+    if (
+        len(enabled_sfs_rows) == 1
+        and len(soperator_targets) == 1
+        and target_ref in soperator_targets
+    ):
         return enabled_sfs_rows
     return []
 
@@ -15135,7 +15291,8 @@ def _materialize_soperator_component_defaults(payload: dict[str, Any]) -> bool:
     ]
 
     soperator_values_by_target: dict[str, dict[str, Any]] = {}
-    generated_node_group_mapping_by_target: dict[str, bool] = {}
+    soperator_placements_by_target: dict[str, dict[str, list[str]]] = {}
+    generated_placements_by_target: dict[str, bool] = {}
     for row in apps_rows:
         if not isinstance(row, dict) or not bool(row.get("enabled", False)):
             continue
@@ -15152,19 +15309,22 @@ def _materialize_soperator_component_defaults(payload: dict[str, Any]) -> bool:
             values.setdefault("partitionProfile", _default_soperator_partition_profile_name())
             values.setdefault("topologyProfile", _default_soperator_topology_profile_name())
             soperator_values_by_target[target_ref] = values
-            generated_mapping = _soperator_node_group_mapping_matches_generated_profile(
-                values=values,
+            placements = _soperator_row_placements(row)
+            soperator_placements_by_target[target_ref] = placements
+            generated_placements = _soperator_placements_match_generated_profile(
+                row=row,
                 inputs=mk8s_inputs_by_target.get(target_ref, {}),
             )
-            generated_node_group_mapping_by_target[target_ref] = generated_mapping
-            if not _soperator_values_node_group_mapping(values):
-                inferred_mapping = _soperator_infer_node_group_mapping(
+            generated_placements_by_target[target_ref] = generated_placements
+            if not placements:
+                inferred_placements = _soperator_infer_placements(
                     inputs=mk8s_inputs_by_target.get(target_ref, {}),
                     profile=profile_by_target.get(target_ref, {}),
                 )
-                _soperator_set_node_group_mapping(values, inferred_mapping)
-                if inferred_mapping:
-                    generated_node_group_mapping_by_target[target_ref] = True
+                _soperator_set_app_placements(row, inferred_placements)
+                if inferred_placements:
+                    soperator_placements_by_target[target_ref] = inferred_placements
+                    generated_placements_by_target[target_ref] = True
         if row != before:
             changed = True
 
@@ -15182,11 +15342,12 @@ def _materialize_soperator_component_defaults(payload: dict[str, Any]) -> bool:
                 inputs=inputs,
                 profile=profile_by_target.get(target_ref, {}),
                 values=soperator_values_by_target.get(target_ref, {}),
+                placements=soperator_placements_by_target.get(target_ref, {}),
                 install_mode=install_mode_by_target.get(
                     target_ref,
                     _default_soperator_install_mode(),
                 ),
-                replace_profile_managed_groups=generated_node_group_mapping_by_target.get(
+                replace_profile_managed_groups=generated_placements_by_target.get(
                     target_ref,
                     False,
                 ),
@@ -15219,15 +15380,17 @@ def _materialize_soperator_component_defaults(payload: dict[str, Any]) -> bool:
         values = row.setdefault("values", {})
         if isinstance(values, dict):
             _delete_mapping_path_value(values, _SOPERATOR_ACTIVECHECKS_READY_PARTITION_PATH)
-            inferred_mapping = _soperator_infer_node_group_mapping(
+            inferred_placements = _soperator_infer_placements(
                 inputs=mk8s_inputs_by_target.get(target_ref, {}),
                 profile=profile_by_target.get(target_ref, {}),
             )
-            _soperator_set_node_group_mapping(
-                values,
-                inferred_mapping,
-                replace=generated_node_group_mapping_by_target.get(target_ref, False),
+            _soperator_set_app_placements(
+                row,
+                inferred_placements,
+                replace=generated_placements_by_target.get(target_ref, False),
             )
+            placements = _soperator_row_placements(row)
+            soperator_placements_by_target[target_ref] = placements
             chart_profile = _profile_mapping(
                 _profile_mapping(profile_by_target.get(target_ref, {}), "chart"),
                 "values",
@@ -15296,6 +15459,7 @@ def _materialize_soperator_component_defaults(payload: dict[str, Any]) -> bool:
                 values=values,
                 profile=profile_by_target.get(target_ref, {}),
                 inputs=mk8s_inputs_by_target.get(target_ref, {}),
+                placements=placements,
                 install_mode=install_mode,
                 preserve_existing_worker_nodesets=preserve_adopted_worker_nodesets,
             )
@@ -15313,7 +15477,8 @@ def _materialize_soperator_component_defaults(payload: dict[str, Any]) -> bool:
                 in onboarding_action_ids_by_target.get(target_ref, set())
             )
             if not current_cluster_name or (
-                current_cluster_name == "mk8s" and target_ref != "mk8s"
+                current_cluster_name == "mk8s"
+                and target_ref != "mk8s"
                 and not preserve_adopted_live_cluster_name
             ):
                 values["clusterName"] = target_ref
@@ -18493,7 +18658,25 @@ def _maybe_clear_gpu_cluster_fabric_after_shape_change(
         component_prefix = _dynamic_component_prefix(entry=entry, full_path_label=full_path_label)
         if not component_prefix:
             return
-        fabric_label = f"{component_prefix}.inputs.node_group_defaults.gpu.infiniband_fabric"
+        target_ref = _component_instance_id_for_prompt_field(
+            payload=payload,
+            entry=entry,
+            full_path_label=full_path_label,
+        )
+        profile = _soperator_profile_by_target(payload).get(target_ref, {})
+        managed_gpu_cluster_keys = (
+            sorted(_soperator_profile_managed_gpu_cluster_keys(profile))
+            if isinstance(profile, Mapping)
+            else []
+        )
+        gpu_cluster_key = managed_gpu_cluster_keys[0] if len(managed_gpu_cluster_keys) == 1 else ""
+        if not gpu_cluster_key and isinstance(profile, Mapping):
+            gpu_cluster_key = _non_empty_text(
+                _profile_mapping(profile, "mk8s").get("gpu_cluster_key")
+            )
+        if not gpu_cluster_key:
+            gpu_cluster_key = "workers"
+        fabric_label = f"{component_prefix}.inputs.gpu_clusters.{gpu_cluster_key}.infiniband_fabric"
         gpu_shape_enabled = bool(
             _non_empty_text(
                 _read_payload_field(
@@ -19035,6 +19218,7 @@ _APP_SKIP_PREVIEW_TOP_LEVEL_KEYS = (
     "version",
     _SOPERATOR_INSTALL_MODE_FIELD,
     "profile",
+    "placements",
 )
 _APP_SKIP_PREVIEW_VALUES_PRIORITY = (
     "clusterName",
@@ -19042,7 +19226,6 @@ _APP_SKIP_PREVIEW_VALUES_PRIORITY = (
     "topologyProfile",
     "volume",
     "sfs",
-    "nodeGroupMapping",
     "nodesets",
     "slurmNodes",
     "k8sNodeFilters",
@@ -19492,7 +19675,7 @@ def _skip_soperator_install_mode_dependent_prompt(
         return False
     if full_path_label.endswith(f".{_SOPERATOR_INSTALL_MODE_FIELD}"):
         return True
-    if ".values.nodeGroupMapping." not in full_path_label:
+    if ".placements." not in full_path_label:
         return False
     component_prefix = _dynamic_component_prefix(entry=entry, full_path_label=full_path_label)
     if not component_prefix:
@@ -19927,6 +20110,24 @@ def _skip_soperator_managed_mk8s_prompt(
             entry=entry,
             full_path_label=full_path_label,
             role=role,
+        )
+    gpu_cluster_fabric_match = re.search(
+        r"\.inputs\.gpu_clusters\.([^.]+)\.infiniband_fabric$",
+        full_path_label,
+    )
+    if gpu_cluster_fabric_match is not None:
+        if not has_soperator_target or install_mode != _SOPERATOR_INSTALL_MODE_PRODUCTION:
+            return True
+        target_ref = _component_instance_id_for_prompt_field(
+            payload=payload,
+            entry=entry,
+            full_path_label=full_path_label,
+        )
+        profile = _soperator_profile_by_target(payload).get(target_ref, {})
+        if not isinstance(profile, Mapping) or not _soperator_profile_uses_gpu(profile):
+            return True
+        return gpu_cluster_fabric_match.group(1) not in _soperator_profile_managed_gpu_cluster_keys(
+            profile
         )
     if ".inputs.node_group_defaults." in full_path_label:
         if not has_soperator_target or install_mode != _SOPERATOR_INSTALL_MODE_PRODUCTION:
@@ -21395,6 +21596,8 @@ def _prompt_scalar_override(
     type_hint: str | None = None,
     required: bool = False,
     unset_on_skip: bool = False,
+    prompt_hint: str | None = None,
+    blank_text: str | None = None,
 ) -> tuple[object, bool]:
     if _is_ssh_public_key_prompt(path_label):
         return _prompt_ssh_public_key_override(
@@ -21423,6 +21626,8 @@ def _prompt_scalar_override(
         required=required,
     )
     prompt_suffix = _wizard_field_prompt_suffix(rendered_label)
+    if prompt_hint:
+        prompt_suffix = f"{prompt_suffix} ({prompt_hint})"
     skip_unsets = unset_on_skip and not required
     if _is_complex_type_hint(type_hint) or isinstance(current, (dict, list)):
         default_value = _serialize_complex_prompt_default(current)
@@ -21432,7 +21637,7 @@ def _prompt_scalar_override(
             prompt_suffix = f"{prompt_suffix}; enter a single-line YAML/JSON value"
         blank_hint = _empty_complex_value_label(current, type_hint=type_hint)
         if skip_unsets:
-            blank_keep_text = "blank keeps unset"
+            blank_keep_text = blank_text or "blank keeps unset"
             prompt_default = ""
         else:
             blank_keep_text = (
@@ -21475,7 +21680,7 @@ def _prompt_scalar_override(
             try:
                 prompt_text = f"{prompt_suffix} [true/false]"
                 if skip_unsets:
-                    prompt_text = f"{prompt_text} (blank keeps unset)"
+                    prompt_text = f"{prompt_text} ({blank_text or 'blank keeps unset'})"
                 raw = (
                     typer.prompt(
                         prompt_text,
@@ -21502,11 +21707,15 @@ def _prompt_scalar_override(
         if isinstance(current, int):
             try:
                 prompt_text = (
-                    f"{prompt_suffix} (blank keeps unset)" if skip_unsets else prompt_suffix
+                    f"{prompt_suffix} ({blank_text or 'blank keeps unset'})"
+                    if skip_unsets
+                    else prompt_suffix
                 )
-                raw = typer.prompt(
-                    prompt_text,
-                    default="" if skip_unsets else str(current),
+                raw = str(
+                    typer.prompt(
+                        prompt_text,
+                        default="" if skip_unsets else current,
+                    )
                 ).strip()
             except (KeyboardInterrupt, EOFError, typer.Abort):
                 return current, True
@@ -21525,7 +21734,9 @@ def _prompt_scalar_override(
         if isinstance(current, float):
             try:
                 prompt_text = (
-                    f"{prompt_suffix} (blank keeps unset)" if skip_unsets else prompt_suffix
+                    f"{prompt_suffix} ({blank_text or 'blank keeps unset'})"
+                    if skip_unsets
+                    else prompt_suffix
                 )
                 raw = typer.prompt(
                     prompt_text,
@@ -21547,8 +21758,11 @@ def _prompt_scalar_override(
 
         if current is None:
             try:
-                blank_text = "blank keeps unset" if skip_unsets else "blank keeps null"
-                raw = typer.prompt(f"{prompt_suffix} ({blank_text})", default="").strip()
+                if skip_unsets:
+                    resolved_blank_text = blank_text or "blank keeps unset"
+                else:
+                    resolved_blank_text = blank_text or "blank keeps null"
+                raw = typer.prompt(f"{prompt_suffix} ({resolved_blank_text})", default="").strip()
             except (KeyboardInterrupt, EOFError, typer.Abort):
                 return current, True
             if raw == WIZARD_ABORT_TOKEN:
@@ -21571,7 +21785,11 @@ def _prompt_scalar_override(
             return coerced, False
 
         try:
-            prompt_text = f"{prompt_suffix} (blank keeps unset)" if skip_unsets else prompt_suffix
+            prompt_text = (
+                f"{prompt_suffix} ({blank_text or 'blank keeps unset'})"
+                if skip_unsets
+                else prompt_suffix
+            )
             raw = typer.prompt(
                 prompt_text,
                 default="" if skip_unsets else str(current),
@@ -22210,9 +22428,7 @@ def _run_component_field_wizard(
             guidance_key = f"{group_prefix}.subnet_capacity:{node_count}:{','.join(cidrs)}"
             if guidance_key in emitted_guidance:
                 return
-            console.print(
-                f"{warning_markup('MK8s subnet capacity warning')}: {escape(guidance)}"
-            )
+            console.print(f"{warning_markup('MK8s subnet capacity warning')}: {escape(guidance)}")
             emitted_guidance.add(guidance_key)
 
         def _restart_group_creation(group_key: str) -> None:
@@ -25574,9 +25790,7 @@ def _validate_requested_app_chart_versions_or_raise(
     candidate_app_ids: set[str] | None = None,
     candidate_app_identities: set[tuple[str, str]] | None = None,
 ) -> None:
-    candidate_ids = {
-        normalize_component_token(item) for item in candidate_app_ids or set() if item
-    }
+    candidate_ids = {normalize_component_token(item) for item in candidate_app_ids or set() if item}
     candidate_identities = {
         (normalize_component_token(chart_id), normalize_component_token(instance_id))
         for chart_id, instance_id in candidate_app_identities or set()
@@ -29101,7 +29315,9 @@ def _mysterybox_eso_write_report(
         "kind": MYSTERYBOX_ESO_CONNECTIVITY_VALIDATION_KIND,
         "checked_at": checked_at.isoformat(),
         "passed": bool(passed),
-        "checks": [_mysterybox_eso_report_check(name, check_passed) for name, check_passed in checks],
+        "checks": [
+            _mysterybox_eso_report_check(name, check_passed) for name, check_passed in checks
+        ],
     }
     path.write_text(json.dumps(report, indent=2, sort_keys=False) + "\n", encoding="utf-8")
 
@@ -31347,6 +31563,12 @@ def _write_post_flux_docs(path: Path, docs: Sequence[Mapping[str, Any]]) -> None
     )
 
 
+def _is_kubernetes_manifest_doc(doc: object) -> bool:
+    if not isinstance(doc, Mapping):
+        return False
+    return bool(str(doc.get("apiVersion") or "").strip() and str(doc.get("kind") or "").strip())
+
+
 def _coerce_priority_class_value(value: Any) -> int | None:
     if isinstance(value, bool) or value is None:
         return None
@@ -31646,8 +31868,7 @@ def _delete_stale_soperator_custom_resources(
             if existing_name in desired_names:
                 continue
             console.print(
-                f"Deleting stale {kind} {namespace}/{existing_name} "
-                f"for Helm instance {instance}."
+                f"Deleting stale {kind} {namespace}/{existing_name} for Helm instance {instance}."
             )
             _run_post_flux_kubectl(
                 [
@@ -31916,7 +32137,7 @@ def _apply_post_flux_manifest(manifest_path: Path, *, env: Mapping[str, str]) ->
     docs = [
         doc
         for doc in yaml.safe_load_all(manifest_path.read_text(encoding="utf-8"))
-        if isinstance(doc, dict)
+        if _is_kubernetes_manifest_doc(doc)
     ]
     if not docs:
         return
@@ -32740,9 +32961,7 @@ def _soperator_deploy_migration_blockers(
     *,
     source_config_path: Path | None = None,
 ) -> tuple[tuple[str, Mapping[str, Any]], ...]:
-    blockers = list(
-        _soperator_deploy_migration_blockers_from_config(config, selected_targets)
-    )
+    blockers = list(_soperator_deploy_migration_blockers_from_config(config, selected_targets))
     seen_target_refs = {target_ref for target_ref, _onboarding in blockers}
     if source_config_path is None:
         return tuple(blockers)
@@ -32819,9 +33038,7 @@ def _soperator_chart_version_for_target(config: Any, *, target_ref: str) -> str:
     payload = to_plain_data(config)
     if not isinstance(payload, Mapping):
         return ""
-    charts = (payload.get("apps") if isinstance(payload.get("apps"), Mapping) else {}).get(
-        "charts"
-    )
+    charts = (payload.get("apps") if isinstance(payload.get("apps"), Mapping) else {}).get("charts")
     normalized_target_ref = normalize_component_token(target_ref)
     if not isinstance(charts, list) or not normalized_target_ref:
         return ""
@@ -33047,6 +33264,7 @@ def _deploy_generated_artifacts(
     )
     gitops_bootstrap_commands: list[str] = []
     apply_kwargs: dict[str, Any] = {"initialize": False}
+    apply_kwargs["manifest"] = manifest
     if status_watchers:
         apply_kwargs["status_watchers"] = status_watchers
     apply_kwargs["run_mk8s_preflight"] = False
@@ -33346,7 +33564,10 @@ def _print_deploy_command_footer(
         console.print(line)
     console.print("[bright_magenta]Copy/paste commands:[/bright_magenta]")
     for line in _deploy_footer_command_lines(config, paths, summary):
-        console.print(line, soft_wrap=True)
+        if _deploy_footer_line_is_command(line):
+            _print_copy_paste_command(line)
+        else:
+            console.print(line, soft_wrap=True)
     console.print("[bright_magenta]Important paths:[/bright_magenta]")
     for line in _deploy_footer_path_lines(paths, summary):
         console.print(line, soft_wrap=True)
@@ -33424,6 +33645,15 @@ def _deploy_footer_command_lines(
     if not lines:
         lines.append("No immediate access or follow-up commands were derived.")
     return lines
+
+
+def _deploy_footer_line_is_command(line: str) -> bool:
+    text = str(line or "").strip()
+    return bool(
+        text
+        and not text.startswith("#")
+        and text != "No immediate access or follow-up commands were derived."
+    )
 
 
 def _deploy_footer_path_lines(paths: ProjectPaths, summary: DeployRunSummary) -> list[str]:
@@ -33862,6 +34092,7 @@ def _run_terraform_apply_with_status(
     status_watchers: list[dict[str, str]] | None = None,
     run_mk8s_preflight: bool = True,
     extra_env: Mapping[str, str] | None = None,
+    manifest: Mapping[str, Any] | None = None,
 ) -> None:
     runtime_env = _terraform_runtime_env(config)
     if extra_env:
@@ -33873,6 +34104,13 @@ def _run_terraform_apply_with_status(
         validate_vpc_networking_preflight(config)
         if has_mk8s_gpu_stack_compatibility_preflight_targets(config):
             validate_mk8s_gpu_stack_compatibility_preflight(config)
+    _raise_on_terraform_gpu_fabric_drift(
+        config,
+        paths,
+        manifest,
+        runtime_env=runtime_env,
+        initialize=initialize,
+    )
     reporting_kwargs: dict[str, Any] = {
         "emit": _print_deployment_status_message,
     }
@@ -37615,7 +37853,8 @@ def component_add_command(
         "--cluster-id selects the Nebius MK8s cluster to adopt. --target-id is only "
         "the optional cxcli logical target id saved as deploy.targets[].instance_id; "
         "when omitted, cxcli derives it from the live cluster name. "
-        f"The command updates config.yaml and writes {SOURCE_SOPERATOR_DISCOVERY_REPORT_NAME}; "
+        "The command updates config.yaml and writes "
+        f"generated/reports/{SOURCE_SOPERATOR_DISCOVERY_REPORT_NAME}; "
         "reruns refresh read-only source discovery and Nebius provider node-template "
         "inventory by node group before deciding whether external node-template "
         "migration is still needed; "
@@ -38052,7 +38291,7 @@ _SOPERATOR_MIGRATION_EXECUTOR_CONTRACT_LINES = (
     "availability, Slurm CLI access, a one-task srun job, and a Slurm NCCL "
     "benchmark using two idle GPU Slurm nodes when available or the only idle "
     "multi-GPU Slurm node otherwise. Validation JSON "
-    "details are written under generated/reports/, migrate-report.md includes "
+    "details are written under generated/reports/, ext-soperator-migrate-report.md includes "
     "the Soperator/Slurm and MK8s GPU validation rollups, and deploy-report.md "
     "is refreshed as a secondary deploy-compatible MK8s GPU summary.",
     "Failure handling contract: mutating phases watch Nebius, Kubernetes, "
@@ -38265,7 +38504,7 @@ def _load_soperator_source_discovery_report(
     config_path: Path,
     target_ref: str,
 ) -> dict[str, Any]:
-    report_path = config_path.parent / SOURCE_SOPERATOR_DISCOVERY_REPORT_NAME
+    report_path = source_soperator_discovery_report_path(config_path.parent)
     if not report_path.exists():
         raise RuntimeError(
             f"Soperator source discovery report not found: {report_path}. Rerun "
@@ -38375,8 +38614,12 @@ def _soperator_migration_output_phases(
         if isinstance(phases, list)
         else []
     )
-    if not output_phases and flags["migration_required"] and (
-        flags["external_node_template_upgrade_required"] or flags["soperator_upgrade_required"]
+    if (
+        not output_phases
+        and flags["migration_required"]
+        and (
+            flags["external_node_template_upgrade_required"] or flags["soperator_upgrade_required"]
+        )
     ):
         output_phases = [
             {
@@ -38494,7 +38737,7 @@ def _format_soperator_migration_plan_lines(
         phases=report.get("migration_plan"),
         onboarding=onboarding,
     )
-    report_path = config_path.parent / SOURCE_SOPERATOR_DISCOVERY_REPORT_NAME
+    report_path = source_soperator_discovery_report_path(config_path.parent)
     lines = [
         f"Soperator migration target: {target_ref}",
         f"Config: {config_path}",
@@ -38616,9 +38859,7 @@ def _soperator_post_migration_provider_snapshot(
     provider = snapshot.get("provider")
     provider_snapshot: dict[str, Any] = {}
     if isinstance(provider, Mapping) and isinstance(provider.get("mk8s_cluster"), Mapping):
-        provider_snapshot["mk8s_cluster"] = copy.deepcopy(
-            to_plain_data(provider["mk8s_cluster"])
-        )
+        provider_snapshot["mk8s_cluster"] = copy.deepcopy(to_plain_data(provider["mk8s_cluster"]))
     node_groups = snapshot.get("node_groups")
     if not isinstance(node_groups, Mapping):
         return provider_snapshot
@@ -38780,7 +39021,7 @@ def _refresh_soperator_onboarding_after_completed_migration(
         "nebius-cxcli ext-soperator migrate ./deployments/tenant/project/config.yaml "
         "--target external-cluster --execute --approve. --target is the cxcli target "
         "id saved as deploy.targets[].instance_id, not the Nebius cluster_id or "
-        "display name. The command reads "
+        "display name. The command reads generated/reports/"
         f"{SOURCE_SOPERATOR_DISCOVERY_REPORT_NAME}, validates the accepted onboarding "
         "analysis, and prints the target remediation and compute/storage migration plan. "
         "If the accepted onboarding report has no migration-owned actions, run render and "
@@ -38809,7 +39050,7 @@ def _refresh_soperator_onboarding_after_completed_migration(
         "Soperator/Slurm smoke validation with a one-task srun job and a "
         "Slurm NCCL benchmark using two idle GPU Slurm nodes when available "
         "or the only idle multi-GPU Slurm node otherwise, writes "
-        "migrate-report.md with the MK8s GPU and Soperator/Slurm validation "
+        "ext-soperator-migrate-report.md with the MK8s GPU and Soperator/Slurm validation "
         "rollups, refreshes deploy-report.md as a secondary deploy-compatible "
         "MK8s GPU summary, and "
         "rechecks completed selected remediation/upgrade/cutover actions "
@@ -41670,6 +41911,7 @@ def render_command(
         materialize_observability_infra_values(config)
         materialize_observability_app_values(config)
         materialize_mysterybox_eso_app_values(config)
+        _raise_on_render_gpu_fabric_drift(config, paths)
         resolved_source_profile = resolve_component_sources_profile()
         _assert_not_nested_deployments_root(paths.deployments_dir)
         if not _confirm_render_overwrite(paths, force=force):
@@ -42062,7 +42304,7 @@ def terraform_plan_command(
 ) -> None:
     """Run Terraform plan against an existing generated/infra bundle."""
     try:
-        config, paths, _manifest = _load_generated_infra_context(generated_path)
+        config, paths, manifest = _load_generated_infra_context(generated_path)
         _ensure_terraform_backend_ready(config, auto_auth_bootstrap=auto_auth_bootstrap)
         runtime_env = _terraform_runtime_env(config)
         runtime_env.update(
@@ -42076,6 +42318,13 @@ def terraform_plan_command(
             config,
             paths,
             runtime_env=runtime_env,
+        )
+        _warn_on_terraform_gpu_fabric_drift(
+            config,
+            paths,
+            manifest,
+            runtime_env=runtime_env,
+            initialize=False,
         )
         terraform_validate(paths.infra_dir, extra_env=runtime_env, initialize=False)
         terraform_plan(paths.infra_dir, extra_env=runtime_env, initialize=False)
@@ -42132,6 +42381,7 @@ def terraform_apply_command(
             config
         )
         apply_kwargs: dict[str, Any] = {"initialize": False}
+        apply_kwargs["manifest"] = manifest
         if status_watchers:
             apply_kwargs["status_watchers"] = status_watchers
         if mysterybox_payload_env:

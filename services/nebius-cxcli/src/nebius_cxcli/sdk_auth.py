@@ -150,6 +150,8 @@ def init_nebius_sdk(
             kwargs["parent_id"] = parent_id
         return kwargs
 
+    last_auth_error: Exception | None = None
+
     def _sdk_from_credentials_file() -> object | None:
         credentials_file = _as_text(os.environ.get("NEBIUS_AUTH_CREDENTIALS_FILE"))
         if not credentials_file:
@@ -189,6 +191,7 @@ def init_nebius_sdk(
         return SDK(**_sdk_kwargs(credentials=iam_token))
 
     def _sdk_from_config() -> object | None:
+        nonlocal last_auth_error
         try:
             from nebius.aio.cli_config import Config
         except Exception as exc:
@@ -212,6 +215,7 @@ def init_nebius_sdk(
             cfg = Config(**config_kwargs)
             return SDK(**_sdk_kwargs(config_reader=cfg))
         except Exception as exc:
+            last_auth_error = exc
             _LOGGER.debug(
                 "Nebius SDK config auth attempt failed for %s: %s",
                 context,
@@ -252,9 +256,12 @@ def init_nebius_sdk(
         if allow_cli_token
         else ""
     )
-    raise RuntimeError(
+    error = RuntimeError(
         f"Failed to initialize Nebius SDK credentials for {context}. "
         "Provide NEBIUS_AUTH_CREDENTIALS_FILE, runtime auth env vars "
         "(NEBIUS_SA_ID/NEBIUS_AUTH_PUBLIC_KEY_ID/NEBIUS_AUTH_PRIVATE_KEY_FILE), "
         f"set NEBIUS_IAM_TOKEN, {cli_hint}provide a Nebius SDK config/profile."
     )
+    if last_auth_error is not None:
+        raise error from last_auth_error
+    raise error

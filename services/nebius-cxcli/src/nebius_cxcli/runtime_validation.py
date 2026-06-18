@@ -1220,6 +1220,7 @@ def validate_dynamic_payload_structure(payload: Mapping[str, Any]) -> None:
                 "group",
                 "enabled",
                 "install_mode",
+                "placements",
                 "repo",
                 "profile",
                 "version",
@@ -1287,6 +1288,38 @@ def validate_dynamic_payload_structure(payload: Mapping[str, Any]) -> None:
             raise ValueError(
                 f"apps.charts[{index}].install_mode is only supported for chart 'soperator'"
             )
+        placements = raw_chart.get("placements")
+        if placements is not None:
+            if chart_id != "soperator":
+                raise ValueError(
+                    f"apps.charts[{index}].placements is only supported for chart 'soperator'"
+                )
+            if not isinstance(placements, Mapping):
+                raise ValueError(f"apps.charts[{index}].placements must be a mapping")
+            for raw_placement, raw_groups in placements.items():
+                placement = _as_text(raw_placement)
+                if not placement:
+                    raise ValueError(
+                        f"apps.charts[{index}].placements entries must have non-empty names"
+                    )
+                if not _ID_PATTERN.fullmatch(placement):
+                    raise ValueError(
+                        f"apps.charts[{index}].placements.{placement} must use lowercase letters, digits, and hyphens"
+                    )
+                if isinstance(raw_groups, str):
+                    if not raw_groups.strip():
+                        raise ValueError(
+                            f"apps.charts[{index}].placements.{placement} must not be empty"
+                        )
+                elif isinstance(raw_groups, list):
+                    if not raw_groups or not all(isinstance(item, str) and item.strip() for item in raw_groups):
+                        raise ValueError(
+                            f"apps.charts[{index}].placements.{placement} must be a non-empty string or list of non-empty strings"
+                        )
+                else:
+                    raise ValueError(
+                        f"apps.charts[{index}].placements.{placement} must be a non-empty string or list of non-empty strings"
+                    )
         if chart_id == "soperator" and install_mode == "onboard-existing-cluster":
             validate_soperator_onboarding_acceptance(payload, target_ref=instance_id)
         for key in ("repo", "profile", "version", "namespace"):
@@ -1298,6 +1331,12 @@ def validate_dynamic_payload_structure(payload: Mapping[str, Any]) -> None:
             raise ValueError(f"apps.charts[{index}].release-name must be a string when set")
         if not isinstance(raw_chart.get("values"), Mapping):
             raise ValueError(f"apps.charts[{index}].values must be a mapping")
+        values = raw_chart.get("values")
+        if chart_id == "soperator" and isinstance(values, Mapping) and "nodeGroupMapping" in values:
+            raise ValueError(
+                f"apps.charts[{index}].values.nodeGroupMapping is no longer supported; "
+                "use apps.charts[].placements instead"
+            )
         if (
             bool(raw_chart.get("enabled", False))
             and cluster_target_refs

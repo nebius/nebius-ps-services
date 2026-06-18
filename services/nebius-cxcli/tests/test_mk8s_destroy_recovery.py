@@ -8,7 +8,55 @@ import pytest
 import nebius_cxcli.mk8s_destroy_recovery as recovery
 
 
-def test_find_stuck_node_groups_returns_only_terminal_unfinished_creates(monkeypatch) -> None:
+def _stuck_node_group() -> SimpleNamespace:
+    return SimpleNamespace(
+        metadata=SimpleNamespace(id="ng-1", name="cluster1-ng-gpu"),
+        status=SimpleNamespace(
+            state="PROVISIONING",
+            ready_node_count=0,
+            target_node_count=2,
+            events=[
+                SimpleNamespace(
+                    last_occurrence=SimpleNamespace(
+                        level="ERROR",
+                        code="ComputeInstanceCreationFailed",
+                        message="Creation of compute instance is failed for nodes ng-1-a,ng-1-b",
+                        error=SimpleNamespace(code="RESOURCE_EXHAUSTED"),
+                    )
+                )
+            ],
+        ),
+    )
+
+
+class _FailedCreateOperationService:
+    def __init__(self, *, done: bool = True, failed: bool = True) -> None:
+        self.done = done
+        self.failed = failed
+
+    def list(self, request):
+        return SimpleNamespace(
+            wait=lambda: SimpleNamespace(
+                operations=[
+                    SimpleNamespace(
+                        id="op-create-ng-1",
+                        description="Create node group",
+                        created_at=2,
+                    )
+                ]
+            )
+        )
+
+    def get(self, request):
+        return SimpleNamespace(
+            wait=lambda: SimpleNamespace(
+                done=lambda: self.done,
+                successful=lambda: not self.failed,
+            )
+        )
+
+
+def test_find_stuck_node_groups_returns_only_failed_terminal_creates(monkeypatch) -> None:
     sdk = SimpleNamespace(sync_close=lambda: None)
 
     class _Level(Enum):
@@ -77,9 +125,9 @@ def test_find_stuck_node_groups_returns_only_terminal_unfinished_creates(monkeyp
 
         def get(self, request):
             if request.id == "op-create-ng-1":
-                operation = SimpleNamespace(done=lambda: False)
+                operation = SimpleNamespace(done=lambda: True, successful=lambda: False)
             else:
-                operation = SimpleNamespace(done=lambda: True)
+                operation = SimpleNamespace(done=lambda: True, successful=lambda: True)
             return SimpleNamespace(wait=lambda: operation)
 
     class _FakeNodeGroupClient:
@@ -117,6 +165,34 @@ def test_find_stuck_node_groups_returns_only_terminal_unfinished_creates(monkeyp
     )
 
 
+def test_find_stuck_node_groups_ignores_unfinished_create_operation(monkeypatch) -> None:
+    sdk = SimpleNamespace(sync_close=lambda: None)
+    cluster = SimpleNamespace(metadata=SimpleNamespace(id="mk8scluster-123"))
+
+    class _FakeClusterClient:
+        def __init__(self, current_sdk):
+            assert current_sdk is sdk
+
+        def get_by_name(self, request):
+            return SimpleNamespace(wait=lambda: cluster)
+
+    class _FakeNodeGroupClient:
+        def __init__(self, current_sdk):
+            assert current_sdk is sdk
+
+        def list(self, request):
+            return SimpleNamespace(wait=lambda: SimpleNamespace(items=[_stuck_node_group()]))
+
+        def operation_service(self):
+            return _FailedCreateOperationService(done=False, failed=False)
+
+    monkeypatch.setattr(recovery, "init_nebius_sdk", lambda **_kwargs: sdk)
+    monkeypatch.setattr(recovery, "ClusterServiceClient", _FakeClusterClient)
+    monkeypatch.setattr(recovery, "NodeGroupServiceClient", _FakeNodeGroupClient)
+
+    assert recovery.find_stuck_node_groups(project_id="project-u123", cluster_name="cluster1") == ()
+
+
 def test_delete_node_group_waits_for_delete_operation(monkeypatch) -> None:
     sdk = SimpleNamespace(sync_close=lambda: None)
     operation = SimpleNamespace(
@@ -130,6 +206,13 @@ def test_delete_node_group_waits_for_delete_operation(monkeypatch) -> None:
     class _FakeNodeGroupClient:
         def __init__(self, current_sdk):
             assert current_sdk is sdk
+
+        def operation_service(self):
+            return _FailedCreateOperationService()
+
+        def get(self, request):
+            assert request.id == "ng-1"
+            return SimpleNamespace(wait=lambda: _stuck_node_group())
 
         def delete(self, request):
             recorded.append(("delete", request.id))
@@ -163,6 +246,13 @@ def test_delete_node_group_rejects_unconfirmable_delete_operation(monkeypatch) -
         def __init__(self, current_sdk):
             assert current_sdk is sdk
 
+        def operation_service(self):
+            return _FailedCreateOperationService()
+
+        def get(self, request):
+            assert request.id == "ng-1"
+            return SimpleNamespace(wait=lambda: _stuck_node_group())
+
         def delete(self, request):
             assert request.id == "ng-1"
             return SimpleNamespace(wait=lambda: operation)
@@ -183,3 +273,45 @@ def test_delete_node_group_rejects_unconfirmable_delete_operation(monkeypatch) -
             ),
             timeout_seconds=42,
         )
+
+
+def test_delete_node_group_rechecks_stuck_condition_before_delete(monkeypatch) -> None:
+    sdk = SimpleNamespace(sync_close=lambda: None)
+    deleted: list[str] = []
+
+    class _FakeNodeGroupClient:
+        def __init__(self, current_sdk):
+            assert current_sdk is sdk
+
+        def operation_service(self):
+            return _FailedCreateOperationService()
+
+        def get(self, request):
+            assert request.id == "ng-1"
+            recovered = _stuck_node_group()
+            recovered.status.state = "RUNNING"
+            recovered.status.ready_node_count = 2
+            recovered.status.target_node_count = 2
+            return SimpleNamespace(wait=lambda: recovered)
+
+        def delete(self, request):
+            deleted.append(request.id)
+            return SimpleNamespace(wait=lambda: SimpleNamespace())
+
+    monkeypatch.setattr(recovery, "init_nebius_sdk", lambda **_kwargs: sdk)
+    monkeypatch.setattr(recovery, "NodeGroupServiceClient", _FakeNodeGroupClient)
+
+    with pytest.raises(RuntimeError, match="Refusing to delete"):
+        recovery.delete_node_group(
+            recovery.Mk8sNodeGroupDestroyCandidate(
+                project_id="project-u123",
+                cluster_name="cluster1",
+                cluster_id="mk8scluster-123",
+                node_group_name="cluster1-ng-gpu",
+                node_group_id="ng-1",
+                create_operation_id="op-create-ng-1",
+                reason="demo",
+            )
+        )
+
+    assert deleted == []

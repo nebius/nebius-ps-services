@@ -71,6 +71,45 @@ def _soperator_test_app_version() -> str:
     return app_version
 
 
+def test_apply_post_flux_manifest_skips_helm_oci_status_output(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    configmap = {
+        "apiVersion": "v1",
+        "kind": "ConfigMap",
+        "metadata": {"name": "rendered-soperator", "namespace": "soperator"},
+    }
+    manifest_path = tmp_path / "post-flux-helmrender-slurm-soperator.yaml"
+    manifest_path.write_text(
+        yaml.safe_dump_all(
+            [
+                {
+                    "Pulled": "oci://example.invalid/charts/soperator:4.0.1-ps.2",
+                    "Digest": "sha256:deadbeef",
+                },
+                configmap,
+            ],
+            explicit_start=True,
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    applied_docs: list[list[dict[str, object]]] = []
+
+    def fake_run_post_flux_kubectl(cmd, **kwargs):
+        _ = kwargs
+        if cmd[:2] == ["kubectl", "apply"]:
+            docs = list(yaml.safe_load_all(Path(cmd[-1]).read_text(encoding="utf-8")))
+            applied_docs.append(docs)
+
+    monkeypatch.setattr(cli_module, "_run_post_flux_kubectl", fake_run_post_flux_kubectl)
+
+    cli_module._apply_post_flux_manifest(manifest_path, env={})
+
+    assert applied_docs == [[configmap]]
+
+
 def _empty_quota_report() -> cli_module.QuotaReport:
     return cli_module.QuotaReport(
         tenant_id="tenant-123",
@@ -271,11 +310,19 @@ def test_deploy_managed_soperator_runs_gpu_validations_before_full_flux(
         lambda *args, **kwargs: {"KUBECONFIG": "test"},
     )
     monkeypatch.setattr(cli_module, "_report_cluster_nodes_status", lambda **kwargs: None)
-    monkeypatch.setattr(cli_module, "_reconcile_observability_gpu_node_labels", lambda *a, **k: None)
-    monkeypatch.setattr(cli_module, "_ensure_mysterybox_eso_runtime_before_flux", lambda *a, **k: None)
+    monkeypatch.setattr(
+        cli_module, "_reconcile_observability_gpu_node_labels", lambda *a, **k: None
+    )
+    monkeypatch.setattr(
+        cli_module, "_ensure_mysterybox_eso_runtime_before_flux", lambda *a, **k: None
+    )
     monkeypatch.setattr(cli_module, "_ensure_grafana_runtime_before_flux", lambda *a, **k: None)
-    monkeypatch.setattr(cli_module, "_ensure_soperator_notifier_runtime_before_flux", lambda *a, **k: None)
-    monkeypatch.setattr(cli_module, "_ensure_soperator_backup_runtime_before_flux", lambda *a, **k: None)
+    monkeypatch.setattr(
+        cli_module, "_ensure_soperator_notifier_runtime_before_flux", lambda *a, **k: None
+    )
+    monkeypatch.setattr(
+        cli_module, "_ensure_soperator_backup_runtime_before_flux", lambda *a, **k: None
+    )
     monkeypatch.setattr(cli_module, "_apply_rendered_flux", fake_apply_rendered_flux)
     monkeypatch.setattr(cli_module, "_run_deploy_validations", fake_run_deploy_validations)
     monkeypatch.setattr(cli_module, "_collect_grafana_status_after_flux", lambda *a, **k: [])
@@ -1060,22 +1107,30 @@ def test_render_deploy_hint_lists_execute_for_multiple_migration_targets(
     assert "second-cluster" in output
     assert "Next step: dry-run each migration-required Soperator target:" in lines
     assert (
-        f"nebius-cxcli ext-soperator migrate {config_arg} "
-        "--target external-cluster --dry-run"
-    ) in lines
+        cli_module.copy_paste_command_markup(
+            f"nebius-cxcli ext-soperator migrate {config_arg} --target external-cluster --dry-run"
+        )
+        in lines
+    )
     assert (
-        f"nebius-cxcli ext-soperator migrate {config_arg} "
-        "--target second-cluster --dry-run"
-    ) in lines
+        cli_module.copy_paste_command_markup(
+            f"nebius-cxcli ext-soperator migrate {config_arg} --target second-cluster --dry-run"
+        )
+        in lines
+    )
     assert "After accepting each dry-run plan, execute that target:" in lines
     assert (
-        f"nebius-cxcli ext-soperator migrate {config_arg} "
-        "--target external-cluster --execute --approve"
-    ) in lines
+        cli_module.copy_paste_command_markup(
+            f"nebius-cxcli ext-soperator migrate {config_arg} --target external-cluster --execute --approve"
+        )
+        in lines
+    )
     assert (
-        f"nebius-cxcli ext-soperator migrate {config_arg} "
-        "--target second-cluster --execute --approve"
-    ) in lines
+        cli_module.copy_paste_command_markup(
+            f"nebius-cxcli ext-soperator migrate {config_arg} --target second-cluster --execute --approve"
+        )
+        in lines
+    )
     assert "Do not run `nebius-cxcli deploy` before `ext-soperator migrate`" in output
 
 
@@ -1125,7 +1180,10 @@ def test_deploy_blocks_migration_required_soperator_onboarding_target(
         )
 
     message = str(exc_info.value)
-    assert "Deploy is blocked for migration-required external Soperator onboarding target(s)" in message
+    assert (
+        "Deploy is blocked for migration-required external Soperator onboarding target(s)"
+        in message
+    )
     assert "external-cluster" in message
     assert "Soperator chart upgrade" in message
     assert "external MK8s control-plane/node-template upgrade via Nebius API" in message
@@ -3352,7 +3410,10 @@ def test_render_overwrite_warning_mentions_preserved_lifecycle_reports(tmp_path:
     assert result.exit_code == 1, result.output
     normalized = " ".join(result.output.split())
     assert "Render will replace existing generated artifacts under" in normalized
-    assert "Render would replace existing generated artifacts in a non-interactive session." in normalized
+    assert (
+        "Render would replace existing generated artifacts in a non-interactive session."
+        in normalized
+    )
     assert "Render would overwrite existing generated artifacts" not in normalized
     assert "keep lifecycle reports under `generated/reports/`" in normalized
     assert "referenced JSON detail files" in normalized
@@ -3746,7 +3807,7 @@ def test_create_explains_soperator_required_component_selection(
             return [cli_module.OptionChoice(value="vpcsubnet-1", label="default subnet")]
         if full_path_label.endswith(".inputs.cluster.k8s_version"):
             return [cli_module.OptionChoice(value="1.33", label="1.33")]
-        if full_path_label.endswith(".inputs.node_group_defaults.gpu.infiniband_fabric"):
+        if full_path_label.endswith(".inputs.gpu_clusters.workers.infiniband_fabric"):
             return [cli_module.OptionChoice(value="fabric-1", label="fabric-1")]
         return []
 
@@ -3799,7 +3860,7 @@ def test_create_explains_soperator_required_component_selection(
     assert mk8s_inputs["cluster"]["network_id"] == "vpcnetwork-1"
     assert mk8s_inputs["cluster"]["subnet_id"] == "vpcsubnet-1"
     assert mk8s_inputs["cluster"]["k8s_version"] == "1.33"
-    assert mk8s_inputs["node_group_defaults"]["gpu"]["infiniband_fabric"] == "fabric-1"
+    assert "infiniband_fabric" not in mk8s_inputs["node_group_defaults"]["gpu"]
     assert mk8s_inputs["gpu_clusters"] == {"workers": {"infiniband_fabric": "fabric-1"}}
     assert mk8s_inputs["node_groups"]["worker"]["gpu_cluster_key"] == "workers"
     assert mk8s_inputs["node_groups"]["worker"]["reservation"] == {"policy": "AUTO"}
@@ -3960,7 +4021,7 @@ def test_create_soperator_cpu_worker_count_prompt_updates_persisted_node_groups(
         for row in payload["apps"]["charts"]
         if isinstance(row, dict) and row.get("id") == "soperator"
     )
-    assert soperator["values"]["nodeGroupMapping"]["worker"] == [
+    assert soperator["placements"]["worker"] == [
         "worker-cpu-0",
         "worker-cpu-1",
     ]
@@ -4960,7 +5021,12 @@ def test_soperator_onboard_interactive_lists_project_mk8s_clusters(
     assert target["soperator_onboarding"]["compute_mode"] == "keep-existing-compute"
     assert "kube_context" not in target
     assert "analysis_report" not in target["soperator_onboarding"]
-    source_report = config_path.parent / "source-soperator-cluster-discovery-report.json"
+    source_report = (
+        config_path.parent
+        / "generated"
+        / "reports"
+        / "ext-soperator-onboard-source-discovery-report.json"
+    )
     assert source_report.exists()
     assert "Wrote Soperator source discovery report:" in result.output
     assert [(row["id"], row["instance_id"]) for row in payload["apps"]["charts"]] == [
@@ -6051,6 +6117,12 @@ def test_soperator_onboarding_preserves_live_adoption_values_after_materializati
                     "instance_id": "external-cluster",
                     "enabled": True,
                     "install_mode": "onboard-existing-cluster",
+                    "placements": {
+                        "worker": [
+                            "mk8snodegroup-worker-cpu",
+                            "mk8snodegroup-worker-gpu",
+                        ]
+                    },
                     "values": {
                         "customUserValue": "keep",
                         "volume": {
@@ -6067,12 +6139,6 @@ def test_soperator_onboarding_preserves_live_adoption_values_after_materializati
                                     }
                                 ]
                             }
-                        },
-                        "nodeGroupMapping": {
-                            "worker": [
-                                "mk8snodegroup-worker-cpu",
-                                "mk8snodegroup-worker-gpu",
-                            ]
                         },
                         "partitionConfiguration": {
                             "configType": "structured",
@@ -6160,11 +6226,11 @@ def test_soperator_onboarding_preserves_live_adoption_values_after_materializati
     assert values["customUserValue"] == "keep"
     assert values["nameOverride"] == "helm-soperator"
     assert values["clusterName"] == "legacy-slurm"
-    assert values["nodeGroupMapping"] == {
-        "system": ["mk8snodegroup-system"],
-        "controller": ["mk8snodegroup-controller"],
-        "login": ["mk8snodegroup-login"],
-        "accounting": ["mk8snodegroup-accounting"],
+    assert soperator["placements"] == {
+        "system": "mk8snodegroup-system",
+        "controller": "mk8snodegroup-controller",
+        "login": "mk8snodegroup-login",
+        "accounting": "mk8snodegroup-accounting",
         "worker-gpu": ["mk8snodegroup-worker-gpu"],
         "worker-cpu": ["mk8snodegroup-worker-cpu"],
     }
@@ -6210,9 +6276,7 @@ def test_soperator_onboarding_preserves_live_adoption_values_after_materializati
     assert mariadb_storage["size"] == "128Gi"
     assert mariadb_storage["storageClassName"] == "compute-csi-default-sc"
     assert mariadb_storage["volumeClaimTemplate"]["accessModes"] == ["ReadWriteOnce"]
-    assert (
-        mariadb_storage["volumeClaimTemplate"]["storageClassName"] == "compute-csi-default-sc"
-    )
+    assert mariadb_storage["volumeClaimTemplate"]["storageClassName"] == "compute-csi-default-sc"
     assert mariadb_storage["volumeClaimTemplate"]["resources"]["requests"]["storage"] == "128Gi"
 
 
@@ -6274,7 +6338,9 @@ def test_soperator_onboard_interactive_prints_mode_choice_guidance(
         "_soperator_onboarding_report_with_source_version",
         lambda *args, **kwargs: report,
     )
-    monkeypatch.setattr(cli_module, "_print_soperator_onboarding_report_summary", lambda _report: None)
+    monkeypatch.setattr(
+        cli_module, "_print_soperator_onboarding_report_summary", lambda _report: None
+    )
     monkeypatch.setattr(
         cli_module,
         "_soperator_onboarding_target_defaults",
@@ -6481,7 +6547,7 @@ def test_soperator_migrate_dry_run_prints_onboarding_migration_plan(tmp_path: Pa
     assert result.exit_code == 0, result.output
     assert "Soperator migration target: external-cluster" in result.output
     assert "Source discovery report:" in result.output
-    assert "source-soperator-cluster-discovery-report.json" in result.output
+    assert "ext-soperator-onboard-source-discovery-report.json" in result.output
     assert "Onboarding state: existing-soperator-supported" in result.output
     assert "Source version: 3.0.5" in result.output
     assert "Target version: 4.0.1-ps.1" in result.output
@@ -6532,9 +6598,7 @@ def test_soperator_migrate_dry_run_prints_onboarding_migration_plan(tmp_path: Pa
     )
 
     assert custom_zero_surge.exit_code == 0, custom_zero_surge.output
-    assert "active worker group capacity may be reduced by 3 nodes" in (
-        custom_zero_surge.output
-    )
+    assert "active worker group capacity may be reduced by 3 nodes" in (custom_zero_surge.output)
 
 
 def test_soperator_migrate_dry_run_validates_worker_rollout_cli_overrides(
@@ -6697,7 +6761,12 @@ def test_soperator_migrate_dry_run_rejects_gpu_reconciliation_only_deploy_route(
     onboarding["node_template_upgrade"] = {}
     cli_module._refresh_soperator_onboarding_fingerprints(payload)
     config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
-    report_path = config_path.parent / "source-soperator-cluster-discovery-report.json"
+    report_path = (
+        config_path.parent
+        / "generated"
+        / "reports"
+        / "ext-soperator-onboard-source-discovery-report.json"
+    )
     source_report = json.loads(report_path.read_text(encoding="utf-8"))
     source_report["report"]["migration_plan"] = []
     report_path.write_text(json.dumps(source_report), encoding="utf-8")
@@ -7026,7 +7095,9 @@ def test_soperator_migrate_execute_records_approval_and_worker_groups(
     ) in result.output
     assert "Pending phase: none" in result.output
     assert "Migration performed: yes." in result.output
-    migrate_report_path = config_path.parent / "generated" / "reports" / "migrate-report.md"
+    migrate_report_path = (
+        config_path.parent / "generated" / "reports" / "ext-soperator-migrate-report.md"
+    )
     assert f"Migrate report: {migrate_report_path}" in result.output
     assert migrate_report_path.exists()
     migrate_report = migrate_report_path.read_text(encoding="utf-8")
@@ -7099,14 +7170,12 @@ def test_soperator_migrate_execute_refreshes_config_after_completed_migration(
     assert onboarding["state"] == "existing-soperator-target"
     assert onboarding["actions"] == ["reconcile-target-gpu-stack", "adopt-soperator"]
     assert not cli_module._soperator_migration_action_flags(onboarding)["migration_required"]
-    assert target["inventory"]["node_groups"]["worker-gpu-pool"]["nodes"] == [
-        "worker-gpu-node-1"
-    ]
+    assert target["inventory"]["node_groups"]["worker-gpu-pool"]["nodes"] == ["worker-gpu-node-1"]
     soperator_row = next(row for row in refreshed["apps"]["charts"] if row["id"] == "soperator")
     values = soperator_row["values"]
     assert values["clusterName"] == "mk8s"
-    assert values["nodeGroupMapping"]["system"] == ["system-pool"]
-    assert values["nodeGroupMapping"]["worker-gpu"] == ["worker-gpu-pool"]
+    assert soperator_row["placements"]["system"] == "system-pool"
+    assert soperator_row["placements"]["worker-gpu"] == ["worker-gpu-pool"]
 
 
 def test_soperator_migrate_execute_auto_selects_worker_groups_for_approval(
@@ -7148,7 +7217,12 @@ def test_soperator_migrate_execute_auto_selects_worker_groups_for_approval(
 
 def test_soperator_migrate_requires_matching_source_discovery_report(tmp_path: Path) -> None:
     config_path = _write_old_soperator_migration_config(tmp_path)
-    report_path = config_path.parent / "source-soperator-cluster-discovery-report.json"
+    report_path = (
+        config_path.parent
+        / "generated"
+        / "reports"
+        / "ext-soperator-onboard-source-discovery-report.json"
+    )
     report_payload = json.loads(report_path.read_text(encoding="utf-8"))
     report_payload["target_ref"] = "different-cluster"
     report_path.write_text(json.dumps(report_payload), encoding="utf-8")
@@ -7375,7 +7449,12 @@ def test_soperator_onboard_target_match_hides_stale_source_release_from_summary(
     assert "Selected onboarding actions:" in result.output
     assert "adopt-soperator" in result.output
 
-    source_report = config_path.parent / "source-soperator-cluster-discovery-report.json"
+    source_report = (
+        config_path.parent
+        / "generated"
+        / "reports"
+        / "ext-soperator-onboard-source-discovery-report.json"
+    )
     report_payload = json.loads(source_report.read_text(encoding="utf-8"))
     findings = report_payload["report"]["findings"]
     assert any(
@@ -8048,21 +8127,21 @@ def test_create_field_wizard_uses_entered_cluster_name_for_app_defaults(
     sfs = next(row for row in updated["infra"]["components"] if row["id"] == "sfs")
     sfs_filesystems = sfs["inputs"]["filesystems"]
     assert sfs_filesystems["jail"]["name"] == "soperator-cluster1-jail"
-    assert sfs_filesystems["controller-spool"]["name"] == (
-        "soperator-cluster1-controller-spool"
-    )
+    assert sfs_filesystems["controller-spool"]["name"] == ("soperator-cluster1-controller-spool")
     assert sfs_filesystems["accounting"]["name"] == "soperator-cluster1-accounting"
     assert sfs_filesystems["jail"]["mount_tag"] == "soperator-cluster1-jail"
     assert sfs_filesystems["controller-spool"]["mount_tag"] == (
         "soperator-cluster1-controller-spool"
     )
     assert sfs_filesystems["accounting"]["mount_tag"] == "soperator-cluster1-accounting"
-    assert sfs_name_prompt_defaults[
-        "infra.components[1].inputs.filesystems.accounting.name"
-    ] == "soperator-cluster1-accounting"
-    assert sfs_mount_tag_prompt_defaults[
-        "infra.components[1].inputs.filesystems.accounting.mount_tag"
-    ] == "soperator-cluster1-accounting"
+    assert (
+        sfs_name_prompt_defaults["infra.components[1].inputs.filesystems.accounting.name"]
+        == "soperator-cluster1-accounting"
+    )
+    assert (
+        sfs_mount_tag_prompt_defaults["infra.components[1].inputs.filesystems.accounting.mount_tag"]
+        == "soperator-cluster1-accounting"
+    )
 
 
 def test_create_auto_enables_observability_agent_when_wizard_turns_on_observability(
@@ -11825,9 +11904,7 @@ def test_component_add_app_release_overrides_apply_to_added_chart(tmp_path: Path
     payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     charts = payload.get("apps", {}).get("charts", [])
     assert isinstance(charts, list)
-    n8n_row = next(
-        row for row in charts if isinstance(row, dict) and row.get("id") == "n8n"
-    )
+    n8n_row = next(row for row in charts if isinstance(row, dict) and row.get("id") == "n8n")
     assert n8n_row["namespace"] == "automation"
     assert n8n_row["release-name"] == "workflow-core"
     assert n8n_row["version"] == "1.2.3-test.1"
@@ -11865,12 +11942,8 @@ def test_component_add_app_release_overrides_apply_to_each_added_target(
     payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     charts = payload.get("apps", {}).get("charts", [])
     assert isinstance(charts, list)
-    n8n_rows = [
-        row for row in charts if isinstance(row, dict) and row.get("id") == "n8n"
-    ]
-    assert {
-        (row.get("instance_id"), row.get("version")) for row in n8n_rows
-    } == {
+    n8n_rows = [row for row in charts if isinstance(row, dict) and row.get("id") == "n8n"]
+    assert {(row.get("instance_id"), row.get("version")) for row in n8n_rows} == {
         ("mk8s", "1.2.3-test.1"),
         ("mk8s-2", "1.2.3-test.1"),
     }
@@ -11972,9 +12045,7 @@ def test_component_add_wizard_prompts_for_chart_version_before_full_app_config(
     payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     charts = payload.get("apps", {}).get("charts", [])
     assert isinstance(charts, list)
-    n8n_row = next(
-        row for row in charts if isinstance(row, dict) and row.get("id") == "n8n"
-    )
+    n8n_row = next(row for row in charts if isinstance(row, dict) and row.get("id") == "n8n")
     assert n8n_row["version"] == "1.2.3-test.1"
 
 

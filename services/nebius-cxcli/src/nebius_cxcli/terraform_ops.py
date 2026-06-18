@@ -339,7 +339,8 @@ def _stream_json_events(
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 process.kill()
-                process.wait()
+                with suppress(subprocess.TimeoutExpired):
+                    process.wait(timeout=5)
                 raise RuntimeError(
                     f"Terraform command `{_format_command(cmd)}` timed out after {timeout} seconds in {cwd}"
                 )
@@ -372,7 +373,16 @@ def _stream_json_events(
         stdout_thread.join(timeout=1)
         stderr_thread.join(timeout=1)
 
-    return_code = process.wait()
+    remaining = deadline - time.monotonic()
+    try:
+        return_code = process.wait(timeout=max(0.0, remaining))
+    except subprocess.TimeoutExpired as exc:
+        process.kill()
+        with suppress(subprocess.TimeoutExpired):
+            process.wait(timeout=5)
+        raise RuntimeError(
+            f"Terraform command `{_format_command(cmd)}` timed out after {timeout} seconds in {cwd}"
+        ) from exc
     if return_code == 0:
         return
 

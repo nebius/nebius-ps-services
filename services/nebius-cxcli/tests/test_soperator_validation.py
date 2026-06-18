@@ -47,6 +47,8 @@ def test_soperator_cluster_validation_specs_for_enabled_soperator_target() -> No
             "target_version": "",
             "kube_context": "training-context",
             "report_file": "soperator-cluster-validation-report-training.json",
+            "readiness_timeout_seconds": 1200,
+            "readiness_poll_seconds": 15.0,
             "required": True,
         }
     ]
@@ -167,6 +169,94 @@ def test_run_soperator_cluster_validation_writes_smoke_report(tmp_path: Path) ->
         "Slurm srun smoke job",
     ]
     assert any("cxcli-soperator-smoke" in " ".join(command) for command in commands)
+
+
+def test_run_soperator_cluster_validation_waits_for_slurmcluster_availability(
+    tmp_path: Path,
+) -> None:
+    spec = {
+        "kind": SOPERATOR_CLUSTER_VALIDATION_KIND,
+        "name": "Soperator cluster smoke test (training)",
+        "target_ref": "training",
+        "namespace": "soperator",
+        "cluster_name": "training",
+        "report_file": "soperator-cluster-validation-report-training.json",
+        "readiness_timeout_seconds": 2,
+        "readiness_poll_seconds": 0,
+    }
+    phases = ["Pending", "Available", "Available"]
+    slurmcluster_gets = 0
+
+    def _runner(
+        args,
+        *,
+        input_text: str | None = None,
+        timeout_seconds: int = 300,
+        check: bool = True,
+    ) -> SoperatorValidationCommandResult:
+        nonlocal slurmcluster_gets
+        del input_text, timeout_seconds, check
+        command = tuple(str(item) for item in args)
+        if command[:5] == ("kubectl", "-n", "soperator", "get", "pods"):
+            return SoperatorValidationCommandResult(
+                command,
+                0,
+                json.dumps(
+                    {
+                        "items": [
+                            {
+                                "metadata": {
+                                    "name": "login-0",
+                                    "labels": {"app.kubernetes.io/component": "login"},
+                                },
+                                "status": {"phase": "Running"},
+                            }
+                        ]
+                    }
+                ),
+                "",
+            )
+        if command[:6] == ("kubectl", "-n", "soperator", "get", "slurmclusters", "-o"):
+            slurmcluster_gets += 1
+            phase = phases.pop(0) if phases else "Available"
+            return SoperatorValidationCommandResult(
+                command,
+                0,
+                json.dumps(
+                    {
+                        "items": [
+                            {
+                                "metadata": {"name": "training"},
+                                "status": {"phase": phase},
+                            }
+                        ]
+                    }
+                ),
+                "",
+            )
+        if command[:6] == ("kubectl", "-n", "soperator", "exec", "login-0", "--"):
+            if command[6:9] == ("sinfo", "-h", "-o"):
+                return SoperatorValidationCommandResult(command, 0, "idle\n", "")
+            if command[6:8] == ("squeue", "-h"):
+                return SoperatorValidationCommandResult(command, 0, "", "")
+            if command[6:8] == ("bash", "-lc"):
+                return SoperatorValidationCommandResult(
+                    command,
+                    0,
+                    "cxcli-soperator-srun-ok\nworker-0\n",
+                    "",
+                )
+        return SoperatorValidationCommandResult(command, 0, "ok\n", "")
+
+    written = run_soperator_cluster_validations(
+        [spec],
+        reports_dir=tmp_path,
+        command_runner=_runner,
+    )
+
+    report = json.loads(written[0].read_text(encoding="utf-8"))
+    assert report["passed"] is True
+    assert slurmcluster_gets >= 3
 
 
 def test_soperator_cluster_validation_fails_on_active_old_source_flux(

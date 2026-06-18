@@ -33,9 +33,14 @@ class RenderResult:
 _LIFECYCLE_REPORT_FILENAMES = frozenset(
     {
         "deploy-report.md",
-        "migrate-report.md",
-        "upgrade-report.md",
-        "upgrade-report.json",
+        "ext-soperator-migrate-report.md",
+        "ext-soperator-onboard-source-discovery-report.json",
+        "soperator-upgrade-report.md",
+        "soperator-upgrade-report.json",
+        "upgrade-node-group-report.md",
+        "upgrade-node-group-report.json",
+        "upgrade-node-template-report.md",
+        "upgrade-node-template-report.json",
     }
 )
 _REPORT_JSON_REF_RE = re.compile(r"`([^`/\\]+\.json)`")

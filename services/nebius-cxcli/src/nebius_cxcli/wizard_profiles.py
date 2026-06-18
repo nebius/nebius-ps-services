@@ -151,7 +151,7 @@ _SOPERATOR_DISABLED_BOOL_WIZARD_FIELDS = (
     "values.sssd.enabled",
 )
 
-_SOPERATOR_NODE_GROUP_MAPPING_ROLES = (
+_SOPERATOR_PLACEMENT_ROLES = (
     "system",
     "controller",
     "login",
@@ -176,16 +176,16 @@ def _materialized_string_wizard_field(default: str) -> dict[str, Any]:
     }
 
 
-def _soperator_node_group_mapping_fields() -> dict[str, dict[str, Any]]:
+def _soperator_placement_fields() -> dict[str, dict[str, Any]]:
     fields: dict[str, dict[str, Any]] = {}
-    for role in _SOPERATOR_NODE_GROUP_MAPPING_ROLES:
+    for role in _SOPERATOR_PLACEMENT_ROLES:
         provider_spec = {
             "from": "soperator_node_groups",
             "args": {
                 "role": role,
             },
         }
-        fields[f"values.nodeGroupMapping.{role}"] = {
+        fields[f"placements.{role}"] = {
             "write_default_to_config": True,
             "type_hint": "list(string)",
             "default_from": copy.deepcopy(provider_spec),
@@ -297,7 +297,7 @@ def _soperator_wizard_profile() -> dict[str, dict[str, Any]]:
         "values.soperator-backup-config.prune.schedule": _materialized_string_wizard_field(
             "@daily-random"
         ),
-        **_soperator_node_group_mapping_fields(),
+        **_soperator_placement_fields(),
     }
     fields.update(
         {
@@ -442,7 +442,7 @@ BUILTIN_WIZARD_PROFILES: dict[str, dict[str, dict[str, Any]]] = {
                 "from": "compute_platform_presets",
                 "depends_on": "inputs.node_group_defaults.gpu.platform",
                 "args": {
-                    "gpu_cluster_required_path": "inputs.node_group_defaults.gpu.infiniband_fabric"
+                    "gpu_cluster_required_path": "inputs.gpu_clusters.workers.infiniband_fabric"
                 },
                 "auto_select_single": True,
             }
@@ -467,11 +467,14 @@ BUILTIN_WIZARD_PROFILES: dict[str, dict[str, dict[str, Any]]] = {
             "default": "nebius_image",
             "write_default_to_config": True,
         },
-        "inputs.node_group_defaults.gpu.infiniband_fabric": {
+        "inputs.gpu_clusters.workers.infiniband_fabric": {
             "options": {
                 "from": "mk8s_infiniband_fabrics",
                 "depends_on": "inputs.node_group_defaults.gpu.platform",
-                "args": {"preset_path": "inputs.node_group_defaults.gpu.preset"},
+                "args": {
+                    "platform_path": "inputs.node_group_defaults.gpu.platform",
+                    "preset_path": "inputs.node_group_defaults.gpu.preset",
+                },
                 "auto_select_first": True,
                 "skip_prompt_if_no_choices": True,
             }

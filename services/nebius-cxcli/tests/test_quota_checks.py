@@ -310,6 +310,7 @@ def test_estimate_mk8s_requirements_add_gpu_capacity_shape_for_infiniband_nodes(
                     "platform": "gpu-b300-sxm",
                     "preset": "8gpu-192vcpu-2768gb",
                     "gpu_cluster_key": "workers",
+                    "reservation": {"policy": "AUTO"},
                 }
             },
             "gpu_clusters": {"workers": {"infiniband_fabric": "uk-south1-a"}},
@@ -326,7 +327,7 @@ def test_estimate_mk8s_requirements_add_gpu_capacity_shape_for_infiniband_nodes(
         platform="gpu-b300-sxm",
         preset="8gpu-192vcpu-2768gb",
         fabric="uk-south1-a",
-        mode="regular",
+        mode="auto",
         gpu_count_per_instance=8,
     )
 
@@ -547,6 +548,107 @@ def test_evaluate_requirement_converts_capacity_dashboard_vm_slots_to_gpu_units(
     assert check.description == (
         "Capacity Dashboard GPU availability "
         "(reserved VM slots, fabric fabric-6, converted to GPU units)"
+    )
+
+
+def test_evaluate_requirement_auto_reservation_policy_can_mix_capacity_lanes() -> None:
+    requirement = AggregatedQuotaRequirement(
+        component_id="mk8s",
+        instance_id="mk8s",
+        component_label="mk8s",
+        quota_name="compute.instance.gpu.h100",
+        region="eu-north1",
+        required=16,
+        reason=(
+            "2 GPU node(s) at gpu-h100-sxm/8gpu-128vcpu-1600gb for 'worker' "
+            "(reservation policy AUTO)"
+        ),
+        gpu_capacity_shape=GpuCapacityShape(
+            platform="gpu-h100-sxm",
+            preset="8gpu-128vcpu-1600gb",
+            fabric="fabric-6",
+            mode="auto",
+            gpu_count_per_instance=8,
+        ),
+    )
+
+    check = _evaluate_requirement(
+        requirement,
+        tenant_quotas={},
+        project_quotas={},
+        capacity_resource_advice=(
+            _capacity_advice(
+                region="eu-north1",
+                platform="gpu-h100-sxm",
+                preset="8gpu-128vcpu-1600gb",
+                fabric="fabric-6",
+                on_demand_available=1,
+                on_demand_limit=2,
+                on_demand_level="AVAILABILITY_LEVEL_MEDIUM",
+                reserved_available=1,
+                reserved_limit=2,
+                reserved_level="AVAILABILITY_LEVEL_HIGH",
+            ),
+        ),
+    )
+
+    assert check.available == 16
+    assert check.sufficient is True
+    assert check.source_scope == "capacity-dashboard/auto"
+    assert check.description == (
+        "Capacity Dashboard GPU availability "
+        "(AUTO reservation policy: reserved + on-demand VM slots, fabric fabric-6, "
+        "converted to GPU units)"
+    )
+
+
+def test_evaluate_requirement_forbid_reservation_policy_checks_common_pool_only() -> None:
+    requirement = AggregatedQuotaRequirement(
+        component_id="mk8s",
+        instance_id="mk8s",
+        component_label="mk8s",
+        quota_name="compute.instance.gpu.h100",
+        region="eu-north1",
+        required=8,
+        reason=(
+            "1 GPU node(s) at gpu-h100-sxm/8gpu-128vcpu-1600gb for 'worker' "
+            "(reservation policy FORBID)"
+        ),
+        gpu_capacity_shape=GpuCapacityShape(
+            platform="gpu-h100-sxm",
+            preset="8gpu-128vcpu-1600gb",
+            fabric="fabric-6",
+            mode="on-demand",
+            gpu_count_per_instance=8,
+        ),
+    )
+
+    check = _evaluate_requirement(
+        requirement,
+        tenant_quotas={},
+        project_quotas={},
+        capacity_resource_advice=(
+            _capacity_advice(
+                region="eu-north1",
+                platform="gpu-h100-sxm",
+                preset="8gpu-128vcpu-1600gb",
+                fabric="fabric-6",
+                on_demand_available=0,
+                on_demand_limit=2,
+                reserved_available=2,
+                reserved_limit=2,
+                reserved_level="AVAILABILITY_LEVEL_HIGH",
+            ),
+        ),
+    )
+
+    assert check.available == 0
+    assert check.sufficient is False
+    assert check.source_scope == "capacity-dashboard/on-demand"
+    assert check.description == (
+        "Capacity Dashboard GPU availability "
+        "(FORBID reservation policy: on-demand VM slots, fabric fabric-6, "
+        "converted to GPU units)"
     )
 
 
@@ -1317,6 +1419,93 @@ def test_format_quota_report_lines_include_errors_gaps_and_shortages() -> None:
         "set inputs.node_groups.<gpu-group>.boot_disk.type and "
         "inputs.node_groups.<gpu-group>.boot_disk.size_gibibytes"
     ) in lines
+
+
+def test_format_quota_report_lines_marks_capacity_dashboard_shortages() -> None:
+    report = QuotaReport(
+        tenant_id="tenant-123",
+        project_id="project-456",
+        region_id="eu-north1",
+        checked_at="2026-04-10T00:00:00+00:00",
+        checks=(
+            QuotaCheck(
+                component_id="mk8s",
+                instance_id="mk8s-node-template-surge-worker",
+                component_label="mk8s@worker surge",
+                quota_name="compute.instance.gpu.h100",
+                region="eu-north1",
+                required=8,
+                reason=(
+                    "1 GPU node(s) at gpu-h100-sxm/8gpu-128vcpu-1600gb for "
+                    "'worker-safe-surge' (reservation policy AUTO)"
+                ),
+                unit="count",
+                available=0,
+                sufficient=False,
+                tenant_limit=32,
+                tenant_usage=8,
+                project_limit=None,
+                project_usage=8,
+                source_scope="capacity-dashboard/auto",
+                description=(
+                    "Capacity Dashboard GPU availability "
+                    "(AUTO reservation policy: reserved + on-demand VM slots, "
+                    "fabric fabric-6, converted to GPU units)"
+                ),
+                contributors=(),
+            ),
+        ),
+    )
+
+    lines = format_quota_report_lines(report, phase="node-template safe-surge")
+
+    assert any("detected insufficient Nebius quota/capacity" in line for line in lines)
+    assert any(
+        "available 0 via Capacity Dashboard GPU availability "
+        "(AUTO reservation policy: reserved + on-demand VM slots, fabric fabric-6"
+        in line
+        for line in lines
+    )
+
+
+def test_format_quota_report_lines_can_disable_rich_markup_for_exception_text() -> None:
+    report = QuotaReport(
+        tenant_id="tenant-123",
+        project_id="project-456",
+        region_id="eu-north1",
+        checked_at="2026-04-10T00:00:00+00:00",
+        checks=(
+            QuotaCheck(
+                component_id="mk8s",
+                instance_id="mk8s-node-template-surge-worker",
+                component_label="mk8s@worker surge",
+                quota_name="compute.instance.gpu.h100",
+                region="eu-north1",
+                required=8,
+                reason="1 GPU surge node",
+                unit="count",
+                available=0,
+                sufficient=False,
+                tenant_limit=32,
+                tenant_usage=8,
+                project_limit=None,
+                project_usage=8,
+                source_scope="capacity-dashboard/auto",
+                description="Capacity Dashboard GPU availability",
+                contributors=(),
+            ),
+        ),
+    )
+
+    lines = format_quota_report_lines(
+        report,
+        phase="node-template safe-surge",
+        markup=False,
+    )
+
+    assert lines[0].startswith("Quota warning:")
+    assert "[#ffbf00]" not in "\n".join(lines)
+    assert "[/]" not in "\n".join(lines)
 
 
 def test_format_quota_report_lines_can_hide_coverage_gaps() -> None:

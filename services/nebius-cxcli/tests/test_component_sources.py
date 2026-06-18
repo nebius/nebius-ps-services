@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from collections.abc import Iterator
 from copy import deepcopy
 from dataclasses import asdict
@@ -10,6 +11,7 @@ import pytest
 import yaml
 
 import nebius_cxcli.component_sources as component_sources
+import nebius_cxcli.runtime_introspection as runtime_introspection
 from nebius_cxcli.cli import _validate_component_sources_registry
 from nebius_cxcli.component_sources import (
     ComponentOutput,
@@ -520,12 +522,12 @@ def test_bundled_catalog_exposes_soperator_and_nfs_local_sources() -> None:
     }
     assert "values.nodesets[0].sssd.enabled" not in soperator_wizard_fields
     assert "values.slurmNodes.sssd.enabled" not in soperator_wizard_fields
-    assert soperator_wizard_fields["values.nodeGroupMapping.worker"]["type_hint"] == "list(string)"
-    assert soperator_wizard_fields["values.nodeGroupMapping.worker"]["default_from"] == {
+    assert soperator_wizard_fields["placements.worker"]["type_hint"] == "list(string)"
+    assert soperator_wizard_fields["placements.worker"]["default_from"] == {
         "from": "soperator_node_groups",
         "args": {"role": "worker"},
     }
-    assert soperator_wizard_fields["values.nodeGroupMapping.controller"]["options"] == {
+    assert soperator_wizard_fields["placements.controller"]["options"] == {
         "from": "soperator_node_groups",
         "args": {"role": "controller"},
     }
@@ -619,7 +621,8 @@ def test_bundled_catalog_exposes_soperator_and_nfs_local_sources() -> None:
     assert {name: deps for name, deps in missing_dependencies.items() if deps} == {}
     profile = soperator.soperator_nodesets.profiles["nebius-gpu-v1"]
     assert profile["chart"]["activechecks"]["srunReadyPartition"] == "hidden"
-    assert profile["role_mapping"]["roles"]["worker"]["default_node_group_kind"] == "gpu"
+    assert profile["placements"]["worker"]["kind"] == "slurm-worker-nodeset"
+    assert profile["placements"]["worker"]["default_node_group_kind"] == "gpu"
     assert (
         profile["chart"]["values"]["soperator-activechecks"]["checks"]["wait-for-topology"][
             "runAfterCreation"
@@ -632,7 +635,7 @@ def test_bundled_catalog_exposes_soperator_and_nfs_local_sources() -> None:
         ]
         is False
     )
-    assert profile["role_mapping"]["roles"]["controller"]["filesystem_keys"] == [
+    assert profile["placements"]["controller"]["filesystem_keys"] == [
         "jail",
         "controller-spool",
     ]
@@ -640,7 +643,7 @@ def test_bundled_catalog_exposes_soperator_and_nfs_local_sources() -> None:
     assert profile["mk8s"]["worker_nodesets"][0]["autoscaling_input"] == (
         "soperator.worker_autoscaling"
     )
-    assert profile["mk8s"]["worker_nodesets"][0]["node_group_key_prefix"] == "worker"
+    assert profile["mk8s"]["worker_nodesets"][0]["node_group_prefix"] == "worker"
     assert profile["mk8s"]["worker_nodesets"][0]["nodeset_name"] == "worker"
     assert profile["chart"]["values"]["partitionConfiguration"]["partitions"][0]["name"] == "gpu"
     assert profile["chart"]["values"]["partitionConfiguration"]["partitions"][0]["nodeSetRefs"] == [
@@ -712,6 +715,10 @@ def test_bundled_catalog_exposes_soperator_and_nfs_local_sources() -> None:
             100,
         ),
     }
+    assert mixed_profile["placements"]["worker"]["nodeset_templates"] == [
+        "worker-cpu",
+        "worker-gpu",
+    ]
     assert [node["name"] for node in mixed_profile["chart"]["values"]["nodesets"]] == [
         "worker-cpu",
         "worker-gpu",
@@ -1569,7 +1576,7 @@ def test_load_component_sources_expands_app_wizard_profile(tmp_path: Path) -> No
         "from": "soperator_topology_profiles",
         "args": {"default": "disabled"},
     }
-    assert chart_wizard_fields["values.nodeGroupMapping.worker"]["default_from"] == {
+    assert chart_wizard_fields["placements.worker"]["default_from"] == {
         "from": "soperator_node_groups",
         "args": {"role": "worker"},
     }
@@ -2901,6 +2908,121 @@ def test_bundled_soperator_profile_service_role_defaults_are_consistent() -> Non
             assert node_groups[role]["autoscaling_input"] == f"soperator.{role}_autoscaling"
 
 
+@pytest.mark.parametrize(
+    ("profile_patch", "match"),
+    [
+        (
+            {"role_mapping": {"roles": {}}},
+            r"components\.apps\.soperator\.cli\.soperator_nodesets_profile\.profiles\.bad\.role_mapping is no longer supported",
+        ),
+        (
+            {
+                "placements": {
+                    "controller": {
+                        "kind": "slurm-service",
+                        "k8s_node_filter_name": "controller",
+                    }
+                }
+            },
+            r"components\.apps\.soperator\.cli\.soperator_nodesets_profile\.profiles\.bad\.placements\.controller\.k8s_node_filter_name is no longer supported",
+        ),
+        (
+            {
+                "placements": {
+                    "controller": {
+                        "kind": "slurm-service",
+                        "chart_filter_paths": ["slurmNodes.controller.k8sNodeFilterName"],
+                    }
+                }
+            },
+            r"components\.apps\.soperator\.cli\.soperator_nodesets_profile\.profiles\.bad\.placements\.controller\.chart_filter_paths is no longer supported",
+        ),
+        (
+            {
+                "placements": {
+                    "system": {
+                        "kind": "platform-support",
+                        "chart_affinity_paths": ["controllerManager.manager.affinity"],
+                    }
+                }
+            },
+            r"components\.apps\.soperator\.cli\.soperator_nodesets_profile\.profiles\.bad\.placements\.system\.chart_affinity_paths is no longer supported",
+        ),
+        (
+            {
+                "placements": {
+                    "controller": {
+                        "kind": "slurm-service",
+                    }
+                },
+                "mk8s": {
+                    "node_groups": {
+                        "controller": {
+                            "nodeset_name": "controller",
+                        }
+                    }
+                },
+            },
+            r"components\.apps\.soperator\.cli\.soperator_nodesets_profile\.profiles\.bad\.mk8s\.node_groups\.controller\.nodeset_name is no longer supported",
+        ),
+        (
+            {
+                "placements": {
+                    "worker": {
+                        "kind": "slurm-worker-nodeset",
+                    }
+                },
+                "mk8s": {
+                    "worker_nodesets": [
+                        {
+                            "nodeset_name": "worker",
+                            "node_group_key_prefix": "worker",
+                        }
+                    ]
+                },
+            },
+            r"components\.apps\.soperator\.cli\.soperator_nodesets_profile\.profiles\.bad\.mk8s\.worker_nodesets\[0\]\.node_group_key_prefix is no longer supported",
+        ),
+    ],
+)
+def test_load_component_sources_rejects_legacy_soperator_placement_profile_keys(
+    tmp_path: Path,
+    profile_patch: dict[str, object],
+    match: str,
+) -> None:
+    sources_file = tmp_path / "component_sources.yaml"
+    _write_catalog_file(
+        sources_file,
+        _catalog(
+            apps={
+                "soperator": {
+                    "source": {
+                        "portable": {
+                            "repo": "oci://example.invalid/soperator",
+                            "chart": "soperator",
+                            "version": "1.0.0",
+                        }
+                    },
+                    "release": {
+                        "namespace": "soperator",
+                        "name": "soperator",
+                    },
+                    "cli": {
+                        "soperator_nodesets_profile": {
+                            "profiles": {
+                                "bad": profile_patch,
+                            }
+                        }
+                    },
+                }
+            }
+        ),
+    )
+
+    with pytest.raises(ValueError, match=match):
+        load_component_sources(explicit=sources_file)
+
+
 def test_bundled_soperator_profiles_leave_worker_images_to_chart_defaults() -> None:
     profiles = _repo_soperator_nodesets_profiles()
 
@@ -2983,7 +3105,7 @@ def test_bundled_mk8s_declares_optional_wizard_field_override() -> None:
         ]
         is True
     )
-    assert mk8s_wizard_fields["inputs.node_group_defaults.gpu.infiniband_fabric"] == {
+    assert mk8s_wizard_fields["inputs.gpu_clusters.workers.infiniband_fabric"] == {
         "options": {
             "from": "mk8s_infiniband_fabrics",
             "args": {
@@ -4972,6 +5094,48 @@ def test_validate_sources_resolves_relative_local_module_path_from_component_sou
     assert resolved_path == sources_file
     assert issues == []
     assert warnings == []
+
+
+def test_remote_module_probe_accepts_terraform_required_argument_diagnostic_after_download(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    reset_runtime_introspection_cache()
+
+    def fake_run(
+        args: list[str],
+        *,
+        cwd: str | Path,
+        capture_output: bool,
+        text: bool,
+        timeout: int,
+        env: dict[str, str],
+    ) -> subprocess.CompletedProcess[str]:
+        del capture_output, text, timeout, env
+        root = Path(cwd)
+        module_dir = root / ".terraform" / "modules" / "probe" / "modules" / "demo"
+        module_dir.mkdir(parents=True)
+        return subprocess.CompletedProcess(
+            args=args,
+            returncode=1,
+            stderr=(
+                "\nError: Missing required argument\n\n"
+                '  on main.tf line 1, in module "probe":\n'
+                'The argument "cluster" is required, but no definition was found.\n'
+            ),
+        )
+
+    monkeypatch.setattr(runtime_introspection, "resolve_terraform_binary", lambda: "terraform")
+    monkeypatch.setattr(runtime_introspection.subprocess, "run", fake_run)
+
+    module_dir, issue = runtime_introspection._module_inspection_path(
+        "git::https://github.com/example/infra.git//modules/demo?ref=v1.2.3"
+    )
+
+    assert issue is None
+    assert module_dir is not None
+    assert module_dir.endswith(".terraform/modules/probe/modules/demo")
+
+    reset_runtime_introspection_cache()
 
 
 def test_validate_sources_accepts_absolute_local_module_path(monkeypatch, tmp_path: Path) -> None:

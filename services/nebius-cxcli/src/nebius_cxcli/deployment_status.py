@@ -1411,7 +1411,7 @@ class DeploymentStatusReporter:
         self._thread: threading.Thread | None = None
         self._startup_notices: list[str] = []
         self._terminal_failure: str | None = None
-        self._terminal_failure_emitted = False
+        self._last_emitted_terminal_failure: str | None = None
         self._operation = _as_text(operation).lower() or "apply"
 
         explicit_watchers = tuple(status_watchers or ())
@@ -1548,9 +1548,9 @@ class DeploymentStatusReporter:
         return f"Nebius API reported a terminal deployment error: {failure}"
 
     def _emit_terminal_failure_notice(self, failure: str) -> None:
-        if self._terminal_failure_emitted:
+        if self._last_emitted_terminal_failure == failure:
             return
-        self._terminal_failure_emitted = True
+        self._last_emitted_terminal_failure = failure
         self._emit(
             escape(
                 "Nebius API reported terminal deployment error; aborting Terraform wait early: "

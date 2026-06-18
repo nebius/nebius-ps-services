@@ -685,9 +685,10 @@ def _mk8s_gpu_defaults(
         gpu["gpu_stack_preset"] = stack_preset
     if os_value is not None:
         gpu["os"] = os_value
+    inputs: dict[str, object] = {"node_group_defaults": {"gpu": gpu}}
     if infiniband_fabric is not None:
-        gpu["infiniband_fabric"] = infiniband_fabric
-    return {"node_group_defaults": {"gpu": gpu}}
+        inputs["gpu_clusters"] = {"workers": {"infiniband_fabric": infiniband_fabric}}
+    return inputs
 
 
 def test_provider_option_lookup_uses_plugin_for_unknown_provider(
@@ -1713,7 +1714,7 @@ def test_compute_platform_presets_filter_gpu_clusterable_shapes(monkeypatch) -> 
         args={
             "platform_path": "infra.components[0].inputs.node_group_defaults.gpu.platform",
             "gpu_cluster_required_path": (
-                "infra.components[0].inputs.node_group_defaults.gpu.infiniband_fabric"
+                "infra.components[0].inputs.gpu_clusters.workers.infiniband_fabric"
             ),
         },
         payload={
@@ -2228,13 +2229,13 @@ def test_soperator_node_group_mapping_choices_follow_profile_role() -> None:
         provider="soperator_node_groups",
         args={"role": "worker"},
         payload=payload,
-        field_path="apps.charts[0].values.nodeGroupMapping.worker",
+        field_path="apps.charts[0].placements.worker",
     )
     controller_choices = lookup.resolve(
         provider="soperator_node_groups",
         args={"role": "controller"},
         payload=payload,
-        field_path="apps.charts[0].values.nodeGroupMapping.controller",
+        field_path="apps.charts[0].placements.controller",
     )
 
     assert [choice.value for choice in worker_choices] == ["h100"]
@@ -2286,13 +2287,13 @@ def test_soperator_node_group_mapping_choices_use_external_target_inventory() ->
         provider="soperator_node_groups",
         args={"role": "worker"},
         payload=payload,
-        field_path="apps.charts[0].values.nodeGroupMapping.worker",
+        field_path="apps.charts[0].placements.worker",
     )
     controller_choices = lookup.resolve(
         provider="soperator_node_groups",
         args={"role": "controller"},
         payload=payload,
-        field_path="apps.charts[0].values.nodeGroupMapping.controller",
+        field_path="apps.charts[0].placements.controller",
     )
 
     assert [choice.value for choice in worker_choices] == ["h100"]
@@ -2350,7 +2351,7 @@ def test_mk8s_infiniband_fabrics_skip_non_clusterable_gpu_presets(monkeypatch) -
                 ]
             },
         },
-        field_path="infra.components[0].inputs.node_group_defaults.gpu.infiniband_fabric",
+        field_path="infra.components[0].inputs.gpu_clusters.workers.infiniband_fabric",
     )
 
     assert resolved == []
@@ -2428,7 +2429,7 @@ def test_mk8s_infiniband_fabrics_use_live_capacity_rows_for_clusterable_shape(
                 ]
             },
         },
-        field_path="infra.components[0].inputs.node_group_defaults.gpu.infiniband_fabric",
+        field_path="infra.components[0].inputs.gpu_clusters.workers.infiniband_fabric",
     )
 
     assert [(choice.value, choice.label, choice.recommended) for choice in resolved] == [
@@ -2538,7 +2539,7 @@ def test_mk8s_infiniband_fabrics_rank_live_capacity_and_mark_recommended(monkeyp
                 ]
             },
         },
-        field_path="infra.components[0].inputs.node_group_defaults.gpu.infiniband_fabric",
+        field_path="infra.components[0].inputs.gpu_clusters.workers.infiniband_fabric",
     )
 
     assert [(choice.value, choice.label, choice.recommended) for choice in resolved] == [
@@ -2641,7 +2642,7 @@ def test_mk8s_infiniband_fabrics_prefer_reserved_capacity_fabric(
                 ]
             },
         },
-        field_path="infra.components[0].inputs.node_group_defaults.gpu.infiniband_fabric",
+        field_path="infra.components[0].inputs.gpu_clusters.workers.infiniband_fabric",
     )
 
     assert [(choice.value, choice.label, choice.recommended) for choice in resolved] == [
@@ -2732,7 +2733,7 @@ def test_mk8s_infiniband_fabrics_report_manual_fallback_when_live_rows_are_missi
                 ]
             },
         },
-        field_path="infra.components[0].inputs.node_group_defaults.gpu.infiniband_fabric",
+        field_path="infra.components[0].inputs.gpu_clusters.workers.infiniband_fabric",
     )
 
     assert resolved == []

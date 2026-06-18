@@ -30,6 +30,7 @@ DISRUPTION_POLICIES = frozenset(
         DISRUPTION_POLICY_FORCE_DELETE,
     }
 )
+SAFE_SURGE_DEFAULT_MAX_SURGE_COUNT = 1
 MIN_ROLLOUT_WAIT_SECONDS = 3600
 ROLLOUT_WAIT_SECONDS_PER_NODE = 600
 ALLOW_UNAVAILABLE_DRAIN_TIMEOUT_SECONDS = 1800
@@ -108,6 +109,22 @@ class CompatibilityChoice:
 
 
 @dataclass(frozen=True)
+class CompatibilityMatrixOsSummary:
+    """Compatibility matrix choices for one OS value."""
+
+    os: str
+    drivers_presets: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class CompatibilityMatrixSummary:
+    """Compatibility matrix choices returned for one platform."""
+
+    platform: str
+    choices: tuple[CompatibilityMatrixOsSummary, ...]
+
+
+@dataclass(frozen=True)
 class CompatibilityFailure:
     """A layer-specific incompatibility that v1 must not auto-fix."""
 
@@ -127,118 +144,6 @@ class PreflightFinding:
 
 
 @dataclass(frozen=True)
-class Mk8sUpgradePlan:
-    """Concrete K8s version upgrade plan."""
-
-    target: UpgradeTarget
-    cluster_id: str
-    cluster_name: str
-    current_version: str
-    target_version: str
-    hops: tuple[UpgradeHop, ...]
-    disruption_policy: str
-    drain_timeout: DrainTimeout
-    node_groups: tuple[LiveNodeGroup, ...]
-    compatibility_failures: tuple[CompatibilityFailure, ...]
-    preflight_findings: tuple[PreflightFinding, ...] = ()
-    warnings: tuple[str, ...] = ()
-
-    @property
-    def node_group_updates_required(self) -> bool:
-        return any(
-            not _version_prefix_matches(group.version, self.target_version)
-            for group in self.node_groups
-        )
-
-    @property
-    def mutates(self) -> bool:
-        return bool(self.hops) or self.node_group_updates_required
-
-    @property
-    def rollout_incomplete(self) -> bool:
-        return any(
-            not node_group_rollout_complete(group.raw, version=self.target_version)
-            for group in self.node_groups
-        )
-
-
-@dataclass(frozen=True)
-class Mk8sOsImageUpgradePlan:
-    """Concrete MK8s node OS-image upgrade plan."""
-
-    target: UpgradeTarget
-    cluster_id: str
-    cluster_name: str
-    k8s_version: str
-    target_os: str
-    disruption_policy: str
-    drain_timeout: DrainTimeout
-    node_groups: tuple[LiveNodeGroup, ...]
-    compatibility_failures: tuple[CompatibilityFailure, ...]
-    preflight_findings: tuple[PreflightFinding, ...] = ()
-    warnings: tuple[str, ...] = ()
-
-    @property
-    def mutates(self) -> bool:
-        return any(group.os != self.target_os for group in self.node_groups)
-
-    @property
-    def rollout_incomplete(self) -> bool:
-        return any(
-            not node_group_os_rollout_complete(group.raw, os=self.target_os)
-            for group in self.node_groups
-        )
-
-
-@dataclass(frozen=True)
-class NodeLayerUpgradeSpec:
-    """One node-template field upgrade command."""
-
-    command: str
-    title: str
-    source_field: str
-    live_field: str
-    target_label: str
-    group_filter: str
-
-
-@dataclass(frozen=True)
-class Mk8sNodeLayerUpgradePlan:
-    """Concrete MK8s node-template layer upgrade plan."""
-
-    target: UpgradeTarget
-    cluster_id: str
-    cluster_name: str
-    k8s_version: str
-    spec: NodeLayerUpgradeSpec
-    target_value: str
-    disruption_policy: str
-    drain_timeout: DrainTimeout
-    node_groups: tuple[LiveNodeGroup, ...]
-    compatibility_failures: tuple[CompatibilityFailure, ...]
-    preflight_findings: tuple[PreflightFinding, ...] = ()
-    warnings: tuple[str, ...] = ()
-
-    @property
-    def mutates(self) -> bool:
-        return any(
-            _node_layer_live_value(group, self.spec.live_field) != self.target_value
-            for group in self.node_groups
-        )
-
-    @property
-    def rollout_incomplete(self) -> bool:
-        return any(
-            not node_group_layer_rollout_complete(
-                group.raw,
-                field=self.spec.live_field,
-                value=self.target_value,
-            )
-            for group in self.node_groups
-        )
-
-
-@dataclass(frozen=True)
 class Mk8sNodeTemplateUpgradePlan:
     """Concrete combined MK8s node-template upgrade plan."""
 
@@ -255,6 +160,7 @@ class Mk8sNodeTemplateUpgradePlan:
     all_node_groups: tuple[LiveNodeGroup, ...]
     node_groups: tuple[LiveNodeGroup, ...]
     compatibility_failures: tuple[CompatibilityFailure, ...]
+    compatibility_matrix: tuple[CompatibilityMatrixSummary, ...] = ()
     preflight_findings: tuple[PreflightFinding, ...] = ()
     warnings: tuple[str, ...] = ()
 
@@ -317,11 +223,7 @@ class Mk8sUpgradeReadinessResult:
         total = len(self.node_groups)
         ready = self.ready_node_group_count
         state = "verified" if self.control_plane_ready and ready == total else "verification failed"
-        node_text = (
-            f"node groups {ready}/{total} ready"
-            if total
-            else "no node groups selected"
-        )
+        node_text = f"node groups {ready}/{total} ready" if total else "no node groups selected"
         return (
             f"{self.label} {state}: cluster {self.cluster_name or self.cluster_id} "
             f"Kubernetes {self.observed_k8s_version or 'unknown'} "
@@ -362,6 +264,21 @@ def validate_disruption_policy(value: str) -> str:
         allowed = "|".join(sorted(DISRUPTION_POLICIES))
         raise ValueError(f"--strategy must be one of {allowed}.")
     return policy
+
+
+def resolve_strategy_max_surge_count(policy: str, value: int | None = None) -> int:
+    """Return the concrete Terraform max_surge count for a named upgrade strategy."""
+
+    policy = validate_disruption_policy(policy)
+    if value is None:
+        return SAFE_SURGE_DEFAULT_MAX_SURGE_COUNT if policy == DISRUPTION_POLICY_SAFE else 0
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError("--strategy-max-surge-count must be an integer.")
+    if policy != DISRUPTION_POLICY_SAFE:
+        raise ValueError("--strategy-max-surge-count is supported only with --strategy safe-surge.")
+    if value <= 0:
+        raise ValueError("--strategy-max-surge-count must be greater than 0 for safe-surge.")
+    return value
 
 
 def _format_duration(seconds: int | None) -> str:
@@ -530,19 +447,6 @@ def source_node_group_versions_for_groups(
     return versions
 
 
-def source_node_group_versions_for_plan(
-    plan: Mk8sUpgradePlan,
-    *,
-    default_version: str | None = None,
-) -> dict[str, str]:
-    """Return selected source node-group versions for a Kubernetes upgrade plan."""
-
-    return source_node_group_versions_for_groups(
-        plan.node_groups,
-        default_version=default_version,
-    )
-
-
 def update_source_k8s_versions(
     payload: dict[str, Any],
     *,
@@ -591,8 +495,8 @@ def validate_os_image_value(value: str) -> str:
     return raw
 
 
-def validate_node_layer_value(value: str, *, flag_name: str) -> str:
-    """Validate a generic node-template layer target value."""
+def validate_node_template_field_value(value: str, *, flag_name: str) -> str:
+    """Validate a node-template field target value."""
 
     raw = _text(value)
     if not raw:
@@ -600,77 +504,6 @@ def validate_node_layer_value(value: str, *, flag_name: str) -> str:
     if any(char.isspace() for char in raw):
         raise ValueError(f"{flag_name} must not contain whitespace.")
     return raw
-
-
-def node_layer_option_name(spec: NodeLayerUpgradeSpec) -> str:
-    """Return the public CLI option for a node-template layer command."""
-
-    if spec.source_field == "platform":
-        return "--to-platform"
-    if spec.source_field == "gpu_stack_preset":
-        return "--to-gpu-stack-preset"
-    return "--to-preset"
-
-
-def update_source_node_group_os(
-    payload: dict[str, Any],
-    *,
-    instance_id: str,
-    target_os: str,
-    node_group_keys: Sequence[str] | None = None,
-) -> bool:
-    """Update config.yaml node-group OS fields for selected enabled groups."""
-
-    target_os = validate_os_image_value(target_os)
-    wanted_keys = {_text(key) for key in tuple(node_group_keys or ()) if _text(key)}
-    row = find_source_mk8s_component(payload, instance_id)
-    changed = False
-    matched: set[str] = set()
-    for key, raw_group in _enabled_source_node_group_rows(row):
-        if wanted_keys and key not in wanted_keys:
-            continue
-        matched.add(key)
-        if raw_group.get("os") != target_os:
-            raw_group["os"] = target_os
-            changed = True
-    missing = sorted(wanted_keys - matched)
-    if missing:
-        raise ValueError(
-            "Could not find enabled MK8s node group(s) in config.yaml: " + ", ".join(missing)
-        )
-    return changed
-
-
-def update_source_node_group_field(
-    payload: dict[str, Any],
-    *,
-    instance_id: str,
-    field: str,
-    value: str,
-    node_group_keys: Sequence[str] | None = None,
-) -> bool:
-    """Update one config.yaml node-group field for selected enabled groups."""
-
-    if field not in {"platform", "preset", "gpu_stack_preset"}:
-        raise ValueError(f"Unsupported MK8s node-group upgrade field '{field}'.")
-    target_value = validate_node_layer_value(value, flag_name=f"--to-{field.replace('_', '-')}")
-    wanted_keys = {_text(key) for key in tuple(node_group_keys or ()) if _text(key)}
-    row = find_source_mk8s_component(payload, instance_id)
-    changed = False
-    matched: set[str] = set()
-    for key, raw_group in _enabled_source_node_group_rows(row):
-        if wanted_keys and key not in wanted_keys:
-            continue
-        matched.add(key)
-        if raw_group.get(field) != target_value:
-            raw_group[field] = target_value
-            changed = True
-    missing = sorted(wanted_keys - matched)
-    if missing:
-        raise ValueError(
-            "Could not find enabled MK8s node group(s) in config.yaml: " + ", ".join(missing)
-        )
-    return changed
 
 
 def _raw_bool(value: Any, *, default: bool = False) -> bool:
@@ -703,7 +536,7 @@ def update_source_node_template(
     target_version = parse_k8s_version(target_version).minor_text
     target_os = validate_os_image_value(target_os)
     target_gpu_stack_preset = (
-        validate_node_layer_value(
+        validate_node_template_field_value(
             target_gpu_stack_preset,
             flag_name="--to-gpu-stack-preset",
         )
@@ -894,12 +727,12 @@ def _node_group_selector_candidates(group: LiveNodeGroup) -> tuple[str, ...]:
     )
 
 
-def select_live_node_groups_for_os_image(
+def select_live_node_groups_for_node_template(
     groups: Sequence[LiveNodeGroup],
     *,
     node_group: str = "",
 ) -> tuple[LiveNodeGroup, ...]:
-    """Select all node groups or one named group for an OS-image upgrade."""
+    """Select all node groups or one named group for a node-template upgrade."""
 
     selector = _text(node_group)
     if not selector:
@@ -910,59 +743,6 @@ def select_live_node_groups_for_os_image(
     if len(matches) > 1:
         labels = ", ".join(group.name for group in matches)
         raise ValueError(f"MK8s node group selector '{selector}' is ambiguous: {labels}.")
-    return matches
-
-
-def _node_group_matches_filter(group: LiveNodeGroup, group_filter: str) -> bool:
-    normalized = _text(group_filter).lower()
-    if normalized == "gpu":
-        return group.gpu
-    if normalized == "cpu":
-        return not group.gpu
-    return True
-
-
-def _node_group_filter_label(group_filter: str) -> str:
-    normalized = _text(group_filter).lower()
-    if normalized == "gpu":
-        return "GPU"
-    if normalized == "cpu":
-        return "CPU/system"
-    return "MK8s"
-
-
-def select_live_node_groups_for_node_layer(
-    groups: Sequence[LiveNodeGroup],
-    *,
-    node_group: str = "",
-    group_filter: str = "all",
-    command: str,
-) -> tuple[LiveNodeGroup, ...]:
-    """Select all applicable node groups or one named group for a node-layer upgrade."""
-
-    selector = _text(node_group)
-    label = _node_group_filter_label(group_filter)
-    if not selector:
-        selected = tuple(
-            group for group in groups if _node_group_matches_filter(group, group_filter)
-        )
-        if not selected:
-            raise ValueError(f"`upgrade {command}` found no {label} node groups for this target.")
-        return selected
-
-    matches = tuple(group for group in groups if selector in _node_group_selector_candidates(group))
-    if not matches:
-        raise ValueError(f"Could not find live MK8s node group '{selector}' for this target.")
-    if len(matches) > 1:
-        names = ", ".join(group.name for group in matches)
-        raise ValueError(f"MK8s node group selector '{selector}' is ambiguous: {names}.")
-    group = matches[0]
-    if not _node_group_matches_filter(group, group_filter):
-        raise ValueError(
-            f"`upgrade {command}` can target only {label} node groups; "
-            f"'{selector}' resolves to {'GPU' if group.gpu else 'CPU/system'} node group "
-            f"'{group.name}'."
-        )
     return matches
 
 
@@ -1036,332 +816,41 @@ def compatibility_choices_from_response(
     return tuple(choices)
 
 
-def _choice_matches_node_group(choice: CompatibilityChoice, group: LiveNodeGroup) -> bool:
-    if choice.platform and group.platform and choice.platform != group.platform:
-        return False
-    if choice.os and group.os and choice.os != group.os:
-        return False
-    if group.gpu and group.drivers_preset:
-        return choice.drivers_preset == group.drivers_preset
-    if group.gpu:
-        return not choice.drivers_preset
-    return True
+def _drivers_preset_label(value: str) -> str:
+    return value or "driverless/operator-managed"
 
 
-def _node_group_config_field(group: LiveNodeGroup, field: str) -> str:
-    if group.source is not None and group.source.key:
-        return f"inputs.node_groups.{group.source.key}.{field}"
-    return f"the config.yaml node-group entry for live node group '{group.name}' field '{field}'"
-
-
-def _node_layer_follow_up(
-    *,
-    config_path: str,
-    target_selector: str,
-    group: LiveNodeGroup,
-    field: str,
-    value: str,
-    layer_command: str,
-) -> str:
-    if layer_command == "os-image":
-        command = f"nebius-cxcli upgrade os-image {config_path} {target_selector} --to-os {value}"
-        return (
-            "Run this command before rerunning upgrade k8s-version:\n"
-            f"{command}\n"
-            f"Or set {_node_group_config_field(group, field)} to {value} in config.yaml, "
-            "then render/deploy that node-layer change manually."
-        )
-    if layer_command == "gpu-stack-preset":
-        command = (
-            f"nebius-cxcli upgrade gpu-stack-preset {config_path} {target_selector} "
-            f"--to-gpu-stack-preset {value}"
-        )
-        return (
-            "Run this command before rerunning upgrade k8s-version:\n"
-            f"{command}\n"
-            f"Or set {_node_group_config_field(group, field)} to {value} in config.yaml, "
-            "then render/deploy that node-layer change manually."
-        )
-    if layer_command == "platform":
-        command = (
-            f"nebius-cxcli upgrade platform {config_path} {target_selector} "
-            f"--to-platform {value}"
-        )
-        return (
-            "Run this command before rerunning upgrade k8s-version:\n"
-            f"{command}\n"
-            f"Or set {_node_group_config_field(group, field)} to {value} in config.yaml, "
-            "then render/deploy that node-layer change manually."
-        )
-    return (
-        f"Set {_node_group_config_field(group, field)} to {value} in config.yaml, "
-        "then render/deploy that node-layer change before rerunning upgrade k8s-version."
-    )
-
-
-def compatibility_failures_for_node_group(
-    *,
-    config_path: str,
-    target_selector: str,
-    target_version: str,
-    group: LiveNodeGroup,
-    choices: Sequence[CompatibilityChoice],
-) -> tuple[CompatibilityFailure, ...]:
-    if any(_choice_matches_node_group(choice, group) for choice in choices):
-        return ()
-
-    os_candidates = tuple(
-        dict.fromkeys(
-            choice.os for choice in choices if choice.os and choice.platform == group.platform
-        )
-    )
-    driver_candidates = tuple(
-        dict.fromkeys(
-            choice.drivers_preset
-            for choice in choices
-            if choice.drivers_preset
-            and choice.platform == group.platform
-            and (not choice.os or not group.os or choice.os == group.os)
-        )
-    )
-    if group.os and os_candidates and group.os not in os_candidates:
-        return (
-            CompatibilityFailure(
-                node_group=group.name,
-                reason=(
-                    f"node group '{group.name}' uses OS '{group.os}', which is not compatible "
-                    f"with Kubernetes {target_version} on platform '{group.platform}'."
+def _compatibility_matrix_summary(
+    choices_by_platform: Mapping[str, Sequence[CompatibilityChoice]],
+) -> tuple[CompatibilityMatrixSummary, ...]:
+    summaries: list[CompatibilityMatrixSummary] = []
+    for platform, choices in choices_by_platform.items():
+        by_os: dict[str, list[str]] = {}
+        for choice in choices:
+            choice_platform = choice.platform or platform
+            if platform and choice_platform and choice_platform != platform:
+                continue
+            os_value = choice.os or "unknown"
+            drivers_preset = _drivers_preset_label(choice.drivers_preset)
+            presets = by_os.setdefault(os_value, [])
+            if drivers_preset not in presets:
+                presets.append(drivers_preset)
+        summaries.append(
+            CompatibilityMatrixSummary(
+                platform=platform or "unknown",
+                choices=tuple(
+                    CompatibilityMatrixOsSummary(os=os_value, drivers_presets=tuple(presets))
+                    for os_value, presets in by_os.items()
                 ),
-                follow_up=(
-                    _node_layer_follow_up(
-                        config_path=config_path,
-                        target_selector=target_selector,
-                        group=group,
-                        field="os",
-                        value=os_candidates[0],
-                        layer_command="os-image",
-                    )
-                ),
-            ),
+            )
         )
-    if (
-        group.gpu
-        and group.drivers_preset
-        and driver_candidates
-        and group.drivers_preset not in driver_candidates
-    ):
-        return (
-            CompatibilityFailure(
-                node_group=group.name,
-                reason=(
-                    f"node group '{group.name}' uses GPU stack preset '{group.drivers_preset}', "
-                    f"which is not compatible with Kubernetes {target_version}."
-                ),
-                follow_up=(
-                    _node_layer_follow_up(
-                        config_path=config_path,
-                        target_selector=target_selector,
-                        group=group,
-                        field="gpu_stack_preset",
-                        value=driver_candidates[0],
-                        layer_command="gpu-stack-preset",
-                    )
-                ),
-            ),
-        )
-    platform_candidates = tuple(dict.fromkeys(choice.platform for choice in choices if choice.platform))
-    if group.platform and platform_candidates and group.platform not in platform_candidates:
-        return (
-            CompatibilityFailure(
-                node_group=group.name,
-                reason=(
-                    f"node group '{group.name}' uses platform '{group.platform}', which is not "
-                    f"compatible with Kubernetes {target_version}."
-                ),
-                follow_up=(
-                    _node_layer_follow_up(
-                        config_path=config_path,
-                        target_selector=target_selector,
-                        group=group,
-                        field="platform",
-                        value=platform_candidates[0],
-                        layer_command="platform",
-                    )
-                ),
-            ),
-        )
-    return (
-        CompatibilityFailure(
-            node_group=group.name,
-            reason=(
-                f"node group '{group.name}' template is not present in the live Nebius "
-                f"compatibility matrix for Kubernetes {target_version}."
-            ),
-            follow_up=(
-                "Review live compatibility, then apply the required node-layer change "
-                "outside upgrade k8s-version before rerunning:\n"
-                f"nebius-cxcli upgrade k8s-version {config_path} {target_selector} "
-                f"--to-version {target_version}"
-            ),
-        ),
-    )
-
-
-def _choice_matches_os_image(
-    choice: CompatibilityChoice,
-    group: LiveNodeGroup,
-    *,
-    target_os: str,
-) -> bool:
-    if choice.platform and group.platform and choice.platform != group.platform:
-        return False
-    if choice.os != target_os:
-        return False
-    if group.gpu and group.drivers_preset:
-        return choice.drivers_preset == group.drivers_preset
-    if group.gpu:
-        return not choice.drivers_preset
-    return True
+    return tuple(summaries)
 
 
 def _os_image_driver_label(group: LiveNodeGroup) -> str:
     if not group.gpu:
         return "driverless"
     return group.drivers_preset or "driverless/operator-managed"
-
-
-def os_image_compatibility_failures_for_node_group(
-    *,
-    target_version: str,
-    target_os: str,
-    group: LiveNodeGroup,
-    choices: Sequence[CompatibilityChoice],
-) -> tuple[CompatibilityFailure, ...]:
-    """Return OS-image compatibility blockers for one node group."""
-
-    target_os = validate_os_image_value(target_os)
-    if any(_choice_matches_os_image(choice, group, target_os=target_os) for choice in choices):
-        return ()
-    compatible_os_values = tuple(
-        dict.fromkeys(
-            choice.os
-            for choice in choices
-            if choice.os
-            and (not choice.platform or not group.platform or choice.platform == group.platform)
-            and (
-                not group.gpu
-                or choice.drivers_preset == group.drivers_preset
-                or (not group.drivers_preset and not choice.drivers_preset)
-            )
-        )
-    )
-    same_os_other_driver = any(
-        choice.os == target_os
-        and (not choice.platform or not group.platform or choice.platform == group.platform)
-        for choice in choices
-    )
-    if same_os_other_driver and group.gpu:
-        follow_up = (
-            "The requested OS exists in the live compatibility matrix for "
-            f"platform '{group.platform}', but not with GPU stack preset "
-            f"'{_os_image_driver_label(group)}'. Apply a compatible "
-            "`upgrade gpu-stack-preset` change first, or choose an OS that is "
-            "compatible with the current GPU stack."
-        )
-    elif compatible_os_values:
-        follow_up = (
-            "Choose one of the OS values returned by the live Nebius MK8s "
-            "compatibility matrix for this node group: " + ", ".join(compatible_os_values) + "."
-        )
-    else:
-        follow_up = (
-            "Review the live Nebius MK8s compatibility matrix for Kubernetes "
-            f"{target_version}, platform '{group.platform}', and GPU stack "
-            f"'{_os_image_driver_label(group)}'."
-        )
-    return (
-        CompatibilityFailure(
-            node_group=group.name,
-            reason=(
-                f"node group '{group.name}' cannot use OS '{target_os}' on "
-                f"Kubernetes {target_version}, platform '{group.platform}', "
-                f"GPU stack '{_os_image_driver_label(group)}'."
-            ),
-            follow_up=follow_up,
-        ),
-    )
-
-
-def _node_layer_live_value(group: LiveNodeGroup, field: str) -> str:
-    if field == "platform":
-        return group.platform
-    if field == "preset":
-        return group.preset
-    if field == "drivers_preset":
-        return group.drivers_preset
-    raise ValueError(f"Unsupported live node-group field '{field}'.")
-
-
-def _node_layer_choice_matches(
-    choice: CompatibilityChoice,
-    group: LiveNodeGroup,
-    *,
-    spec: NodeLayerUpgradeSpec,
-    target_value: str,
-) -> bool:
-    platform = target_value if spec.live_field == "platform" else group.platform
-    drivers_preset = target_value if spec.live_field == "drivers_preset" else group.drivers_preset
-    if choice.platform and platform and choice.platform != platform:
-        return False
-    if choice.os and group.os and choice.os != group.os:
-        return False
-    if group.gpu:
-        return choice.drivers_preset == drivers_preset
-    return not choice.drivers_preset
-
-
-def node_layer_compatibility_failures_for_node_group(
-    *,
-    k8s_version: str,
-    group: LiveNodeGroup,
-    spec: NodeLayerUpgradeSpec,
-    target_value: str,
-    choices: Sequence[CompatibilityChoice],
-) -> tuple[CompatibilityFailure, ...]:
-    """Return compatibility blockers for node-template fields covered by MK8s matrix."""
-
-    if spec.live_field not in {"platform", "drivers_preset"}:
-        return ()
-    if any(
-        _node_layer_choice_matches(
-            choice,
-            group,
-            spec=spec,
-            target_value=target_value,
-        )
-        for choice in choices
-    ):
-        return ()
-    current_value = _node_layer_live_value(group, spec.live_field) or "unknown"
-    return (
-        CompatibilityFailure(
-            node_group=group.name,
-            reason=(
-                f"node group '{group.name}' cannot use {spec.target_label} "
-                f"'{target_value}' on Kubernetes {k8s_version}, OS "
-                f"'{group.os or 'unknown'}', platform "
-                f"'{target_value if spec.live_field == 'platform' else group.platform or 'unknown'}', "
-                f"GPU stack "
-                f"'{target_value if spec.live_field == 'drivers_preset' else _os_image_driver_label(group)}'."
-            ),
-            follow_up=(
-                f"Current live {spec.target_label} is '{current_value}'. "
-                "Choose a value returned by the live Nebius MK8s compatibility "
-                "matrix for this node group, or make the required combined "
-                "config.yaml node-layer changes manually and rerender/deploy."
-            ),
-        ),
-    )
 
 
 def node_group_uses_nebius_gpu_image(group: LiveNodeGroup) -> bool:
@@ -1433,7 +922,7 @@ def node_template_compatibility_failures_for_node_group(
 
     target_os = validate_os_image_value(target_os)
     if _text(target_gpu_stack_preset):
-        target_gpu_stack_preset = validate_node_layer_value(
+        target_gpu_stack_preset = validate_node_template_field_value(
             target_gpu_stack_preset,
             flag_name="--to-gpu-stack-preset",
         )
@@ -1468,9 +957,7 @@ def node_template_compatibility_failures_for_node_group(
         follow_up_parts.append("Compatible OS values: " + ", ".join(os_values) + ".")
     if driver_values:
         follow_up_parts.append(
-            "Compatible GPU stack values for the requested OS: "
-            + ", ".join(driver_values)
-            + "."
+            "Compatible GPU stack values for the requested OS: " + ", ".join(driver_values) + "."
         )
     return (
         CompatibilityFailure(
@@ -1737,6 +1224,17 @@ def _preflight_finding_summary_lines(findings: Sequence[PreflightFinding]) -> tu
     return tuple(lines)
 
 
+def _safe_surge_warning_line(max_surge_count: int) -> str:
+    node_label = "node" if max_surge_count == 1 else "nodes"
+    return (
+        f"safe-surge uses {max_surge_count} temporary surge {node_label} "
+        "per active node group "
+        f"(max_surge={max_surge_count}, max_unavailable=0) and requires "
+        "spare quota/capacity; cxcli fails preflight when quota assessment "
+        "reports a shortage."
+    )
+
+
 def _looks_like_copy_paste_command(line: str) -> bool:
     return line.strip().startswith(
         (
@@ -1767,140 +1265,20 @@ def _append_compatibility_failure_lines(
             lines.append(f"      {line}")
 
 
-def format_upgrade_plan(
-    plan: Mk8sUpgradePlan,
-    *,
-    dry_run: bool,
-    repeat_dry_run_command: str | None = None,
-) -> tuple[str, ...]:
-    lines = [
-        "MK8s Kubernetes version upgrade plan",
-        f"- target: {plan.target.selector}",
-        f"- cluster: {plan.cluster_name or plan.cluster_id} ({plan.cluster_id})",
-        f"- current version: {plan.current_version}",
-        f"- target version: {plan.target_version}",
-        f"- strategy: {plan.disruption_policy}",
-        f"- drain timeout: {plan.drain_timeout.label}",
-    ]
-    if plan.hops:
-        lines.append("- version hops:")
-        lines.extend(
-            f"  - control plane: {hop.from_version} -> {hop.to_version}" for hop in plan.hops
-        )
-    else:
-        lines.append("- version hops: none; cluster is already on the requested minor version")
-    if plan.node_groups:
-        lines.append("- node-group order:")
-        lines.extend(
-            f"  - {group.name}: {group.version or 'unknown'} -> {plan.target_version}"
-            f" ({'gpu' if group.gpu else 'cpu/system'})"
-            for group in plan.node_groups
-        )
-    if plan.preflight_findings:
-        lines.append("- preflight findings:")
-        lines.extend(_preflight_finding_summary_lines(plan.preflight_findings))
-    if plan.compatibility_failures:
-        lines.append("- compatibility blockers:")
-        for failure in plan.compatibility_failures:
-            _append_compatibility_failure_lines(lines, failure)
-    if plan.warnings:
-        lines.append("- warnings:")
-        lines.extend(f"  - {warning}" for warning in plan.warnings)
-    if dry_run:
-        if repeat_dry_run_command:
-            lines.append("- repeat dry-run command:")
-            lines.append(repeat_dry_run_command)
-        lines.append(
-            "Dry run only: no config.yaml write, generated bundle render, or Terraform plan/apply was performed."
-        )
-    return tuple(lines)
-
-
-def format_os_image_upgrade_plan(
-    plan: Mk8sOsImageUpgradePlan,
-    *,
-    dry_run: bool,
-    repeat_dry_run_command: str | None = None,
-) -> tuple[str, ...]:
-    lines = [
-        "MK8s OS image upgrade plan",
-        f"- target: {plan.target.selector}",
-        f"- cluster: {plan.cluster_name or plan.cluster_id} ({plan.cluster_id})",
-        f"- Kubernetes version: {plan.k8s_version}",
-        f"- target OS image: {plan.target_os}",
-        f"- strategy: {plan.disruption_policy}",
-        f"- drain timeout: {plan.drain_timeout.label}",
-    ]
-    if plan.node_groups:
-        lines.append("- node-group order:")
-        lines.extend(
-            f"  - {group.name}: {group.os or 'unknown'} -> {plan.target_os}"
-            f" ({'gpu' if group.gpu else 'cpu/system'})"
-            for group in plan.node_groups
-        )
-    if plan.preflight_findings:
-        lines.append("- preflight findings:")
-        lines.extend(_preflight_finding_summary_lines(plan.preflight_findings))
-    if plan.compatibility_failures:
-        lines.append("- compatibility blockers:")
-        for failure in plan.compatibility_failures:
-            _append_compatibility_failure_lines(lines, failure)
-    if plan.warnings:
-        lines.append("- warnings:")
-        lines.extend(f"  - {warning}" for warning in plan.warnings)
-    if dry_run:
-        if repeat_dry_run_command:
-            lines.append("- repeat dry-run command:")
-            lines.append(repeat_dry_run_command)
-        lines.append(
-            "Dry run only: no config.yaml write, generated bundle render, "
-            "or Terraform plan/apply was performed."
-        )
-    return tuple(lines)
-
-
-def format_node_layer_upgrade_plan(
-    plan: Mk8sNodeLayerUpgradePlan,
-    *,
-    dry_run: bool,
-    repeat_dry_run_command: str | None = None,
-) -> tuple[str, ...]:
-    lines = [
-        f"{plan.spec.title} upgrade plan",
-        f"- target: {plan.target.selector}",
-        f"- cluster: {plan.cluster_name or plan.cluster_id} ({plan.cluster_id})",
-        f"- Kubernetes version: {plan.k8s_version}",
-        f"- target {plan.spec.target_label}: {plan.target_value}",
-        f"- strategy: {plan.disruption_policy}",
-        f"- drain timeout: {plan.drain_timeout.label}",
-    ]
-    if plan.node_groups:
-        lines.append("- node-group order:")
-        lines.extend(
-            f"  - {group.name}: "
-            f"{_node_layer_live_value(group, plan.spec.live_field) or 'unknown'} "
-            f"-> {plan.target_value} ({'gpu' if group.gpu else 'cpu/system'})"
-            for group in plan.node_groups
-        )
-    if plan.preflight_findings:
-        lines.append("- preflight findings:")
-        lines.extend(_preflight_finding_summary_lines(plan.preflight_findings))
-    if plan.compatibility_failures:
-        lines.append("- compatibility blockers:")
-        for failure in plan.compatibility_failures:
-            _append_compatibility_failure_lines(lines, failure)
-    if plan.warnings:
-        lines.append("- warnings:")
-        lines.extend(f"  - {warning}" for warning in plan.warnings)
-    if dry_run:
-        if repeat_dry_run_command:
-            lines.append("- repeat dry-run command:")
-            lines.append(repeat_dry_run_command)
-        lines.append(
-            "Dry run only: no config.yaml write, generated bundle render, "
-            "or Terraform plan/apply was performed."
-        )
-    return tuple(lines)
+def _append_compatibility_matrix_lines(
+    lines: list[str],
+    summaries: Sequence[CompatibilityMatrixSummary],
+) -> None:
+    if not summaries:
+        return
+    lines.append("- compatibility matrix:")
+    for summary in summaries:
+        lines.append(f"  - {summary.platform}:")
+        if not summary.choices:
+            lines.append("    - no compatible OS/GPU stack values returned")
+            continue
+        for choice in summary.choices:
+            lines.append(f"    - {choice.os}: " + ", ".join(choice.drivers_presets))
 
 
 def format_node_template_upgrade_plan(
@@ -1945,6 +1323,7 @@ def format_node_template_upgrade_plan(
                 f"GPU stack {current_stack} -> {gpu_stack} "
                 f"({'gpu' if group.gpu else 'cpu/system'})"
             )
+    _append_compatibility_matrix_lines(lines, plan.compatibility_matrix)
     if plan.preflight_findings:
         lines.append("- preflight findings:")
         lines.extend(_preflight_finding_summary_lines(plan.preflight_findings))
@@ -2020,6 +1399,8 @@ def _node_group_status_ready(node_group: Any) -> bool:
     outdated = getattr(status, "outdated_node_count", None)
     if not all(isinstance(value, int) for value in (ready, target, node_count, outdated)):
         return False
+    if not isinstance(target, int) or target <= 0:
+        return False
     if isinstance(ready, int) and isinstance(target, int) and ready < target:
         return False
     if isinstance(node_count, int) and isinstance(target, int) and node_count != target:
@@ -2027,26 +1408,6 @@ def _node_group_status_ready(node_group: Any) -> bool:
     if isinstance(outdated, int) and outdated > 0:
         return False
     return not bool(getattr(status, "reconciling", False))
-
-
-def node_group_os_rollout_complete(node_group: Any, *, os: str) -> bool:
-    if _node_group_template_os(node_group) != validate_os_image_value(os):
-        return False
-    return _node_group_status_ready(node_group)
-
-
-def node_group_layer_rollout_complete(
-    node_group: Any,
-    *,
-    field: str,
-    value: str,
-) -> bool:
-    if _node_group_template_layer_value(node_group, field=field) != validate_node_layer_value(
-        value,
-        flag_name="node layer value",
-    ):
-        return False
-    return _node_group_status_ready(node_group)
 
 
 def node_group_node_template_rollout_complete(
@@ -2073,34 +1434,6 @@ def node_group_rollout_summary(node_group: Any) -> str:
     return (
         f"{name}: spec={_text(getattr(getattr(node_group, 'spec', None), 'version', None)) or 'unknown'}, "
         f"status={_text(getattr(status, 'version', None)) or 'unknown'}, "
-        f"ready={getattr(status, 'ready_node_count', None)}/"
-        f"{getattr(status, 'target_node_count', None)}, "
-        f"nodes={getattr(status, 'node_count', None)}, "
-        f"outdated={getattr(status, 'outdated_node_count', None)}, "
-        f"reconciling={getattr(status, 'reconciling', None)}"
-    )
-
-
-def node_group_os_rollout_summary(node_group: Any) -> str:
-    metadata = getattr(node_group, "metadata", None)
-    status = getattr(node_group, "status", None)
-    name = _metadata_name(metadata) or _text(getattr(metadata, "id", None)) or "unknown"
-    return (
-        f"{name}: os={_node_group_template_os(node_group) or 'unknown'}, "
-        f"ready={getattr(status, 'ready_node_count', None)}/"
-        f"{getattr(status, 'target_node_count', None)}, "
-        f"nodes={getattr(status, 'node_count', None)}, "
-        f"outdated={getattr(status, 'outdated_node_count', None)}, "
-        f"reconciling={getattr(status, 'reconciling', None)}"
-    )
-
-
-def node_group_layer_rollout_summary(node_group: Any, *, field: str) -> str:
-    metadata = getattr(node_group, "metadata", None)
-    status = getattr(node_group, "status", None)
-    name = _metadata_name(metadata) or _text(getattr(metadata, "id", None)) or "unknown"
-    return (
-        f"{name}: {field}={_node_group_template_layer_value(node_group, field=field) or 'unknown'}, "
         f"ready={getattr(status, 'ready_node_count', None)}/"
         f"{getattr(status, 'target_node_count', None)}, "
         f"nodes={getattr(status, 'node_count', None)}, "
@@ -2164,12 +1497,7 @@ def node_group_rollout_wait_seconds(group: LiveNodeGroup) -> int:
 def verify_mk8s_upgrade_plan_ready(
     *,
     executor: Any,
-    plan: (
-        Mk8sUpgradePlan
-        | Mk8sOsImageUpgradePlan
-        | Mk8sNodeLayerUpgradePlan
-        | Mk8sNodeTemplateUpgradePlan
-    ),
+    plan: Mk8sNodeTemplateUpgradePlan,
     label: str = "MK8s upgrade",
 ) -> Mk8sUpgradeReadinessResult:
     """Re-read live MK8s state and fail unless the requested upgrade is complete."""
@@ -2246,62 +1574,28 @@ def _cluster_control_plane_version_from_sdk(cluster: Any) -> str:
     )
 
 
-def _plan_expected_cluster_version(
-    plan: (
-        Mk8sUpgradePlan
-        | Mk8sOsImageUpgradePlan
-        | Mk8sNodeLayerUpgradePlan
-        | Mk8sNodeTemplateUpgradePlan
-    ),
-) -> str:
-    if isinstance(plan, (Mk8sUpgradePlan, Mk8sNodeTemplateUpgradePlan)):
-        return plan.target_version
-    return plan.k8s_version
+def _plan_expected_cluster_version(plan: Mk8sNodeTemplateUpgradePlan) -> str:
+    return plan.target_version
 
 
 def _plan_node_group_ready(
-    plan: (
-        Mk8sUpgradePlan
-        | Mk8sOsImageUpgradePlan
-        | Mk8sNodeLayerUpgradePlan
-        | Mk8sNodeTemplateUpgradePlan
-    ),
+    plan: Mk8sNodeTemplateUpgradePlan,
     planned_group: LiveNodeGroup,
     live_group: Any,
 ) -> tuple[bool, str]:
     if not _node_group_has_status(live_group):
         return (
             False,
-            _node_group_status_missing_summary(plan, live_group),
+            _node_group_status_missing_summary(live_group),
         )
     missing_status_fields = _missing_required_status_count_fields(live_group)
     if missing_status_fields:
         return (
             False,
             _node_group_status_incomplete_summary(
-                plan,
                 live_group,
                 missing_fields=missing_status_fields,
             ),
-        )
-    if isinstance(plan, Mk8sUpgradePlan):
-        return (
-            node_group_rollout_complete(live_group, version=plan.target_version),
-            node_group_rollout_summary(live_group),
-        )
-    if isinstance(plan, Mk8sOsImageUpgradePlan):
-        return (
-            node_group_os_rollout_complete(live_group, os=plan.target_os),
-            node_group_os_rollout_summary(live_group),
-        )
-    if isinstance(plan, Mk8sNodeLayerUpgradePlan):
-        return (
-            node_group_layer_rollout_complete(
-                live_group,
-                field=plan.spec.live_field,
-                value=plan.target_value,
-            ),
-            node_group_layer_rollout_summary(live_group, field=plan.spec.live_field),
         )
     drivers_preset = node_template_target_drivers_preset(
         planned_group,
@@ -2318,49 +1612,19 @@ def _plan_node_group_ready(
     )
 
 
-def _node_group_status_missing_summary(
-    plan: (
-        Mk8sUpgradePlan
-        | Mk8sOsImageUpgradePlan
-        | Mk8sNodeLayerUpgradePlan
-        | Mk8sNodeTemplateUpgradePlan
-    ),
-    live_group: Any,
-) -> str:
-    if isinstance(plan, Mk8sUpgradePlan):
-        summary = node_group_rollout_summary(live_group)
-    elif isinstance(plan, Mk8sOsImageUpgradePlan):
-        summary = node_group_os_rollout_summary(live_group)
-    elif isinstance(plan, Mk8sNodeLayerUpgradePlan):
-        summary = node_group_layer_rollout_summary(live_group, field=plan.spec.live_field)
-    else:
-        summary = node_group_node_template_rollout_summary(live_group)
+def _node_group_status_missing_summary(live_group: Any) -> str:
+    summary = node_group_node_template_rollout_summary(live_group)
     return summary + "; status not returned by Nebius SDK, rollout readiness cannot be verified"
 
 
 def _node_group_status_incomplete_summary(
-    plan: (
-        Mk8sUpgradePlan
-        | Mk8sOsImageUpgradePlan
-        | Mk8sNodeLayerUpgradePlan
-        | Mk8sNodeTemplateUpgradePlan
-    ),
     live_group: Any,
     *,
     missing_fields: Sequence[str],
 ) -> str:
-    if isinstance(plan, Mk8sUpgradePlan):
-        summary = node_group_rollout_summary(live_group)
-    elif isinstance(plan, Mk8sOsImageUpgradePlan):
-        summary = node_group_os_rollout_summary(live_group)
-    elif isinstance(plan, Mk8sNodeLayerUpgradePlan):
-        summary = node_group_layer_rollout_summary(live_group, field=plan.spec.live_field)
-    else:
-        summary = node_group_node_template_rollout_summary(live_group)
+    summary = node_group_node_template_rollout_summary(live_group)
     missing = ", ".join(missing_fields)
-    return (
-        f"{summary}; status missing {missing}, rollout readiness cannot be verified"
-    )
+    return f"{summary}; status missing {missing}, rollout readiness cannot be verified"
 
 
 def _missing_required_status_count_fields(node_group: Any) -> tuple[str, ...]:
@@ -2368,11 +1632,7 @@ def _missing_required_status_count_fields(node_group: Any) -> tuple[str, ...]:
     if status is None:
         return ()
     required = ("ready_node_count", "target_node_count", "node_count")
-    return tuple(
-        field
-        for field in required
-        if not isinstance(getattr(status, field, None), int)
-    )
+    return tuple(field for field in required if not isinstance(getattr(status, field, None), int))
 
 
 def _node_group_has_status(node_group: Any) -> bool:
@@ -2380,17 +1640,25 @@ def _node_group_has_status(node_group: Any) -> bool:
 
 
 def terraform_node_group_strategy_for_policy(
-    policy: str, timeout: DrainTimeout
+    policy: str,
+    timeout: DrainTimeout,
+    *,
+    max_surge_count: int | None = None,
 ) -> dict[str, Any] | None:
     """Return the Terraform node-group strategy override for an upgrade strategy."""
 
     policy = validate_disruption_policy(policy)
     if policy == DISRUPTION_POLICY_SAFE:
+        resolved_max_surge_count = resolve_strategy_max_surge_count(
+            policy,
+            max_surge_count,
+        )
         strategy: dict[str, Any] = {
-            "max_surge": {"count": 1},
+            "max_surge": {"count": resolved_max_surge_count},
             "max_unavailable": {"count": 0},
         }
     else:
+        resolve_strategy_max_surge_count(policy, max_surge_count)
         strategy = {
             "max_surge": {"count": 0},
             "max_unavailable": {"count": 1},
@@ -2515,71 +1783,6 @@ class Mk8sKubernetesVersionExecutor:
                 )
             time.sleep(poll_seconds)
 
-    def wait_node_group_os(
-        self,
-        *,
-        cluster_id: str,
-        node_group_id: str,
-        os: str,
-        timeout_seconds: int = 3600,
-        poll_seconds: float = 15.0,
-    ) -> Any:
-        target_os = validate_os_image_value(os)
-        deadline = time.monotonic() + timeout_seconds
-        while True:
-            for candidate in self.list_node_groups(cluster_id):
-                metadata = getattr(candidate, "metadata", None)
-                if _text(getattr(metadata, "id", None)) != node_group_id:
-                    continue
-                if node_group_os_rollout_complete(candidate, os=target_os):
-                    return candidate
-                last_summary = node_group_os_rollout_summary(candidate)
-                break
-            else:
-                last_summary = f"node group {node_group_id} was not found"
-            if time.monotonic() >= deadline:
-                raise TimeoutError(
-                    "Timed out waiting for MK8s node group "
-                    f"{node_group_id} to finish OS image rollout to "
-                    f"{target_os}: {last_summary}."
-                )
-            time.sleep(poll_seconds)
-
-    def wait_node_group_layer(
-        self,
-        *,
-        cluster_id: str,
-        node_group_id: str,
-        field: str,
-        value: str,
-        timeout_seconds: int = 3600,
-        poll_seconds: float = 15.0,
-    ) -> Any:
-        target_value = validate_node_layer_value(value, flag_name="node layer value")
-        deadline = time.monotonic() + timeout_seconds
-        while True:
-            for candidate in self.list_node_groups(cluster_id):
-                metadata = getattr(candidate, "metadata", None)
-                if _text(getattr(metadata, "id", None)) != node_group_id:
-                    continue
-                if node_group_layer_rollout_complete(
-                    candidate,
-                    field=field,
-                    value=target_value,
-                ):
-                    return candidate
-                last_summary = node_group_layer_rollout_summary(candidate, field=field)
-                break
-            else:
-                last_summary = f"node group {node_group_id} was not found"
-            if time.monotonic() >= deadline:
-                raise TimeoutError(
-                    "Timed out waiting for MK8s node group "
-                    f"{node_group_id} to finish {field} rollout to "
-                    f"{target_value}: {last_summary}."
-                )
-            time.sleep(poll_seconds)
-
     def wait_node_group_node_template(
         self,
         *,
@@ -2621,196 +1824,18 @@ class Mk8sKubernetesVersionExecutor:
             time.sleep(poll_seconds)
 
 
-def plan_k8s_upgrade(
-    *,
-    config_path: str,
-    target: UpgradeTarget,
-    cluster: Any,
-    cluster_id: str,
-    source_component: Mapping[str, Any],
-    target_version: str,
+def _node_template_warning_lines(
     disruption_policy: str,
-    drain_timeout: DrainTimeout,
-    live_node_groups: Sequence[Any],
-    compatibility_lookup,
-    preflight_findings: Sequence[PreflightFinding] = (),
-) -> Mk8sUpgradePlan:
-    """Build a Kubernetes version upgrade plan from live SDK objects."""
-
-    cluster_metadata = getattr(cluster, "metadata", None)
-    cluster_name = _text(getattr(cluster_metadata, "name", None)) or target.instance_id
-    current_version = _text(
-        getattr(getattr(getattr(cluster, "spec", None), "control_plane", None), "version", None)
-    )
-    if not current_version:
-        raise ValueError(f"MK8s cluster '{cluster_id}' did not return spec.control_plane.version.")
-    hops = require_single_minor_hop(current_version, target_version)
-
-    source_groups = source_node_groups_by_name(source_component)
-    live_groups = sort_live_node_groups(
-        tuple(
-            live_node_group_from_sdk(raw, source=source_groups.get(_node_group_name(raw)))
-            for raw in live_node_groups
-        )
-    )
-    higher_live_groups = live_node_groups_above_control_plane_version(
-        live_groups,
-        control_plane_version=target_version,
-    )
-    if higher_live_groups:
-        target_minor = parse_k8s_version(target_version).minor_text
-        details = ", ".join(
-            f"{group.name} ({_minor_version_label(group.version)})" for group in higher_live_groups
-        )
-        raise ValueError(
-            "MK8s node groups must not run a Kubernetes minor version above the "
-            f"target/control-plane version {target_minor}. Resolve live version "
-            f"skew before running the upgrade: {details}."
-        )
-    failures: list[CompatibilityFailure] = []
-    for group in live_groups:
-        choices = compatibility_lookup(target_version=target_version, platform=group.platform)
-        failures.extend(
-            compatibility_failures_for_node_group(
-                config_path=config_path,
-                target_selector=target.selector,
-                target_version=target_version,
-                group=group,
-                choices=choices,
-            )
-        )
-    warnings: list[str] = []
-    if disruption_policy == DISRUPTION_POLICY_SAFE:
-        warnings.append(
-            "safe-surge uses one temporary surge node per active node group "
-            "(max_surge=1, max_unavailable=0) and requires spare quota/capacity; "
-            "cxcli fails preflight when quota assessment reports a shortage."
-        )
-    if disruption_policy == DISRUPTION_POLICY_ALLOW_UNAVAILABLE:
-        warnings.append(
-            "zero-surge sets max_surge=0 and max_unavailable=1; it avoids spare "
-            "node quota but active capacity can drop by one node per active node group, "
-            "and provider drain fallback can occur after the finite drain_timeout."
-        )
-    if disruption_policy == DISRUPTION_POLICY_FORCE_DELETE:
-        warnings.append(
-            "force-delete never deletes PVC/PV objects, but it sets a finite Terraform "
-            "node-group drain_timeout. If Managed Kubernetes has to delete Pods after "
-            "that timeout, applications that need graceful shutdown, single-writer locks, "
-            "or coordinated external API updates can lose in-flight state."
-        )
-    return Mk8sUpgradePlan(
-        target=target,
-        cluster_id=cluster_id,
-        cluster_name=cluster_name,
-        current_version=current_version,
-        target_version=parse_k8s_version(target_version).minor_text,
-        hops=hops,
-        disruption_policy=disruption_policy,
-        drain_timeout=drain_timeout,
-        node_groups=live_groups,
-        compatibility_failures=tuple(failures),
-        preflight_findings=tuple(preflight_findings),
-        warnings=tuple(warnings),
-    )
-
-
-def plan_os_image_upgrade(
     *,
-    target: UpgradeTarget,
-    cluster: Any,
-    cluster_id: str,
-    source_component: Mapping[str, Any],
-    target_os: str,
-    disruption_policy: str,
-    drain_timeout: DrainTimeout,
-    live_node_groups: Sequence[Any],
-    compatibility_lookup,
-    node_group: str = "",
-    preflight_findings: Sequence[PreflightFinding] = (),
-) -> Mk8sOsImageUpgradePlan:
-    """Build an OS-image upgrade plan from live SDK objects."""
-
-    target_os = validate_os_image_value(target_os)
-    cluster_metadata = getattr(cluster, "metadata", None)
-    cluster_name = _text(getattr(cluster_metadata, "name", None)) or target.instance_id
-    current_version = _text(
-        getattr(getattr(getattr(cluster, "spec", None), "control_plane", None), "version", None)
-    )
-    if not current_version:
-        raise ValueError(f"MK8s cluster '{cluster_id}' did not return spec.control_plane.version.")
-    k8s_version = parse_k8s_version(current_version).minor_text
-    source_groups = source_node_groups_by_name(source_component)
-    live_groups = sort_live_node_groups(
-        tuple(
-            live_node_group_from_sdk(raw, source=source_groups.get(_node_group_name(raw)))
-            for raw in live_node_groups
-        )
-    )
-    selected_groups = select_live_node_groups_for_os_image(
-        live_groups,
-        node_group=node_group,
-    )
-    unmanaged = tuple(group.name for group in selected_groups if group.source is None)
-    if unmanaged:
-        raise ValueError(
-            "Live MK8s node groups are not declared in config.yaml, so cxcli cannot "
-            "safely upgrade their OS image through Terraform: " + ", ".join(unmanaged)
-        )
-    failures: list[CompatibilityFailure] = []
-    for group in selected_groups:
-        choices = compatibility_lookup(target_version=k8s_version, platform=group.platform)
-        failures.extend(
-            os_image_compatibility_failures_for_node_group(
-                target_version=k8s_version,
-                target_os=target_os,
-                group=group,
-                choices=choices,
-            )
-        )
+    strategy_max_surge_count: int | None = None,
+) -> tuple[str, ...]:
     warnings: list[str] = []
-    if disruption_policy == DISRUPTION_POLICY_SAFE:
-        warnings.append(
-            "safe-surge uses one temporary surge node per active node group "
-            "(max_surge=1, max_unavailable=0) and requires spare quota/capacity; "
-            "cxcli fails preflight when quota assessment reports a shortage."
-        )
-    if disruption_policy == DISRUPTION_POLICY_ALLOW_UNAVAILABLE:
-        warnings.append(
-            "zero-surge sets max_surge=0 and max_unavailable=1; it avoids spare "
-            "node quota but active capacity can drop by one node per active node group, "
-            "and provider drain fallback can occur after the finite drain_timeout."
-        )
-    if disruption_policy == DISRUPTION_POLICY_FORCE_DELETE:
-        warnings.append(
-            "force-delete never deletes PVC/PV objects, but it sets a finite Terraform "
-            "node-group drain_timeout. If Managed Kubernetes has to delete Pods after "
-            "that timeout, applications that need graceful shutdown, single-writer locks, "
-            "or coordinated external API updates can lose in-flight state."
-        )
-    return Mk8sOsImageUpgradePlan(
-        target=target,
-        cluster_id=cluster_id,
-        cluster_name=cluster_name,
-        k8s_version=k8s_version,
-        target_os=target_os,
-        disruption_policy=disruption_policy,
-        drain_timeout=drain_timeout,
-        node_groups=selected_groups,
-        compatibility_failures=tuple(failures),
-        preflight_findings=tuple(preflight_findings),
-        warnings=tuple(warnings),
+    resolved_max_surge_count = resolve_strategy_max_surge_count(
+        disruption_policy,
+        strategy_max_surge_count,
     )
-
-
-def _node_layer_warning_lines(disruption_policy: str) -> tuple[str, ...]:
-    warnings: list[str] = []
     if disruption_policy == DISRUPTION_POLICY_SAFE:
-        warnings.append(
-            "safe-surge uses one temporary surge node per active node group "
-            "(max_surge=1, max_unavailable=0) and requires spare quota/capacity; "
-            "cxcli fails preflight when quota assessment reports a shortage."
-        )
+        warnings.append(_safe_surge_warning_line(resolved_max_surge_count))
     if disruption_policy == DISRUPTION_POLICY_ALLOW_UNAVAILABLE:
         warnings.append(
             "zero-surge sets max_surge=0 and max_unavailable=1; it avoids spare "
@@ -2827,88 +1852,6 @@ def _node_layer_warning_lines(disruption_policy: str) -> tuple[str, ...]:
     return tuple(warnings)
 
 
-def plan_node_layer_upgrade(
-    *,
-    target: UpgradeTarget,
-    cluster: Any,
-    cluster_id: str,
-    source_component: Mapping[str, Any],
-    spec: NodeLayerUpgradeSpec,
-    target_value: str,
-    disruption_policy: str,
-    drain_timeout: DrainTimeout,
-    live_node_groups: Sequence[Any],
-    compatibility_lookup,
-    node_group: str = "",
-    preflight_findings: Sequence[PreflightFinding] = (),
-) -> Mk8sNodeLayerUpgradePlan:
-    """Build a node-template layer upgrade plan from live SDK objects."""
-
-    target_value = validate_node_layer_value(
-        target_value,
-        flag_name=node_layer_option_name(spec),
-    )
-    cluster_metadata = getattr(cluster, "metadata", None)
-    cluster_name = _text(getattr(cluster_metadata, "name", None)) or target.instance_id
-    current_version = _text(
-        getattr(getattr(getattr(cluster, "spec", None), "control_plane", None), "version", None)
-    )
-    if not current_version:
-        raise ValueError(f"MK8s cluster '{cluster_id}' did not return spec.control_plane.version.")
-    k8s_version = parse_k8s_version(current_version).minor_text
-    source_groups = source_node_groups_by_name(source_component)
-    live_groups = sort_live_node_groups(
-        tuple(
-            live_node_group_from_sdk(raw, source=source_groups.get(_node_group_name(raw)))
-            for raw in live_node_groups
-        )
-    )
-    selected_groups = select_live_node_groups_for_node_layer(
-        live_groups,
-        node_group=node_group,
-        group_filter=spec.group_filter,
-        command=spec.command,
-    )
-    unmanaged = tuple(group.name for group in selected_groups if group.source is None)
-    if unmanaged:
-        raise ValueError(
-            "Live MK8s node groups are not declared in config.yaml, so cxcli cannot "
-            f"safely upgrade their {spec.target_label} through Terraform: " + ", ".join(unmanaged)
-        )
-    failures: list[CompatibilityFailure] = []
-    for group in selected_groups:
-        choices: Sequence[CompatibilityChoice] = ()
-        if spec.live_field in {"platform", "drivers_preset"}:
-            matrix_platform = target_value if spec.live_field == "platform" else group.platform
-            choices = compatibility_lookup(
-                target_version=k8s_version,
-                platform=matrix_platform,
-            )
-        failures.extend(
-            node_layer_compatibility_failures_for_node_group(
-                k8s_version=k8s_version,
-                group=group,
-                spec=spec,
-                target_value=target_value,
-                choices=choices,
-            )
-        )
-    return Mk8sNodeLayerUpgradePlan(
-        target=target,
-        cluster_id=cluster_id,
-        cluster_name=cluster_name,
-        k8s_version=k8s_version,
-        spec=spec,
-        target_value=target_value,
-        disruption_policy=disruption_policy,
-        drain_timeout=drain_timeout,
-        node_groups=selected_groups,
-        compatibility_failures=tuple(failures),
-        preflight_findings=tuple(preflight_findings),
-        warnings=_node_layer_warning_lines(disruption_policy),
-    )
-
-
 def plan_node_template_upgrade(
     *,
     target: UpgradeTarget,
@@ -2920,17 +1863,18 @@ def plan_node_template_upgrade(
     target_gpu_stack_preset: str = "",
     disruption_policy: str,
     drain_timeout: DrainTimeout,
+    strategy_max_surge_count: int | None = None,
     live_node_groups: Sequence[Any],
     compatibility_lookup,
     node_group: str = "",
     preflight_findings: Sequence[PreflightFinding] = (),
 ) -> Mk8sNodeTemplateUpgradePlan:
-    """Build a combined Kubernetes version, OS-image, and GPU-stack upgrade plan."""
+    """Build a combined Kubernetes version, OS image, and GPU-stack upgrade plan."""
 
     target_version = parse_k8s_version(target_version).minor_text
     target_os = validate_os_image_value(target_os)
     target_gpu_stack_preset = (
-        validate_node_layer_value(
+        validate_node_template_field_value(
             target_gpu_stack_preset,
             flag_name="--to-gpu-stack-preset",
         )
@@ -2952,7 +1896,7 @@ def plan_node_template_upgrade(
             for raw in live_node_groups
         )
     )
-    selected_groups = select_live_node_groups_for_os_image(
+    selected_groups = select_live_node_groups_for_node_template(
         live_groups,
         node_group=node_group,
     )
@@ -2991,8 +1935,14 @@ def plan_node_template_upgrade(
             "Kubernetes version and OS changes, but not a Nebius GPU stack preset."
         )
     failures: list[CompatibilityFailure] = []
+    choices_by_platform: dict[str, tuple[CompatibilityChoice, ...]] = {}
     for group in selected_groups:
-        choices = compatibility_lookup(target_version=target_version, platform=group.platform)
+        choices = choices_by_platform.get(group.platform)
+        if choices is None:
+            choices = tuple(
+                compatibility_lookup(target_version=target_version, platform=group.platform)
+            )
+            choices_by_platform[group.platform] = choices
         failures.extend(
             node_template_compatibility_failures_for_node_group(
                 target_version=target_version,
@@ -3016,57 +1966,12 @@ def plan_node_template_upgrade(
         all_node_groups=live_groups,
         node_groups=selected_groups,
         compatibility_failures=tuple(failures),
+        compatibility_matrix=_compatibility_matrix_summary(choices_by_platform),
         preflight_findings=tuple(preflight_findings),
-        warnings=_node_layer_warning_lines(disruption_policy),
-    )
-
-
-def wait_for_node_group_rollout(
-    *,
-    executor: Mk8sKubernetesVersionExecutor,
-    plan: Mk8sUpgradePlan,
-    planned_group: LiveNodeGroup,
-) -> None:
-    """Wait for one Terraform-requested node-group rollout to finish."""
-
-    executor.wait_node_group_version(
-        cluster_id=plan.cluster_id,
-        node_group_id=planned_group.id,
-        version=plan.target_version,
-        timeout_seconds=node_group_rollout_wait_seconds(planned_group),
-    )
-
-
-def wait_for_os_image_rollout(
-    *,
-    executor: Mk8sKubernetesVersionExecutor,
-    plan: Mk8sOsImageUpgradePlan,
-    planned_group: LiveNodeGroup,
-) -> None:
-    """Wait for one Terraform-requested node-group OS-image rollout to finish."""
-
-    executor.wait_node_group_os(
-        cluster_id=plan.cluster_id,
-        node_group_id=planned_group.id,
-        os=plan.target_os,
-        timeout_seconds=node_group_rollout_wait_seconds(planned_group),
-    )
-
-
-def wait_for_node_layer_rollout(
-    *,
-    executor: Mk8sKubernetesVersionExecutor,
-    plan: Mk8sNodeLayerUpgradePlan,
-    planned_group: LiveNodeGroup,
-) -> None:
-    """Wait for one Terraform-requested node-template layer rollout to finish."""
-
-    executor.wait_node_group_layer(
-        cluster_id=plan.cluster_id,
-        node_group_id=planned_group.id,
-        field=plan.spec.live_field,
-        value=plan.target_value,
-        timeout_seconds=node_group_rollout_wait_seconds(planned_group),
+        warnings=_node_template_warning_lines(
+            disruption_policy,
+            strategy_max_surge_count=strategy_max_surge_count,
+        ),
     )
 
 

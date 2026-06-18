@@ -187,6 +187,10 @@ def _safe_hcl_identifier(value: str, *, fallback_prefix: str) -> str:
     return token
 
 
+def _hcl_literal_string(value: str) -> str:
+    return json.dumps(value.replace("${", "$${").replace("%{", "%%{"))
+
+
 def _hcl_value(value: Any, *, indent: int = 2) -> str:
     if isinstance(value, _HclExpression):
         return value.expression
@@ -197,7 +201,7 @@ def _hcl_value(value: Any, *, indent: int = 2) -> str:
     if isinstance(value, (int, float)):
         return str(value)
     if isinstance(value, str):
-        return json.dumps(value)
+        return _hcl_literal_string(value)
     if isinstance(value, list):
         if not value:
             return "[]"
@@ -529,7 +533,9 @@ def _binding_selected_static_value(
     return selected[binding.attribute]
 
 
-def _binding_output_expression(*, module_name: str, source_path: str, binding: Any) -> _HclExpression:
+def _binding_output_expression(
+    *, module_name: str, source_path: str, binding: Any
+) -> _HclExpression:
     expression = f"module.{module_name}.{source_path}"
     if binding.key:
         expression = f"{expression}[{json.dumps(binding.key)}]"
@@ -540,7 +546,7 @@ def _binding_output_expression(*, module_name: str, source_path: str, binding: A
 
 def _node_group_sfs_filesystem_keys(group_key: str, group: dict[str, Any]) -> list[str]:
     filesystem_keys: list[str] = []
-    workload = str(group.get("workload") or group.get("nodeset_name") or group_key).strip()
+    workload = str(group.get("workload") or group.get("placement_name") or group_key).strip()
     if bool(group.get("jail", False)):
         filesystem_keys.append("jail")
     if workload == "controller" or group_key == "controller":
@@ -598,9 +604,7 @@ def _vm_sfs_attachments_value(
             )
             continue
 
-        filesystem_id = (
-            str(attachment.get("id") or attachment.get("existing_id") or "").strip()
-        )
+        filesystem_id = str(attachment.get("id") or attachment.get("existing_id") or "").strip()
         existing_filesystem = attachment.get("existing_filesystem")
         if not filesystem_id and isinstance(existing_filesystem, dict):
             filesystem_id = str(existing_filesystem.get("id") or "").strip()
@@ -816,7 +820,9 @@ def _build_module_plans(
                 "module_source": module_source,
                 "module_version": module_version,
                 "module_inputs": module_inputs,
-                "cxcli_sfs_attachments": inputs.get("sfs_attachments") if component_id == "vm" else None,
+                "cxcli_sfs_attachments": inputs.get("sfs_attachments")
+                if component_id == "vm"
+                else None,
                 "type_hints": _module_type_hints(metadata_module_source),
                 "runtime_only_argument_names": runtime_only_argument_names,
             }

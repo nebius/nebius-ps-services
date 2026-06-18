@@ -6,6 +6,9 @@ All notable changes to the reusable Codex skills are tracked here.
 
 ### Added
 
+- Added `docs/agentic-sdlc-design.md` to document the Agentic SDLC
+  architecture, requirements/design templates, local run state, hook
+  boundaries, MCP role, and skill-by-skill lifecycle.
 - Added the Agentic SDLC skill set: `sdlc-create-requirements`, `sdlc-start`,
   `sdlc-gather-context`, `sdlc-create-design`, `sdlc-create-plan`,
   `sdlc-tdd`, `sdlc-implement-plan`, `sdlc-validate-codes`,

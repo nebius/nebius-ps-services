@@ -189,7 +189,22 @@ def _cleanup_module_probe_roots_at_exit() -> None:
     _cleanup_module_probe_roots()
 
 
-def _module_dir_from_probe_manifest(tmp_root: Path) -> Path | None:
+def _git_module_source_subdir(source: str) -> str:
+    raw = str(source).strip()
+    if raw.lower().startswith("git::"):
+        raw = raw[5:]
+    raw = raw.split("?", 1)[0]
+    search_from = 0
+    scheme_marker = raw.find("://")
+    if scheme_marker >= 0:
+        search_from = scheme_marker + 3
+    subdir_marker = raw.find("//", search_from)
+    if subdir_marker < 0:
+        return ""
+    return raw[subdir_marker + 2 :].strip("/")
+
+
+def _module_dir_from_probe_manifest(tmp_root: Path, module_source: str = "") -> Path | None:
     manifest_path = tmp_root / ".terraform" / "modules" / "modules.json"
     if manifest_path.exists() and manifest_path.is_file():
         try:
@@ -210,12 +225,28 @@ def _module_dir_from_probe_manifest(tmp_root: Path) -> Path | None:
                 if not candidate.is_absolute():
                     candidate = (tmp_root / candidate).resolve()
                 if candidate.exists() and candidate.is_dir():
-                    return candidate
+                        return candidate
 
     fallback = tmp_root / ".terraform" / "modules" / "probe"
+    module_subdir = _git_module_source_subdir(module_source)
+    if module_subdir:
+        fallback_subdir = fallback / module_subdir
+        if fallback_subdir.exists() and fallback_subdir.is_dir():
+            return fallback_subdir
     if fallback.exists() and fallback.is_dir():
         return fallback
     return None
+
+
+def _terraform_init_failed_only_for_missing_required_probe_args(output: str) -> bool:
+    error_titles = [
+        line.strip()
+        for line in output.splitlines()
+        if line.strip().startswith("Error:")
+    ]
+    return bool(error_titles) and all(
+        title == "Error: Missing required argument" for title in error_titles
+    )
 
 
 @lru_cache(maxsize=64)
@@ -272,7 +303,7 @@ def _module_inspection_path(module_source: str) -> tuple[str | None, str | None]
         return None, f"terraform init could not validate module source '{source}': {exc}"
 
     if result.returncode == 0:
-        module_dir = _module_dir_from_probe_manifest(tmp_root)
+        module_dir = _module_dir_from_probe_manifest(tmp_root, probe_source)
         if module_dir is not None:
             return str(module_dir), None
         return (
@@ -281,7 +312,13 @@ def _module_inspection_path(module_source: str) -> tuple[str | None, str | None]
             "the downloaded module directory for output/variable inspection.",
         )
 
-    failure_line = _first_non_empty_line(result.stderr or result.stdout or "")
+    combined_output = result.stderr or result.stdout or ""
+    if _terraform_init_failed_only_for_missing_required_probe_args(combined_output):
+        module_dir = _module_dir_from_probe_manifest(tmp_root, probe_source)
+        if module_dir is not None:
+            return str(module_dir), None
+
+    failure_line = _first_non_empty_line(combined_output)
     if failure_line:
         return (
             None,

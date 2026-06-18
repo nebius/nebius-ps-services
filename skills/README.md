@@ -158,6 +158,8 @@ Keep these SDLC hooks separate from the non-SDLC global-context hooks:
 `SessionStart` is for stable global context and task-state location, and
 `UserPromptSubmit` is only for lightweight prompt-time context, safety, or
 opt-in delegation requests.
+See `docs/agentic-sdlc-design.md` for the architecture, template ownership,
+local state layout, hook boundaries, and full skill-by-skill lifecycle.
 
 - `sdlc-create-requirements`: creates or updates `docs/requirements.md` from user
   prompts, tickets, or approved change requests while preserving stable

@@ -30,7 +30,7 @@ from nebius_cxcli.flux_render import (
     _stage_local_helm_chart,
     render_flux,
 )
-from nebius_cxcli.infra_render import _build_module_plans, _render_module_block
+from nebius_cxcli.infra_render import _build_module_plans, _hcl_value, _render_module_block
 from nebius_cxcli.mk8s_gpu import ensure_mk8s_gpu_app_rows, materialize_mk8s_gpu_app_values
 from nebius_cxcli.mysterybox_eso import materialize_mysterybox_eso_app_values
 from nebius_cxcli.nfs_csi import ensure_nfs_csi_app_rows
@@ -201,9 +201,7 @@ def _repo_component_cli_settings_payload() -> dict:
     return payload
 
 
-def _app_entry(
-    component_id: str, source_profile: SourceProfile | None = None
-) -> ComponentEntry:
+def _app_entry(component_id: str, source_profile: SourceProfile | None = None) -> ComponentEntry:
     return next(
         entry
         for entry in component_entries("apps", source_profile=source_profile)
@@ -1143,18 +1141,17 @@ def test_load_config_materializes_soperator_before_gpu_app_rows_for_profile_swit
     ]
     assert soperator["values"]["slurmConfig"]["topologyPlugin"] == "topology/block"
     assert ensure_mk8s_gpu_app_rows(payload, app_entries=component_entries("apps")) is True
-    payload["apps"]["charts"].append(
-        {
-            "id": "nvidia-network-operator",
-            "instance_id": "mk8s",
-            "enabled": True,
-            "target_ref": "mk8s",
-            "values": {},
-        }
-    )
-    assert soperator["values"]["nodeGroupMapping"]["worker"] == ["worker-gpu"]
-    assert any(row["id"] == "nvidia-gpu-operator" for row in payload["apps"]["charts"])
-    assert any(row["id"] == "nvidia-network-operator" for row in payload["apps"]["charts"])
+    assert soperator["placements"]["worker"] == ["worker-cpu", "worker-gpu"]
+    gpu_stack_rows = [
+        row
+        for row in payload["apps"]["charts"]
+        if row["id"] in {"nvidia-gpu-operator", "nvidia-network-operator"}
+    ]
+    assert sorted(row["id"] for row in gpu_stack_rows) == [
+        "nvidia-gpu-operator",
+        "nvidia-network-operator",
+    ]
+    assert {row["instance_id"] for row in gpu_stack_rows} == {"mk8s"}
 
     soperator["profile"] = "nebius-cpu-v1"
     soperator["values"]["partitionProfile"] = "shape-default"
@@ -1182,8 +1179,9 @@ def test_load_config_materializes_soperator_before_gpu_app_rows_for_profile_swit
     node_groups = mk8s_inputs["node_groups"]
     assert sorted(node_groups) == ["accounting", "controller", "login", "system", "worker-cpu"]
     assert node_groups["worker-cpu"]["node_count"] == 1
-    values = next(row for row in persisted["apps"]["charts"] if row["id"] == "soperator")["values"]
-    assert values["nodeGroupMapping"]["worker"] == ["worker-cpu"]
+    soperator_row = next(row for row in persisted["apps"]["charts"] if row["id"] == "soperator")
+    values = soperator_row["values"]
+    assert soperator_row["placements"]["worker"] == ["worker-cpu"]
     assert [node["name"] for node in values["nodesets"]] == ["worker-cpu"]
     assert [item["name"] for item in values["partitionConfiguration"]["partitions"]] == [
         "cpu",
@@ -1253,7 +1251,9 @@ def test_render_local_soperator_chart_source_writes_static_manifest(tmp_path: Pa
     } == {"Always"}
     slurm_cluster = next(doc for doc in rendered_docs if doc.get("kind") == "SlurmCluster")
     assert slurm_cluster["spec"]["partitionConfiguration"]["configType"] == "structured"
-    assert "PluginDir=" not in slurm_cluster.get("spec", {}).get("customSlurmConfig", "")
+    assert "PluginDir=/usr/lib/x86_64-linux-gnu/slurm" in slurm_cluster.get("spec", {}).get(
+        "customSlurmConfig", ""
+    )
     assert slurm_cluster["spec"]["slurmNodes"]["accounting"]["enabled"] is True
     assert slurm_cluster["spec"]["slurmNodes"]["rest"]["enabled"] is True
     assert slurm_cluster["spec"]["slurmNodes"]["accounting"]["mariadbOperator"]["enabled"] is True
@@ -1755,6 +1755,50 @@ def test_inject_local_chart_namespace_skips_hooks_only_render() -> None:
     assert _inject_local_chart_namespace(rendered, namespace="slurm") == ""
 
 
+def test_local_helm_chart_render_rejects_hooks_only_output(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    chart_dir = tmp_path / "chart"
+    chart_dir.mkdir()
+    rendered = yaml.safe_dump(
+        {
+            "apiVersion": "batch/v1",
+            "kind": "Job",
+            "metadata": {
+                "name": "cleanup",
+                "annotations": {"helm.sh/hook": "pre-delete"},
+            },
+        },
+        sort_keys=False,
+    )
+
+    monkeypatch.setattr(
+        flux_render_module, "_stage_local_helm_chart", lambda _chart, _tmp: chart_dir
+    )
+    monkeypatch.setattr(
+        flux_render_module, "_build_local_helm_chart_dependencies", lambda _chart: None
+    )
+    monkeypatch.setattr(
+        flux_render_module.subprocess,
+        "run",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess(
+            args=("helm", "template"),
+            returncode=0,
+            stdout=rendered,
+            stderr="",
+        ),
+    )
+
+    with pytest.raises(ValueError, match="produced only hook manifests"):
+        flux_render_module._render_local_helm_chart(
+            release_name="demo",
+            namespace="slurm",
+            chart_path=str(chart_dir),
+            values={},
+        )
+
+
 def test_inject_local_chart_namespace_keeps_opted_in_hooks() -> None:
     rendered = yaml.safe_dump(
         {
@@ -1774,6 +1818,43 @@ def test_inject_local_chart_namespace_keeps_opted_in_hooks() -> None:
     docs = list(yaml.safe_load_all(_inject_local_chart_namespace(rendered, namespace="slurm")))
     assert docs[0]["metadata"]["namespace"] == "slurm"
     assert docs[0]["metadata"]["name"] == "qos-reconcile"
+
+
+def test_file_slug_rejects_dot_segments() -> None:
+    with pytest.raises(ValueError, match="dot segments"):
+        flux_render_module._file_slug("../dashboards")
+
+
+def test_hcl_value_escapes_template_sequences() -> None:
+    rendered = _hcl_value({"literal": "keep ${not.hcl} and %{not a directive}"})
+
+    assert "$${not.hcl}" in rendered
+    assert "%%{not a directive}" in rendered
+    assert "${not.hcl}" not in rendered.replace("$${not.hcl}", "")
+
+
+def test_inject_local_chart_namespace_skips_helm_oci_status_output() -> None:
+    rendered = yaml.safe_dump_all(
+        [
+            {
+                "Pulled": "oci://example.invalid/charts/soperator:4.0.1-ps.2",
+                "Digest": "sha256:deadbeef",
+            },
+            {
+                "apiVersion": "v1",
+                "kind": "ConfigMap",
+                "metadata": {"name": "rendered-soperator"},
+            },
+        ],
+        sort_keys=False,
+    )
+
+    docs = list(yaml.safe_load_all(_inject_local_chart_namespace(rendered, namespace="slurm")))
+
+    assert len(docs) == 1
+    assert docs[0]["apiVersion"] == "v1"
+    assert docs[0]["kind"] == "ConfigMap"
+    assert docs[0]["metadata"] == {"name": "rendered-soperator", "namespace": "slurm"}
 
 
 def test_inject_local_chart_namespace_makes_cert_manager_rotation_policy_explicit() -> None:
@@ -2364,11 +2445,12 @@ def test_render_local_soperator_mixed_profile_writes_two_nodesets(tmp_path: Path
     assert set(node_sets) == {"worker-cpu", "worker-gpu"}
     assert "nvidia.com/gpu" not in node_sets["worker-cpu"]["spec"]["slurmd"]["resources"]
     assert node_sets["worker-gpu"]["spec"]["slurmd"]["resources"]["nvidia.com/gpu"] == 8
+    assert node_sets["worker-gpu"]["spec"]["slurmd"]["resources"]["cpu"] == "32"
     assert node_sets["worker-cpu"]["spec"]["nodeConfig"]["static"] == (
         "Boards=1 SocketsPerBoard=1 CoresPerSocket=8 ThreadsPerCore=1"
     )
     assert node_sets["worker-gpu"]["spec"]["nodeConfig"]["static"] == (
-        "Boards=1 SocketsPerBoard=1 CoresPerSocket=8 ThreadsPerCore=1 Gres=gpu:8"
+        "Boards=1 SocketsPerBoard=1 CoresPerSocket=32 ThreadsPerCore=1 Gres=gpu:8"
     )
 
     slurm_cluster = next(doc for doc in rendered_docs if doc.get("kind") == "SlurmCluster")
@@ -3631,11 +3713,20 @@ def test_render_instance_resets_generated_bundle_and_removes_stale_files(
     stale_report = paths.reports_dir / "old.json"
     deploy_report = paths.reports_dir / "deploy-report.md"
     deploy_detail_report = paths.reports_dir / "gpu-visibility-report-mk8s.json"
-    migrate_report = paths.reports_dir / "migrate-report.md"
-    migration_detail_report = paths.reports_dir / "soperator-cluster-validation-report-external.json"
-    unreferenced_migration_like_report = paths.reports_dir / "soperator-cluster-validation-report-old.json"
-    upgrade_report = paths.reports_dir / "upgrade-report.md"
-    upgrade_report_json = paths.reports_dir / "upgrade-report.json"
+    onboard_report = paths.reports_dir / "ext-soperator-onboard-source-discovery-report.json"
+    migrate_report = paths.reports_dir / "ext-soperator-migrate-report.md"
+    migration_detail_report = (
+        paths.reports_dir / "soperator-cluster-validation-report-external.json"
+    )
+    unreferenced_migration_like_report = (
+        paths.reports_dir / "soperator-cluster-validation-report-old.json"
+    )
+    node_template_report = paths.reports_dir / "upgrade-node-template-report.md"
+    node_template_report_json = paths.reports_dir / "upgrade-node-template-report.json"
+    node_group_report = paths.reports_dir / "upgrade-node-group-report.md"
+    node_group_report_json = paths.reports_dir / "upgrade-node-group-report.json"
+    upgrade_report = paths.reports_dir / "soperator-upgrade-report.md"
+    upgrade_report_json = paths.reports_dir / "soperator-upgrade-report.json"
     stale_top_level = paths.generated_dir / "obsolete.txt"
     stale_tf.parent.mkdir(parents=True, exist_ok=True)
     bootstrap_flux_dir.mkdir(parents=True, exist_ok=True)
@@ -3654,6 +3745,7 @@ def test_render_instance_resets_generated_bundle_and_removes_stale_files(
         encoding="utf-8",
     )
     deploy_detail_report.write_text('{"status": "passed"}\n', encoding="utf-8")
+    onboard_report.write_text('{"schema": "onboard"}\n', encoding="utf-8")
     migrate_report.write_text(
         "# Soperator Migration Report\n\n"
         "- `soperator-cluster-validation-report-external.json`: `PASS` - ok\n",
@@ -3661,6 +3753,10 @@ def test_render_instance_resets_generated_bundle_and_removes_stale_files(
     )
     migration_detail_report.write_text('{"passed": true}\n', encoding="utf-8")
     unreferenced_migration_like_report.write_text('{"passed": false}\n', encoding="utf-8")
+    node_template_report.write_text("# MK8s Node Template Upgrade Report\n", encoding="utf-8")
+    node_template_report_json.write_text('{"status": "passed"}\n', encoding="utf-8")
+    node_group_report.write_text("# MK8s Node-Group Upgrade Report\n", encoding="utf-8")
+    node_group_report_json.write_text('{"status": "approved-pre-mutation"}\n', encoding="utf-8")
     upgrade_report.write_text("# Soperator Upgrade Report\n", encoding="utf-8")
     upgrade_report_json.write_text('{"status": "completed"}\n', encoding="utf-8")
     stale_top_level.write_text("obsolete\n", encoding="utf-8")
@@ -3672,9 +3768,20 @@ def test_render_instance_resets_generated_bundle_and_removes_stale_files(
     assert not stale_report.exists()
     assert deploy_report.read_text(encoding="utf-8").startswith("# Deploy Report")
     assert deploy_detail_report.read_text(encoding="utf-8") == '{"status": "passed"}\n'
+    assert onboard_report.read_text(encoding="utf-8") == '{"schema": "onboard"}\n'
     assert migrate_report.read_text(encoding="utf-8").startswith("# Soperator Migration Report")
     assert migration_detail_report.read_text(encoding="utf-8") == '{"passed": true}\n'
     assert not unreferenced_migration_like_report.exists()
+    assert node_template_report.read_text(encoding="utf-8").startswith(
+        "# MK8s Node Template Upgrade Report"
+    )
+    assert node_template_report_json.read_text(encoding="utf-8") == '{"status": "passed"}\n'
+    assert node_group_report.read_text(encoding="utf-8").startswith(
+        "# MK8s Node-Group Upgrade Report"
+    )
+    assert node_group_report_json.read_text(encoding="utf-8") == (
+        '{"status": "approved-pre-mutation"}\n'
+    )
     assert upgrade_report.read_text(encoding="utf-8").startswith("# Soperator Upgrade Report")
     assert upgrade_report_json.read_text(encoding="utf-8") == '{"status": "completed"}\n'
     assert not stale_top_level.exists()

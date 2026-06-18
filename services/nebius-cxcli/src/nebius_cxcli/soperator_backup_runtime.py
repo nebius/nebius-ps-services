@@ -261,8 +261,7 @@ def _secret_has_keys(
         timeout=60,
     )
     if completed.returncode != 0:
-        detail = (completed.stderr or completed.stdout or "").lower()
-        if "notfound" in detail or "not found" in detail or "notfound" in detail.replace(" ", ""):
+        if _kubectl_not_found_error(completed):
             return False
         message = _first_non_empty_line(completed.stderr or completed.stdout or "")
         raise RuntimeError(f"{' '.join(command)} failed: {message or completed.returncode}")
@@ -274,6 +273,19 @@ def _secret_has_keys(
     if not isinstance(data, Mapping):
         return False
     return all(str(key) in data for key in keys)
+
+
+def _kubectl_not_found_error(completed: subprocess.CompletedProcess[str]) -> bool:
+    detail = completed.stderr or completed.stdout or ""
+    for candidate in (completed.stdout, completed.stderr):
+        try:
+            payload = json.loads(candidate or "{}")
+        except json.JSONDecodeError:
+            continue
+        if isinstance(payload, Mapping) and str(payload.get("reason", "") or "") == "NotFound":
+            return True
+    normalized = detail.lower()
+    return "error from server (notfound)" in normalized or '"reason":"notfound"' in normalized
 
 
 def _apply_secret(

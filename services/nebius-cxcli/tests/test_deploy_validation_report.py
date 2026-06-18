@@ -171,6 +171,24 @@ def test_clear_deploy_validation_artifacts_removes_stale_outputs(tmp_path: Path)
     assert not (tmp_path / "nccl-test-report.json").exists()
 
 
+def test_clear_deploy_validation_artifacts_can_preserve_markdown(tmp_path: Path) -> None:
+    validations = [
+        {"kind": "soperator_cluster_smoke", "report_file": "soperator-smoke.json"},
+    ]
+    for name in (
+        DEPLOY_REPORT_FILENAME,
+        "deploy-validation-report.md",
+        "soperator-smoke.json",
+    ):
+        (tmp_path / name).write_text("data\n", encoding="utf-8")
+
+    clear_deploy_validation_artifacts(validations, reports_dir=tmp_path, include_markdown=False)
+
+    assert (tmp_path / DEPLOY_REPORT_FILENAME).exists()
+    assert (tmp_path / "deploy-validation-report.md").exists()
+    assert not (tmp_path / "soperator-smoke.json").exists()
+
+
 def test_build_deploy_validation_report_formats_soperator_smoke_summary(
     tmp_path: Path,
 ) -> None:

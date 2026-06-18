@@ -226,9 +226,10 @@ def test_collect_snapshot_groups_nodes_by_unique_nebius_node_group_id(
         "operator": "In",
         "values": ["mk8snodegroup-system"],
     }
-    assert snapshot["node_groups"]["mk8snodegroup-controller"]["labels"][
-        "slurm.nebius.ai/nodeset"
-    ] == "controller"
+    assert (
+        snapshot["node_groups"]["mk8snodegroup-controller"]["labels"]["slurm.nebius.ai/nodeset"]
+        == "controller"
+    )
 
 
 def test_collect_snapshot_discovers_soperator_helm_releases_by_namespace(
@@ -271,9 +272,7 @@ def test_collect_snapshot_discovers_soperator_helm_releases_by_namespace(
     ]
     assert helm_commands
     assert all("-A" not in cmd for cmd in helm_commands)
-    assert {
-        cmd[cmd.index("-n") + 1] for cmd in helm_commands if "-n" in cmd
-    } == {
+    assert {cmd[cmd.index("-n") + 1] for cmd in helm_commands if "-n" in cmd} == {
         "soperator",
         "soperator-system",
         "flux-system",
@@ -374,7 +373,14 @@ def test_collect_snapshot_records_worker_nodeset_topology(
         if cmd[:5] == ["kubectl", "--context", "ctx", "get", "namespace"]:
             return {"items": [{"metadata": {"name": "soperator"}}]}
         if (
-            cmd[:5] == ["kubectl", "--context", "ctx", "get", "deployments,statefulsets,daemonsets,pods,services,configmaps,secrets"]
+            cmd[:5]
+            == [
+                "kubectl",
+                "--context",
+                "ctx",
+                "get",
+                "deployments,statefulsets,daemonsets,pods,services,configmaps,secrets",
+            ]
             and "-n" in cmd
         ):
             return {
@@ -436,7 +442,9 @@ def test_soperator_onboarding_analyzer_detects_vanilla_cluster_actions() -> None
     assert ONBOARDING_ACTION_INSTALL_SOPERATOR in action_ids
     assert ONBOARDING_ACTION_CREATE_ALIGNED_SFS in action_ids
     assert any(finding.layer == "storage-sfs" for finding in report.findings)
-    assert any(finding.layer == "topology" and finding.status == "available" for finding in report.findings)
+    assert any(
+        finding.layer == "topology" and finding.status == "available" for finding in report.findings
+    )
 
 
 def test_soperator_onboarding_analyzer_allows_target_compatible_existing_storage() -> None:
@@ -531,7 +539,7 @@ def test_soperator_onboarding_analyzer_accepts_fallback_selector_labels() -> Non
     )
 
     assert not any(
-        finding.layer == "role-mapping" and finding.status == "selector-required"
+        finding.layer == "placements" and finding.status == "selector-required"
         for finding in report.findings
     )
 
@@ -549,7 +557,7 @@ def test_soperator_onboarding_analyzer_accepts_nebius_node_group_id_selector_lab
     )
 
     assert not any(
-        finding.layer == "role-mapping" and finding.status == "selector-required"
+        finding.layer == "placements" and finding.status == "selector-required"
         for finding in report.findings
     )
 
@@ -580,7 +588,9 @@ def test_soperator_onboarding_analyzer_offers_upgrade_for_older_release() -> Non
     assert ONBOARDING_ACTION_UPGRADE_EXTERNAL_NODE_TEMPLATE in {
         action.id for action in report.actions if action.selected
     }
-    assert len([action.id for action in report.actions]) == len({action.id for action in report.actions})
+    assert len([action.id for action in report.actions]) == len(
+        {action.id for action in report.actions}
+    )
     assert any(item.classification == "data-sensitive" for item in report.remediation)
     assert [phase.id for phase in report.migration_plan] == [
         "discovery-and-plan",
@@ -595,8 +605,7 @@ def test_soperator_onboarding_analyzer_offers_upgrade_for_older_release() -> Non
         "retire-old-resources",
     ]
     assert any(
-        finding.layer == "mk8s-node-template"
-        and finding.status == "remediation-planned"
+        finding.layer == "mk8s-node-template" and finding.status == "remediation-planned"
         for finding in report.findings
     )
     assert any(finding.status == "upgrade-available" for finding in report.findings)
@@ -701,10 +710,7 @@ def test_soperator_onboarding_analyzer_verifies_healthy_live_gpu_stack() -> None
     assert gpu_stack.evidence["cluster_policy_ready"] is True
     assert gpu_stack.evidence["nic_cluster_policy_ready"] is True
     assert gpu_stack.evidence["gpu_operator_release"]["chart"] == "gpu-operator-v25.10.0"
-    assert (
-        gpu_stack.evidence["network_operator_release"]["chart"]
-        == "network-operator-25.7.0"
-    )
+    assert gpu_stack.evidence["network_operator_release"]["chart"] == "network-operator-25.7.0"
     assert ONBOARDING_ACTION_RECONCILE_TARGET_GPU_STACK in {
         action.id for action in report.actions if action.selected
     }
@@ -742,11 +748,15 @@ def test_soperator_onboarding_modes_make_compute_only_plan_consistent() -> None:
         "validation-and-rollback-hold",
         "retire-old-resources",
     ]
-    final_phase = next(phase for phase in adjusted.migration_plan if phase.id == "final-control-plane-cutover")
+    final_phase = next(
+        phase for phase in adjusted.migration_plan if phase.id == "final-control-plane-cutover"
+    )
     assert final_phase.progress_label == "Compute Migration: final control-plane cutover"
     assert "storage" not in final_phase.title.lower()
     assert not any("delta sync" in note for note in final_phase.notes)
-    approval_phase = next(phase for phase in adjusted.migration_plan if phase.id == "customer-approval")
+    approval_phase = next(
+        phase for phase in adjusted.migration_plan if phase.id == "customer-approval"
+    )
     assert "storage" not in approval_phase.title.lower()
     approval_action = next(
         action for action in adjusted.actions if action.id == ONBOARDING_ACTION_APPROVE_MIGRATION
@@ -777,7 +787,7 @@ def test_soperator_onboarding_analyzer_reuses_target_compatible_legacy_layout() 
         for finding in report.findings
     )
     assert any(
-        finding.layer == "role-mapping" and finding.status == "target-compatible"
+        finding.layer == "placements" and finding.status == "target-compatible"
         for finding in report.findings
     )
     assert [phase.id for phase in report.migration_plan] == [
@@ -800,7 +810,9 @@ def test_soperator_onboarding_analyzer_reuses_target_compatible_legacy_layout() 
     assert final_phase.title == "Final Soperator chart cutover"
 
 
-def test_soperator_onboarding_skips_external_node_template_when_provider_inventory_matches() -> None:
+def test_soperator_onboarding_skips_external_node_template_when_provider_inventory_matches() -> (
+    None
+):
     report = analyze_soperator_onboarding_snapshot(
         _with_provider_node_template_inventory(_target_compatible_legacy_snapshot()),
         target_ref="cluster1",
@@ -812,20 +824,19 @@ def test_soperator_onboarding_skips_external_node_template_when_provider_invento
     assert report.state == "existing-soperator-supported"
     assert ONBOARDING_ACTION_UPGRADE_SOPERATOR in selected_action_ids
     assert ONBOARDING_ACTION_UPGRADE_EXTERNAL_NODE_TEMPLATE not in selected_action_ids
-    assert "external-node-template-upgrade" not in [
-        phase.id for phase in report.migration_plan
-    ]
+    assert "external-node-template-upgrade" not in [phase.id for phase in report.migration_plan]
     finding = next(
         finding
         for finding in report.findings
-        if finding.layer == "mk8s-node-template"
-        and finding.status == "target-compatible"
+        if finding.layer == "mk8s-node-template" and finding.status == "target-compatible"
     )
     assert finding.evidence is not None
     assert finding.evidence["matched_node_group_count"] == 6
 
 
-def test_soperator_onboarding_keeps_external_node_template_when_provider_inventory_is_partial() -> None:
+def test_soperator_onboarding_keeps_external_node_template_when_provider_inventory_is_partial() -> (
+    None
+):
     snapshot = _with_provider_node_template_inventory(
         _target_compatible_legacy_snapshot(),
         stale_group="worker-cpu",
@@ -841,14 +852,11 @@ def test_soperator_onboarding_keeps_external_node_template_when_provider_invento
 
     selected_action_ids = {action.id for action in report.actions if action.selected}
     assert ONBOARDING_ACTION_UPGRADE_EXTERNAL_NODE_TEMPLATE in selected_action_ids
-    assert "external-node-template-upgrade" in [
-        phase.id for phase in report.migration_plan
-    ]
+    assert "external-node-template-upgrade" in [phase.id for phase in report.migration_plan]
     finding = next(
         finding
         for finding in report.findings
-        if finding.layer == "mk8s-node-template"
-        and finding.status == "remediation-planned"
+        if finding.layer == "mk8s-node-template" and finding.status == "remediation-planned"
     )
     assert finding.evidence is not None
     remaining = finding.evidence["remaining_node_groups"]
@@ -856,7 +864,9 @@ def test_soperator_onboarding_keeps_external_node_template_when_provider_invento
     assert "CPU node group still has GPU driver preset cuda12.4" in remaining[0]["reasons"]
 
 
-def test_soperator_onboarding_keeps_external_node_template_when_provider_collection_errors() -> None:
+def test_soperator_onboarding_keeps_external_node_template_when_provider_collection_errors() -> (
+    None
+):
     snapshot = _with_provider_node_template_inventory(_target_compatible_legacy_snapshot())
     snapshot["provider_collection_errors"] = [
         {
@@ -877,8 +887,7 @@ def test_soperator_onboarding_keeps_external_node_template_when_provider_collect
     finding = next(
         finding
         for finding in report.findings
-        if finding.layer == "mk8s-node-template"
-        and finding.status == "remediation-planned"
+        if finding.layer == "mk8s-node-template" and finding.status == "remediation-planned"
     )
     assert finding.evidence is not None
     assert finding.evidence["provider_collection_errors"] == [
@@ -953,9 +962,7 @@ def test_soperator_onboarding_report_from_config_respects_selected_modes() -> No
     )
 
     assert "accepted_fingerprint" in report
-    assert not any(
-        item.get("classification") == "data-sensitive" for item in report["remediation"]
-    )
+    assert not any(item.get("classification") == "data-sensitive" for item in report["remediation"])
     assert [phase["id"] for phase in report["migration_plan"]] == [
         "discovery-and-plan",
         "customer-approval",
@@ -974,7 +981,9 @@ def test_soperator_onboarding_report_from_config_respects_selected_modes() -> No
     )
     assert "storage" not in approval_phase["title"].lower()
     approval_action = next(
-        action for action in report["actions"] if action["id"] == ONBOARDING_ACTION_APPROVE_MIGRATION
+        action
+        for action in report["actions"]
+        if action["id"] == ONBOARDING_ACTION_APPROVE_MIGRATION
     )
     assert "storage" not in approval_action["title"].lower()
 
@@ -1021,7 +1030,9 @@ def test_soperator_onboarding_report_from_config_honors_accepted_action_contract
     assert report["target_version"] == "4.0.1-ps.1"
     assert report["migration_profile_id"] == "v4-to-target"
     assert report["migration_plan"] == []
-    assert not any(action["id"] == ONBOARDING_ACTION_UPGRADE_SOPERATOR for action in report["actions"])
+    assert not any(
+        action["id"] == ONBOARDING_ACTION_UPGRADE_SOPERATOR for action in report["actions"]
+    )
     assert not any(
         action["id"] == ONBOARDING_ACTION_UPGRADE_EXTERNAL_NODE_TEMPLATE
         for action in report["actions"]
@@ -1093,7 +1104,9 @@ def test_onboarding_report_writer_prefers_matching_source_discovery_report(tmp_p
             "migration_plan": [],
         }
     }
-    (tmp_path / SOURCE_SOPERATOR_DISCOVERY_REPORT_NAME).write_text(
+    source_report_path = tmp_path / "generated" / "reports" / SOURCE_SOPERATOR_DISCOVERY_REPORT_NAME
+    source_report_path.parent.mkdir(parents=True)
+    source_report_path.write_text(
         json.dumps(source_report),
         encoding="utf-8",
     )
@@ -1280,7 +1293,9 @@ def test_soperator_onboarding_analyzer_does_not_downgrade_newer_release() -> Non
     assert any(finding.status == "newer-than-cxcli" for finding in report.findings)
 
 
-def test_soperator_onboarding_analyzer_requires_source_version_for_incompatible_release_identity() -> None:
+def test_soperator_onboarding_analyzer_requires_source_version_for_incompatible_release_identity() -> (
+    None
+):
     report = analyze_soperator_onboarding_snapshot(
         _snapshot(
             release={
@@ -1312,9 +1327,14 @@ def test_soperator_onboarding_analyzer_source_version_finding_names_profile_cont
         pinned_app_version="4.0.2",
     )
 
-    findings = [finding for finding in report.findings if finding.status == "source-version-required"]
+    findings = [
+        finding for finding in report.findings if finding.status == "source-version-required"
+    ]
     assert len(findings) == 1
-    assert "exact committed migration-profile row or known major-generation profile" in findings[0].message
+    assert (
+        "exact committed migration-profile row or known major-generation profile"
+        in findings[0].message
+    )
 
 
 def test_soperator_onboarding_analyzer_matches_manual_source_version_for_crd_only_cluster() -> None:
@@ -1535,7 +1555,9 @@ def test_collect_kubectl_soperator_snapshot_records_shellout_errors(
             stderr="forbidden by current context",
         )
 
-    monkeypatch.setattr("nebius_cxcli.soperator_onboarding.subprocess.run", _raise_called_process_error)
+    monkeypatch.setattr(
+        "nebius_cxcli.soperator_onboarding.subprocess.run", _raise_called_process_error
+    )
 
     snapshot = collect_kubectl_soperator_snapshot(kube_context="missing-context", timeout=1)
 
@@ -1646,10 +1668,7 @@ def test_collect_kubectl_soperator_snapshot_queries_only_discovered_soperator_cr
 
     assert snapshot["collection_errors"] == []
     assert any(command[4] == "slurmclusters" for command in commands if len(command) > 4)
-    assert not any(
-        "nodeconfigurators" in command or "nodesets" in command
-        for command in commands
-    )
+    assert not any("nodeconfigurators" in command or "nodesets" in command for command in commands)
 
 
 def _onboarding_payload() -> dict[str, object]:
@@ -1722,7 +1741,7 @@ def _onboarding_payload() -> dict[str, object]:
                     "namespace": "nvidia-gpu-operator",
                     "release-name": "gpu-operator",
                     "values": {},
-                }
+                },
             ]
         },
     }
@@ -1955,7 +1974,7 @@ def test_source_discovery_report_writer_persists_full_snapshot(tmp_path) -> None
         cluster_name="cluster1",
     )
 
-    assert path == tmp_path / SOURCE_SOPERATOR_DISCOVERY_REPORT_NAME
+    assert path == tmp_path / "generated" / "reports" / SOURCE_SOPERATOR_DISCOVERY_REPORT_NAME
     payload = json.loads(path.read_text(encoding="utf-8"))
     assert payload["cluster_id"] == "mk8scluster-123"
     assert payload["report"]["state"] == "no-soperator-detected"

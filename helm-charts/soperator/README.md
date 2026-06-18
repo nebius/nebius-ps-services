@@ -273,12 +273,11 @@ Common direct Helm settings:
   per NodeSet derived from topology (rack, SU, fabric). Appended to
   `nodeConfig.features` so jobs can target them with `--constraint=`. Used
   by cxcli's `nebius-nvl-rack-v1` topology profile for GB300/NVL clusters.
-- `nodeGroupMapping` is a cxcli-authored convenience value for mapping
-  Soperator roles to existing MK8s node groups. Helm itself schedules from
-  `k8sNodeFilters[]`, `nodesets[]`, `storage.*`, `rebooter.tolerations`, and
-  `partitionConfiguration`. cxcli also applies the mapped `system` filter to
-  chart-owned helper deployments such as the Soperator manager, checks
-  controller, and MariaDB operator.
+- `k8sNodeFilters[]` and `nodesets[]`: chart-native placement controls for
+  direct Helm installs. Service pods select a named filter through
+  `slurmNodes.*.k8sNodeFilterName`, helper workloads can select filters through
+  their own chart values, and worker capacity is declared through
+  `nodesets[]`.
 - `volume.*` and `storage.*`: jail, controller spool, optional accounting
   storage, and mount placement.
 - `slurmNodes.login.sshRootPublicKeys`: public keys for login SSH access.

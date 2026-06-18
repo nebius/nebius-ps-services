@@ -56,10 +56,12 @@ def clear_deploy_validation_artifacts(
     validations: Sequence[Mapping[str, Any]],
     *,
     reports_dir: Path,
+    include_markdown: bool = True,
 ) -> None:
-    """Remove stale validation artifacts before a new deploy run."""
-    deploy_report_path(reports_dir).unlink(missing_ok=True)
-    (reports_dir / _LEGACY_VALIDATION_MARKDOWN_FILENAME).unlink(missing_ok=True)
+    """Remove stale validation detail artifacts before a validation run."""
+    if include_markdown:
+        deploy_report_path(reports_dir).unlink(missing_ok=True)
+        (reports_dir / _LEGACY_VALIDATION_MARKDOWN_FILENAME).unlink(missing_ok=True)
     for spec in validations:
         _validation_report_path(spec, reports_dir=reports_dir).unlink(missing_ok=True)
 
@@ -107,9 +109,7 @@ def _apply_soperator_owned_gpu_summaries(
         for item in results
         if item.kind == "soperator_cluster_smoke" and item.target_ref
     }
-    unique_soperator = tuple(
-        item for item in results if item.kind == "soperator_cluster_smoke"
-    )
+    unique_soperator = tuple(item for item in results if item.kind == "soperator_cluster_smoke")
     updated: list[DeployValidationResult] = []
     for item in results:
         if item.kind not in {"mk8s_gpu_visibility", "mk8s_nccl"}:

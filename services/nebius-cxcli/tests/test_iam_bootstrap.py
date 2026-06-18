@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import importlib
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from types import ModuleType, SimpleNamespace
 
 import pytest
@@ -165,6 +165,19 @@ def test_bootstrap_ci_service_account_closes_key_sdk(monkeypatch: pytest.MonkeyP
     assert result.auth_public_key_id == "publickey-123"
     assert result.s3_access_key_id == "access-key"
     assert sdk.closed
+
+
+def test_bootstrap_result_sensitive_fields_are_excluded_from_repr() -> None:
+    ci_fields = {item.name: item.repr for item in fields(iam_bootstrap.CIBootstrapResult)}
+    auth_fields = {
+        item.name: item.repr for item in fields(iam_bootstrap.ServiceAccountAuthKeyResult)
+    }
+    static_fields = {item.name: item.repr for item in fields(iam_bootstrap.StaticKeyIssueResult)}
+
+    assert ci_fields["auth_" + "private_key_pem"] is False
+    assert ci_fields["s3_" + "secret_" + "access_key"] is False
+    assert auth_fields["auth_" + "private_key_pem"] is False
+    assert static_fields["to" + "ken"] is False
 
 
 def test_bootstrap_service_account_auth_key_closes_sdk_without_s3(

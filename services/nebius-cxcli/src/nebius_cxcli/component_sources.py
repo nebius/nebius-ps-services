@@ -2582,6 +2582,70 @@ def _parse_grafana_cli_settings(
     )
 
 
+_SOPERATOR_PLACEMENT_KINDS = {
+    "platform-support",
+    "slurm-service",
+    "slurm-worker-nodeset",
+}
+
+
+def _validate_soperator_nodesets_profile(raw_profile: dict[str, Any], *, field_label: str) -> None:
+    if "role_mapping" in raw_profile:
+        raise ValueError(
+            f"{field_label}.role_mapping is no longer supported; use {field_label}.placements"
+        )
+    placements = raw_profile.get("placements")
+    if placements is not None:
+        if not isinstance(placements, dict):
+            raise ValueError(f"{field_label}.placements must be a mapping")
+        for raw_name, raw_placement in placements.items():
+            name = _as_text(raw_name)
+            if not name:
+                raise ValueError(f"{field_label}.placements entries must have non-empty names")
+            if not isinstance(raw_placement, dict):
+                raise ValueError(f"{field_label}.placements.{name} must be a mapping")
+            for legacy_key in (
+                "k8s_node_filter_name",
+                "chart_filter_paths",
+                "chart_affinity_paths",
+            ):
+                if legacy_key in raw_placement:
+                    raise ValueError(
+                        f"{field_label}.placements.{name}.{legacy_key} is no longer supported"
+                    )
+            kind = _as_text(raw_placement.get("kind"))
+            if kind not in _SOPERATOR_PLACEMENT_KINDS:
+                allowed = ", ".join(sorted(_SOPERATOR_PLACEMENT_KINDS))
+                raise ValueError(
+                    f"{field_label}.placements.{name}.kind must be one of: {allowed}"
+                )
+            bindings = raw_placement.get("soperator_value_bindings")
+            if bindings is not None and not isinstance(bindings, dict):
+                raise ValueError(
+                    f"{field_label}.placements.{name}.soperator_value_bindings must be a mapping"
+                )
+    mk8s_profile = raw_profile.get("mk8s")
+    if isinstance(mk8s_profile, dict):
+        node_groups = mk8s_profile.get("node_groups")
+        if isinstance(node_groups, dict):
+            for raw_group_name, raw_group in node_groups.items():
+                if isinstance(raw_group, dict) and "nodeset_name" in raw_group:
+                    group_name = _as_text(raw_group_name)
+                    raise ValueError(
+                        f"{field_label}.mk8s.node_groups.{group_name}.nodeset_name "
+                        "is no longer supported for service/support node groups; "
+                        "use placement_name"
+                    )
+        worker_nodesets = mk8s_profile.get("worker_nodesets")
+        if isinstance(worker_nodesets, list):
+            for index, raw_worker in enumerate(worker_nodesets):
+                if isinstance(raw_worker, dict) and "node_group_key_prefix" in raw_worker:
+                    raise ValueError(
+                        f"{field_label}.mk8s.worker_nodesets[{index}].node_group_key_prefix "
+                        "is no longer supported; use node_group_prefix"
+                    )
+
+
 def _parse_soperator_nodesets_profile_settings(
     raw: Any,
     *,
@@ -2609,6 +2673,10 @@ def _parse_soperator_nodesets_profile_settings(
             raise ValueError(f"{field_label}.profiles entries must have non-empty names")
         if not isinstance(raw_profile, dict):
             raise ValueError(f"{field_label}.profiles.{name} must be a mapping")
+        _validate_soperator_nodesets_profile(
+            raw_profile,
+            field_label=f"{field_label}.profiles.{name}",
+        )
         profiles[name] = copy.deepcopy(raw_profile)
 
     default = _as_text(raw.get("default"))

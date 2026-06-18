@@ -23,7 +23,7 @@ from .runtime_config import to_plain_data
 
 ONBOARDING_SCHEMA = "nebius-cxcli-soperator-onboarding/v2"
 ONBOARDING_REPORT_DIR = "reports"
-SOURCE_SOPERATOR_DISCOVERY_REPORT_NAME = "source-soperator-cluster-discovery-report.json"
+SOURCE_SOPERATOR_DISCOVERY_REPORT_NAME = "ext-soperator-onboard-source-discovery-report.json"
 ONBOARDING_STATE_NO_SOPERATOR_DETECTED = "no-soperator-detected"
 ONBOARDING_STATE_EXISTING_SOPERATOR_SUPPORTED = "existing-soperator-supported"
 ONBOARDING_STATE_EXISTING_SOPERATOR_TARGET = "existing-soperator-target"
@@ -110,9 +110,7 @@ SOPERATOR_MIGRATION_PROFILE_DATA_FILE = Path(__file__).with_name(
 )
 SOPERATOR_COMPATIBLE_RELEASE_NAMES = frozenset({"soperator", "slurm-operator"})
 SOPERATOR_COMPATIBLE_CONTROLLER_RELEASE_NAMES = frozenset({"soperator-controller"})
-SOPERATOR_COMPATIBLE_CHART_IDENTITIES = frozenset(
-    {"soperator", "helm-soperator", "slurm-operator"}
-)
+SOPERATOR_COMPATIBLE_CHART_IDENTITIES = frozenset({"soperator", "helm-soperator", "slurm-operator"})
 SOPERATOR_HELM_DISCOVERY_NAMESPACES = ("soperator", "soperator-system", "flux-system")
 GPU_STACK_HELM_DISCOVERY_NAMESPACES = ("nvidia-gpu-operator", "nvidia-network-operator")
 _EPHEMERAL_HELM_RELEASE_KEYS = frozenset(
@@ -220,7 +218,9 @@ def _stable_analysis_snapshot(snapshot: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _analysis_fingerprint(snapshot: Mapping[str, Any]) -> str:
-    return hashlib.sha256(_stable_json(_stable_analysis_snapshot(snapshot)).encode("utf-8")).hexdigest()
+    return hashlib.sha256(
+        _stable_json(_stable_analysis_snapshot(snapshot)).encode("utf-8")
+    ).hexdigest()
 
 
 def _stable_source_discovery_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
@@ -290,9 +290,7 @@ def soperator_onboarding_fingerprint(
                 "migration_profile_id": str(
                     onboarding.get("migration_profile_id", "") or ""
                 ).strip(),
-                "node_template_upgrade": to_plain_data(
-                    onboarding.get("node_template_upgrade", {})
-                ),
+                "node_template_upgrade": to_plain_data(onboarding.get("node_template_upgrade", {})),
                 "collection_errors": list(onboarding.get("collection_errors", []) or []),
             },
         },
@@ -306,6 +304,12 @@ def soperator_onboarding_fingerprint(
 def soperator_onboarding_report_path(target_ref: str) -> str:
     normalized = normalize_component_token(target_ref) or "mk8s"
     return f"generated/{ONBOARDING_REPORT_DIR}/soperator-onboarding-{normalized}.json"
+
+
+def source_soperator_discovery_report_path(project_dir: Path) -> Path:
+    return (
+        project_dir / "generated" / ONBOARDING_REPORT_DIR / SOURCE_SOPERATOR_DISCOVERY_REPORT_NAME
+    )
 
 
 def soperator_onboarding_target(
@@ -448,7 +452,10 @@ def _required_storage_mode_from_onboarding(onboarding: Mapping[str, Any]) -> str
         for action in onboarding.get("actions", []) or []
         if str(action or "").strip()
     }
-    if ONBOARDING_ACTION_CREATE_ALIGNED_SFS in actions or ONBOARDING_ACTION_PLAN_DATA_MIGRATION in actions:
+    if (
+        ONBOARDING_ACTION_CREATE_ALIGNED_SFS in actions
+        or ONBOARDING_ACTION_PLAN_DATA_MIGRATION in actions
+    ):
         return ONBOARDING_STORAGE_MODE_CREATE_ALIGNED_SFS
     return ""
 
@@ -506,10 +513,7 @@ def _report_has_finding(
     layer: str,
     status: str,
 ) -> bool:
-    return any(
-        finding.layer == layer and finding.status == status
-        for finding in report.findings
-    )
+    return any(finding.layer == layer and finding.status == status for finding in report.findings)
 
 
 def soperator_onboarding_effective_storage_mode(
@@ -518,9 +522,8 @@ def soperator_onboarding_effective_storage_mode(
 ) -> str:
     """Return the storage mode after analyzer compatibility evidence is applied."""
 
-    if (
-        storage_mode == ONBOARDING_STORAGE_MODE_CREATE_ALIGNED_SFS
-        and _report_has_finding(report, layer="storage-sfs", status="target-compatible")
+    if storage_mode == ONBOARDING_STORAGE_MODE_CREATE_ALIGNED_SFS and _report_has_finding(
+        report, layer="storage-sfs", status="target-compatible"
     ):
         return ONBOARDING_STORAGE_MODE_KEEP_EXISTING
     return storage_mode
@@ -532,9 +535,8 @@ def soperator_onboarding_effective_compute_mode(
 ) -> str:
     """Return the compute mode after analyzer compatibility evidence is applied."""
 
-    if (
-        compute_mode == ONBOARDING_COMPUTE_MODE_CREATE_ALIGNED_NODE_GROUPS
-        and _report_has_finding(report, layer="role-mapping", status="target-compatible")
+    if compute_mode == ONBOARDING_COMPUTE_MODE_CREATE_ALIGNED_NODE_GROUPS and _report_has_finding(
+        report, layer="placements", status="target-compatible"
     ):
         return ONBOARDING_COMPUTE_MODE_KEEP_EXISTING
     return compute_mode
@@ -708,7 +710,7 @@ def _ps_suffix_number(version: str) -> int | None:
     core_index = text.find(core_text)
     if core_index < 0:
         return None
-    suffix = text[core_index + len(core_text):]
+    suffix = text[core_index + len(core_text) :]
     if not suffix:
         return 0
     match = re.fullmatch(r"-ps\.(\d+)", suffix)
@@ -1075,8 +1077,7 @@ def _default_soperator_migration_plan(
         else:
             rolling_title = "Soperator chart upgrade with existing compute layout"
             rolling_progress_label = (
-                "Soperator Upgrade: existing compute layout verified, "
-                "<running jobs> jobs remaining"
+                "Soperator Upgrade: existing compute layout verified, <running jobs> jobs remaining"
             )
             rolling_notes = (
                 "Reuse detected service-role and worker node groups.",
@@ -1111,9 +1112,7 @@ def _default_soperator_migration_plan(
                 "Pause new scheduling or drain partitions according to customer policy.",
                 "Run a final delta sync before updating Soperator values or CRs.",
             )
-            validation_notes = (
-                "Keep old storage resources available until validation passes.",
-            )
+            validation_notes = ("Keep old storage resources available until validation passes.",)
             retire_title = "Retire old storage resources only after explicit approval"
         elif include_compute_migration:
             final_title = "Final Soperator compute and control-plane cutover"
@@ -1182,10 +1181,14 @@ def soperator_onboarding_report_for_modes(
     )
     filtered_actions: list[SoperatorOnboardingAction] = []
     for action in report.actions:
-        if action.id in {
-            ONBOARDING_ACTION_CREATE_ALIGNED_SFS,
-            ONBOARDING_ACTION_PLAN_DATA_MIGRATION,
-        } and not include_data_migration:
+        if (
+            action.id
+            in {
+                ONBOARDING_ACTION_CREATE_ALIGNED_SFS,
+                ONBOARDING_ACTION_PLAN_DATA_MIGRATION,
+            }
+            and not include_data_migration
+        ):
             continue
         if action.id == ONBOARDING_ACTION_PLAN_COMPUTE_MIGRATION and not include_compute_migration:
             continue
@@ -1208,8 +1211,7 @@ def soperator_onboarding_report_for_modes(
             include_external_node_template_upgrade=(
                 ONBOARDING_ACTION_UPGRADE_EXTERNAL_NODE_TEMPLATE in selected_ids
             ),
-            include_soperator_upgrade=ONBOARDING_ACTION_UPGRADE_SOPERATOR
-            in selected_ids,
+            include_soperator_upgrade=ONBOARDING_ACTION_UPGRADE_SOPERATOR in selected_ids,
             include_data_migration=bool(
                 selected_ids
                 & {
@@ -1217,8 +1219,7 @@ def soperator_onboarding_report_for_modes(
                     ONBOARDING_ACTION_PLAN_DATA_MIGRATION,
                 }
             ),
-            include_compute_migration=ONBOARDING_ACTION_PLAN_COMPUTE_MIGRATION
-            in selected_ids,
+            include_compute_migration=ONBOARDING_ACTION_PLAN_COMPUTE_MIGRATION in selected_ids,
         )
     remediation = tuple(
         item
@@ -1384,7 +1385,7 @@ def _configured_soperator_action(
         ONBOARDING_ACTION_PLAN_COMPUTE_MIGRATION: SoperatorOnboardingAction(
             id=ONBOARDING_ACTION_PLAN_COMPUTE_MIGRATION,
             title="Plan in-place compute remediation without duplicating workers",
-            layer="role-mapping",
+            layer="placements",
             selected=True,
             disruptive=True,
             reason=(
@@ -1451,7 +1452,9 @@ def _configured_soperator_actions(
     )
 
 
-def _migration_plan_for_action_ids(action_ids: Sequence[str]) -> tuple[SoperatorMigrationPhase, ...]:
+def _migration_plan_for_action_ids(
+    action_ids: Sequence[str],
+) -> tuple[SoperatorMigrationPhase, ...]:
     selected_ids = set(action_ids)
     if not selected_ids & ONBOARDING_MIGRATION_ACTION_IDS:
         return ()
@@ -1761,10 +1764,7 @@ def _gpu_stack_discovery_evidence(
         and cluster_policy_ready
         and gpu_groups
         and gpu_groups.issubset(allocatable_gpu_groups)
-        and (
-            not rdma_groups
-            or (network_operator is not None and nic_cluster_policy_ready)
-        )
+        and (not rdma_groups or (network_operator is not None and nic_cluster_policy_ready))
     )
     return evidence
 
@@ -1904,13 +1904,9 @@ def _node_template_inventory_analysis(
     target_os = ONBOARDING_EXTERNAL_NODE_TEMPLATE_TARGET_OS
     target_gpu = ONBOARDING_EXTERNAL_NODE_TEMPLATE_TARGET_GPU_STACK_PRESET
     control_plane_version = _provider_control_plane_version(snapshot)
-    provider_collection_errors = _sequence_of_mappings(
-        snapshot.get("provider_collection_errors")
-    )
+    provider_collection_errors = _sequence_of_mappings(snapshot.get("provider_collection_errors"))
     control_plane_matches = (
-        _k8s_minor_matches(control_plane_version, target_k8s)
-        if control_plane_version
-        else False
+        _k8s_minor_matches(control_plane_version, target_k8s) if control_plane_version else False
     )
     matched: list[dict[str, Any]] = []
     remaining: list[dict[str, Any]] = []
@@ -1940,9 +1936,7 @@ def _node_template_inventory_analysis(
         expected_gpu = target_gpu if group_name in gpu_groups else ""
         reasons: list[str] = []
         if not _k8s_minor_matches(current_k8s, target_k8s):
-            reasons.append(
-                f"Kubernetes {current_k8s or 'unknown'} != target {target_k8s}"
-            )
+            reasons.append(f"Kubernetes {current_k8s or 'unknown'} != target {target_k8s}")
         if current_os != target_os:
             reasons.append(f"OS {current_os or 'unknown'} != target {target_os}")
         if group_name in gpu_groups:
@@ -2013,8 +2007,7 @@ def _node_template_inventory_finding_evidence(analysis: Mapping[str, Any]) -> di
         "remaining_node_groups": [dict(item) for item in remaining[:50]],
         "unknown_node_groups": [dict(item) for item in unknown[:50]],
         "provider_collection_errors": [
-            dict(item)
-            for item in _sequence_of_mappings(analysis.get("provider_collection_errors"))
+            dict(item) for item in _sequence_of_mappings(analysis.get("provider_collection_errors"))
         ],
     }
 
@@ -2032,7 +2025,9 @@ def analyze_soperator_onboarding_snapshot(
         node_groups = {}
     cpu_groups, gpu_groups = _node_group_kinds(node_groups)
     releases = _sequence_of_mappings(snapshot.get("helm_releases"))
-    soperator_candidates = tuple(release for release in releases if _is_soperator_release_candidate(release))
+    soperator_candidates = tuple(
+        release for release in releases if _is_soperator_release_candidate(release)
+    )
     soperator_release = next(
         (release for release in soperator_candidates if _is_compatible_soperator_release(release)),
         None,
@@ -2108,7 +2103,7 @@ def analyze_soperator_onboarding_snapshot(
         if missing_selector_labels:
             findings.append(
                 SoperatorOnboardingFinding(
-                    layer="role-mapping",
+                    layer="placements",
                     status="selector-required",
                     severity="required",
                     message=(
@@ -2132,7 +2127,7 @@ def analyze_soperator_onboarding_snapshot(
         if compute_layout_compatible:
             findings.append(
                 SoperatorOnboardingFinding(
-                    layer="role-mapping",
+                    layer="placements",
                     status="target-compatible",
                     severity="info",
                     message=(
@@ -2148,15 +2143,13 @@ def analyze_soperator_onboarding_snapshot(
             ]
             findings.append(
                 SoperatorOnboardingFinding(
-                    layer="role-mapping",
+                    layer="placements",
                     status="incomplete",
                     severity="recommended",
                     message=(
                         "Some Soperator node-group role labels were detected, but the "
                         "standard service-role and worker layout is incomplete. Missing "
-                        "roles: "
-                        + ", ".join(missing_roles)
-                        + "."
+                        "roles: " + ", ".join(missing_roles) + "."
                     ),
                     action_id=ONBOARDING_ACTION_PLAN_COMPUTE_MIGRATION,
                     evidence={"roles": role_evidence, "missing_roles": missing_roles},
@@ -2169,7 +2162,7 @@ def analyze_soperator_onboarding_snapshot(
                 layer="gpu-rdma",
                 status="warning",
                 severity="recommended",
-                message="No GPU node group was discovered; worker role mapping will be CPU-only.",
+                message="No GPU node group was discovered; worker placement will be CPU-only.",
             )
         )
     else:
@@ -2406,7 +2399,9 @@ def analyze_soperator_onboarding_snapshot(
         )
 
     detected_source_version = (
-        _release_detected_version(soperator_release) if isinstance(soperator_release, Mapping) else ""
+        _release_detected_version(soperator_release)
+        if isinstance(soperator_release, Mapping)
+        else ""
     )
     detected_source_profile = (
         soperator_migration_profile_for_version(
@@ -2517,8 +2512,8 @@ def analyze_soperator_onboarding_snapshot(
                     layer="soperator",
                     selected=True,
                     reason="Existing resources must be adopted cautiously before cxcli manages them.",
+                )
             )
-        )
 
     source_version = detected_source_version or (
         manual_source_version if manual_source_version_applies else ""
@@ -2617,9 +2612,7 @@ def analyze_soperator_onboarding_snapshot(
                     storage_present=storage_present,
                     target_version=pinned_chart_version or target_version,
                 )
-                external_node_template_required = not bool(
-                    node_template_inventory.get("complete")
-                )
+                external_node_template_required = not bool(node_template_inventory.get("complete"))
                 migration_plan = _default_soperator_migration_plan(
                     include_target_gpu_reconciliation=any(
                         action.id == ONBOARDING_ACTION_RECONCILE_TARGET_GPU_STACK
@@ -2754,7 +2747,7 @@ def analyze_soperator_onboarding_snapshot(
                         SoperatorOnboardingAction(
                             id=ONBOARDING_ACTION_PLAN_COMPUTE_MIGRATION,
                             title="Plan in-place compute remediation without duplicating workers",
-                            layer="role-mapping",
+                            layer="placements",
                             selected=True,
                             disruptive=True,
                             reason=(
@@ -3042,7 +3035,7 @@ def write_soperator_onboarding_reports(
             target_ref=target_ref,
             pinned_chart_version=pinned_chart_version,
             pinned_app_version=pinned_app_version,
-            source_report_path=generated_dir.parent / SOURCE_SOPERATOR_DISCOVERY_REPORT_NAME,
+            source_report_path=source_soperator_discovery_report_path(generated_dir.parent),
         )
         path = reports_dir / f"soperator-onboarding-{target_ref}.json"
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -3076,8 +3069,10 @@ def write_source_soperator_discovery_report(
     cluster_id: str = "",
     cluster_name: str = "",
 ) -> Path:
-    path = target_dir / SOURCE_SOPERATOR_DISCOVERY_REPORT_NAME
-    report_payload = report.to_dict() if isinstance(report, SoperatorOnboardingReport) else dict(report)
+    path = source_soperator_discovery_report_path(target_dir)
+    report_payload = (
+        report.to_dict() if isinstance(report, SoperatorOnboardingReport) else dict(report)
+    )
     payload = {
         "schema": "nebius-cxcli-source-soperator-discovery/v1",
         "generated_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
@@ -3142,10 +3137,15 @@ def collect_kubectl_soperator_snapshot(
         errors=collection_errors,
         extra_env=extra_env,
     )
-    namespace_names = [
-        str(item.get("metadata", {}).get("name", "")).strip()
-        for item in namespaces.get("items", []) if isinstance(item, Mapping)
-    ] if isinstance(namespaces, Mapping) else []
+    namespace_names = (
+        [
+            str(item.get("metadata", {}).get("name", "")).strip()
+            for item in namespaces.get("items", [])
+            if isinstance(item, Mapping)
+        ]
+        if isinstance(namespaces, Mapping)
+        else []
+    )
     pvs = _kubectl_json(
         ["kubectl", "--context", context, "get", "pv", "-o", "json"],
         timeout,
@@ -3176,10 +3176,15 @@ def collect_kubectl_soperator_snapshot(
             errors=collection_errors,
             extra_env=extra_env,
         )
-    crd_names = [
-        str(item.get("metadata", {}).get("name", "")).strip()
-        for item in crds.get("items", []) if isinstance(item, Mapping)
-    ] if isinstance(crds, Mapping) else []
+    crd_names = (
+        [
+            str(item.get("metadata", {}).get("name", "")).strip()
+            for item in crds.get("items", [])
+            if isinstance(item, Mapping)
+        ]
+        if isinstance(crds, Mapping)
+        else []
+    )
     soperator_resource_kinds = [
         resource_kind
         for crd_name, resource_kind in SOPERATOR_CRD_RESOURCE_KINDS
@@ -3283,7 +3288,9 @@ def collect_kubectl_soperator_snapshot(
                     "key": selector_key,
                     "operator": "In",
                     "values": [selector_value],
-                } if selector_key and selector_value else {},
+                }
+                if selector_key and selector_value
+                else {},
                 "taints": [],
             },
         )
@@ -3300,7 +3307,9 @@ def collect_kubectl_soperator_snapshot(
             str(key).startswith("nvidia.com/gpu") and str(value) not in {"0", ""}
             for key, value in allocatable.items()
         )
-        taints = item.get("spec", {}).get("taints", []) if isinstance(item.get("spec"), Mapping) else []
+        taints = (
+            item.get("spec", {}).get("taints", []) if isinstance(item.get("spec"), Mapping) else []
+        )
         if isinstance(taints, list):
             existing_taints = group.setdefault("taints", [])
             if isinstance(existing_taints, list):
@@ -3353,7 +3362,9 @@ def _sanitize_namespace_resource_items(items: Any) -> list[dict[str, Any]]:
             "metadata": {
                 "name": metadata.get("name"),
                 "namespace": metadata.get("namespace"),
-                "labels": metadata.get("labels") if isinstance(metadata.get("labels"), Mapping) else {},
+                "labels": metadata.get("labels")
+                if isinstance(metadata.get("labels"), Mapping)
+                else {},
             },
         }
         kind = str(item.get("kind", "") or "")
@@ -3368,7 +3379,9 @@ def _sanitize_namespace_resource_items(items: Any) -> list[dict[str, Any]]:
             row["spec"] = {
                 "type": spec.get("type"),
                 "ports": spec.get("ports") if isinstance(spec.get("ports"), list) else [],
-                "selector": spec.get("selector") if isinstance(spec.get("selector"), Mapping) else {},
+                "selector": spec.get("selector")
+                if isinstance(spec.get("selector"), Mapping)
+                else {},
             }
         elif kind == "ConfigMap":
             data = item.get("data")

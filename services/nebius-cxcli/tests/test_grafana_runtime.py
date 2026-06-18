@@ -356,6 +356,23 @@ def test_ensure_grafana_runtime_secrets_refreshes_rejected_read_token(
     ]
 
 
+def test_observability_read_token_status_refuses_plain_http_probe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        grafana_runtime,
+        "_read_token_probe_url",
+        lambda _payload: "http://observability.example.invalid/api/v1/query?query=1",
+    )
+    monkeypatch.setattr(
+        grafana_runtime,
+        "urlopen",
+        lambda *_args, **_kwargs: pytest.fail("plain HTTP token probe must not run"),
+    )
+
+    assert grafana_runtime._observability_read_token_status({}, "viewer-token") is None
+
+
 def test_grafana_dashboard_url_rewrites_to_public_base(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

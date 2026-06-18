@@ -833,7 +833,7 @@ dev = [
 requires-dist = [
     { name = "build", marker = "extra == 'dev'", specifier = ">=1.2.0,<2.0.0" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.11.0,<2.0.0" },
-    { name = "nebius", specifier = ">=0.3.18,<1.0.0" },
+    { name = "nebius", specifier = ">=0.3.59,<1.0.0" },
     { name = "pynacl", specifier = ">=1.5.0,<2.0.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=9.0.3,<10.0.0" },
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=5.0.0,<7.0.0" },
