@@ -32,6 +32,7 @@ For skill-specific release notes, see [CHANGELOG.md](CHANGELOG.md).
 - Security review and safe remediation across infra, CI/CD, shell, and app
   code: `apply-security`
 - Disposable Ubuntu project container setup: `attach-ubuntu`
+- Fast local whole-repository commits on the current branch: `commit`
 - Commit and push the current feature branch: `commit-push`
 - Branch-safe GitHub pull request creation with safe check repair: `create-pr`
 - Read-only copy/paste-friendly local or GitHub repo code metrics: `code-info`
@@ -64,6 +65,8 @@ review Terraform code.
 ### Prompt Examples
 
 ```text
+$commit Quickly commit all current local changes on this branch without pushing.
+
 $commit-push Commit all current changes on this feature branch, generate a commit message, push it to origin, and tell me whether the worktree is clean.
 
 $create-pr Create a PR for the current local work, using a new prep branch if I am still on the default branch.
@@ -94,8 +97,10 @@ $review-pr Review this Helm chart PR, apply the relevant sibling skills, resolve
 ```
 
 These prompts should work when the skill is installed and the local environment
-matches the task. For Git-backed flows such as `commit-push`, `create-pr`, and
-`review-pr`, that means:
+matches the task. For Git-backed flows such as `commit`, `commit-push`,
+`create-pr`, and `review-pr`, that means the current directory is inside a Git
+repository. For remote-backed flows such as `commit-push`, `create-pr`, and
+`review-pr`, that also means:
 
 - the repository has an `origin` remote
 - the branch state allows the requested operation
@@ -190,7 +195,8 @@ local state layout, hook boundaries, and full skill-by-skill lifecycle.
 - `sdlc-tui-test`: controls and evaluates terminal, CLI wizard, or TUI flows with
   transcripts and exit-code evidence.
 - `sdlc-commit`: creates local feature-scoped Git commits after validation, tests,
-  and evaluation pass; it never pushes and does not replace `commit-push`.
+  and evaluation pass; it never pushes and does not replace the general
+  `commit` or `commit-push` skills.
 - `sdlc-uat-tests`: runs product-level user acceptance testing before PR creation.
 - `create-pr`: existing PR skill reused as the SDLC handoff after UAT passes;
   it opens or reuses the PR and summarizes SDLC evidence.
@@ -214,6 +220,14 @@ container, mounts the project at `/workdir`, prepares attached-container VS
 Code defaults, and helps create a disposable Ubuntu environment for local
 testing on macOS with Docker Desktop and the Dev Containers extension.
 
+### `commit`
+
+`commit` creates a fast local Git commit on the current branch without pushing.
+It stages the complete monorepo diff with repo-root `git add -A`, runs
+lightweight staged validation, uses a provided or generated commit message,
+preserves normal hooks, and stops instead of pushing, creating PRs, repairing
+branches, or writing Agentic SDLC evidence.
+
 ### `commit-push`
 
 `commit-push` commits all current local changes on the active non-default
@@ -229,8 +243,11 @@ without leaving new work on the default branch. It can prepare conflict-free
 PRs, repair safe branch-owned validation or GitHub check failures before
 presenting the PR as handled, avoid duplicate PRs for the same head branch,
 preserve one PR per branch, stage complete monorepo local work with
-`git add -A` when committing current dirty changes, validate the staged diff,
-reuse the current non-default branch without creating another branch, and
+`git add -A` only after safe formatting, whitespace, lint, build, and focused
+test checks finish, validate the staged diff, merge `origin/<base>` into the PR
+branch before PR creation without rewriting history, reuse the current
+non-default branch without creating another branch, push with explicit
+refspecs, wait for available GitHub checks before calling the PR ready, and
 report readiness plus manual merge order.
 
 ### `code-info`

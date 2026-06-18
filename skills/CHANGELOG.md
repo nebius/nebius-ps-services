@@ -51,6 +51,10 @@ All notable changes to the reusable Codex skills are tracked here.
 - Added the `commit-push` Codex skill for committing all current feature-branch
   changes with `git add -A`, pushing the branch to `origin`, and reporting
   final worktree cleanliness without opening a pull request.
+- Added the `commit` Codex skill for fast local commits on the current branch:
+  it stages the complete repository diff with repo-root `git add -A`, runs
+  lightweight staged validation, commits with normal hooks, and intentionally
+  does not push, create PRs, or participate in Agentic SDLC state.
 - Added the `code-info` Codex skill for copy/paste-friendly project code
   metrics, including LOC by language and component, repo size and link,
   test-file counts, CLI command detection, module/package counts, artifact
@@ -86,6 +90,16 @@ All notable changes to the reusable Codex skills are tracked here.
 
 ### Changed
 
+- Clarified `sdlc-commit` boundaries so ordinary local commits use `commit`
+  and publish commits use `commit-push`; `sdlc-commit` remains Agentic
+  SDLC-only.
+- Tightened `create-pr` so dirty PR work runs safe formatting, whitespace,
+  lint, build, and focused test checks before `git add -A` and commit, waits
+  for local tests to finish, and uses `git fetch origin` plus
+  `git merge --no-edit origin/<base>` before PR creation so branches receive
+  the latest base updates without rewriting history. Pushing now uses explicit
+  refspecs, and available GitHub checks must reach a terminal state before the
+  PR is reported ready.
 - Relaxed `global-context-management` subagent guidance so, after a prompt or
   user-enabled local hook policy authorizes delegation, Codex should choose
   useful targeted read-only helper roles instead of waiting for the prompt to

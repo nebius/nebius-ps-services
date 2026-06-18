@@ -9,6 +9,7 @@ Create a local commit for one completed feature as a durable checkpoint without 
 
 ## Main Boundaries
 
+- Ordinary local commits outside Agentic SDLC; use `commit`.
 - Push.
 - Create PRs.
 - Merge.

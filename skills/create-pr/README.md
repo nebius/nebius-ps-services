@@ -8,11 +8,19 @@ and GitHub steps.
 
 - Creates or reuses feature branches.
 - Reuses the current non-default branch as the normal path, staging existing
-  work with `git add -A`, validating the staged diff, committing it, pushing
-  it, and opening or reusing a PR without creating another branch.
+  work only after formatting, whitespace, lint, and test gates complete,
+  validating the staged diff, committing it, pushing it, and opening or reusing
+  a PR without creating another branch.
+- Runs safe pre-test hygiene before local tests, waits for local tests to
+  finish, and commits only after selected checks pass or a real blocker is
+  reported.
+- Merges the latest `origin/<base>` into the PR branch before PR creation so
+  the branch is current without rewriting history.
 - Keeps PR branches conflict-free against the base branch when possible.
 - Repairs safe branch-owned validation, build, lint, test, or GitHub check
   failures before presenting PR creation as handled.
+- Waits for available GitHub PR checks to reach a terminal state before
+  reporting a PR as ready.
 - Opens or reuses GitHub pull requests.
 - Preserves explicit user-supplied PR titles and bodies.
 - When invoked from Agentic SDLC, checks local UAT evidence and summarizes
@@ -33,7 +41,7 @@ Branch selection or current-branch reuse
 Commit current feature-branch work or reuse requested commits
   |
   v
-Base refresh and conflict handling
+Base refresh, merge update, or conflict handling
   |
   v
 Run focused validation and repair safe branch-owned failures
@@ -52,17 +60,21 @@ Report PR number, URL, and blockers
 
 1. Inspect repository status, remotes, current branch, and base branch.
 2. If already on a non-default branch and no branch was named, reuse that
-   branch and commit current dirty work first with repo-root `git add -A` and
-   staged-diff validation.
+   branch. For dirty work, run safe formatting, whitespace, lint, build, and
+   test checks first, wait for local tests to finish, then stage with repo-root
+   `git add -A`, validate the staged diff, and commit.
 3. Select or create the target branch only when needed.
-4. Refresh against the base branch and handle safe conflicts.
-5. Run focused validation and repair safe branch-owned failures.
-6. Push the branch.
+4. Refresh against the base branch, then merge `origin/<base>` into the target
+   branch before PR creation. For a `main` base branch, merge `origin/main`.
+5. Rerun focused validation after formatting fixes, merge, or conflict
+   repair, and repair safe branch-owned failures.
+6. Push the branch with an explicit refspec.
 7. Open or reuse the PR with the requested title and body.
 8. For Agentic SDLC runs, include available SDLC evidence and use a draft PR
    for explicitly requested early PRs when UAT is missing or failed.
 9. Keep repairing available branch-caused check failures when safe, or mark a
-   real blocker.
+   real blocker. If GitHub checks are still pending, report the PR as pending
+   instead of ready.
 10. Return PR details, validation state, and remaining blockers.
 
 ## Core Concepts
@@ -74,10 +86,19 @@ Report PR number, URL, and blockers
   unclear.
 - Always stage local work from the repository root with `git add -A`; do not
   narrow PR commits to selected paths.
+- Run format and whitespace checks before tests when those checks may change
+  files, wait for tests to finish, then stage and commit.
+- Use `git fetch origin` plus `git merge --no-edit origin/<base>` before PR
+  creation so the branch has the latest base updates without rewriting
+  history.
+- Use explicit push refspecs such as `git push origin HEAD:<branch>`; do not
+  use a plain ambiguous `git push`.
+- Do not rebase or force-push inside this skill.
 - Use draft PRs for incomplete work when that better matches readiness.
 - Preserve one PR per branch.
 - Treat a known fixable branch-owned failure as unfinished PR creation, not as
   a successful handoff with a link.
+- Do not call a PR ready while local tests or GitHub checks are still pending.
 
 ## Files
 
