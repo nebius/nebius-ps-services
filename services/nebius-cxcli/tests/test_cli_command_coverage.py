@@ -39,12 +39,14 @@ from nebius_cxcli.paths import (
     resolve_generated_infra_paths,
 )
 from nebius_cxcli.quota_checks import (
+    GpuCapacityShape,
     QuotaCheck,
     QuotaCoverageGap,
     QuotaReport,
     QuotaRequestChange,
     QuotaRequestFailure,
     QuotaRequestResult,
+    QuotaRequirement,
     RegionalQuotaAvailability,
 )
 
@@ -97,9 +99,7 @@ def _empty_quota_report() -> cli.QuotaReport:
     )
 
 
-def _config_with_enabled_mk8s(
-    *, charts: list[dict[str, Any]] | None = None
-) -> dict[str, Any]:
+def _config_with_enabled_mk8s(*, charts: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     return {
         "client_info": {
             "client_name": "client-a",
@@ -174,6 +174,284 @@ def _fake_paths(tmp_path: Path) -> ProjectPaths:
         path_tenant_folder="tenant-name-example",
         path_project_folder="project-name-example",
     )
+
+
+def _mk8s_gpu_fabric_payload(*, fabric: str = "fabric-4") -> dict[str, Any]:
+    return {
+        "client_info": {
+            "nebius": {
+                "tenant_id": "tenant-1",
+                "project_id": "project-1",
+                "region_id": "eu-north1",
+            }
+        },
+        "infra": {
+            "components": [
+                {
+                    "id": "mk8s",
+                    "instance_id": "cluster1",
+                    "enabled": True,
+                    "inputs": {
+                        "cluster": {"cluster_name": "cluster1"},
+                        "gpu_clusters": {"workers": {"infiniband_fabric": fabric}},
+                        "node_groups": {
+                            "worker": {
+                                "gpu": True,
+                                "node_count": 1,
+                                "platform": "gpu-h100-sxm",
+                                "preset": "8gpu-128vcpu-1600gb",
+                                "gpu_cluster_key": "workers",
+                                "sfs_filesystem_keys": ["jail"],
+                                "reservation": {"policy": "AUTO"},
+                            }
+                        },
+                    },
+                }
+            ]
+        },
+        "apps": {
+            "charts": [
+                {
+                    "id": "soperator",
+                    "instance_id": "cluster1",
+                    "enabled": True,
+                    "values": {},
+                }
+            ]
+        },
+    }
+
+
+def test_render_blocks_direct_mk8s_gpu_fabric_drift(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    paths = _fake_paths(tmp_path)
+    paths.generated_dir.mkdir(parents=True, exist_ok=True)
+    (paths.generated_dir / "nebius-cxcli-manifest.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(cli, "load_generated_manifest", lambda _generated_dir: {"runtime_config": {}})
+    monkeypatch.setattr(
+        cli,
+        "runtime_config_from_manifest",
+        lambda _manifest: _mk8s_gpu_fabric_payload(fabric="fabric-4"),
+    )
+
+    with pytest.raises(RuntimeError, match="upgrade node-group"):
+        cli._raise_on_render_gpu_fabric_drift(
+            _mk8s_gpu_fabric_payload(fabric="fabric-6"),
+            paths,
+        )
+
+
+def test_terraform_apply_blocks_mk8s_gpu_fabric_drift(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    paths = _fake_paths(tmp_path)
+    monkeypatch.setattr(
+        cli,
+        "_mk8s_gpu_fabric_specs_from_terraform_state",
+        lambda **_kwargs: {
+            ("cluster1", "workers"): cli._Mk8sGpuFabricSpec(
+                instance_id="cluster1",
+                gpu_cluster_key="workers",
+                fabric="fabric-4",
+                node_groups=(),
+            )
+        },
+    )
+
+    with pytest.raises(RuntimeError, match="Terraform apply would change"):
+        cli._raise_on_terraform_gpu_fabric_drift(
+            _mk8s_gpu_fabric_payload(fabric="fabric-6"),
+            paths,
+            {"render": {"module_sources": []}},
+            runtime_env={},
+            initialize=False,
+        )
+
+
+def test_upgrade_node_group_fabric_dry_run_prints_repeatable_plan(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    paths = _fake_paths(tmp_path)
+    generated_config = SimpleNamespace(
+        client_info=SimpleNamespace(
+            nebius=SimpleNamespace(
+                tenant_id="tenant-1",
+                project_id="project-1",
+                region_id="eu-north1",
+            )
+        )
+    )
+    source_payload = _mk8s_gpu_fabric_payload(fabric="fabric-4")
+    monkeypatch.setattr(cli, "_load_source_payload", lambda _path: source_payload)
+    monkeypatch.setattr(
+        cli,
+        "_load_deploy_context_readonly",
+        lambda _path: (generated_config, paths, {"render": {"module_sources": []}}),
+    )
+    monkeypatch.setattr(cli, "_terraform_runtime_env", lambda _config: {})
+    monkeypatch.setattr(cli, "_node_group_migration_quota_report", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        cli,
+        "_mk8s_gpu_fabric_specs_from_terraform_state",
+        lambda **_kwargs: {
+            ("cluster1", "workers"): cli._Mk8sGpuFabricSpec(
+                instance_id="cluster1",
+                gpu_cluster_key="workers",
+                fabric="fabric-4",
+                node_groups=(),
+            )
+        },
+    )
+
+    result = runner.invoke(
+        cli.app,
+        [
+            "upgrade",
+            "node-group",
+            str(paths.config_path),
+            "infra:mk8s@cluster1",
+            "--node-group",
+            "worker",
+            "--to-fabric",
+            "fabric-6",
+            "--dry-run",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "MK8s node-group migration plan" in result.output
+    assert "- current config fabric: fabric-4" in result.output
+    assert "- current Terraform state fabric: fabric-4" in result.output
+    assert "- requested target fabric: fabric-6" in result.output
+    assert "- effective target fabric: fabric-6" in result.output
+    assert "- fabric status: changing fabric-4 -> fabric-6" in result.output
+    assert "--to-fabric fabric-6 --dry-run" in result.output
+    assert "--execute --approve" in result.output
+
+
+def test_upgrade_node_group_omitted_fabric_inherits_current_fabric(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    paths = _fake_paths(tmp_path)
+    generated_config = SimpleNamespace(
+        client_info=SimpleNamespace(
+            nebius=SimpleNamespace(
+                tenant_id="tenant-1",
+                project_id="project-1",
+                region_id="eu-north1",
+            )
+        )
+    )
+    source_payload = _mk8s_gpu_fabric_payload(fabric="fabric-4")
+    monkeypatch.setattr(cli, "_load_source_payload", lambda _path: source_payload)
+    monkeypatch.setattr(
+        cli,
+        "_load_deploy_context_readonly",
+        lambda _path: (generated_config, paths, {"render": {"module_sources": []}}),
+    )
+    monkeypatch.setattr(cli, "_terraform_runtime_env", lambda _config: {})
+    monkeypatch.setattr(cli, "_node_group_migration_quota_report", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        cli,
+        "_mk8s_gpu_fabric_specs_from_terraform_state",
+        lambda **_kwargs: {
+            ("cluster1", "workers"): cli._Mk8sGpuFabricSpec(
+                instance_id="cluster1",
+                gpu_cluster_key="workers",
+                fabric="fabric-4",
+                node_groups=(),
+            )
+        },
+    )
+
+    result = runner.invoke(
+        cli.app,
+        [
+            "upgrade",
+            "node-group",
+            str(paths.config_path),
+            "infra:mk8s@cluster1",
+            "--node-group",
+            "worker",
+            "--to-platform",
+            "gpu-b200-sxm",
+            "--to-preset",
+            "8gpu-160vcpu-1792gb",
+            "--dry-run",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "- requested target fabric: (not provided; using current fabric when applicable)" in result.output
+    assert "- effective target fabric: fabric-4" in result.output
+    assert "- fabric status: unchanged" in result.output
+    assert "--to-fabric" not in result.output
+
+
+def test_upgrade_node_group_same_fabric_keeps_explicit_flag(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    paths = _fake_paths(tmp_path)
+    generated_config = SimpleNamespace(
+        client_info=SimpleNamespace(
+            nebius=SimpleNamespace(
+                tenant_id="tenant-1",
+                project_id="project-1",
+                region_id="eu-north1",
+            )
+        )
+    )
+    source_payload = _mk8s_gpu_fabric_payload(fabric="fabric-4")
+    monkeypatch.setattr(cli, "_load_source_payload", lambda _path: source_payload)
+    monkeypatch.setattr(
+        cli,
+        "_load_deploy_context_readonly",
+        lambda _path: (generated_config, paths, {"render": {"module_sources": []}}),
+    )
+    monkeypatch.setattr(cli, "_terraform_runtime_env", lambda _config: {})
+    monkeypatch.setattr(cli, "_node_group_migration_quota_report", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        cli,
+        "_mk8s_gpu_fabric_specs_from_terraform_state",
+        lambda **_kwargs: {
+            ("cluster1", "workers"): cli._Mk8sGpuFabricSpec(
+                instance_id="cluster1",
+                gpu_cluster_key="workers",
+                fabric="fabric-4",
+                node_groups=(),
+            )
+        },
+    )
+
+    result = runner.invoke(
+        cli.app,
+        [
+            "upgrade",
+            "node-group",
+            str(paths.config_path),
+            "infra:mk8s@cluster1",
+            "--node-group",
+            "worker",
+            "--to-platform",
+            "gpu-b200-sxm",
+            "--to-preset",
+            "8gpu-160vcpu-1792gb",
+            "--to-fabric",
+            "fabric-4",
+            "--dry-run",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "- requested target fabric: fabric-4" in result.output
+    assert "- fabric status: unchanged" in result.output
+    assert "--to-fabric fabric-4 --dry-run" in result.output
 
 
 def test_upgrade_readonly_context_does_not_materialize_terraform_tfvars(
@@ -277,7 +555,7 @@ def test_managed_mk8s_handoff_uses_resolved_cluster_id_without_terraform_output(
     assert env[cli.GRAFANA_TARGET_CLUSTER_ID_ENV] == "mk8scluster-123"
 
 
-def test_upgrade_k8s_version_runs_staged_terraform_plan_apply_not_sdk_updates(
+def test_upgrade_node_template_config_only_guided_dry_run_prompts_required_values(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -301,14 +579,19 @@ def test_upgrade_k8s_version_runs_staged_terraform_plan_apply_not_sdk_updates(
                                 },
                                 "node_groups": {
                                     "system": {
+                                        "version": "1.32",
                                         "platform": "cpu-platform",
                                         "preset": "cpu-4-16",
+                                        "os": "ubuntu22.04",
                                     },
                                     "gpu": {
                                         "gpu": True,
+                                        "gpu_stack_source": "nebius_image",
+                                        "version": "1.32",
                                         "platform": "gpu-platform",
                                         "preset": "8gpu",
-                                        "gpu_stack_preset": "cuda13.0",
+                                        "os": "ubuntu22.04",
+                                        "gpu_stack_preset": "cuda12.8",
                                     },
                                 },
                             },
@@ -319,34 +602,24 @@ def test_upgrade_k8s_version_runs_staged_terraform_plan_apply_not_sdk_updates(
         ),
         encoding="utf-8",
     )
+    original_config = paths.config_path.read_text(encoding="utf-8")
     generated_config = SimpleNamespace(
         client_info=SimpleNamespace(
             client_name="test-client",
             nebius=SimpleNamespace(project_id="project-1"),
         )
     )
-    manifest = {
-        "deploy": {
-            "targets": [],
-            "validations": [
-                {
-                    "kind": "mk8s_gpu_visibility",
-                    "target_ref": "mk8s",
-                    "report_file": "gpu-visibility-report.json",
-                }
-            ],
-        }
-    }
-    plan_stages: list[tuple[dict[str, str], bool]] = []
-    apply_stages: list[dict[str, str]] = []
+    manifest = {"deploy": {"targets": [_mk8s_target(paths)]}}
+    prompt_paths: list[str] = []
     wait_calls: list[tuple[str, str]] = []
-    completed_versions: dict[str, str] = {}
+    rich_console = cli.Console(record=True, width=300)
 
-    def _node_group(
+    def _live_node_group(
         *,
         id: str,
         name: str,
         version: str,
+        os: str,
         platform: str,
         preset: str,
         drivers_preset: str = "",
@@ -356,7 +629,7 @@ def test_upgrade_k8s_version_runs_staged_terraform_plan_apply_not_sdk_updates(
             spec=SimpleNamespace(
                 version=version,
                 template=SimpleNamespace(
-                    os="ubuntu24.04",
+                    os=os,
                     resources=SimpleNamespace(platform=platform, preset=preset),
                     gpu_settings=SimpleNamespace(drivers_preset=drivers_preset),
                 ),
@@ -379,98 +652,83 @@ def test_upgrade_k8s_version_runs_staged_terraform_plan_apply_not_sdk_updates(
                 spec=SimpleNamespace(control_plane=SimpleNamespace(version="1.32")),
             )
 
-        def get_cluster(self, cluster_id: str) -> SimpleNamespace:
-            assert cluster_id == "cluster-1"
-            return SimpleNamespace(
-                metadata=SimpleNamespace(id="cluster-1", name="mk8s-live", resource_version=1),
-                spec=SimpleNamespace(control_plane=SimpleNamespace(version="1.33")),
-            )
-
         def control_plane_versions(self) -> tuple[str, ...]:
             return ("1.33",)
 
         def list_node_groups(self, cluster_id: str) -> tuple[SimpleNamespace, ...]:
             assert cluster_id == "cluster-1"
             return (
-                _node_group(
+                _live_node_group(
                     id="ng-system",
                     name="mk8s-live-system",
-                    version=completed_versions.get("ng-system", "1.32"),
+                    version="1.32",
+                    os="ubuntu22.04",
                     platform="cpu-platform",
                     preset="cpu-4-16",
                 ),
-                _node_group(
+                _live_node_group(
                     id="ng-gpu",
                     name="mk8s-live-gpu",
-                    version=completed_versions.get("ng-gpu", "1.32"),
+                    version="1.32",
+                    os="ubuntu22.04",
                     platform="gpu-platform",
                     preset="8gpu",
-                    drivers_preset="cuda13.0",
+                    drivers_preset="cuda12.8",
                 ),
             )
 
         def compatibility_choices(self, *, target_version: str, platform: str):
             assert target_version == "1.33"
             return (
-                SimpleNamespace(platform=platform, os="ubuntu24.04", drivers_preset=""),
-                SimpleNamespace(platform=platform, os="ubuntu24.04", drivers_preset="cuda13.0"),
+                SimpleNamespace(
+                    platform=platform,
+                    os="ubuntu24.04",
+                    drivers_preset="cuda13.0" if platform == "gpu-platform" else "",
+                ),
             )
 
-        def wait_cluster_version(self, *, cluster_id: str, version: str) -> None:
-            wait_calls.append(("control-plane", f"{cluster_id}:{version}"))
-
-        def wait_node_group_version(
-            self,
-            *,
-            cluster_id: str,
-            node_group_id: str,
-            version: str,
-            timeout_seconds: int,
-        ) -> None:
-            completed_versions[node_group_id] = version
-            wait_calls.append(
-                ("node-group", f"{cluster_id}:{node_group_id}:{version}:{timeout_seconds}")
-            )
-
-    def _current_stage_versions() -> dict[str, str]:
-        payload = yaml.safe_load(paths.config_path.read_text(encoding="utf-8"))
-        component = payload["infra"]["components"][0]
-        groups = component["inputs"]["node_groups"]
-        return {
-            "cluster": component["inputs"]["cluster"]["k8s_version"],
-            "system": groups["system"]["version"],
-            "gpu": groups["gpu"]["version"],
-        }
-
-    def _record_plan(_infra_dir: Path, **kwargs: object) -> None:
-        plan_stages.append((_current_stage_versions(), kwargs.get("quiet") is True))
-
-    def _record_apply(_config: object, _paths: ProjectPaths, **_kwargs: object) -> None:
-        apply_stages.append(_current_stage_versions())
-
-    def _record_validations(
-        validations: list[dict[str, Any]],
+    def _prompt_scalar(
+        path_label: str,
+        current: object,
         *,
-        reports_dir: Path,
-        extra_env: dict[str, str] | None,
-        emit: object,
-    ) -> list[Path]:
-        assert reports_dir == paths.reports_dir
-        assert extra_env == {}
-        assert emit is not None
-        wait_calls.append(
-            (
-                "validations",
-                ",".join(str(item.get("kind", "")) for item in validations),
-            )
-        )
-        return []
+        choices: list[cli.OptionChoice] | None = None,
+        type_hint: str | None = None,
+        required: bool = False,
+        unset_on_skip: bool = False,
+        **_kwargs: object,
+    ) -> tuple[object, bool]:
+        del type_hint, required
+        answers: dict[str, Any] = {
+            "upgrade.node_template.target": "infra:mk8s@mk8s",
+            "upgrade.node_template.to_version": "1.33",
+            "upgrade.node_template.node_group": "",
+            "upgrade.node_template.to_os": "ubuntu24.04",
+            "upgrade.node_template.to_gpu_stack_preset": "cuda13.0",
+            "upgrade.node_template.dry_run": True,
+            "upgrade.node_template.strategy": "safe-surge",
+            "upgrade.node_template.strategy_max_surge_count": 1,
+            "upgrade.node_template.drain_timeout": "auto",
+            "upgrade.node_template.run_post_upgrade_validations": True,
+        }
+        prompt_paths.append(path_label)
+        if path_label == "upgrade.node_template.node_group":
+            assert current is None
+            assert choices is None
+            assert unset_on_skip is True
+        elif path_label == "upgrade.node_template.to_os":
+            assert choices is not None
+            assert [choice.value for choice in choices] == ["ubuntu24.04"]
+            assert current == "ubuntu24.04"
+        elif path_label == "upgrade.node_template.to_gpu_stack_preset":
+            assert choices is not None
+            assert [choice.value for choice in choices] == ["cuda13.0"]
+            assert current == "cuda13.0"
+        if choices:
+            assert answers[path_label] in {choice.value for choice in choices}
+        return answers[path_label], False
 
     monkeypatch.setattr(
         cli, "_load_deploy_context_readonly", lambda _path: (generated_config, paths, manifest)
-    )
-    monkeypatch.setattr(
-        cli, "_load_deploy_context", lambda _path: (generated_config, paths, manifest)
     )
     monkeypatch.setattr(
         cli,
@@ -491,47 +749,265 @@ def test_upgrade_k8s_version_runs_staged_terraform_plan_apply_not_sdk_updates(
     monkeypatch.setattr(cli, "Mk8sKubernetesVersionExecutor", FakeExecutor)
     monkeypatch.setattr(cli, "_prepare_cluster_handoff_kube_env", lambda *_args, **_kwargs: {})
     monkeypatch.setattr(cli, "collect_kubernetes_preflight_findings", lambda *, kube_env: ())
-    monkeypatch.setattr(cli, "_run_generated_bundle_validation", lambda *_args, **_kwargs: {})
-    monkeypatch.setattr(cli, "render_command", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(cli, "_manifest_status_watchers", lambda _manifest: [])
-    monkeypatch.setattr(cli, "_enabled_status_watcher_specs", lambda _config: [])
-    monkeypatch.setattr(cli, "terraform_plan", _record_plan)
-    monkeypatch.setattr(cli, "_run_terraform_apply_with_status", _record_apply)
-    monkeypatch.setattr(cli, "_run_deploy_validations", _record_validations)
+    monkeypatch.setattr(cli, "_upgrade_interactive_prompts_enabled", lambda: True)
+    monkeypatch.setattr(cli, "_prompt_scalar_override", _prompt_scalar)
+    monkeypatch.setattr(cli, "console", rich_console)
 
-    with cli.console.capture() as capture:
-        cli.upgrade_k8s_version_command(
-            paths.config_path,
-            "infra:mk8s@mk8s",
-            to_version="1.33",
-            dry_run=False,
+    cli.upgrade_node_template_command(paths.config_path)
+
+    rendered = rich_console.export_text()
+    assert prompt_paths == [
+        "upgrade.node_template.target",
+        "upgrade.node_template.to_version",
+        "upgrade.node_template.node_group",
+        "upgrade.node_template.to_os",
+        "upgrade.node_template.to_gpu_stack_preset",
+        "upgrade.node_template.dry_run",
+        "upgrade.node_template.strategy",
+        "upgrade.node_template.strategy_max_surge_count",
+        "upgrade.node_template.drain_timeout",
+        "upgrade.node_template.run_post_upgrade_validations",
+    ]
+    assert "Discovering live MK8s state and preparing node-template upgrade plan..." in rendered
+    assert "MK8s node-template upgrade plan" in rendered
+    assert "mk8s-live-system: version 1.32 -> 1.33, OS ubuntu22.04 -> ubuntu24.04" in rendered
+    assert (
+        "mk8s-live-gpu: version 1.32 -> 1.33, OS ubuntu22.04 -> ubuntu24.04, "
+        "GPU stack cuda12.8 -> cuda13.0"
+    ) in rendered
+    assert (
+        f"nebius-cxcli upgrade node-template {paths.config_path} infra:mk8s@mk8s "
+        "--to-version 1.33 --to-os ubuntu24.04 --strategy safe-surge "
+        "--strategy-max-surge-count 1 --to-gpu-stack-preset cuda13.0 "
+        "--drain-timeout auto --no-interactive --dry-run"
+    ) in rendered
+    assert paths.config_path.read_text(encoding="utf-8") == original_config
+    assert wait_calls == [("sdk-close", "")]
+
+
+def test_upgrade_node_template_guided_backtracks_across_setup_prompts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    paths = _fake_paths(tmp_path)
+    paths.infra_dir.mkdir(parents=True)
+    paths.flux_dir.mkdir(parents=True)
+    paths.reports_dir.mkdir(parents=True)
+    paths.config_path.write_text(
+        yaml.safe_dump(
+            {
+                "infra": {
+                    "components": [
+                        {
+                            "id": "mk8s",
+                            "instance_id": "mk8s",
+                            "enabled": True,
+                            "inputs": {
+                                "cluster": {
+                                    "cluster_name": "mk8s-live",
+                                    "k8s_version": "1.32",
+                                },
+                                "node_groups": {
+                                    "system": {
+                                        "version": "1.32",
+                                        "platform": "cpu-platform",
+                                        "preset": "cpu-4-16",
+                                        "os": "ubuntu22.04",
+                                    },
+                                    "gpu": {
+                                        "gpu": True,
+                                        "gpu_stack_source": "nebius_image",
+                                        "version": "1.32",
+                                        "platform": "gpu-platform",
+                                        "preset": "8gpu",
+                                        "os": "ubuntu22.04",
+                                        "gpu_stack_preset": "cuda12.8",
+                                    },
+                                },
+                            },
+                        }
+                    ]
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    generated_config = SimpleNamespace(
+        client_info=SimpleNamespace(
+            client_name="test-client",
+            nebius=SimpleNamespace(project_id="project-1"),
         )
-    output = _plain_output(capture.get())
+    )
+    manifest = {"deploy": {"targets": [_mk8s_target(paths)]}}
+    prompt_paths: list[str] = []
+    responses: dict[str, list[Any]] = {
+        "upgrade.node_template.target": ["infra:mk8s@mk8s"],
+        "upgrade.node_template.to_version": ["1.33"],
+        "upgrade.node_template.node_group": ["", ""],
+        "upgrade.node_template.to_os": [cli._WIZARD_BACKTRACK, "ubuntu24.04"],
+        "upgrade.node_template.to_gpu_stack_preset": ["cuda13.0", "cuda13.0"],
+        "upgrade.node_template.strategy": [cli._WIZARD_BACKTRACK, "safe-surge"],
+        "upgrade.node_template.strategy_max_surge_count": [1],
+        "upgrade.node_template.drain_timeout": ["auto"],
+    }
+    rich_console = cli.Console(record=True, width=300)
 
-    expected_stages = [
-        {"cluster": "1.33", "system": "1.32", "gpu": "1.32"},
-        {"cluster": "1.33", "system": "1.33", "gpu": "1.32"},
-        {"cluster": "1.33", "system": "1.33", "gpu": "1.33"},
-        {"cluster": "1.33", "system": "1.33", "gpu": "1.33"},
+    def _live_node_group(
+        *,
+        id: str,
+        name: str,
+        version: str,
+        os: str,
+        platform: str,
+        preset: str,
+        drivers_preset: str = "",
+    ) -> SimpleNamespace:
+        return SimpleNamespace(
+            metadata=SimpleNamespace(id=id, name=name, resource_version=1),
+            spec=SimpleNamespace(
+                version=version,
+                template=SimpleNamespace(
+                    os=os,
+                    resources=SimpleNamespace(platform=platform, preset=preset),
+                    gpu_settings=SimpleNamespace(drivers_preset=drivers_preset),
+                ),
+            ),
+            status=_mk8s_ready_status(version),
+        )
+
+    class FakeSdk:
+        def sync_close(self) -> None:
+            pass
+
+    class FakeExecutor:
+        def __init__(self, sdk: object) -> None:
+            assert isinstance(sdk, FakeSdk)
+
+        def get_cluster_by_name(self, *, project_id: str, name: str) -> SimpleNamespace:
+            assert (project_id, name) == ("project-1", "mk8s-live")
+            return SimpleNamespace(
+                metadata=SimpleNamespace(id="cluster-1", name=name, resource_version=1),
+                spec=SimpleNamespace(control_plane=SimpleNamespace(version="1.32")),
+            )
+
+        def control_plane_versions(self) -> tuple[str, ...]:
+            return ("1.33",)
+
+        def list_node_groups(self, cluster_id: str) -> tuple[SimpleNamespace, ...]:
+            assert cluster_id == "cluster-1"
+            return (
+                _live_node_group(
+                    id="ng-system",
+                    name="mk8s-live-system",
+                    version="1.32",
+                    os="ubuntu22.04",
+                    platform="cpu-platform",
+                    preset="cpu-4-16",
+                ),
+                _live_node_group(
+                    id="ng-gpu",
+                    name="mk8s-live-gpu",
+                    version="1.32",
+                    os="ubuntu22.04",
+                    platform="gpu-platform",
+                    preset="8gpu",
+                    drivers_preset="cuda12.8",
+                ),
+            )
+
+        def compatibility_choices(self, *, target_version: str, platform: str):
+            assert target_version == "1.33"
+            return (
+                SimpleNamespace(
+                    platform=platform,
+                    os="ubuntu24.04",
+                    drivers_preset="cuda13.0" if platform == "gpu-platform" else "",
+                ),
+            )
+
+    def _prompt_scalar(
+        path_label: str,
+        current: object,
+        *,
+        choices: list[cli.OptionChoice] | None = None,
+        type_hint: str | None = None,
+        required: bool = False,
+        unset_on_skip: bool = False,
+        **_kwargs: object,
+    ) -> tuple[object, bool]:
+        del current, choices, type_hint, required, unset_on_skip
+        prompt_paths.append(path_label)
+        return responses[path_label].pop(0), False
+
+    monkeypatch.setattr(
+        cli, "_load_deploy_context_readonly", lambda _path: (generated_config, paths, manifest)
+    )
+    monkeypatch.setattr(
+        cli,
+        "_resolve_managed_mk8s_upgrade_target",
+        lambda _manifest, *, target_instance_id: {
+            "component_id": "mk8s",
+            "target_ref": target_instance_id,
+            "access": "external",
+            "cluster_id_output_name": "cluster_id",
+        },
+    )
+    monkeypatch.setattr(
+        cli,
+        "_managed_mk8s_target_with_cluster_id",
+        lambda target, *, cluster_id: {**target, "cluster_id": cluster_id},
+    )
+    monkeypatch.setattr(cli, "init_nebius_sdk", lambda **_kwargs: FakeSdk())
+    monkeypatch.setattr(cli, "Mk8sKubernetesVersionExecutor", FakeExecutor)
+    monkeypatch.setattr(cli, "_prepare_cluster_handoff_kube_env", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(cli, "collect_kubernetes_preflight_findings", lambda *, kube_env: ())
+    monkeypatch.setattr(cli, "_upgrade_interactive_prompts_enabled", lambda: True)
+    monkeypatch.setattr(cli, "_prompt_scalar_override", _prompt_scalar)
+    monkeypatch.setattr(cli, "console", rich_console)
+
+    cli.upgrade_node_template_command(paths.config_path, dry_run=True, skip_validations=True)
+
+    assert prompt_paths == [
+        "upgrade.node_template.target",
+        "upgrade.node_template.to_version",
+        "upgrade.node_template.node_group",
+        "upgrade.node_template.to_os",
+        "upgrade.node_template.node_group",
+        "upgrade.node_template.to_os",
+        "upgrade.node_template.to_gpu_stack_preset",
+        "upgrade.node_template.strategy",
+        "upgrade.node_template.to_gpu_stack_preset",
+        "upgrade.node_template.strategy",
+        "upgrade.node_template.strategy_max_surge_count",
+        "upgrade.node_template.drain_timeout",
     ]
-    assert "Upgrade execution stages are per control-plane hop and per node group" in output
-    assert "not per node:" in output
-    assert "1 control-plane stage(s)" in output
-    assert "2 node-group stage(s)" in output
-    assert "Updated " in output
-    compact_output = " ".join(output.split())
-    assert "control-plane upgrade to Kubernetes 1.33" in compact_output
-    assert "node-group mk8s-live-system upgrade to Kubernetes 1.33" in compact_output
-    assert "node-group mk8s-live-gpu upgrade to Kubernetes 1.33" in compact_output
-    assert plan_stages == [(stage, True) for stage in expected_stages]
-    assert apply_stages == expected_stages
-    assert wait_calls == [
-        ("control-plane", "cluster-1:1.33"),
-        ("node-group", "cluster-1:ng-system:1.33:3600"),
-        ("node-group", "cluster-1:ng-gpu:1.33:3600"),
-        ("validations", "mk8s_gpu_visibility"),
-        ("sdk-close", ""),
-    ]
+    rendered = rich_console.export_text()
+    assert "Discovering live MK8s state and preparing node-template upgrade plan..." in rendered
+    assert "MK8s node-template upgrade plan" in rendered
+    assert all(not remaining for remaining in responses.values())
+
+
+def test_upgrade_node_template_no_interactive_requires_explicit_required_values(
+    tmp_path: Path,
+) -> None:
+    result = runner.invoke(
+        cli.app,
+        [
+            "upgrade",
+            "node-template",
+            str(tmp_path / "missing-config.yaml"),
+            "--no-interactive",
+        ],
+    )
+
+    assert result.exit_code != 0
+    flat_output = " ".join(result.output.split())
+    assert (
+        "Missing target selector and one of --to-version <major.minor>, --to-os <os>, "
+        "or --to-gpu-stack-preset <preset>"
+    ) in flat_output
+    assert "allow interactive prompting" in flat_output
+    assert "Config file not found" not in result.output
 
 
 def test_upgrade_node_template_stages_control_plane_then_combined_node_groups(
@@ -802,19 +1278,23 @@ def test_upgrade_node_template_stages_control_plane_then_combined_node_groups(
             "gpu_stack": "cuda13.0",
         },
     ]
-    assert "Node-template upgrade execution stages are per control-plane hop and per node group" in output
+    assert (
+        "Node-template upgrade execution stages are per control-plane hop and per node group"
+        in output
+    )
     assert "not per node:" in output
     assert "1 control-plane stage(s)" in output
     assert "2 node-group template stage(s)" in output
+    assert "- compatibility matrix:" in output
+    assert "  - gpu-platform:" in output
+    assert "    - ubuntu24.04: cuda13.0" in output
     compact_output = " ".join(output.split())
     assert "control-plane upgrade to Kubernetes 1.33" in compact_output
     assert (
-        "node-group mk8s-live-system node-template upgrade to Kubernetes 1.33, "
-        "OS ubuntu24.04"
+        "node-group mk8s-live-system node-template upgrade to Kubernetes 1.33, OS ubuntu24.04"
     ) in compact_output
     assert (
-        "node-group mk8s-live-gpu node-template upgrade to Kubernetes 1.33, "
-        "OS ubuntu24.04"
+        "node-group mk8s-live-gpu node-template upgrade to Kubernetes 1.33, OS ubuntu24.04"
     ) in compact_output
     assert plan_stages == expected_stages
     assert apply_stages == expected_stages
@@ -824,6 +1304,478 @@ def test_upgrade_node_template_stages_control_plane_then_combined_node_groups(
         ("node-template", "cluster-1:ng-gpu:1.33:ubuntu24.04:cuda13.0:3600"),
         ("sdk-close", ""),
     ]
+
+
+def test_upgrade_node_template_safe_surge_quota_blocks_before_mutation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    paths = _fake_paths(tmp_path)
+    paths.infra_dir.mkdir(parents=True)
+    paths.flux_dir.mkdir(parents=True)
+    paths.reports_dir.mkdir(parents=True)
+    paths.config_path.write_text(
+        yaml.safe_dump(
+            {
+                "client_info": {
+                    "nebius": {
+                        "tenant_id": "tenant-1",
+                        "project_id": "project-1",
+                        "region_id": "eu-north1",
+                    }
+                },
+                "infra": {
+                    "components": [
+                        {
+                            "id": "mk8s",
+                            "instance_id": "mk8s",
+                            "enabled": True,
+                            "inputs": {
+                                "cluster": {
+                                    "cluster_name": "mk8s-live",
+                                    "k8s_version": "1.32",
+                                },
+                                "node_groups": {
+                                    "system": {
+                                        "version": "1.32",
+                                        "platform": "cpu-platform",
+                                        "preset": "cpu-4-16",
+                                        "os": "ubuntu22.04",
+                                    },
+                                },
+                            },
+                        }
+                    ]
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    generated_config = SimpleNamespace(
+        client_info=SimpleNamespace(
+            client_name="test-client",
+            nebius=SimpleNamespace(
+                tenant_id="tenant-1",
+                project_id="project-1",
+                region_id="eu-north1",
+            ),
+        )
+    )
+    manifest = {"deploy": {"targets": []}}
+    calls: list[str] = []
+
+    class FakeSdk:
+        def sync_close(self) -> None:
+            calls.append("sdk-close")
+
+    class FakeExecutor:
+        def __init__(self, sdk: object) -> None:
+            assert isinstance(sdk, FakeSdk)
+
+        def get_cluster_by_name(self, *, project_id: str, name: str) -> SimpleNamespace:
+            assert (project_id, name) == ("project-1", "mk8s-live")
+            return SimpleNamespace(
+                metadata=SimpleNamespace(id="cluster-1", name=name, resource_version=1),
+                spec=SimpleNamespace(control_plane=SimpleNamespace(version="1.32")),
+            )
+
+        def control_plane_versions(self) -> tuple[str, ...]:
+            return ("1.33",)
+
+        def list_node_groups(self, cluster_id: str) -> tuple[SimpleNamespace, ...]:
+            assert cluster_id == "cluster-1"
+            return (
+                SimpleNamespace(
+                    metadata=SimpleNamespace(
+                        id="ng-system",
+                        name="mk8s-live-system",
+                        resource_version=1,
+                    ),
+                    spec=SimpleNamespace(
+                        version="1.32",
+                        template=SimpleNamespace(
+                            os="ubuntu22.04",
+                            resources=SimpleNamespace(
+                                platform="cpu-platform",
+                                preset="cpu-4-16",
+                            ),
+                            gpu_settings=SimpleNamespace(drivers_preset=""),
+                        ),
+                    ),
+                    status=_mk8s_ready_status("1.32"),
+                ),
+            )
+
+        def compatibility_choices(self, *, target_version: str, platform: str):
+            assert target_version == "1.33"
+            return (SimpleNamespace(platform=platform, os="ubuntu24.04", drivers_preset=""),)
+
+    def _quota_preflight(**kwargs: object) -> None:
+        request_groups = kwargs["request_groups"]
+        assert tuple(group.name for group in request_groups) == ("mk8s-live-system",)
+        calls.append("quota-preflight")
+        raise RuntimeError("safe-surge quota shortage")
+
+    monkeypatch.setattr(
+        cli, "_load_deploy_context_readonly", lambda _path: (generated_config, paths, manifest)
+    )
+    monkeypatch.setattr(
+        cli,
+        "_resolve_managed_mk8s_upgrade_target",
+        lambda _manifest, *, target_instance_id: {
+            "component_id": "mk8s",
+            "target_ref": target_instance_id,
+            "access": "external",
+            "cluster_id_output_name": "cluster_id",
+        },
+    )
+    monkeypatch.setattr(
+        cli,
+        "_managed_mk8s_target_with_cluster_id",
+        lambda target, *, cluster_id: {**target, "cluster_id": cluster_id},
+    )
+    monkeypatch.setattr(cli, "init_nebius_sdk", lambda **_kwargs: FakeSdk())
+    monkeypatch.setattr(cli, "Mk8sKubernetesVersionExecutor", FakeExecutor)
+    monkeypatch.setattr(cli, "_prepare_cluster_handoff_kube_env", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(cli, "collect_kubernetes_preflight_findings", lambda *, kube_env: ())
+    monkeypatch.setattr(cli, "_run_node_template_safe_surge_quota_preflight", _quota_preflight)
+    monkeypatch.setattr(cli, "_run_generated_bundle_validation", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(cli, "render_command", lambda *_args, **_kwargs: calls.append("render"))
+    monkeypatch.setattr(cli, "terraform_plan", lambda *_args, **_kwargs: calls.append("plan"))
+    monkeypatch.setattr(
+        cli,
+        "_run_terraform_apply_with_status",
+        lambda *_args, **_kwargs: calls.append("apply"),
+    )
+
+    result = runner.invoke(
+        cli.app,
+        [
+            "upgrade",
+            "node-template",
+            str(paths.config_path),
+            "infra:mk8s@mk8s",
+            "--to-version",
+            "1.33",
+            "--to-os",
+            "ubuntu24.04",
+            "--strategy",
+            "safe-surge",
+            "--strategy-max-surge-count",
+            "1",
+            "--no-interactive",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "safe-surge quota shortage" in _plain_output(result.output)
+    assert "quota-preflight" in calls
+    assert "render" not in calls
+    assert "plan" not in calls
+    assert "apply" not in calls
+
+
+def test_node_template_safe_surge_quota_preflight_counts_selected_surge_nodes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = {
+        "id": "mk8s",
+        "instance_id": "mk8s",
+        "enabled": True,
+        "inputs": {
+            "gpu_clusters": {"workers": {"infiniband_fabric": "fabric-6"}},
+            "node_groups": {
+                "system": {
+                    "name": "mk8s-live-system",
+                    "version": "1.32",
+                    "platform": "cpu-platform",
+                    "preset": "cpu-4-16",
+                    "os": "ubuntu22.04",
+                    "node_count": 3,
+                },
+                "gpu": {
+                    "name": "mk8s-live-gpu",
+                    "gpu": True,
+                    "gpu_stack_source": "nebius_image",
+                    "version": "1.32",
+                    "platform": "gpu-platform",
+                    "preset": "8gpu",
+                    "os": "ubuntu22.04",
+                    "gpu_stack_preset": "cuda12.8",
+                    "gpu_cluster_key": "workers",
+                    "reservation": {"policy": "AUTO"},
+                    "autoscaling": {"initial_count": 4, "max_count": 8},
+                },
+            },
+        },
+    }
+    plan = cli.plan_node_template_upgrade(
+        target=cli.parse_upgrade_selector("infra:mk8s@mk8s"),
+        cluster=SimpleNamespace(
+            metadata=SimpleNamespace(id="cluster-1", name="mk8s-live", resource_version=1),
+            spec=SimpleNamespace(control_plane=SimpleNamespace(version="1.32")),
+        ),
+        cluster_id="cluster-1",
+        source_component=source,
+        target_version="1.33",
+        target_os="ubuntu24.04",
+        target_gpu_stack_preset="cuda13.0",
+        disruption_policy="safe-surge",
+        drain_timeout=cli.resolve_drain_timeout("safe-surge", "auto"),
+        strategy_max_surge_count=2,
+        live_node_groups=(
+            SimpleNamespace(
+                metadata=SimpleNamespace(id="ng-system", name="mk8s-live-system", resource_version=1),
+                spec=SimpleNamespace(
+                    version="1.32",
+                    template=SimpleNamespace(
+                        os="ubuntu22.04",
+                        resources=SimpleNamespace(platform="cpu-platform", preset="cpu-4-16"),
+                        gpu_settings=SimpleNamespace(drivers_preset=""),
+                    ),
+                ),
+                status=_mk8s_ready_status("1.32"),
+            ),
+            SimpleNamespace(
+                metadata=SimpleNamespace(id="ng-gpu", name="mk8s-live-gpu", resource_version=1),
+                spec=SimpleNamespace(
+                    version="1.32",
+                    template=SimpleNamespace(
+                        os="ubuntu22.04",
+                        resources=SimpleNamespace(platform="gpu-platform", preset="8gpu"),
+                        gpu_settings=SimpleNamespace(drivers_preset="cuda12.8"),
+                    ),
+                ),
+                status=_mk8s_ready_status("1.32"),
+            ),
+        ),
+        compatibility_lookup=lambda **kwargs: (
+            SimpleNamespace(
+                platform=kwargs["platform"],
+                os="ubuntu24.04",
+                drivers_preset="cuda13.0" if kwargs["platform"] == "gpu-platform" else "",
+            ),
+        ),
+    )
+    estimate_inputs: list[Mapping[str, Any]] = []
+    assessed_requirements: list[QuotaRequirement] = []
+
+    def _estimate(**kwargs: object):
+        inputs = kwargs["inputs"]
+        assert isinstance(inputs, Mapping)
+        estimate_inputs.append(inputs)
+        groups = inputs["node_groups"]
+        assert isinstance(groups, Mapping)
+        group = next(iter(groups.values()))
+        assert isinstance(group, Mapping)
+        assert group["node_count"] == 2
+        assert "autoscaling" not in group
+        if group.get("gpu"):
+            assert group["gpu_cluster_key"] == "workers"
+            assert group["reservation"] == {"policy": "AUTO"}
+            assert inputs["gpu_clusters"] == {"workers": {"infiniband_fabric": "fabric-6"}}
+            return (
+                (
+                    QuotaRequirement(
+                        component_id="mk8s",
+                        instance_id="mk8s-node-template-surge-gpu",
+                        component_label="gpu surge",
+                        quota_name="compute.instance.gpu.h100",
+                        region="eu-north1",
+                        required=16,
+                        reason="2 GPU surge nodes",
+                        gpu_capacity_shape=GpuCapacityShape(
+                            platform="gpu-platform",
+                            preset="8gpu",
+                            fabric="fabric-6",
+                            mode="auto",
+                            gpu_count_per_instance=8,
+                        ),
+                    ),
+                ),
+                (),
+            )
+        return (
+            (
+                QuotaRequirement(
+                    component_id="mk8s",
+                    instance_id="mk8s-node-template-surge-system",
+                    component_label="system surge",
+                    quota_name="compute.instance.non-gpu.vcpu",
+                    region="eu-north1",
+                    required=8,
+                    reason="2 CPU surge nodes",
+                ),
+            ),
+            (),
+        )
+
+    def _assess(**kwargs: object) -> QuotaReport:
+        assert kwargs["tenant_id"] == "tenant-1"
+        assert kwargs["project_id"] == "project-1"
+        assert kwargs["region_id"] == "eu-north1"
+        assessed_requirements.extend(kwargs["requirements"])
+        return _empty_quota_report()
+
+    monkeypatch.setattr(cli, "estimate_mk8s_quota_requirements", _estimate)
+    monkeypatch.setattr(cli, "assess_live_quota_requirements", _assess)
+
+    with cli.console.capture():
+        cli._run_node_template_safe_surge_quota_preflight(
+            source_payload={
+                "client_info": {
+                    "nebius": {
+                        "tenant_id": "tenant-1",
+                        "project_id": "project-1",
+                        "region_id": "eu-north1",
+                    }
+                }
+            },
+            generated_config=SimpleNamespace(client_info=SimpleNamespace(nebius=SimpleNamespace())),
+            source_component=source,
+            plan=plan,
+            max_surge_count=2,
+            request_groups=plan.node_groups,
+        )
+
+    assert len(estimate_inputs) == 2
+    assert {item.quota_name: item.required for item in assessed_requirements} == {
+        "compute.instance.gpu.h100": 16,
+        "compute.instance.non-gpu.vcpu": 8,
+    }
+
+
+def test_node_template_safe_surge_quota_preflight_reports_failure_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = {
+        "inputs": {
+            "node_groups": {
+                "system": {
+                    "platform": "cpu-platform",
+                    "preset": "cpu-4-16",
+                    "node_count": 3,
+                },
+            },
+        },
+    }
+    plan = SimpleNamespace(
+        target=SimpleNamespace(instance_id="mk8s"),
+        cluster_name="mk8s-live",
+    )
+    group = SimpleNamespace(
+        name="mk8s-live-system",
+        platform="cpu-platform",
+        preset="cpu-4-16",
+        gpu=False,
+        source=SimpleNamespace(
+            key="system",
+            gpu_cluster_key="",
+            gpu_cluster_id="",
+            gpu_stack_source="",
+            reservation_policy="",
+            reservation_ids=(),
+        ),
+    )
+
+    def _estimate(**_kwargs: object):
+        return (
+            (
+                QuotaRequirement(
+                    component_id="mk8s",
+                    instance_id="mk8s-node-template-surge-system",
+                    component_label="system surge",
+                    quota_name="compute.instance.non-gpu.vcpu",
+                    region="eu-north1",
+                    required=4,
+                    reason="1 CPU surge node",
+                ),
+            ),
+            (),
+        )
+
+    def _assess(**_kwargs: object) -> QuotaReport:
+        return QuotaReport(
+            tenant_id="tenant-1",
+            project_id="project-1",
+            region_id="eu-north1",
+            checked_at="2026-04-10T00:00:00+00:00",
+            errors=("quota lookup failed",),
+        )
+
+    monkeypatch.setattr(cli, "estimate_mk8s_quota_requirements", _estimate)
+    monkeypatch.setattr(cli, "assess_live_quota_requirements", _assess)
+
+    with cli.console.capture() as capture, pytest.raises(RuntimeError) as excinfo:
+        cli._run_node_template_safe_surge_quota_preflight(
+            source_payload={
+                "client_info": {
+                    "nebius": {
+                        "tenant_id": "tenant-1",
+                        "project_id": "project-1",
+                        "region_id": "eu-north1",
+                    }
+                }
+            },
+            generated_config=SimpleNamespace(client_info=SimpleNamespace(nebius=SimpleNamespace())),
+            source_component=source,
+            plan=plan,
+            max_surge_count=1,
+            request_groups=(group,),
+        )
+
+    output = _plain_output(capture.get())
+    message = str(excinfo.value)
+    assert "mk8s-live-system requires 1 temporary surge node" in output
+    assert "quota assessment was not fully available" not in output
+    assert "quota assessment was not fully available" in message
+    assert message.count("quota assessment was not fully available") == 1
+
+
+def test_node_template_safe_surge_quota_preflight_reports_capacity_fabric_guidance() -> None:
+    report = QuotaReport(
+        tenant_id="tenant-1",
+        project_id="project-1",
+        region_id="eu-north1",
+        checked_at="2026-04-10T00:00:00+00:00",
+        checks=(
+            QuotaCheck(
+                component_id="mk8s",
+                instance_id="mk8s-node-template-surge-worker",
+                component_label="mk8s@worker surge",
+                quota_name="compute.instance.gpu.h100",
+                region="eu-north1",
+                required=8,
+                reason=(
+                    "1 GPU node(s) at gpu-h100-sxm/8gpu-128vcpu-1600gb for "
+                    "'worker-safe-surge' (reservation policy AUTO)"
+                ),
+                unit="count",
+                available=0,
+                sufficient=False,
+                tenant_limit=32,
+                tenant_usage=8,
+                project_limit=None,
+                project_usage=8,
+                source_scope="capacity-dashboard/auto",
+                description=(
+                    "Capacity Dashboard GPU availability "
+                    "(AUTO reservation policy: reserved + on-demand VM slots, "
+                    "fabric fabric-6, converted to GPU units)"
+                ),
+                contributors=(),
+            ),
+        ),
+    )
+
+    message = _plain_output(cli._node_template_safe_surge_quota_failure_message(report))
+
+    assert "same fabric and reservation policy" in message
+    assert "migrate to a new GPU node group/fabric" in message
+    assert "detected insufficient Nebius quota/capacity" in message
+    assert "AUTO reservation policy: reserved + on-demand VM slots, fabric fabric-6" in message
+    assert "[#ffbf00]" not in message
+    assert "[/]" not in message
 
 
 def test_upgrade_node_template_node_group_stages_only_selected_group(
@@ -1087,15 +2039,17 @@ def test_upgrade_node_template_node_group_stages_only_selected_group(
             "gpu_stack": "cuda13.0",
         },
     ]
-    assert "Node-template upgrade execution stages are per control-plane hop and per node group" in output
+    assert (
+        "Node-template upgrade execution stages are per control-plane hop and per node group"
+        in output
+    )
     assert "not per node:" in output
     assert "1 control-plane stage(s)" in output
     assert "1 node-group template stage(s)" in output
     compact_output = " ".join(output.split())
     assert "control-plane upgrade to Kubernetes 1.33" in compact_output
     assert (
-        "node-group mk8s-live-gpu node-template upgrade to Kubernetes 1.33, "
-        "OS ubuntu24.04"
+        "node-group mk8s-live-gpu node-template upgrade to Kubernetes 1.33, OS ubuntu24.04"
     ) in compact_output
     assert "mk8s-live-system node-template upgrade" not in output
     assert plan_stages == expected_stages
@@ -1311,201 +2265,7 @@ def test_upgrade_node_template_resume_waits_and_restores_strategy_after_timeout(
     ]
 
 
-def test_upgrade_k8s_version_syncs_stale_source_when_live_is_already_target(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    paths = _fake_paths(tmp_path)
-    paths.infra_dir.mkdir(parents=True)
-    paths.flux_dir.mkdir(parents=True)
-    paths.reports_dir.mkdir(parents=True)
-    paths.config_path.write_text(
-        yaml.safe_dump(
-            {
-                "infra": {
-                    "components": [
-                        {
-                            "id": "mk8s",
-                            "instance_id": "mk8s",
-                            "enabled": True,
-                            "inputs": {
-                                "cluster": {
-                                    "cluster_name": "mk8s-live",
-                                    "k8s_version": "1.32",
-                                },
-                                "node_groups": {
-                                    "system": {"version": "1.32"},
-                                },
-                            },
-                        }
-                    ]
-                }
-            }
-        ),
-        encoding="utf-8",
-    )
-    generated_config = SimpleNamespace(
-        client_info=SimpleNamespace(
-            client_name="test-client",
-            nebius=SimpleNamespace(project_id="project-1"),
-        )
-    )
-    manifest = {"deploy": {"targets": []}}
-    plan_stages: list[dict[str, str]] = []
-    apply_stages: list[dict[str, str]] = []
-    wait_calls: list[tuple[str, str]] = []
-
-    class FakeSdk:
-        def sync_close(self) -> None:
-            wait_calls.append(("sdk-close", ""))
-
-    class FakeExecutor:
-        def __init__(self, sdk: object) -> None:
-            assert isinstance(sdk, FakeSdk)
-
-        def get_cluster_by_name(self, *, project_id: str, name: str) -> SimpleNamespace:
-            assert (project_id, name) == ("project-1", "mk8s-live")
-            return SimpleNamespace(
-                metadata=SimpleNamespace(id="cluster-1", name=name, resource_version=1),
-                spec=SimpleNamespace(control_plane=SimpleNamespace(version="1.33")),
-            )
-
-        def get_cluster(self, cluster_id: str) -> SimpleNamespace:
-            assert cluster_id == "cluster-1"
-            return SimpleNamespace(
-                metadata=SimpleNamespace(id="cluster-1", name="mk8s-live", resource_version=1),
-                spec=SimpleNamespace(control_plane=SimpleNamespace(version="1.33")),
-            )
-
-        def control_plane_versions(self) -> tuple[str, ...]:
-            return ("1.33",)
-
-        def list_node_groups(self, cluster_id: str) -> tuple[SimpleNamespace, ...]:
-            assert cluster_id == "cluster-1"
-            return (
-                SimpleNamespace(
-                    metadata=SimpleNamespace(id="ng-system", name="system", resource_version=1),
-                    spec=SimpleNamespace(
-                        version="1.33",
-                        template=SimpleNamespace(
-                            os="ubuntu24.04",
-                            resources=SimpleNamespace(platform="cpu-platform", preset="cpu-4-16"),
-                            gpu_settings=SimpleNamespace(drivers_preset=""),
-                        ),
-                    ),
-                    status=SimpleNamespace(
-                        version="v1.33.7-nebius-node.64",
-                        ready_node_count=1,
-                        target_node_count=1,
-                        node_count=1,
-                        outdated_node_count=0,
-                        reconciling=False,
-                    ),
-                ),
-            )
-
-        def compatibility_choices(self, *, target_version: str, platform: str):
-            assert target_version == "1.33"
-            return (SimpleNamespace(platform=platform, os="ubuntu24.04", drivers_preset=""),)
-
-        def wait_cluster_version(self, *, cluster_id: str, version: str) -> None:
-            wait_calls.append(("control-plane", f"{cluster_id}:{version}"))
-
-        def wait_node_group_version(
-            self,
-            *,
-            cluster_id: str,
-            node_group_id: str,
-            version: str,
-            timeout_seconds: int,
-        ) -> None:
-            wait_calls.append(
-                ("node-group", f"{cluster_id}:{node_group_id}:{version}:{timeout_seconds}")
-            )
-
-    def _current_stage_versions() -> dict[str, str]:
-        payload = yaml.safe_load(paths.config_path.read_text(encoding="utf-8"))
-        component = payload["infra"]["components"][0]
-        groups = component["inputs"]["node_groups"]
-        return {
-            "cluster": component["inputs"]["cluster"]["k8s_version"],
-            "system": groups["system"]["version"],
-        }
-
-    monkeypatch.setattr(
-        cli, "_load_deploy_context_readonly", lambda _path: (generated_config, paths, manifest)
-    )
-    monkeypatch.setattr(
-        cli, "_load_deploy_context", lambda _path: (generated_config, paths, manifest)
-    )
-    monkeypatch.setattr(
-        cli,
-        "_resolve_managed_mk8s_upgrade_target",
-        lambda _manifest, *, target_instance_id: {
-            "component_id": "mk8s",
-            "target_ref": target_instance_id,
-            "access": "external",
-            "cluster_id_output_name": "cluster_id",
-        },
-    )
-    monkeypatch.setattr(
-        cli,
-        "_managed_mk8s_target_with_cluster_id",
-        lambda target, *, cluster_id: {**target, "cluster_id": cluster_id},
-    )
-    monkeypatch.setattr(cli, "init_nebius_sdk", lambda **_kwargs: FakeSdk())
-    monkeypatch.setattr(cli, "Mk8sKubernetesVersionExecutor", FakeExecutor)
-    monkeypatch.setattr(cli, "_prepare_cluster_handoff_kube_env", lambda *_args, **_kwargs: {})
-    monkeypatch.setattr(cli, "collect_kubernetes_preflight_findings", lambda *, kube_env: ())
-    monkeypatch.setattr(cli, "_run_generated_bundle_validation", lambda *_args, **_kwargs: {})
-    monkeypatch.setattr(cli, "render_command", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(cli, "_manifest_status_watchers", lambda _manifest: [])
-    monkeypatch.setattr(cli, "_enabled_status_watcher_specs", lambda _config: [])
-    monkeypatch.setattr(
-        cli,
-        "terraform_plan",
-        lambda *_args, **_kwargs: plan_stages.append(_current_stage_versions()),
-    )
-    monkeypatch.setattr(
-        cli,
-        "_run_terraform_apply_with_status",
-        lambda *_args, **_kwargs: apply_stages.append(_current_stage_versions()),
-    )
-    monkeypatch.setattr(cli, "_manifest_deploy_validations", lambda _manifest: [])
-
-    cli.upgrade_k8s_version_command(
-        paths.config_path,
-        "infra:mk8s@mk8s",
-        to_version="1.33",
-        dry_run=False,
-    )
-
-    assert plan_stages == [{"cluster": "1.33", "system": "1.33"}]
-    assert apply_stages == [{"cluster": "1.33", "system": "1.33"}]
-    assert wait_calls == [("sdk-close", "")]
-
-
-def test_upgrade_k8s_version_rejects_unknown_strategy(tmp_path: Path) -> None:
-    result = runner.invoke(
-        cli.app,
-        [
-            "upgrade",
-            "k8s-version",
-            str(tmp_path / "missing-config.yaml"),
-            "infra:mk8s@mk8s",
-            "--to-version",
-            "1.33",
-            "--dry-run",
-            "--strategy",
-            "safe",
-        ],
-    )
-
-    assert result.exit_code == 1
-    assert "--strategy must be one of" in result.output
-
-
-def test_upgrade_k8s_version_target_choices_do_not_label_endpoint_access() -> None:
+def test_node_template_target_choices_do_not_label_endpoint_access() -> None:
     manifest = {
         "deploy": {
             "targets": [
@@ -1549,8 +2309,8 @@ def test_upgrade_k8s_version_target_choices_do_not_label_endpoint_access() -> No
     ]
 
 
-def test_upgrade_k8s_version_choices_explain_sequential_minor_policy() -> None:
-    choices = cli._upgrade_k8s_version_choices(
+def test_node_template_version_choices_explain_sequential_minor_policy() -> None:
+    choices = cli._node_template_version_choices(
         current_version="1.31",
         supported_versions=("1.31.9", "1.32.4", "1.33.1"),
     )
@@ -1566,1333 +2326,6 @@ def test_upgrade_k8s_version_choices_explain_sequential_minor_policy() -> None:
             "1.32  (next supported minor; upstream Kubernetes does not support skipped minors)",
             True,
         ),
-    ]
-
-
-def test_upgrade_k8s_dry_run_command_uses_selected_arguments(tmp_path: Path) -> None:
-    command = cli._upgrade_k8s_dry_run_command(
-        config_path=tmp_path / "project path" / "config.yaml",
-        target_selector="infra:mk8s@cluster1",
-        to_version="1.32",
-        disruption_policy="zero-surge",
-        drain_timeout=cli.resolve_drain_timeout("zero-surge", "45m"),
-    )
-
-    assert command == (
-        "nebius-cxcli upgrade k8s-version "
-        f"'{tmp_path / 'project path' / 'config.yaml'}' "
-        "infra:mk8s@cluster1 --to-version 1.32 "
-        "--strategy zero-surge --drain-timeout 45m --dry-run"
-    )
-
-
-def test_upgrade_k8s_dry_run_command_omits_auto_drain_timeout(tmp_path: Path) -> None:
-    command = cli._upgrade_k8s_dry_run_command(
-        config_path=tmp_path / "config.yaml",
-        target_selector="infra:mk8s@cluster1",
-        to_version="1.32",
-        disruption_policy="safe-surge",
-        drain_timeout=cli.resolve_drain_timeout("safe-surge", "auto"),
-    )
-
-    assert command == (
-        f"nebius-cxcli upgrade k8s-version {tmp_path / 'config.yaml'} "
-        "infra:mk8s@cluster1 --to-version 1.32 --strategy safe-surge --dry-run"
-    )
-
-
-def test_upgrade_k8s_version_force_delete_is_explicit_without_yes(tmp_path: Path) -> None:
-    result = runner.invoke(
-        cli.app,
-        [
-            "upgrade",
-            "k8s-version",
-            str(tmp_path / "missing-config.yaml"),
-            "infra:mk8s@mk8s",
-            "--to-version",
-            "1.33",
-            "--strategy",
-            "force-delete",
-        ],
-    )
-
-    assert result.exit_code == 1
-    assert "Config file not found" in result.output
-    assert "requires --yes" not in result.output
-
-
-def _mk8s_os_live_node_group(
-    *,
-    id: str,
-    name: str,
-    os: str,
-    platform: str = "cpu-platform",
-    preset: str = "cpu-4-16",
-    drivers_preset: str = "",
-    status: SimpleNamespace | None = None,
-) -> SimpleNamespace:
-    group = SimpleNamespace(
-        metadata=SimpleNamespace(id=id, name=name, resource_version=1),
-        spec=SimpleNamespace(
-            version="1.33",
-            template=SimpleNamespace(
-                os=os,
-                resources=SimpleNamespace(platform=platform, preset=preset),
-                gpu_settings=SimpleNamespace(drivers_preset=drivers_preset),
-            ),
-        ),
-        status=status if status is not None else _mk8s_ready_status(),
-    )
-    return group
-
-
-def _install_os_image_upgrade_fakes(
-    monkeypatch: pytest.MonkeyPatch,
-    *,
-    generated_config: SimpleNamespace,
-    paths: ProjectPaths,
-    manifest: Mapping[str, object],
-    live_node_groups: tuple[SimpleNamespace, ...],
-    compatibility_choices: object,
-    preflight_findings: tuple[object, ...] = (),
-) -> tuple[list[tuple[str, str]], list[str]]:
-    wait_calls: list[tuple[str, str]] = []
-    validation_calls: list[str] = []
-
-    class FakeSdk:
-        def sync_close(self) -> None:
-            wait_calls.append(("sdk-close", ""))
-
-    class FakeExecutor:
-        def __init__(self, sdk: object) -> None:
-            assert isinstance(sdk, FakeSdk)
-
-        def get_cluster_by_name(self, *, project_id: str, name: str) -> SimpleNamespace:
-            assert (project_id, name) == ("project-1", "mk8s-live")
-            return SimpleNamespace(
-                metadata=SimpleNamespace(id="cluster-1", name=name, resource_version=1),
-                spec=SimpleNamespace(control_plane=SimpleNamespace(version="1.33")),
-            )
-
-        def get_cluster(self, cluster_id: str) -> SimpleNamespace:
-            assert cluster_id == "cluster-1"
-            return SimpleNamespace(
-                metadata=SimpleNamespace(id="cluster-1", name="mk8s-live", resource_version=1),
-                spec=SimpleNamespace(control_plane=SimpleNamespace(version="1.33")),
-            )
-
-        def list_node_groups(self, cluster_id: str) -> tuple[SimpleNamespace, ...]:
-            assert cluster_id == "cluster-1"
-            return live_node_groups
-
-        def compatibility_choices(self, *, target_version: str, platform: str):
-            assert target_version == "1.33"
-            if callable(compatibility_choices):
-                return compatibility_choices(target_version=target_version, platform=platform)
-            return tuple(
-                choice
-                for choice in cast(tuple[object, ...], compatibility_choices)
-                if not getattr(choice, "platform", "")
-                or getattr(choice, "platform", "") == platform
-            )
-
-        def wait_node_group_os(
-            self,
-            *,
-            cluster_id: str,
-            node_group_id: str,
-            os: str,
-            timeout_seconds: int,
-        ) -> None:
-            for group in live_node_groups:
-                metadata = getattr(group, "metadata", None)
-                if getattr(metadata, "id", "") != node_group_id:
-                    continue
-                template = getattr(getattr(group, "spec", None), "template", None)
-                if template is not None:
-                    template.os = os
-            wait_calls.append(
-                ("node-group-os", f"{cluster_id}:{node_group_id}:{os}:{timeout_seconds}")
-            )
-
-        def wait_node_group_layer(
-            self,
-            *,
-            cluster_id: str,
-            node_group_id: str,
-            field: str,
-            value: str,
-            timeout_seconds: int,
-        ) -> None:
-            for group in live_node_groups:
-                metadata = getattr(group, "metadata", None)
-                if getattr(metadata, "id", "") != node_group_id:
-                    continue
-                template = getattr(getattr(group, "spec", None), "template", None)
-                resources = getattr(template, "resources", None)
-                gpu_settings = getattr(template, "gpu_settings", None)
-                if field == "platform" and resources is not None:
-                    resources.platform = value
-                elif field == "preset" and resources is not None:
-                    resources.preset = value
-                elif field == "drivers_preset" and gpu_settings is not None:
-                    gpu_settings.drivers_preset = value
-            wait_calls.append(
-                ("node-group-layer", f"{cluster_id}:{node_group_id}:{field}:{value}:{timeout_seconds}")
-            )
-
-    def _record_validation(*_args: object, **kwargs: object) -> dict[str, Any]:
-        validation_calls.append(str(kwargs.get("title", "")))
-        return {}
-
-    monkeypatch.setattr(
-        cli, "_load_deploy_context_readonly", lambda _path: (generated_config, paths, manifest)
-    )
-    monkeypatch.setattr(
-        cli, "_load_deploy_context", lambda _path: (generated_config, paths, manifest)
-    )
-    monkeypatch.setattr(
-        cli,
-        "_resolve_managed_mk8s_upgrade_target",
-        lambda _manifest, *, target_instance_id: {
-            "component_id": "mk8s",
-            "target_ref": target_instance_id,
-            "access": "external",
-            "cluster_id_output_name": "cluster_id",
-        },
-    )
-    monkeypatch.setattr(
-        cli,
-        "_managed_mk8s_target_with_cluster_id",
-        lambda target, *, cluster_id: {**target, "cluster_id": cluster_id},
-    )
-    monkeypatch.setattr(cli, "init_nebius_sdk", lambda **_kwargs: FakeSdk())
-    monkeypatch.setattr(cli, "Mk8sKubernetesVersionExecutor", FakeExecutor)
-    monkeypatch.setattr(cli, "_prepare_cluster_handoff_kube_env", lambda *_args, **_kwargs: {})
-    monkeypatch.setattr(
-        cli, "collect_kubernetes_preflight_findings", lambda *, kube_env: preflight_findings
-    )
-    monkeypatch.setattr(cli, "_run_generated_bundle_validation", _record_validation)
-    monkeypatch.setattr(cli, "render_command", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(cli, "_manifest_status_watchers", lambda _manifest: [])
-    monkeypatch.setattr(cli, "_enabled_status_watcher_specs", lambda _config: [])
-    return wait_calls, validation_calls
-
-
-def test_upgrade_os_image_target_choices_include_managed_mk8s_and_generic_vm() -> None:
-    manifest = {
-        "deploy": {
-            "targets": [
-                {
-                    "component_id": "mk8s",
-                    "instance_id": "mk8s",
-                    "target_ref": "mk8s",
-                    "access": "external",
-                    "cluster_id_output_name": "cluster_id",
-                    "component_output_ref": "mk8s.cluster_id",
-                    "flux_dir": "generated/flux/mk8s",
-                }
-            ]
-        }
-    }
-    source_payload = {
-        "infra": {
-            "components": [
-                {
-                    "id": "vm",
-                    "instance_id": "worker",
-                    "enabled": True,
-                    "inputs": {
-                        "name": "worker",
-                        "platform": "cpu-d3",
-                        "source_image_family": "ubuntu22.04-driverless",
-                    },
-                },
-                {
-                    "id": "vm",
-                    "instance_id": "existing-disk",
-                    "enabled": True,
-                    "inputs": {"boot_disk_existing_id": "disk-1"},
-                },
-                {
-                    "id": "vm",
-                    "instance_id": "missing-family",
-                    "enabled": True,
-                    "inputs": {"name": "missing-family", "platform": "cpu-d3"},
-                },
-                {
-                    "id": "vm",
-                    "instance_id": "image-id",
-                    "enabled": True,
-                    "inputs": {"source_image_id": "image-1"},
-                },
-            ]
-        }
-    }
-
-    choices = cli._os_image_upgrade_target_choices(
-        source_payload=source_payload,
-        manifest=manifest,
-    )
-
-    assert [(choice.value, choice.recommended) for choice in choices] == [
-        ("infra:mk8s@mk8s", True),
-        ("infra:vm@worker", False),
-    ]
-
-
-def test_upgrade_os_image_config_only_guided_mk8s_dry_run_prompts_shared_options(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    paths = _fake_paths(tmp_path)
-    paths.infra_dir.mkdir(parents=True)
-    paths.flux_dir.mkdir(parents=True)
-    paths.reports_dir.mkdir(parents=True)
-    paths.config_path.write_text(
-        yaml.safe_dump(
-            {
-                "infra": {
-                    "components": [
-                        {
-                            "id": "mk8s",
-                            "instance_id": "mk8s",
-                            "enabled": True,
-                            "inputs": {
-                                "cluster": {
-                                    "cluster_name": "mk8s-live",
-                                    "k8s_version": "1.33",
-                                },
-                                "node_groups": {
-                                    "system": {
-                                        "platform": "cpu-platform",
-                                        "preset": "cpu-4-16",
-                                        "os": "ubuntu22.04",
-                                    },
-                                },
-                            },
-                        }
-                    ]
-                }
-            }
-        ),
-        encoding="utf-8",
-    )
-    original_config = paths.config_path.read_text(encoding="utf-8")
-    generated_config = SimpleNamespace(
-        client_info=SimpleNamespace(
-            client_name="test-client",
-            nebius=SimpleNamespace(project_id="project-1"),
-        )
-    )
-    manifest = {
-        "deploy": {
-            "targets": [
-                {
-                    "component_id": "mk8s",
-                    "instance_id": "mk8s",
-                    "target_ref": "mk8s",
-                    "access": "external",
-                    "cluster_id_output_name": "cluster_id",
-                    "component_output_ref": "mk8s.cluster_id",
-                    "flux_dir": str(paths.flux_dir),
-                }
-            ]
-        }
-    }
-    prompt_paths: list[str] = []
-    rich_console = cli.Console(record=True, width=300)
-    wait_calls, _validation_calls = _install_os_image_upgrade_fakes(
-        monkeypatch,
-        generated_config=generated_config,
-        paths=paths,
-        manifest=manifest,
-        live_node_groups=(
-            _mk8s_os_live_node_group(
-                id="ng-system",
-                name="mk8s-live-system",
-                os="ubuntu22.04",
-            ),
-        ),
-        compatibility_choices=(
-            SimpleNamespace(platform="cpu-platform", os="ubuntu22.04", drivers_preset=""),
-            SimpleNamespace(platform="cpu-platform", os="ubuntu24.04", drivers_preset=""),
-        ),
-    )
-    provider_calls: list[tuple[str, dict[str, Any], str]] = []
-
-    class FakeProviderLookup:
-        def resolve(
-            self,
-            *,
-            provider: str,
-            args: dict[str, Any],
-            payload: dict[str, Any],
-            field_path: str,
-        ) -> list[cli.OptionChoice]:
-            del payload
-            provider_calls.append((provider, args, field_path))
-            assert provider == "mk8s_node_group_os_values"
-            assert args == {
-                "kubernetes_version_default": "1.33",
-                "platform": "cpu-platform",
-                "stack_preset": "",
-            }
-            return [
-                cli.OptionChoice(value="ubuntu22.04", label="ubuntu22.04"),
-                cli.OptionChoice(value="ubuntu24.04", label="ubuntu24.04"),
-            ]
-
-    def _prompt_scalar(
-        path_label: str,
-        current: object,
-        *,
-        choices: list[cli.OptionChoice] | None = None,
-        type_hint: str | None = None,
-        required: bool = False,
-        unset_on_skip: bool = False,
-    ) -> tuple[object, bool]:
-        del type_hint, required
-        answers: dict[str, Any] = {
-            "upgrade.os_image.target": "infra:mk8s@mk8s",
-            "upgrade.os_image.node_group": "",
-            "upgrade.os_image.to_os": "ubuntu24.04",
-            "upgrade.os_image.dry_run": True,
-            "upgrade.os_image.strategy": "zero-surge",
-            "upgrade.os_image.drain_timeout": "45m",
-        }
-        prompt_paths.append(path_label)
-        value = answers[path_label]
-        if path_label == "upgrade.os_image.node_group":
-            assert current is None
-            assert choices is None
-            assert unset_on_skip is True
-        elif path_label == "upgrade.os_image.to_os":
-            assert choices is not None
-            assert [choice.value for choice in choices] == ["ubuntu22.04", "ubuntu24.04"]
-            assert any(choice.recommended and choice.value == "ubuntu24.04" for choice in choices)
-            assert current == "ubuntu24.04"
-        else:
-            assert unset_on_skip is False
-        if choices:
-            assert value in {choice.value for choice in choices}
-        return value, False
-
-    monkeypatch.setattr(cli, "_upgrade_interactive_prompts_enabled", lambda: True)
-    monkeypatch.setattr(cli, "ProviderOptionLookup", FakeProviderLookup)
-    monkeypatch.setattr(cli, "_prompt_scalar_override", _prompt_scalar)
-    monkeypatch.setattr(cli, "console", rich_console)
-
-    cli.upgrade_os_image_command(paths.config_path)
-
-    rendered = rich_console.export_text()
-    assert prompt_paths == [
-        "upgrade.os_image.target",
-        "upgrade.os_image.node_group",
-        "upgrade.os_image.to_os",
-        "upgrade.os_image.dry_run",
-        "upgrade.os_image.strategy",
-        "upgrade.os_image.drain_timeout",
-    ]
-    assert "- repeat dry-run command:" in rendered
-    assert (
-        f"nebius-cxcli upgrade os-image {paths.config_path} infra:mk8s@mk8s "
-        "--to-os ubuntu24.04 --strategy zero-surge --drain-timeout 45m --dry-run"
-    ) in rendered
-    assert paths.config_path.read_text(encoding="utf-8") == original_config
-    assert wait_calls == [("sdk-close", "")]
-    assert provider_calls == [
-        (
-            "mk8s_node_group_os_values",
-            {
-                "kubernetes_version_default": "1.33",
-                "platform": "cpu-platform",
-                "stack_preset": "",
-            },
-            "infra.components[0].inputs.node_groups.system.os",
-        )
-    ]
-
-
-def test_upgrade_cpu_preset_config_only_guided_dry_run_prompts_shared_options(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    paths = _fake_paths(tmp_path)
-    paths.infra_dir.mkdir(parents=True)
-    paths.flux_dir.mkdir(parents=True)
-    paths.reports_dir.mkdir(parents=True)
-    paths.config_path.write_text(
-        yaml.safe_dump(
-            {
-                "infra": {
-                    "components": [
-                        {
-                            "id": "mk8s",
-                            "instance_id": "mk8s",
-                            "enabled": True,
-                            "inputs": {
-                                "cluster": {
-                                    "cluster_name": "mk8s-live",
-                                    "k8s_version": "1.33",
-                                },
-                                "node_groups": {
-                                    "system": {
-                                        "platform": "cpu-platform",
-                                        "preset": "cpu-4-16",
-                                        "os": "ubuntu24.04",
-                                    },
-                                    "gpu": {
-                                        "gpu": True,
-                                        "platform": "gpu-platform",
-                                        "preset": "8gpu",
-                                        "os": "ubuntu24.04",
-                                        "gpu_stack_preset": "cuda13.0",
-                                    },
-                                },
-                            },
-                        }
-                    ]
-                }
-            }
-        ),
-        encoding="utf-8",
-    )
-    original_config = paths.config_path.read_text(encoding="utf-8")
-    generated_config = SimpleNamespace(
-        client_info=SimpleNamespace(
-            client_name="test-client",
-            nebius=SimpleNamespace(project_id="project-1"),
-        )
-    )
-    manifest = {
-        "deploy": {
-            "targets": [
-                {
-                    "component_id": "mk8s",
-                    "instance_id": "mk8s",
-                    "target_ref": "mk8s",
-                    "access": "external",
-                    "cluster_id_output_name": "cluster_id",
-                    "component_output_ref": "mk8s.cluster_id",
-                    "flux_dir": str(paths.flux_dir),
-                }
-            ]
-        }
-    }
-    prompt_paths: list[str] = []
-    rich_console = cli.Console(record=True, width=300)
-    wait_calls, _validation_calls = _install_os_image_upgrade_fakes(
-        monkeypatch,
-        generated_config=generated_config,
-        paths=paths,
-        manifest=manifest,
-        live_node_groups=(
-            _mk8s_os_live_node_group(
-                id="ng-system",
-                name="mk8s-live-system",
-                os="ubuntu24.04",
-                preset="cpu-4-16",
-            ),
-            _mk8s_os_live_node_group(
-                id="ng-gpu",
-                name="mk8s-live-gpu",
-                os="ubuntu24.04",
-                platform="gpu-platform",
-                preset="8gpu",
-                drivers_preset="cuda13.0",
-            ),
-        ),
-        compatibility_choices=(),
-    )
-    provider_calls: list[tuple[str, dict[str, Any], str]] = []
-
-    class FakeProviderLookup:
-        def resolve(
-            self,
-            *,
-            provider: str,
-            args: dict[str, Any],
-            payload: dict[str, Any],
-            field_path: str,
-        ) -> list[cli.OptionChoice]:
-            del payload
-            provider_calls.append((provider, args, field_path))
-            assert provider == "compute_platform_presets"
-            assert args["platform"] == "cpu-platform"
-            return [
-                cli.OptionChoice(value="cpu-4-16", label="cpu-4-16"),
-                cli.OptionChoice(
-                    value="cpu-8-32",
-                    label="cpu-8-32  (live provider)",
-                    recommended=True,
-                ),
-            ]
-
-    def _prompt_scalar(
-        path_label: str,
-        current: object,
-        *,
-        choices: list[cli.OptionChoice] | None = None,
-        type_hint: str | None = None,
-        required: bool = False,
-        unset_on_skip: bool = False,
-    ) -> tuple[object, bool]:
-        del type_hint, required
-        answers: dict[str, Any] = {
-            "upgrade.cpu_preset.target": "infra:mk8s@mk8s",
-            "upgrade.cpu_preset.node_group": "",
-            "upgrade.cpu_preset.to_preset": "cpu-8-32",
-            "upgrade.cpu_preset.dry_run": True,
-            "upgrade.cpu_preset.strategy": "zero-surge",
-            "upgrade.cpu_preset.drain_timeout": "45m",
-        }
-        prompt_paths.append(path_label)
-        value = answers[path_label]
-        if path_label == "upgrade.cpu_preset.node_group":
-            assert current is None
-            assert choices is None
-            assert unset_on_skip is True
-        elif path_label == "upgrade.cpu_preset.to_preset":
-            assert choices is not None
-            assert [choice.value for choice in choices] == ["cpu-4-16", "cpu-8-32"]
-            assert any(choice.recommended and choice.value == "cpu-8-32" for choice in choices)
-            assert current == "cpu-8-32"
-        else:
-            assert unset_on_skip is False
-        if choices:
-            assert value in {choice.value for choice in choices}
-        return value, False
-
-    monkeypatch.setattr(cli, "_upgrade_interactive_prompts_enabled", lambda: True)
-    monkeypatch.setattr(cli, "ProviderOptionLookup", FakeProviderLookup)
-    monkeypatch.setattr(cli, "_prompt_scalar_override", _prompt_scalar)
-    monkeypatch.setattr(cli, "console", rich_console)
-
-    cli.upgrade_cpu_preset_command(paths.config_path)
-
-    rendered = rich_console.export_text()
-    assert prompt_paths == [
-        "upgrade.cpu_preset.target",
-        "upgrade.cpu_preset.node_group",
-        "upgrade.cpu_preset.to_preset",
-        "upgrade.cpu_preset.dry_run",
-        "upgrade.cpu_preset.strategy",
-        "upgrade.cpu_preset.drain_timeout",
-    ]
-    assert "MK8s CPU preset upgrade plan" in rendered
-    assert "mk8s-live-system: cpu-4-16 -> cpu-8-32" in rendered
-    assert "mk8s-live-gpu" not in rendered
-    assert "- repeat dry-run command:" in rendered
-    assert (
-        f"nebius-cxcli upgrade cpu-preset {paths.config_path} infra:mk8s@mk8s "
-        "--to-preset cpu-8-32 --strategy zero-surge --drain-timeout 45m --dry-run"
-    ) in rendered
-    assert paths.config_path.read_text(encoding="utf-8") == original_config
-    assert wait_calls == [("sdk-close", "")]
-    assert provider_calls == [
-        (
-            "compute_platform_presets",
-            {
-                "platform": "cpu-platform",
-                "project_id": "project-1",
-                "tenant_id": "",
-                "region_id": "",
-            },
-            "infra.components[0].inputs.node_groups.system.preset",
-        )
-    ]
-
-
-def test_upgrade_gpu_stack_preset_config_only_guided_dry_run_prompts_gpu_stack_choices(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    paths = _fake_paths(tmp_path)
-    paths.infra_dir.mkdir(parents=True)
-    paths.flux_dir.mkdir(parents=True)
-    paths.reports_dir.mkdir(parents=True)
-    paths.config_path.write_text(
-        yaml.safe_dump(
-            {
-                "infra": {
-                    "components": [
-                        {
-                            "id": "mk8s",
-                            "instance_id": "mk8s",
-                            "enabled": True,
-                            "inputs": {
-                                "cluster": {
-                                    "cluster_name": "mk8s-live",
-                                    "k8s_version": "1.33",
-                                },
-                                "node_groups": {
-                                    "gpu": {
-                                        "gpu": True,
-                                        "platform": "gpu-platform",
-                                        "preset": "8gpu",
-                                        "os": "ubuntu24.04",
-                                        "gpu_stack_preset": "cuda12.8",
-                                    },
-                                },
-                            },
-                        }
-                    ]
-                }
-            }
-        ),
-        encoding="utf-8",
-    )
-    original_config = paths.config_path.read_text(encoding="utf-8")
-    generated_config = SimpleNamespace(
-        client_info=SimpleNamespace(
-            client_name="test-client",
-            nebius=SimpleNamespace(project_id="project-1"),
-        )
-    )
-    manifest = {"deploy": {"targets": [_mk8s_target(paths)]}}
-    prompt_paths: list[str] = []
-    rich_console = cli.Console(record=True, width=300)
-    wait_calls, _validation_calls = _install_os_image_upgrade_fakes(
-        monkeypatch,
-        generated_config=generated_config,
-        paths=paths,
-        manifest=manifest,
-        live_node_groups=(
-            _mk8s_os_live_node_group(
-                id="ng-gpu",
-                name="mk8s-live-gpu",
-                os="ubuntu24.04",
-                platform="gpu-platform",
-                preset="8gpu",
-                drivers_preset="cuda12.8",
-            ),
-        ),
-        compatibility_choices=(
-            SimpleNamespace(
-                platform="gpu-platform",
-                os="ubuntu24.04",
-                drivers_preset="cuda12.8",
-            ),
-            SimpleNamespace(
-                platform="gpu-platform",
-                os="ubuntu24.04",
-                drivers_preset="cuda13.0",
-            ),
-        ),
-    )
-    provider_calls: list[tuple[str, dict[str, Any], str]] = []
-
-    class FakeProviderLookup:
-        def resolve(
-            self,
-            *,
-            provider: str,
-            args: dict[str, Any],
-            payload: dict[str, Any],
-            field_path: str,
-        ) -> list[cli.OptionChoice]:
-            del payload
-            provider_calls.append((provider, args, field_path))
-            assert provider == "mk8s_gpu_stack_presets"
-            assert args == {
-                "kubernetes_version_default": "1.33",
-                "platform": "gpu-platform",
-                "os": "ubuntu24.04",
-                "project_id": "project-1",
-            }
-            return [
-                cli.OptionChoice(value="cuda12.8", label="cuda12.8"),
-                cli.OptionChoice(
-                    value="cuda13.0",
-                    label="cuda13.0  (live provider)",
-                    recommended=True,
-                ),
-            ]
-
-    def _prompt_scalar(
-        path_label: str,
-        current: object,
-        *,
-        choices: list[cli.OptionChoice] | None = None,
-        type_hint: str | None = None,
-        required: bool = False,
-        unset_on_skip: bool = False,
-    ) -> tuple[object, bool]:
-        del type_hint, required
-        answers: dict[str, Any] = {
-            "upgrade.gpu_stack_preset.target": "infra:mk8s@mk8s",
-            "upgrade.gpu_stack_preset.node_group": "",
-            "upgrade.gpu_stack_preset.to_gpu_stack_preset": "cuda13.0",
-            "upgrade.gpu_stack_preset.dry_run": True,
-            "upgrade.gpu_stack_preset.strategy": "safe-surge",
-            "upgrade.gpu_stack_preset.drain_timeout": "auto",
-        }
-        prompt_paths.append(path_label)
-        value = answers[path_label]
-        if path_label == "upgrade.gpu_stack_preset.node_group":
-            assert current is None
-            assert choices is None
-            assert unset_on_skip is True
-        elif path_label == "upgrade.gpu_stack_preset.to_gpu_stack_preset":
-            assert choices is not None
-            assert [choice.value for choice in choices] == ["cuda12.8", "cuda13.0"]
-            assert any(choice.recommended and choice.value == "cuda13.0" for choice in choices)
-            assert current == "cuda13.0"
-        else:
-            assert unset_on_skip is False
-        if choices:
-            assert value in {choice.value for choice in choices}
-        return value, False
-
-    monkeypatch.setattr(cli, "_upgrade_interactive_prompts_enabled", lambda: True)
-    monkeypatch.setattr(cli, "ProviderOptionLookup", FakeProviderLookup)
-    monkeypatch.setattr(cli, "_prompt_scalar_override", _prompt_scalar)
-    monkeypatch.setattr(cli, "console", rich_console)
-
-    cli.upgrade_gpu_stack_preset_command(paths.config_path)
-
-    rendered = rich_console.export_text()
-    assert prompt_paths == [
-        "upgrade.gpu_stack_preset.target",
-        "upgrade.gpu_stack_preset.node_group",
-        "upgrade.gpu_stack_preset.to_gpu_stack_preset",
-        "upgrade.gpu_stack_preset.dry_run",
-        "upgrade.gpu_stack_preset.strategy",
-        "upgrade.gpu_stack_preset.drain_timeout",
-    ]
-    assert "MK8s GPU stack preset upgrade plan" in rendered
-    assert "mk8s-live-gpu: cuda12.8 -> cuda13.0" in rendered
-    assert (
-        f"nebius-cxcli upgrade gpu-stack-preset {paths.config_path} infra:mk8s@mk8s "
-        "--to-gpu-stack-preset cuda13.0 --strategy safe-surge --dry-run"
-    ) in rendered
-    assert "--to-preset cuda13.0" not in rendered
-    assert paths.config_path.read_text(encoding="utf-8") == original_config
-    assert wait_calls == [("sdk-close", "")]
-    assert provider_calls == [
-        (
-            "mk8s_gpu_stack_presets",
-            {
-                "kubernetes_version_default": "1.33",
-                "platform": "gpu-platform",
-                "os": "ubuntu24.04",
-                "project_id": "project-1",
-            },
-            "infra.components[0].inputs.node_groups.gpu.gpu_stack_preset",
-        )
-    ]
-
-
-def test_upgrade_platform_config_only_guided_dry_run_prompts_live_platform_choices(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    paths = _fake_paths(tmp_path)
-    paths.infra_dir.mkdir(parents=True)
-    paths.flux_dir.mkdir(parents=True)
-    paths.reports_dir.mkdir(parents=True)
-    paths.config_path.write_text(
-        yaml.safe_dump(
-            {
-                "infra": {
-                    "components": [
-                        {
-                            "id": "mk8s",
-                            "instance_id": "mk8s",
-                            "enabled": True,
-                            "inputs": {
-                                "cluster": {
-                                    "cluster_name": "mk8s-live",
-                                    "k8s_version": "1.33",
-                                },
-                                "node_groups": {
-                                    "system": {
-                                        "platform": "cpu-platform",
-                                        "preset": "cpu-4-16",
-                                        "os": "ubuntu24.04",
-                                    },
-                                },
-                            },
-                        }
-                    ]
-                }
-            }
-        ),
-        encoding="utf-8",
-    )
-    generated_config = SimpleNamespace(
-        client_info=SimpleNamespace(
-            client_name="test-client",
-            nebius=SimpleNamespace(project_id="project-1"),
-        )
-    )
-    manifest = {"deploy": {"targets": [_mk8s_target(paths)]}}
-    wait_calls, _validation_calls = _install_os_image_upgrade_fakes(
-        monkeypatch,
-        generated_config=generated_config,
-        paths=paths,
-        manifest=manifest,
-        live_node_groups=(
-            _mk8s_os_live_node_group(
-                id="ng-system",
-                name="mk8s-live-system",
-                os="ubuntu24.04",
-                platform="cpu-platform",
-                preset="cpu-4-16",
-            ),
-        ),
-        compatibility_choices=(
-            SimpleNamespace(platform="cpu-d3", os="ubuntu24.04", drivers_preset=""),
-        ),
-    )
-    provider_calls: list[tuple[str, dict[str, Any], str]] = []
-    prompt_paths: list[str] = []
-    rich_console = cli.Console(record=True, width=300)
-
-    class FakeProviderLookup:
-        def resolve(
-            self,
-            *,
-            provider: str,
-            args: dict[str, Any],
-            payload: dict[str, Any],
-            field_path: str,
-        ) -> list[cli.OptionChoice]:
-            del payload
-            provider_calls.append((provider, args, field_path))
-            assert provider == "mk8s_compatible_platforms"
-            assert args["kubernetes_version_default"] == "1.33"
-            assert args["project_id"] == "project-1"
-            assert args["platform_prefix"] == "cpu-"
-            return [
-                cli.OptionChoice(value="cpu-platform", label="cpu-platform"),
-                cli.OptionChoice(value="cpu-d3", label="cpu-d3  (live provider)"),
-            ]
-
-    def _prompt_scalar(
-        path_label: str,
-        current: object,
-        *,
-        choices: list[cli.OptionChoice] | None = None,
-        type_hint: str | None = None,
-        required: bool = False,
-        unset_on_skip: bool = False,
-    ) -> tuple[object, bool]:
-        del type_hint, required
-        answers: dict[str, Any] = {
-            "upgrade.platform.target": "infra:mk8s@mk8s",
-            "upgrade.platform.node_group": "",
-            "upgrade.platform.to_platform": "cpu-d3",
-            "upgrade.platform.dry_run": True,
-            "upgrade.platform.strategy": "safe-surge",
-            "upgrade.platform.drain_timeout": "auto",
-        }
-        prompt_paths.append(path_label)
-        value = answers[path_label]
-        if path_label == "upgrade.platform.node_group":
-            assert current is None
-            assert choices is None
-            assert unset_on_skip is True
-        elif path_label == "upgrade.platform.to_platform":
-            assert choices is not None
-            assert [choice.value for choice in choices] == ["cpu-platform", "cpu-d3"]
-            assert any(choice.recommended and choice.value == "cpu-d3" for choice in choices)
-            assert current == "cpu-d3"
-        if choices:
-            assert value in {choice.value for choice in choices}
-        return value, False
-
-    monkeypatch.setattr(cli, "_upgrade_interactive_prompts_enabled", lambda: True)
-    monkeypatch.setattr(cli, "ProviderOptionLookup", FakeProviderLookup)
-    monkeypatch.setattr(cli, "_prompt_scalar_override", _prompt_scalar)
-    monkeypatch.setattr(cli, "console", rich_console)
-
-    cli.upgrade_platform_command(paths.config_path)
-
-    rendered = rich_console.export_text()
-    assert prompt_paths == [
-        "upgrade.platform.target",
-        "upgrade.platform.node_group",
-        "upgrade.platform.to_platform",
-        "upgrade.platform.dry_run",
-        "upgrade.platform.strategy",
-        "upgrade.platform.drain_timeout",
-    ]
-    assert "MK8s node platform upgrade plan" in rendered
-    assert "mk8s-live-system: cpu-platform -> cpu-d3" in rendered
-    assert (
-        f"nebius-cxcli upgrade platform {paths.config_path} infra:mk8s@mk8s "
-        "--to-platform cpu-d3 --strategy safe-surge --dry-run"
-    ) in rendered
-    assert wait_calls == [("sdk-close", "")]
-    assert provider_calls == [
-        (
-            "mk8s_compatible_platforms",
-            {
-                "kubernetes_version_default": "1.33",
-                "project_id": "project-1",
-                "platform_prefix": "cpu-",
-            },
-            "infra.components[0].inputs.node_groups.system.platform",
-        )
-    ]
-
-
-def test_upgrade_cpu_preset_apply_updates_source_and_waits_for_node_layer_rollout(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    paths = _fake_paths(tmp_path)
-    paths.infra_dir.mkdir(parents=True)
-    paths.flux_dir.mkdir(parents=True)
-    paths.reports_dir.mkdir(parents=True)
-    paths.config_path.write_text(
-        yaml.safe_dump(
-            {
-                "infra": {
-                    "components": [
-                        {
-                            "id": "mk8s",
-                            "instance_id": "mk8s",
-                            "enabled": True,
-                            "inputs": {
-                                "cluster": {
-                                    "cluster_name": "mk8s-live",
-                                    "k8s_version": "1.33",
-                                },
-                                "node_groups": {
-                                    "system": {
-                                        "platform": "cpu-platform",
-                                        "preset": "cpu-4-16",
-                                        "os": "ubuntu24.04",
-                                    },
-                                },
-                            },
-                        }
-                    ]
-                }
-            }
-        ),
-        encoding="utf-8",
-    )
-    generated_config = SimpleNamespace(
-        client_info=SimpleNamespace(
-            client_name="test-client",
-            nebius=SimpleNamespace(project_id="project-1"),
-        )
-    )
-    manifest = {"deploy": {"targets": [_mk8s_target(paths)]}}
-    calls: list[object] = []
-    live_node_group = {"preset": "cpu-4-16"}
-
-    class FakeSdk:
-        def sync_close(self) -> None:
-            calls.append("sdk-close")
-
-    class FakeExecutor:
-        def __init__(self, sdk: object) -> None:
-            assert isinstance(sdk, FakeSdk)
-
-        def get_cluster_by_name(self, *, project_id: str, name: str) -> SimpleNamespace:
-            assert (project_id, name) == ("project-1", "mk8s-live")
-            return SimpleNamespace(
-                metadata=SimpleNamespace(id="cluster-1", name=name, resource_version=1),
-                spec=SimpleNamespace(control_plane=SimpleNamespace(version="1.33")),
-            )
-
-        def get_cluster(self, cluster_id: str) -> SimpleNamespace:
-            assert cluster_id == "cluster-1"
-            return SimpleNamespace(
-                metadata=SimpleNamespace(id="cluster-1", name="mk8s-live", resource_version=1),
-                spec=SimpleNamespace(control_plane=SimpleNamespace(version="1.33")),
-            )
-
-        def list_node_groups(self, cluster_id: str) -> tuple[SimpleNamespace, ...]:
-            assert cluster_id == "cluster-1"
-            return (
-                _mk8s_os_live_node_group(
-                    id="ng-system",
-                    name="mk8s-live-system",
-                    os="ubuntu24.04",
-                    preset=live_node_group["preset"],
-                ),
-            )
-
-        def compatibility_choices(self, *, target_version: str, platform: str):
-            raise AssertionError("CPU preset upgrade should not query MK8s compatibility matrix")
-
-        def wait_node_group_layer(
-            self,
-            *,
-            cluster_id: str,
-            node_group_id: str,
-            field: str,
-            value: str,
-            timeout_seconds: int,
-        ) -> None:
-            live_node_group["preset"] = value
-            calls.append(
-                (
-                    "wait-layer",
-                    f"{cluster_id}:{node_group_id}:{field}:{value}:{timeout_seconds}",
-                )
-            )
-
-    def _current_preset() -> str:
-        payload = yaml.safe_load(paths.config_path.read_text(encoding="utf-8"))
-        return payload["infra"]["components"][0]["inputs"]["node_groups"]["system"]["preset"]
-
-    monkeypatch.setattr(
-        cli, "_load_deploy_context_readonly", lambda _path: (generated_config, paths, manifest)
-    )
-    monkeypatch.setattr(
-        cli, "_load_deploy_context", lambda _path: (generated_config, paths, manifest)
-    )
-    monkeypatch.setattr(
-        cli,
-        "_resolve_managed_mk8s_upgrade_target",
-        lambda _manifest, *, target_instance_id: {
-            "component_id": "mk8s",
-            "target_ref": target_instance_id,
-            "access": "external",
-            "cluster_id_output_name": "cluster_id",
-        },
-    )
-    monkeypatch.setattr(
-        cli,
-        "_managed_mk8s_target_with_cluster_id",
-        lambda target, *, cluster_id: {**target, "cluster_id": cluster_id},
-    )
-    monkeypatch.setattr(cli, "init_nebius_sdk", lambda **_kwargs: FakeSdk())
-    monkeypatch.setattr(cli, "Mk8sKubernetesVersionExecutor", FakeExecutor)
-    monkeypatch.setattr(cli, "_prepare_cluster_handoff_kube_env", lambda *_args, **_kwargs: {})
-    monkeypatch.setattr(cli, "collect_kubernetes_preflight_findings", lambda *, kube_env: ())
-    monkeypatch.setattr(
-        cli,
-        "_run_generated_bundle_validation",
-        lambda *_args, **kwargs: calls.append(("validate", kwargs["title"])) or {},
-    )
-    monkeypatch.setattr(
-        cli, "render_command", lambda *_args, **_kwargs: calls.append(("render", _current_preset()))
-    )
-    monkeypatch.setattr(cli, "_manifest_status_watchers", lambda _manifest: [])
-    monkeypatch.setattr(cli, "_enabled_status_watcher_specs", lambda _config: [])
-    monkeypatch.setattr(
-        cli, "terraform_plan", lambda *_args, **_kwargs: calls.append(("plan", _current_preset()))
-    )
-    monkeypatch.setattr(
-        cli,
-        "_run_terraform_apply_with_status",
-        lambda *_args, **_kwargs: calls.append(("apply", _current_preset())),
-    )
-
-    cli.upgrade_cpu_preset_command(
-        paths.config_path,
-        "infra:mk8s@mk8s",
-        to_preset="cpu-8-32",
-    )
-
-    payload = yaml.safe_load(paths.config_path.read_text(encoding="utf-8"))
-    assert (
-        payload["infra"]["components"][0]["inputs"]["node_groups"]["system"]["preset"] == "cpu-8-32"
-    )
-    assert calls == [
-        ("validate", "CPU preset upgrade preflight"),
-        ("render", "cpu-8-32"),
-        (
-            "validate",
-            "Validate rendered stage 1/2: node-group mk8s-live-system CPU preset upgrade to cpu-8-32",
-        ),
-        ("plan", "cpu-8-32"),
-        ("apply", "cpu-8-32"),
-        ("wait-layer", "cluster-1:ng-system:preset:cpu-8-32:3600"),
-        ("render", "cpu-8-32"),
-        ("validate", "Validate rendered stage 2/2: node-group strategy restore"),
-        ("plan", "cpu-8-32"),
-        ("apply", "cpu-8-32"),
-        "sdk-close",
-    ]
-
-
-def test_upgrade_cpu_preset_resume_waits_and_restores_strategy_after_timeout(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    paths = _fake_paths(tmp_path)
-    paths.infra_dir.mkdir(parents=True)
-    paths.flux_dir.mkdir(parents=True)
-    paths.reports_dir.mkdir(parents=True)
-    paths.config_path.write_text(
-        yaml.safe_dump(
-            {
-                "infra": {
-                    "components": [
-                        {
-                            "id": "mk8s",
-                            "instance_id": "mk8s",
-                            "enabled": True,
-                            "inputs": {
-                                "cluster": {
-                                    "cluster_name": "mk8s-live",
-                                    "k8s_version": "1.33",
-                                },
-                                "node_groups": {
-                                    "system": {
-                                        "platform": "cpu-platform",
-                                        "preset": "cpu-8-32",
-                                        "os": "ubuntu24.04",
-                                    },
-                                },
-                            },
-                        }
-                    ]
-                }
-            }
-        ),
-        encoding="utf-8",
-    )
-    generated_config = SimpleNamespace(
-        client_info=SimpleNamespace(
-            client_name="test-client",
-            nebius=SimpleNamespace(project_id="project-1"),
-        )
-    )
-    manifest = {"deploy": {"targets": [_mk8s_target(paths)]}}
-    calls: list[object] = []
-    live_status = {
-        "value": SimpleNamespace(
-            version="1.33",
-            ready_node_count=0,
-            target_node_count=1,
-            node_count=2,
-            outdated_node_count=1,
-            reconciling=True,
-        )
-    }
-
-    class FakeSdk:
-        def sync_close(self) -> None:
-            calls.append("sdk-close")
-
-    class FakeExecutor:
-        def __init__(self, sdk: object) -> None:
-            assert isinstance(sdk, FakeSdk)
-
-        def get_cluster_by_name(self, *, project_id: str, name: str) -> SimpleNamespace:
-            assert (project_id, name) == ("project-1", "mk8s-live")
-            return SimpleNamespace(
-                metadata=SimpleNamespace(id="cluster-1", name=name, resource_version=1),
-                spec=SimpleNamespace(control_plane=SimpleNamespace(version="1.33")),
-            )
-
-        def get_cluster(self, cluster_id: str) -> SimpleNamespace:
-            assert cluster_id == "cluster-1"
-            return SimpleNamespace(
-                metadata=SimpleNamespace(id="cluster-1", name="mk8s-live", resource_version=1),
-                spec=SimpleNamespace(control_plane=SimpleNamespace(version="1.33")),
-            )
-
-        def list_node_groups(self, cluster_id: str) -> tuple[SimpleNamespace, ...]:
-            assert cluster_id == "cluster-1"
-            return (
-                _mk8s_os_live_node_group(
-                    id="ng-system",
-                    name="mk8s-live-system",
-                    os="ubuntu24.04",
-                    preset="cpu-8-32",
-                    status=live_status["value"],
-                ),
-            )
-
-        def compatibility_choices(self, *, target_version: str, platform: str):
-            raise AssertionError("CPU preset upgrade should not query MK8s compatibility matrix")
-
-        def wait_node_group_layer(
-            self,
-            *,
-            cluster_id: str,
-            node_group_id: str,
-            field: str,
-            value: str,
-            timeout_seconds: int,
-        ) -> None:
-            live_status["value"] = _mk8s_ready_status(version="1.33")
-            calls.append(
-                (
-                    "wait-layer",
-                    f"{cluster_id}:{node_group_id}:{field}:{value}:{timeout_seconds}",
-                )
-            )
-
-    def _current_preset() -> str:
-        payload = yaml.safe_load(paths.config_path.read_text(encoding="utf-8"))
-        return payload["infra"]["components"][0]["inputs"]["node_groups"]["system"]["preset"]
-
-    monkeypatch.setattr(
-        cli, "_load_deploy_context_readonly", lambda _path: (generated_config, paths, manifest)
-    )
-    monkeypatch.setattr(
-        cli, "_load_deploy_context", lambda _path: (generated_config, paths, manifest)
-    )
-    monkeypatch.setattr(
-        cli,
-        "_resolve_managed_mk8s_upgrade_target",
-        lambda _manifest, *, target_instance_id: {
-            "component_id": "mk8s",
-            "target_ref": target_instance_id,
-            "access": "external",
-            "cluster_id_output_name": "cluster_id",
-        },
-    )
-    monkeypatch.setattr(
-        cli,
-        "_managed_mk8s_target_with_cluster_id",
-        lambda target, *, cluster_id: {**target, "cluster_id": cluster_id},
-    )
-    monkeypatch.setattr(cli, "init_nebius_sdk", lambda **_kwargs: FakeSdk())
-    monkeypatch.setattr(cli, "Mk8sKubernetesVersionExecutor", FakeExecutor)
-    monkeypatch.setattr(cli, "_prepare_cluster_handoff_kube_env", lambda *_args, **_kwargs: {})
-    monkeypatch.setattr(cli, "collect_kubernetes_preflight_findings", lambda *, kube_env: ())
-    monkeypatch.setattr(
-        cli,
-        "_run_generated_bundle_validation",
-        lambda *_args, **kwargs: calls.append(("validate", kwargs["title"])) or {},
-    )
-    monkeypatch.setattr(
-        cli, "render_command", lambda *_args, **_kwargs: calls.append(("render", _current_preset()))
-    )
-    monkeypatch.setattr(cli, "_manifest_status_watchers", lambda _manifest: [])
-    monkeypatch.setattr(cli, "_enabled_status_watcher_specs", lambda _config: [])
-    monkeypatch.setattr(
-        cli, "terraform_plan", lambda *_args, **_kwargs: calls.append(("plan", _current_preset()))
-    )
-    monkeypatch.setattr(
-        cli,
-        "_run_terraform_apply_with_status",
-        lambda *_args, **_kwargs: calls.append(("apply", _current_preset())),
-    )
-
-    with cli.console.capture() as capture:
-        cli.upgrade_cpu_preset_command(
-            paths.config_path,
-            "infra:mk8s@mk8s",
-            to_preset="cpu-8-32",
-            disruption_policy="zero-surge",
-        )
-    output = _plain_output(capture.get())
-    flat_output = " ".join(output.split())
-
-    assert "waiting for the in-progress node-group rollout to finish" in flat_output
-    assert "1 strategy-restore stage" in flat_output
-    assert calls == [
-        ("validate", "CPU preset upgrade preflight"),
-        ("wait-layer", "cluster-1:ng-system:preset:cpu-8-32:3600"),
-        ("render", "cpu-8-32"),
-        ("validate", "Validate rendered stage 1/1: node-group strategy restore"),
-        ("plan", "cpu-8-32"),
-        ("apply", "cpu-8-32"),
-        "sdk-close",
     ]
 
 
@@ -2948,6 +2381,7 @@ def test_upgrade_helm_chart_config_only_guided_dry_run_prompts_target_and_versio
         type_hint: str | None = None,
         required: bool = False,
         unset_on_skip: bool = False,
+        **_kwargs: object,
     ) -> tuple[object, bool]:
         del current, type_hint, required, unset_on_skip
         answers: dict[str, Any] = {
@@ -2982,7 +2416,7 @@ def test_upgrade_helm_chart_config_only_guided_dry_run_prompts_target_and_versio
     assert "- repeat dry-run command:" in rendered
     assert (
         f"nebius-cxcli soperator upgrade {paths.config_path} "
-        "--target mk8s --to-version 0.26.0 --dry-run"
+        "--target mk8s --to-version 0.26.0 --no-interactive --dry-run"
     ) in rendered
     assert paths.config_path.read_text(encoding="utf-8") == original_config
 
@@ -3244,8 +2678,10 @@ def test_soperator_upgrade_checkpoints_activechecks_suspend_and_restore(
     monkeypatch.setattr(
         cli,
         "_suspend_live_soperator_activechecks",
-        lambda *_args, **_kwargs: calls.append("live-activechecks-suspend")
-        or {"status": "suspended", "patched": ["nccl"], "skipped": []},
+        lambda *_args, **_kwargs: (
+            calls.append("live-activechecks-suspend")
+            or {"status": "suspended", "patched": ["nccl"], "skipped": []}
+        ),
     )
 
     cli._run_soperator_upgrade_command(
@@ -3293,10 +2729,7 @@ def test_soperator_upgrade_checkpoints_activechecks_suspend_and_restore(
         "soperator-static-ready",
     ]
     checkpoint_path = (
-        paths.project_dir
-        / cli.SOPERATOR_UPGRADE_CHECKPOINT_DIR
-        / "mk8s"
-        / "checkpoint.json"
+        paths.project_dir / cli.SOPERATOR_UPGRADE_CHECKPOINT_DIR / "mk8s" / "checkpoint.json"
     )
     checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
     assert checkpoint["status"] == "completed"
@@ -3315,9 +2748,7 @@ def test_soperator_upgrade_checkpoints_activechecks_suspend_and_restore(
         "activechecks-restored",
         "completed",
     ]
-    upgrade_report = (paths.reports_dir / cli.UPGRADE_REPORT_FILENAME).read_text(
-        encoding="utf-8"
-    )
+    upgrade_report = (paths.reports_dir / cli.UPGRADE_REPORT_FILENAME).read_text(encoding="utf-8")
     assert "checkpointed suspend/restore was required" in upgrade_report
     assert "`activechecks-restored`" in upgrade_report
     assert "`completed`" in upgrade_report
@@ -3398,8 +2829,10 @@ def test_soperator_upgrade_restores_activechecks_after_failed_upgrade(
     monkeypatch.setattr(
         cli,
         "_suspend_live_soperator_activechecks",
-        lambda *_args, **_kwargs: calls.append("live-activechecks-suspend")
-        or {"status": "suspended", "patched": ["nccl"], "skipped": []},
+        lambda *_args, **_kwargs: (
+            calls.append("live-activechecks-suspend")
+            or {"status": "suspended", "patched": ["nccl"], "skipped": []}
+        ),
     )
 
     with pytest.raises(RuntimeError, match="postflight failed"):
@@ -3427,10 +2860,7 @@ def test_soperator_upgrade_restores_activechecks_after_failed_upgrade(
         "soperator-static-ready",
     ]
     checkpoint_path = (
-        paths.project_dir
-        / cli.SOPERATOR_UPGRADE_CHECKPOINT_DIR
-        / "mk8s"
-        / "checkpoint.json"
+        paths.project_dir / cli.SOPERATOR_UPGRADE_CHECKPOINT_DIR / "mk8s" / "checkpoint.json"
     )
     checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
     assert checkpoint["status"] == "failed"
@@ -3441,9 +2871,7 @@ def test_soperator_upgrade_restores_activechecks_after_failed_upgrade(
     assert "activechecks-restored-after-failure" in [
         event["event"] for event in checkpoint["events"]
     ]
-    upgrade_report = (paths.reports_dir / cli.UPGRADE_REPORT_FILENAME).read_text(
-        encoding="utf-8"
-    )
+    upgrade_report = (paths.reports_dir / cli.UPGRADE_REPORT_FILENAME).read_text(encoding="utf-8")
     assert "- Status: `failed`" in upgrade_report
     assert "`activechecks-restored-after-failure`" in upgrade_report
 
@@ -3551,10 +2979,7 @@ def test_soperator_upgrade_restores_activechecks_after_suspend_validation_failur
         "soperator-static-ready",
     ]
     checkpoint_path = (
-        paths.project_dir
-        / cli.SOPERATOR_UPGRADE_CHECKPOINT_DIR
-        / "mk8s"
-        / "checkpoint.json"
+        paths.project_dir / cli.SOPERATOR_UPGRADE_CHECKPOINT_DIR / "mk8s" / "checkpoint.json"
     )
     checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
     assert checkpoint["status"] == "failed"
@@ -3630,10 +3055,7 @@ def test_soperator_upgrade_resumes_pending_activechecks_restore_from_checkpoint(
         ),
     )
     checkpoint_path = (
-        paths.project_dir
-        / cli.SOPERATOR_UPGRADE_CHECKPOINT_DIR
-        / "mk8s"
-        / "checkpoint.json"
+        paths.project_dir / cli.SOPERATOR_UPGRADE_CHECKPOINT_DIR / "mk8s" / "checkpoint.json"
     )
     checkpoint = cli._new_soperator_upgrade_checkpoint(
         plan=checkpoint_plan,
@@ -3684,8 +3106,10 @@ def test_soperator_upgrade_resumes_pending_activechecks_restore_from_checkpoint(
     monkeypatch.setattr(
         cli,
         "_suspend_live_soperator_activechecks",
-        lambda *_args, **_kwargs: calls.append("live-activechecks-suspend")
-        or {"status": "suspended", "patched": ["nccl"], "skipped": []},
+        lambda *_args, **_kwargs: (
+            calls.append("live-activechecks-suspend")
+            or {"status": "suspended", "patched": ["nccl"], "skipped": []}
+        ),
     )
 
     cli._run_soperator_upgrade_command(
@@ -3796,10 +3220,7 @@ def test_soperator_upgrade_resumed_activechecks_restore_survives_preflight_failu
         ),
     )
     checkpoint_path = (
-        paths.project_dir
-        / cli.SOPERATOR_UPGRADE_CHECKPOINT_DIR
-        / "mk8s"
-        / "checkpoint.json"
+        paths.project_dir / cli.SOPERATOR_UPGRADE_CHECKPOINT_DIR / "mk8s" / "checkpoint.json"
     )
     checkpoint = cli._new_soperator_upgrade_checkpoint(
         plan=checkpoint_plan,
@@ -3853,8 +3274,10 @@ def test_soperator_upgrade_resumed_activechecks_restore_survives_preflight_failu
     monkeypatch.setattr(
         cli,
         "_suspend_live_soperator_activechecks",
-        lambda *_args, **_kwargs: calls.append("live-activechecks-suspend")
-        or {"status": "suspended", "patched": ["nccl"], "skipped": []},
+        lambda *_args, **_kwargs: (
+            calls.append("live-activechecks-suspend")
+            or {"status": "suspended", "patched": ["nccl"], "skipped": []}
+        ),
     )
 
     with pytest.raises(RuntimeError, match="preflight failed"):
@@ -3892,9 +3315,7 @@ def test_soperator_upgrade_resumed_activechecks_restore_survives_preflight_failu
     event_names = [event["event"] for event in checkpoint["events"]]
     assert "resumed" in event_names
     assert "activechecks-restored-after-failure" in event_names
-    upgrade_report = (paths.reports_dir / cli.UPGRADE_REPORT_FILENAME).read_text(
-        encoding="utf-8"
-    )
+    upgrade_report = (paths.reports_dir / cli.UPGRADE_REPORT_FILENAME).read_text(encoding="utf-8")
     assert "- Status: `failed`" in upgrade_report
     assert "`activechecks-restored-after-failure`" in upgrade_report
 
@@ -3987,10 +3408,7 @@ def test_soperator_upgrade_live_activechecks_cleanup_is_cluster_scoped(
         source_payload=source_payload,
     )
 
-    selector = (
-        "app.kubernetes.io/component=soperatorchecks,"
-        "app.kubernetes.io/instance=cluster-a"
-    )
+    selector = "app.kubernetes.io/component=soperatorchecks,app.kubernetes.io/instance=cluster-a"
     assert result["status"] == "suspended"
     assert result["patched"] == ["nccl"]
     assert result["skipped"] == ["other"]
@@ -4158,7 +3576,7 @@ def test_soperator_upgrade_guided_prompts_dry_run_before_mutation(
                             "version": "0.25.0",
                         }
                     ]
-                }
+                },
             }
         ),
         encoding="utf-8",
@@ -4177,6 +3595,7 @@ def test_soperator_upgrade_guided_prompts_dry_run_before_mutation(
         type_hint: str | None = None,
         required: bool = False,
         unset_on_skip: bool = False,
+        **_kwargs: object,
     ) -> tuple[object, bool]:
         del current, choices, type_hint, required, unset_on_skip
         answers: dict[str, Any] = {
@@ -4238,7 +3657,7 @@ def test_soperator_upgrade_no_interactive_requires_version_before_prompt(
                             "version": "0.25.0",
                         }
                     ]
-                }
+                },
             }
         ),
         encoding="utf-8",
@@ -4343,24 +3762,28 @@ def test_soperator_upgrade_postflight_refreshes_deploy_report(
     monkeypatch.setattr(
         cli,
         "_run_deploy_validations",
-        lambda validations, **kwargs: calls.append(
-            ("run-validations", validations, kwargs["reports_dir"], kwargs["extra_env"])
-        )
-        or [paths.reports_dir / "soperator-smoke.json"],
+        lambda validations, **kwargs: (
+            calls.append(
+                ("run-validations", validations, kwargs["reports_dir"], kwargs["extra_env"])
+            )
+            or [paths.reports_dir / "soperator-smoke.json"]
+        ),
     )
     monkeypatch.setattr(
         cli,
         "write_inventory",
-        lambda *_args, **kwargs: calls.append(("write-inventory", kwargs["validations"]))
-        or SimpleNamespace(markdown=paths.reports_dir / "deploy-report.md"),
+        lambda *_args, **kwargs: (
+            calls.append(("write-inventory", kwargs["validations"]))
+            or SimpleNamespace(markdown=paths.reports_dir / "deploy-report.md")
+        ),
     )
     monkeypatch.setattr(
         cli,
         "build_deploy_validation_report",
-        lambda validations, **kwargs: calls.append(
-            ("build-report", validations, kwargs["markdown_path"])
-        )
-        or SimpleNamespace(overall_status="passed"),
+        lambda validations, **kwargs: (
+            calls.append(("build-report", validations, kwargs["markdown_path"]))
+            or SimpleNamespace(overall_status="passed")
+        ),
     )
 
     report = cli._run_soperator_upgrade_validation_phase(
@@ -4523,1017 +3946,6 @@ def test_soperator_static_upgrade_readiness_uses_chart_labels_without_helm(
     assert not any(call and call[0] == "helm" for call in calls)
 
 
-def test_upgrade_os_image_config_only_guided_vm_dry_run_prompts_target_and_image(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    paths = _fake_paths(tmp_path)
-    paths.infra_dir.mkdir(parents=True)
-    paths.flux_dir.mkdir(parents=True)
-    paths.reports_dir.mkdir(parents=True)
-    paths.config_path.write_text(
-        yaml.safe_dump(
-            {
-                "client_info": {
-                    "client_name": "test-client",
-                    "nebius": {
-                        "project_id": "project-1",
-                        "region_id": "eu-north1",
-                    },
-                },
-                "infra": {
-                    "components": [
-                        {
-                            "id": "vm",
-                            "instance_id": "worker",
-                            "enabled": True,
-                            "inputs": {
-                                "name": "worker",
-                                "parent_id": "project-1",
-                                "platform": "cpu-d3",
-                                "source_image_family": "ubuntu22.04-driverless",
-                            },
-                        }
-                    ]
-                },
-            }
-        ),
-        encoding="utf-8",
-    )
-    original_config = paths.config_path.read_text(encoding="utf-8")
-    generated_config = SimpleNamespace(
-        client_info=SimpleNamespace(
-            client_name="test-client",
-            nebius=SimpleNamespace(project_id="project-1"),
-        )
-    )
-    manifest: dict[str, Any] = {"deploy": {"targets": []}}
-    prompt_paths: list[str] = []
-    rich_console = cli.Console(record=True, width=300)
-
-    def _prompt_scalar(
-        path_label: str,
-        current: object,
-        *,
-        choices: list[cli.OptionChoice] | None = None,
-        type_hint: str | None = None,
-        required: bool = False,
-        unset_on_skip: bool = False,
-    ) -> tuple[object, bool]:
-        del current, type_hint, required, unset_on_skip
-        answers: dict[str, Any] = {
-            "upgrade.os_image.target": "infra:vm@worker",
-            "upgrade.os_image.to_os": "ubuntu24.04-driverless",
-            "upgrade.os_image.dry_run": True,
-        }
-        prompt_paths.append(path_label)
-        value = answers[path_label]
-        if choices:
-            assert value in {choice.value for choice in choices}
-        return value, False
-
-    monkeypatch.setattr(cli, "_upgrade_interactive_prompts_enabled", lambda: True)
-    monkeypatch.setattr(
-        cli, "_load_deploy_context_readonly", lambda _path: (generated_config, paths, manifest)
-    )
-    monkeypatch.setattr(
-        cli,
-        "_vm_os_image_choices",
-        lambda **_kwargs: [
-            cli.OptionChoice(
-                value="ubuntu24.04-driverless",
-                label="ubuntu24.04-driverless",
-                recommended=True,
-            )
-        ],
-    )
-    monkeypatch.setattr(cli, "_prompt_scalar_override", _prompt_scalar)
-    monkeypatch.setattr(cli, "console", rich_console)
-
-    cli.upgrade_os_image_command(paths.config_path)
-
-    rendered = rich_console.export_text()
-    assert prompt_paths == [
-        "upgrade.os_image.target",
-        "upgrade.os_image.to_os",
-        "upgrade.os_image.dry_run",
-    ]
-    assert "VM OS image upgrade plan" in rendered
-    assert (
-        f"nebius-cxcli upgrade os-image {paths.config_path} infra:vm@worker "
-        "--to-os ubuntu24.04-driverless --dry-run"
-    ) in rendered
-    assert paths.config_path.read_text(encoding="utf-8") == original_config
-
-
-def test_upgrade_os_image_vm_apply_updates_source_and_uses_vm_status_watcher(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    paths = _fake_paths(tmp_path)
-    paths.infra_dir.mkdir(parents=True)
-    paths.flux_dir.mkdir(parents=True)
-    paths.reports_dir.mkdir(parents=True)
-    paths.config_path.write_text(
-        yaml.safe_dump(
-            {
-                "client_info": {
-                    "client_name": "test-client",
-                    "nebius": {"project_id": "project-1"},
-                },
-                "infra": {
-                    "components": [
-                        {
-                            "id": "vm",
-                            "instance_id": "worker",
-                            "enabled": True,
-                            "inputs": {
-                                "name": "worker-vm",
-                                "parent_id": "project-1",
-                                "platform": "cpu-d3",
-                                "source_image_family": "ubuntu22.04-driverless",
-                            },
-                        }
-                    ]
-                },
-            }
-        ),
-        encoding="utf-8",
-    )
-    generated_config = SimpleNamespace(
-        client_info=SimpleNamespace(
-            client_name="test-client",
-            nebius=SimpleNamespace(project_id="project-1"),
-        )
-    )
-    manifest = {
-        "deploy": {
-            "targets": [],
-            "status_watchers": [
-                {
-                    "component_id": "vm",
-                    "instance_id": "worker",
-                    "kind": "nebius.compute.instance",
-                    "parent_id": "project-1",
-                    "resource_name": "worker-vm",
-                },
-                {
-                    "component_id": "vm",
-                    "instance_id": "other",
-                    "kind": "nebius.compute.instance",
-                    "parent_id": "project-1",
-                    "resource_name": "other-vm",
-                },
-            ],
-        }
-    }
-    calls: list[object] = []
-
-    monkeypatch.setattr(
-        cli, "_load_deploy_context_readonly", lambda _path: (generated_config, paths, manifest)
-    )
-    monkeypatch.setattr(
-        cli, "_load_deploy_context", lambda _path: (generated_config, paths, manifest)
-    )
-    monkeypatch.setattr(
-        cli,
-        "_run_generated_bundle_validation",
-        lambda *_args, **kwargs: calls.append(("validate", kwargs["title"])) or {},
-    )
-    monkeypatch.setattr(cli, "render_command", lambda *_args, **_kwargs: calls.append("render"))
-    monkeypatch.setattr(cli, "terraform_plan", lambda *_args, **_kwargs: calls.append("plan"))
-    monkeypatch.setattr(
-        cli,
-        "_run_terraform_apply_with_status",
-        lambda *_args, **kwargs: calls.append(("apply", kwargs.get("status_watchers"))),
-    )
-
-    cli.upgrade_os_image_command(
-        paths.config_path,
-        "infra:vm@worker",
-        to_os="ubuntu24.04-driverless",
-    )
-
-    payload = yaml.safe_load(paths.config_path.read_text(encoding="utf-8"))
-    assert payload["infra"]["components"][0]["inputs"]["source_image_family"] == (
-        "ubuntu24.04-driverless"
-    )
-    assert calls == [
-        ("validate", "VM OS image upgrade preflight"),
-        "render",
-        ("validate", "Validate rendered VM OS image upgrade to ubuntu24.04-driverless"),
-        "plan",
-        (
-            "apply",
-            [
-                {
-                    "component_id": "vm",
-                    "instance_id": "worker",
-                    "kind": "nebius.compute.instance",
-                    "parent_id": "project-1",
-                    "resource_name": "worker-vm",
-                }
-            ],
-        ),
-    ]
-
-
-@pytest.mark.parametrize(
-    ("extra_args", "expected"),
-    [
-        (
-            ["--node-group", "system"],
-            "--node-group is supported only for infra:mk8s OS-image upgrades.",
-        ),
-        (
-            ["--strategy", "force-delete"],
-            "--strategy force-delete is supported only for infra:mk8s OS-image upgrades.",
-        ),
-    ],
-)
-def test_upgrade_os_image_vm_rejects_mk8s_only_options(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    extra_args: list[str],
-    expected: str,
-) -> None:
-    paths = _fake_paths(tmp_path)
-    paths.infra_dir.mkdir(parents=True)
-    paths.flux_dir.mkdir(parents=True)
-    paths.reports_dir.mkdir(parents=True)
-    paths.config_path.write_text(
-        yaml.safe_dump(
-            {
-                "client_info": {
-                    "client_name": "test-client",
-                    "nebius": {"project_id": "project-1"},
-                },
-                "infra": {
-                    "components": [
-                        {
-                            "id": "vm",
-                            "instance_id": "worker",
-                            "enabled": True,
-                            "inputs": {
-                                "name": "worker-vm",
-                                "parent_id": "project-1",
-                                "platform": "cpu-d3",
-                                "source_image_family": "ubuntu22.04-driverless",
-                            },
-                        }
-                    ]
-                },
-            }
-        ),
-        encoding="utf-8",
-    )
-    original_config = paths.config_path.read_text(encoding="utf-8")
-    generated_config = SimpleNamespace(
-        client_info=SimpleNamespace(
-            client_name="test-client",
-            nebius=SimpleNamespace(project_id="project-1"),
-        )
-    )
-    manifest: dict[str, Any] = {"deploy": {"targets": []}}
-
-    monkeypatch.setattr(
-        cli,
-        "_load_deploy_context_readonly",
-        lambda _path: (generated_config, paths, manifest),
-    )
-
-    result = runner.invoke(
-        cli.app,
-        [
-            "upgrade",
-            "os-image",
-            str(paths.config_path),
-            "infra:vm@worker",
-            "--to-os",
-            "ubuntu24.04-driverless",
-            *extra_args,
-        ],
-    )
-
-    assert result.exit_code == 1
-    assert " ".join(expected.split()) in " ".join(_plain_output(result.output).split())
-    assert paths.config_path.read_text(encoding="utf-8") == original_config
-
-
-def test_upgrade_os_image_dry_run_does_not_write_or_apply(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    paths = _fake_paths(tmp_path)
-    paths.infra_dir.mkdir(parents=True)
-    paths.flux_dir.mkdir(parents=True)
-    paths.reports_dir.mkdir(parents=True)
-    paths.config_path.write_text(
-        yaml.safe_dump(
-            {
-                "infra": {
-                    "components": [
-                        {
-                            "id": "mk8s",
-                            "instance_id": "mk8s",
-                            "enabled": True,
-                            "inputs": {
-                                "cluster": {
-                                    "cluster_name": "mk8s-live",
-                                    "k8s_version": "1.33",
-                                },
-                                "node_groups": {
-                                    "system": {
-                                        "platform": "cpu-platform",
-                                        "preset": "cpu-4-16",
-                                        "os": "ubuntu22.04",
-                                    },
-                                },
-                            },
-                        }
-                    ]
-                }
-            }
-        ),
-        encoding="utf-8",
-    )
-    original_config = paths.config_path.read_text(encoding="utf-8")
-    generated_config = SimpleNamespace(
-        client_info=SimpleNamespace(
-            client_name="test-client",
-            nebius=SimpleNamespace(project_id="project-1"),
-        )
-    )
-    manifest = {"deploy": {"targets": []}}
-    calls: list[str] = []
-
-    class FakeSdk:
-        def sync_close(self) -> None:
-            calls.append("sdk-close")
-
-    class FakeExecutor:
-        def __init__(self, sdk: object) -> None:
-            assert isinstance(sdk, FakeSdk)
-
-        def get_cluster_by_name(self, *, project_id: str, name: str) -> SimpleNamespace:
-            assert (project_id, name) == ("project-1", "mk8s-live")
-            return SimpleNamespace(
-                metadata=SimpleNamespace(id="cluster-1", name=name, resource_version=1),
-                spec=SimpleNamespace(control_plane=SimpleNamespace(version="1.33")),
-            )
-
-        def get_cluster(self, cluster_id: str) -> SimpleNamespace:
-            assert cluster_id == "cluster-1"
-            return SimpleNamespace(
-                metadata=SimpleNamespace(id="cluster-1", name="mk8s-live", resource_version=1),
-                spec=SimpleNamespace(control_plane=SimpleNamespace(version="1.33")),
-            )
-
-        def list_node_groups(self, cluster_id: str) -> tuple[SimpleNamespace, ...]:
-            assert cluster_id == "cluster-1"
-            return (
-                SimpleNamespace(
-                    metadata=SimpleNamespace(
-                        id="ng-system",
-                        name="mk8s-live-system",
-                        resource_version=1,
-                    ),
-                        spec=SimpleNamespace(
-                            version="1.33",
-                            template=SimpleNamespace(
-                                os="ubuntu22.04",
-                                resources=SimpleNamespace(
-                                    platform="cpu-platform",
-                                    preset="cpu-4-16",
-                            ),
-                            gpu_settings=SimpleNamespace(drivers_preset=""),
-                        ),
-                    ),
-                ),
-            )
-
-        def compatibility_choices(self, *, target_version: str, platform: str):
-            assert (target_version, platform) == ("1.33", "cpu-platform")
-            return (SimpleNamespace(platform=platform, os="ubuntu24.04", drivers_preset=""),)
-
-        def wait_node_group_os(self, **_kwargs: object) -> None:
-            raise AssertionError("dry-run should not wait for node-group rollout")
-
-    monkeypatch.setattr(
-        cli, "_load_deploy_context_readonly", lambda _path: (generated_config, paths, manifest)
-    )
-    monkeypatch.setattr(
-        cli,
-        "_resolve_managed_mk8s_upgrade_target",
-        lambda _manifest, *, target_instance_id: {
-            "component_id": "mk8s",
-            "target_ref": target_instance_id,
-            "access": "external",
-            "cluster_id_output_name": "cluster_id",
-        },
-    )
-    monkeypatch.setattr(
-        cli,
-        "_managed_mk8s_target_with_cluster_id",
-        lambda target, *, cluster_id: {**target, "cluster_id": cluster_id},
-    )
-    monkeypatch.setattr(cli, "init_nebius_sdk", lambda **_kwargs: FakeSdk())
-    monkeypatch.setattr(cli, "Mk8sKubernetesVersionExecutor", FakeExecutor)
-    monkeypatch.setattr(cli, "_prepare_cluster_handoff_kube_env", lambda *_args, **_kwargs: {})
-    monkeypatch.setattr(cli, "collect_kubernetes_preflight_findings", lambda *, kube_env: ())
-    monkeypatch.setattr(cli, "render_command", lambda *_args, **_kwargs: calls.append("render"))
-    monkeypatch.setattr(cli, "terraform_plan", lambda *_args, **_kwargs: calls.append("plan"))
-    monkeypatch.setattr(
-        cli,
-        "_run_terraform_apply_with_status",
-        lambda *_args, **_kwargs: calls.append("apply"),
-    )
-
-    with cli.console.capture() as capture:
-        cli.upgrade_os_image_command(
-            paths.config_path,
-            "infra:mk8s@mk8s",
-            to_os="ubuntu24.04",
-            dry_run=True,
-        )
-    output = _plain_output(capture.get())
-
-    assert "MK8s OS image upgrade plan" in output
-    assert "mk8s-live-system: ubuntu22.04 -> ubuntu24.04" in output
-    assert "Dry run only" in output
-    assert (
-        f"nebius-cxcli upgrade os-image {paths.config_path} infra:mk8s@mk8s "
-        "--to-os ubuntu24.04 --strategy zero-surge --dry-run"
-    ) in output
-    assert paths.config_path.read_text(encoding="utf-8") == original_config
-    assert calls == ["sdk-close"]
-
-
-def test_upgrade_os_image_runs_single_node_group_stage(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    paths = _fake_paths(tmp_path)
-    paths.infra_dir.mkdir(parents=True)
-    paths.flux_dir.mkdir(parents=True)
-    paths.reports_dir.mkdir(parents=True)
-    paths.config_path.write_text(
-        yaml.safe_dump(
-            {
-                "infra": {
-                    "components": [
-                        {
-                            "id": "mk8s",
-                            "instance_id": "mk8s",
-                            "enabled": True,
-                            "inputs": {
-                                "cluster": {
-                                    "cluster_name": "mk8s-live",
-                                    "k8s_version": "1.33",
-                                },
-                                "node_groups": {
-                                    "system": {
-                                        "platform": "cpu-platform",
-                                        "preset": "cpu-4-16",
-                                        "os": "ubuntu22.04",
-                                    },
-                                    "gpu": {
-                                        "name": "gpu-workers",
-                                        "gpu": True,
-                                        "platform": "gpu-platform",
-                                        "preset": "8gpu",
-                                        "os": "ubuntu22.04",
-                                        "gpu_stack_preset": "cuda13.0",
-                                    },
-                                },
-                            },
-                        }
-                    ]
-                }
-            }
-        ),
-        encoding="utf-8",
-    )
-    generated_config = SimpleNamespace(
-        client_info=SimpleNamespace(
-            client_name="test-client",
-            nebius=SimpleNamespace(project_id="project-1"),
-        )
-    )
-    manifest = {"deploy": {"targets": []}}
-    plan_stages: list[tuple[dict[str, str], bool]] = []
-    apply_stages: list[dict[str, str]] = []
-    wait_calls: list[tuple[str, str]] = []
-    completed_os: dict[str, str] = {}
-
-    class FakeSdk:
-        def sync_close(self) -> None:
-            wait_calls.append(("sdk-close", ""))
-
-    class FakeExecutor:
-        def __init__(self, sdk: object) -> None:
-            assert isinstance(sdk, FakeSdk)
-
-        def get_cluster_by_name(self, *, project_id: str, name: str) -> SimpleNamespace:
-            assert (project_id, name) == ("project-1", "mk8s-live")
-            return SimpleNamespace(
-                metadata=SimpleNamespace(id="cluster-1", name=name, resource_version=1),
-                spec=SimpleNamespace(control_plane=SimpleNamespace(version="1.33")),
-            )
-
-        def get_cluster(self, cluster_id: str) -> SimpleNamespace:
-            assert cluster_id == "cluster-1"
-            return SimpleNamespace(
-                metadata=SimpleNamespace(id="cluster-1", name="mk8s-live", resource_version=1),
-                spec=SimpleNamespace(control_plane=SimpleNamespace(version="1.33")),
-            )
-
-        def list_node_groups(self, cluster_id: str) -> tuple[SimpleNamespace, ...]:
-            assert cluster_id == "cluster-1"
-            return (
-                SimpleNamespace(
-                    metadata=SimpleNamespace(
-                        id="ng-system",
-                        name="mk8s-live-system",
-                        resource_version=1,
-                    ),
-                    spec=SimpleNamespace(
-                        version="1.33",
-                        template=SimpleNamespace(
-                            os=completed_os.get("ng-system", "ubuntu22.04"),
-                            resources=SimpleNamespace(
-                                platform="cpu-platform",
-                                preset="cpu-4-16",
-                            ),
-                            gpu_settings=SimpleNamespace(drivers_preset=""),
-                        ),
-                    ),
-                    status=_mk8s_ready_status(),
-                ),
-                SimpleNamespace(
-                    metadata=SimpleNamespace(
-                        id="ng-gpu",
-                        name="gpu-workers",
-                        resource_version=1,
-                    ),
-                    spec=SimpleNamespace(
-                        version="1.33",
-                        template=SimpleNamespace(
-                            os=completed_os.get("ng-gpu", "ubuntu22.04"),
-                            resources=SimpleNamespace(
-                                platform="gpu-platform",
-                                preset="8gpu",
-                            ),
-                            gpu_settings=SimpleNamespace(drivers_preset="cuda13.0"),
-                        ),
-                    ),
-                    status=_mk8s_ready_status(),
-                ),
-            )
-
-        def compatibility_choices(self, *, target_version: str, platform: str):
-            assert target_version == "1.33"
-            return (
-                SimpleNamespace(
-                    platform=platform,
-                    os="ubuntu24.04",
-                    drivers_preset="cuda13.0" if platform == "gpu-platform" else "",
-                ),
-            )
-
-        def wait_node_group_os(
-            self,
-            *,
-            cluster_id: str,
-            node_group_id: str,
-            os: str,
-            timeout_seconds: int,
-        ) -> None:
-            completed_os[node_group_id] = os
-            wait_calls.append(
-                ("node-group-os", f"{cluster_id}:{node_group_id}:{os}:{timeout_seconds}")
-            )
-
-    def _current_stage_os() -> dict[str, str]:
-        payload = yaml.safe_load(paths.config_path.read_text(encoding="utf-8"))
-        component = payload["infra"]["components"][0]
-        groups = component["inputs"]["node_groups"]
-        return {
-            "system": groups["system"]["os"],
-            "gpu": groups["gpu"]["os"],
-        }
-
-    def _record_plan(_infra_dir: Path, **kwargs: object) -> None:
-        plan_stages.append((_current_stage_os(), kwargs.get("quiet") is True))
-
-    def _record_apply(_config: object, _paths: ProjectPaths, **_kwargs: object) -> None:
-        apply_stages.append(_current_stage_os())
-
-    monkeypatch.setattr(
-        cli, "_load_deploy_context_readonly", lambda _path: (generated_config, paths, manifest)
-    )
-    monkeypatch.setattr(
-        cli, "_load_deploy_context", lambda _path: (generated_config, paths, manifest)
-    )
-    monkeypatch.setattr(
-        cli,
-        "_resolve_managed_mk8s_upgrade_target",
-        lambda _manifest, *, target_instance_id: {
-            "component_id": "mk8s",
-            "target_ref": target_instance_id,
-            "access": "external",
-            "cluster_id_output_name": "cluster_id",
-        },
-    )
-    monkeypatch.setattr(
-        cli,
-        "_managed_mk8s_target_with_cluster_id",
-        lambda target, *, cluster_id: {**target, "cluster_id": cluster_id},
-    )
-    monkeypatch.setattr(cli, "init_nebius_sdk", lambda **_kwargs: FakeSdk())
-    monkeypatch.setattr(cli, "Mk8sKubernetesVersionExecutor", FakeExecutor)
-    monkeypatch.setattr(cli, "_prepare_cluster_handoff_kube_env", lambda *_args, **_kwargs: {})
-    monkeypatch.setattr(cli, "collect_kubernetes_preflight_findings", lambda *, kube_env: ())
-    monkeypatch.setattr(cli, "_run_generated_bundle_validation", lambda *_args, **_kwargs: {})
-    monkeypatch.setattr(cli, "render_command", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(cli, "_manifest_status_watchers", lambda _manifest: [])
-    monkeypatch.setattr(cli, "_enabled_status_watcher_specs", lambda _config: [])
-    monkeypatch.setattr(cli, "terraform_plan", _record_plan)
-    monkeypatch.setattr(cli, "_run_terraform_apply_with_status", _record_apply)
-
-    with cli.console.capture() as capture:
-        cli.upgrade_os_image_command(
-            paths.config_path,
-            "infra:mk8s@mk8s",
-            to_os="ubuntu24.04",
-            node_group="gpu",
-            dry_run=False,
-        )
-    output = _plain_output(capture.get())
-
-    expected_stage = {"system": "ubuntu22.04", "gpu": "ubuntu24.04"}
-    assert "OS image upgrade execution stages are per node group, not per node:" in output
-    assert "1 node-group stage(s)" in output
-    compact_output = " ".join(output.split())
-    assert "node-group gpu-workers OS image upgrade to ubuntu24.04" in compact_output
-    assert plan_stages == [(expected_stage, True), (expected_stage, True)]
-    assert apply_stages == [expected_stage, expected_stage]
-    assert wait_calls == [
-        ("node-group-os", "cluster-1:ng-gpu:ubuntu24.04:3600"),
-        ("sdk-close", ""),
-    ]
-
-
-def test_upgrade_os_image_runs_all_node_groups_in_order_and_restores_strategy(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    paths = _fake_paths(tmp_path)
-    paths.infra_dir.mkdir(parents=True)
-    paths.flux_dir.mkdir(parents=True)
-    paths.reports_dir.mkdir(parents=True)
-    paths.config_path.write_text(
-        yaml.safe_dump(
-            {
-                "infra": {
-                    "components": [
-                        {
-                            "id": "mk8s",
-                            "instance_id": "mk8s",
-                            "enabled": True,
-                            "inputs": {
-                                "cluster": {
-                                    "cluster_name": "mk8s-live",
-                                    "k8s_version": "1.33",
-                                },
-                                "node_groups": {
-                                    "system": {
-                                        "platform": "cpu-platform",
-                                        "preset": "cpu-4-16",
-                                        "os": "ubuntu22.04",
-                                        "strategy": {"max_surge": {"count": 1}},
-                                    },
-                                    "gpu": {
-                                        "name": "gpu-workers",
-                                        "gpu": True,
-                                        "platform": "gpu-platform",
-                                        "preset": "8gpu",
-                                        "os": "ubuntu22.04",
-                                        "gpu_stack_preset": "cuda13.0",
-                                    },
-                                },
-                            },
-                        }
-                    ]
-                }
-            }
-        ),
-        encoding="utf-8",
-    )
-    generated_config = SimpleNamespace(
-        client_info=SimpleNamespace(
-            client_name="test-client",
-            nebius=SimpleNamespace(project_id="project-1"),
-        )
-    )
-    manifest = {"deploy": {"targets": []}}
-    stage_plans: list[dict[str, Any]] = []
-    stage_applies: list[dict[str, Any]] = []
-
-    wait_calls, validation_calls = _install_os_image_upgrade_fakes(
-        monkeypatch,
-        generated_config=generated_config,
-        paths=paths,
-        manifest=manifest,
-        live_node_groups=(
-            _mk8s_os_live_node_group(
-                id="ng-gpu",
-                name="gpu-workers",
-                os="ubuntu22.04",
-                platform="gpu-platform",
-                preset="8gpu",
-                drivers_preset="cuda13.0",
-            ),
-            _mk8s_os_live_node_group(
-                id="ng-system",
-                name="mk8s-live-system",
-                os="ubuntu22.04",
-            ),
-        ),
-        compatibility_choices=(
-            SimpleNamespace(platform="cpu-platform", os="ubuntu24.04", drivers_preset=""),
-            SimpleNamespace(platform="gpu-platform", os="ubuntu24.04", drivers_preset="cuda13.0"),
-        ),
-    )
-
-    def _stage_snapshot() -> dict[str, Any]:
-        payload = yaml.safe_load(paths.config_path.read_text(encoding="utf-8"))
-        groups = payload["infra"]["components"][0]["inputs"]["node_groups"]
-        return {
-            "system_os": groups["system"].get("os"),
-            "gpu_os": groups["gpu"].get("os"),
-            "system_strategy": groups["system"].get("strategy"),
-            "gpu_strategy": groups["gpu"].get("strategy"),
-        }
-
-    def _record_plan(_infra_dir: Path, **kwargs: object) -> None:
-        snapshot = _stage_snapshot()
-        snapshot["quiet"] = kwargs.get("quiet") is True
-        stage_plans.append(snapshot)
-
-    def _record_apply(_config: object, _paths: ProjectPaths, **_kwargs: object) -> None:
-        stage_applies.append(_stage_snapshot())
-
-    monkeypatch.setattr(cli, "terraform_plan", _record_plan)
-    monkeypatch.setattr(cli, "_run_terraform_apply_with_status", _record_apply)
-
-    with cli.console.capture() as capture:
-        cli.upgrade_os_image_command(
-            paths.config_path,
-            "infra:mk8s@mk8s",
-            to_os="ubuntu24.04",
-            disruption_policy="zero-surge",
-        )
-    output = _plain_output(capture.get())
-
-    temporary_strategy = {
-        "drain_timeout": "30m",
-        "max_surge": {"count": 0},
-        "max_unavailable": {"count": 1},
-    }
-    restored_strategy = {"max_surge": {"count": 1}}
-    assert "OS image upgrade execution stages are per node group, not per node:" in output
-    assert "2 node-group stage(s)" in output
-    assert "1 strategy-restore stage" in output
-    compact_output = " ".join(output.split())
-    assert "node-group mk8s-live-system OS image upgrade to ubuntu24.04" in compact_output
-    assert "node-group gpu-workers OS image upgrade to ubuntu24.04" in compact_output
-    assert stage_plans == [
-        {
-            "system_os": "ubuntu24.04",
-            "gpu_os": "ubuntu22.04",
-            "system_strategy": temporary_strategy,
-            "gpu_strategy": None,
-            "quiet": True,
-        },
-        {
-            "system_os": "ubuntu24.04",
-            "gpu_os": "ubuntu24.04",
-            "system_strategy": restored_strategy,
-            "gpu_strategy": temporary_strategy,
-            "quiet": True,
-        },
-        {
-            "system_os": "ubuntu24.04",
-            "gpu_os": "ubuntu24.04",
-            "system_strategy": restored_strategy,
-            "gpu_strategy": None,
-            "quiet": True,
-        },
-    ]
-    assert stage_applies == [
-        {key: value for key, value in stage.items() if key != "quiet"} for stage in stage_plans
-    ]
-    assert wait_calls == [
-        ("node-group-os", "cluster-1:ng-system:ubuntu24.04:3600"),
-        ("node-group-os", "cluster-1:ng-gpu:ubuntu24.04:3600"),
-        ("sdk-close", ""),
-    ]
-    assert validation_calls[0] == "OS image upgrade preflight"
-
-
-def test_upgrade_os_image_compatibility_failure_blocks_before_writes(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    paths = _fake_paths(tmp_path)
-    paths.infra_dir.mkdir(parents=True)
-    paths.flux_dir.mkdir(parents=True)
-    paths.reports_dir.mkdir(parents=True)
-    paths.config_path.write_text(
-        yaml.safe_dump(
-            {
-                "infra": {
-                    "components": [
-                        {
-                            "id": "mk8s",
-                            "instance_id": "mk8s",
-                            "enabled": True,
-                            "inputs": {
-                                "cluster": {
-                                    "cluster_name": "mk8s-live",
-                                    "k8s_version": "1.33",
-                                },
-                                "node_groups": {
-                                    "system": {
-                                        "platform": "cpu-platform",
-                                        "preset": "cpu-4-16",
-                                        "os": "ubuntu22.04",
-                                    },
-                                },
-                            },
-                        }
-                    ]
-                }
-            }
-        ),
-        encoding="utf-8",
-    )
-    original_config = paths.config_path.read_text(encoding="utf-8")
-    generated_config = SimpleNamespace(
-        client_info=SimpleNamespace(
-            client_name="test-client",
-            nebius=SimpleNamespace(project_id="project-1"),
-        )
-    )
-    manifest = {"deploy": {"targets": []}}
-    mutation_calls: list[str] = []
-    wait_calls, validation_calls = _install_os_image_upgrade_fakes(
-        monkeypatch,
-        generated_config=generated_config,
-        paths=paths,
-        manifest=manifest,
-        live_node_groups=(
-            _mk8s_os_live_node_group(
-                id="ng-system",
-                name="mk8s-live-system",
-                os="ubuntu22.04",
-            ),
-        ),
-        compatibility_choices=(
-            SimpleNamespace(platform="cpu-platform", os="ubuntu20.04", drivers_preset=""),
-        ),
-    )
-    monkeypatch.setattr(
-        cli, "render_command", lambda *_args, **_kwargs: mutation_calls.append("render")
-    )
-    monkeypatch.setattr(
-        cli, "terraform_plan", lambda *_args, **_kwargs: mutation_calls.append("plan")
-    )
-    monkeypatch.setattr(
-        cli,
-        "_run_terraform_apply_with_status",
-        lambda *_args, **_kwargs: mutation_calls.append("apply"),
-    )
-
-    with cli.console.capture() as capture, pytest.raises(cli.typer.Exit) as exc_info:
-        cli.upgrade_os_image_command(
-            paths.config_path,
-            "infra:mk8s@mk8s",
-            to_os="ubuntu24.04",
-        )
-    output = _plain_output(capture.get())
-
-    assert exc_info.value.exit_code == 1
-    assert "compatibility blockers" in output
-    assert "OS image upgrade is blocked by the live Nebius MK8s compatibility matrix" in output
-    assert paths.config_path.read_text(encoding="utf-8") == original_config
-    assert mutation_calls == []
-    assert validation_calls == []
-    assert wait_calls == [("sdk-close", "")]
-
-
-def test_upgrade_os_image_preflight_blocker_stops_before_writes(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    paths = _fake_paths(tmp_path)
-    paths.infra_dir.mkdir(parents=True)
-    paths.flux_dir.mkdir(parents=True)
-    paths.reports_dir.mkdir(parents=True)
-    paths.config_path.write_text(
-        yaml.safe_dump(
-            {
-                "infra": {
-                    "components": [
-                        {
-                            "id": "mk8s",
-                            "instance_id": "mk8s",
-                            "enabled": True,
-                            "inputs": {
-                                "cluster": {
-                                    "cluster_name": "mk8s-live",
-                                    "k8s_version": "1.33",
-                                },
-                                "node_groups": {
-                                    "system": {
-                                        "platform": "cpu-platform",
-                                        "preset": "cpu-4-16",
-                                        "os": "ubuntu22.04",
-                                    },
-                                },
-                            },
-                        }
-                    ]
-                }
-            }
-        ),
-        encoding="utf-8",
-    )
-    original_config = paths.config_path.read_text(encoding="utf-8")
-    generated_config = SimpleNamespace(
-        client_info=SimpleNamespace(
-            client_name="test-client",
-            nebius=SimpleNamespace(project_id="project-1"),
-        )
-    )
-    manifest = {"deploy": {"targets": []}}
-    mutation_calls: list[str] = []
-    wait_calls, validation_calls = _install_os_image_upgrade_fakes(
-        monkeypatch,
-        generated_config=generated_config,
-        paths=paths,
-        manifest=manifest,
-        live_node_groups=(
-            _mk8s_os_live_node_group(
-                id="ng-system",
-                name="mk8s-live-system",
-                os="ubuntu22.04",
-            ),
-        ),
-        compatibility_choices=(
-            SimpleNamespace(platform="cpu-platform", os="ubuntu24.04", drivers_preset=""),
-        ),
-        preflight_findings=(
-            SimpleNamespace(
-                kind="pdb-blocker",
-                namespace="default",
-                name="web",
-                message="PDB allows zero disruptions.",
-            ),
-        ),
-    )
-    monkeypatch.setattr(
-        cli, "render_command", lambda *_args, **_kwargs: mutation_calls.append("render")
-    )
-    monkeypatch.setattr(
-        cli, "terraform_plan", lambda *_args, **_kwargs: mutation_calls.append("plan")
-    )
-    monkeypatch.setattr(
-        cli,
-        "_run_terraform_apply_with_status",
-        lambda *_args, **_kwargs: mutation_calls.append("apply"),
-    )
-
-    with cli.console.capture() as capture, pytest.raises(cli.typer.Exit) as exc_info:
-        cli.upgrade_os_image_command(
-            paths.config_path,
-            "infra:mk8s@mk8s",
-            to_os="ubuntu24.04",
-        )
-    output = _plain_output(capture.get())
-
-    assert exc_info.value.exit_code == 1
-    assert "preflight findings" in output
-    assert "Upgrade preflight blockers must be resolved first: pdb-blocker:default/web" in " ".join(
-        output.split()
-    )
-    assert paths.config_path.read_text(encoding="utf-8") == original_config
-    assert mutation_calls == []
-    assert validation_calls == []
-    assert wait_calls == [("sdk-close", "")]
-
-
 def test_resolve_managed_mk8s_upgrade_target_uses_shared_upgrade_wording() -> None:
     external_manifest = {
         "deploy": {
@@ -5558,7 +3970,6 @@ def test_resolve_managed_mk8s_upgrade_target_uses_shared_upgrade_wording() -> No
     assert "upgrade v1 supports Terraform-managed infra:mk8s targets only" in str(
         external_error.value
     )
-    assert "k8s-version" not in str(external_error.value)
 
     wrong_component_manifest = {
         "deploy": {
@@ -5583,282 +3994,19 @@ def test_resolve_managed_mk8s_upgrade_target_uses_shared_upgrade_wording() -> No
     assert "MK8s upgrade commands require a generated infra:mk8s target" in str(
         component_error.value
     )
-    assert "k8s-version" not in str(component_error.value)
-
-
-def test_upgrade_os_image_rejects_unknown_strategy(tmp_path: Path) -> None:
-    result = runner.invoke(
-        cli.app,
-        [
-            "upgrade",
-            "os-image",
-            str(tmp_path / "missing-config.yaml"),
-            "infra:mk8s@mk8s",
-            "--to-os",
-            "ubuntu24.04",
-            "--dry-run",
-            "--strategy",
-            "safe",
-        ],
-    )
-
-    assert result.exit_code == 1
-    assert "--strategy must be one of" in result.output
-
-
-def test_upgrade_os_image_force_delete_is_explicit_without_yes(tmp_path: Path) -> None:
-    result = runner.invoke(
-        cli.app,
-        [
-            "upgrade",
-            "os-image",
-            str(tmp_path / "missing-config.yaml"),
-            "infra:mk8s@mk8s",
-            "--to-os",
-            "ubuntu24.04",
-            "--strategy",
-            "force-delete",
-        ],
-    )
-
-    assert result.exit_code == 1
-    assert "Config file not found" in result.output
-    assert "requires --yes" not in result.output
-
-
-def test_upgrade_k8s_version_config_only_guided_dry_run_prompts_required_and_optional_choices(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    paths = _fake_paths(tmp_path)
-    paths.infra_dir.mkdir(parents=True)
-    paths.flux_dir.mkdir(parents=True)
-    paths.reports_dir.mkdir(parents=True)
-    paths.config_path.write_text(
-        yaml.safe_dump(
-            {
-                "infra": {
-                    "components": [
-                        {
-                            "id": "mk8s",
-                            "instance_id": "mk8s",
-                            "enabled": True,
-                            "inputs": {
-                                "cluster": {
-                                    "cluster_name": "mk8s-live",
-                                    "k8s_version": "1.32",
-                                },
-                                "node_groups": {
-                                    "system": {
-                                        "platform": "cpu-platform",
-                                        "preset": "cpu-4-16",
-                                    },
-                                },
-                            },
-                        }
-                    ]
-                }
-            }
-        ),
-        encoding="utf-8",
-    )
-    original_config = paths.config_path.read_text(encoding="utf-8")
-    generated_config = SimpleNamespace(
-        client_info=SimpleNamespace(
-            client_name="test-client",
-            nebius=SimpleNamespace(project_id="project-1"),
-        )
-    )
-    manifest = {
-        "deploy": {
-            "targets": [
-                {
-                    "component_id": "mk8s",
-                    "instance_id": "mk8s",
-                    "target_ref": "mk8s",
-                    "access": "external",
-                    "cluster_id_output_name": "cluster_id",
-                    "component_output_ref": "mk8s.cluster_id",
-                    "flux_dir": str(paths.flux_dir),
-                }
-            ]
-        }
-    }
-    prompt_paths: list[str] = []
-    sdk_closed = False
-    rich_console = cli.Console(record=True, width=300)
-
-    class FakeSdk:
-        def sync_close(self) -> None:
-            nonlocal sdk_closed
-            sdk_closed = True
-
-    class FakeExecutor:
-        def __init__(self, sdk: object) -> None:
-            assert isinstance(sdk, FakeSdk)
-
-        def get_cluster_by_name(self, *, project_id: str, name: str) -> SimpleNamespace:
-            assert (project_id, name) == ("project-1", "mk8s-live")
-            return SimpleNamespace(
-                metadata=SimpleNamespace(id="cluster-1", name=name, resource_version=1),
-                spec=SimpleNamespace(control_plane=SimpleNamespace(version="1.32")),
-            )
-
-        def get_cluster(self, cluster_id: str) -> SimpleNamespace:
-            assert cluster_id == "cluster-1"
-            return SimpleNamespace(
-                metadata=SimpleNamespace(id="cluster-1", name="mk8s-live", resource_version=1),
-                spec=SimpleNamespace(control_plane=SimpleNamespace(version="1.33")),
-            )
-
-        def control_plane_versions(self) -> tuple[str, ...]:
-            return ("1.32", "1.33")
-
-        def list_node_groups(self, cluster_id: str) -> tuple[SimpleNamespace, ...]:
-            assert cluster_id == "cluster-1"
-            return (
-                SimpleNamespace(
-                    metadata=SimpleNamespace(
-                        id="ng-system",
-                        name="mk8s-live-system",
-                        resource_version=1,
-                    ),
-                    spec=SimpleNamespace(
-                        version="1.32",
-                        template=SimpleNamespace(
-                            os="ubuntu24.04",
-                            resources=SimpleNamespace(
-                                platform="cpu-platform",
-                                preset="cpu-4-16",
-                            ),
-                            gpu_settings=SimpleNamespace(drivers_preset=""),
-                        ),
-                    ),
-                ),
-            )
-
-        def compatibility_choices(self, *, target_version: str, platform: str):
-            assert (target_version, platform) == ("1.33", "cpu-platform")
-            return (SimpleNamespace(platform=platform, os="ubuntu24.04", drivers_preset=""),)
-
-        def wait_cluster_version(self, *, cluster_id: str, version: str) -> None:
-            raise AssertionError("dry-run wizard should not wait for control-plane rollout")
-
-        def wait_node_group_version(
-            self,
-            *,
-            cluster_id: str,
-            node_group_id: str,
-            version: str,
-            timeout_seconds: int,
-        ) -> None:
-            raise AssertionError("dry-run wizard should not wait for node-group rollout")
-
-    def _prompt_scalar(
-        path_label: str,
-        current: object,
-        *,
-        choices: list[cli.OptionChoice] | None = None,
-        type_hint: str | None = None,
-        required: bool = False,
-        unset_on_skip: bool = False,
-    ) -> tuple[object, bool]:
-        del current, type_hint, required, unset_on_skip
-        answers: dict[str, Any] = {
-            "upgrade.k8s_version.target": "infra:mk8s@mk8s",
-            "upgrade.k8s_version.to_version": "1.33",
-            "upgrade.k8s_version.dry_run": True,
-            "upgrade.k8s_version.strategy": "zero-surge",
-            "upgrade.k8s_version.drain_timeout": "45m",
-            "upgrade.k8s_version.run_post_upgrade_validations": True,
-        }
-        prompt_paths.append(path_label)
-        value = answers[path_label]
-        if choices:
-            assert value in {choice.value for choice in choices}
-        return value, False
-
-    monkeypatch.setattr(cli, "_upgrade_interactive_prompts_enabled", lambda: True)
-    monkeypatch.setattr(
-        cli, "_load_deploy_context_readonly", lambda _path: (generated_config, paths, manifest)
-    )
-    monkeypatch.setattr(cli, "init_nebius_sdk", lambda **_kwargs: FakeSdk())
-    monkeypatch.setattr(cli, "Mk8sKubernetesVersionExecutor", FakeExecutor)
-    monkeypatch.setattr(cli, "_prepare_cluster_handoff_kube_env", lambda *_args, **_kwargs: {})
-    monkeypatch.setattr(cli, "collect_kubernetes_preflight_findings", lambda *, kube_env: ())
-    monkeypatch.setattr(cli, "_prompt_scalar_override", _prompt_scalar)
-    monkeypatch.setattr(cli, "console", rich_console)
-
-    cli.upgrade_k8s_version_command(paths.config_path)
-
-    rendered = rich_console.export_text()
-    assert prompt_paths == [
-        "upgrade.k8s_version.target",
-        "upgrade.k8s_version.to_version",
-        "upgrade.k8s_version.dry_run",
-        "upgrade.k8s_version.strategy",
-        "upgrade.k8s_version.drain_timeout",
-        "upgrade.k8s_version.run_post_upgrade_validations",
-    ]
-    assert "- repeat dry-run command:" in rendered
-    assert (
-        f"nebius-cxcli upgrade k8s-version {paths.config_path} infra:mk8s@mk8s "
-        "--to-version 1.33 --strategy zero-surge --drain-timeout 45m --dry-run"
-    ) in rendered
-    assert paths.config_path.read_text(encoding="utf-8") == original_config
-    assert sdk_closed is True
-
-
-def test_upgrade_k8s_version_no_interactive_requires_explicit_target_and_version(
-    tmp_path: Path,
-) -> None:
-    result = runner.invoke(
-        cli.app,
-        [
-            "upgrade",
-            "k8s-version",
-            str(tmp_path / "missing-config.yaml"),
-            "--no-interactive",
-        ],
-    )
-
-    assert result.exit_code == 1
-    assert "Missing target selector and --to-version <major.minor>" in result.output
-    assert "Config file not found" not in result.output
-
-
-def test_upgrade_os_image_no_interactive_requires_explicit_target_and_os(
-    tmp_path: Path,
-) -> None:
-    result = runner.invoke(
-        cli.app,
-        [
-            "upgrade",
-            "os-image",
-            str(tmp_path / "missing-config.yaml"),
-            "--no-interactive",
-        ],
-    )
-
-    assert result.exit_code == 1
-    assert "Missing target selector and --to-os <os>" in result.output
-    assert "Config file not found" not in result.output
 
 
 @pytest.mark.parametrize(
-    ("command", "missing_value"),
+    "command",
     [
-        ("gpu-stack-preset", "--to-gpu-stack-preset <value>"),
-        ("platform", "--to-platform <value>"),
-        ("cpu-preset", "--to-preset <value>"),
-        ("gpu-preset", "--to-preset <value>"),
+        "gpu-" + "fabric",
+        "gpu-" + "stack-preset",
+        "platform",
+        "cpu-" + "preset",
+        "gpu-" + "preset",
     ],
 )
-def test_upgrade_node_layer_no_interactive_requires_explicit_target_and_value(
-    tmp_path: Path,
-    command: str,
-    missing_value: str,
-) -> None:
+def test_removed_upgrade_commands_are_not_registered(tmp_path: Path, command: str) -> None:
     result = runner.invoke(
         cli.app,
         [
@@ -5869,27 +4017,30 @@ def test_upgrade_node_layer_no_interactive_requires_explicit_target_and_value(
         ],
     )
 
-    assert result.exit_code == 1
-    assert f"Missing target selector and {missing_value}" in result.output
+    assert result.exit_code != 0
+    assert "No such command" in _plain_output(result.output)
     assert "Config file not found" not in result.output
 
 
-def test_upgrade_gpu_stack_preset_rejects_old_to_preset_flag(tmp_path: Path) -> None:
+def test_upgrade_node_group_accepts_to_gpu_stack_preset_flag_name(tmp_path: Path) -> None:
     result = runner.invoke(
         cli.app,
         [
             "upgrade",
-            "gpu-stack-preset",
+            "node-group",
             str(tmp_path / "missing-config.yaml"),
             "infra:mk8s@mk8s",
-            "--to-preset",
+            "--node-group",
+            "worker",
+            "--to-gpu-stack-preset",
             "cuda13.0",
-            "--no-interactive",
+            "--dry-run",
         ],
     )
 
-    assert result.exit_code != 0
-    assert "No such option" in _plain_output(result.output)
+    assert result.exit_code == 1
+    assert "Config file not found" in result.output
+    assert "No such option" not in _plain_output(result.output)
 
 
 def test_upgrade_helm_chart_no_interactive_requires_explicit_target_and_version(
@@ -5908,176 +4059,6 @@ def test_upgrade_helm_chart_no_interactive_requires_explicit_target_and_version(
     assert result.exit_code == 1
     assert "Missing target selector and --to-version <chart-version>" in result.output
     assert "Config file not found" not in result.output
-
-
-def test_upgrade_k8s_version_restores_temporary_strategy_after_failed_stage(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    paths = _fake_paths(tmp_path)
-    paths.infra_dir.mkdir(parents=True)
-    paths.flux_dir.mkdir(parents=True)
-    paths.reports_dir.mkdir(parents=True)
-    paths.config_path.write_text(
-        yaml.safe_dump(
-            {
-                "infra": {
-                    "components": [
-                        {
-                            "id": "mk8s",
-                            "instance_id": "mk8s",
-                            "enabled": True,
-                            "inputs": {
-                                "cluster": {
-                                    "cluster_name": "mk8s-live",
-                                    "k8s_version": "1.32",
-                                },
-                                "node_groups": {
-                                    "system": {
-                                        "platform": "cpu-platform",
-                                        "preset": "cpu-4-16",
-                                    },
-                                },
-                            },
-                        }
-                    ]
-                }
-            }
-        ),
-        encoding="utf-8",
-    )
-    generated_config = SimpleNamespace(
-        client_info=SimpleNamespace(
-            client_name="test-client",
-            nebius=SimpleNamespace(project_id="project-1"),
-        )
-    )
-    manifest = {"deploy": {"targets": []}}
-    render_calls: list[dict[str, Any]] = []
-
-    class FakeSdk:
-        def sync_close(self) -> None:
-            pass
-
-    class FakeExecutor:
-        def __init__(self, sdk: object) -> None:
-            assert isinstance(sdk, FakeSdk)
-
-        def get_cluster_by_name(self, *, project_id: str, name: str) -> SimpleNamespace:
-            assert (project_id, name) == ("project-1", "mk8s-live")
-            return SimpleNamespace(
-                metadata=SimpleNamespace(id="cluster-1", name=name, resource_version=1),
-                spec=SimpleNamespace(control_plane=SimpleNamespace(version="1.32")),
-            )
-
-        def get_cluster(self, cluster_id: str) -> SimpleNamespace:
-            assert cluster_id == "cluster-1"
-            return SimpleNamespace(
-                metadata=SimpleNamespace(id="cluster-1", name="mk8s-live", resource_version=1),
-                spec=SimpleNamespace(control_plane=SimpleNamespace(version="1.33")),
-            )
-
-        def control_plane_versions(self) -> tuple[str, ...]:
-            return ("1.33",)
-
-        def list_node_groups(self, cluster_id: str) -> tuple[SimpleNamespace, ...]:
-            assert cluster_id == "cluster-1"
-            return (
-                SimpleNamespace(
-                    metadata=SimpleNamespace(
-                        id="ng-system", name="mk8s-live-system", resource_version=1
-                    ),
-                    spec=SimpleNamespace(
-                        version="1.32",
-                        template=SimpleNamespace(
-                            os="ubuntu24.04",
-                            resources=SimpleNamespace(platform="cpu-platform", preset="cpu-4-16"),
-                            gpu_settings=SimpleNamespace(drivers_preset=""),
-                        ),
-                    ),
-                ),
-            )
-
-        def compatibility_choices(self, *, target_version: str, platform: str):
-            assert target_version == "1.33"
-            return (SimpleNamespace(platform=platform, os="ubuntu24.04", drivers_preset=""),)
-
-        def wait_cluster_version(self, *, cluster_id: str, version: str) -> None:
-            assert (cluster_id, version) == ("cluster-1", "1.33")
-
-        def wait_node_group_version(
-            self,
-            *,
-            cluster_id: str,
-            node_group_id: str,
-            version: str,
-            timeout_seconds: int,
-        ) -> None:
-            raise AssertionError("node-group wait should not run after failed apply")
-
-    def _current_payload() -> dict[str, Any]:
-        payload = yaml.safe_load(paths.config_path.read_text(encoding="utf-8"))
-        assert isinstance(payload, dict)
-        return payload
-
-    def _record_render(_config_path: Path, **_kwargs: object) -> None:
-        component = _current_payload()["infra"]["components"][0]
-        group = component["inputs"]["node_groups"]["system"]
-        render_calls.append({"version": group.get("version"), "strategy": group.get("strategy")})
-
-    def _record_apply(_config: object, _paths: ProjectPaths, **_kwargs: object) -> None:
-        component = _current_payload()["infra"]["components"][0]
-        group = component["inputs"]["node_groups"]["system"]
-        if group.get("version") == "1.33":
-            raise RuntimeError("simulated Terraform apply failure")
-
-    monkeypatch.setattr(
-        cli, "_load_deploy_context_readonly", lambda _path: (generated_config, paths, manifest)
-    )
-    monkeypatch.setattr(
-        cli, "_load_deploy_context", lambda _path: (generated_config, paths, manifest)
-    )
-    monkeypatch.setattr(
-        cli,
-        "_resolve_managed_mk8s_upgrade_target",
-        lambda _manifest, *, target_instance_id: {
-            "component_id": "mk8s",
-            "target_ref": target_instance_id,
-            "access": "external",
-            "cluster_id_output_name": "cluster_id",
-        },
-    )
-    monkeypatch.setattr(
-        cli,
-        "_managed_mk8s_target_with_cluster_id",
-        lambda target, *, cluster_id: {**target, "cluster_id": cluster_id},
-    )
-    monkeypatch.setattr(cli, "init_nebius_sdk", lambda **_kwargs: FakeSdk())
-    monkeypatch.setattr(cli, "Mk8sKubernetesVersionExecutor", FakeExecutor)
-    monkeypatch.setattr(cli, "_prepare_cluster_handoff_kube_env", lambda *_args, **_kwargs: {})
-    monkeypatch.setattr(cli, "collect_kubernetes_preflight_findings", lambda *, kube_env: ())
-    monkeypatch.setattr(cli, "_run_generated_bundle_validation", lambda *_args, **_kwargs: {})
-    monkeypatch.setattr(cli, "render_command", _record_render)
-    monkeypatch.setattr(cli, "_manifest_status_watchers", lambda _manifest: [])
-    monkeypatch.setattr(cli, "_enabled_status_watcher_specs", lambda _config: [])
-    monkeypatch.setattr(cli, "terraform_plan", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(cli, "_run_terraform_apply_with_status", _record_apply)
-    monkeypatch.setattr(cli, "_manifest_deploy_validations", lambda _manifest: [])
-
-    with pytest.raises(cli.typer.Exit):
-        cli.upgrade_k8s_version_command(
-            paths.config_path,
-            "infra:mk8s@mk8s",
-            to_version="1.33",
-            dry_run=False,
-            disruption_policy="zero-surge",
-        )
-
-    component = _current_payload()["infra"]["components"][0]
-    group = component["inputs"]["node_groups"]["system"]
-    assert group["version"] == "1.33"
-    assert "strategy" not in group
-    assert render_calls[-1] == {"version": "1.33", "strategy": None}
 
 
 def _mk8s_target(paths: ProjectPaths, *, target_ref: str = "mk8s") -> dict[str, str]:
@@ -7589,8 +5570,9 @@ def test_render_command_points_migration_required_soperator_to_migrate(
     monkeypatch.setattr(
         cli,
         "_write_generated_runtime_manifest",
-        lambda config, paths, *, source_profile, **kwargs: paths.generated_dir
-        / "nebius-cxcli-manifest.json",
+        lambda config, paths, *, source_profile, **kwargs: (
+            paths.generated_dir / "nebius-cxcli-manifest.json"
+        ),
     )
 
     result = runner.invoke(cli.app, ["render", str(fake_paths.config_path)])
@@ -7601,16 +5583,13 @@ def test_render_command_points_migration_required_soperator_to_migrate(
     config_arg = str(fake_paths.config_path.resolve())
     lines = plain_output.splitlines()
     assert (
-        f"nebius-cxcli ext-soperator migrate {config_arg} "
-        "--target external-cluster --dry-run"
+        f"nebius-cxcli ext-soperator migrate {config_arg} --target external-cluster --dry-run"
     ) in lines
     assert (
         f"nebius-cxcli ext-soperator migrate {config_arg} "
         "--target external-cluster --execute --approve"
     ) in lines
-    assert "Do not run `nebius-cxcli deploy` before `ext-soperator migrate`" in (
-        normalized_output
-    )
+    assert "Do not run `nebius-cxcli deploy` before `ext-soperator migrate`" in (normalized_output)
     assert f"nebius-cxcli deploy {config_arg}" not in lines
 
 
@@ -7669,8 +5648,9 @@ def test_render_command_points_gpu_reconciliation_only_soperator_to_deploy(
     monkeypatch.setattr(
         cli,
         "_write_generated_runtime_manifest",
-        lambda config, paths, *, source_profile, **kwargs: paths.generated_dir
-        / "nebius-cxcli-manifest.json",
+        lambda config, paths, *, source_profile, **kwargs: (
+            paths.generated_dir / "nebius-cxcli-manifest.json"
+        ),
     )
 
     result = runner.invoke(cli.app, ["render", str(fake_paths.config_path)])
@@ -9250,9 +7230,7 @@ def test_render_command_prompts_before_overwrite_when_interactive(
     result = runner.invoke(cli.app, ["render", str(tmp_path / "config.yaml")], input="y\n")
 
     assert result.exit_code == 0, result.output
-    assert "Continue and replace the existing generated artifacts?" in _plain_output(
-        result.output
-    )
+    assert "Continue and replace the existing generated artifacts?" in _plain_output(result.output)
     assert calls["rendered"] is True
 
 
@@ -9317,7 +7295,7 @@ def test_deploy_command_passes_auto_auth_flag(
 ) -> None:
     fake_paths = _fake_paths(tmp_path)
     captured: dict[str, Any] = {}
-    manifest = {"schema": "nebius-cxcli-generated/v1"}
+    manifest = {"schema": "nebius-cxcli-generated/v1", "render": {"module_sources": []}}
 
     monkeypatch.setattr(cli, "_load_deploy_context", lambda _path: ("cfg", fake_paths, manifest))
     monkeypatch.setattr(
@@ -9509,7 +7487,7 @@ def test_deploy_command_prints_ssh_jumphost_access_hint(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fake_paths = _fake_paths(tmp_path)
-    manifest = {"schema": "nebius-cxcli-generated/v1"}
+    manifest = {"schema": "nebius-cxcli-generated/v1", "render": {"module_sources": []}}
 
     monkeypatch.setattr(cli, "_load_deploy_context", lambda _path: ("cfg", fake_paths, manifest))
     monkeypatch.setattr(
@@ -9610,6 +7588,40 @@ def test_deploy_command_prints_wireguard_generation_command(
     assert "# Generate WireGuard client config for wireguard-gw" in lines
     assert f"nebius-cxcli wireguard --gen-client-conf {fake_paths.config_path}" in lines
     assert "--component wireguard-gw" not in output
+
+
+def test_deploy_footer_styles_copy_paste_commands_not_labels(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_paths = _fake_paths(tmp_path)
+    rich_console = cli.Console(
+        force_terminal=True,
+        color_system="truecolor",
+        width=220,
+        record=True,
+    )
+    monkeypatch.setattr(cli, "console", rich_console)
+    monkeypatch.setattr(
+        cli,
+        "wireguard_access_command_hints",
+        lambda _config, _paths: [
+            {
+                "label": "WireGuard connect laptop",
+                "command": "wg-quick up /tmp/laptop.conf",
+            }
+        ],
+    )
+    monkeypatch.setattr(cli, "ssh_jump_access_hints", lambda *_args: [])
+
+    cli._print_deploy_command_footer({}, fake_paths, cli.DeployRunSummary(), succeeded=True)
+
+    rendered = rich_console.export_text(styles=True)
+    plain_rendered = _ANSI_ESCAPE_RE.sub("", rendered)
+    assert "# WireGuard connect laptop" in plain_rendered
+    assert "wg-quick up /tmp/laptop.conf" in plain_rendered
+    assert "\x1b[1;38;2;0;215;255m# WireGuard connect laptop" not in rendered
+    assert "\x1b[1;38;2;0;215;255mwg-quick up /tmp/laptop.conf\x1b[0m" in rendered
 
 
 def test_deploy_command_passes_one_run_validation_skip_flags(
@@ -10517,8 +8529,16 @@ def test_generated_bundle_live_quota_failure_prints_remediation_hints(
     assert f"nebius-cxcli quota-request {fake_paths.config_path}" in output
     assert "Next step: compare quota availability across regions with:" in output
     assert f"nebius-cxcli quota-check --all-regions {fake_paths.config_path}" in output
-    assert f"nebius-cxcli quota-request {fake_paths.config_path}" in rendered_messages
-    assert f"nebius-cxcli quota-check --all-regions {fake_paths.config_path}" in rendered_messages
+    assert (
+        cli.copy_paste_command_markup(f"nebius-cxcli quota-request {fake_paths.config_path}")
+        in rendered_messages
+    )
+    assert (
+        cli.copy_paste_command_markup(
+            f"nebius-cxcli quota-check --all-regions {fake_paths.config_path}"
+        )
+        in rendered_messages
+    )
 
 
 def test_adjust_quota_report_for_managed_mk8s_state_discounts_existing_cluster_capacity() -> None:
@@ -10845,7 +8865,7 @@ def test_deploy_generated_artifacts_validates_before_apply_and_prepares_kube_env
     monkeypatch.setattr(
         cli,
         "_run_terraform_apply_with_status",
-        lambda config, paths, *, initialize=True, run_mk8s_preflight=True: calls.append(
+        lambda config, paths, *, initialize=True, run_mk8s_preflight=True, **_kwargs: calls.append(
             ("apply_with_status", config, paths, initialize, run_mk8s_preflight)
         ),
     )
@@ -11047,7 +9067,14 @@ def test_deploy_generated_artifacts_recovers_mysterybox_versions_after_apply_fai
 
     assert calls == [
         ("preflight", True, manifest),
-        ("apply", {"initialize": False, "run_mk8s_preflight": False}),
+        (
+            "apply",
+            {
+                "initialize": False,
+                "manifest": manifest,
+                "run_mk8s_preflight": False,
+            },
+        ),
         ("sync", False, manifest, False),
         (
             "print",
@@ -11149,7 +9176,7 @@ def test_deploy_generated_artifacts_without_apps_still_prepares_kube_env(
     monkeypatch.setattr(
         cli,
         "_run_terraform_apply_with_status",
-        lambda config, paths, *, initialize=True, run_mk8s_preflight=True: calls.append(
+        lambda config, paths, *, initialize=True, run_mk8s_preflight=True, **_kwargs: calls.append(
             ("apply_with_status", config, paths, initialize, run_mk8s_preflight)
         ),
     )
@@ -11246,7 +9273,7 @@ def test_deploy_generated_artifacts_with_multiple_handoffs_and_no_apps_refreshes
     monkeypatch.setattr(
         cli,
         "_run_terraform_apply_with_status",
-        lambda config, paths, *, initialize=True, run_mk8s_preflight=True: calls.append(
+        lambda config, paths, *, initialize=True, run_mk8s_preflight=True, **_kwargs: calls.append(
             ("apply_with_status", config, paths, initialize, run_mk8s_preflight)
         ),
     )
@@ -11664,7 +9691,7 @@ def test_deploy_generated_artifacts_rejects_manifest_missing_deploy_section(
 ) -> None:
     fake_paths = _fake_paths(tmp_path)
     config = _config_with_enabled_mk8s()
-    manifest = {"schema": "nebius-cxcli-generated/v1"}
+    manifest = {"schema": "nebius-cxcli-generated/v1", "render": {"module_sources": []}}
     monkeypatch.setattr(cli, "_run_deploy_preflight", lambda *_args, **_kwargs: None)
 
     with pytest.raises(
@@ -12784,7 +10811,7 @@ def test_destroy_generated_artifacts_stops_when_flux_teardown_fails(
         "infra": {"components": [{"id": "mk8s", "enabled": True, "inputs": {}}]},
         "apps": {"charts": [{"id": "gateway-helm", "enabled": True}]},
     }
-    manifest = {"schema": "nebius-cxcli-generated/v1"}
+    manifest = {"schema": "nebius-cxcli-generated/v1", "render": {"module_sources": []}}
     captured: dict[str, Any] = {}
     messages: list[str] = []
 
@@ -12939,8 +10966,7 @@ def test_apply_rendered_flux_installs_flux_controllers_when_missing(
         cli,
         "install_flux_controllers",
         lambda *, extra_env=None: (
-            calls.append(("install_flux", extra_env))
-            or _bundled_flux_install_manifest_url()
+            calls.append(("install_flux", extra_env)) or _bundled_flux_install_manifest_url()
         ),
     )
     monkeypatch.setattr(
@@ -13644,7 +11670,7 @@ def test_apply_post_flux_manifest_deletes_stale_soperator_custom_resources(
                         "labels": {"app.kubernetes.io/instance": "soperator"},
                     },
                     "spec": {},
-                }
+                },
             ],
             explicit_start=True,
             sort_keys=False,
@@ -13999,8 +12025,7 @@ def test_apply_rendered_flux_reinstalls_when_flux_crds_are_missing(
         cli,
         "install_flux_controllers",
         lambda *, extra_env=None: (
-            calls.append(("install_flux", extra_env))
-            or _bundled_flux_install_manifest_url()
+            calls.append(("install_flux", extra_env)) or _bundled_flux_install_manifest_url()
         ),
     )
     monkeypatch.setattr(
@@ -14717,6 +12742,90 @@ def test_print_deployment_status_message_disables_rich_auto_highlighter(
     assert "\x1b[1;92mb:DE\x1b[0m" not in rendered
 
 
+def test_print_copy_paste_command_styles_command_and_escapes_markup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rich_console = cli.Console(
+        force_terminal=True,
+        color_system="truecolor",
+        width=220,
+        record=True,
+    )
+    monkeypatch.setattr(cli, "console", rich_console)
+
+    cli._print_copy_paste_command("nebius-cxcli render /tmp/[red]project[/red]/config.yaml")
+
+    rendered = rich_console.export_text(styles=True)
+    plain_rendered = _ANSI_ESCAPE_RE.sub("", rendered)
+    assert "nebius-cxcli render /tmp/[red]project[/red]/config.yaml" in plain_rendered
+    assert (
+        "\x1b[1;38;2;0;215;255mnebius-cxcli render /tmp/[red]project[/red]/config.yaml\x1b[0m"
+    ) in rendered
+
+
+def test_print_create_next_steps_styles_all_copy_paste_commands(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rich_console = cli.Console(
+        force_terminal=True,
+        color_system="truecolor",
+        width=220,
+        record=True,
+    )
+    monkeypatch.setattr(cli, "console", rich_console)
+    config_path = tmp_path / "config.yaml"
+
+    cli._print_create_next_steps(config_path)
+
+    rendered = rich_console.export_text(styles=True)
+    plain_rendered = _ANSI_ESCAPE_RE.sub("", rendered)
+    config_arg = str(config_path.resolve())
+    assert plain_rendered.splitlines() == [
+        "Next steps:",
+        f"nebius-cxcli validate {config_arg}",
+        f"nebius-cxcli render {config_arg}",
+        f"nebius-cxcli deploy {config_arg}",
+        "Optional CI bootstrap:",
+        f"nebius-cxcli bootstrap-ci {config_arg}",
+    ]
+    assert rendered.count("\x1b[1;38;2;0;215;255mnebius-cxcli ") == 4
+
+
+def test_soperator_deploy_owned_route_styles_copy_paste_commands(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    rich_console = cli.Console(
+        force_terminal=True,
+        color_system="truecolor",
+        width=220,
+        record=True,
+    )
+    monkeypatch.setattr(cli, "console", rich_console)
+    config_arg = str((tmp_path / "config.yaml").resolve())
+
+    with pytest.raises(cli.typer.Exit):
+        cli._exit_with_soperator_deploy_owned_route(
+            cli._SoperatorDeployOwnedRoute(
+                (
+                    "Soperator target has no migration-owned onboarding actions.",
+                    "Run these commands to reconcile deploy-owned work:",
+                    f"nebius-cxcli validate {config_arg}",
+                    f"nebius-cxcli render {config_arg}",
+                    f"nebius-cxcli deploy {config_arg}",
+                )
+            )
+        )
+
+    rendered = rich_console.export_text(styles=True)
+    plain_rendered = _ANSI_ESCAPE_RE.sub("", rendered)
+    assert "Run these commands to reconcile deploy-owned work:" in plain_rendered
+    assert f"nebius-cxcli validate {config_arg}" in plain_rendered
+    assert (f"\x1b[1;38;2;0;215;255mnebius-cxcli validate {config_arg}\x1b[0m") in rendered
+    assert "\x1b[1;38;2;0;215;255mRun these commands" not in rendered
+
+
 def test_print_upgrade_plan_lines_styles_warnings_amber(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -14730,7 +12839,7 @@ def test_print_upgrade_plan_lines_styles_warnings_amber(
 
     cli._print_upgrade_plan_lines(
         (
-            "MK8s Kubernetes version upgrade plan",
+            "MK8s node-template upgrade plan",
             "- warnings:",
             "  - safe mode generic warning",
             "Dry run only: no changes.",
@@ -14753,9 +12862,9 @@ def test_print_upgrade_plan_lines_wraps_repeat_dry_run_command(
 
     cli._print_upgrade_plan_lines(
         (
-            "MK8s OS image upgrade plan",
+            "MK8s node-template upgrade plan",
             "- repeat dry-run command:",
-            "  nebius-cxcli upgrade os-image '/tmp/project path/config.yaml' "
+            "  nebius-cxcli upgrade node-template '/tmp/project path/config.yaml' "
             "infra:mk8s@cluster1 --to-os ubuntu24.04 "
             "--strategy zero-surge --dry-run",
             "Dry run only: no changes.",
@@ -14764,7 +12873,7 @@ def test_print_upgrade_plan_lines_wraps_repeat_dry_run_command(
 
     rendered = rich_console.export_text()
     assert (
-        "nebius-cxcli upgrade os-image '/tmp/project path/config.yaml' "
+        "nebius-cxcli upgrade node-template '/tmp/project path/config.yaml' "
         "infra:mk8s@cluster1 --to-os ubuntu24.04 --strategy zero-surge --dry-run"
     ) in rendered
     assert "Dry run only: no changes." in rendered
@@ -15461,7 +13570,7 @@ def test_terraform_plan_command_invokes_runtime_auth_and_plan(
 ) -> None:
     fake_paths = _fake_paths(tmp_path)
     captured: dict[str, Any] = {}
-    manifest = {"schema": "nebius-cxcli-generated/v1"}
+    manifest = {"schema": "nebius-cxcli-generated/v1", "render": {"module_sources": []}}
 
     monkeypatch.setattr(
         cli, "_load_generated_infra_context", lambda _path: ("cfg", fake_paths, manifest)
@@ -15588,8 +13697,9 @@ def test_terraform_apply_command_invokes_runtime_auth_and_apply(
     monkeypatch.setattr(
         cli,
         "_run_terraform_apply_with_status",
-        lambda config, paths, *, initialize=True: captured.setdefault(
-            "apply", {"config": config, "paths": paths, "initialize": initialize}
+        lambda config, paths, *, initialize=True, manifest=None, **_kwargs: captured.setdefault(
+            "apply",
+            {"config": config, "paths": paths, "initialize": initialize, "manifest": manifest},
         ),
     )
     monkeypatch.setattr(
@@ -15623,6 +13733,7 @@ def test_terraform_apply_command_invokes_runtime_auth_and_apply(
         "config": "cfg",
         "paths": fake_paths,
         "initialize": False,
+        "manifest": manifest,
     }
     assert captured["inventory"] == {
         "config": "cfg",
@@ -17710,7 +15821,10 @@ def test_warn_if_flux_gitops_not_bootstrapped_prints_guidance(
     assert "Commit and push the rendered generated/flux path" in messages[2]
     assert "skip this step when local direct apply is the intended workflow" in messages[2]
     assert "Optional command to enable GitOps sync:" in messages[3]
-    assert f"nebius-cxcli flux bootstrap {fake_paths.generated_dir}" == messages[4]
+    assert (
+        cli.copy_paste_command_markup(f"nebius-cxcli flux bootstrap {fake_paths.generated_dir}")
+        == messages[4]
+    )
     assert command == f"nebius-cxcli flux bootstrap {fake_paths.generated_dir}"
 
     messages.clear()
@@ -17744,15 +15858,20 @@ def test_help_text_aligns_render_and_apply_surfaces() -> None:
     flux_destroy_result = runner.invoke(cli.app, ["flux", "destroy", "--help"])
     flux_bootstrap_result = runner.invoke(cli.app, ["flux", "bootstrap", "--help"])
     upgrade_result = runner.invoke(cli.app, ["upgrade", "--help"])
-    upgrade_k8s_result = runner.invoke(cli.app, ["upgrade", "k8s-version", "--help"])
-    upgrade_os_result = runner.invoke(cli.app, ["upgrade", "os-image", "--help"])
-    upgrade_node_template_result = runner.invoke(
-        cli.app, ["upgrade", "node-template", "--help"]
-    )
-    upgrade_gpu_stack_result = runner.invoke(cli.app, ["upgrade", "gpu-stack-preset", "--help"])
-    upgrade_platform_result = runner.invoke(cli.app, ["upgrade", "platform", "--help"])
-    upgrade_cpu_preset_result = runner.invoke(cli.app, ["upgrade", "cpu-preset", "--help"])
-    upgrade_gpu_preset_result = runner.invoke(cli.app, ["upgrade", "gpu-preset", "--help"])
+    upgrade_node_template_result = runner.invoke(cli.app, ["upgrade", "node-template", "--help"])
+    upgrade_node_group_result = runner.invoke(cli.app, ["upgrade", "node-group", "--help"])
+    removed_upgrade_results = {
+        command: runner.invoke(cli.app, ["upgrade", command, "--help"])
+        for command in (
+            "k8s-" + "version",
+            "os-" + "image",
+            "gpu-" + "fabric",
+            "gpu-" + "stack-preset",
+            "platform",
+            "cpu-" + "preset",
+            "gpu-" + "preset",
+        )
+    }
     upgrade_helm_result = runner.invoke(cli.app, ["upgrade", "helm-chart", "--help"])
     upgrade_firmware_result = runner.invoke(cli.app, ["upgrade", "firmware", "--help"])
 
@@ -17770,13 +15889,11 @@ def test_help_text_aligns_render_and_apply_surfaces() -> None:
     assert flux_destroy_result.exit_code == 0, flux_destroy_result.output
     assert flux_bootstrap_result.exit_code == 0, flux_bootstrap_result.output
     assert upgrade_result.exit_code == 0, upgrade_result.output
-    assert upgrade_k8s_result.exit_code == 0, upgrade_k8s_result.output
-    assert upgrade_os_result.exit_code == 0, upgrade_os_result.output
     assert upgrade_node_template_result.exit_code == 0, upgrade_node_template_result.output
-    assert upgrade_gpu_stack_result.exit_code == 0, upgrade_gpu_stack_result.output
-    assert upgrade_platform_result.exit_code == 0, upgrade_platform_result.output
-    assert upgrade_cpu_preset_result.exit_code == 0, upgrade_cpu_preset_result.output
-    assert upgrade_gpu_preset_result.exit_code == 0, upgrade_gpu_preset_result.output
+    assert upgrade_node_group_result.exit_code == 0, upgrade_node_group_result.output
+    for command, result in removed_upgrade_results.items():
+        assert result.exit_code != 0, (command, result.output)
+        assert "No such command" in _plain_output(result.output)
     assert upgrade_helm_result.exit_code == 0, upgrade_helm_result.output
     assert upgrade_firmware_result.exit_code != 0
     assert "No such command" in _plain_output(upgrade_firmware_result.output)
@@ -17794,20 +15911,11 @@ def test_help_text_aligns_render_and_apply_surfaces() -> None:
     flux_destroy_help = " ".join(_plain_output(flux_destroy_result.output).split()).lower()
     flux_bootstrap_help = " ".join(_plain_output(flux_bootstrap_result.output).split()).lower()
     upgrade_help = " ".join(_plain_output(upgrade_result.output).split()).lower()
-    upgrade_k8s_help = " ".join(_plain_output(upgrade_k8s_result.output).split()).lower()
-    upgrade_os_help = " ".join(_plain_output(upgrade_os_result.output).split()).lower()
     upgrade_node_template_help = " ".join(
         _plain_output(upgrade_node_template_result.output).split()
     ).lower()
-    upgrade_gpu_stack_help = " ".join(
-        _plain_output(upgrade_gpu_stack_result.output).split()
-    ).lower()
-    upgrade_platform_help = " ".join(_plain_output(upgrade_platform_result.output).split()).lower()
-    upgrade_cpu_preset_help = " ".join(
-        _plain_output(upgrade_cpu_preset_result.output).split()
-    ).lower()
-    upgrade_gpu_preset_help = " ".join(
-        _plain_output(upgrade_gpu_preset_result.output).split()
+    upgrade_node_group_help = " ".join(
+        _plain_output(upgrade_node_group_result.output).split()
     ).lower()
     upgrade_helm_help = " ".join(_plain_output(upgrade_helm_result.output).split()).lower()
     quota_check_help = " ".join(_plain_output(quota_check_result.output).split()).lower()
@@ -17820,7 +15928,7 @@ def test_help_text_aligns_render_and_apply_surfaces() -> None:
         "soperator, upgrade, and bootstrap-ci use config.yaml"
     ) in top_help
     assert (
-        f"upgrade example: nebius-cxcli upgrade k8s-version {upgrade_example_config} "
+        f"upgrade example: nebius-cxcli upgrade node-template {upgrade_example_config} "
         "infra:mk8s@mk8s --to-version 1.33 --dry-run"
     ) in top_help
     assert "nebius-cxcli upgrade --help" in top_help
@@ -17868,104 +15976,62 @@ def test_help_text_aligns_render_and_apply_surfaces() -> None:
     assert "day-2 lifecycle upgrades from config.yaml" in upgrade_help
     legacy_scope_label = "V" + "1"
     assert legacy_scope_label not in upgrade_help
-    assert "k8s-version" in upgrade_help
+    for removed_command in ("k8s-" + "version", "os-" + "image"):
+        assert removed_command not in upgrade_help
     assert "node-template" in upgrade_help
-    assert "os-image" in upgrade_help
-    assert "gpu-stack-preset" in upgrade_help
-    assert "platform" in upgrade_help
-    assert "cpu-preset" in upgrade_help
-    assert "gpu-preset" in upgrade_help
+    assert "node-group" in upgrade_help
     assert "helm-chart" in upgrade_help
+    assert "gpu-" + "fabric" not in upgrade_help
+    assert "upgrade gpu-" + "stack-preset" not in upgrade_help
+    assert "cpu-" + "preset" not in upgrade_help
+    assert "gpu-" + "preset" not in upgrade_help
+    assert "nebius-cxcli upgrade " + "platform" not in upgrade_help
     assert "firmware" not in upgrade_help
     assert "examples:" in upgrade_help
     assert "reserved future command shapes:" not in upgrade_help
-    assert f"nebius-cxcli upgrade os-image {upgrade_example_config}" in upgrade_help
-    assert (
-        f"nebius-cxcli upgrade os-image {upgrade_example_config} (guided wizard)"
-    ) in upgrade_help
-    assert (
-        f"nebius-cxcli upgrade os-image {upgrade_example_config} "
-        "infra:vm@worker --to-os ubuntu24.04-driverless --dry-run"
-    ) in upgrade_help
     assert "--yes" not in upgrade_help
     assert "--disruption-policy" not in upgrade_help
     assert "allow-unavailable" not in upgrade_help
     assert (
-        f"nebius-cxcli upgrade k8s-version {upgrade_example_config} "
-        "infra:mk8s@mk8s --to-version 1.33 --dry-run"
-    ) in upgrade_help
-    assert (
-        f"nebius-cxcli upgrade k8s-version {upgrade_example_config} (guided wizard)"
-    ) in upgrade_help
-    assert (
-        f"nebius-cxcli upgrade k8s-version {upgrade_example_config} "
-        "infra:mk8s@mk8s --to-version 1.33 --strategy zero-surge"
+        f"nebius-cxcli upgrade node-template {upgrade_example_config} (guided wizard)"
     ) in upgrade_help
     assert (
         "nebius-cxcli upgrade node-template <config.yaml> infra:mk8s@<target> "
-        "--to-version 1.33 --to-os ubuntu24.04 --to-gpu-stack-preset cuda13.0"
-    ) in upgrade_help
-    assert "one non-interactive command" in upgrade_help
-    assert "see examples below" in upgrade_help
-    assert (
-        "nebius-cxcli upgrade gpu-stack-preset <config.yaml> infra:mk8s@<target> "
-        "--to-gpu-stack-preset cuda13.0"
+        "--to-version 1.33 --to-os ubuntu24.04 --to-gpu-stack-preset cuda13.0 "
+        "--dry-run"
     ) in upgrade_help
     assert (
-        "nebius-cxcli upgrade platform <config.yaml> infra:mk8s@<target> --to-platform cpu-d3"
+        "nebius-cxcli upgrade node-template <config.yaml> infra:mk8s@<target> "
+        "--to-os ubuntu24.04 --node-group system --dry-run"
+    ) in upgrade_help
+    assert "one non-interactive command" not in upgrade_help
+    assert (
+        "nebius-cxcli upgrade node-group <config.yaml> infra:mk8s@<target> "
+        "--node-group worker --to-platform gpu-b200-sxm --to-preset "
+        "8gpu-160vcpu-1792gb --to-fabric fabric-6 --dry-run"
+    ) in upgrade_help
+    assert (
+        "nebius-cxcli upgrade node-group <config.yaml> infra:mk8s@<target> "
+        "--node-group system --to-platform cpu-d3 --to-preset <preset> --dry-run"
     ) in upgrade_help
     assert (
         "nebius-cxcli upgrade helm-chart <config.yaml> apps:<chart>@<target> "
         "--to-version <chart-version>"
     ) in upgrade_help
-    assert "upgrade a terraform-managed mk8s cluster and node groups" in upgrade_k8s_help
-    assert "--to-version" in upgrade_k8s_help
-    assert "--dry-run" in upgrade_k8s_help
-    assert "--yes" not in upgrade_k8s_help
-    assert "--strategy" in upgrade_k8s_help
-    assert "--drain-timeout" in upgrade_k8s_help
-    assert "--disruption-policy" not in upgrade_k8s_help
-    assert "allow-unavailable" not in upgrade_k8s_help
-    assert "--interactive" in upgrade_k8s_help
-    assert "--no-interactive" in upgrade_k8s_help
-    assert "force-delete" in upgrade_k8s_help
-    assert "guided wizard:" in upgrade_k8s_help
-    assert "dry-run plan:" in upgrade_k8s_help
-    assert "default zero-surge:" in upgrade_k8s_help
-    assert "capacity-preserving safe-surge:" in upgrade_k8s_help
-    assert "custom drain timeout:" in upgrade_k8s_help
-    assert "last-resort force-delete:" in upgrade_k8s_help
-    assert "zero-surge -> 30m, safe-surge -> 30m, force-delete -> 10m" in upgrade_k8s_help
-    assert "force-delete never deletes pvc/pv objects" in upgrade_k8s_help
-    assert "final mk8s readiness check" in upgrade_k8s_help
-    assert (f"nebius-cxcli upgrade k8s-version {upgrade_example_config}") in upgrade_k8s_help
-    assert (
-        f"nebius-cxcli upgrade k8s-version {upgrade_example_config} "
-        "infra:mk8s@mk8s --to-version 1.33 --dry-run"
-    ) in upgrade_k8s_help
-    assert (
-        f"nebius-cxcli upgrade k8s-version {upgrade_example_config} "
-        "infra:mk8s@mk8s --to-version 1.33 --strategy zero-surge "
-        "--drain-timeout 45m"
-    ) in upgrade_k8s_help
-    assert (
-        f"nebius-cxcli upgrade k8s-version {upgrade_example_config} "
-        "infra:mk8s@mk8s --to-version 1.33 --strategy force-delete"
-    ) in upgrade_k8s_help
-    assert (
-        "upgrade mk8s kubernetes version, os image, and gpu stack together in "
-        "one non-interactive command; see the example below"
-    ) in upgrade_node_template_help
-    assert "config_yaml target" in upgrade_node_template_help
+    assert "upgrade mk8s kubernetes version, os image, or gpu stack values" in (
+        upgrade_node_template_help
+    )
+    assert "config_yaml [target]" in upgrade_node_template_help
     assert "--to-version" in upgrade_node_template_help
     assert "--to-os" in upgrade_node_template_help
     assert "--to-gpu-stack-preset" in upgrade_node_template_help
     assert "--node-group" in upgrade_node_template_help
     assert "--dry-run" in upgrade_node_template_help
     assert "--yes" not in upgrade_node_template_help
-    assert "--interactive" not in upgrade_node_template_help
-    assert "--no-interactive" not in upgrade_node_template_help
+    assert "--interactive" in upgrade_node_template_help
+    assert "--no-interactive" in upgrade_node_template_help
     assert "--strategy" in upgrade_node_template_help
+    assert "--strategy-max-surge-count" in upgrade_node_template_help
     assert "--drain-timeout" in upgrade_node_template_help
     assert "--disruption-policy" not in upgrade_node_template_help
     assert "allow-unavailable" not in upgrade_node_template_help
@@ -17973,81 +16039,50 @@ def test_help_text_aligns_render_and_apply_surfaces() -> None:
     assert "--skip-validations" in upgrade_node_template_help
     assert "--skip-validation" in upgrade_node_template_help
     assert (
-        "example: nebius-cxcli upgrade node-template <config.yaml> "
+        f"guided wizard: nebius-cxcli upgrade node-template {upgrade_example_config}"
+    ) in upgrade_node_template_help
+    assert (
+        "dry-run plan: nebius-cxcli upgrade node-template <config.yaml> "
         "infra:mk8s@<target> --to-version 1.33 --to-os ubuntu24.04 "
         "--to-gpu-stack-preset cuda13.0 --dry-run"
     ) in upgrade_node_template_help
+    assert "omitted --to-version, --to-os, and --to-gpu-stack-preset values keep" in (
+        upgrade_node_template_help
+    )
+    assert "--no-interactive for automation" in upgrade_node_template_help
     assert "selected node group rolls once" in upgrade_node_template_help
     assert "final mk8s readiness check" in upgrade_node_template_help
-    assert "upgrade mk8s node-group or generic vm os images" in upgrade_os_help
-    assert "reserved future command shape" not in upgrade_os_help
-    assert "this changes the mk8s node template os through terraform" in upgrade_os_help
-    assert "generic vm source_image_family through terraform replacement" in upgrade_os_help
-    assert "does not ssh to nodes or run apt" in upgrade_os_help
-    assert "final mk8s readiness check" in upgrade_os_help
-    assert "config_yaml [target]" in upgrade_os_help
-    assert "--node-group" in upgrade_os_help
-    assert "--dry-run" in upgrade_os_help
-    assert "--yes" not in upgrade_os_help
-    assert "--strategy" in upgrade_os_help
-    assert "--drain-timeout" in upgrade_os_help
-    assert "--disruption-policy" not in upgrade_os_help
-    assert "allow-unavailable" not in upgrade_os_help
-    assert "--to-os" in upgrade_os_help
-    assert "--interactive" in upgrade_os_help
-    assert "--no-interactive" in upgrade_os_help
     assert (
-        f"guided wizard: nebius-cxcli upgrade os-image {upgrade_example_config}"
-    ) in upgrade_os_help
+        "plan an explicit terraform-managed node-group migration"
+        in upgrade_node_group_help
+    )
+    assert "config_yaml target" in upgrade_node_group_help
+    assert "--node-group" in upgrade_node_group_help
+    assert "--to-platform" in upgrade_node_group_help
+    assert "--to-preset" in upgrade_node_group_help
+    assert "--to-os" in upgrade_node_group_help
+    assert "--to-gpu-stack-preset" in upgrade_node_group_help
+    assert "--to-fabric" in upgrade_node_group_help
+    assert "--dry-run" in upgrade_node_group_help
+    assert "--execute" in upgrade_node_group_help
+    assert "--approve" in upgrade_node_group_help
+    assert "omit --to-fabric for a gpu-cluster node group to keep its current fabric" in (
+        upgrade_node_group_help
+    )
+    assert "approved pre-mutation checkpoint" in upgrade_node_group_help
+    assert "stops before live" in upgrade_node_group_help
     assert (
-        f"dry-run plan: nebius-cxcli upgrade os-image {upgrade_example_config} "
-        "infra:mk8s@mk8s --to-os ubuntu24.04 --dry-run"
-    ) in upgrade_os_help
-    assert (
-        f"vm dry-run plan: nebius-cxcli upgrade os-image {upgrade_example_config} "
-        "infra:vm@worker --to-os ubuntu24.04-driverless --dry-run"
-    ) in upgrade_os_help
-    assert (
-        f"one node group: nebius-cxcli upgrade os-image {upgrade_example_config} "
-        "infra:mk8s@mk8s --to-os ubuntu24.04 --node-group system"
-    ) in upgrade_os_help
-    for node_layer_help in (
-        upgrade_gpu_stack_help,
-        upgrade_platform_help,
-        upgrade_cpu_preset_help,
-        upgrade_gpu_preset_help,
-    ):
-        assert "reserved future command shape" not in node_layer_help
-        assert "config_yaml [target]" in node_layer_help
-        assert "--node-group" in node_layer_help
-        assert "--dry-run" in node_layer_help
-        assert "--yes" not in node_layer_help
-        assert "--strategy" in node_layer_help
-        assert "--drain-timeout" in node_layer_help
-        assert "--interactive" in node_layer_help
-        assert "--no-interactive" in node_layer_help
-        assert "final mk8s readiness check" in node_layer_help
-    assert "--to-gpu-stack-preset" in upgrade_gpu_stack_help
-    assert "--to-preset" not in upgrade_gpu_stack_help
-    assert "--to-platform" in upgrade_platform_help
-    assert "--to-preset" in upgrade_cpu_preset_help
-    assert "--to-preset" in upgrade_gpu_preset_help
-    assert (
-        "example: nebius-cxcli upgrade gpu-stack-preset <config.yaml> "
-        "infra:mk8s@<target> --to-gpu-stack-preset cuda13.0 --dry-run"
-    ) in upgrade_gpu_stack_help
-    assert (
-        "example: nebius-cxcli upgrade platform <config.yaml> "
-        "infra:mk8s@<target> --to-platform cpu-d3 --node-group worker --dry-run"
-    ) in upgrade_platform_help
-    assert (
-        "example: nebius-cxcli upgrade cpu-preset <config.yaml> "
-        "infra:mk8s@<target> --to-preset <preset> --node-group system --dry-run"
-    ) in upgrade_cpu_preset_help
-    assert (
-        "example: nebius-cxcli upgrade gpu-preset <config.yaml> "
-        "infra:mk8s@<target> --to-preset <preset> --node-group worker --dry-run"
-    ) in upgrade_gpu_preset_help
+        "example: nebius-cxcli upgrade node-group <config.yaml> "
+        "infra:mk8s@<target> --node-group worker --to-platform gpu-b200-sxm "
+        "--to-preset 8gpu-160vcpu-1792gb --to-fabric fabric-6 --dry-run"
+    ) in upgrade_node_group_help
+    assert "use upgrade node-template instead for kubernetes version, os, or nebius-image gpu stack rolling updates" in (
+        upgrade_node_group_help
+    )
+    assert "--strategy" not in upgrade_node_group_help
+    assert "--interactive" not in upgrade_node_group_help
+    assert "--no-interactive" not in upgrade_node_group_help
+    assert "--yes" not in upgrade_node_group_help
     assert "apps:soperator@mk8s" in upgrade_helm_help
     assert "reserved future command shape" not in upgrade_helm_help
     assert "config_yaml [target]" in upgrade_helm_help
@@ -18213,9 +16248,7 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert tf_destroy_result.exit_code == 0, tf_destroy_result.output
     assert flux_destroy_result.exit_code == 0, flux_destroy_result.output
     assert managed_soperator_result.exit_code == 0, managed_soperator_result.output
-    assert managed_soperator_upgrade_result.exit_code == 0, (
-        managed_soperator_upgrade_result.output
-    )
+    assert managed_soperator_upgrade_result.exit_code == 0, managed_soperator_upgrade_result.output
     assert soperator_result.exit_code == 0, soperator_result.output
     assert soperator_onboard_result.exit_code == 0, soperator_onboard_result.output
     assert soperator_migrate_result.exit_code == 0, soperator_migrate_result.output
@@ -18251,9 +16284,7 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     normalized_component_remove_help = " ".join(component_remove_help.split())
     normalized_soperator_help = " ".join(soperator_help.split())
     normalized_managed_soperator_help = " ".join(managed_soperator_help.split())
-    normalized_managed_soperator_upgrade_help = " ".join(
-        managed_soperator_upgrade_help.split()
-    )
+    normalized_managed_soperator_upgrade_help = " ".join(managed_soperator_upgrade_help.split())
     normalized_soperator_onboard_help = " ".join(soperator_onboard_help.split())
     normalized_soperator_migrate_help = " ".join(soperator_migrate_help.split())
     normalized_wireguard_help = " ".join(wireguard_help.split())
@@ -18405,9 +16436,7 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "onboard-existing-cluster" not in normalized_create_help
     assert "complete production MK8s+SFS+Soperator cluster" in normalized_create_help
     assert "soperator [OPTIONS] COMMAND [ARGS]" in managed_soperator_help
-    assert "Manage cxcli-managed Soperator deployments" in (
-        normalized_managed_soperator_help
-    )
+    assert "Manage cxcli-managed Soperator deployments" in (normalized_managed_soperator_help)
     assert "Soperator-aware chart upgrades with Slurm preflight and postflight validation" in (
         normalized_managed_soperator_help
     )
@@ -18428,16 +16457,12 @@ def test_command_help_usage_labels_positional_target_types() -> None:
         normalized_soperator_help
     )
     assert "using its Nebius --cluster-id" in normalized_soperator_help
-    assert "stores a cxcli target id in deploy.targets[].instance_id" in (
-        normalized_soperator_help
-    )
+    assert "stores a cxcli target id in deploy.targets[].instance_id" in (normalized_soperator_help)
     assert (
         "If the accepted onboarding report says no migration-owned work is required, run deploy <config.yaml>"
         in normalized_soperator_help
     )
-    assert "Use deploy --target <target-id> only to narrow one run" in (
-        normalized_soperator_help
-    )
+    assert "Use deploy --target <target-id> only to narrow one run" in (normalized_soperator_help)
     assert "deploy-report.md plus deploy-time validations" in normalized_soperator_help
     assert "If migration-owned work is required, do not deploy first" in normalized_soperator_help
     assert "ext-soperator migrate --dry-run" in normalized_soperator_help
@@ -18507,17 +16532,14 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "--strategy-max-surge-count" in normalized_soperator_onboard_help
     assert "--strategy-max-unavailable-count" in normalized_soperator_onboard_help
     assert "--strategy-drain-timeout" in normalized_soperator_onboard_help
-    assert "Default: 0 for zero-surge / 1 for safe-surge" in (
-        normalized_soperator_onboard_help
-    )
-    assert "Default: 1 for zero-surge / 0 for safe-surge" in (
-        normalized_soperator_onboard_help
-    )
+    assert "Default: 0 for zero-surge / 1 for safe-surge" in (normalized_soperator_onboard_help)
+    assert "Default: 1 for zero-surge / 0 for safe-surge" in (normalized_soperator_onboard_help)
     assert "--source-version 1.23.3" not in normalized_soperator_onboard_help
     assert "nebius-cxcli validate <config.yaml>" in normalized_soperator_onboard_help
     assert "nebius-cxcli render <config.yaml>" in normalized_soperator_onboard_help
-    assert "reruns refresh read-only source discovery and Nebius provider node-template inventory by node group" in (
-        normalized_soperator_onboard_help
+    assert (
+        "reruns refresh read-only source discovery and Nebius provider node-template inventory by node group"
+        in (normalized_soperator_onboard_help)
     )
     assert "--cluster-id selects the Nebius MK8s cluster to adopt" in (
         normalized_soperator_onboard_help
@@ -18558,24 +16580,18 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "Not the Nebius cluster_id or display name" in normalized_soperator_migrate_help
     assert "Use --dry-run for the read-only plan" in normalized_soperator_migrate_help
     assert "Use --execute only after accepting that plan" in normalized_soperator_migrate_help
-    assert "Confirm approval for the accepted migration plan" in (
-        normalized_soperator_migrate_help
-    )
+    assert "Confirm approval for the accepted migration plan" in (normalized_soperator_migrate_help)
     assert "auto-detects source worker node groups" in normalized_soperator_migrate_help
     assert (
         "nebius-cxcli ext-soperator migrate ./deployments/tenant/project/config.yaml "
         "--target external-cluster --execute --approve"
     ) in normalized_soperator_migrate_help
-    assert "source-soperator-cluster-discovery-report.json" in (
-        normalized_soperator_migrate_help
-    )
+    assert "source-soperator-cluster-discovery-report.json" in (normalized_soperator_migrate_help)
     assert "validates the accepted onboarding analysis" in normalized_soperator_migrate_help
     assert "If the accepted onboarding report has no migration-owned actions" in (
         normalized_soperator_migrate_help
     )
-    assert "run render and deploy <config.yaml> instead" in (
-        normalized_soperator_migrate_help
-    )
+    assert "run render and deploy <config.yaml> instead" in (normalized_soperator_migrate_help)
     assert "deploy writes deploy-report.md and runs deploy-time validations" in (
         normalized_soperator_migrate_help
     )
@@ -18599,8 +16615,9 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "selected worker nodes to start Ready and schedulable" in (
         normalized_soperator_migrate_help
     )
-    assert "service-role source node groups one group at a time with zero-surge node-group updates" in (
-        normalized_soperator_migrate_help
+    assert (
+        "service-role source node groups one group at a time with zero-surge node-group updates"
+        in (normalized_soperator_migrate_help)
     )
     assert "attaches them to discovered Nebius node groups" in normalized_soperator_migrate_help
     assert "max_surge=0, max_unavailable=1, drain_timeout=30m" in (
@@ -18615,7 +16632,9 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "creates or reuses aligned SFS filesystems" in normalized_soperator_migrate_help
     assert "Soperator/Slurm smoke validation" in normalized_soperator_migrate_help
     assert "one-task srun job" in normalized_soperator_migrate_help
-    assert "Slurm NCCL benchmark using two idle GPU Slurm nodes" in normalized_soperator_migrate_help
+    assert (
+        "Slurm NCCL benchmark using two idle GPU Slurm nodes" in normalized_soperator_migrate_help
+    )
     assert "only idle multi-GPU Slurm node" in normalized_soperator_migrate_help
     assert "migrate-report.md" in normalized_soperator_migrate_help
     assert "shows an interactive progress spinner and phase-aware Soperator migration status" in (
@@ -21631,10 +19650,13 @@ def test_soperator_profile_managed_groups_track_selected_shape_defaults() -> Non
         is False
     )
 
-    mk8s_inputs["node_group_defaults"]["gpu"]["infiniband_fabric"] = "fabric-6"
+    mk8s_inputs.setdefault("gpu_clusters", {}).setdefault("workers", {})[
+        "infiniband_fabric"
+    ] = "fabric-6"
 
-    assert cli._materialize_soperator_component_defaults(payload) is True
+    assert cli._materialize_soperator_component_defaults(payload) is False
 
+    assert "infiniband_fabric" not in mk8s_inputs["node_group_defaults"]["gpu"]
     assert mk8s_inputs["gpu_clusters"]["workers"]["infiniband_fabric"] == "fabric-6"
     assert mk8s_inputs["node_groups"]["worker"]["gpu_cluster_key"] == "workers"
 
@@ -22484,15 +20506,15 @@ def test_soperator_onboarding_rejects_removed_chart_local_storage_mode() -> None
                             }
                         }
                     },
-                        "soperator_onboarding": {
-                            "accepted": True,
-                            "analysis_fingerprint": "",
-                            "state": "no-soperator-detected",
-                            "storage_mode": "use-existing-pvc-or-storageclass",
-                            "actions": ["configure-soperator-storage", "install-soperator"],
-                        },
-                    }
-                ]
+                    "soperator_onboarding": {
+                        "accepted": True,
+                        "analysis_fingerprint": "",
+                        "state": "no-soperator-detected",
+                        "storage_mode": "use-existing-pvc-or-storageclass",
+                        "actions": ["configure-soperator-storage", "install-soperator"],
+                    },
+                }
+            ]
         },
         "infra": {"components": []},
         "apps": {
@@ -22935,25 +20957,25 @@ def test_soperator_placements_derive_tolerations_from_mk8s_taints() -> None:
                     "id": "soperator",
                     "instance_id": "cluster1",
                     "enabled": True,
-                        "placements": {
-                            "system": "system",
-                            "controller": "controller",
-                            "login": "login",
-                            "accounting": "accounting",
-                            "worker": ["worker"],
-                        },
-                        "values": {
-                            "rebooter": {
-                                "tolerations": [
-                                    {
-                                        "key": "custom.nebius.ai/reboot",
+                    "placements": {
+                        "system": "system",
+                        "controller": "controller",
+                        "login": "login",
+                        "accounting": "accounting",
+                        "worker": ["worker"],
+                    },
+                    "values": {
+                        "rebooter": {
+                            "tolerations": [
+                                {
+                                    "key": "custom.nebius.ai/reboot",
                                     "operator": "Exists",
                                     "effect": "NoSchedule",
                                 }
                             ]
-                            },
                         },
-                    }
+                    },
+                }
             ]
         },
     }
@@ -23063,17 +21085,17 @@ def test_soperator_placements_preserve_explicit_node_group_sfs_keys() -> None:
         "apps": {
             "charts": [
                 {
-                        "id": "soperator",
-                        "instance_id": "cluster1",
-                        "enabled": True,
-                        "placements": {
-                            "controller": "controller",
-                            "worker": ["worker"],
-                        },
-                        "values": {},
-                    }
-                ]
-            },
+                    "id": "soperator",
+                    "instance_id": "cluster1",
+                    "enabled": True,
+                    "placements": {
+                        "controller": "controller",
+                        "worker": ["worker"],
+                    },
+                    "values": {},
+                }
+            ]
+        },
     }
 
     assert cli._materialize_soperator_component_defaults(payload) is True

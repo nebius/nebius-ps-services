@@ -6,6 +6,7 @@ from rich.markup import escape
 
 WARNING_COLOR = "#ffbf00"
 ERROR_COLOR = "red"
+COPY_PASTE_COMMAND_COLOR = "#00d7ff"
 
 
 def _styled_markup(text: str, *, color: str, bold: bool = False) -> str:
@@ -21,4 +22,15 @@ def error_markup(text: str, *, bold: bool = False) -> str:
     return _styled_markup(text, color=ERROR_COLOR, bold=bold)
 
 
-__all__ = ["ERROR_COLOR", "WARNING_COLOR", "error_markup", "warning_markup"]
+def copy_paste_command_markup(command: str) -> str:
+    return _styled_markup(command, color=COPY_PASTE_COMMAND_COLOR, bold=True)
+
+
+__all__ = [
+    "COPY_PASTE_COMMAND_COLOR",
+    "ERROR_COLOR",
+    "WARNING_COLOR",
+    "copy_paste_command_markup",
+    "error_markup",
+    "warning_markup",
+]

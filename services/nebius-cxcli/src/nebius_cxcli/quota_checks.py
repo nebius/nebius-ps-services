@@ -13,7 +13,7 @@ from typing import Any, cast
 
 from .capacity_dashboard import (
     CapacityResourceAdvice,
-    capacity_lane,
+    capacity_mode_available,
     capacity_mode_sort_key,
     filter_capacity_resource_advice,
     list_capacity_resource_advice,
@@ -563,44 +563,74 @@ def _regional_availability_lines(report: QuotaReport) -> list[str]:
     return lines
 
 
+def _quota_check_uses_capacity_dashboard(item: QuotaCheck) -> bool:
+    return item.source_scope.startswith("capacity-dashboard") or item.description.startswith(
+        "Capacity Dashboard"
+    )
+
+
+def _quota_check_source_detail(item: QuotaCheck) -> str:
+    if not _quota_check_uses_capacity_dashboard(item) or not item.description:
+        return ""
+    return f" via {item.description}"
+
+
+def _quota_report_label(text: str, *, markup: bool) -> str:
+    return warning_markup(text) if markup else text
+
+
 def format_quota_report_lines(
     report: QuotaReport,
     *,
     phase: str,
     include_coverage_gaps: bool = True,
     include_confirmed_components: bool = False,
+    markup: bool = True,
 ) -> list[str]:
     lines: list[str] = []
     if report.errors:
         lines.append(
-            f"{warning_markup('Quota check warning:')} "
+            f"{_quota_report_label('Quota check warning:', markup=markup)} "
             f"{phase} quota assessment was not fully available."
         )
         for item in report.errors:
             lines.append(f"  - {item}")
     if report.insufficient_checks:
+        shortage_kind = (
+            "Nebius quota/capacity"
+            if any(_quota_check_uses_capacity_dashboard(item) for item in report.insufficient_checks)
+            else "Nebius quota"
+        )
         lines.append(
-            f"{warning_markup('Quota warning:')} {phase} detected insufficient Nebius quota."
+            f"{_quota_report_label('Quota warning:', markup=markup)} "
+            f"{phase} detected insufficient {shortage_kind}."
         )
         for item in report.insufficient_checks:
             required = _format_amount(item.required, item.unit)
             available = _format_amount(item.available, item.unit)
+            source_detail = _quota_check_source_detail(item)
             lines.append(
                 "  - "
                 f"{item.component_label}: {item.region} {item.quota_name} requires {required}, "
-                f"available {available} ({item.reason})"
+                f"available {available}{source_detail} ({item.reason})"
             )
     if report.unknown_checks:
+        unresolved_kind = (
+            "live quota/capacity limits"
+            if any(_quota_check_uses_capacity_dashboard(item) for item in report.unknown_checks)
+            else "live quota limits"
+        )
         lines.append(
-            f"{warning_markup('Quota unresolved:')} "
-            f"{phase} could not resolve one or more live quota limits."
+            f"{_quota_report_label('Quota unresolved:', markup=markup)} "
+            f"{phase} could not resolve one or more {unresolved_kind}."
         )
         for item in report.unknown_checks:
             required = _format_amount(item.required, item.unit)
+            source_detail = _quota_check_source_detail(item)
             lines.append(
                 "  - "
                 f"{item.component_label}: {item.region} {item.quota_name} requires {required}, "
-                f"available unknown ({item.reason})"
+                f"available unknown{source_detail} ({item.reason})"
             )
     if include_confirmed_components:
         confirmed_component_summaries = _confirmed_component_summaries(report)
@@ -616,7 +646,7 @@ def format_quota_report_lines(
                         lines.append(f"      - {quota_name}")
     if include_coverage_gaps and report.coverage_gaps:
         lines.append(
-            f"{warning_markup('Quota coverage gap:')} "
+            f"{_quota_report_label('Quota coverage gap:', markup=markup)} "
             "quota could not be fully evaluated for the following component(s)."
         )
         for component_label, gap_messages in _coverage_gap_component_details(report):
@@ -1184,13 +1214,18 @@ def _gpu_capacity_availability(
             f"{shape.platform}/{shape.preset}{fabric_detail}",
         )
 
-    lane_name, lane = capacity_lane(selected, mode=shape.mode)
-    available = lane.available * shape.gpu_count_per_instance
+    lane_name, available_vm_slots = capacity_mode_available(selected, mode=shape.mode)
+    available = available_vm_slots * shape.gpu_count_per_instance
     fabric_detail = f", fabric {selected.fabric}" if selected.fabric else ""
-    description = (
-        "Capacity Dashboard GPU availability "
-        f"({lane_name} VM slots{fabric_detail}, converted to GPU units)"
-    )
+    if lane_name == "auto":
+        lane_detail = "AUTO reservation policy: reserved + on-demand VM slots"
+    elif shape.mode == "reserved":
+        lane_detail = "STRICT reservation policy: reserved VM slots"
+    elif shape.mode == "on-demand":
+        lane_detail = "FORBID reservation policy: on-demand VM slots"
+    else:
+        lane_detail = f"{lane_name} VM slots"
+    description = f"Capacity Dashboard GPU availability ({lane_detail}{fabric_detail}, converted to GPU units)"
     return (
         available,
         requirement.required <= available,
@@ -1852,6 +1887,31 @@ def _node_group_preemptible(inputs: dict[str, Any], group: Mapping[str, Any], *,
     return False
 
 
+def _node_group_reservation_policy(group: Mapping[str, Any], *, gpu: bool) -> str:
+    if not gpu:
+        return ""
+    reservation = group.get("reservation")
+    if isinstance(reservation, Mapping):
+        policy = _mapping_text(reservation, "policy")
+        if policy:
+            return policy.upper()
+    policy = _mapping_text(group, "reservation_policy")
+    return policy.upper() if policy else "FORBID"
+
+
+def _gpu_capacity_mode(*, preemptible: bool, reservation_policy: str) -> str:
+    if preemptible:
+        return "preemptible"
+    normalized_policy = _as_text(reservation_policy).upper()
+    if normalized_policy == "AUTO":
+        return "auto"
+    if normalized_policy == "STRICT":
+        return "reserved"
+    if normalized_policy == "FORBID":
+        return "on-demand"
+    return "regular"
+
+
 def _node_group_public_ips(inputs: dict[str, Any], group: Mapping[str, Any], *, gpu: bool) -> bool:
     if group.get("public_ips") is not None:
         return bool(group.get("public_ips"))
@@ -1922,6 +1982,7 @@ def _estimate_mk8s_generic_node_group_requirements(
         platform = _node_group_platform(inputs, raw_group, gpu=gpu)
         preset = _node_group_preset(inputs, raw_group, gpu=gpu)
         preemptible = _node_group_preemptible(inputs, raw_group, gpu=gpu)
+        reservation_policy = _node_group_reservation_policy(raw_group, gpu=gpu)
         public_ips = _node_group_public_ips(inputs, raw_group, gpu=gpu)
 
         _append_requirement(
@@ -1990,12 +2051,18 @@ def _estimate_mk8s_generic_node_group_requirements(
                 quota_name=_gpu_quota_name(platform),
                 region=region,
                 required=resources.gpu_count * count,
-                reason=f"{count} GPU node(s) at {platform}/{preset} for '{group_label}'",
+                reason=(
+                    f"{count} GPU node(s) at {platform}/{preset} for '{group_label}'"
+                    f" (reservation policy {reservation_policy or 'FORBID'})"
+                ),
                 gpu_capacity_shape=_gpu_capacity_shape(
                     platform=platform,
                     preset=preset,
                     fabric=gpu_fabric,
-                    mode="preemptible" if preemptible else "regular",
+                    mode=_gpu_capacity_mode(
+                        preemptible=preemptible,
+                        reservation_policy=reservation_policy,
+                    ),
                     resources=resources,
                 ),
             )

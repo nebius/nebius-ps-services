@@ -27,6 +27,43 @@ _EXPECTED_VPC_CUSTOM_PRIVATE_CIDR_SUGGESTIONS = (
 )
 
 
+def test_upgrade_discovery_status_uses_spinner_for_terminal(monkeypatch) -> None:
+    events: list[object] = []
+    message = "[cyan]Discovering live MK8s state and preparing node-template upgrade plan...[/cyan]"
+
+    class _FakeStatus:
+        def __enter__(self):
+            events.append("enter")
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            del exc_type, exc, tb
+            events.append("exit")
+            return False
+
+    class _FakeConsole:
+        is_terminal = True
+
+        def status(self, status_message: str, *, spinner: str):
+            events.append(("status", status_message, spinner))
+            return _FakeStatus()
+
+        def print(self, *_args: object, **_kwargs: object) -> None:
+            raise AssertionError("terminal status should use console.status")
+
+    monkeypatch.setattr(cli, "console", _FakeConsole())
+
+    with cli._upgrade_discovery_status(message):
+        events.append("body")
+
+    assert events == [
+        ("status", message, "dots"),
+        "enter",
+        "body",
+        "exit",
+    ]
+
+
 def test_prompt_choice_override_tty_cancel_stops_wizard(
     monkeypatch,
 ) -> None:
@@ -3858,6 +3895,225 @@ def test_prompt_scalar_override_unset_on_skip_leaves_non_choice_scalars_unset(
     assert value is None
     assert captured["default"] == ""
     assert "blank keeps unset" in str(captured["text"])
+
+
+def test_upgrade_node_template_node_group_prompt_mentions_blank_selects_all(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(cli, "_upgrade_interactive_prompts_enabled", lambda: True)
+    captured: dict[str, Any] = {}
+
+    def _fake_prompt(text: str, default=None):
+        captured["text"] = text
+        captured["default"] = default
+        return ""
+
+    monkeypatch.setattr(cli.typer, "prompt", _fake_prompt)
+
+    value = cli._prompt_upgrade_node_group_if_guided(
+        path_prefix="upgrade.node_template",
+        guided=True,
+        node_group="",
+    )
+
+    assert value == ""
+    assert captured["default"] == ""
+    assert "blank = all managed node groups" in str(captured["text"])
+    assert "blank keeps unset" not in str(captured["text"])
+
+
+def test_upgrade_strategy_choice_explains_safe_surge_default_spare_node(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(cli, "_upgrade_interactive_prompts_enabled", lambda: True)
+    captured: dict[str, Any] = {}
+
+    def _fake_prompt(path_label: str, current: object, **kwargs: object):
+        del current
+        if path_label == "upgrade.node_template.strategy":
+            captured["choices"] = kwargs["choices"]
+            return cli.DISRUPTION_POLICY_SAFE, False
+        if path_label == "upgrade.node_template.strategy_max_surge_count":
+            return 1, False
+        if path_label == "upgrade.node_template.drain_timeout":
+            return "auto", False
+        raise AssertionError(f"unexpected prompt: {path_label}")
+
+    monkeypatch.setattr(cli, "_prompt_scalar_override", _fake_prompt)
+
+    cli._prompt_upgrade_disruption_options_if_guided(
+        path_prefix="upgrade.node_template",
+        guided=True,
+        dry_run=True,
+        disruption_policy=cli.DISRUPTION_POLICY_ALLOW_UNAVAILABLE,
+        drain_timeout="auto",
+        strategy_max_surge_count=None,
+        skip_validations=True,
+    )
+
+    labels = [choice.label for choice in captured["choices"]]
+    assert (
+        "safe-surge  (default 1 spare node per active node group; preserves active capacity)"
+        in labels
+    )
+    assert (
+        "force-delete  (last resort; auto=10m, then deletes remaining Pods and node)"
+        in labels
+    )
+
+
+def test_upgrade_drain_timeout_prompt_mentions_auto_strategy_default(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(cli, "_upgrade_interactive_prompts_enabled", lambda: True)
+    captured: dict[str, tuple[str, object]] = {}
+
+    def _fake_prompt(text: str, default=None):
+        label = str(text)
+        if "strategy_max_surge_count" in label:
+            captured["strategy_max_surge_count"] = (label, default)
+            return "1"
+        captured["drain_timeout"] = (label, default)
+        return "auto"
+
+    monkeypatch.setattr(cli.typer, "prompt", _fake_prompt)
+
+    dry_run, policy, drain_timeout, strategy_max_surge_count, skip_validations = (
+        cli._prompt_upgrade_disruption_options_if_guided(
+            path_prefix="upgrade.node_template",
+            guided=True,
+            dry_run=True,
+            disruption_policy=cli.DISRUPTION_POLICY_SAFE,
+            drain_timeout="auto",
+            strategy_max_surge_count=None,
+            skip_validations=True,
+        )
+    )
+
+    assert (dry_run, policy, drain_timeout, strategy_max_surge_count, skip_validations) == (
+        True,
+        cli.DISRUPTION_POLICY_SAFE,
+        "auto",
+        1,
+        True,
+    )
+    surge_prompt, surge_default = captured["strategy_max_surge_count"]
+    assert surge_default == 1
+    assert "temporary extra nodes per active node group" in surge_prompt
+    drain_prompt, drain_default = captured["drain_timeout"]
+    assert drain_default == "auto"
+    assert "auto = 30m for zero-surge/safe-surge; 10m for force-delete" in drain_prompt
+
+
+def test_upgrade_drain_timeout_backtracks_to_strategy_prompt(monkeypatch) -> None:
+    monkeypatch.setattr(cli, "_upgrade_interactive_prompts_enabled", lambda: True)
+    responses: dict[str, list[object]] = {
+        "upgrade.node_template.strategy": [
+            cli.DISRUPTION_POLICY_ALLOW_UNAVAILABLE,
+            cli.DISRUPTION_POLICY_SAFE,
+        ],
+        "upgrade.node_template.strategy_max_surge_count": [1],
+        "upgrade.node_template.drain_timeout": [cli._WIZARD_BACKTRACK, "auto"],
+    }
+    prompted_paths: list[str] = []
+
+    def _fake_prompt(
+        path_label: str,
+        current: object,
+        *,
+        choices=None,
+        type_hint: str | None = None,
+        required: bool = False,
+        unset_on_skip: bool = False,
+        **_kwargs: object,
+    ) -> tuple[object, bool]:
+        del current, choices, type_hint, required, unset_on_skip
+        prompted_paths.append(path_label)
+        return responses[path_label].pop(0), False
+
+    monkeypatch.setattr(cli, "_prompt_scalar_override", _fake_prompt)
+
+    dry_run, policy, drain_timeout, strategy_max_surge_count, skip_validations = (
+        cli._prompt_upgrade_disruption_options_if_guided(
+            path_prefix="upgrade.node_template",
+            guided=True,
+            dry_run=True,
+            disruption_policy=cli.DISRUPTION_POLICY_ALLOW_UNAVAILABLE,
+            drain_timeout="auto",
+            strategy_max_surge_count=None,
+            skip_validations=True,
+        )
+    )
+
+    assert (dry_run, policy, drain_timeout, strategy_max_surge_count, skip_validations) == (
+        True,
+        cli.DISRUPTION_POLICY_SAFE,
+        "auto",
+        1,
+        True,
+    )
+    assert prompted_paths == [
+        "upgrade.node_template.strategy",
+        "upgrade.node_template.drain_timeout",
+        "upgrade.node_template.strategy",
+        "upgrade.node_template.strategy_max_surge_count",
+        "upgrade.node_template.drain_timeout",
+    ]
+
+
+def test_upgrade_drain_timeout_backtracks_to_safe_surge_count_prompt(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(cli, "_upgrade_interactive_prompts_enabled", lambda: True)
+    responses: dict[str, list[object]] = {
+        "upgrade.node_template.strategy": [cli.DISRUPTION_POLICY_SAFE],
+        "upgrade.node_template.strategy_max_surge_count": [2, 3],
+        "upgrade.node_template.drain_timeout": [cli._WIZARD_BACKTRACK, "auto"],
+    }
+    prompted_paths: list[str] = []
+
+    def _fake_prompt(
+        path_label: str,
+        current: object,
+        *,
+        choices=None,
+        type_hint: str | None = None,
+        required: bool = False,
+        unset_on_skip: bool = False,
+        **_kwargs: object,
+    ) -> tuple[object, bool]:
+        del current, choices, type_hint, required, unset_on_skip
+        prompted_paths.append(path_label)
+        return responses[path_label].pop(0), False
+
+    monkeypatch.setattr(cli, "_prompt_scalar_override", _fake_prompt)
+
+    dry_run, policy, drain_timeout, strategy_max_surge_count, skip_validations = (
+        cli._prompt_upgrade_disruption_options_if_guided(
+            path_prefix="upgrade.node_template",
+            guided=True,
+            dry_run=True,
+            disruption_policy=cli.DISRUPTION_POLICY_ALLOW_UNAVAILABLE,
+            drain_timeout="auto",
+            strategy_max_surge_count=None,
+            skip_validations=True,
+        )
+    )
+
+    assert (dry_run, policy, drain_timeout, strategy_max_surge_count, skip_validations) == (
+        True,
+        cli.DISRUPTION_POLICY_SAFE,
+        "auto",
+        3,
+        True,
+    )
+    assert prompted_paths == [
+        "upgrade.node_template.strategy",
+        "upgrade.node_template.strategy_max_surge_count",
+        "upgrade.node_template.drain_timeout",
+        "upgrade.node_template.strategy_max_surge_count",
+        "upgrade.node_template.drain_timeout",
+    ]
 
 
 def test_prompt_choice_override_tty_keeps_skip_for_optional_recommended_default(

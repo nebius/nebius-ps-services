@@ -442,7 +442,7 @@ BUILTIN_WIZARD_PROFILES: dict[str, dict[str, dict[str, Any]]] = {
                 "from": "compute_platform_presets",
                 "depends_on": "inputs.node_group_defaults.gpu.platform",
                 "args": {
-                    "gpu_cluster_required_path": "inputs.node_group_defaults.gpu.infiniband_fabric"
+                    "gpu_cluster_required_path": "inputs.gpu_clusters.workers.infiniband_fabric"
                 },
                 "auto_select_single": True,
             }
@@ -467,11 +467,14 @@ BUILTIN_WIZARD_PROFILES: dict[str, dict[str, dict[str, Any]]] = {
             "default": "nebius_image",
             "write_default_to_config": True,
         },
-        "inputs.node_group_defaults.gpu.infiniband_fabric": {
+        "inputs.gpu_clusters.workers.infiniband_fabric": {
             "options": {
                 "from": "mk8s_infiniband_fabrics",
                 "depends_on": "inputs.node_group_defaults.gpu.platform",
-                "args": {"preset_path": "inputs.node_group_defaults.gpu.preset"},
+                "args": {
+                    "platform_path": "inputs.node_group_defaults.gpu.platform",
+                    "preset_path": "inputs.node_group_defaults.gpu.preset",
+                },
                 "auto_select_first": True,
                 "skip_prompt_if_no_choices": True,
             }

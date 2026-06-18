@@ -1206,6 +1206,8 @@ components:
                         type: NETWORK_SSD
                       gpu_stack_source: nebius_image
                       gpu_stack_preset: cuda13.0
+                gpu_clusters:
+                  workers: {}
                 gpu_cluster_key: workers
                 node_groups:
                   system:
@@ -1872,6 +1874,8 @@ components:
                         type: NETWORK_SSD
                       gpu_stack_source: nebius_image
                       gpu_stack_preset: cuda13.0
+                gpu_clusters:
+                  workers: {}
                 gpu_cluster_key: workers
                 node_groups:
                   system:

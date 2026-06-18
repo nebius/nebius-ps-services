@@ -1099,22 +1099,30 @@ def test_render_deploy_hint_lists_execute_for_multiple_migration_targets(
     assert "second-cluster" in output
     assert "Next step: dry-run each migration-required Soperator target:" in lines
     assert (
-        f"nebius-cxcli ext-soperator migrate {config_arg} "
-        "--target external-cluster --dry-run"
-    ) in lines
+        cli_module.copy_paste_command_markup(
+            f"nebius-cxcli ext-soperator migrate {config_arg} --target external-cluster --dry-run"
+        )
+        in lines
+    )
     assert (
-        f"nebius-cxcli ext-soperator migrate {config_arg} "
-        "--target second-cluster --dry-run"
-    ) in lines
+        cli_module.copy_paste_command_markup(
+            f"nebius-cxcli ext-soperator migrate {config_arg} --target second-cluster --dry-run"
+        )
+        in lines
+    )
     assert "After accepting each dry-run plan, execute that target:" in lines
     assert (
-        f"nebius-cxcli ext-soperator migrate {config_arg} "
-        "--target external-cluster --execute --approve"
-    ) in lines
+        cli_module.copy_paste_command_markup(
+            f"nebius-cxcli ext-soperator migrate {config_arg} --target external-cluster --execute --approve"
+        )
+        in lines
+    )
     assert (
-        f"nebius-cxcli ext-soperator migrate {config_arg} "
-        "--target second-cluster --execute --approve"
-    ) in lines
+        cli_module.copy_paste_command_markup(
+            f"nebius-cxcli ext-soperator migrate {config_arg} --target second-cluster --execute --approve"
+        )
+        in lines
+    )
     assert "Do not run `nebius-cxcli deploy` before `ext-soperator migrate`" in output
 
 
@@ -3785,7 +3793,7 @@ def test_create_explains_soperator_required_component_selection(
             return [cli_module.OptionChoice(value="vpcsubnet-1", label="default subnet")]
         if full_path_label.endswith(".inputs.cluster.k8s_version"):
             return [cli_module.OptionChoice(value="1.33", label="1.33")]
-        if full_path_label.endswith(".inputs.node_group_defaults.gpu.infiniband_fabric"):
+        if full_path_label.endswith(".inputs.gpu_clusters.workers.infiniband_fabric"):
             return [cli_module.OptionChoice(value="fabric-1", label="fabric-1")]
         return []
 
@@ -3838,7 +3846,7 @@ def test_create_explains_soperator_required_component_selection(
     assert mk8s_inputs["cluster"]["network_id"] == "vpcnetwork-1"
     assert mk8s_inputs["cluster"]["subnet_id"] == "vpcsubnet-1"
     assert mk8s_inputs["cluster"]["k8s_version"] == "1.33"
-    assert mk8s_inputs["node_group_defaults"]["gpu"]["infiniband_fabric"] == "fabric-1"
+    assert "infiniband_fabric" not in mk8s_inputs["node_group_defaults"]["gpu"]
     assert mk8s_inputs["gpu_clusters"] == {"workers": {"infiniband_fabric": "fabric-1"}}
     assert mk8s_inputs["node_groups"]["worker"]["gpu_cluster_key"] == "workers"
     assert mk8s_inputs["node_groups"]["worker"]["reservation"] == {"policy": "AUTO"}

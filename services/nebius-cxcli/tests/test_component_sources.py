@@ -3105,7 +3105,7 @@ def test_bundled_mk8s_declares_optional_wizard_field_override() -> None:
         ]
         is True
     )
-    assert mk8s_wizard_fields["inputs.node_group_defaults.gpu.infiniband_fabric"] == {
+    assert mk8s_wizard_fields["inputs.gpu_clusters.workers.infiniband_fabric"] == {
         "options": {
             "from": "mk8s_infiniband_fabrics",
             "args": {

@@ -7,15 +7,15 @@ from dataclasses import replace
 from typing import Any
 
 from .mk8s_upgrade import (
+    CompatibilityChoice,
     LiveNodeGroup,
-    NodeLayerUpgradeSpec,
     live_node_group_from_sdk,
-    select_live_node_groups_for_node_layer,
-    select_live_node_groups_for_os_image,
+    node_group_uses_nebius_gpu_image,
+    select_live_node_groups_for_node_template,
     sort_live_node_groups,
     source_node_groups_by_name,
 )
-from .provider_options import OptionChoice, ProviderOptionLookup
+from .provider_options import OptionChoice
 
 
 def _text(value: object) -> str:
@@ -25,17 +25,6 @@ def _text(value: object) -> str:
 def _raw_node_group_name(node_group: Any) -> str:
     metadata = getattr(node_group, "metadata", None)
     return _text(getattr(metadata, "name", None)) or _text(getattr(metadata, "id", None))
-
-
-def _node_group_field_path(
-    *,
-    component_path_label: str,
-    group: LiveNodeGroup,
-    field: str,
-) -> str:
-    if component_path_label and group.source is not None and group.source.key:
-        return f"{component_path_label}.inputs.node_groups.{group.source.key}.{field}"
-    return f"upgrade.node_groups.{group.name}.{field}"
 
 
 def live_node_groups_from_sdk(
@@ -63,18 +52,6 @@ def recommended_choice_value(choices: Sequence[OptionChoice]) -> str:
     if not choices:
         return ""
     return next((choice.value for choice in choices if choice.recommended), choices[0].value)
-
-
-def _append_choice(
-    choices: list[OptionChoice],
-    seen: set[str],
-    choice: OptionChoice,
-) -> None:
-    value = _text(choice.value)
-    if not value or value in seen:
-        return
-    choices.append(choice)
-    seen.add(value)
 
 
 def _finalize_upgrade_choices(
@@ -108,162 +85,127 @@ def _finalize_upgrade_choices(
     return resolved
 
 
-def _provider_choice_args(
-    *,
-    project_id: str,
-    tenant_id: str,
-    region_id: str,
-    k8s_version: str,
+def _choice_field(choice: CompatibilityChoice | Any, field: str) -> str:
+    return _text(getattr(choice, field, None))
+
+
+def _common_ordered_values(value_sets: Sequence[Sequence[str]]) -> list[str]:
+    if not value_sets:
+        return []
+    common = set(value_sets[0])
+    for values in value_sets[1:]:
+        common &= set(values)
+    return [value for value in value_sets[0] if value in common]
+
+
+def _node_template_choice_matches_group(
+    choice: CompatibilityChoice | Any,
     group: LiveNodeGroup,
-    spec: NodeLayerUpgradeSpec,
-) -> tuple[str, dict[str, Any]]:
-    if spec.live_field == "platform":
-        platform_prefix = ""
-        if group.platform.startswith("gpu-"):
-            platform_prefix = "gpu-"
-        elif group.platform.startswith("cpu-"):
-            platform_prefix = "cpu-"
-        args: dict[str, Any] = {
-            "kubernetes_version_default": k8s_version,
-            "project_id": project_id,
-        }
-        if platform_prefix:
-            args["platform_prefix"] = platform_prefix
-        return "mk8s_compatible_platforms", args
-
-    if spec.live_field == "drivers_preset":
-        return (
-            "mk8s_gpu_stack_presets",
-            {
-                "kubernetes_version_default": k8s_version,
-                "platform": group.platform,
-                "os": group.os,
-                "project_id": project_id,
-            },
-        )
-
-    if spec.live_field == "preset":
-        return (
-            "compute_platform_presets",
-            {
-                "platform": group.platform,
-                "project_id": project_id,
-                "tenant_id": tenant_id,
-                "region_id": region_id,
-            },
-        )
-
-    return "", {}
-
-
-def node_layer_value_choices(
     *,
-    provider_lookup: ProviderOptionLookup,
-    source_payload: dict[str, Any],
+    target_os: str = "",
+    target_gpu_stack_preset: str = "",
+) -> bool:
+    choice_platform = _choice_field(choice, "platform")
+    if choice_platform and group.platform and choice_platform != group.platform:
+        return False
+    choice_os = _choice_field(choice, "os")
+    if target_os and choice_os != target_os:
+        return False
+    choice_driver = _choice_field(choice, "drivers_preset")
+    if not group.gpu:
+        return not choice_driver
+    if node_group_uses_nebius_gpu_image(group):
+        if target_gpu_stack_preset:
+            return choice_driver == target_gpu_stack_preset
+        return bool(choice_driver)
+    return not choice_driver
+
+
+def node_template_os_choices(
+    *,
     source_component: Mapping[str, Any],
-    component_path_label: str,
-    project_id: str,
-    tenant_id: str,
-    region_id: str,
-    k8s_version: str,
-    spec: NodeLayerUpgradeSpec,
+    target_version: str,
+    target_gpu_stack_preset: str,
     live_node_groups: Sequence[Any],
     node_group: str,
+    compatibility_lookup: Any,
 ) -> list[OptionChoice]:
-    """Build live-provider choices for a node-template upgrade value."""
+    """Build OS choices valid for every selected node-template group."""
 
     groups = live_node_groups_from_sdk(
         source_component=source_component,
         live_node_groups=live_node_groups,
     )
-    selected_groups = select_live_node_groups_for_node_layer(
-        groups,
-        node_group=node_group,
-        group_filter=spec.group_filter,
-        command=spec.command,
-    )
-    choices: list[OptionChoice] = []
-    seen: set[str] = set()
-    current_values: set[str] = set()
+    selected_groups = select_live_node_groups_for_node_template(groups, node_group=node_group)
+    current_values = {group.os for group in selected_groups if group.os}
+    per_group_values: list[list[str]] = []
+    labels: dict[str, str] = {}
 
     for group in selected_groups:
-        current = {
-            "platform": group.platform,
-            "preset": group.preset,
-            "drivers_preset": group.drivers_preset,
-        }.get(spec.live_field, "")
-        if current:
-            current_values.add(current)
+        group_values: list[str] = []
+        for choice in compatibility_lookup(target_version=target_version, platform=group.platform):
+            if not _node_template_choice_matches_group(
+                choice,
+                group,
+                target_gpu_stack_preset=target_gpu_stack_preset,
+            ):
+                continue
+            os_value = _choice_field(choice, "os")
+            if not os_value or os_value in group_values:
+                continue
+            group_values.append(os_value)
+            labels.setdefault(os_value, os_value)
+        per_group_values.append(group_values)
 
-        provider, args = _provider_choice_args(
-            project_id=project_id,
-            tenant_id=tenant_id,
-            region_id=region_id,
-            k8s_version=k8s_version,
-            group=group,
-            spec=spec,
-        )
-        if not provider:
-            continue
-        field_path = _node_group_field_path(
-            component_path_label=component_path_label,
-            group=group,
-            field=spec.source_field,
-        )
-        for choice in provider_lookup.resolve(
-            provider=provider,
-            args=args,
-            payload=source_payload,
-            field_path=field_path,
-        ):
-            _append_choice(choices, seen, choice)
-
+    choices = [
+        OptionChoice(value=value, label=labels.get(value, value))
+        for value in _common_ordered_values(per_group_values)
+    ]
     return _finalize_upgrade_choices(
         choices,
         current_values=current_values,
         current_label="current on selected live node group",
     )
 
-
-def mk8s_os_image_choices(
+def node_template_gpu_stack_choices(
     *,
-    provider_lookup: ProviderOptionLookup,
-    source_payload: dict[str, Any],
     source_component: Mapping[str, Any],
-    component_path_label: str,
-    k8s_version: str,
+    target_version: str,
+    target_os: str,
     live_node_groups: Sequence[Any],
     node_group: str,
+    compatibility_lookup: Any,
 ) -> list[OptionChoice]:
-    """Build live compatibility-matrix OS choices for MK8s node groups."""
+    """Build GPU stack choices valid for every selected Nebius-image GPU group."""
 
     groups = live_node_groups_from_sdk(
         source_component=source_component,
         live_node_groups=live_node_groups,
     )
-    selected_groups = select_live_node_groups_for_os_image(groups, node_group=node_group)
-    choices: list[OptionChoice] = []
-    seen: set[str] = set()
-    current_values = {group.os for group in selected_groups if group.os}
+    selected_groups = select_live_node_groups_for_node_template(groups, node_group=node_group)
+    nebius_image_groups = tuple(
+        group for group in selected_groups if node_group_uses_nebius_gpu_image(group)
+    )
+    current_values = {group.drivers_preset for group in nebius_image_groups if group.drivers_preset}
+    per_group_values: list[list[str]] = []
+    labels: dict[str, str] = {}
 
-    for group in selected_groups:
-        field_path = _node_group_field_path(
-            component_path_label=component_path_label,
-            group=group,
-            field="os",
-        )
-        for choice in provider_lookup.resolve(
-            provider="mk8s_node_group_os_values",
-            args={
-                "kubernetes_version_default": k8s_version,
-                "platform": group.platform,
-                "stack_preset": group.drivers_preset,
-            },
-            payload=source_payload,
-            field_path=field_path,
-        ):
-            _append_choice(choices, seen, choice)
+    for group in nebius_image_groups:
+        group_values: list[str] = []
+        for choice in compatibility_lookup(target_version=target_version, platform=group.platform):
+            if not _node_template_choice_matches_group(choice, group, target_os=target_os):
+                continue
+            driver_preset = _choice_field(choice, "drivers_preset")
+            if not driver_preset or driver_preset in group_values:
+                continue
+            group_values.append(driver_preset)
+            labels.setdefault(driver_preset, f"{driver_preset}  ({target_os})")
+        per_group_values.append(group_values)
 
+    choices = [
+        OptionChoice(value=value, label=labels.get(value, value))
+        for value in _common_ordered_values(per_group_values)
+    ]
     return _finalize_upgrade_choices(
         choices,
         current_values=current_values,

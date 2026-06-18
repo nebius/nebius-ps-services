@@ -423,6 +423,18 @@ def _validate_mk8s_inputs(
             f"{base} uses removed MK8s shortcut input(s): {', '.join(legacy_keys)}. "
             "Use inputs.cluster and inputs.node_groups."
         )
+    node_group_defaults = inputs.get("node_group_defaults")
+    gpu_defaults = (
+        node_group_defaults.get("gpu")
+        if isinstance(node_group_defaults, Mapping)
+        else None
+    )
+    if isinstance(gpu_defaults, Mapping) and "infiniband_fabric" in gpu_defaults:
+        raise ValueError(
+            f"{base}.node_group_defaults.gpu.infiniband_fabric is no longer supported. "
+            "Use inputs.gpu_clusters.<key>.infiniband_fabric as the single source of "
+            "truth and keep GPU node groups pointing at that key with gpu_cluster_key."
+        )
 
     node_groups = iter_node_groups(inputs)
     selected_gpu_enabled = gpu_enabled(inputs)

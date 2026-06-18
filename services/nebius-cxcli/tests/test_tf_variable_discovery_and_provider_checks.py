@@ -6120,17 +6120,21 @@ def test_wizard_clears_stale_infiniband_when_gpu_preset_loses_cluster_support(
                         "instance_id": "mk8s",
                         "enabled": True,
                         "source": "../../platform-infra/modules/mk8s",
-                        "inputs": {
-                            "node_group_defaults": {
-                                "gpu": {
-                                    "platform": "gpu-b200-sxm",
-                                    "preset": "8gpu-160vcpu-1792gb",
-                                    "infiniband_fabric": "us-central1-b",
-                                }
+                            "inputs": {
+                                "node_group_defaults": {
+                                    "gpu": {
+                                        "platform": "gpu-b200-sxm",
+                                        "preset": "8gpu-160vcpu-1792gb",
+                                    }
+                                },
+                                "gpu_clusters": {
+                                    "workers": {
+                                        "infiniband_fabric": "us-central1-b",
+                                    }
+                                },
                             },
-                        },
-                    }
-                ],
+                        }
+                    ],
             },
             "apps": {
                 "charts": [
@@ -6159,7 +6163,7 @@ def test_wizard_clears_stale_infiniband_when_gpu_preset_loses_cluster_support(
                     "args": {"platform_path": "inputs.node_group_defaults.gpu.platform"},
                 }
             },
-            "inputs.node_group_defaults.gpu.infiniband_fabric": {
+            "inputs.gpu_clusters.workers.infiniband_fabric": {
                 "options": {
                     "from": "mk8s_infiniband_fabrics",
                     "args": {
@@ -6228,3 +6232,6 @@ def test_wizard_clears_stale_infiniband_when_gpu_preset_loses_cluster_support(
     gpu_defaults = inputs["node_group_defaults"]["gpu"]
     assert gpu_defaults["preset"] == "1gpu-20vcpu-224gb"
     assert "infiniband_fabric" not in gpu_defaults
+    assert "gpu_clusters" not in inputs or "infiniband_fabric" not in inputs["gpu_clusters"].get(
+        "workers", {}
+    )

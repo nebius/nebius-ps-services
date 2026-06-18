@@ -732,6 +732,46 @@ def test_runtime_validation_plugins_reject_non_clusterable_mk8s_gpu_preset_with_
         )
 
 
+def test_runtime_validation_plugins_reject_stale_mk8s_gpu_default_fabric(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(
+        "NEBIUS_CXCLI_RUNTIME_VALIDATION_PLUGINS",
+        "nebius_cxcli.runtime_component_validation:validate_component_runtime_rules",
+    )
+    payload = {
+        "__shared_admin_ssh_user_name__": "ubuntu",
+        "infra": {
+            "mk8s": {
+                "node_group_defaults": {
+                    "gpu": {
+                        "platform": "gpu-h100-sxm",
+                        "preset": "8gpu-128vcpu-1600gb",
+                        "infiniband_fabric": "fabric-4",
+                    }
+                },
+                "node_groups": {
+                    "worker": {
+                        "gpu": True,
+                        "node_count": 1,
+                        "platform": "gpu-h100-sxm",
+                        "preset": "8gpu-128vcpu-1600gb",
+                    }
+                },
+            }
+        },
+    }
+
+    with pytest.raises(ValueError, match="node_group_defaults.gpu.infiniband_fabric"):
+        run_runtime_validation_plugins(
+            payload=payload,
+            get_path=_get_path,
+            as_text=_as_text,
+            id_pattern=re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"),
+            env_var_pattern=re.compile(r"^[A-Z_][A-Z0-9_]*$"),
+        )
+
+
 def test_runtime_validation_plugins_reject_mk8s_infiniband_when_clustering_unconfirmed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -57,7 +57,19 @@ def capacity_lane(
     normalized_mode = _as_text(mode).lower() or "regular"
     if normalized_mode == "preemptible":
         return "preemptible", item.preemptible
+    if normalized_mode in {"on-demand", "on_demand", "forbid", "reservation-forbid"}:
+        return "on-demand", item.on_demand
+    if normalized_mode in {"reserved", "strict", "reservation-strict"}:
+        return "reserved", item.reserved
     return regular_capacity_lane(item)
+
+
+def capacity_mode_available(item: CapacityResourceAdvice, *, mode: str) -> tuple[str, int]:
+    normalized_mode = _as_text(mode).lower() or "regular"
+    if normalized_mode in {"auto", "reservation-auto"}:
+        return "auto", item.reserved.available + item.on_demand.available
+    lane_name, lane = capacity_lane(item, mode=mode)
+    return lane_name, lane.available
 
 
 def capacity_level_rank(level: str) -> int:
@@ -92,12 +104,20 @@ def capacity_mode_sort_key(
     mode: str,
     fabric_order: dict[str, int] | None = None,
 ) -> tuple[int, int, int, int, str]:
-    lane_name, lane = capacity_lane(item, mode=mode)
+    lane_name, available = capacity_mode_available(item, mode=mode)
+    if lane_name == "auto":
+        availability_rank = min(
+            capacity_level_rank(item.reserved.availability_level),
+            capacity_level_rank(item.on_demand.availability_level),
+        )
+    else:
+        _, lane = capacity_lane(item, mode=mode)
+        availability_rank = capacity_level_rank(lane.availability_level)
     fabric_rank = (fabric_order or {}).get(item.fabric, len(fabric_order or {}))
     return (
-        -lane.available,
+        -available,
         0 if lane_name == "on-demand" else 1 if lane_name == "reserved" else 2,
-        capacity_level_rank(lane.availability_level),
+        availability_rank,
         fabric_rank,
         item.fabric,
     )

@@ -6,6 +6,57 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Made MK8s GPU fabric single-source: Soperator GPU profiles now write
+  `inputs.gpu_clusters.<key>.infiniband_fabric` directly, validation rejects
+  stale `inputs.node_group_defaults.gpu.infiniband_fabric`, and raw fabric drift
+  is blocked during render/deploy/direct Terraform apply with guidance to run
+  the new `upgrade node-group ... --dry-run` planner.
+- Folded MK8s Kubernetes-version and OS image rolling updates into
+  `upgrade node-template`, making it the single public command for
+  Terraform-managed MK8s node-template version, OS, and Nebius-image GPU stack
+  updates. The former narrow public upgrade surfaces were removed without
+  aliases or compatibility shims.
+- Exposed the live Nebius MK8s compatibility-matrix summary in infra upgrade
+  plans: `upgrade node-template` now prints the returned OS and
+  `drivers_preset` choices for each selected platform before non-dry-run
+  mutation.
+- Made `upgrade node-template` wizard-capable: running it with only
+  `config.yaml` now prompts for the managed MK8s target, target Kubernetes
+  version, optional node group, compatible OS, required Nebius-image GPU stack,
+  dry-run/apply choice, strategy, drain timeout, and validation choice, while
+  `--no-interactive` keeps missing required values as fail-fast automation
+  errors.
+- Clarified guided upgrade prompts so blank `node_group` input says it selects
+  all managed node groups, `drain_timeout=auto` shows all strategy defaults,
+  and `force-delete` states that the 10m auto drain can end with remaining Pod
+  and old-node deletion.
+- Fixed guided `upgrade node-template` wizard backtracking so pressing `q` at
+  target selector, Kubernetes version, node-group, OS, GPU-stack, strategy,
+  safe-surge count, drain-timeout, validation, or apply-confirmation prompts
+  returns to the previous prompted step instead of cancelling the wizard.
+- Added a post-wizard `upgrade node-template` status spinner while cxcli
+  discovers live MK8s state, checks preflight blockers, and builds the upgrade
+  plan before printing it.
+- Made printed upgrade repeat dry-run commands preserve explicit dry-run
+  choices, including `--no-interactive`, `--drain-timeout auto`, default
+  safe-surge count, and selected validation/auth skip flags, so removing only
+  `--dry-run` keeps the apply command aligned with the reviewed plan.
+- Exposed MK8s upgrade safe-surge count in CLI and guided wizard flows:
+  `--strategy-max-surge-count` now controls the temporary extra nodes per
+  active node group for `--strategy safe-surge`, defaults to `1`, and is
+  rejected for non-safe-surge strategies.
+- Added a strict `upgrade node-template --strategy safe-surge` quota/capacity
+  preflight before any staged source write or Terraform mutation. The command
+  now estimates the temporary surge nodes for the selected node-group stages
+  and blocks on confirmed shortages, unknown limits, coverage gaps, or lookup
+  errors instead of discovering missing quota after the control plane has
+  already been updated. GPU node groups are checked against the same
+  InfiniBand fabric and `reservation.policy` as the selected node group, and
+  Capacity Dashboard shortages now print capacity/fabric details instead of
+  looking like generic quota allowance failures.
+- Fixed quota preflight failure messages raised through the CLI error path so
+  Rich color markup such as `[#ffbf00]Quota warning:[/]` is not printed
+  literally, while normal terminal quota reports remain colorized.
 - Removed confusing version-label wording from `upgrade` help and docs while
   preserving the documented supported upgrade scope.
 - Added create/component-add Helm chart version overrides for app charts:
@@ -96,6 +147,10 @@ All notable changes to this project are tracked here. This changelog follows
   component edit, render, Soperator onboarding, deploy, quota, WireGuard, and
   upgrade guidance are printed as separate first-column copy-paste lines
   instead of inline or indented prose.
+- Styled CLI copy-paste command helper lines in a distinct bold cyan terminal
+  color across create, component edit, render, Soperator onboarding, deploy,
+  quota, WireGuard, and upgrade guidance while keeping the command text
+  directly copyable.
 - Renamed the external Soperator migration report and execute summary field
   from `Mutation performed` to `Migration performed` so completed migrations are
   easier to recognize.
@@ -323,8 +378,7 @@ All notable changes to this project are tracked here. This changelog follows
   MK8s `upgrade` reruns that only wait for an already-requested rollout now
   still perform the final rendered apply needed to restore temporary
   `zero-surge`, `safe-surge`, or `force-delete` node-group strategies.
-- Added final MK8s readiness checks for `upgrade k8s-version`,
-  `upgrade node-template`, MK8s `upgrade os-image`, node-layer upgrades, and
+- Added final MK8s readiness checks for `upgrade node-template` and
   `ext-soperator migrate --execute`; commands now re-read live control-plane
   and node-group state before reporting success, including Nebius OS image and
   GPU `drivers_preset` / CUDA stack where applicable. Final checks now require
@@ -563,16 +617,16 @@ All notable changes to this project are tracked here. This changelog follows
   `slurm.nebius.ai/nodeset` / `slurm.nebius.ai/nodeset-name` labels, while
   preserving worker node groups in place and using migration-owned external
   node-group updates for template remediation.
-- Added a final `Next step: nebius-cxcli deploy <config.yaml>` helper line to
-  successful `render` command output, while suppressing that hint for internal
-  rerenders used by upgrade flows.
+- Added a final render helper to successful `render` command output: `Next step: deploy the rendered bundle:`
+  followed by a copy-paste `nebius-cxcli deploy <config.yaml>` command line.
+  Internal rerenders used by upgrade flows suppress this hint.
 - Clarified `component add` help and examples so `--config` is shown as the
   required config path option, target-bound app examples use the plural
   `apps:<chart>@<target>` selector form, and singular `app:` selector errors
   point operators at `apps:`.
 - Clarified `upgrade node-template` help so the command list and subcommand
   help call out that Kubernetes version, OS image, and GPU stack move together
-  in one non-interactive command with examples below.
+  in one combined command with examples below.
 - Updated the development lockfile to `aiohttp` 3.14.0 to resolve the open
   Dependabot alerts on `services/nebius-cxcli/uv.lock`.
 - Fixed high-priority teardown, recovery, notification, and observability
@@ -598,75 +652,34 @@ All notable changes to this project are tracked here. This changelog follows
   OS-specific GPU stack preset. The live compatibility lookup now shares the
   provider timeout policy and accepts both top-level and version-nested matrix
   response shapes.
-- Added the top-level `upgrade` command group with `upgrade k8s-version
-  <config.yaml> [infra:mk8s@<target>] --to-version <major.minor>` implemented for
-  Terraform-managed MK8s targets. The new flow plans with live Nebius SDK data,
-  prompts for target/version/core options from a config-only interactive
-  wizard, supports `--no-interactive` fail-fast automation, `--dry-run`,
-  upgrade strategies, and drain-timeout defaults, syncs `config.yaml` plus
-  `generated/`, runs Terraform plan and apply in staged control-plane then
-  per-node-group order, writes explicit node-group versions during the upgrade,
-  uses the SDK for live discovery/status/error watching rather than MK8s
-  mutation, keeps provider drain timeout separate from cxcli's rollout wait
-  budget, sizes SDK node-group rollout watches by node-group size, defaults
-  `zero-surge` and `safe-surge` drain timeout to `30m`, uses the explicit
-  upgrade strategy instead of a separate upgrade `--yes` confirmation, matches live node
-  groups by Terraform-default names, blocks mutation when Kubernetes preflight
-  inspection cannot prove safety, restores temporary node-group strategies in
-  source/generated files after failed stages,
-  reconciles stale source config even when live resources are already at the
-  target version, resumes already-started rollouts, and reserves explicit
-  command/flag shapes for GPU stack, platform, hardware preset, and Helm chart
-  layers.
-- Implemented `upgrade os-image <config.yaml> infra:mk8s@<target> --to-os <os>`
-  for Terraform-managed MK8s node groups. The command validates the requested
-  node-template OS against the live Nebius MK8s compatibility matrix for the
-  current Kubernetes version, platform, and GPU stack preset, updates
-  `inputs.node_groups.*.os`, rerenders and validates `generated/`, runs quiet
-  Terraform plan/apply stages one node group at a time in CPU/system-before-GPU
-  order, supports `--node-group`, `--dry-run`, upgrade strategies, and
-  drain-timeout defaults, and waits for Managed Kubernetes rolling replacement
-  to finish without SSHing to nodes or running apt-based OS upgrades.
-- Implemented non-interactive
-  `upgrade node-template <config.yaml> infra:mk8s@<target> --to-version <major.minor> --to-os <os> [--to-gpu-stack-preset <preset>]`
-  for combined MK8s control-plane, node-group Kubernetes version, node OS, and
-  Nebius-image GPU stack upgrades. The command validates the requested tuple
-  through the SDK compatibility matrix, stages control plane first, then writes
-  version, OS, and Nebius-image `gpu_stack_preset` together for each selected
-  node group in CPU/system-before-GPU order so the group rolls once. The GPU
-  stack flag is required for selected Nebius-image GPU groups and rejected for
-  CPU-only or operator-managed GPU selections. Generated-bundle GPU stack
-  compatibility validation now honors explicit node-group `version` values, so
-  a staged control-plane hop can validate old node templates against their
-  pinned node-group version until the node-group stage writes the new template.
-- Added a guided `upgrade os-image <config.yaml>` wizard that lists
-  Terraform-managed `infra:mk8s@<target>` targets and generic
-  `infra:vm@<target>` components, prompts for missing OS-image values, defaults
-  guided runs to dry-run, supports `--no-interactive` fail-fast automation, and
-  implements generic `infra:vm@<target>` `source_image_family` upgrades through
-  the same config/render/validate/Terraform plan/apply path with the selected
-  VM status watcher. VM upgrades are limited to module-managed boot disks that
-  use `inputs.source_image_family`; `source_image_id`, `boot_disk_existing_id`,
-  node-group, and MK8s strategy semantics remain outside the VM path.
-- Simplified the guided MK8s `upgrade os-image` `node_group` prompt so it maps
-  directly to the optional `--node-group` flag: blank omits the flag and updates
-  all managed node groups, while a typed source key or live name narrows the
-  upgrade to one group.
+- Implemented
+  `upgrade node-template <config.yaml> [infra:mk8s@<target>] --to-version <major.minor> --to-os <os> [--to-gpu-stack-preset <preset>]`
+  for MK8s control-plane, node-group Kubernetes version, node OS, and
+  Nebius-image GPU stack rolling updates. The command validates the requested
+  tuple through the SDK compatibility matrix, stages control plane first, then
+  writes version, OS, and Nebius-image `gpu_stack_preset` together for each
+  selected node group in CPU/system-before-GPU order so the group rolls once.
+  Automation can request any subset of version, OS, and GPU stack fields;
+  omitted values keep the selected live value when unambiguous and compatible.
+  The GPU stack flag is required for selected Nebius-image GPU groups and
+  rejected for CPU-only or operator-managed GPU selections. Generated-bundle
+  GPU stack compatibility validation now honors explicit node-group `version`
+  values, so a staged control-plane hop can validate old node templates against
+  their pinned node-group version until the node-group stage writes the new
+  template.
 - Wrapped upgrade dry-run repeat commands across shell-safe continuation lines
   so long config paths and selected flags remain readable and copy-pasteable.
-- Implemented `upgrade gpu-stack-preset`, `upgrade platform`,
-  `upgrade cpu-preset`, `upgrade gpu-preset`, and `upgrade helm-chart` with the
-  same wizard/non-interactive flag contract as `k8s-version` and `os-image`.
-  The node-layer commands update selected MK8s node-group desired-state fields,
-  support `--node-group`, `--dry-run`, upgrade strategies, drain-timeout
-  defaults, rendered-bundle validation, quiet Terraform plan/apply, and rollout
-  waits; CPU preset changes target only CPU/system groups, GPU preset and GPU
-  stack changes target only GPU groups, and GPU stack/platform changes use the
-  live MK8s compatibility matrix where applicable. The Helm chart command
-  updates the selected target-scoped `apps.charts[]` version, rerenders,
-  validates, and applies that target's Flux bundle. The GPU-stack command uses
-  the explicit `--to-gpu-stack-preset` flag for Nebius `drivers_preset`; hardware
-  CPU/GPU preset commands keep `--to-preset`.
+- Added `upgrade node-group` as the single MK8s node-group migration surface for
+  platform, hardware preset, CPU/GPU kind, GPU cluster, and InfiniBand fabric
+  changes. The command plans one node group at a time, resolves optional
+  `--to-fabric` from the canonical current fabric when omitted, checks target
+  shape/fabric/reservation quota and capacity before mutation, and prints
+  repeatable dry-run and approved execute commands. Current execute writes only
+  an approved pre-mutation checkpoint and stops before live replacement/cutover.
+- Implemented `upgrade helm-chart` with the same wizard/non-interactive flag
+  contract as the other upgrade surfaces. The Helm chart command updates the
+  selected target-scoped `apps.charts[]` version, rerenders, validates, and
+  applies that target's Flux bundle.
 - Refactored guided upgrade value prompts through a reusable upgrade wizard
   choice builder and provider lookup path. MK8s OS image, GPU stack preset,
   platform, CPU preset, and GPU preset prompts now show live SDK/provider-driven
@@ -679,36 +692,36 @@ All notable changes to this project are tracked here. This changelog follows
   legacy static-choice prompts.
 - Reorganized README upgrade guidance into a dedicated top-level `Upgrade`
   section with a visible table-of-contents entry, strategy
-  drain-timeout defaults, copy-paste Kubernetes upgrade examples, node-layer
-  upgrade examples, Helm chart upgrade examples, and manual desired-state
+  drain-timeout defaults, copy-paste Kubernetes upgrade examples,
+  node-group migration examples, Helm chart upgrade examples, and manual desired-state
   fallback guidance.
 - Aligned `upgrade --help` and upgrade subcommand help output with the README
   upgrade examples, including implemented Kubernetes dry-run/strategy
-  examples, node-layer examples, and Helm chart examples.
-- Removed public/private endpoint access from the guided `upgrade k8s-version`
+  examples, node-group migration examples, and Helm chart examples.
+- Removed public/private endpoint access from the guided MK8s upgrade
   target picker labels so managed MK8s targets are shown by selector only,
   avoiding confusion with external-cluster ownership.
-- Clarified guided and explicit `upgrade k8s-version` multi-minor handling with
+- Clarified guided and explicit MK8s upgrade multi-minor handling with
   upstream Kubernetes guidance that skipped minor upgrades are unsupported.
-- Improved guided `upgrade k8s-version --dry-run` output by aggregating
+- Improved guided MK8s upgrade dry-run output by aggregating
   `emptyDir` pod findings into one PVC-aware advisory, printing a repeatable
   dry-run command with the selected arguments, and styling the warnings section
   with the shared amber warning color.
-- Suppressed raw Terraform plan dumps during live `upgrade k8s-version` staged
+- Suppressed raw Terraform plan dumps during live MK8s upgrade staged
   applies while still running each staged plan as a safety gate before apply.
-- Fixed live `upgrade k8s-version` staged Terraform plans when a temporary
+- Fixed live MK8s upgrade staged Terraform plans when a temporary
   node-group strategy is applied to only the node group currently
   being upgraded.
-- Hardened `upgrade k8s-version` ordering by rejecting live node groups that
+- Hardened MK8s upgrade ordering by rejecting live node groups that
   are already above the requested control-plane minor, and documented the
   post-upgrade GPU canary, add-on, and rollback boundaries.
-- Clarified live `upgrade k8s-version` output so execution stages are labeled
+- Clarified live MK8s upgrade output so execution stages are labeled
   as per control-plane hop and per node group rather than per node, and
   de-duplicated repeated deploy-validation advisories across nested render and
   validation calls within one upgrade run.
-- Clarified `upgrade k8s-version` OS/platform/GPU compatibility blockers so
-  implemented OS-image, platform, and GPU-stack node-layer commands are printed
-  as runnable follow-up commands where available, while manual
+- Clarified MK8s upgrade OS/platform/GPU compatibility blockers so
+  node-template and node-group commands are printed as
+  runnable follow-up commands where available, while manual
   config/render/deploy follow-up remains documented. Also tightened the
   `force-delete` warning around graceful shutdown and in-flight application
   state.

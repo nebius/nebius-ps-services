@@ -48,7 +48,7 @@ from .mk8s_upgrade import (
     parse_k8s_version,
     resolve_drain_timeout,
     terraform_node_group_strategy_for_policy,
-    validate_node_layer_value,
+    validate_node_template_field_value,
     validate_os_image_value,
 )
 from .paths import resolve_project_paths
@@ -662,7 +662,7 @@ def _external_node_template_target(
     return SoperatorExternalNodeTemplateTarget(
         k8s_version=parse_k8s_version(target_version).minor_text,
         os=validate_os_image_value(target_os),
-        gpu_stack_preset=validate_node_layer_value(
+        gpu_stack_preset=validate_node_template_field_value(
             gpu_stack_preset,
             flag_name="target GPU stack preset",
         ),
@@ -4658,6 +4658,7 @@ def _quota_preflight_failure_message(report: QuotaReport) -> str:
         report,
         phase="soperator migration",
         include_confirmed_components=True,
+        markup=False,
     )
     details = "\n".join(detail_lines).strip()
     if not details:
