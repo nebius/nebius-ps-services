@@ -1143,18 +1143,17 @@ def test_load_config_materializes_soperator_before_gpu_app_rows_for_profile_swit
     ]
     assert soperator["values"]["slurmConfig"]["topologyPlugin"] == "topology/block"
     assert ensure_mk8s_gpu_app_rows(payload, app_entries=component_entries("apps")) is True
-    payload["apps"]["charts"].append(
-        {
-            "id": "nvidia-network-operator",
-            "instance_id": "mk8s",
-            "enabled": True,
-            "target_ref": "mk8s",
-            "values": {},
-        }
-    )
     assert soperator["placements"]["worker"] == ["worker-cpu", "worker-gpu"]
-    assert any(row["id"] == "nvidia-gpu-operator" for row in payload["apps"]["charts"])
-    assert any(row["id"] == "nvidia-network-operator" for row in payload["apps"]["charts"])
+    gpu_stack_rows = [
+        row
+        for row in payload["apps"]["charts"]
+        if row["id"] in {"nvidia-gpu-operator", "nvidia-network-operator"}
+    ]
+    assert sorted(row["id"] for row in gpu_stack_rows) == [
+        "nvidia-gpu-operator",
+        "nvidia-network-operator",
+    ]
+    assert {row["instance_id"] for row in gpu_stack_rows} == {"mk8s"}
 
     soperator["profile"] = "nebius-cpu-v1"
     soperator["values"]["partitionProfile"] = "shape-default"

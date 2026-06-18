@@ -56,7 +56,7 @@ Core principles:
 - `upgrade` is a day-2 lifecycle command group. It supports MK8s
   node-template rolling updates for Kubernetes version, OS image, and
   Nebius-image GPU stack, explicit MK8s node-group migration, and
-  target-scoped Helm chart upgrades as separate product surfaces. In
+  non-Soperator target-scoped Helm chart upgrades as separate product surfaces. In
   interactive terminals, commands that support guided mode can prompt from the
   generated managed-MK8s target set, live supported Kubernetes versions, live
   image choices, and live provider-backed node-group choices where applicable.
@@ -562,12 +562,12 @@ and chart source-family changes.
 - Generic `upgrade helm-chart` and managed `soperator upgrade` are implemented
   focused chart upgrade layers. Generic `upgrade helm-chart` updates the selected
   non-Soperator `apps.charts[]` version, rerenders, validates, and applies the
-  selected Flux target. When the selected chart is `apps:soperator@<target>`,
-  it redirects into `soperator upgrade`, the canonical cxcli-managed Soperator chart
-  path. That path wraps the same version bump/render/Flux apply with a live
-  Soperator/Slurm smoke preflight, external-migration bypass guard, Helm
-  readiness verification, postflight Soperator/Slurm validation, and
-  `deploy-report.md` refresh. If
+  selected Flux target. It fails fast for `apps:soperator@<target>` with the
+  canonical `soperator upgrade` command instead of keeping a duplicate
+  compatibility path. That Soperator path wraps the same version
+  bump/render/Flux apply with a live Soperator/Slurm smoke preflight,
+  external-migration bypass guard, Helm readiness verification, postflight
+  Soperator/Slurm validation, and `deploy-report.md` refresh. If
   `values.soperator-activechecks.enabled` or
   `values.soperator-activechecks.waitForChecks.enabled` is true in the
   cxcli-owned Soperator row, it snapshots the original values, writes a local

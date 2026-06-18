@@ -38,13 +38,16 @@ def test_design_architecture_summary_matches_upgrade_surface() -> None:
     )
     legacy_scope_label = "V" + "1"
     assert legacy_scope_label not in architecture_flat
-    assert "explicit MK8s node-group migration, and target-scoped Helm chart upgrades" in architecture_flat
+    assert (
+        "explicit MK8s node-group migration, and non-Soperator target-scoped Helm chart upgrades"
+        in architecture_flat
+    )
     assert "later GPU stack, platform, hardware preset, and app/chart upgrades" not in (
         architecture_flat
     )
     assert "managed `soperator upgrade`" in design_flat
     assert (
-        "redirects into `soperator upgrade`, the canonical cxcli-managed Soperator chart path"
+        "fails fast for `apps:soperator@<target>` with the canonical `soperator upgrade` command"
         in (design_flat)
     )
     assert "pending ActiveChecks restore is still completed" in design_flat
@@ -227,8 +230,7 @@ def test_readme_supporting_commands_include_current_quota_and_target_flags() -> 
     ) in common_flags_flat
     assert (
         "- `upgrade helm-chart`: `--to-version`, `--dry-run`, "
-        "`--interactive/--no-interactive` (`apps:soperator@<target>` redirects to "
-        "`soperator upgrade`)"
+        "`--interactive/--no-interactive` (non-Soperator app charts only)"
     ) in common_flags_flat
     assert (
         "- `grafana`: `--export-dashboard`, `--dashboard-json`, `--output-dir`, `--folder-uid`, "
@@ -362,7 +364,10 @@ def test_readme_upgrade_section_is_visible_and_consolidated() -> None:
         "`nebius-cxcli soperator upgrade <config.yaml> --target <target> --to-version <chart-version>`"
         in soperator
     )
-    assert "Redirects to the Soperator-aware cxcli-managed upgrade path" in soperator
+    assert "Compatibility entry point for Soperator chart upgrades" not in soperator
+    assert "`nebius-cxcli upgrade helm-chart <config.yaml> apps:soperator@<target>`" not in (
+        soperator
+    )
     assert "External onboarding is not a Terraform import." in soperator
     assert "Use `soperator upgrade` when cxcli already manages the Soperator app row" in (soperator)
     assert "If the existing Soperator row uses `repo: ''`" in soperator
@@ -401,7 +406,7 @@ def test_readme_upgrade_section_is_visible_and_consolidated() -> None:
     assert "### Upgrade Strategies" in upgrade
     assert "### Upgrade Examples" in upgrade
     assert "### Helm Chart Upgrades" in upgrade
-    assert "target-scoped Helm chart version upgrades" in upgrade
+    assert "non-Soperator target-scoped Helm chart version upgrades" in upgrade
     assert "reserves the command shape" not in upgrade
     assert "Terraform remains the mutation path for Terraform-managed infrastructure." in upgrade
     assert "The Nebius SDK is used for live discovery" in upgrade
@@ -482,7 +487,7 @@ def test_readme_upgrade_section_is_visible_and_consolidated() -> None:
         "soperator upgrade <config.yaml> --target <target> --to-version <chart-version>"
     ) in upgrade
     assert "Use `soperator upgrade` instead of the generic Helm path" in upgrade_flat
-    assert "selected chart is `apps:soperator@<target>`, `upgrade helm-chart` redirects" in (
+    assert "selected chart is `apps:soperator@<target>`, `upgrade helm-chart` fails fast" in (
         upgrade_flat
     )
     assert "local upgrade checkpoint to restore the original ActiveChecks values" in (upgrade_flat)

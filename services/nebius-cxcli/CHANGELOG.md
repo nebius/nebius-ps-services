@@ -16,6 +16,11 @@ All notable changes to this project are tracked here. This changelog follows
   Terraform-managed MK8s node-template version, OS, and Nebius-image GPU stack
   updates. The former narrow public upgrade surfaces were removed without
   aliases or compatibility shims.
+- Removed the Soperator compatibility redirect from
+  `upgrade helm-chart apps:soperator@<target>`; Soperator chart upgrades now
+  fail fast there and point to the single canonical
+  `soperator upgrade <config.yaml> --target <target> --to-version <version>`
+  command.
 - Exposed the live Nebius MK8s compatibility-matrix summary in infra upgrade
   plans: `upgrade node-template` now prints the returned OS and
   `drivers_preset` choices for each selected platform before non-dry-run
@@ -121,13 +126,11 @@ All notable changes to this project are tracked here. This changelog follows
   and CLI-sourced IAM tokens are no longer written into process-global
   environment variables.
 - Added `nebius-cxcli soperator upgrade <config.yaml>` as the canonical
-  cxcli-managed Soperator chart upgrade path. The generic
-  `upgrade helm-chart apps:soperator@<target>` entry now redirects to the
-  Soperator-aware flow, which validates the current bundle, runs live
-  Soperator/Slurm preflight, updates and rerenders the chart version, applies
-  the selected target Flux bundle, verifies the static Soperator chart version
-  on live Kubernetes objects, reruns required Soperator/Slurm validation, and
-  refreshes `deploy-report.md`.
+  cxcli-managed Soperator chart upgrade path. It validates the current bundle,
+  runs live Soperator/Slurm preflight, updates and rerenders the chart version,
+  applies the selected target Flux bundle, verifies the static Soperator chart
+  version on live Kubernetes objects, reruns required Soperator/Slurm
+  validation, and refreshes `deploy-report.md`.
 - Clarified the README Soperator command map so the cxcli-managed
   `nebius-cxcli soperator` path is documented separately from
   `nebius-cxcli ext-soperator` external onboarding and migration, including

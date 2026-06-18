@@ -1753,8 +1753,8 @@ soperator_app = typer.Typer(
 upgrade_app = typer.Typer(
     help=(
         "Run day-2 lifecycle upgrades from config.yaml. Supports MK8s node-template "
-        "rolling updates, MK8s node-group migration, and target-scoped Helm chart "
-        "upgrades with dry-run planning and guardrails."
+        "rolling updates, MK8s node-group migration, and non-Soperator "
+        "target-scoped Helm chart upgrades with dry-run planning and guardrails."
     ),
     epilog=_UPGRADE_GROUP_EPILOG,
 )
@@ -6018,10 +6018,11 @@ def upgrade_node_group_command(
 
 @upgrade_app.command(
     "helm-chart",
-    short_help="Upgrade a target-scoped app Helm chart version.",
+    short_help="Upgrade a non-Soperator target-scoped app Helm chart version.",
     epilog=(
         "Example: nebius-cxcli upgrade helm-chart <config.yaml> "
-        "apps:soperator@mk8s --to-version <chart-version> --dry-run."
+        "apps:<chart>@mk8s --to-version <chart-version> --dry-run. "
+        "Use nebius-cxcli soperator upgrade for Soperator chart upgrades."
     ),
 )
 def upgrade_helm_chart_command(
@@ -6033,7 +6034,7 @@ def upgrade_helm_chart_command(
         str | None,
         typer.Argument(
             metavar="TARGET",
-            help="Optional app selector, for example apps:soperator@mk8s.",
+            help="Optional non-Soperator app selector, for example apps:grafana@mk8s.",
         ),
     ] = None,
     to_version: Annotated[
@@ -6198,28 +6199,18 @@ def _run_helm_chart_upgrade_command(
         raise RuntimeError(
             f"Soperator upgrades require apps:soperator@<target>. Received {target.selector}."
         )
+    if target.chart_id == _SOPERATOR_APP_ID and not soperator_aware:
+        raise RuntimeError(
+            "Soperator chart upgrades use the canonical command "
+            f"`nebius-cxcli soperator upgrade {config_path} "
+            f"--target {target.target_ref} --to-version {target_version}`. "
+            "`nebius-cxcli upgrade helm-chart` only upgrades non-Soperator app charts."
+        )
     dry_run = _resolve_helm_chart_upgrade_options(
         guided=guided,
         dry_run=dry_run,
         path_prefix="soperator.upgrade" if soperator_aware else "upgrade.helm_chart",
     )
-    if target.chart_id == _SOPERATOR_APP_ID and not soperator_aware:
-        console.print(
-            "Soperator Helm chart upgrades use the Soperator-aware command; "
-            "redirecting to "
-            f"`nebius-cxcli soperator upgrade {config_path} "
-            f"--target {target.target_ref} --to-version {target_version}`.",
-            soft_wrap=True,
-        )
-        _run_helm_chart_upgrade_command(
-            config_path=config_path,
-            target_selector=target.selector,
-            to_version=target_version,
-            dry_run=dry_run,
-            interactive=interactive,
-            soperator_aware=True,
-        )
-        return
     plan = _plan_helm_chart_upgrade(
         payload=source_payload,
         target=target,

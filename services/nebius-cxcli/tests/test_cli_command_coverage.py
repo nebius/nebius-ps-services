@@ -2329,7 +2329,7 @@ def test_node_template_version_choices_explain_sequential_minor_policy() -> None
     ]
 
 
-def test_upgrade_helm_chart_config_only_guided_dry_run_prompts_target_and_version(
+def test_upgrade_helm_chart_rejects_soperator_selector_with_canonical_command(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2402,22 +2402,23 @@ def test_upgrade_helm_chart_config_only_guided_dry_run_prompts_target_and_versio
     monkeypatch.setattr(cli, "_prompt_scalar_override", _prompt_scalar)
     monkeypatch.setattr(cli, "console", rich_console)
 
-    cli.upgrade_helm_chart_command(paths.config_path)
+    with pytest.raises(cli.typer.Exit) as exc_info:
+        cli.upgrade_helm_chart_command(paths.config_path)
 
     rendered = rich_console.export_text()
+    rendered_flat = " ".join(rendered.split())
+    assert exc_info.value.exit_code == 1
     assert prompt_paths == [
         "upgrade.helm_chart.target",
         "upgrade.helm_chart.to_version",
-        "upgrade.helm_chart.dry_run",
     ]
-    assert "Soperator Helm chart upgrades use the Soperator-aware command" in rendered
-    assert "Soperator upgrade plan" in rendered
-    assert "chart version: 0.25.0 -> 0.26.0" in rendered
-    assert "- repeat dry-run command:" in rendered
+    assert "Soperator chart upgrades use the canonical command" in rendered
     assert (
         f"nebius-cxcli soperator upgrade {paths.config_path} "
-        "--target mk8s --to-version 0.26.0 --no-interactive --dry-run"
-    ) in rendered
+        "--target mk8s --to-version 0.26.0"
+    ) in rendered_flat
+    assert "only upgrades non-Soperator app charts" in rendered_flat
+    assert "Soperator upgrade plan" not in rendered_flat
     assert paths.config_path.read_text(encoding="utf-8") == original_config
 
 
@@ -15974,6 +15975,7 @@ def test_help_text_aligns_render_and_apply_surfaces() -> None:
     assert "copy-paste commands" in deploy_help
     assert "important generated paths" in deploy_help
     assert "day-2 lifecycle upgrades from config.yaml" in upgrade_help
+    assert "non-soperator target-scoped helm chart upgrades" in upgrade_help
     legacy_scope_label = "V" + "1"
     assert legacy_scope_label not in upgrade_help
     for removed_command in ("k8s-" + "version", "os-" + "image"):
@@ -16083,7 +16085,8 @@ def test_help_text_aligns_render_and_apply_surfaces() -> None:
     assert "--interactive" not in upgrade_node_group_help
     assert "--no-interactive" not in upgrade_node_group_help
     assert "--yes" not in upgrade_node_group_help
-    assert "apps:soperator@mk8s" in upgrade_helm_help
+    assert "apps:grafana@mk8s" in upgrade_helm_help
+    assert "apps:soperator@mk8s" not in upgrade_helm_help
     assert "reserved future command shape" not in upgrade_helm_help
     assert "config_yaml [target]" in upgrade_helm_help
     assert "--to-version" in upgrade_helm_help
@@ -16094,8 +16097,11 @@ def test_help_text_aligns_render_and_apply_surfaces() -> None:
     assert "--strategy" not in upgrade_helm_help
     assert (
         "example: nebius-cxcli upgrade helm-chart <config.yaml> "
-        "apps:soperator@mk8s --to-version <chart-version> --dry-run"
+        "apps:<chart>@mk8s --to-version <chart-version> --dry-run"
     ) in upgrade_helm_help
+    assert "use nebius-cxcli soperator upgrade for soperator chart upgrades" in (
+        upgrade_helm_help
+    )
     assert "destroy all rendered project resources" in destroy_help
     assert "destructive inverse of `deploy`" in destroy_help
     assert "whole rendered project" in destroy_help
