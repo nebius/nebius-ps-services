@@ -275,7 +275,35 @@ def test_init_nebius_sdk_falls_back_to_sdk_config(
     assert config.kwargs == {"profile": "dev", "endpoint": "api.example.invalid"}
 
 
-def test_init_nebius_sdk_prefer_operator_auth_uses_service_account_before_sdk_config(
+def test_init_nebius_sdk_prefer_operator_auth_uses_iam_token_before_runtime_auth(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _install_fake_nebius_modules(monkeypatch)
+    private_key_file = tmp_path / "auth-private.pem"
+    private_key_file.write_text("PRIVATE-KEY", encoding="utf-8")
+    monkeypatch.delenv("NEBIUS_AUTH_CREDENTIALS_FILE", raising=False)
+    monkeypatch.setenv("NEBIUS_SA_ID", "sa-1")
+    monkeypatch.setenv("NEBIUS_AUTH_PUBLIC_KEY_ID", "pub-1")
+    monkeypatch.setenv("NEBIUS_AUTH_PRIVATE_KEY_FILE", str(private_key_file))
+    monkeypatch.setenv("NEBIUS_IAM_TOKEN", "operator-token-123")
+    monkeypatch.setattr(
+        sdk_auth.subprocess,
+        "run",
+        lambda *args, **kwargs: pytest.fail("CLI token should not be needed"),
+    )
+
+    sdk: Any = sdk_auth.init_nebius_sdk(
+        parent_id="project-1",
+        context="quota assessment",
+        prefer_operator_auth=True,
+    )
+
+    assert sdk.kwargs["credentials"] == "operator-token-123"
+    assert "service_account_id" not in sdk.kwargs
+    assert sdk.kwargs["parent_id"] == "project-1"
+
+
+def test_init_nebius_sdk_prefer_operator_auth_uses_sdk_config_before_runtime_auth(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _install_fake_nebius_modules(monkeypatch)
@@ -298,9 +326,8 @@ def test_init_nebius_sdk_prefer_operator_auth_uses_service_account_before_sdk_co
         prefer_operator_auth=True,
     )
 
-    assert sdk.kwargs["service_account_id"] == "sa-1"
-    assert sdk.kwargs["service_account_public_key_id"] == "pub-1"
-    assert sdk.kwargs["service_account_private_key_file_name"] == private_key_file.resolve()
+    assert "config_reader" in sdk.kwargs
+    assert "service_account_id" not in sdk.kwargs
     assert sdk.kwargs["parent_id"] == "project-1"
 
 
@@ -337,7 +364,7 @@ def test_init_nebius_sdk_prefer_operator_auth_falls_back_to_service_account(
     assert sdk.kwargs["parent_id"] == "project-1"
 
 
-def test_init_nebius_sdk_prefer_operator_auth_uses_service_account_before_cli_token(
+def test_init_nebius_sdk_prefer_operator_auth_uses_cli_token_before_runtime_auth(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -368,8 +395,8 @@ def test_init_nebius_sdk_prefer_operator_auth_uses_service_account_before_cli_to
         prefer_operator_auth=True,
     )
 
-    assert sdk.kwargs["service_account_id"] == "sa-1"
-    assert "credentials" not in sdk.kwargs
+    assert sdk.kwargs["credentials"] == "cli-token-789"
+    assert "service_account_id" not in sdk.kwargs
 
 
 def test_init_nebius_sdk_chains_failed_config_attempt(

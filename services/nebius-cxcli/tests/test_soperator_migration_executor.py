@@ -1603,7 +1603,7 @@ def test_write_migrate_report_uses_default_text_file_mode_for_new_file(tmp_path:
 
 def test_write_migrate_report_preserves_existing_file_mode(tmp_path: Path) -> None:
     config_path = tmp_path / "config.yaml"
-    report_path = tmp_path / "generated" / "reports" / "migrate-report.md"
+    report_path = tmp_path / "generated" / "reports" / "ext-soperator-migrate-report.md"
     report_path.parent.mkdir(parents=True, exist_ok=True)
     report_path.write_text("# Existing Migration Report\n", encoding="utf-8")
     report_path.chmod(0o640)
@@ -1619,7 +1619,7 @@ def test_write_migrate_report_preserves_existing_file_when_replace_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     config_path = tmp_path / "config.yaml"
-    report_path = tmp_path / "generated" / "reports" / "migrate-report.md"
+    report_path = tmp_path / "generated" / "reports" / "ext-soperator-migrate-report.md"
     report_path.parent.mkdir(parents=True, exist_ok=True)
     report_path.write_text("# Existing Migration Report\n", encoding="utf-8")
     before = report_path.read_text(encoding="utf-8")
@@ -1633,7 +1633,7 @@ def test_write_migrate_report_preserves_existing_file_when_replace_fails(
         _write_minimal_migrate_report(config_path)
 
     assert report_path.read_text(encoding="utf-8") == before
-    assert not list(report_path.parent.glob(".migrate-report.md.*.tmp"))
+    assert not list(report_path.parent.glob(".ext-soperator-migrate-report.md.*.tmp"))
 
 
 def test_execute_quota_preflight_blocks_before_mutation(
@@ -3277,7 +3277,7 @@ def test_execute_runs_configured_mk8s_gpu_validations_during_validation_hold(
     reports_dir = tmp_path / "generated" / "reports"
     assert (reports_dir / "external-cluster-nccl-test-report.json").exists()
     assert "## Validations" in (reports_dir / "deploy-report.md").read_text(encoding="utf-8")
-    migrate_report = (reports_dir / "migrate-report.md").read_text(encoding="utf-8")
+    migrate_report = (reports_dir / "ext-soperator-migrate-report.md").read_text(encoding="utf-8")
     assert "## Migration Steps" in migrate_report
     assert "- Migration performed: `yes`" in migrate_report
     assert "Soperator and Slurm smoke" in migrate_report
@@ -3304,7 +3304,9 @@ def test_execute_runs_configured_mk8s_gpu_validations_during_validation_hold(
     assert validation_state["soperator_cluster_validation_count"] == 1
     assert len(validation_state["mk8s_gpu_validation_reports"]) == 3
     assert len(validation_state["soperator_cluster_validation_reports"]) == 1
-    assert checkpoint["migrate_report"].endswith("generated/reports/migrate-report.md")
+    assert checkpoint["migrate_report"].endswith(
+        "generated/reports/ext-soperator-migrate-report.md"
+    )
 
 
 def test_external_node_template_quiesces_one_node_service_roles(

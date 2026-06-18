@@ -379,9 +379,13 @@ def test_readme_upgrade_section_is_visible_and_consolidated() -> None:
         soperator_flat
     )
     assert "live Soperator/Slurm smoke preflight" in soperator_flat
+    assert "soperator.upgrade.to_version" in soperator_flat
+    assert "active `component_sources.yaml` Soperator chart pin as the default target version" in (
+        soperator_flat
+    )
     assert "checkpointed maintenance-window lifecycle" in soperator_flat
     assert "cxcli-managed upgrade fails closed before the chart upgrade" in soperator_flat
-    assert "generated/reports/upgrade-report.md" in soperator_flat
+    assert "generated/reports/soperator-upgrade-report.md" in soperator_flat
     assert "does not silently disable arbitrary live external ActiveChecks" in (soperator_flat)
     assert (
         "Use `ext-soperator onboard` plus `ext-soperator migrate` when the source cluster is not"
@@ -394,10 +398,7 @@ def test_readme_upgrade_section_is_visible_and_consolidated() -> None:
     assert "Use `upgrade` when the change is one of the covered operational upgrades" in (upgrade)
     assert "MK8s Kubernetes minor upgrades." in upgrade
     assert "MK8s node-template upgrades: Kubernetes version, OS, and GPU stack." in upgrade
-    assert (
-        "MK8s node-group migrations: hardware platform, hardware preset, CPU/GPU"
-        in upgrade
-    )
+    assert "MK8s node-group migrations: hardware platform, hardware preset, CPU/GPU" in upgrade
     assert "changes a generic VM image family" in upgrade
     assert "Target-scoped Helm chart version bumps." in upgrade
     assert "Edit `config.yaml` manually instead when the change" in upgrade
@@ -425,7 +426,10 @@ def test_readme_upgrade_section_is_visible_and_consolidated() -> None:
     assert "source/generated files through Terraform plan/apply" in upgrade
     assert "final MK8s readiness check" in upgrade
     assert "live control-plane version plus selected node-group version, OS" in upgrade_flat
-    assert "provider node-group status rather than accepting matching spec fields alone" in upgrade_flat
+    assert (
+        "provider node-group status rather than accepting matching spec fields alone"
+        in upgrade_flat
+    )
     assert "Kubernetes version downgrade targets are refused" in upgrade_flat
     assert "lower target versions are allowed with an explicit warning" in upgrade_flat
     assert "Manual desired-state upgrades remain supported outside the `upgrade` command" in upgrade
@@ -456,20 +460,32 @@ def test_readme_upgrade_section_is_visible_and_consolidated() -> None:
     assert "prompt says blank selects all managed node groups" in upgrade_flat
     assert "safe-surge` strategy choice says it defaults to one spare node" in upgrade_flat
     assert "strategy_max_surge_count` prompt asks for temporary extra nodes" in upgrade_flat
-    assert (
-        "drain_timeout` prompt shows all `auto` defaults" in upgrade_flat
-    )
+    assert "drain_timeout` prompt shows all `auto` defaults" in upgrade_flat
     assert "`upgrade node-template` uses `--strategy` plus `--drain-timeout`" in upgrade
     assert "force-delete -> 10m" in upgrade
     assert "--disruption-policy" not in upgrade
     assert "allow-unavailable" not in upgrade
     assert retired_os_command not in upgrade
-    assert "Automation should pass the explicit target and at least one requested node-template field" in upgrade_flat
+    assert (
+        "Automation should pass the explicit target and at least one requested node-template field"
+        in upgrade_flat
+    )
     assert "Leave `--node-group` unset to select all managed node groups" in upgrade_flat
-    assert "node-group Kubernetes version, OS, and Nebius-image `gpu_stack_preset` together" in upgrade_flat
+    assert (
+        "node-group Kubernetes version, OS, and Nebius-image `gpu_stack_preset` together"
+        in upgrade_flat
+    )
     assert "`--node-group` unset to select all managed node groups" in upgrade
-    assert "control plane first, then selected node groups in the same CPU/system-before-GPU order" in upgrade_flat
-    assert "final MK8s readiness check for the live control-plane version plus selected node-group version, OS" in upgrade_flat
+    assert (
+        "control plane first, then selected node groups in the same CPU/system-before-GPU order"
+        in upgrade_flat
+    )
+    assert (
+        "final MK8s readiness check for the live control-plane version plus selected node-group version, OS"
+        in upgrade_flat
+    )
+    assert "`generated/reports/upgrade-node-template-report.md`" in upgrade
+    assert "`generated/reports/upgrade-node-template-report.json`" in upgrade
     assert "SSH to nodes and run apt-based Ubuntu upgrades" not in upgrade
     assert (
         "upgrade node-group <config.yaml> infra:mk8s@<target> --node-group system "
@@ -487,6 +503,9 @@ def test_readme_upgrade_section_is_visible_and_consolidated() -> None:
         "soperator upgrade <config.yaml> --target <target> --to-version <chart-version>"
     ) in upgrade
     assert "Use `soperator upgrade` instead of the generic Helm path" in upgrade_flat
+    assert "active `component_sources.yaml` Soperator chart pin as the default target version" in (
+        upgrade_flat
+    )
     assert "selected chart is `apps:soperator@<target>`, `upgrade helm-chart` fails fast" in (
         upgrade_flat
     )
@@ -505,6 +524,8 @@ def test_readme_upgrade_section_is_visible_and_consolidated() -> None:
         upgrade_flat
     )
     assert "Current execute requires `--execute --approve`" in upgrade_flat
+    assert "`generated/reports/upgrade-node-group-report.md`" in upgrade
+    assert "`generated/reports/upgrade-node-group-report.json`" in upgrade
     assert retired_k8s_command not in quick_start
     assert "### Command Examples" in commands
     assert commands.index("### Command Examples") < commands.index("### Supporting Commands")
@@ -901,12 +922,24 @@ def test_docs_define_component_selector_contract() -> None:
         "`ext-soperator migrate --execute` must first verify the live source release" in readme_flat
     )
     assert "After a full successful `ext-soperator migrate --execute`" in readme_flat
-    assert "`generated/reports/migrate-report.md` reports `Pending phase: none`" in readme_flat
-    assert "Rerendering preserves command-owned runtime reports" in readme_flat
     assert (
-        "external Soperator `migrate-report.md`, `upgrade-report.md`, `upgrade-report.json`"
+        "`generated/reports/ext-soperator-migrate-report.md` reports `Pending phase: none`"
         in readme_flat
     )
+    assert "Rerendering preserves command-owned runtime reports" in readme_flat
+    assert "All lifecycle reports stay in the single `generated/reports/` folder" in readme_flat
+    assert "Each command owns a deterministic latest artifact" in readme_flat
+    for report_name in (
+        "`ext-soperator-onboard-source-discovery-report.json`",
+        "`ext-soperator-migrate-report.md`",
+        "`upgrade-node-template-report.md`",
+        "`upgrade-node-template-report.json`",
+        "`upgrade-node-group-report.md`",
+        "`upgrade-node-group-report.json`",
+        "`soperator-upgrade-report.md`",
+        "`soperator-upgrade-report.json`",
+    ):
+        assert report_name in readme_flat
     assert "JSON detail reports referenced from those Markdown reports" in readme_flat
     assert (
         "the selected actions become deploy-owned for the next normal reconciliation" in readme_flat
@@ -923,9 +956,12 @@ def test_docs_define_component_selector_contract() -> None:
         "decides whether the accepted `deploy.targets[].soperator_onboarding.actions` list contains migration-owned work"
         in readme_flat
     )
-    assert "`generated/reports/migrate-report.md` shows `Pending phase: none`" in readme_flat
     assert (
-        "`config.yaml` and `source-soperator-cluster-discovery-report.json` into the deploy-owned onboarding shape"
+        "`generated/reports/ext-soperator-migrate-report.md` shows `Pending phase: none`"
+        in readme_flat
+    )
+    assert (
+        "`config.yaml` and `generated/reports/ext-soperator-onboard-source-discovery-report.json` into the deploy-owned onboarding shape"
         in readme_flat
     )
     assert "edit `config.yaml`, run `render`, then run `deploy`" in readme_flat
@@ -1020,7 +1056,7 @@ def test_docs_define_component_selector_contract() -> None:
     assert "prefers an idle non-GPU partition when one exists" in readme_flat
     assert "Slurm nodes reported as `inval` remain an unhealthy validation gate" in readme_flat
     assert "same catalog-owned post-render patches that Flux would apply" in readme_flat
-    assert "`generated/reports/migrate-report.md`" in readme
+    assert "`generated/reports/ext-soperator-migrate-report.md`" in readme
     assert (
         "Phases complete only when their live prerequisites are absent or satisfied" in readme_flat
     )
@@ -1062,15 +1098,29 @@ def test_docs_define_component_selector_contract() -> None:
     assert "If the accepted onboarding report says migration-owned work is required" in design_flat
     assert "skip normal deploy and continue with" in design_flat
     assert "After a full successful `ext-soperator migrate --execute`" in design_flat
-    assert "`generated/reports/migrate-report.md` shows `Pending phase: none`" in design_flat
+    assert (
+        "`generated/reports/ext-soperator-migrate-report.md` shows `Pending phase: none`"
+        in design_flat
+    )
     assert (
         "The render-time `generated/` replacement preserves command-owned runtime reports"
         in design_flat
     )
     assert (
-        "external Soperator `migrate-report.md`, `upgrade-report.md`, `upgrade-report.json`"
+        "All lifecycle reports stay under `generated/reports/`, and command-specific reports use deterministic latest filenames"
         in design_flat
     )
+    for report_name in (
+        "`ext-soperator-onboard-source-discovery-report.json`",
+        "`ext-soperator-migrate-report.md`",
+        "`upgrade-node-template-report.md`",
+        "`upgrade-node-template-report.json`",
+        "`upgrade-node-group-report.md`",
+        "`upgrade-node-group-report.json`",
+        "`soperator-upgrade-report.md`",
+        "`soperator-upgrade-report.json`",
+    ):
+        assert report_name in design_flat
     assert "JSON detail files referenced from those Markdown reports" in design_flat
     assert "migration-owned actions are no longer selected" in design_flat
     assert "future normal reconciliation can use render/deploy" in design_flat
@@ -1185,7 +1235,7 @@ def test_docs_define_component_selector_contract() -> None:
     assert "prefers an idle non-GPU partition when one exists" in design_flat
     assert "Slurm nodes reported as `inval` remain an unhealthy validation gate" in design_flat
     assert "same catalog-owned post-render patches that Flux would apply" in design_flat
-    assert "`generated/reports/migrate-report.md`" in design
+    assert "`generated/reports/ext-soperator-migrate-report.md`" in design
     assert "resume relies on phase checkpoints" in design_flat
     assert "interactive spinner backed by phase-aware status snapshots" in design_flat
     assert "canonical phase id, human-readable phase label, and overall phase health" in readme_flat
@@ -1608,15 +1658,19 @@ def test_design_supporting_commands_include_quota_request_and_flux_targets() -> 
         "[--to-version <major.minor>] [--to-os <os>] "
         "[--to-gpu-stack-preset <preset>]`"
     ) in supporting
-    assert "- `upgrade node-group <config.yaml> infra:mk8s@<target> --node-group <group>`" in supporting
+    assert (
+        "- `upgrade node-group <config.yaml> infra:mk8s@<target> --node-group <group>`"
+        in supporting
+    )
     assert "Prompts for the target selector" in supporting
     assert "one node group at a time in CPU/system-before-GPU order" in supporting_flat
     assert "copy/paste-ready repeat dry-run command" in supporting_flat
     assert "plain optional flag-value prompt" in supporting_flat
     assert "blank omits the flag and updates every managed node group" in supporting_flat
     assert "does not SSH to nodes, run apt-based Ubuntu" in supporting_flat
-    assert "Supports CPU node groups, GPU node groups without InfiniBand, and GPU-cluster / InfiniBand node groups through one command" in (
-        supporting_flat
+    assert (
+        "Supports CPU node groups, GPU node groups without InfiniBand, and GPU-cluster / InfiniBand node groups through one command"
+        in (supporting_flat)
     )
     assert "upgrade helm-chart <config.yaml> apps:<chart>@<target> --to-version" in supporting_flat
     assert "source-family change is the desired state" in supporting_flat
@@ -1637,7 +1691,9 @@ def test_design_supporting_commands_include_quota_request_and_flux_targets() -> 
     assert "source config is stale" in supporting
     assert "final MK8s readiness check re-reads the live control plane" in supporting_flat
     assert "requires provider node-group status" in supporting_flat
-    assert "verify Kubernetes version, OS, and Nebius `drivers_preset` / CUDA stack" in supporting_flat
+    assert (
+        "verify Kubernetes version, OS, and Nebius `drivers_preset` / CUDA stack" in supporting_flat
+    )
     assert "A valid row must match the requested OS" in supporting_flat
     assert "requested `drivers_preset`" in supporting_flat
     assert "- `flux apply <generated-path>`" in supporting

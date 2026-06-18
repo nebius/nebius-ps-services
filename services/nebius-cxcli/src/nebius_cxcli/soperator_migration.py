@@ -84,7 +84,7 @@ from .soperator_validation import (
 
 SOPERATOR_MIGRATION_EXECUTION_SCHEMA = "nebius-cxcli-soperator-migration-execution/v1"
 SOPERATOR_MIGRATION_CHECKPOINT_DIR = ".nebius-cxcli/soperator-migrations"
-MIGRATE_REPORT_FILENAME = "migrate-report.md"
+MIGRATE_REPORT_FILENAME = "ext-soperator-migrate-report.md"
 _MUTATING_PHASE_IDS = frozenset(
     {
         "external-node-template-upgrade",

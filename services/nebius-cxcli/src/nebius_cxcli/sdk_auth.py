@@ -226,13 +226,17 @@ def init_nebius_sdk(
 
     if prefer_operator_auth:
         auth_attempts = [
-            _sdk_from_credentials_file,
-            _sdk_from_service_account_env,
-            _sdk_from_config,
             _sdk_from_iam_token_env,
+            _sdk_from_config,
         ]
         if allow_cli_token:
             auth_attempts.append(_sdk_from_cli_token)
+        auth_attempts.extend(
+            [
+                _sdk_from_credentials_file,
+                _sdk_from_service_account_env,
+            ]
+        )
     else:
         auth_attempts = [
             _sdk_from_credentials_file,

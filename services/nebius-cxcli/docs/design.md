@@ -546,7 +546,10 @@ and chart source-family changes.
   validations such as GPU stack readiness, GPU Visibility, and NCCL are the
   post-upgrade GPU canary phase. Repeated deploy-validation advisories are
   de-duplicated within the upgrade command even though each rendered stage is
-  validated independently.
+  validated independently. Successful runs write
+  `generated/reports/upgrade-node-template-report.md` and
+  `generated/reports/upgrade-node-template-report.json` as the command-scoped
+  latest report.
 - `upgrade node-group <config.yaml> infra:mk8s@<target> --node-group <group>`
   is the explicit approved migration planner for Terraform-managed MK8s node
   groups that need a different hardware platform, hardware preset, CPU/GPU
@@ -557,7 +560,9 @@ and chart source-family changes.
   config/state fabric, effective target fabric, shape deltas, reservation
   policy, shared-storage evidence, target quota/capacity preflight, and
   repeatable dry-run/execute commands. Current execute writes an approved
-  pre-mutation checkpoint after the local gates and then stops before live
+  pre-mutation checkpoint after the local gates, writes
+  `generated/reports/upgrade-node-group-report.md` and
+  `generated/reports/upgrade-node-group-report.json`, and then stops before live
   replacement/cutover/retirement; the live executor is not enabled yet.
 - Generic `upgrade helm-chart` and managed `soperator upgrade` are implemented
   focused chart upgrade layers. Generic `upgrade helm-chart` updates the selected
@@ -567,7 +572,12 @@ and chart source-family changes.
   compatibility path. That Soperator path wraps the same version
   bump/render/Flux apply with a live Soperator/Slurm smoke preflight,
   external-migration bypass guard, Helm readiness verification, postflight
-  Soperator/Slurm validation, and `deploy-report.md` refresh. If
+  Soperator/Slurm validation, command-owned validation detail reports, and
+  `soperator-upgrade-report.md` / `soperator-upgrade-report.json`. If
+  `--to-version` is omitted in an interactive run, the
+  `soperator.upgrade.to_version` prompt shows the selected row's current chart
+  version and uses the active `component_sources.yaml` Soperator chart pin as
+  the default target version. If
   `values.soperator-activechecks.enabled` or
   `values.soperator-activechecks.waitForChecks.enabled` is true in the
   cxcli-owned Soperator row, it snapshots the original values, writes a local
@@ -578,8 +588,9 @@ and chart source-family changes.
   values after postflight validation. If live ActiveChecks cannot be inspected,
   the cxcli-managed upgrade fails closed before the chart upgrade so the report
   does not claim an ambiguous live suspension. The flow writes
-  `upgrade-report.md` and `upgrade-report.json` next to `deploy-report.md` for
-  restore evidence. If the process is interrupted after ActiveChecks are
+  `generated/reports/soperator-upgrade-report.md` and
+  `generated/reports/soperator-upgrade-report.json` for postflight and restore
+  evidence. If the process is interrupted after ActiveChecks are
   suspended, rerunning the same `soperator upgrade` command reuses the local
   upgrade checkpoint and restores the original values before completing the
   maintenance flow.
@@ -828,9 +839,9 @@ partition refs, and worker `nodesets[]`. The onboarding command asks for the
 target cluster plus storage and compute intent. Generated onboarding NodeSets use live inventory-derived
 node counts, selectors, taints, and GPU allocatable data as authoritative
 scheduling/resource inputs over catalog template defaults. The full
-source-cluster discovery snapshot is written beside
-the project config as `source-soperator-cluster-discovery-report.json`; the
-config keeps only stable onboarding decisions and fingerprints. The onboarding
+source-cluster discovery snapshot is written under `generated/reports/` as
+`ext-soperator-onboard-source-discovery-report.json`; the config keeps only
+stable onboarding decisions and fingerprints. The onboarding
 flow has
 an explicit source-version recovery path: when Soperator CRDs are present but
 no compatible Helm release version is detected, interactive onboarding asks the
@@ -933,7 +944,7 @@ bundles fail closed while migration-owned actions remain selected.
 `ext-soperator migrate --execute` owns the ad hoc Nebius API calls,
 checkpointing, validation hold, and source retirement phases. Use migrate for
 reruns/resume while those actions remain selected. After a full successful
-`ext-soperator migrate --execute`, `generated/reports/migrate-report.md` shows
+`ext-soperator migrate --execute`, `generated/reports/ext-soperator-migrate-report.md` shows
 `Pending phase: none` and cxcli refreshes the source config from live
 post-migration discovery when it can, so migration-owned actions are no longer
 selected and future normal reconciliation can use render/deploy. If the report
@@ -970,7 +981,8 @@ while the raw Kubernetes detail JSON keeps the scheduler skip. The
 migration command is the separate execution
 surface for live orchestration. `--execute` validates the accepted onboarding
 analysis, reads
-`source-soperator-cluster-discovery-report.json`, rechecks the live source
+`generated/reports/ext-soperator-onboard-source-discovery-report.json`,
+rechecks the live source
 release and full discovery fingerprint before the first mutation, writes a
 local `.nebius-cxcli/soperator-migrations/` timeout-guarded checkpoint, and
 advances supported external MK8s control-plane/node-template, target GPU stack
@@ -1001,7 +1013,7 @@ required Soperator/Slurm smoke validation with a one-task `srun` job that
 prefers an idle non-GPU partition when one exists plus the same Slurm NCCL
 benchmark using two GPU nodes when available or one multi-GPU node when it is
 the only GPU node, writes
-`generated/reports/migrate-report.md` with MK8s GPU and Soperator/Slurm
+`generated/reports/ext-soperator-migrate-report.md` with MK8s GPU and Soperator/Slurm
 validation rollups, refreshes `generated/reports/deploy-report.md` as a
 secondary deploy-compatible MK8s GPU summary, and checkpoints pending gates instead
 of retiring old resources early. During chart takeover it suspends legacy Flux HelmReleases
@@ -3734,9 +3746,9 @@ Flux render:
 
 - Generic Helm source docs (`HelmRepository` HTTP/OCI or `GitRepository` for standalone chart sources).
 - Runtime inventory/report artifacts are written only by deployment/apply paths.
-- `generated/reports/deploy-report.md` is the single human-readable customer report and the body used by the `email` command after a deployment/apply command has created it.
+- `generated/reports/deploy-report.md` is the deploy-time human-readable customer handoff report and the body used by the `email` command after a deployment/apply command has created it.
 - The generated Markdown should stay lint-clean, including no trailing duplicate blank lines at EOF.
-- `create` and `render` do not create the Markdown report; `deploy`, `terraform apply`, `flux apply`, and `flux bootstrap` refresh it for the active project. The render-time `generated/` replacement preserves command-owned runtime reports such as `deploy-report.md`, external Soperator `migrate-report.md`, `upgrade-report.md`, `upgrade-report.json`, and JSON detail files referenced from those Markdown reports, but still removes unrelated stale report files with the replaced bundle.
+- `create` and `render` do not create the Markdown report; `deploy`, `terraform apply`, `flux apply`, and `flux bootstrap` refresh it for the active project. All lifecycle reports stay under `generated/reports/`, and command-specific reports use deterministic latest filenames rather than timestamped session directories. The render-time `generated/` replacement preserves command-owned runtime reports such as `deploy-report.md`, external Soperator `ext-soperator-onboard-source-discovery-report.json` and `ext-soperator-migrate-report.md`, `upgrade-node-template-report.md`, `upgrade-node-template-report.json`, `upgrade-node-group-report.md`, `upgrade-node-group-report.json`, `soperator-upgrade-report.md`, `soperator-upgrade-report.json`, and JSON detail files referenced from those Markdown reports, but still removes unrelated stale report files with the replaced bundle.
 - Explicit Namespace docs for chart target namespaces.
 - Generic HelmRelease docs from enabled app releases.
 - Deterministic flat output under the rendered Flux tree:

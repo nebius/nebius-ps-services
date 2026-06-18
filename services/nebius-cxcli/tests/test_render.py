@@ -3713,15 +3713,20 @@ def test_render_instance_resets_generated_bundle_and_removes_stale_files(
     stale_report = paths.reports_dir / "old.json"
     deploy_report = paths.reports_dir / "deploy-report.md"
     deploy_detail_report = paths.reports_dir / "gpu-visibility-report-mk8s.json"
-    migrate_report = paths.reports_dir / "migrate-report.md"
+    onboard_report = paths.reports_dir / "ext-soperator-onboard-source-discovery-report.json"
+    migrate_report = paths.reports_dir / "ext-soperator-migrate-report.md"
     migration_detail_report = (
         paths.reports_dir / "soperator-cluster-validation-report-external.json"
     )
     unreferenced_migration_like_report = (
         paths.reports_dir / "soperator-cluster-validation-report-old.json"
     )
-    upgrade_report = paths.reports_dir / "upgrade-report.md"
-    upgrade_report_json = paths.reports_dir / "upgrade-report.json"
+    node_template_report = paths.reports_dir / "upgrade-node-template-report.md"
+    node_template_report_json = paths.reports_dir / "upgrade-node-template-report.json"
+    node_group_report = paths.reports_dir / "upgrade-node-group-report.md"
+    node_group_report_json = paths.reports_dir / "upgrade-node-group-report.json"
+    upgrade_report = paths.reports_dir / "soperator-upgrade-report.md"
+    upgrade_report_json = paths.reports_dir / "soperator-upgrade-report.json"
     stale_top_level = paths.generated_dir / "obsolete.txt"
     stale_tf.parent.mkdir(parents=True, exist_ok=True)
     bootstrap_flux_dir.mkdir(parents=True, exist_ok=True)
@@ -3740,6 +3745,7 @@ def test_render_instance_resets_generated_bundle_and_removes_stale_files(
         encoding="utf-8",
     )
     deploy_detail_report.write_text('{"status": "passed"}\n', encoding="utf-8")
+    onboard_report.write_text('{"schema": "onboard"}\n', encoding="utf-8")
     migrate_report.write_text(
         "# Soperator Migration Report\n\n"
         "- `soperator-cluster-validation-report-external.json`: `PASS` - ok\n",
@@ -3747,6 +3753,10 @@ def test_render_instance_resets_generated_bundle_and_removes_stale_files(
     )
     migration_detail_report.write_text('{"passed": true}\n', encoding="utf-8")
     unreferenced_migration_like_report.write_text('{"passed": false}\n', encoding="utf-8")
+    node_template_report.write_text("# MK8s Node Template Upgrade Report\n", encoding="utf-8")
+    node_template_report_json.write_text('{"status": "passed"}\n', encoding="utf-8")
+    node_group_report.write_text("# MK8s Node-Group Upgrade Report\n", encoding="utf-8")
+    node_group_report_json.write_text('{"status": "approved-pre-mutation"}\n', encoding="utf-8")
     upgrade_report.write_text("# Soperator Upgrade Report\n", encoding="utf-8")
     upgrade_report_json.write_text('{"status": "completed"}\n', encoding="utf-8")
     stale_top_level.write_text("obsolete\n", encoding="utf-8")
@@ -3758,9 +3768,20 @@ def test_render_instance_resets_generated_bundle_and_removes_stale_files(
     assert not stale_report.exists()
     assert deploy_report.read_text(encoding="utf-8").startswith("# Deploy Report")
     assert deploy_detail_report.read_text(encoding="utf-8") == '{"status": "passed"}\n'
+    assert onboard_report.read_text(encoding="utf-8") == '{"schema": "onboard"}\n'
     assert migrate_report.read_text(encoding="utf-8").startswith("# Soperator Migration Report")
     assert migration_detail_report.read_text(encoding="utf-8") == '{"passed": true}\n'
     assert not unreferenced_migration_like_report.exists()
+    assert node_template_report.read_text(encoding="utf-8").startswith(
+        "# MK8s Node Template Upgrade Report"
+    )
+    assert node_template_report_json.read_text(encoding="utf-8") == '{"status": "passed"}\n'
+    assert node_group_report.read_text(encoding="utf-8").startswith(
+        "# MK8s Node-Group Upgrade Report"
+    )
+    assert node_group_report_json.read_text(encoding="utf-8") == (
+        '{"status": "approved-pre-mutation"}\n'
+    )
     assert upgrade_report.read_text(encoding="utf-8").startswith("# Soperator Upgrade Report")
     assert upgrade_report_json.read_text(encoding="utf-8") == '{"status": "completed"}\n'
     assert not stale_top_level.exists()

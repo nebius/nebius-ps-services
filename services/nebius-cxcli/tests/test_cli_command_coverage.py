@@ -229,7 +229,9 @@ def test_render_blocks_direct_mk8s_gpu_fabric_drift(
     paths = _fake_paths(tmp_path)
     paths.generated_dir.mkdir(parents=True, exist_ok=True)
     (paths.generated_dir / "nebius-cxcli-manifest.json").write_text("{}", encoding="utf-8")
-    monkeypatch.setattr(cli, "load_generated_manifest", lambda _generated_dir: {"runtime_config": {}})
+    monkeypatch.setattr(
+        cli, "load_generated_manifest", lambda _generated_dir: {"runtime_config": {}}
+    )
     monkeypatch.setattr(
         cli,
         "runtime_config_from_manifest",
@@ -333,6 +335,82 @@ def test_upgrade_node_group_fabric_dry_run_prints_repeatable_plan(
     assert "--execute --approve" in result.output
 
 
+def test_upgrade_node_group_execute_writes_command_report_before_executor_gate(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    paths = _fake_paths(tmp_path)
+    generated_config = SimpleNamespace(
+        client_info=SimpleNamespace(
+            nebius=SimpleNamespace(
+                tenant_id="tenant-1",
+                project_id="project-1",
+                region_id="eu-north1",
+            )
+        )
+    )
+    source_payload = _mk8s_gpu_fabric_payload(fabric="fabric-4")
+    monkeypatch.setattr(cli, "_load_source_payload", lambda _path: source_payload)
+    monkeypatch.setattr(
+        cli,
+        "_load_deploy_context_readonly",
+        lambda _path: (generated_config, paths, {"render": {"module_sources": []}}),
+    )
+    monkeypatch.setattr(cli, "_terraform_runtime_env", lambda _config: {})
+    monkeypatch.setattr(cli, "_node_group_migration_quota_report", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        cli,
+        "_mk8s_gpu_fabric_specs_from_terraform_state",
+        lambda **_kwargs: {
+            ("cluster1", "workers"): cli._Mk8sGpuFabricSpec(
+                instance_id="cluster1",
+                gpu_cluster_key="workers",
+                fabric="fabric-4",
+                node_groups=(),
+            )
+        },
+    )
+
+    result = runner.invoke(
+        cli.app,
+        [
+            "upgrade",
+            "node-group",
+            str(paths.config_path),
+            "infra:mk8s@cluster1",
+            "--node-group",
+            "worker",
+            "--to-platform",
+            "gpu-b200-sxm",
+            "--to-preset",
+            "8gpu-160vcpu-1792gb",
+            "--to-fabric",
+            "fabric-6",
+            "--execute",
+            "--approve",
+        ],
+    )
+
+    assert result.exit_code == 1, result.output
+    assert "approved pre-mutation gate" in _plain_output(result.output)
+    assert "Node-group upgrade report:" in _plain_output(result.output)
+    report_path = paths.reports_dir / cli.UPGRADE_NODE_GROUP_REPORT_FILENAME
+    report_json_path = paths.reports_dir / cli.UPGRADE_NODE_GROUP_REPORT_JSON_FILENAME
+    assert report_path.exists()
+    assert report_json_path.exists()
+    report = report_path.read_text(encoding="utf-8")
+    assert "# MK8s Node-Group Upgrade Report" in report
+    assert "- Status: `APPROVED-PRE-MUTATION`" in report
+    assert "- Effective target fabric: `fabric-6`" in report
+    payload = json.loads(report_json_path.read_text(encoding="utf-8"))
+    assert payload["schema"] == "nebius-cxcli-upgrade-node-group-report/v1"
+    assert payload["status"] == "approved-pre-mutation"
+    assert payload["target"] == "infra:mk8s@cluster1"
+    assert payload["fabric"]["effective_target"] == "fabric-6"
+    assert payload["shared_storage_evidence"] == ["sfs_filesystem_keys:jail"]
+    assert Path(payload["checkpoint"]).exists()
+
+
 def test_upgrade_node_group_omitted_fabric_inherits_current_fabric(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -387,7 +465,10 @@ def test_upgrade_node_group_omitted_fabric_inherits_current_fabric(
     )
 
     assert result.exit_code == 0, result.output
-    assert "- requested target fabric: (not provided; using current fabric when applicable)" in result.output
+    assert (
+        "- requested target fabric: (not provided; using current fabric when applicable)"
+        in result.output
+    )
     assert "- effective target fabric: fabric-4" in result.output
     assert "- fabric status: unchanged" in result.output
     assert "--to-fabric" not in result.output
@@ -1304,6 +1385,25 @@ def test_upgrade_node_template_stages_control_plane_then_combined_node_groups(
         ("node-template", "cluster-1:ng-gpu:1.33:ubuntu24.04:cuda13.0:3600"),
         ("sdk-close", ""),
     ]
+    assert "MK8s node-template upgrade report:" in output
+    report_path = paths.reports_dir / cli.UPGRADE_NODE_TEMPLATE_REPORT_FILENAME
+    report_json_path = paths.reports_dir / cli.UPGRADE_NODE_TEMPLATE_REPORT_JSON_FILENAME
+    assert report_path.exists()
+    assert report_json_path.exists()
+    report = report_path.read_text(encoding="utf-8")
+    assert "# MK8s Node Template Upgrade Report" in report
+    assert "- Target: `infra:mk8s@mk8s`" in report
+    assert "- Kubernetes version: `1.32` -> `1.33`" in report
+    assert "- `mk8s-live-system`: `PASS`" in report
+    assert "- `mk8s-live-gpu`: `PASS`" in report
+    payload = json.loads(report_json_path.read_text(encoding="utf-8"))
+    assert payload["schema"] == "nebius-cxcli-upgrade-node-template-report/v1"
+    assert payload["target"] == "infra:mk8s@mk8s"
+    assert payload["validations"]["overall_status"] == "not_run"
+    assert [group["name"] for group in payload["node_groups"]] == [
+        "mk8s-live-system",
+        "mk8s-live-gpu",
+    ]
 
 
 def test_upgrade_node_template_safe_surge_quota_blocks_before_mutation(
@@ -1525,7 +1625,9 @@ def test_node_template_safe_surge_quota_preflight_counts_selected_surge_nodes(
         strategy_max_surge_count=2,
         live_node_groups=(
             SimpleNamespace(
-                metadata=SimpleNamespace(id="ng-system", name="mk8s-live-system", resource_version=1),
+                metadata=SimpleNamespace(
+                    id="ng-system", name="mk8s-live-system", resource_version=1
+                ),
                 spec=SimpleNamespace(
                     version="1.32",
                     template=SimpleNamespace(
@@ -2059,6 +2161,12 @@ def test_upgrade_node_template_node_group_stages_only_selected_group(
         ("node-template", "cluster-1:ng-gpu:1.33:ubuntu24.04:cuda13.0:3600"),
         ("sdk-close", ""),
     ]
+    payload = json.loads(
+        (paths.reports_dir / cli.UPGRADE_NODE_TEMPLATE_REPORT_JSON_FILENAME).read_text(
+            encoding="utf-8"
+        )
+    )
+    assert [group["name"] for group in payload["node_groups"]] == ["mk8s-live-gpu"]
 
 
 def test_upgrade_node_template_resume_waits_and_restores_strategy_after_timeout(
@@ -2414,8 +2522,7 @@ def test_upgrade_helm_chart_rejects_soperator_selector_with_canonical_command(
     ]
     assert "Soperator chart upgrades use the canonical command" in rendered
     assert (
-        f"nebius-cxcli soperator upgrade {paths.config_path} "
-        "--target mk8s --to-version 0.26.0"
+        f"nebius-cxcli soperator upgrade {paths.config_path} --target mk8s --to-version 0.26.0"
     ) in rendered_flat
     assert "only upgrades non-Soperator app charts" in rendered_flat
     assert "Soperator upgrade plan" not in rendered_flat
@@ -2579,7 +2686,9 @@ def test_soperator_upgrade_apply_runs_soperator_preflight_and_postflight(
     monkeypatch.setattr(
         cli,
         "_run_soperator_upgrade_validation_phase",
-        lambda *_args, **kwargs: calls.append(("soperator-validation", kwargs["phase_label"])),
+        lambda *_args, **kwargs: (
+            calls.append(("soperator-validation", kwargs["phase_label"])) or ()
+        ),
     )
 
     cli.soperator_upgrade_command(
@@ -2674,7 +2783,9 @@ def test_soperator_upgrade_checkpoints_activechecks_suspend_and_restore(
     monkeypatch.setattr(
         cli,
         "_run_soperator_upgrade_validation_phase",
-        lambda *_args, **kwargs: calls.append(("soperator-validation", kwargs["phase_label"])),
+        lambda *_args, **kwargs: (
+            calls.append(("soperator-validation", kwargs["phase_label"])) or ()
+        ),
     )
     monkeypatch.setattr(
         cli,
@@ -2749,7 +2860,9 @@ def test_soperator_upgrade_checkpoints_activechecks_suspend_and_restore(
         "activechecks-restored",
         "completed",
     ]
-    upgrade_report = (paths.reports_dir / cli.UPGRADE_REPORT_FILENAME).read_text(encoding="utf-8")
+    upgrade_report = (paths.reports_dir / cli.SOPERATOR_UPGRADE_REPORT_FILENAME).read_text(
+        encoding="utf-8"
+    )
     assert "checkpointed suspend/restore was required" in upgrade_report
     assert "`activechecks-restored`" in upgrade_report
     assert "`completed`" in upgrade_report
@@ -2793,11 +2906,12 @@ def test_soperator_upgrade_restores_activechecks_after_failed_upgrade(
     manifest: dict[str, Any] = {"deploy": {"targets": [_mk8s_target(paths)]}}
     calls: list[object] = []
 
-    def validation_phase(*_args: Any, **kwargs: Any) -> None:
+    def validation_phase(*_args: Any, **kwargs: Any) -> tuple[Path, ...]:
         phase = kwargs["phase_label"]
         calls.append(("soperator-validation", phase))
         if phase == "Postflight":
             raise RuntimeError("postflight failed")
+        return ()
 
     monkeypatch.setattr(
         cli, "_load_deploy_context_readonly", lambda _path: (generated_config, paths, manifest)
@@ -2872,7 +2986,9 @@ def test_soperator_upgrade_restores_activechecks_after_failed_upgrade(
     assert "activechecks-restored-after-failure" in [
         event["event"] for event in checkpoint["events"]
     ]
-    upgrade_report = (paths.reports_dir / cli.UPGRADE_REPORT_FILENAME).read_text(encoding="utf-8")
+    upgrade_report = (paths.reports_dir / cli.SOPERATOR_UPGRADE_REPORT_FILENAME).read_text(
+        encoding="utf-8"
+    )
     assert "- Status: `failed`" in upgrade_report
     assert "`activechecks-restored-after-failure`" in upgrade_report
 
@@ -2948,7 +3064,9 @@ def test_soperator_upgrade_restores_activechecks_after_suspend_validation_failur
     monkeypatch.setattr(
         cli,
         "_run_soperator_upgrade_validation_phase",
-        lambda *_args, **kwargs: calls.append(("soperator-validation", kwargs["phase_label"])),
+        lambda *_args, **kwargs: (
+            calls.append(("soperator-validation", kwargs["phase_label"])) or ()
+        ),
     )
 
     with pytest.raises(RuntimeError, match="suspension validation failed"):
@@ -3102,7 +3220,9 @@ def test_soperator_upgrade_resumes_pending_activechecks_restore_from_checkpoint(
     monkeypatch.setattr(
         cli,
         "_run_soperator_upgrade_validation_phase",
-        lambda *_args, **kwargs: calls.append(("soperator-validation", kwargs["phase_label"])),
+        lambda *_args, **kwargs: (
+            calls.append(("soperator-validation", kwargs["phase_label"])) or ()
+        ),
     )
     monkeypatch.setattr(
         cli,
@@ -3270,7 +3390,9 @@ def test_soperator_upgrade_resumed_activechecks_restore_survives_preflight_failu
     monkeypatch.setattr(
         cli,
         "_run_soperator_upgrade_validation_phase",
-        lambda *_args, **kwargs: calls.append(("soperator-validation", kwargs["phase_label"])),
+        lambda *_args, **kwargs: (
+            calls.append(("soperator-validation", kwargs["phase_label"])) or ()
+        ),
     )
     monkeypatch.setattr(
         cli,
@@ -3316,7 +3438,9 @@ def test_soperator_upgrade_resumed_activechecks_restore_survives_preflight_failu
     event_names = [event["event"] for event in checkpoint["events"]]
     assert "resumed" in event_names
     assert "activechecks-restored-after-failure" in event_names
-    upgrade_report = (paths.reports_dir / cli.UPGRADE_REPORT_FILENAME).read_text(encoding="utf-8")
+    upgrade_report = (paths.reports_dir / cli.SOPERATOR_UPGRADE_REPORT_FILENAME).read_text(
+        encoding="utf-8"
+    )
     assert "- Status: `failed`" in upgrade_report
     assert "`activechecks-restored-after-failure`" in upgrade_report
 
@@ -3586,6 +3710,8 @@ def test_soperator_upgrade_guided_prompts_dry_run_before_mutation(
     generated_config = SimpleNamespace()
     manifest: dict[str, Any] = {"deploy": {"targets": [_mk8s_target(paths)]}}
     prompt_paths: list[str] = []
+    prompt_hints: dict[str, str | None] = {}
+    prompt_defaults: dict[str, object] = {}
     rich_console = cli.Console(record=True, width=300)
 
     def _prompt_scalar(
@@ -3598,15 +3724,19 @@ def test_soperator_upgrade_guided_prompts_dry_run_before_mutation(
         unset_on_skip: bool = False,
         **_kwargs: object,
     ) -> tuple[object, bool]:
-        del current, choices, type_hint, required, unset_on_skip
+        del choices, type_hint, required, unset_on_skip
         answers: dict[str, Any] = {
-            "soperator.upgrade.to_version": "0.26.0",
             "soperator.upgrade.dry_run": True,
         }
         prompt_paths.append(path_label)
+        prompt_hints[path_label] = cast(str | None, _kwargs.get("prompt_hint"))
+        prompt_defaults[path_label] = current
+        if path_label == "soperator.upgrade.to_version":
+            return current, False
         return answers[path_label], False
 
     monkeypatch.setattr(cli, "_upgrade_interactive_prompts_enabled", lambda: True)
+    monkeypatch.setattr(cli, "_soperator_upgrade_catalog_to_version_default", lambda: "0.26.0")
     monkeypatch.setattr(
         cli, "_load_deploy_context_readonly", lambda _path: (generated_config, paths, manifest)
     )
@@ -3625,9 +3755,29 @@ def test_soperator_upgrade_guided_prompts_dry_run_before_mutation(
         "soperator.upgrade.to_version",
         "soperator.upgrade.dry_run",
     ]
+    assert prompt_hints["soperator.upgrade.to_version"] == "current: 0.25.0"
+    assert prompt_defaults["soperator.upgrade.to_version"] == "0.26.0"
     assert "Soperator upgrade plan" in rendered
+    assert "- chart version: 0.25.0 -> 0.26.0" in rendered
     assert "Dry run only" in rendered
+    assert (
+        f"nebius-cxcli soperator upgrade {paths.config_path} "
+        "--target mk8s --to-version 0.26.0 --no-interactive --dry-run"
+    ) in rendered
     assert paths.config_path.read_text(encoding="utf-8") == original_config
+
+
+def test_soperator_upgrade_catalog_to_version_default_prefers_portable_pin(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    chart = SimpleNamespace(
+        version="local-chart-version",
+        portable_source=SimpleNamespace(version="0.26.0"),
+    )
+
+    monkeypatch.setattr(cli, "helm_chart_source_by_id", lambda _component_id: chart)
+
+    assert cli._soperator_upgrade_catalog_to_version_default() == "0.26.0"
 
 
 def test_soperator_upgrade_no_interactive_requires_version_before_prompt(
@@ -3718,12 +3868,14 @@ def test_soperator_upgrade_validation_specs_select_target_and_require_manifest()
         cli._soperator_upgrade_validation_specs(manifest, target_ref="missing")
 
 
-def test_soperator_upgrade_postflight_refreshes_deploy_report(
+def test_soperator_upgrade_postflight_writes_separate_validation_reports(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     paths = _fake_paths(tmp_path)
     paths.reports_dir.mkdir(parents=True)
+    deploy_report = paths.reports_dir / "deploy-report.md"
+    deploy_report.write_text("# Existing Deploy Report\n", encoding="utf-8")
     validation = {
         "kind": cli.SOPERATOR_CLUSTER_VALIDATION_KIND,
         "target_ref": "mk8s",
@@ -3770,37 +3922,24 @@ def test_soperator_upgrade_postflight_refreshes_deploy_report(
             or [paths.reports_dir / "soperator-smoke.json"]
         ),
     )
+    monkeypatch.setattr(cli, "write_inventory", lambda *_args, **_kwargs: pytest.fail())
     monkeypatch.setattr(
-        cli,
-        "write_inventory",
-        lambda *_args, **kwargs: (
-            calls.append(("write-inventory", kwargs["validations"]))
-            or SimpleNamespace(markdown=paths.reports_dir / "deploy-report.md")
-        ),
-    )
-    monkeypatch.setattr(
-        cli,
-        "build_deploy_validation_report",
-        lambda validations, **kwargs: (
-            calls.append(("build-report", validations, kwargs["markdown_path"]))
-            or SimpleNamespace(overall_status="passed")
-        ),
+        cli, "build_deploy_validation_report", lambda *_args, **_kwargs: pytest.fail()
     )
 
-    report = cli._run_soperator_upgrade_validation_phase(
+    reports = cli._run_soperator_upgrade_validation_phase(
         SimpleNamespace(),
         paths,
         manifest,
         plan,
         phase_label="Postflight",
-        refresh_deploy_report=True,
+        persist_reports=True,
     )
 
-    assert report.overall_status == "passed"
+    assert reports == (paths.reports_dir / "soperator-smoke.json",)
+    assert deploy_report.read_text(encoding="utf-8") == "# Existing Deploy Report\n"
     assert calls == [
         ("run-validations", [validation], paths.reports_dir, {"KUBECONFIG": "fake"}),
-        ("write-inventory", [validation]),
-        ("build-report", [validation], paths.reports_dir / "deploy-report.md"),
     ]
 
 
@@ -7155,21 +7294,31 @@ def test_render_command_force_allows_noninteractive_overwrite(
     fake_paths.reports_dir.mkdir(parents=True, exist_ok=True)
     deploy_report = fake_paths.reports_dir / "deploy-report.md"
     deploy_detail_report = fake_paths.reports_dir / "gpu-visibility-report-mk8s.json"
-    migrate_report = fake_paths.reports_dir / "migrate-report.md"
+    onboard_report = fake_paths.reports_dir / "ext-soperator-onboard-source-discovery-report.json"
+    migrate_report = fake_paths.reports_dir / "ext-soperator-migrate-report.md"
     migrate_detail_report = fake_paths.reports_dir / "external-nccl-test-report.json"
-    upgrade_report = fake_paths.reports_dir / "upgrade-report.md"
-    upgrade_report_json = fake_paths.reports_dir / "upgrade-report.json"
+    node_template_report = fake_paths.reports_dir / "upgrade-node-template-report.md"
+    node_template_report_json = fake_paths.reports_dir / "upgrade-node-template-report.json"
+    node_group_report = fake_paths.reports_dir / "upgrade-node-group-report.md"
+    node_group_report_json = fake_paths.reports_dir / "upgrade-node-group-report.json"
+    upgrade_report = fake_paths.reports_dir / "soperator-upgrade-report.md"
+    upgrade_report_json = fake_paths.reports_dir / "soperator-upgrade-report.json"
     stale_report = fake_paths.reports_dir / "old.json"
     deploy_report.write_text(
         "# Deploy Report\n\n- Detail report: `gpu-visibility-report-mk8s.json`\n",
         encoding="utf-8",
     )
     deploy_detail_report.write_text('{"status": "passed"}\n', encoding="utf-8")
+    onboard_report.write_text('{"schema": "onboard"}\n', encoding="utf-8")
     migrate_report.write_text(
         "# Soperator Migration Report\n\n- `external-nccl-test-report.json`: `PASS` - ok\n",
         encoding="utf-8",
     )
     migrate_detail_report.write_text('{"passed": true}\n', encoding="utf-8")
+    node_template_report.write_text("# MK8s Node Template Upgrade Report\n", encoding="utf-8")
+    node_template_report_json.write_text('{"status": "passed"}\n', encoding="utf-8")
+    node_group_report.write_text("# MK8s Node-Group Upgrade Report\n", encoding="utf-8")
+    node_group_report_json.write_text('{"status": "approved-pre-mutation"}\n', encoding="utf-8")
     upgrade_report.write_text("# Soperator Upgrade Report\n", encoding="utf-8")
     upgrade_report_json.write_text('{"status": "completed"}\n', encoding="utf-8")
     stale_report.write_text("{}\n", encoding="utf-8")
@@ -7197,8 +7346,19 @@ def test_render_command_force_allows_noninteractive_overwrite(
     assert calls["rendered"] is True
     assert deploy_report.read_text(encoding="utf-8").startswith("# Deploy Report")
     assert deploy_detail_report.read_text(encoding="utf-8") == '{"status": "passed"}\n'
+    assert onboard_report.read_text(encoding="utf-8") == '{"schema": "onboard"}\n'
     assert migrate_report.read_text(encoding="utf-8").startswith("# Soperator Migration Report")
     assert migrate_detail_report.read_text(encoding="utf-8") == '{"passed": true}\n'
+    assert node_template_report.read_text(encoding="utf-8").startswith(
+        "# MK8s Node Template Upgrade Report"
+    )
+    assert node_template_report_json.read_text(encoding="utf-8") == '{"status": "passed"}\n'
+    assert node_group_report.read_text(encoding="utf-8").startswith(
+        "# MK8s Node-Group Upgrade Report"
+    )
+    assert node_group_report_json.read_text(encoding="utf-8") == (
+        '{"status": "approved-pre-mutation"}\n'
+    )
     assert upgrade_report.read_text(encoding="utf-8").startswith("# Soperator Upgrade Report")
     assert upgrade_report_json.read_text(encoding="utf-8") == '{"status": "completed"}\n'
     assert not stale_report.exists()
@@ -16054,10 +16214,9 @@ def test_help_text_aligns_render_and_apply_surfaces() -> None:
     assert "--no-interactive for automation" in upgrade_node_template_help
     assert "selected node group rolls once" in upgrade_node_template_help
     assert "final mk8s readiness check" in upgrade_node_template_help
-    assert (
-        "plan an explicit terraform-managed node-group migration"
-        in upgrade_node_group_help
-    )
+    assert "generated/reports/upgrade-node-template-report.md" in upgrade_node_template_help
+    assert "generated/reports/upgrade-node-template-report.json" in upgrade_node_template_help
+    assert "plan an explicit terraform-managed node-group migration" in upgrade_node_group_help
     assert "config_yaml target" in upgrade_node_group_help
     assert "--node-group" in upgrade_node_group_help
     assert "--to-platform" in upgrade_node_group_help
@@ -16073,13 +16232,16 @@ def test_help_text_aligns_render_and_apply_surfaces() -> None:
     )
     assert "approved pre-mutation checkpoint" in upgrade_node_group_help
     assert "stops before live" in upgrade_node_group_help
+    assert "generated/reports/upgrade-node-group-report.md" in upgrade_node_group_help
+    assert "generated/reports/upgrade-node-group-report.json" in upgrade_node_group_help
     assert (
         "example: nebius-cxcli upgrade node-group <config.yaml> "
         "infra:mk8s@<target> --node-group worker --to-platform gpu-b200-sxm "
         "--to-preset 8gpu-160vcpu-1792gb --to-fabric fabric-6 --dry-run"
     ) in upgrade_node_group_help
-    assert "use upgrade node-template instead for kubernetes version, os, or nebius-image gpu stack rolling updates" in (
-        upgrade_node_group_help
+    assert (
+        "use upgrade node-template instead for kubernetes version, os, or nebius-image gpu stack rolling updates"
+        in (upgrade_node_group_help)
     )
     assert "--strategy" not in upgrade_node_group_help
     assert "--interactive" not in upgrade_node_group_help
@@ -16099,9 +16261,7 @@ def test_help_text_aligns_render_and_apply_surfaces() -> None:
         "example: nebius-cxcli upgrade helm-chart <config.yaml> "
         "apps:<chart>@mk8s --to-version <chart-version> --dry-run"
     ) in upgrade_helm_help
-    assert "use nebius-cxcli soperator upgrade for soperator chart upgrades" in (
-        upgrade_helm_help
-    )
+    assert "use nebius-cxcli soperator upgrade for soperator chart upgrades" in (upgrade_helm_help)
     assert "destroy all rendered project resources" in destroy_help
     assert "destructive inverse of `deploy`" in destroy_help
     assert "whole rendered project" in destroy_help
@@ -16592,7 +16752,9 @@ def test_command_help_usage_labels_positional_target_types() -> None:
         "nebius-cxcli ext-soperator migrate ./deployments/tenant/project/config.yaml "
         "--target external-cluster --execute --approve"
     ) in normalized_soperator_migrate_help
-    assert "source-soperator-cluster-discovery-report.json" in (normalized_soperator_migrate_help)
+    assert "ext-soperator-onboard-source-discovery-report.json" in (
+        normalized_soperator_migrate_help
+    )
     assert "validates the accepted onboarding analysis" in normalized_soperator_migrate_help
     assert "If the accepted onboarding report has no migration-owned actions" in (
         normalized_soperator_migrate_help
@@ -16642,7 +16804,7 @@ def test_command_help_usage_labels_positional_target_types() -> None:
         "Slurm NCCL benchmark using two idle GPU Slurm nodes" in normalized_soperator_migrate_help
     )
     assert "only idle multi-GPU Slurm node" in normalized_soperator_migrate_help
-    assert "migrate-report.md" in normalized_soperator_migrate_help
+    assert "ext-soperator-migrate-report.md" in normalized_soperator_migrate_help
     assert "shows an interactive progress spinner and phase-aware Soperator migration status" in (
         normalized_soperator_migrate_help
     )
@@ -19656,9 +19818,9 @@ def test_soperator_profile_managed_groups_track_selected_shape_defaults() -> Non
         is False
     )
 
-    mk8s_inputs.setdefault("gpu_clusters", {}).setdefault("workers", {})[
-        "infiniband_fabric"
-    ] = "fabric-6"
+    mk8s_inputs.setdefault("gpu_clusters", {}).setdefault("workers", {})["infiniband_fabric"] = (
+        "fabric-6"
+    )
 
     assert cli._materialize_soperator_component_defaults(payload) is False
 

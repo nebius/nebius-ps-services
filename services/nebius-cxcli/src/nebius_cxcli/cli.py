@@ -129,6 +129,7 @@ from .deploy_validation_report import (
     build_deploy_validation_report,
     clear_deploy_validation_artifacts,
     status_label,
+    validation_section_lines,
 )
 from .deployment_status import deployment_status_reporting
 from .discover_ops import discover_configs
@@ -269,6 +270,7 @@ from .mk8s_upgrade import (
     LiveNodeGroup,
     Mk8sKubernetesVersionExecutor,
     Mk8sNodeTemplateUpgradePlan,
+    Mk8sUpgradeReadinessResult,
     blocking_preflight_findings,
     collect_kubernetes_preflight_findings,
     find_source_mk8s_component,
@@ -426,6 +428,7 @@ from .soperator_onboarding import (
     soperator_onboarding_report_for_modes,
     soperator_onboarding_target,
     soperator_onboarding_target_refs,
+    source_soperator_discovery_report_path,
     validate_soperator_onboarding_acceptance,
     write_soperator_onboarding_reports,
     write_source_soperator_discovery_report,
@@ -708,9 +711,7 @@ def _raise_on_config_live_quota_issues(
 
 
 _TERRAFORM_STATE_MODULE_RE = re.compile(r"^module\.([A-Za-z0-9_]+)(?:\.|$)")
-_TERRAFORM_GPU_CLUSTER_KEY_RE = re.compile(
-    r'nebius_compute_v1_gpu_cluster\.this\["([^"]+)"\]'
-)
+_TERRAFORM_GPU_CLUSTER_KEY_RE = re.compile(r'nebius_compute_v1_gpu_cluster\.this\["([^"]+)"\]')
 
 
 def _terraform_state_module_name(address: str) -> str:
@@ -1654,7 +1655,9 @@ _UPGRADE_NODE_TEMPLATE_EPILOG = (
     "Safe-surge count: "
     "--strategy-max-surge-count <n> sets temporary extra nodes per active node "
     "group; default 1. Non-dry runs finish with a final MK8s readiness check "
-    "against the live control plane and selected node groups."
+    "against the live control plane and selected node groups, then write "
+    "generated/reports/upgrade-node-template-report.md and "
+    "generated/reports/upgrade-node-template-report.json."
 )
 app = typer.Typer(
     add_completion=False,
@@ -2054,13 +2057,16 @@ class _SoperatorActiveChecksLifecycle:
 
 SOPERATOR_UPGRADE_CHECKPOINT_SCHEMA = "nebius-cxcli-soperator-upgrade/v1"
 SOPERATOR_UPGRADE_CHECKPOINT_DIR = ".nebius-cxcli/soperator-upgrades"
-UPGRADE_REPORT_FILENAME = "upgrade-report.md"
-UPGRADE_REPORT_JSON_FILENAME = "upgrade-report.json"
+UPGRADE_NODE_TEMPLATE_REPORT_FILENAME = "upgrade-node-template-report.md"
+UPGRADE_NODE_TEMPLATE_REPORT_JSON_FILENAME = "upgrade-node-template-report.json"
+UPGRADE_NODE_GROUP_REPORT_FILENAME = "upgrade-node-group-report.md"
+UPGRADE_NODE_GROUP_REPORT_JSON_FILENAME = "upgrade-node-group-report.json"
+SOPERATOR_UPGRADE_REPORT_FILENAME = "soperator-upgrade-report.md"
+SOPERATOR_UPGRADE_REPORT_JSON_FILENAME = "soperator-upgrade-report.json"
 _SOPERATOR_ACTIVECHECKS_UPGRADE_PATHS = (
     "values.soperator-activechecks.enabled",
     "values.soperator-activechecks.waitForChecks.enabled",
 )
-
 
 
 def _parse_helm_chart_upgrade_selector(selector: str) -> _HelmChartUpgradeTarget:
@@ -2280,18 +2286,33 @@ def _prompt_soperator_upgrade_target_if_needed(
 def _prompt_soperator_upgrade_to_version_if_needed(
     *,
     to_version: str | None,
+    current_version: str | None,
+    catalog_default_version: str | None,
 ) -> str:
     current = _non_empty_text(to_version)
     if current:
         return _validate_helm_chart_version_value(current)
+    current_hint = _non_empty_text(current_version) or "unset"
+    default_version = _non_empty_text(catalog_default_version)
     value = _prompt_upgrade_scalar(
         "soperator.upgrade.to_version",
-        "",
+        default_version,
         type_hint="string",
         missing="--to-version <chart-version>",
+        prompt_hint=f"current: {current_hint}",
     )
     return _validate_helm_chart_version_value(str(value))
 
+
+def _soperator_upgrade_catalog_to_version_default() -> str:
+    chart = helm_chart_source_by_id(_SOPERATOR_APP_ID)
+    if chart is None:
+        return ""
+    portable_source = getattr(chart, "portable_source", None)
+    portable_version = _non_empty_text(getattr(portable_source, "version", ""))
+    if portable_version:
+        return portable_version
+    return _non_empty_text(getattr(chart, "version", ""))
 
 
 def _prompt_upgrade_choice(
@@ -2465,7 +2486,9 @@ def _default_node_template_gpu_stack_preset(
         return validate_node_template_field_value(current, flag_name="--to-gpu-stack-preset")
     if prompt_gpu_stack:
         return ""
-    nebius_image_groups = tuple(group for group in groups if node_group_uses_nebius_gpu_image(group))
+    nebius_image_groups = tuple(
+        group for group in groups if node_group_uses_nebius_gpu_image(group)
+    )
     if not nebius_image_groups:
         return ""
     return validate_node_template_field_value(
@@ -2758,8 +2781,7 @@ def _prompt_upgrade_disruption_options_if_guided(
                 continue
             if step == "strategy_max_surge_count":
                 should_prompt_count = (
-                    disruption_policy == DISRUPTION_POLICY_SAFE
-                    and prompt_strategy_max_surge_count
+                    disruption_policy == DISRUPTION_POLICY_SAFE and prompt_strategy_max_surge_count
                 )
                 if should_prompt_count:
                     prompted_count = _prompt_upgrade_scalar_or_back(
@@ -2781,7 +2803,7 @@ def _prompt_upgrade_disruption_options_if_guided(
                         disruption_policy=disruption_policy,
                         strategy_max_surge_count=strategy_max_surge_count,
                         allow_backtrack=True,
-                )
+                    )
                 if _wizard_backtrack_requested(prompted_count):
                     _backtrack()
                     if outer_backtrack:
@@ -2934,7 +2956,6 @@ def _prompt_upgrade_node_template_field_value_if_needed(
     return validate_node_template_field_value(str(prompted), flag_name=option_name)
 
 
-
 def _prompt_upgrade_node_template_to_os_if_needed(
     *,
     path_label: str,
@@ -2968,7 +2989,6 @@ def _prompt_upgrade_node_template_to_os_if_needed(
             return _WIZARD_BACKTRACK
         raise RuntimeError("Upgrade wizard cancelled.")
     return validate_os_image_value(str(value))
-
 
 
 def _resolve_helm_chart_upgrade_options(
@@ -3032,7 +3052,6 @@ def _append_upgrade_validation_args(
         args.append("--skip-validations")
     for kind in skip_validation or ():
         args.extend(["--skip-validation", kind])
-
 
 
 def _upgrade_node_template_dry_run_command(
@@ -3223,9 +3242,7 @@ def _node_group_migration_replacement_inputs(
         replacement_group["gpu_cluster_key"] = gpu_cluster_key
     inputs: dict[str, Any] = {"node_groups": {"replacement": replacement_group}}
     if gpu_cluster_key and effective_target_fabric:
-        inputs["gpu_clusters"] = {
-            gpu_cluster_key: {"infiniband_fabric": effective_target_fabric}
-        }
+        inputs["gpu_clusters"] = {gpu_cluster_key: {"infiniband_fabric": effective_target_fabric}}
     return inputs
 
 
@@ -3242,7 +3259,9 @@ def _node_group_migration_quota_report(
     gpu_cluster_key: str,
     effective_target_fabric: str,
 ) -> QuotaReport | None:
-    tenant_id, project_id, region_id = _quota_identity_from_payload(source_payload, generated_config)
+    tenant_id, project_id, region_id = _quota_identity_from_payload(
+        source_payload, generated_config
+    )
     if not tenant_id or not project_id or not region_id:
         return None
     requirements, gaps = estimate_mk8s_quota_requirements(
@@ -3338,7 +3357,9 @@ def _plan_node_group_migration(
     current_os = _non_empty_text(raw_group.get("os"))
     current_gpu_stack_preset = _non_empty_text(raw_group.get("gpu_stack_preset"))
     if not current_platform or not current_preset:
-        raise ValueError(f"{target.selector} node group '{node_group}' requires platform and preset.")
+        raise ValueError(
+            f"{target.selector} node group '{node_group}' requires platform and preset."
+        )
 
     target_platform = _non_empty_text(to_platform) or current_platform
     target_preset = _non_empty_text(to_preset) or current_preset
@@ -3590,7 +3611,6 @@ def _format_node_group_migration_plan(
     return lines
 
 
-
 def _upgrade_helm_chart_dry_run_command(
     *,
     config_path: Path,
@@ -3733,7 +3753,7 @@ def _format_helm_chart_upgrade_plan(
     if dry_run:
         if repeat_dry_run_command:
             lines.append("- repeat dry-run command:")
-            lines.append(f"  {repeat_dry_run_command}")
+            lines.append(repeat_dry_run_command)
         lines.append(
             "Dry run only: no config.yaml write, generated bundle render, "
             "or Flux apply was performed."
@@ -3818,6 +3838,10 @@ def _soperator_upgrade_relative_path(path: Path, *, root: Path) -> str:
         return str(path)
 
 
+def _soperator_upgrade_relative_paths(paths: ProjectPaths, reports: Iterable[Path]) -> list[str]:
+    return [_soperator_upgrade_relative_path(report, root=paths.project_dir) for report in reports]
+
+
 def _soperator_upgrade_now_iso() -> str:
     return datetime.now(UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
 
@@ -3847,6 +3871,253 @@ def _write_text_atomic(path: Path, content: str, *, encoding: str = "utf-8") -> 
             temp_path.unlink(missing_ok=True)
 
 
+def _validation_report_payload(
+    validations: Sequence[Mapping[str, Any]],
+    *,
+    reports_dir: Path,
+) -> dict[str, Any]:
+    if not validations:
+        return {
+            "overall_status": "not_run",
+            "total_count": 0,
+            "completed_count": 0,
+            "passed_count": 0,
+            "failed_count": 0,
+            "not_run_count": 0,
+            "results": [],
+        }
+    report = build_deploy_validation_report(validations, reports_dir=reports_dir)
+    return {
+        "overall_status": report.overall_status,
+        "total_count": report.total_count,
+        "completed_count": report.completed_count,
+        "passed_count": report.passed_count,
+        "failed_count": report.failed_count,
+        "not_run_count": report.not_run_count,
+        "results": [
+            {
+                "kind": item.kind,
+                "name": item.name,
+                "target_ref": item.target_ref,
+                "status": item.status,
+                "summary": item.summary,
+                "report_file": item.report_path.name,
+                "report_exists": item.report_exists,
+            }
+            for item in report.results
+        ],
+    }
+
+
+def _validation_report_markdown_lines(
+    validations: Sequence[Mapping[str, Any]],
+    *,
+    reports_dir: Path,
+) -> list[str]:
+    if not validations:
+        return [
+            "## Validations",
+            "",
+            "- No post-upgrade validations were configured or selected.",
+            "",
+        ]
+    report = build_deploy_validation_report(validations, reports_dir=reports_dir)
+    lines = validation_section_lines(report)
+    lines.append("")
+    return lines
+
+
+def _write_upgrade_node_template_report(
+    paths: ProjectPaths,
+    *,
+    plan: Mk8sNodeTemplateUpgradePlan,
+    readiness: Mk8sUpgradeReadinessResult,
+    validations: Sequence[Mapping[str, Any]],
+) -> tuple[Path, Path]:
+    paths.reports_dir.mkdir(parents=True, exist_ok=True)
+    markdown_path = paths.reports_dir / UPGRADE_NODE_TEMPLATE_REPORT_FILENAME
+    json_path = paths.reports_dir / UPGRADE_NODE_TEMPLATE_REPORT_JSON_FILENAME
+    generated_at = _soperator_upgrade_now_iso()
+    node_groups = [
+        {
+            "id": str(getattr(group, "id", "") or ""),
+            "name": str(getattr(group, "name", "") or ""),
+            "ready": bool(getattr(group, "ready", False)),
+            "summary": str(getattr(group, "summary", "") or ""),
+        }
+        for group in getattr(readiness, "node_groups", ()) or ()
+    ]
+    validation_payload = _validation_report_payload(validations, reports_dir=paths.reports_dir)
+    payload = {
+        "schema": "nebius-cxcli-upgrade-node-template-report/v1",
+        "generated_at": generated_at,
+        "status": "passed",
+        "target": str(getattr(getattr(plan, "target", None), "selector", "") or ""),
+        "cluster_id": str(getattr(plan, "cluster_id", "") or ""),
+        "cluster_name": str(getattr(plan, "cluster_name", "") or ""),
+        "current_version": str(getattr(plan, "current_version", "") or ""),
+        "target_version": str(getattr(plan, "target_version", "") or ""),
+        "target_os": str(getattr(plan, "target_os", "") or ""),
+        "target_gpu_stack_preset": str(getattr(plan, "target_gpu_stack_preset", "") or ""),
+        "readiness_summary": readiness.summary() if hasattr(readiness, "summary") else "",
+        "node_groups": node_groups,
+        "validations": validation_payload,
+    }
+    _write_text_atomic(json_path, json.dumps(payload, indent=2, sort_keys=True) + "\n")
+    lines = [
+        "# MK8s Node Template Upgrade Report",
+        "",
+        f"- Target: `{payload['target']}`",
+        f"- Cluster: `{payload['cluster_name'] or payload['cluster_id']}`",
+        f"- Kubernetes version: `{payload['current_version'] or 'unknown'}` -> `{payload['target_version'] or 'unchanged'}`",
+        f"- OS image: `{payload['target_os'] or 'unchanged'}`",
+        f"- GPU stack preset: `{payload['target_gpu_stack_preset'] or 'unchanged/operator-managed'}`",
+        f"- Status: `{status_label(payload['status'])}`",
+        f"- Generated at: `{generated_at}`",
+        f"- JSON report: `{json_path.name}`",
+        "",
+        "## Readiness",
+        "",
+        f"- {payload['readiness_summary'] or 'No readiness summary recorded.'}",
+    ]
+    for group in node_groups:
+        lines.append(
+            f"- `{group['name'] or group['id']}`: "
+            f"`{status_label('passed' if group['ready'] else 'failed')}` - "
+            f"{group['summary'] or 'No summary recorded.'}"
+        )
+    lines.extend(
+        ["", *_validation_report_markdown_lines(validations, reports_dir=paths.reports_dir)]
+    )
+    _write_text_atomic(markdown_path, "\n".join(lines).rstrip() + "\n")
+    return markdown_path, json_path
+
+
+def _node_group_migration_report_payload(
+    *,
+    plan: _NodeGroupMigrationPlan,
+    checkpoint_path: Path,
+    status: str,
+) -> dict[str, Any]:
+    return {
+        "schema": "nebius-cxcli-upgrade-node-group-report/v1",
+        "generated_at": _soperator_upgrade_now_iso(),
+        "status": status,
+        "checkpoint": str(checkpoint_path),
+        "target": plan.target_selector,
+        "instance_id": plan.instance_id,
+        "cluster": plan.cluster_name,
+        "node_group": plan.node_group,
+        "node_group_kind": plan.node_group_kind,
+        "platform": {
+            "from": plan.current_platform,
+            "to": plan.target_platform,
+        },
+        "hardware_preset": {
+            "from": plan.current_preset,
+            "to": plan.target_preset,
+        },
+        "os": {
+            "from": plan.current_os,
+            "to": plan.target_os,
+        },
+        "gpu_stack_preset": {
+            "from": plan.current_gpu_stack_preset,
+            "to": plan.target_gpu_stack_preset,
+        },
+        "fabric": {
+            "gpu_cluster_key": plan.gpu_cluster_key,
+            "current_config": plan.current_config_fabric,
+            "current_terraform_state": plan.current_state_fabric,
+            "requested": plan.requested_target_fabric,
+            "effective_target": plan.effective_target_fabric,
+            "status": plan.fabric_status,
+        },
+        "reservation_policy": plan.reservation_policy,
+        "managed_soperator_target": plan.soperator_managed,
+        "shared_storage_evidence": list(plan.sfs_evidence),
+        "quota_blocks_execute": _node_group_migration_quota_blocks(plan),
+        "quota_report_lines": (
+            format_quota_report_lines(
+                plan.quota_report,
+                phase="node-group migration",
+                include_confirmed_components=True,
+                markup=False,
+            )
+            if plan.quota_report is not None
+            else []
+        ),
+    }
+
+
+def _write_upgrade_node_group_report(
+    paths: ProjectPaths,
+    *,
+    plan: _NodeGroupMigrationPlan,
+    checkpoint_path: Path,
+    status: str,
+) -> tuple[Path, Path]:
+    paths.reports_dir.mkdir(parents=True, exist_ok=True)
+    markdown_path = paths.reports_dir / UPGRADE_NODE_GROUP_REPORT_FILENAME
+    json_path = paths.reports_dir / UPGRADE_NODE_GROUP_REPORT_JSON_FILENAME
+    payload = _node_group_migration_report_payload(
+        plan=plan,
+        checkpoint_path=checkpoint_path,
+        status=status,
+    )
+    _write_text_atomic(json_path, json.dumps(payload, indent=2, sort_keys=True) + "\n")
+    lines = [
+        "# MK8s Node-Group Upgrade Report",
+        "",
+        f"- Target: `{plan.target_selector}`",
+        f"- Cluster: `{plan.cluster_name}`",
+        f"- Node group: `{plan.node_group}` ({plan.node_group_kind})",
+        f"- Status: `{status_label(status)}`",
+        f"- Generated at: `{payload['generated_at']}`",
+        f"- Checkpoint: `{checkpoint_path}`",
+        f"- JSON report: `{json_path.name}`",
+        "",
+        "## Planned Change",
+        "",
+        f"- Platform: `{plan.current_platform}` -> `{plan.target_platform}`",
+        f"- Hardware preset: `{plan.current_preset}` -> `{plan.target_preset}`",
+        f"- OS image: `{plan.current_os or '(unset)'}` -> `{plan.target_os or '(unchanged/unset)'}`",
+    ]
+    if plan.node_group_kind == "gpu":
+        lines.append(
+            "- GPU stack preset: "
+            f"`{plan.current_gpu_stack_preset or '(operator-managed/driverless)'}` -> "
+            f"`{plan.target_gpu_stack_preset or '(operator-managed/driverless)'}`"
+        )
+    lines.extend(
+        [
+            f"- GPU cluster key: `{plan.gpu_cluster_key or '(not applicable)'}`",
+            f"- Effective target fabric: `{plan.effective_target_fabric or '(not applicable)'}`",
+            f"- Fabric status: `{plan.fabric_status}`",
+            f"- Reservation policy: `{plan.reservation_policy}`",
+            "- Shared storage evidence: "
+            + (
+                ", ".join(f"`{item}`" for item in plan.sfs_evidence)
+                if plan.sfs_evidence
+                else "not found"
+            ),
+            "",
+            "## Execution State",
+            "",
+            "- Current executor status: approved pre-mutation checkpoint only; live replacement/cutover/retirement is not enabled yet.",
+            "- Quota/capacity blocks execute: `"
+            + ("yes" if payload["quota_blocks_execute"] else "no")
+            + "`",
+        ]
+    )
+    quota_lines = payload["quota_report_lines"]
+    if quota_lines:
+        lines.extend(["", "## Quota/Capacity Preflight", ""])
+        lines.extend(f"- {line}" for line in quota_lines)
+    _write_text_atomic(markdown_path, "\n".join(lines).rstrip() + "\n")
+    return markdown_path, json_path
+
+
 def _new_soperator_upgrade_checkpoint(
     *,
     plan: _HelmChartUpgradePlan,
@@ -3869,11 +4140,11 @@ def _new_soperator_upgrade_checkpoint(
         ),
         "reports": {
             "upgrade": _soperator_upgrade_relative_path(
-                paths.reports_dir / UPGRADE_REPORT_FILENAME,
+                paths.reports_dir / SOPERATOR_UPGRADE_REPORT_FILENAME,
                 root=paths.project_dir,
             ),
-            "deploy": _soperator_upgrade_relative_path(
-                paths.reports_dir / DEPLOY_REPORT_FILENAME,
+            "upgrade_json": _soperator_upgrade_relative_path(
+                paths.reports_dir / SOPERATOR_UPGRADE_REPORT_JSON_FILENAME,
                 root=paths.project_dir,
             ),
         },
@@ -4017,11 +4288,11 @@ def _soperator_upgrade_resume_checkpoint(
     )
     checkpoint["reports"] = {
         "upgrade": _soperator_upgrade_relative_path(
-            paths.reports_dir / UPGRADE_REPORT_FILENAME,
+            paths.reports_dir / SOPERATOR_UPGRADE_REPORT_FILENAME,
             root=paths.project_dir,
         ),
-        "deploy": _soperator_upgrade_relative_path(
-            paths.reports_dir / DEPLOY_REPORT_FILENAME,
+        "upgrade_json": _soperator_upgrade_relative_path(
+            paths.reports_dir / SOPERATOR_UPGRADE_REPORT_JSON_FILENAME,
             root=paths.project_dir,
         ),
     }
@@ -4057,8 +4328,8 @@ def _write_soperator_upgrade_report(
     checkpoint: Mapping[str, Any],
 ) -> tuple[Path, Path]:
     paths.reports_dir.mkdir(parents=True, exist_ok=True)
-    json_path = paths.reports_dir / UPGRADE_REPORT_JSON_FILENAME
-    markdown_path = paths.reports_dir / UPGRADE_REPORT_FILENAME
+    json_path = paths.reports_dir / SOPERATOR_UPGRADE_REPORT_JSON_FILENAME
+    markdown_path = paths.reports_dir / SOPERATOR_UPGRADE_REPORT_FILENAME
     _write_text_atomic(json_path, json.dumps(dict(checkpoint), indent=2, sort_keys=True) + "\n")
 
     activechecks = checkpoint.get("activechecks")
@@ -4085,7 +4356,19 @@ def _write_soperator_upgrade_report(
                 continue
             event = str(item.get("event") or "event")
             when = str(item.get("time") or "")
-            event_lines.append(f"{index}. `{event}`" + (f" at `{when}`" if when else ""))
+            report_refs = item.get("validation_reports")
+            report_text = ""
+            if isinstance(report_refs, list):
+                report_names = [str(report) for report in report_refs if str(report or "").strip()]
+                if report_names:
+                    report_text = (
+                        " (validation reports: "
+                        + ", ".join(f"`{report}`" for report in report_names)
+                        + ")"
+                    )
+            event_lines.append(
+                f"{index}. `{event}`" + (f" at `{when}`" if when else "") + report_text
+            )
     if not event_lines:
         event_lines.append("1. `planned`")
 
@@ -4098,7 +4381,7 @@ def _write_soperator_upgrade_report(
             f"- Chart version: `{checkpoint.get('current_version') or 'unset'}` -> `{checkpoint.get('target_version') or 'unset'}`",
             f"- Status: `{checkpoint.get('status', 'unknown')}`",
             f"- Checkpoint: `{checkpoint.get('checkpoint_path', '')}`",
-            f"- Deploy report: `{_soperator_upgrade_relative_path(paths.reports_dir / DEPLOY_REPORT_FILENAME, root=paths.project_dir)}`",
+            f"- JSON report: `{SOPERATOR_UPGRADE_REPORT_JSON_FILENAME}`",
             "",
             "## ActiveChecks Lifecycle",
             "",
@@ -4287,7 +4570,11 @@ def _format_soperator_upgrade_plan(
             "- Soperator-aware gates:",
             "  - preflight runs the existing generated-bundle validation and a live Soperator/Slurm smoke validation before mutation.",
             "  - apply updates config.yaml, rerenders, validates the new bundle, and applies only the selected target Flux bundle.",
-            "  - postflight verifies the static Soperator chart version and reruns the required Soperator/Slurm smoke validation, refreshing deploy-report.md.",
+            (
+                "  - postflight verifies the static Soperator chart version, reruns "
+                "the required Soperator/Slurm smoke validation, and writes "
+                "soperator-upgrade-report.md and soperator-upgrade-report.json."
+            ),
         ]
     )
     lifecycle = _soperator_upgrade_activechecks_lifecycle(payload, plan.target)
@@ -4566,8 +4853,8 @@ def _run_soperator_upgrade_validation_phase(
     plan: _HelmChartUpgradePlan,
     *,
     phase_label: str,
-    refresh_deploy_report: bool,
-) -> DeployValidationReport | None:
+    persist_reports: bool,
+) -> tuple[Path, ...]:
     selected_targets = _resolve_selected_deploy_targets(
         manifest,
         requested_target_ref=plan.target.target_ref,
@@ -4605,29 +4892,26 @@ def _run_soperator_upgrade_validation_phase(
                     console.print(message)
                 last_validation_phase = message
 
-            if refresh_deploy_report:
+            if persist_reports:
                 paths.reports_dir.mkdir(parents=True, exist_ok=True)
-                clear_deploy_validation_artifacts(validations, reports_dir=paths.reports_dir)
+                clear_deploy_validation_artifacts(
+                    validations,
+                    reports_dir=paths.reports_dir,
+                    include_markdown=False,
+                )
                 reports_dir = paths.reports_dir
             else:
                 temp_dir = stack.enter_context(
                     tempfile.TemporaryDirectory(prefix="nebius-cxcli-soperator-upgrade-preflight-")
                 )
                 reports_dir = Path(temp_dir)
-            _run_deploy_validations(
+            written_reports = _run_deploy_validations(
                 validations,
                 reports_dir=reports_dir,
                 extra_env=kube_env,
                 emit=_emit_validation_phase,
             )
-    if not refresh_deploy_report:
-        return None
-    artifacts = write_inventory(config, paths, validations=validations)
-    return build_deploy_validation_report(
-        validations,
-        reports_dir=paths.reports_dir,
-        markdown_path=artifacts.markdown,
-    )
+    return tuple(written_reports) if persist_reports else ()
 
 
 def _raise_if_soperator_upgrade_would_bypass_migration(
@@ -4748,18 +5032,15 @@ def _quota_identity_from_payload(
     client_info = payload.get("client_info")
     nebius = client_info.get("nebius") if isinstance(client_info, Mapping) else None
     generated_nebius = getattr(getattr(generated_config, "client_info", None), "nebius", None)
-    tenant_id = (
-        _non_empty_text(nebius.get("tenant_id") if isinstance(nebius, Mapping) else None)
-        or _non_empty_text(getattr(generated_nebius, "tenant_id", None))
-    )
-    project_id = (
-        _non_empty_text(nebius.get("project_id") if isinstance(nebius, Mapping) else None)
-        or _non_empty_text(getattr(generated_nebius, "project_id", None))
-    )
-    region_id = (
-        _non_empty_text(nebius.get("region_id") if isinstance(nebius, Mapping) else None)
-        or _non_empty_text(getattr(generated_nebius, "region_id", None))
-    )
+    tenant_id = _non_empty_text(
+        nebius.get("tenant_id") if isinstance(nebius, Mapping) else None
+    ) or _non_empty_text(getattr(generated_nebius, "tenant_id", None))
+    project_id = _non_empty_text(
+        nebius.get("project_id") if isinstance(nebius, Mapping) else None
+    ) or _non_empty_text(getattr(generated_nebius, "project_id", None))
+    region_id = _non_empty_text(
+        nebius.get("region_id") if isinstance(nebius, Mapping) else None
+    ) or _non_empty_text(getattr(generated_nebius, "region_id", None))
     return tenant_id, project_id, region_id
 
 
@@ -4867,7 +5148,9 @@ def _node_template_safe_surge_quota_requirements(
     for group in request_groups:
         if group.source is None:
             continue
-        planned_name = f"{plan.cluster_name or plan.target.instance_id}-{group.source.key}-safe-surge"
+        planned_name = (
+            f"{plan.cluster_name or plan.target.instance_id}-{group.source.key}-safe-surge"
+        )
         planned_group = _node_template_safe_surge_group_payload(
             source_component,
             group,
@@ -5021,7 +5304,6 @@ def _run_node_template_safe_surge_quota_preflight(
     return report
 
 
-
 @upgrade_app.command(
     "node-template",
     short_help=(
@@ -5096,8 +5378,7 @@ def upgrade_node_template_command(
         typer.Option(
             "--strategy-max-surge-count",
             help=(
-                "Temporary extra nodes per active node group for --strategy safe-surge. "
-                "Default: 1."
+                "Temporary extra nodes per active node group for --strategy safe-surge. Default: 1."
             ),
         ),
     ] = None,
@@ -5555,7 +5836,14 @@ def upgrade_node_template_command(
                     plan=plan,
                     label="MK8s node-template upgrade",
                 )
+                report_path, _report_json_path = _write_upgrade_node_template_report(
+                    paths,
+                    plan=plan,
+                    readiness=readiness,
+                    validations=[],
+                )
                 console.print(f"[green]{readiness.summary()}[/green]")
+                console.print(f"MK8s node-template upgrade report: {report_path}", soft_wrap=True)
                 console.print(
                     f"MK8s target {target.selector} is already on Kubernetes "
                     f"{normalized_to_version}, OS {target_os}, and the requested GPU stack."
@@ -5828,7 +6116,14 @@ def upgrade_node_template_command(
                 plan=plan,
                 label="MK8s node-template upgrade",
             )
+            report_path, _report_json_path = _write_upgrade_node_template_report(
+                paths,
+                plan=plan,
+                readiness=readiness,
+                validations=validations,
+            )
             console.print(f"[green]{readiness.summary()}[/green]")
+            console.print(f"MK8s node-template upgrade report: {report_path}", soft_wrap=True)
             console.print(
                 f"[green]MK8s node-template upgrade completed[/green]: "
                 f"{target.selector} -> Kubernetes {normalized_to_version}, OS {target_os}"
@@ -5853,7 +6148,11 @@ def upgrade_node_template_command(
         "--to-fabric fabric-6 --dry-run. Omit --to-fabric for a GPU-cluster node group "
         "to keep its current fabric. Use upgrade node-template instead for Kubernetes "
         "version, OS, or Nebius-image GPU stack rolling updates that do not change "
-        "hardware platform, hardware preset, CPU/GPU kind, GPU cluster, or fabric."
+        "hardware platform, hardware preset, CPU/GPU kind, GPU cluster, or fabric. "
+        "Current --execute --approve writes "
+        "generated/reports/upgrade-node-group-report.md and "
+        "generated/reports/upgrade-node-group-report.json at the approved "
+        "pre-mutation gate."
     ),
 )
 def upgrade_node_group_command(
@@ -6005,10 +6304,17 @@ def upgrade_node_group_command(
             + "\n",
             encoding="utf-8",
         )
+        report_path, _report_json_path = _write_upgrade_node_group_report(
+            paths,
+            plan=plan,
+            checkpoint_path=checkpoint_path,
+            status="approved-pre-mutation",
+        )
         raise RuntimeError(
             "upgrade node-group --execute reached the approved pre-mutation gate and wrote "
-            f"{checkpoint_path}. The live replacement/cutover/retirement executor is not "
-            "enabled yet, so cxcli stopped before making changes."
+            f"{checkpoint_path}. Node-group upgrade report: {report_path}. "
+            "The live replacement/cutover/retirement executor is not enabled yet, so cxcli "
+            "stopped before making changes."
         )
     except typer.Exit:
         raise
@@ -6147,7 +6453,15 @@ def _run_soperator_upgrade_command(
             "Missing --to-version <chart-version>. Pass explicit Soperator upgrade "
             "options or allow interactive prompting."
         )
-    target_version = _prompt_soperator_upgrade_to_version_if_needed(to_version=to_version)
+    current_version = _non_empty_text(_source_helm_chart_row(source_payload, target).get("version"))
+    catalog_default_version = (
+        _soperator_upgrade_catalog_to_version_default() if version_missing else ""
+    )
+    target_version = _prompt_soperator_upgrade_to_version_if_needed(
+        to_version=to_version,
+        current_version=current_version,
+        catalog_default_version=catalog_default_version,
+    )
     guided = version_missing or (target_missing and interactive)
     dry_run = _resolve_helm_chart_upgrade_options(
         guided=guided,
@@ -6270,17 +6584,13 @@ def _run_helm_chart_upgrade_command(
     if not plan.mutates and resume_checkpoint is None:
         if soperator_aware:
             _verify_soperator_static_upgrade_ready(generated_config, paths, manifest, plan)
-            _run_soperator_upgrade_validation_phase(
+            postflight_reports = _run_soperator_upgrade_validation_phase(
                 generated_config,
                 paths,
                 manifest,
                 plan,
                 phase_label="Postflight",
-                refresh_deploy_report=True,
-            )
-            console.print(
-                f"Soperator upgrade validation report: {paths.reports_dir / DEPLOY_REPORT_FILENAME}",
-                soft_wrap=True,
+                persist_reports=True,
             )
             lifecycle = _soperator_upgrade_activechecks_lifecycle(source_payload, target)
             checkpoint_path = _soperator_upgrade_checkpoint_path(config_path, target.target_ref)
@@ -6290,7 +6600,12 @@ def _run_helm_chart_upgrade_command(
                 checkpoint_path=checkpoint_path,
                 paths=paths,
             )
-            _append_soperator_upgrade_event(checkpoint, "completed", reason="already-current")
+            _append_soperator_upgrade_event(
+                checkpoint,
+                "completed",
+                reason="already-current",
+                validation_reports=_soperator_upgrade_relative_paths(paths, postflight_reports),
+            )
             _write_soperator_upgrade_checkpoint(checkpoint_path, checkpoint)
             upgrade_report_path, _upgrade_report_json_path = _write_soperator_upgrade_report(
                 paths,
@@ -6409,7 +6724,7 @@ def _run_helm_chart_upgrade_command(
                 manifest,
                 plan,
                 phase_label="Preflight",
-                refresh_deploy_report=False,
+                persist_reports=False,
             )
             _checkpoint("preflight-soperator-validation-completed")
 
@@ -6441,15 +6756,21 @@ def _run_helm_chart_upgrade_command(
                     )
                 )
                 _checkpoint("upgrade-applied")
-            _run_soperator_upgrade_validation_phase(
+            postflight_reports = _run_soperator_upgrade_validation_phase(
                 staged_config,
                 staged_paths,
                 staged_manifest,
                 plan,
                 phase_label="Postflight",
-                refresh_deploy_report=True,
+                persist_reports=True,
             )
-            _checkpoint("postflight-soperator-validation-completed")
+            _checkpoint(
+                "postflight-soperator-validation-completed",
+                validation_reports=_soperator_upgrade_relative_paths(
+                    staged_paths,
+                    postflight_reports,
+                ),
+            )
 
             if lifecycle.required:
                 _checkpoint("activechecks-restore-started")
@@ -6472,10 +6793,6 @@ def _run_helm_chart_upgrade_command(
             upgrade_report_path, _upgrade_report_json_path = _write_soperator_upgrade_report(
                 staged_paths,
                 checkpoint,
-            )
-            console.print(
-                f"Soperator upgrade validation report: {staged_paths.reports_dir / DEPLOY_REPORT_FILENAME}",
-                soft_wrap=True,
             )
             console.print(f"Soperator upgrade report: {upgrade_report_path}", soft_wrap=True)
             console.print(
@@ -18354,7 +18671,9 @@ def _maybe_clear_gpu_cluster_fabric_after_shape_change(
         )
         gpu_cluster_key = managed_gpu_cluster_keys[0] if len(managed_gpu_cluster_keys) == 1 else ""
         if not gpu_cluster_key and isinstance(profile, Mapping):
-            gpu_cluster_key = _non_empty_text(_profile_mapping(profile, "mk8s").get("gpu_cluster_key"))
+            gpu_cluster_key = _non_empty_text(
+                _profile_mapping(profile, "mk8s").get("gpu_cluster_key")
+            )
         if not gpu_cluster_key:
             gpu_cluster_key = "workers"
         fabric_label = f"{component_prefix}.inputs.gpu_clusters.{gpu_cluster_key}.infiniband_fabric"
@@ -37534,7 +37853,8 @@ def component_add_command(
         "--cluster-id selects the Nebius MK8s cluster to adopt. --target-id is only "
         "the optional cxcli logical target id saved as deploy.targets[].instance_id; "
         "when omitted, cxcli derives it from the live cluster name. "
-        f"The command updates config.yaml and writes {SOURCE_SOPERATOR_DISCOVERY_REPORT_NAME}; "
+        "The command updates config.yaml and writes "
+        f"generated/reports/{SOURCE_SOPERATOR_DISCOVERY_REPORT_NAME}; "
         "reruns refresh read-only source discovery and Nebius provider node-template "
         "inventory by node group before deciding whether external node-template "
         "migration is still needed; "
@@ -37971,7 +38291,7 @@ _SOPERATOR_MIGRATION_EXECUTOR_CONTRACT_LINES = (
     "availability, Slurm CLI access, a one-task srun job, and a Slurm NCCL "
     "benchmark using two idle GPU Slurm nodes when available or the only idle "
     "multi-GPU Slurm node otherwise. Validation JSON "
-    "details are written under generated/reports/, migrate-report.md includes "
+    "details are written under generated/reports/, ext-soperator-migrate-report.md includes "
     "the Soperator/Slurm and MK8s GPU validation rollups, and deploy-report.md "
     "is refreshed as a secondary deploy-compatible MK8s GPU summary.",
     "Failure handling contract: mutating phases watch Nebius, Kubernetes, "
@@ -38184,7 +38504,7 @@ def _load_soperator_source_discovery_report(
     config_path: Path,
     target_ref: str,
 ) -> dict[str, Any]:
-    report_path = config_path.parent / SOURCE_SOPERATOR_DISCOVERY_REPORT_NAME
+    report_path = source_soperator_discovery_report_path(config_path.parent)
     if not report_path.exists():
         raise RuntimeError(
             f"Soperator source discovery report not found: {report_path}. Rerun "
@@ -38417,7 +38737,7 @@ def _format_soperator_migration_plan_lines(
         phases=report.get("migration_plan"),
         onboarding=onboarding,
     )
-    report_path = config_path.parent / SOURCE_SOPERATOR_DISCOVERY_REPORT_NAME
+    report_path = source_soperator_discovery_report_path(config_path.parent)
     lines = [
         f"Soperator migration target: {target_ref}",
         f"Config: {config_path}",
@@ -38701,7 +39021,7 @@ def _refresh_soperator_onboarding_after_completed_migration(
         "nebius-cxcli ext-soperator migrate ./deployments/tenant/project/config.yaml "
         "--target external-cluster --execute --approve. --target is the cxcli target "
         "id saved as deploy.targets[].instance_id, not the Nebius cluster_id or "
-        "display name. The command reads "
+        "display name. The command reads generated/reports/"
         f"{SOURCE_SOPERATOR_DISCOVERY_REPORT_NAME}, validates the accepted onboarding "
         "analysis, and prints the target remediation and compute/storage migration plan. "
         "If the accepted onboarding report has no migration-owned actions, run render and "
@@ -38730,7 +39050,7 @@ def _refresh_soperator_onboarding_after_completed_migration(
         "Soperator/Slurm smoke validation with a one-task srun job and a "
         "Slurm NCCL benchmark using two idle GPU Slurm nodes when available "
         "or the only idle multi-GPU Slurm node otherwise, writes "
-        "migrate-report.md with the MK8s GPU and Soperator/Slurm validation "
+        "ext-soperator-migrate-report.md with the MK8s GPU and Soperator/Slurm validation "
         "rollups, refreshes deploy-report.md as a secondary deploy-compatible "
         "MK8s GPU summary, and "
         "rechecks completed selected remediation/upgrade/cutover actions "

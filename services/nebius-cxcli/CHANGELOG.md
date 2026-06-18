@@ -6,6 +6,28 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Refactored lifecycle report naming under the single `generated/reports/`
+  folder. `upgrade node-template` now writes
+  `upgrade-node-template-report.md` / `.json` after readiness verification,
+  `upgrade node-group --execute --approve` writes
+  `upgrade-node-group-report.md` / `.json` at the approved pre-mutation gate,
+  external Soperator source discovery is now
+  `ext-soperator-onboard-source-discovery-report.json`, external migration uses
+  `ext-soperator-migrate-report.md`, and cxcli-managed Soperator chart upgrades
+  use `soperator-upgrade-report.md` / `soperator-upgrade-report.json`; the old
+  generic report names are not kept as aliases.
+- Clarified `soperator upgrade` dry-run output: the wizard shows the current
+  Soperator chart version while prompting for `--to-version`, defaults that
+  prompt to the active `component_sources.yaml` Soperator chart pin, keeps the
+  repeat command copy/paste-ready with selected non-interactive flags, and
+  postflight now writes command-owned Soperator upgrade reports instead of
+  refreshing `deploy-report.md`.
+- Fixed live quota/capacity auth selection so operator IAM tokens, SDK config,
+  and Nebius CLI tokens win over runtime service-account env vars when
+  `prefer_operator_auth=True`, preventing project-scoped runtime auth from
+  masking tenant-scope quota and Capacity Dashboard reads. Raised the Nebius
+  Python SDK floor to a version that includes the `capacity.v1` resource-advice
+  API used by those checks.
 - Hardened live-operation failure handling across Soperator migration, MK8s
   destroy recovery, Terraform streaming, runtime secret checks, Grafana token
   probing, Helm readiness, and SDK auth fallback so unsafe or ambiguous states
@@ -125,7 +147,7 @@ All notable changes to this project are tracked here. This changelog follows
 - Hardened cxcli safety paths: managed Terraform/Flux downloads now verify
   published SHA256 manifests, use bounded reads, atomically install cached
   binaries, and reject corrupted cache entries; local SMTP settings and
-  Soperator migration checkpoints and `migrate-report.md` are written
+  Soperator migration checkpoints and `ext-soperator-migrate-report.md` are written
   atomically; Nebius SDK pagination loops fail fast on repeated page tokens;
   and CLI-sourced IAM tokens are no longer written into process-global
   environment variables.
@@ -134,7 +156,7 @@ All notable changes to this project are tracked here. This changelog follows
   runs live Soperator/Slurm preflight, updates and rerenders the chart version,
   applies the selected target Flux bundle, verifies the static Soperator chart
   version on live Kubernetes objects, reruns required Soperator/Slurm
-  validation, and refreshes `deploy-report.md`.
+  validation, and writes command-owned Soperator upgrade reports.
 - Clarified the README Soperator command map so the cxcli-managed
   `nebius-cxcli soperator` path is documented separately from
   `nebius-cxcli ext-soperator` external onboarding and migration, including
@@ -163,7 +185,10 @@ All notable changes to this project are tracked here. This changelog follows
   easier to recognize.
 - Fixed `render` so the transactional `generated/` replacement preserves
   command-owned runtime reports such as `deploy-report.md`, external Soperator
-  `migrate-report.md`, `upgrade-report.md` / `upgrade-report.json`, and JSON
+  `ext-soperator-onboard-source-discovery-report.json`,
+  `ext-soperator-migrate-report.md`, `upgrade-node-template-report.md` /
+  `.json`, `upgrade-node-group-report.md` / `.json`,
+  `soperator-upgrade-report.md` / `soperator-upgrade-report.json`, and JSON
   detail reports referenced by those Markdown reports, while still removing
   unrelated stale report files from the generated bundle.
 - Reorganized the README navigation to group common user tasks near the table
@@ -182,8 +207,8 @@ All notable changes to this project are tracked here. This changelog follows
   window, patches matching live ActiveCheck CRs, deletes matching
   already-launched check workloads, fails closed when live ActiveChecks cannot
   be inspected, restores the original values after postflight validation, and
-  writes `upgrade-report.md` / `upgrade-report.json` restore evidence. Reruns
-  now reuse an unfinished upgrade checkpoint to restore the original
+  writes `soperator-upgrade-report.md` / `soperator-upgrade-report.json` restore
+  evidence. Reruns now reuse an unfinished upgrade checkpoint to restore the original
   ActiveChecks values even if a previous interruption left `config.yaml`
   temporarily suspended, and write the upgrade checkpoint/report atomically.
 - Documented when operators should use the structured `upgrade` command instead
@@ -266,10 +291,10 @@ All notable changes to this project are tracked here. This changelog follows
 - Improved external Soperator migration completion handoff. After a fully
   completed `ext-soperator migrate --execute`, cxcli now performs a live
   post-migration discovery refresh and rewrites `config.yaml` plus
-  `source-soperator-cluster-discovery-report.json` into the same deploy-owned
-  onboarding shape that a rerun of `ext-soperator onboard` would produce, while
+  `generated/reports/ext-soperator-onboard-source-discovery-report.json` into
+  the same deploy-owned onboarding shape that a rerun of `ext-soperator onboard` would produce, while
   leaving pending or still-migration-owned plans blocked from normal deploy. The
-  README and design guide now call out `generated/reports/migrate-report.md`
+  README and design guide now call out `generated/reports/ext-soperator-migrate-report.md`
   `Pending phase: none` as the migration resume-complete marker before normal
   render/deploy reconciliation.
 - Improved external Soperator onboarding rollout wizard guidance. The worker
@@ -508,13 +533,13 @@ All notable changes to this project are tracked here. This changelog follows
   target-scoped `deploy.targets[].validations.mk8s_gpu.*` checks for the
   onboarded external target, including operator readiness, GPU Visibility, and
   NCCL when enabled. The MK8s GPU rollup is written to
-  `generated/reports/migrate-report.md`; `generated/reports/deploy-report.md`
+  `generated/reports/ext-soperator-migrate-report.md`; `generated/reports/deploy-report.md`
   is refreshed as a secondary deploy-compatible summary.
 - Added required Soperator/Slurm smoke validation for enabled Soperator
   targets. `deploy` now records a `soperator_cluster_smoke` JSON report and
   includes it in `deploy-report.md`; `ext-soperator migrate --execute` runs
   the same smoke validation during validation hold and writes
-  `generated/reports/migrate-report.md` with migration phase, remediation,
+  `generated/reports/ext-soperator-migrate-report.md` with migration phase, remediation,
   upgrade, layout, validation, and event summaries.
 - Clarified the successful `ext-soperator onboard` config-only note so
   migration-required targets point to the Soperator-specific next steps instead
@@ -577,8 +602,9 @@ All notable changes to this project are tracked here. This changelog follows
   non-interactive runs can pass `--source-version`.
 - Added `nebius-cxcli ext-soperator migrate <config.yaml>` as the explicit
   Soperator migration command surface. It validates the accepted onboarding
-  analysis, reads `source-soperator-cluster-discovery-report.json`, prints the
-  target remediation and compute/storage migration plan in dry-run mode, and
+  analysis, reads
+  `generated/reports/ext-soperator-onboard-source-discovery-report.json`, prints
+  the target remediation and compute/storage migration plan in dry-run mode, and
   runs checkpointed live phases in `--execute` mode. The executor rechecks the
   live source release and discovery fingerprint before the first mutation,
   records customer approval when `--approve` is passed, auto-detects source
