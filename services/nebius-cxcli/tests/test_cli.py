@@ -495,6 +495,8 @@ def _reset_runtime_state(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
             return [cli_module.OptionChoice(value="vpcnetwork-123", label="default network")]
         if full_path_label.endswith(".subnet_id"):
             return [cli_module.OptionChoice(value="vpcsubnet-123", label="default subnet")]
+        if full_path_label.endswith(".infiniband_fabric"):
+            return [cli_module.OptionChoice(value="fabric-1", label="default fabric")]
         return original_dynamic_choices(**kwargs)
 
     monkeypatch.setattr(
@@ -8217,6 +8219,63 @@ def test_create_vm_only_omits_kubernetes_observability_defaults(tmp_path: Path) 
     assert observability["vm"]["logs"]["enabled"] is True
     deploy = payload.get("deploy", {})
     assert "validations" not in deploy
+
+
+def test_prune_redundant_app_chart_default_values_skips_chart_lookup_without_scalar_values(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = {
+        "apps": {
+            "charts": [
+                {
+                    "id": "demo-app",
+                    "instance_id": "demo-empty",
+                    "enabled": True,
+                    "repo": "oci://example.com/charts/demo-app",
+                    "version": "1.0.0",
+                    "values": {},
+                },
+                {
+                    "id": "demo-app",
+                    "instance_id": "demo-nested",
+                    "enabled": True,
+                    "repo": "oci://example.com/charts/demo-app",
+                    "version": "1.0.0",
+                    "values": {"nested": {}},
+                },
+                {
+                    "id": "demo-app",
+                    "instance_id": "demo-list",
+                    "enabled": True,
+                    "repo": "oci://example.com/charts/demo-app",
+                    "version": "1.0.0",
+                    "values": {"items": [{"name": "keep"}]},
+                },
+            ]
+        }
+    }
+    app_entry = ComponentEntry(
+        id="demo-app",
+        scope="apps",
+        config_path="apps.platform.demo-app",
+        description="Demo app",
+        chart_name="demo-app",
+    )
+
+    def _unexpected_chart_defaults(**_kwargs: object) -> dict[str, object]:
+        pytest.fail("chart defaults should not be loaded when there are no scalar values")
+
+    monkeypatch.setattr(cli_module, "_app_chart_default_values", _unexpected_chart_defaults)
+
+    cli_module._prune_redundant_app_chart_default_values(
+        payload=payload,
+        app_entries=(app_entry,),
+    )
+
+    charts = payload["apps"]["charts"]
+    assert charts[0]["values"] == {}
+    assert charts[1]["values"] == {"nested": {}}
+    assert charts[2]["values"] == {"items": [{"name": "keep"}]}
 
 
 def test_create_prunes_redundant_live_chart_default_values_from_existing_config(

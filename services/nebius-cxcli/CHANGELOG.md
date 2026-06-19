@@ -121,6 +121,10 @@ All notable changes to this project are tracked here. This changelog follows
   non-catalog chart versions before writing `config.yaml`, so a published
   rollback/test package such as `soperator=4.0.1-ps.2` can be selected
   explicitly while unknown versions fail fast.
+- Improved create/component-add and Soperator onboarding performance by
+  skipping Helm chart default lookups when app rows have no explicit scalar
+  values to prune, and by caching parsed Soperator migration-profile data
+  during source-version checks.
 - Fixed source validation against Terraform 1.15 remote module probes: cxcli now
   treats Terraform's post-download missing-required-argument diagnostic as a
   successful module download for introspection, and resolves Git module

@@ -20587,6 +20587,19 @@ def _prune_redundant_app_chart_default_values(
         component_path = _dynamic_app_chart_path(payload, chart_id, instance_id=instance_id)
         if component_path is None:
             continue
+        values_path = component_path + ("values",)
+        if not _payload_path_exists(payload, values_path):
+            continue
+        explicit_values = _get_payload_value(payload, values_path)
+        if not isinstance(explicit_values, Mapping):
+            continue
+        explicit_value_paths = {
+            path
+            for path in _collect_scalar_leaf_paths(explicit_values)
+            if not any(isinstance(segment, int) for segment in path)
+        }
+        if not explicit_value_paths:
+            continue
         chart_defaults = _app_chart_default_values(
             payload=payload,
             entry=entry,
@@ -20594,15 +20607,12 @@ def _prune_redundant_app_chart_default_values(
         )
         if not chart_defaults:
             continue
-        values_path = component_path + ("values",)
-        if not _payload_path_exists(payload, values_path):
-            continue
         for relative_path in _collect_scalar_leaf_paths(chart_defaults):
             if any(isinstance(segment, int) for segment in relative_path):
                 continue
-            full_path = values_path + relative_path
-            if not _payload_path_exists(payload, full_path):
+            if relative_path not in explicit_value_paths:
                 continue
+            full_path = values_path + relative_path
             explicit_value = _get_payload_value(payload, full_path)
             default_value = _get_payload_value(chart_defaults, relative_path)
             if explicit_value == default_value:

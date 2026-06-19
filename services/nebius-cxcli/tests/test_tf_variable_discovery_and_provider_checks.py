@@ -63,6 +63,11 @@ class _StaticVpcLookup(ProviderOptionLookup):
         return ()
 
 
+@pytest.fixture(autouse=True)
+def _disable_live_gpu_capacity_summary(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(cli, "_maybe_print_live_gpu_capacity_summary", lambda **_kwargs: None)
+
+
 def test_prompt_path_sort_key_orders_mk8s_cpu_defaults_before_gpu_defaults() -> None:
     paths = [
         ("infra", "components", 0, "inputs", "node_group_defaults", "gpu", "preset"),
@@ -1561,6 +1566,7 @@ def test_wizard_declared_nested_app_value_path_is_prompted_and_created(
     )
 
     monkeypatch.setattr("nebius_cxcli.cli._wizard_continue_phase", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr("nebius_cxcli.cli._app_chart_default_values", lambda **_kwargs: {})
 
     rendered_messages: list[str] = []
     prompted_paths: list[str] = []
@@ -3736,6 +3742,7 @@ def test_wizard_q_revisits_previous_nested_app_value_prompt(monkeypatch) -> None
     )
 
     monkeypatch.setattr("nebius_cxcli.cli._wizard_continue_phase", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr("nebius_cxcli.cli._app_chart_default_values", lambda **_kwargs: {})
 
     prompted_paths: list[str] = []
     prompt_counts: dict[str, int] = {}

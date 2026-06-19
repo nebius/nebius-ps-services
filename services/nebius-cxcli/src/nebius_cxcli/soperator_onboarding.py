@@ -13,6 +13,7 @@ from collections.abc import Mapping, Sequence
 from contextlib import suppress
 from dataclasses import asdict, dataclass, replace
 from datetime import UTC, datetime
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -752,6 +753,7 @@ def compare_chart_versions(live: str, pinned: str) -> str:
     return "equal"
 
 
+@lru_cache(maxsize=1)
 def _load_soperator_migration_profile_data() -> Mapping[str, Any]:
     with suppress(Exception):
         payload = yaml.safe_load(SOPERATOR_MIGRATION_PROFILE_DATA_FILE.read_text(encoding="utf-8"))

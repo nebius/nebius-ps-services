@@ -111,6 +111,7 @@ def test_components_discovered_from_source_file(monkeypatch, tmp_path: Path) -> 
     assert mk8s_fields["inputs.node_group_defaults.cpu.platform"]["options"] == {
         "from": "mk8s_compatible_platforms",
         "args": {"platform_prefix": "cpu-"},
+        "auto_select_first": True,
     }
     assert mk8s_fields["inputs.node_group_defaults.gpu.platform"]["options"] == {
         "from": "mk8s_compatible_platforms",
