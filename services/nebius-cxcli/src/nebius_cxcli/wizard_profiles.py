@@ -406,13 +406,19 @@ BUILTIN_WIZARD_PROFILES: dict[str, dict[str, dict[str, Any]]] = {
             "options": {
                 "from": "mk8s_compatible_platforms",
                 "prefix": "cpu-",
-            }
+                "auto_select_first": True,
+            },
+            "required": True,
+            "type_hint": "string",
         },
         "inputs.node_group_defaults.cpu.preset": {
             "options": {
                 "from": "compute_platform_presets",
                 "depends_on": "inputs.node_group_defaults.cpu.platform",
-            }
+                "auto_select_first": True,
+            },
+            "required": True,
+            "type_hint": "string",
         },
         "inputs.node_group_defaults.cpu.os": {
             "options": {
@@ -442,10 +448,26 @@ BUILTIN_WIZARD_PROFILES: dict[str, dict[str, dict[str, Any]]] = {
                 "from": "compute_platform_presets",
                 "depends_on": "inputs.node_group_defaults.gpu.platform",
                 "args": {
-                    "gpu_cluster_required_path": "inputs.gpu_clusters.workers.infiniband_fabric"
+                    "reservation_policy_path": "inputs.node_group_defaults.gpu.reservation.policy",
                 },
                 "auto_select_single": True,
             }
+        },
+        "inputs.node_group_defaults.gpu.reservation.policy": {
+            **_static_sources(
+                (
+                    "AUTO",
+                    "AUTO  (try selected reservations, then suitable capacity)",
+                ),
+                ("FORBID", "FORBID  (do not use reservations)"),
+                (
+                    "STRICT",
+                    "STRICT  (use only selected/suitable reservations)",
+                ),
+            ),
+            "default": "AUTO",
+            "write_default_to_config": True,
+            "type_hint": "string",
         },
         "inputs.node_group_defaults.gpu.gpu_stack_source": {
             **_static_sources(
@@ -474,10 +496,12 @@ BUILTIN_WIZARD_PROFILES: dict[str, dict[str, dict[str, Any]]] = {
                 "args": {
                     "platform_path": "inputs.node_group_defaults.gpu.platform",
                     "preset_path": "inputs.node_group_defaults.gpu.preset",
+                    "reservation_policy_path": "inputs.node_group_defaults.gpu.reservation.policy",
                 },
                 "auto_select_first": True,
                 "skip_prompt_if_no_choices": True,
-            }
+            },
+            "prompt": False,
         },
         "inputs.node_group_defaults.gpu.gpu_stack_preset": {
             "options": {

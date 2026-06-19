@@ -1862,7 +1862,7 @@ def test_node_template_safe_surge_quota_preflight_reports_capacity_fabric_guidan
                 source_scope="capacity-dashboard/auto",
                 description=(
                     "Capacity Dashboard GPU availability "
-                    "(AUTO reservation policy: reserved + on-demand VM slots, "
+                    "(AUTO reservation policy: reserved + regular-vm slots, "
                     "fabric fabric-6, converted to GPU units)"
                 ),
                 contributors=(),
@@ -1875,7 +1875,7 @@ def test_node_template_safe_surge_quota_preflight_reports_capacity_fabric_guidan
     assert "same fabric and reservation policy" in message
     assert "migrate to a new GPU node group/fabric" in message
     assert "detected insufficient Nebius quota/capacity" in message
-    assert "AUTO reservation policy: reserved + on-demand VM slots, fabric fabric-6" in message
+    assert "AUTO reservation policy: reserved + regular-vm slots, fabric fabric-6" in message
     assert "[#ffbf00]" not in message
     assert "[/]" not in message
 
@@ -4967,7 +4967,7 @@ def test_quota_check_capacity_only_shortage_does_not_suggest_quota_request(
                     source_scope="capacity-dashboard/on-demand",
                     description=(
                         "Capacity Dashboard GPU availability "
-                        "(on-demand VM slots, fabric fabric-4, converted to GPU units)"
+                        "(regular-vm slots, fabric fabric-4, converted to GPU units)"
                     ),
                     contributors=(),
                 ),
@@ -8656,7 +8656,7 @@ def test_generated_bundle_live_quota_failure_prints_remediation_hints(
                 source_scope="capacity-dashboard/on-demand",
                 description=(
                     "Capacity Dashboard GPU availability "
-                    "(on-demand VM slots, fabric fabric-4, converted to GPU units)"
+                    "(regular-vm slots, fabric fabric-4, converted to GPU units)"
                 ),
                 contributors=(),
             ),
@@ -8727,7 +8727,7 @@ def test_adjust_quota_report_for_managed_mk8s_state_discounts_existing_cluster_c
                 source_scope="capacity-dashboard/on-demand",
                 description=(
                     "Capacity Dashboard GPU availability "
-                    "(on-demand VM slots, fabric fabric-4, converted to GPU units)"
+                    "(regular-vm slots, fabric fabric-4, converted to GPU units)"
                 ),
                 contributors=(
                     cli.QuotaContributor(
@@ -18950,6 +18950,54 @@ def test_soperator_selection_seeds_required_infra_and_defaults() -> None:
         "cluster1-controller-spool"
     )
     assert soperator_row["placements"]["worker"] == ["worker"]
+
+
+def test_soperator_gpu_node_group_defaults_override_worker_reservation_policy() -> None:
+    payload = {
+        "infra": {
+            "components": [
+                {
+                    "id": "mk8s",
+                    "instance_id": "cluster1",
+                    "enabled": True,
+                    "inputs": {
+                        "node_group_defaults": {
+                            "gpu": {
+                                "platform": "gpu-h100-sxm",
+                                "preset": "8gpu-128vcpu-1600gb",
+                                "reservation": {"policy": "STRICT"},
+                            }
+                        }
+                    },
+                },
+                {
+                    "id": "sfs",
+                    "instance_id": "sfs",
+                    "enabled": True,
+                    "inputs": {},
+                },
+            ]
+        },
+        "apps": {
+            "charts": [
+                {
+                    "id": "soperator",
+                    "instance_id": "cluster1",
+                    "enabled": True,
+                    "install_mode": "production-cluster",
+                    "values": {},
+                }
+            ]
+        },
+    }
+
+    assert cli._materialize_soperator_component_defaults(payload) is True
+
+    worker = payload["infra"]["components"][0]["inputs"]["node_groups"]["worker"]
+    assert worker["gpu"] is True
+    assert worker["platform"] == "gpu-h100-sxm"
+    assert worker["preset"] == "8gpu-128vcpu-1600gb"
+    assert worker["reservation"] == {"policy": "STRICT"}
 
 
 def test_soperator_sfs_defaults_are_target_scoped_for_multi_target_rows() -> None:

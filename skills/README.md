@@ -21,6 +21,7 @@ For skill-specific release notes, see [CHANGELOG.md](CHANGELOG.md).
 ## Included Skills
 
 - End-to-end project alignment: `align`
+- Agentic SDLC workflow verification: `agentic-sdlc-test`
 - Agentic SDLC workflow skills: `sdlc-create-requirements`, `sdlc-start`,
   `sdlc-gather-context`, `sdlc-create-design`, `sdlc-create-plan`,
   `sdlc-tdd`, `sdlc-implement-plan`, `sdlc-validate-codes`,
@@ -77,6 +78,8 @@ $review-pr Review PR #110 against the base branch, fix safe issues on the branch
 
 $review-pr Review https://github.com/example-org/example-repo/pull/42, resolve straightforward conflicts against main if the branch is writable, and report remaining blockers.
 
+$agentic-sdlc-test Verify the Agentic SDLC workflow against docs/agentic-sdlc-design.md and write a safe report.
+
 $align-skill Review and standardize skills/foo against the canonical skill structure and official vendor docs.
 
 $align-skill Harden this scaffolded skill folder into a safe, secure, fast Codex skill, then validate it.
@@ -126,7 +129,10 @@ otherwise read the script or report the command that would be used.
 `align` is the end-to-end repair and consistency skill. Use it when a project
 needs code, module wiring, tests, CI, CLI behavior, config, examples, help
 output, README/design docs, workflows, and applicable project skills reviewed
-together as a cautious senior code-review style alignment pass.
+together as a cautious senior code-review style alignment pass. It first
+synthesizes the current thread, relevant Agent Memory, and durable task-state
+context, then verifies that context against current repository or runtime
+evidence before making safe fixes.
 
 ### `align-skill`
 
@@ -137,6 +143,16 @@ multi-skill parent folders, GitHub skill repositories, or GitHub tree URLs when
 official vendor-doc verification, canonical structure, validation evidence, fast
 authoring practices, optional stateful-workflow section profiles, and reusable
 learning capture in local skill source materials need to be aligned.
+
+### `agentic-sdlc-test`
+
+`agentic-sdlc-test` verifies the Agentic SDLC workflow from outside the
+workflow. It checks `docs/agentic-sdlc-design.md`, global `sdlc-*` skill
+discovery, hook configuration, disposable PreToolUse and Stop hook fixture
+behavior, idempotency, failure routing, steering, and disposable golden-path
+execution. It writes the report under `~/.codex/sdlc-verification/` and must
+not change real projects, installed skills, hooks, hook trust, or agent
+configuration.
 
 ### Agentic SDLC Skills
 

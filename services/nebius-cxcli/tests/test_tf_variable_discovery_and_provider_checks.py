@@ -47,6 +47,61 @@ class _StaticVpcLookup(ProviderOptionLookup):
     def compute_platform_preset_allows_gpu_clustering(self, **_kwargs):
         return False
 
+    def compute_platform_preset_resources(self, *, project_id, platform_name, preset_name):
+        _ = project_id, platform_name
+        if preset_name == "4vcpu-16gb":
+            return (4, 16, 0)
+        if preset_name == "16vcpu-64gb":
+            return (16, 64, 0)
+        if preset_name == "1gpu-16vcpu-200gb":
+            return (16, 200, 1)
+        if preset_name == "8gpu-128vcpu-1600gb":
+            return (128, 1600, 8)
+        return None
+
+    def compute_platform_preset_fabrics(self, **_kwargs):
+        return ()
+
+
+def test_prompt_path_sort_key_orders_mk8s_cpu_defaults_before_gpu_defaults() -> None:
+    paths = [
+        ("infra", "components", 0, "inputs", "node_group_defaults", "gpu", "preset"),
+        (
+            "infra",
+            "components",
+            0,
+            "inputs",
+            "node_group_defaults",
+            "gpu",
+            "reservation",
+            "policy",
+        ),
+        ("infra", "components", 0, "inputs", "node_group_defaults", "cpu", "preset"),
+        ("infra", "components", 0, "inputs", "node_group_defaults", "gpu", "platform"),
+        ("infra", "components", 0, "inputs", "node_group_defaults", "cpu", "platform"),
+    ]
+
+    ordered = sorted(
+        paths, key=lambda path: cli._prompt_path_sort_key(path, required_leaf_names=set())
+    )
+
+    assert ordered == [
+        ("infra", "components", 0, "inputs", "node_group_defaults", "cpu", "platform"),
+        ("infra", "components", 0, "inputs", "node_group_defaults", "cpu", "preset"),
+        ("infra", "components", 0, "inputs", "node_group_defaults", "gpu", "platform"),
+        (
+            "infra",
+            "components",
+            0,
+            "inputs",
+            "node_group_defaults",
+            "gpu",
+            "reservation",
+            "policy",
+        ),
+        ("infra", "components", 0, "inputs", "node_group_defaults", "gpu", "preset"),
+    ]
+
 
 def test_module_variable_discovery_includes_optional_and_required(tmp_path: Path) -> None:
     module_dir = tmp_path / "demo-module"
@@ -571,7 +626,7 @@ def test_wizard_uses_guided_mk8s_cluster_and_node_group_fields(
         selected_apps=set(),
         infra_entries=(entry,),
         app_entries=(),
-        provider_lookup=cli.ProviderOptionLookup(),
+        provider_lookup=_StaticVpcLookup(),
     )
 
     assert completed is True
@@ -785,11 +840,9 @@ def test_wizard_auto_enables_gpu_apps_after_plain_mk8s_gpu_node_group_loop(
             return "nebius_image", False
         if path_label.endswith(".inputs.node_groups.gpu.gpu_stack_preset"):
             return "cuda12", False
-        if path_label.endswith(".inputs.node_groups.gpu.gpu_cluster.enabled"):
-            return False, False
         if path_label.endswith(".inputs.node_groups.gpu.reservation.policy"):
-            assert current == "FORBID"
-            return "FORBID", False
+            assert current == "AUTO"
+            return "AUTO", False
         if path_label.endswith(".inputs.node_groups.gpu.boot_disk.type"):
             return "NETWORK_SSD", False
         if path_label.endswith(".inputs.node_groups.gpu.boot_disk.size_gibibytes"):
@@ -977,8 +1030,6 @@ def test_wizard_back_inside_plain_mk8s_node_group_stays_in_group_loop(
                 stack_preset_back_once = False
                 return cli._WIZARD_BACKTRACK, False
             return "cuda13.0", False
-        if path_label.endswith(".inputs.node_groups.gpu-nodeg2.gpu_cluster.enabled"):
-            return False, False
         if path_label.endswith(".inputs.node_groups.gpu-nodeg2.reservation.policy"):
             return "FORBID", False
         if path_label.endswith(".inputs.node_groups.gpu-nodeg2.os"):
@@ -1087,8 +1138,9 @@ def test_wizard_back_after_plain_mk8s_gpu_cluster_removes_orphan_fabric(
     monkeypatch.setattr("nebius_cxcli.cli._wizard_continue_phase", lambda *_args, **_kwargs: True)
 
     resource_prompt_count = 0
-    reservation_back_once = True
+    reservation_ids_back_once = True
     prompted_paths: list[str] = []
+    resolved_fabric_fields: list[str] = []
 
     def _fake_prompt(
         path_label: str,
@@ -1099,7 +1151,7 @@ def test_wizard_back_after_plain_mk8s_gpu_cluster_removes_orphan_fabric(
         required=False,
         unset_on_skip=False,
     ) -> tuple[object, bool]:
-        nonlocal resource_prompt_count, reservation_back_once
+        nonlocal resource_prompt_count, reservation_ids_back_once
         _ = choices, type_hint, required, unset_on_skip
         prompted_paths.append(path_label)
         if ".inputs.cluster." in path_label:
@@ -1125,17 +1177,14 @@ def test_wizard_back_after_plain_mk8s_gpu_cluster_removes_orphan_fabric(
             return "nebius_image", False
         if path_label.endswith(".gpu_stack_preset"):
             return "cuda13.0", False
-        if path_label.endswith(".gpu_cluster.enabled"):
-            assert current is True
-            return True, False
-        if path_label.endswith(".infiniband_fabric"):
-            return "fabric-2", False
         if path_label.endswith(".reservation.policy"):
             assert current == "AUTO"
-            if reservation_back_once:
-                reservation_back_once = False
+            return "AUTO", False
+        if path_label.endswith(".reservation.reservation_ids"):
+            if reservation_ids_back_once:
+                reservation_ids_back_once = False
                 return cli._WIZARD_BACKTRACK, False
-            return "FORBID", False
+            return current, False
         if path_label.endswith(".boot_disk.type"):
             return "NETWORK_SSD", False
         if path_label.endswith(".boot_disk.size_gibibytes"):
@@ -1159,13 +1208,15 @@ def test_wizard_back_after_plain_mk8s_gpu_cluster_removes_orphan_fabric(
             if provider == "mk8s_node_group_os_values":
                 return [OptionChoice(value="ubuntu24.04", label="ubuntu24.04")]
             if provider == "mk8s_infiniband_fabrics":
+                resolved_fabric_fields.append(field_path)
                 return [
                     OptionChoice(
                         value="fabric-2",
                         label=(
-                            "fabric-2  (gpu-h100-sxm, eu-north1), live on-demand VMs=0, "
-                            "reserved VMs=1, recommended for reservations"
+                            "fabric-2  (gpu-h100-sxm, eu-north1), regular-vm 0 VMs, "
+                            "reserved 1 VM (1 x 8-GPU = 8 GPUs), recommended for reservations"
                         ),
+                        metadata={"reserved_vms": 1},
                     )
                 ]
             if provider == "compute_boot_disk_types":
@@ -1196,7 +1247,16 @@ def test_wizard_back_after_plain_mk8s_gpu_cluster_removes_orphan_fabric(
     )
 
     assert completed is True
-    assert "infra.components[0].inputs.gpu_clusters.gpu-nodeg2.infiniband_fabric" in prompted_paths
+    assert (
+        "infra.components[0].inputs.gpu_clusters.gpu-nodeg2.infiniband_fabric"
+        in resolved_fabric_fields
+    )
+    assert "infra.components[0].inputs.gpu_clusters.gpu-nodeg2.infiniband_fabric" not in (
+        prompted_paths
+    )
+    assert "infra.components[0].inputs.node_groups.gpu-nodeg2.gpu_cluster.enabled" not in (
+        prompted_paths
+    )
     payload = yaml.safe_load(updated_yaml)
     inputs = payload["infra"]["components"][0]["inputs"]
     assert "gpu_clusters" not in inputs
@@ -4102,6 +4162,89 @@ def test_materialize_singleton_provider_defaults_sets_clusterable_gpu_preset() -
     assert payload["infra"]["components"][0]["inputs"]["gpu_nodes_preset"] == "8gpu-160vcpu-1792gb"
 
 
+def test_materialize_singleton_provider_defaults_sets_hidden_mk8s_gpu_fabric() -> None:
+    payload = {
+        "version": "v1",
+        "client_info": {
+            "client_name": "demo",
+            "nebius": {
+                "tenant_id": "tenant-1",
+                "project_id": "project-1",
+                "region_id": "us-central1",
+            },
+            "notifications": {"email_enabled": False, "email": None},
+        },
+        "infra": {
+            "components": [
+                {
+                    "id": "mk8s",
+                    "instance_id": "mk8s",
+                    "enabled": True,
+                    "inputs": {
+                        "node_group_defaults": {
+                            "gpu": {
+                                "platform": "gpu-h100-sxm",
+                                "preset": "8gpu-128vcpu-1600gb",
+                            }
+                        },
+                        "gpu_clusters": {"workers": {}},
+                    },
+                }
+            ]
+        },
+        "apps": {"charts": []},
+    }
+
+    entry = ComponentEntry(
+        id="mk8s",
+        scope="infra",
+        config_path="infra.mk8s",
+        description="Managed Kubernetes",
+        source="../../platform-infra/modules/mk8s",
+        wizard_fields={
+            "inputs.gpu_clusters.workers.infiniband_fabric": {
+                "prompt": False,
+                "options": {
+                    "from": "mk8s_infiniband_fabrics",
+                    "args": {
+                        "platform_path": "inputs.node_group_defaults.gpu.platform",
+                        "preset_path": "inputs.node_group_defaults.gpu.preset",
+                    },
+                    "auto_select_first": True,
+                    "skip_prompt_if_no_choices": True,
+                },
+            }
+        },
+    )
+
+    class _Lookup(ProviderOptionLookup):
+        def resolve(self, *, provider, args, payload, field_path):
+            _ = args, payload
+            if provider == "mk8s_infiniband_fabrics" and field_path.endswith(
+                ".gpu_clusters.workers.infiniband_fabric"
+            ):
+                return [
+                    OptionChoice(value="fabric-2", label="fabric-2", recommended=True),
+                    OptionChoice(value="fabric-3", label="fabric-3"),
+                ]
+            return []
+
+        def last_error(self):
+            return None
+
+    _materialize_singleton_provider_defaults(
+        payload=payload,
+        selected_infra={"mk8s"},
+        infra_entries=(entry,),
+        provider_lookup=_Lookup(),
+    )
+
+    assert (
+        payload["infra"]["components"][0]["inputs"]["gpu_clusters"]["workers"]["infiniband_fabric"]
+        == "fabric-2"
+    )
+
+
 def test_materialize_vm_image_defaults_sets_first_live_image_family() -> None:
     payload = {
         "version": "v1",
@@ -6120,21 +6263,21 @@ def test_wizard_clears_stale_infiniband_when_gpu_preset_loses_cluster_support(
                         "instance_id": "mk8s",
                         "enabled": True,
                         "source": "../../platform-infra/modules/mk8s",
-                            "inputs": {
-                                "node_group_defaults": {
-                                    "gpu": {
-                                        "platform": "gpu-b200-sxm",
-                                        "preset": "8gpu-160vcpu-1792gb",
-                                    }
-                                },
-                                "gpu_clusters": {
-                                    "workers": {
-                                        "infiniband_fabric": "us-central1-b",
-                                    }
-                                },
+                        "inputs": {
+                            "node_group_defaults": {
+                                "gpu": {
+                                    "platform": "gpu-b200-sxm",
+                                    "preset": "8gpu-160vcpu-1792gb",
+                                }
                             },
-                        }
-                    ],
+                            "gpu_clusters": {
+                                "workers": {
+                                    "infiniband_fabric": "us-central1-b",
+                                }
+                            },
+                        },
+                    }
+                ],
             },
             "apps": {
                 "charts": [
@@ -6160,7 +6303,12 @@ def test_wizard_clears_stale_infiniband_when_gpu_preset_loses_cluster_support(
             "inputs.node_group_defaults.gpu.preset": {
                 "options": {
                     "from": "compute_platform_presets",
-                    "args": {"platform_path": "inputs.node_group_defaults.gpu.platform"},
+                    "args": {
+                        "platform_path": "inputs.node_group_defaults.gpu.platform",
+                        "reservation_policy_path": (
+                            "inputs.node_group_defaults.gpu.reservation.policy"
+                        ),
+                    },
                 }
             },
             "inputs.gpu_clusters.workers.infiniband_fabric": {
@@ -6169,6 +6317,9 @@ def test_wizard_clears_stale_infiniband_when_gpu_preset_loses_cluster_support(
                     "args": {
                         "platform_path": "inputs.node_group_defaults.gpu.platform",
                         "preset_path": "inputs.node_group_defaults.gpu.preset",
+                        "reservation_policy_path": (
+                            "inputs.node_group_defaults.gpu.reservation.policy"
+                        ),
                     },
                     "skip_prompt_if_no_choices": True,
                 }

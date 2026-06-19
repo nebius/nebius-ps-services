@@ -253,7 +253,10 @@ def validate_soperator_qos_partition_profiles(
 
         field_prefix = f"apps.charts[{index}].values"
         qos_configuration = _mapping_path_value(values, "qosConfiguration")
-        if not isinstance(qos_configuration, Mapping) or qos_configuration.get("enabled") is not True:
+        if (
+            not isinstance(qos_configuration, Mapping)
+            or qos_configuration.get("enabled") is not True
+        ):
             raise ValueError(
                 f"{field_prefix}.partitionProfile='{partition_profile_name}' uses "
                 "Slurm preempt/qos and partition AllowQos lists. Matching SlurmDBD "
@@ -397,12 +400,7 @@ def _validate_mk8s_node_group_scale(base: str, key: str, group: Mapping[str, Any
     max_raw = autoscaling.get("max_node_count")
     min_count = _integer_or_none(min_raw)
     max_count = _integer_or_none(max_raw)
-    if (
-        min_count is None
-        or max_count is None
-        or min_count < 0
-        or max_count < min_count
-    ):
+    if min_count is None or max_count is None or min_count < 0 or max_count < min_count:
         raise ValueError(
             f"{label}.autoscaling requires integer min_node_count >= 0 "
             "and max_node_count >= min_node_count"
@@ -425,9 +423,7 @@ def _validate_mk8s_inputs(
         )
     node_group_defaults = inputs.get("node_group_defaults")
     gpu_defaults = (
-        node_group_defaults.get("gpu")
-        if isinstance(node_group_defaults, Mapping)
-        else None
+        node_group_defaults.get("gpu") if isinstance(node_group_defaults, Mapping) else None
     )
     if isinstance(gpu_defaults, Mapping) and "infiniband_fabric" in gpu_defaults:
         raise ValueError(
@@ -479,7 +475,18 @@ def _validate_mk8s_inputs(
                     "GPU node_groups entries require gpu_stack_source to be "
                     "'nebius_image' or 'operator_managed' when set"
                 )
+            if group.reservation_policy not in {"AUTO", "FORBID", "STRICT"}:
+                raise ValueError(
+                    "GPU node_groups entries require reservation.policy to be one of: "
+                    "AUTO, FORBID, STRICT"
+                )
             fabric = gpu_cluster_fabric(inputs, group)
+            if group.gpu_cluster_key and not fabric:
+                raise ValueError(
+                    f"GPU node_groups entry '{group.key}' references gpu_cluster_key "
+                    f"'{group.gpu_cluster_key}', but inputs.gpu_clusters."
+                    f"{group.gpu_cluster_key}.infiniband_fabric is missing"
+                )
             if fabric:
                 gpu_fabric_checks.append((group.platform, group.preset, fabric))
 
@@ -763,9 +770,7 @@ def _validate_wireguard(
                 f"{base}.create_public_ip_allocation must be false "
                 "when public_ip_allocation_id is set"
             )
-        public_ip_allocation_name = as_text(
-            get_path(payload, f"{base}.public_ip_allocation_name")
-        )
+        public_ip_allocation_name = as_text(get_path(payload, f"{base}.public_ip_allocation_name"))
         if public_ip_allocation_name and not id_pattern.fullmatch(public_ip_allocation_name):
             raise ValueError(
                 f"{base}.public_ip_allocation_name must use lowercase letters, digits, and hyphens"
@@ -910,9 +915,7 @@ def _validate_ssh_jumphost(
     if ssh_jump_enabled:
         ssh_user_name = as_text(get_path(payload, f"{base}.ssh_user_name"))
         _validate_linux_user_name(ssh_user_name, field_label=f"{base}.ssh_user_name")
-        public_ip_allocation_name = as_text(
-            get_path(payload, f"{base}.public_ip_allocation_name")
-        )
+        public_ip_allocation_name = as_text(get_path(payload, f"{base}.public_ip_allocation_name"))
         if public_ip_allocation_name and not id_pattern.fullmatch(public_ip_allocation_name):
             raise ValueError(
                 f"{base}.public_ip_allocation_name must use lowercase letters, digits, and hyphens"

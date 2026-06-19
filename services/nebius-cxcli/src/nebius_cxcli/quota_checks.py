@@ -598,7 +598,9 @@ def format_quota_report_lines(
     if report.insufficient_checks:
         shortage_kind = (
             "Nebius quota/capacity"
-            if any(_quota_check_uses_capacity_dashboard(item) for item in report.insufficient_checks)
+            if any(
+                _quota_check_uses_capacity_dashboard(item) for item in report.insufficient_checks
+            )
             else "Nebius quota"
         )
         lines.append(
@@ -1218,11 +1220,13 @@ def _gpu_capacity_availability(
     available = available_vm_slots * shape.gpu_count_per_instance
     fabric_detail = f", fabric {selected.fabric}" if selected.fabric else ""
     if lane_name == "auto":
-        lane_detail = "AUTO reservation policy: reserved + on-demand VM slots"
+        lane_detail = "AUTO reservation policy: reserved + regular-vm slots"
     elif shape.mode == "reserved":
         lane_detail = "STRICT reservation policy: reserved VM slots"
     elif shape.mode == "on-demand":
-        lane_detail = "FORBID reservation policy: on-demand VM slots"
+        lane_detail = "FORBID reservation policy: regular-vm slots"
+    elif lane_name == "on-demand":
+        lane_detail = "regular-vm slots"
     else:
         lane_detail = f"{lane_name} VM slots"
     description = f"Capacity Dashboard GPU availability ({lane_detail}{fabric_detail}, converted to GPU units)"
@@ -2044,6 +2048,18 @@ def _estimate_mk8s_generic_node_group_requirements(
                 and isinstance(gpu_clusters.get(gpu_cluster_key), Mapping)
                 else ""
             )
+            missing_keyed_fabric = bool(gpu_cluster_key and not gpu_fabric)
+            if missing_keyed_fabric:
+                _append_gap(
+                    gaps,
+                    component_id=component_id,
+                    instance_id=instance_id,
+                    message=(
+                        f"MK8s node group '{group_label}' references gpu_cluster_key "
+                        f"'{gpu_cluster_key}', but inputs.gpu_clusters.{gpu_cluster_key}."
+                        "infiniband_fabric is missing; fabric-bound GPU capacity was not checked"
+                    ),
+                )
             _append_requirement(
                 requirements,
                 component_id=component_id,
@@ -2055,15 +2071,19 @@ def _estimate_mk8s_generic_node_group_requirements(
                     f"{count} GPU node(s) at {platform}/{preset} for '{group_label}'"
                     f" (reservation policy {reservation_policy or 'FORBID'})"
                 ),
-                gpu_capacity_shape=_gpu_capacity_shape(
-                    platform=platform,
-                    preset=preset,
-                    fabric=gpu_fabric,
-                    mode=_gpu_capacity_mode(
-                        preemptible=preemptible,
-                        reservation_policy=reservation_policy,
-                    ),
-                    resources=resources,
+                gpu_capacity_shape=(
+                    None
+                    if missing_keyed_fabric
+                    else _gpu_capacity_shape(
+                        platform=platform,
+                        preset=preset,
+                        fabric=gpu_fabric,
+                        mode=_gpu_capacity_mode(
+                            preemptible=preemptible,
+                            reservation_policy=reservation_policy,
+                        ),
+                        resources=resources,
+                    )
                 ),
             )
         else:

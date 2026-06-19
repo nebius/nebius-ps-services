@@ -5,7 +5,45 @@ from types import ModuleType, SimpleNamespace
 
 import pytest
 
-from nebius_cxcli.capacity_dashboard import list_capacity_resource_advice
+from nebius_cxcli.capacity_dashboard import (
+    CapacityAdviceAvailability,
+    CapacityResourceAdvice,
+    capacity_summary_text,
+    list_capacity_resource_advice,
+)
+
+
+def test_capacity_summary_text_shows_vm_slots_and_gpu_total() -> None:
+    item = CapacityResourceAdvice(
+        region="eu-north1",
+        platform="gpu-h100-sxm",
+        preset="8gpu-128vcpu-1600gb",
+        fabric="fabric-1",
+        on_demand=CapacityAdviceAvailability(
+            available=2,
+            limit=10,
+            availability_level="AVAILABILITY_LEVEL_MEDIUM",
+            data_state="DATA_STATE_FRESH",
+        ),
+        reserved=CapacityAdviceAvailability(
+            available=1,
+            limit=1,
+            availability_level="AVAILABILITY_LEVEL_HIGH",
+            data_state="DATA_STATE_FRESH",
+        ),
+        preemptible=CapacityAdviceAvailability(
+            available=0,
+            limit=0,
+            availability_level="AVAILABILITY_LEVEL_UNKNOWN",
+            data_state="DATA_STATE_FRESH",
+        ),
+        gpu_count=8,
+    )
+
+    assert (
+        capacity_summary_text(item)
+        == "regular-vm 2 VMs (2 x 8-GPU = 16 GPUs), reserved 1 VM (1 x 8-GPU = 8 GPUs)"
+    )
 
 
 def test_list_capacity_resource_advice_rejects_repeated_page_token(

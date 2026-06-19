@@ -37,6 +37,11 @@ All notable changes to the reusable Codex skills are tracked here.
   Agent Skill folders, including `SKILL.md`, references, assets, scripts,
   official vendor-doc verification, safety guardrails, canonical structure, and
   validation evidence.
+- Added the `agentic-sdlc-test` Codex skill for safely verifying the Agentic
+  SDLC workflow from outside the workflow with global `sdlc-*` skill discovery,
+  hook configuration inspection, disposable PreToolUse and Stop hook fixture
+  tests, disposable golden-path guidance, idempotency and failure-loop checks,
+  and a report under `~/.codex/sdlc-verification/`.
 - Added the `apply-security` Codex skill for security scans, remediation
   plans, safe patching, verification, and explanation across Terraform,
   Kubernetes, Helm, CI/CD, Bash, Python, Java, JavaScript, TypeScript, and Rust
@@ -90,6 +95,20 @@ All notable changes to the reusable Codex skills are tracked here.
 
 ### Changed
 
+- Expanded `docs/agentic-sdlc-design.md` with an explicit SDLC workflow
+  verification procedure, including quick preflight usage, full disposable
+  golden-path testing, report status interpretation, and fix/rerun policy for
+  `agentic-sdlc-test`.
+- Hardened `agentic-sdlc-test` hook fixture execution so subprocesses disable
+  Python bytecode writes and do not create `__pycache__` artifacts in skill
+  source folders.
+- Strengthened `agentic-sdlc-test` design-contract preflight so it verifies the
+  Agentic SDLC design document includes the workflow verification procedure and
+  report path, not only the core SDLC lifecycle terms.
+- Updated `align` so alignment decisions first synthesize the active thread,
+  relevant Agent Memory, and durable task-state or workflow state files, while
+  treating those sources as leads that must be verified against current
+  repository or runtime evidence before safe fixes.
 - Clarified `sdlc-commit` boundaries so ordinary local commits use `commit`
   and publish commits use `commit-push`; `sdlc-commit` remains Agentic
   SDLC-only.

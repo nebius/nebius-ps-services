@@ -37,6 +37,27 @@ All notable changes to this project are tracked here. This changelog follows
   stale `inputs.node_group_defaults.gpu.infiniband_fabric`, and raw fabric drift
   is blocked during render/deploy/direct Terraform apply with guidance to run
   the new `upgrade node-group ... --dry-run` planner.
+- Aligned MK8s/Soperator GPU wizard ordering and live fabric selection: CPU
+  defaults are prompted first and required, GPU defaults stay optional so blank
+  means no GPU worker shape, cluster-capable GPU presets derive the canonical
+  `inputs.gpu_clusters.<key>.infiniband_fabric` from live Capacity Dashboard
+  rows without a raw fabric prompt, and validation/quota checks now reject or
+  report keyed GPU clusters missing that fabric.
+- Expanded MK8s GPU preset prompts to print all live Capacity Dashboard rows
+  for the selected platform and region by preset, fabric, regular-vm slots,
+  and reserved VM slots before the preset menu. Soperator GPU profile-backed
+  creates now also keep regular 1-GPU presets selectable when a previous
+  derived fabric exists, ask `inputs.node_group_defaults.gpu.reservation.policy`,
+  default it to `AUTO`, materialize it into generated GPU worker node groups,
+  and validate edited GPU `reservation.policy` values.
+- Moved MK8s GPU reservation policy before GPU preset selection for both
+  profile-backed and plain node-group flows. The selected policy now filters
+  live Capacity Dashboard preset/fabric choices (`AUTO`, `STRICT`, `FORBID`),
+  and GPU preset menu labels omit redundant vCPU/RAM/GPU parentheticals.
+- Improved GPU Capacity Dashboard choice labels and recommendations: live
+  advice rows now display VM slots with the selected preset's GPU totals, and
+  GPU preset/fabric recommendations prefer matching reserved-capacity rows
+  before falling back to regular-vm capacity.
 - Folded MK8s Kubernetes-version and OS image rolling updates into
   `upgrade node-template`, making it the single public command for
   Terraform-managed MK8s node-template version, OS, and Nebius-image GPU stack
@@ -1049,7 +1070,7 @@ All notable changes to this project are tracked here. This changelog follows
   GPU shapes auto-select the provider-ranked InfiniBand fabric when live fabric
   choices are available, keeping generated H100/H200/B200-style profiles on the
   reserved/fabric-aware GPU-cluster path instead of accidentally trying
-  unclustered on-demand capacity.
+  unclustered regular-vm capacity.
 - Fixed Soperator GPU and mixed production worker profiles to render
   `reservation.policy: AUTO` on GPU worker node groups, so reserved-capacity
   fabric recommendations can actually use matching reservations while still
@@ -1245,11 +1266,11 @@ All notable changes to this project are tracked here. This changelog follows
   for shape-specific boot-disk defaults, materializes singleton compatible OS
   choices without a redundant prompt, defaults the SSH toggle to enabled, and
   keeps `q` within the current draft node group. GPU-cluster fabric is now
-  offered and accepted only after live metadata confirms the selected GPU shape
-  supports clustering, and the plain MK8s wizard defaults that toggle to enabled
-  for live-confirmed cluster-capable shapes. Reservation policy now defaults to
-  `AUTO` when the selected live GPU shape/fabric exposes reserved capacity and
-  otherwise keeps `FORBID`.
+  derived only after live metadata confirms the selected GPU shape supports
+  clustering, and the plain MK8s wizard writes the provider-ranked fabric for
+  live-confirmed cluster-capable shapes without a raw toggle/fabric prompt.
+  Reservation policy now defaults to `AUTO` when the selected live GPU
+  shape/fabric exposes reserved capacity and otherwise keeps `FORBID`.
 - Cleaned up wizard ordering and profile coverage: component selection now
   prints one target-aware summary after infra/app dependency resolution,
   component Terraform inputs finish before deploy-target observability/GPU
@@ -2313,7 +2334,7 @@ All notable changes to this project are tracked here. This changelog follows
   Network Operator, and observability-agent rows before render/deploy, then
   materializes their managed chart values against the mutable runtime payload.
 - Fixed GPU Capacity Dashboard preflight math for MK8s quota checks. cxcli now
-  treats `resource-advice` on-demand/reserved/preemptible availability as VM
+  treats `resource-advice` regular-vm/reserved/preemptible availability as VM
   slots for the selected preset and converts those slots to GPU units before
   comparing them with `compute.instance.gpu.*` quota requirements. For example,
   three reserved `8gpu-*` H100 VM slots now count as 24 available GPUs for a
@@ -2324,10 +2345,10 @@ All notable changes to this project are tracked here. This changelog follows
   aggregates live Capacity Dashboard rows per exact selected
   platform/region/preset instead of keeping only one fabric row, so matching
   H100 and H200 preset names stay separated and reserved VM availability is not
-  hidden when the best reserved fabric differs from the best on-demand fabric.
+  hidden when the best reserved fabric differs from the best regular-vm fabric.
 - Fixed MK8s InfiniBand fabric recommendations for reserved GPU capacity. When
   live Capacity Dashboard rows show reservation slots on a different fabric
-  than the strongest on-demand lane, the wizard now recommends the reserved
+  than the strongest regular-vm lane, the wizard now recommends the reserved
   fabric first and labels it `recommended for reservations`.
 - Closed Nebius SDK instances used by runtime-auth IAM bootstrap and stale-profile
   validation and added a token-exchange readiness wait after new runtime auth
@@ -2496,8 +2517,9 @@ All notable changes to this project are tracked here. This changelog follows
   only the RDMA-specific threshold field until the current shape is actually on
   the GPU-cluster / fabric path.
 - Removed the hardcoded MK8s InfiniBand fabric table from the wizard/provider
-  path. For cluster-capable GPU presets, `inputs.infiniband_fabric` choices now
-  come from live Nebius Capacity Dashboard fabric rows, while live preset
+  path. For cluster-capable GPU presets,
+  `inputs.gpu_clusters.<key>.infiniband_fabric` values now come from live
+  Nebius Capacity Dashboard fabric rows, while live preset
   `allow_gpu_clustering` metadata remains the gate that decides whether a shape
   is actually GPU-cluster / RDMA-capable. Runtime validation now also rejects a
   configured fabric that does not match the live Capacity Dashboard rows for
@@ -2609,9 +2631,9 @@ All notable changes to this project are tracked here. This changelog follows
 - Improved live GPU wizard guidance across bundled infra flows: GPU preset
   prompts now annotate/rank supported GPU shapes with live Nebius Capacity
   Dashboard `resource-advice` availability when tenant/region context is
-  available, optional InfiniBand fabric prompts now annotate the exact
-  platform+preset fabrics with live on-demand/reserved availability and
-  highlight the recommended default without forcing the field to be set, and
+  available, derived InfiniBand fabric selections now use exact
+  platform+preset fabrics with live regular-vm/reserved availability and
+  persist the recommended default without showing a raw fabric prompt, and
   `create` quota warnings now print the exact `quota-request <config.yaml>`
   follow-up command instead of stopping the config workflow.
 - Aligned shared GPU interconnect guidance across MK8s and VM wizard flows:
@@ -2875,7 +2897,7 @@ All notable changes to this project are tracked here. This changelog follows
 - Changed `render <config.yaml>` to always run pre-render runtime validation before writing artifacts, so active-source drift, unresolved component dependencies, and Terraform module schema/input mismatches fail before any generated bundle side effects.
 - Changed long-running `deploy` / `terraform apply` / `terraform destroy` MK8s monitoring from passive alerting to active fail-fast behavior: node-group API event levels are now read correctly from the live SDK enum fields, terminal node-group failures surface their Nebius error detail directly in status/recovery output without leaking raw SDK object reprs, and apply/destroy abort their Terraform wait loop instead of idling until a generic timeout when the live MK8s API already shows the operation has failed.
 - Added live MK8s GPU stack-preset selection to the bundled `mk8s` wizard profile: `inputs.gpu_stack_preset` now comes from the MK8s compatibility matrix, the wizard can auto-select and materialize a singleton compatible preset into `config.yaml`, and new provider option source `mk8s_gpu_stack_presets` is available for other catalog wiring.
-- Tightened bundled MK8s GPU-cluster guidance around live preset capability instead of guesswork: the wizard now selects `inputs.gpu_nodes_preset` before `inputs.infiniband_fabric`, the later fabric prompt is shown only when the chosen preset's live SDK metadata allows GPU clustering, stale `infiniband_fabric` values are cleared during interactive edits when the selected GPU shape no longer supports clustering, and runtime validation now fails early on invalid fabric+preset combinations instead of deferring them to Terraform/MK8s admission errors.
+- Tightened bundled MK8s GPU-cluster guidance around live preset capability instead of guesswork: the wizard now resolves the GPU preset before deriving canonical `inputs.gpu_clusters.<key>.infiniband_fabric`, fabric is written only when the chosen preset's live SDK metadata allows GPU clustering, stale fabric values fail during validation when the selected GPU shape no longer supports clustering, and runtime validation now fails early on invalid fabric+preset combinations instead of deferring them to Terraform/MK8s admission errors.
 - Fixed `component_sources.yaml` wizard-option normalization so explicit `options.args` entries and `skip_prompt_if_no_choices` survive catalog loading; bundled MK8s profile expansions now keep extra provider args such as `preset_path` instead of silently dropping them.
 - Standardized explicit CLI severity colors so warnings now render in amber and errors continue to render in red, and aligned the shared shell-scripting skill/template to the same warning/error color contract.
 - Refined quota coverage-gap terminal output so repeated internal gap reasons for one component collapse to one concise per-component summary entry in explicit `quota-check`, while routine `create`/`render`/`deploy` output keeps those non-blocking coverage-gap details in the manifest instead of printing them every time.
@@ -2893,7 +2915,7 @@ All notable changes to this project are tracked here. This changelog follows
 - Improved complex wizard prompt wording to ask for single-line YAML/JSON values for maps, objects, and object lists, and stopped app components with an empty top-level `values: {}` block from showing a confusing whole-map prompt when no concrete Helm value leaves are known yet.
 - Added `wizard.<field>.prompt: false` support so bundled profiles can suppress optional advanced fields from the interactive wizard; the MK8s profile now hides the raw `mk8s_*_overrides` passthrough maps while keeping them available for manual `config.yaml` edits.
 - Hardened `create --force` guard rails for existing projects: the CLI emits a force-specific overwrite warning before overwriting an existing resolved project folder and documents that `create --force` does not delete the deployments root or unrelated projects.
-- Wired MK8s `inputs.infiniband_fabric` into the built-in wizard profile with a guided, optional fabric selector keyed by the chosen GPU platform and `client_info.nebius.region_id`, using the Nebius GPU-cluster fabric matrix instead of a raw free-text prompt.
+- Wired canonical MK8s `inputs.gpu_clusters.<key>.infiniband_fabric` materialization into the built-in wizard profile with a provider-ranked derived fabric selection keyed by the chosen GPU platform/preset and `client_info.nebius.region_id`, using live Nebius GPU-cluster capacity rows instead of a raw free-text prompt.
 - Fixed `create` wizard prompt helper late-binding closures in `cli.py` so Ruff no longer flags `B023` on the deferred module-prompt builders, and tightened the runtime-shape unit coverage to skip post-write validation in the test that only asserts generated config structure.
 - Added a central Codex skill at `../../skills/onboard-nebius-cxcli/` for onboarding Nebius Terraform modules into `nebius-cxcli`; it documents the catalog-first onboarding flow, the code-owned layers (`wizard_profiles.py`, `provider_options.py`, `validation_profiles.py`, `runtime_component_validation.py`, `cluster_handoffs.py`, `deployment_status.py`), and the focused test/doc updates expected for each change shape.
 - Refined MK8s wizard platform discovery to use live Nebius platform inventory at runtime: CPU/GPU platform prompts now intersect the MK8s compatibility matrix with the selected project's compute-platform list, so the wizard only shows currently available supported platforms while preset choices remain live per selected platform.

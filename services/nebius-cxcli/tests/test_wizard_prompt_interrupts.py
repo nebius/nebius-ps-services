@@ -9,6 +9,7 @@ import pytest
 import yaml
 
 import nebius_cxcli.cli as cli
+from nebius_cxcli.capacity_dashboard import CapacityAdviceAvailability, CapacityResourceAdvice
 from nebius_cxcli.components import ComponentEntry
 from nebius_cxcli.provider_options import OptionChoice, ProviderOptionLookup
 from nebius_cxcli.wizard_profiles import BUILTIN_WIZARD_PROFILES
@@ -1541,7 +1542,8 @@ def test_vpc_subnet_cidr_prompt_choices_suggest_child_ranges_inside_parent_pool(
         ("10.4.0.0/16", False),
     ]
     assert all(
-        choice.metadata == {
+        choice.metadata
+        == {
             "suggestion_kind": "subnet_child",
             "parent_cidr": "10.0.0.0/13",
         }
@@ -1647,13 +1649,9 @@ def test_vpc_subnet_cidr_prompt_choices_keep_attached_rfc1918_parent_blocks_visi
         "subnet_child",
     ]
     assert choices[-2].metadata["parent_cidr"] == "172.16.0.0/12"
-    assert choices[-2].label == (
-        "172.16.0.0/12  (subnet child range inside 172.16.0.0/12)"
-    )
+    assert choices[-2].label == ("172.16.0.0/12  (subnet child range inside 172.16.0.0/12)")
     assert choices[-1].metadata["parent_cidr"] == "192.168.0.0/16"
-    assert choices[-1].label == (
-        "192.168.0.0/16  (subnet child range inside 192.168.0.0/16)"
-    )
+    assert choices[-1].label == ("192.168.0.0/16  (subnet child range inside 192.168.0.0/16)")
 
 
 def test_vpc_subnet_cidr_prompt_choices_skip_whole_parent_block_with_allocations() -> None:
@@ -1818,9 +1816,7 @@ def test_extend_existing_vpc_parent_private_cidrs_updates_attached_pool_cidrs(
         spec=SimpleNamespace(
             version="IPV4",
             visibility="PRIVATE",
-            cidrs=[
-                SimpleNamespace(cidr="10.0.0.0/13", state="AVAILABLE", max_mask_length=32)
-            ],
+            cidrs=[SimpleNamespace(cidr="10.0.0.0/13", state="AVAILABLE", max_mask_length=32)],
         ),
         status=SimpleNamespace(cidrs=["10.0.0.0/13"]),
     )
@@ -2627,10 +2623,7 @@ def test_component_field_wizard_existing_vpc_extends_parent_for_out_of_parent_su
     assert "Live VPC network update required" in joined
     assert "cxcli will add this CIDR to an attached private pool" in joined
     assert "use_network_private_pools=false" in joined
-    assert (
-        "Extended selected live VPC network attached private pool with 172.16.0.0/12"
-        in joined
-    )
+    assert "Extended selected live VPC network attached private pool with 172.16.0.0/12" in joined
     assert "Extend the selected live VPC network private pool now?" not in joined
 
 
@@ -2798,7 +2791,7 @@ def test_component_field_wizard_existing_vpc_accepts_subnet_cidr_inside_default_
                         value="vpcsubnet-live-2",
                         label="vpcsubnet-live-2  (existing) (10.2.0.0/16)",
                         metadata={"private_cidrs": ("10.2.0.0/16",)},
-                    )
+                    ),
                 ]
             return []
 
@@ -3956,10 +3949,7 @@ def test_upgrade_strategy_choice_explains_safe_surge_default_spare_node(
         "safe-surge  (default 1 spare node per active node group; preserves active capacity)"
         in labels
     )
-    assert (
-        "force-delete  (last resort; auto=10m, then deletes remaining Pods and node)"
-        in labels
-    )
+    assert "force-delete  (last resort; auto=10m, then deletes remaining Pods and node)" in labels
 
 
 def test_upgrade_drain_timeout_prompt_mentions_auto_strategy_default(
@@ -4229,8 +4219,12 @@ def test_prompt_choice_override_tty_can_hide_skip_choice_for_semantic_none(
         current="none",
         choices=[
             OptionChoice(value="none", label="none  (do not assign a service account)"),
-            OptionChoice(value="existing_id", label="existing_id  (use existing service account ID)"),
-            OptionChoice(value="create_name", label="create_name  (create service account by name)"),
+            OptionChoice(
+                value="existing_id", label="existing_id  (use existing service account ID)"
+            ),
+            OptionChoice(
+                value="create_name", label="create_name  (create service account by name)"
+            ),
         ],
         type_hint="string",
         required=False,
@@ -4315,6 +4309,98 @@ def test_maybe_print_gpu_preset_prompt_guidance_for_gpu_shape(monkeypatch) -> No
     )
 
     assert any("Ethernet-only" in message for message in captured)
+
+
+def test_maybe_print_gpu_preset_prompt_guidance_lists_live_capacity_rows(
+    monkeypatch,
+) -> None:
+    captured: list[str] = []
+    monkeypatch.setattr(cli.console, "print", lambda message: captured.append(str(message)))
+
+    def _availability(available: int) -> CapacityAdviceAvailability:
+        return CapacityAdviceAvailability(
+            available=available,
+            limit=available,
+            availability_level="AVAILABILITY_LEVEL_HIGH",
+            data_state="DATA_STATE_FRESH",
+        )
+
+    provider_lookup: Any = SimpleNamespace(
+        compute_platform_capacity_advice=lambda **_kwargs: (
+            CapacityResourceAdvice(
+                region="us-central1",
+                platform="gpu-h100-sxm",
+                preset="8gpu-128vcpu-1600gb",
+                fabric="fabric-a",
+                on_demand=_availability(4),
+                reserved=_availability(1),
+                preemptible=_availability(0),
+                gpu_count=8,
+            ),
+            CapacityResourceAdvice(
+                region="us-central1",
+                platform="gpu-h100-sxm",
+                preset="8gpu-128vcpu-1600gb",
+                fabric="fabric-b",
+                on_demand=_availability(2),
+                reserved=_availability(0),
+                preemptible=_availability(0),
+                gpu_count=8,
+            ),
+            CapacityResourceAdvice(
+                region="us-central1",
+                platform="gpu-h100-sxm",
+                preset="1gpu-16vcpu-200gb",
+                fabric="",
+                on_demand=_availability(0),
+                reserved=_availability(0),
+                preemptible=_availability(0),
+                gpu_count=1,
+            ),
+        )
+    )
+
+    cli._maybe_print_gpu_preset_prompt_guidance(
+        payload={
+            "client_info": {
+                "nebius": {
+                    "tenant_id": "tenant-123",
+                    "region_id": "us-central1",
+                }
+            },
+            "infra": {
+                "components": [
+                    {
+                        "inputs": {
+                            "node_group_defaults": {
+                                "gpu": {
+                                    "platform": "gpu-h100-sxm",
+                                }
+                            },
+                        }
+                    }
+                ]
+            },
+        },
+        entry=ComponentEntry(
+            id="mk8s",
+            scope="infra",
+            config_path="infra.mk8s",
+            description="mk8s",
+        ),
+        full_path_label="infra.components[0].inputs.node_group_defaults.gpu.preset",
+        provider_lookup=provider_lookup,
+        emitted_guidance=set(),
+    )
+
+    output = "\n".join(captured)
+    assert "Live GPU capacity for gpu-h100-sxm in us-central1" in output
+    assert "fabric-a" in output
+    assert "fabric-b" in output
+    assert "regular-vm" in output
+    assert "4 VMs (4 x 8-GPU = 32 GPUs)" in output
+    assert "1 VM (1 x 8-GPU = 8 GPUs)" in output
+    assert "1gpu-16vcpu-200gb" not in output
 
 
 def test_maybe_print_selected_gpu_preset_guidance_for_single_gpu_shape(monkeypatch) -> None:

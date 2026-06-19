@@ -1,6 +1,6 @@
 ---
 name: align
-description: "Use for project-wide alignment or review: reconcile code, wiring, tests, CI, CLI/help, config, README/design docs, workflows, and project skills. Make minimal evidence-backed fixes for inconsistencies. Do not use for skill-folder-only metadata validation; use align-skill."
+description: "Use for project-wide alignment or review: reconcile code, wiring, tests, CI, CLI/help, config, README/design docs, workflows, and project skills. Integrate current thread, Agent Memory, and task state before minimal evidence-backed fixes. Do not use for skill-folder-only metadata validation; use align-skill."
 ---
 
 # Align
@@ -45,6 +45,29 @@ than stale prose or isolated examples.
 Before proposing fixes, understand the design, data flow, control flow,
 dependencies, ownership boundaries, and intended runtime behavior.
 
+## Context Integration
+
+Before deciding what to align, synthesize the active context:
+
+- Read the current user request and current thread for explicit objectives,
+  accepted wording, constraints, and newest instructions. Newer user
+  instructions override older discussion.
+- Use Agent Memory when available and relevant: start with the provided memory
+  summary or registry, search only targeted terms, and open pointed rollout or
+  skill memory files only when they materially affect the current scope. Treat
+  memory as leads, not proof.
+- Read injected durable task-state files, workflow run state, or other related
+  state files only when active instructions provide a path or the repository
+  workflow documents them and they are relevant. Do not invent fallback state
+  paths.
+- Integrate prior decisions with current repository evidence before editing. If
+  the thread, memory, state, docs, tests, and implementation disagree, verify
+  with local source or runtime evidence and report unresolved conflicts instead
+  of guessing.
+- Do not paste or persist raw conversation transcripts, raw memory dumps,
+  secrets, customer data, private URLs, or one-off local state in project files
+  or task state.
+
 ## Safety Rules
 
 - Inspect before changing.
@@ -67,6 +90,8 @@ dependencies, ownership boundaries, and intended runtime behavior.
   explicitly requests legacy support.
 - Do not hide uncertainty with speculative docs, tests, comments, fallbacks, or
   silent defaults.
+- Do not let Agent Memory, prior task state, stale docs, or prior discussion
+  override current codebase evidence without verification.
 - Do not introduce new dependencies unless they are necessary and consistent
   with the project.
 - If behavior changes, explain the before-and-after behavior.
@@ -149,23 +174,29 @@ code so aggressively that wiring becomes harder to trace.
 
 ## Workflow
 
-1. Inspect before editing.
+1. Consolidate current and durable context.
+   Review the current thread for the user's latest objective and constraints,
+   then gather relevant Agent Memory and related task or workflow state when
+   available. Keep only a concise decision summary in the parent thread or task
+   state; do not copy raw discussions, broad memory dumps, logs, secrets, or
+   environment-specific values.
+2. Inspect before editing.
    Map the project layout, runtime entry points, main libraries or services,
    data flow, control flow, dependencies, test strategy, lint or format
    tooling, and CI workflows. Read enough code and docs to understand intended
    behavior and how the pieces connect.
-2. Check applicable skills.
+3. Check applicable skills.
    Use additional skills only when their metadata clearly matches a concrete
    part of the task, such as workflow, Helm, shell, lint, Terraform, Python,
    documentation, spreadsheet, slide, PDF, or repo-local skill work. Read the
    relevant `SKILL.md`, keep scope narrow, and do not let another skill
    override these safety rules unless the user explicitly asked for that
    behavior.
-3. Establish the actual contract.
+4. Establish the actual contract.
    Compare implementation against tests, CLI help, examples, workflows, and
    documentation. Treat mismatches as evidence to resolve, not as proof that
    any one surface is automatically correct.
-4. Identify and prioritize alignment gaps.
+5. Identify and prioritize alignment gaps.
    Prioritize:
    - bugs and incorrect behavior
    - broken runtime or workflow paths
@@ -175,19 +206,19 @@ code so aggressively that wiring becomes harder to trace.
    - missing tests for repaired behavior
    - stale docs, examples, help output, or changelog entries
    - modularity issues that directly cause maintenance risk
-5. Make focused changes.
+6. Make focused changes.
    Make the smallest effective change only when the issue is clear and the
    fix is low risk. When behavior changes or a bug is fixed, update the
    relevant tests, docs, examples, help text, and workflow assumptions so the
    project has one canonical story.
-6. Verify.
+7. Verify.
    Run the focused tests, lint or format checks, type checks, build checks, and
    relevant `--help` or smoke commands for the touched surfaces. Broaden to the
    full suite when feasible. If the repo has a `CHANGELOG.md`, update the
    active unreleased section when behavior, commands, workflows, or
    user-facing docs changed. Check the final diff for unrelated files, secrets,
    credentials, private endpoints, and environment-specific values.
-7. Report remaining uncertainty clearly.
+8. Report remaining uncertainty clearly.
    If something cannot be verified from the codebase or local tooling, say
    exactly what could not be confirmed and why. Do not guess.
 
@@ -203,6 +234,9 @@ code so aggressively that wiring becomes harder to trace.
   user explicitly asked to change it.
 - Verify wiring from entry point to implementation where relevant.
 - Apply relevant available skills for concrete subtasks.
+- Base alignment decisions on the current thread, relevant Agent Memory, and
+  related state files only after checking them against current repository or
+  runtime evidence.
 - Do not invent requirements.
 - Do not assume missing behavior is correct.
 - State clearly when something cannot be verified from the codebase.
@@ -218,6 +252,10 @@ Do not:
 - add fallback behavior that hides broken wiring
 - update docs to match broken code when the code is clearly wrong
 - update tests to match a bug
+- treat Agent Memory, old task state, or previous discussion as unquestioned
+  proof of current behavior
+- persist raw discussion, memory, or state-file contents into project files,
+  generated docs, task state, or final reports
 - optimize speculative paths at the cost of clarity
 - ignore README, design documents, CI, workflow references, or help output
 - assume generated code should be edited manually
@@ -255,6 +293,8 @@ When using this skill:
    - Tests that are missing or should be improved
    - Safe code changes made, including why each change is safe
    - Changes intentionally not made because the logic was unclear
+   - Context used from the current thread, relevant Agent Memory, or task state,
+     including any conflicts or stale information that affected decisions
    - Risks, assumptions, and open questions
    - Final recommendation
 3. Include applicable skills used and validation actually run.

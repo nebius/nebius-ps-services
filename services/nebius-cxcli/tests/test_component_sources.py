@@ -47,6 +47,7 @@ _NEBIUS_CPU_ONLY_AFFINITY = {
     }
 }
 
+
 def _required[T](value: T | None) -> T:
     assert value is not None
     return value
@@ -787,16 +788,13 @@ def test_soperator_parent_dependencies_match_folded_child_chart_family() -> None
         str(dependency.get("name")): dependency for dependency in chart_yaml.get("dependencies", [])
     }
     lock_dependencies_by_name = {
-        str(dependency.get("name")): dependency
-        for dependency in chart_lock.get("dependencies", [])
+        str(dependency.get("name")): dependency for dependency in chart_lock.get("dependencies", [])
     }
     for dependency_name in sorted(parent_child_dependencies):
         dependency = dependencies_by_name[dependency_name]
         lock_dependency = lock_dependencies_by_name[dependency_name]
         child_chart = yaml.safe_load(
-            (repo_root / "helm-charts" / dependency_name / "Chart.yaml").read_text(
-                encoding="utf-8"
-            )
+            (repo_root / "helm-charts" / dependency_name / "Chart.yaml").read_text(encoding="utf-8")
         )
         expected_repository = f"file://../{dependency_name}"
         assert dependency["version"] == str(child_chart["version"])
@@ -2879,11 +2877,9 @@ def test_component_sources_rejects_invalid_observability_gpu_node_label_stack_so
 
 
 def _repo_soperator_nodesets_profiles() -> dict:
-    profiles = (
-        _repo_component_cli_settings_payload()["components"]["apps"]["soperator"]["cli"][
-            "soperator_nodesets_profile"
-        ]["profiles"]
-    )
+    profiles = _repo_component_cli_settings_payload()["components"]["apps"]["soperator"]["cli"][
+        "soperator_nodesets_profile"
+    ]["profiles"]
     assert isinstance(profiles, dict)
     return profiles
 
@@ -2899,9 +2895,7 @@ def test_bundled_soperator_profile_service_role_defaults_are_consistent() -> Non
             "max_node_count": 5,
         }
         assert node_groups["system"]["node_count_input"] == "soperator.system_node_count"
-        assert (
-            node_groups["system"]["autoscaling_input"] == "soperator.system_autoscaling"
-        )
+        assert node_groups["system"]["autoscaling_input"] == "soperator.system_autoscaling"
         for role in ("controller", "login", "accounting"):
             assert node_groups[role]["node_count"] == 2
             assert node_groups[role]["node_count_input"] == f"soperator.{role}_node_count"
@@ -3075,9 +3069,35 @@ def test_bundled_mk8s_declares_optional_wizard_field_override() -> None:
         "write_default_to_config": True,
         "type_hint": "bool",
     }
+    assert mk8s_wizard_fields["inputs.node_group_defaults.cpu.platform"] == {
+        "options": {
+            "from": "mk8s_compatible_platforms",
+            "args": {"platform_prefix": "cpu-"},
+            "auto_select_first": True,
+        },
+        "required": True,
+        "type_hint": "string",
+    }
+    assert mk8s_wizard_fields["inputs.node_group_defaults.cpu.preset"] == {
+        "options": {
+            "from": "compute_platform_presets",
+            "args": {"platform_path": "inputs.node_group_defaults.cpu.platform"},
+            "auto_select_first": True,
+        },
+        "required": True,
+        "type_hint": "string",
+    }
     assert mk8s_wizard_fields["inputs.node_group_defaults.gpu.platform"]["options"] == {
         "from": "mk8s_compatible_platforms",
         "args": {"platform_prefix": "gpu-"},
+    }
+    assert mk8s_wizard_fields["inputs.node_group_defaults.gpu.preset"]["options"] == {
+        "from": "compute_platform_presets",
+        "args": {
+            "platform_path": "inputs.node_group_defaults.gpu.platform",
+            "reservation_policy_path": "inputs.node_group_defaults.gpu.reservation.policy",
+        },
+        "auto_select_single": True,
     }
     assert mk8s_wizard_fields["inputs.node_groups"]["prompt"] is False
     assert mk8s_wizard_fields["inputs.node_groups.system.node_count"] == {
@@ -3105,16 +3125,42 @@ def test_bundled_mk8s_declares_optional_wizard_field_override() -> None:
         ]
         is True
     )
+    assert mk8s_wizard_fields["inputs.node_group_defaults.gpu.reservation.policy"] == {
+        "sources": [
+            {
+                "source": "static",
+                "values": [
+                    {
+                        "value": "AUTO",
+                        "label": "AUTO  (try selected reservations, then suitable capacity)",
+                    },
+                    {
+                        "value": "FORBID",
+                        "label": "FORBID  (do not use reservations)",
+                    },
+                    {
+                        "value": "STRICT",
+                        "label": "STRICT  (use only selected/suitable reservations)",
+                    },
+                ],
+            }
+        ],
+        "default": "AUTO",
+        "write_default_to_config": True,
+        "type_hint": "string",
+    }
     assert mk8s_wizard_fields["inputs.gpu_clusters.workers.infiniband_fabric"] == {
         "options": {
             "from": "mk8s_infiniband_fabrics",
             "args": {
                 "platform_path": "inputs.node_group_defaults.gpu.platform",
                 "preset_path": "inputs.node_group_defaults.gpu.preset",
+                "reservation_policy_path": "inputs.node_group_defaults.gpu.reservation.policy",
             },
             "auto_select_first": True,
             "skip_prompt_if_no_choices": True,
-        }
+        },
+        "prompt": False,
     }
     assert mk8s_wizard_fields["inputs.soperator.worker_total_nodes"] == {
         "default": 1,
@@ -3174,9 +3220,7 @@ def test_bundled_mk8s_declares_optional_wizard_field_override() -> None:
         "required": True,
         "type_hint": "bool",
     }
-    assert mk8s_wizard_fields[
-        "deploy.targets[].validations.mk8s_gpu.gpu_visibility.max_nodes"
-    ] == {
+    assert mk8s_wizard_fields["deploy.targets[].validations.mk8s_gpu.gpu_visibility.max_nodes"] == {
         "default": 3,
         "write_default_to_config": True,
         "type_hint": "number",

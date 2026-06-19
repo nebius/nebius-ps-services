@@ -46,6 +46,7 @@ from rich.progress import (
 )
 
 from . import __version__, native_logs, runtime_introspection
+from .capacity_dashboard import CapacityResourceAdvice, capacity_vm_slots_text
 from .component_defaults import (
     default_target_paths,
     literal_default_input_leaf_names,
@@ -13151,6 +13152,16 @@ def _materialize_soperator_node_group_shape(
                 group["gpu_stack_preset"] = defaults["gpu_stack_preset"]
             else:
                 group.setdefault("gpu_stack_preset", defaults["gpu_stack_preset"])
+        default_reservation = defaults.get("reservation")
+        if isinstance(default_reservation, Mapping):
+            reservation_policy = _non_empty_text(default_reservation.get("policy")).upper()
+            if reservation_policy:
+                if prefer_shape_defaults or not isinstance(group.get("reservation"), Mapping):
+                    group["reservation"] = {"policy": reservation_policy}
+                else:
+                    reservation = group.setdefault("reservation", {})
+                    if isinstance(reservation, dict):
+                        reservation.setdefault("policy", reservation_policy)
 
 
 def _materialize_soperator_node_group_labels(group: dict[str, Any], *, group_key: str) -> None:
@@ -16929,6 +16940,7 @@ _PROVIDER_ARG_PATH_KEYS = frozenset(
         "fallback_project_id_path",
         "gpu_cluster_required_path",
         "network_id_path",
+        "reservation_policy_path",
     }
 )
 
@@ -18581,6 +18593,11 @@ def _prompt_path_sort_key(
         "deploy.targets[].secrets.mysterybox.enabled": 240,
         "deploy.targets[].secrets.mysterybox.allow_all_namespaces": 241,
         "deploy.targets[].secrets.mysterybox.sync_namespaces": 242,
+        "infra.components[].inputs.node_group_defaults.cpu.platform": 21,
+        "infra.components[].inputs.node_group_defaults.cpu.preset": 22,
+        "infra.components[].inputs.node_group_defaults.gpu.platform": 23,
+        "infra.components[].inputs.node_group_defaults.gpu.reservation.policy": 24,
+        "infra.components[].inputs.node_group_defaults.gpu.preset": 25,
         "infra.components[].inputs.soperator.system_autoscaling.enabled": 38,
         "infra.components[].inputs.soperator.system_autoscaling.min_node_count": 39,
         "infra.components[].inputs.soperator.system_autoscaling.max_node_count": 40,
@@ -18811,11 +18828,109 @@ def _gpu_preset_field_context(
     return component_prefix, platform_label, preset_label, preset_name
 
 
+def _gpu_capacity_reservation_policy(
+    *,
+    payload: dict[str, Any],
+    full_path_label: str,
+    component_prefix: str,
+) -> str:
+    policy_label = ""
+    if full_path_label.endswith(".node_group_defaults.gpu.preset"):
+        policy_label = f"{component_prefix}.inputs.node_group_defaults.gpu.reservation.policy"
+    elif ".inputs.node_groups." in full_path_label and full_path_label.endswith(".preset"):
+        policy_label = f"{full_path_label[: -len('.preset')]}.reservation.policy"
+    policy = _non_empty_text(_read_payload_field(payload, policy_label)).upper()
+    return policy if policy in {"AUTO", "FORBID", "STRICT"} else "AUTO"
+
+
+def _live_gpu_capacity_rows(
+    rows: Iterable[CapacityResourceAdvice],
+    *,
+    reservation_policy: str,
+) -> tuple[CapacityResourceAdvice, ...]:
+    policy = reservation_policy.upper()
+    if policy == "STRICT":
+        return tuple(item for item in rows if item.reserved.available > 0)
+    if policy == "FORBID":
+        return tuple(item for item in rows if item.on_demand.available > 0)
+    return tuple(
+        item for item in rows if item.on_demand.available > 0 or item.reserved.available > 0
+    )
+
+
+def _format_live_gpu_capacity_row(item: CapacityResourceAdvice) -> str:
+    preset = item.preset or "(unknown preset)"
+    fabric = item.fabric or "(no fabric)"
+    return (
+        f"  - {preset} on {fabric}: regular-vm "
+        f"{capacity_vm_slots_text(item.on_demand.available, item.gpu_count)}; "
+        f"reserved {capacity_vm_slots_text(item.reserved.available, item.gpu_count)}"
+    )
+
+
+def _maybe_print_live_gpu_capacity_summary(
+    *,
+    payload: dict[str, Any],
+    entry: ComponentEntry,
+    full_path_label: str,
+    provider_lookup: ProviderOptionLookup | None,
+    emitted_guidance: set[str],
+) -> None:
+    if provider_lookup is None:
+        return
+    context = _gpu_preset_field_context(
+        payload=payload,
+        entry=entry,
+        full_path_label=full_path_label,
+    )
+    if context is None:
+        return
+    component_prefix, platform_label, _preset_label, _preset_name = context
+    tenant_id = _non_empty_text(_read_payload_field(payload, "client_info.nebius.tenant_id"))
+    region_id = _non_empty_text(_read_payload_field(payload, "client_info.nebius.region_id"))
+    platform_name = _non_empty_text(_read_payload_field(payload, platform_label))
+    if not tenant_id or not region_id or not platform_name:
+        return
+    reservation_policy = _gpu_capacity_reservation_policy(
+        payload=payload,
+        full_path_label=full_path_label,
+        component_prefix=component_prefix,
+    )
+    guidance_key = f"gpu_capacity:{platform_label}:{platform_name}:{region_id}:{reservation_policy}"
+    if guidance_key in emitted_guidance:
+        return
+    compute_platform_capacity_advice = getattr(
+        provider_lookup,
+        "compute_platform_capacity_advice",
+        None,
+    )
+    if not callable(compute_platform_capacity_advice):
+        return
+    rows = _live_gpu_capacity_rows(
+        compute_platform_capacity_advice(
+            tenant_id=tenant_id,
+            region_id=region_id,
+            platform_name=platform_name,
+        ),
+        reservation_policy=reservation_policy,
+    )
+    if not rows:
+        return
+    console.print(
+        f"[dim]Live GPU capacity for {escape(platform_name)} in {escape(region_id)} "
+        "(Capacity Dashboard VM slots):[/dim]"
+    )
+    for row in rows:
+        console.print(f"[dim]{escape(_format_live_gpu_capacity_row(row))}[/dim]")
+    emitted_guidance.add(guidance_key)
+
+
 def _maybe_print_gpu_preset_prompt_guidance(
     *,
     payload: dict[str, Any],
     entry: ComponentEntry,
     full_path_label: str,
+    provider_lookup: ProviderOptionLookup | None = None,
     emitted_guidance: set[str],
 ) -> None:
     if (
@@ -18823,6 +18938,13 @@ def _maybe_print_gpu_preset_prompt_guidance(
         is None
     ):
         return
+    _maybe_print_live_gpu_capacity_summary(
+        payload=payload,
+        entry=entry,
+        full_path_label=full_path_label,
+        provider_lookup=provider_lookup,
+        emitted_guidance=emitted_guidance,
+    )
     if "gpu_preset_interconnect" in emitted_guidance:
         return
     console.print(
@@ -18894,6 +19016,14 @@ def _maybe_print_selected_gpu_preset_guidance(
         return
 
     if allow_gpu_clustering is True:
+        if entry.id == "mk8s":
+            console.print(
+                "[dim]Selected GPU shape supports InfiniBand / GPUDirect-RDMA. "
+                "cxcli will select the provider-ranked fabric automatically when "
+                "live Capacity Dashboard rows are available.[/dim]"
+            )
+            emitted_guidance.add(guidance_key)
+            return
         console.print(
             "[dim]Selected GPU shape supports InfiniBand / GPUDirect-RDMA. "
             "Choose a fabric next when live capacity is available.[/dim]"
@@ -22243,18 +22373,50 @@ def _run_component_field_wizard(
                 return choice
         return None
 
-    def _choice_reserved_vm_count(choice: OptionChoice | None) -> int:
-        if choice is None:
-            return 0
-        metadata_count = choice.metadata.get("reserved_vms")
-        if isinstance(metadata_count, int | float):
-            return int(metadata_count)
-        if isinstance(metadata_count, str) and metadata_count.strip().isdigit():
-            return int(metadata_count.strip())
-        match = re.search(r"reserved VMs=(\d+)", choice.label)
-        if not match:
-            return 0
-        return int(match.group(1))
+    def _recommended_choice(choices: Sequence[OptionChoice] | None) -> OptionChoice | None:
+        for choice in choices or ():
+            if choice.recommended:
+                return choice
+        return choices[0] if choices else None
+
+    def _materialize_node_group_gpu_cluster_fabric(
+        *,
+        inputs: dict[str, Any],
+        component_path_label: str,
+        group_key: str,
+        group: dict[str, Any],
+        platform_label: str,
+        preset_label: str,
+        reservation_policy: str,
+    ) -> OptionChoice | None:
+        if provider_lookup is None:
+            return None
+        fabric_label = f"{component_path_label}.inputs.gpu_clusters.{group_key}.infiniband_fabric"
+        fabric_choices = provider_lookup.resolve(
+            provider="mk8s_infiniband_fabrics",
+            args={
+                "platform_path": platform_label,
+                "preset_path": preset_label,
+                "reservation_policy": reservation_policy,
+            },
+            payload=payload,
+            field_path=fabric_label,
+        )
+        selected = _recommended_choice(fabric_choices)
+        if selected is None:
+            last_error = provider_lookup.last_error()
+            if last_error:
+                console.print(
+                    f"{warning_markup('GPU cluster fabric auto-selection skipped')}: "
+                    f"{escape(last_error)}"
+                )
+            return None
+        gpu_clusters = inputs.setdefault("gpu_clusters", {})
+        if not isinstance(gpu_clusters, dict):
+            return None
+        gpu_clusters[group_key] = {"infiniband_fabric": selected.value}
+        group["gpu_cluster_key"] = group_key
+        return selected
 
     def _run_plain_mk8s_node_group_loop(
         *,
@@ -22594,10 +22756,41 @@ def _run_component_field_wizard(
                 continue
             group["platform"] = str(platform).strip()
 
+            reservation_policy = "FORBID"
+            if gpu:
+                reservation_policy_value, status = _prompt_loop_value(
+                    f"{group_prefix}.reservation.policy",
+                    "AUTO",
+                    choices=[
+                        OptionChoice(
+                            value="AUTO",
+                            label="AUTO  (try selected reservations, then suitable capacity)",
+                        ),
+                        OptionChoice(value="FORBID", label="FORBID  (do not use reservations)"),
+                        OptionChoice(
+                            value="STRICT",
+                            label="STRICT  (use only selected/suitable reservations)",
+                        ),
+                    ],
+                    required=True,
+                )
+                if status == "quit":
+                    return None, True
+                if status == "back":
+                    _restart_group_creation(group_key)
+                    continue
+                reservation_policy = str(reservation_policy_value).strip().upper()
+                if reservation_policy not in {"AUTO", "FORBID", "STRICT"}:
+                    reservation_policy = "AUTO"
+                group["reservation"] = {"policy": reservation_policy}
+
             preset_label = f"{group_prefix}.preset"
+            preset_args = {"platform_path": platform_label}
+            if gpu:
+                preset_args["reservation_policy"] = reservation_policy
             preset_choices = _mk8s_provider_choices(
                 provider="compute_platform_presets",
-                args={"platform_path": platform_label},
+                args=preset_args,
                 field_path=preset_label,
                 required=True,
             )
@@ -22605,6 +22798,7 @@ def _run_component_field_wizard(
                 payload=payload,
                 entry=entry,
                 full_path_label=preset_label,
+                provider_lookup=provider_lookup,
                 emitted_guidance=emitted_guidance,
             )
             preset, status = _prompt_loop_value(
@@ -22619,9 +22813,6 @@ def _run_component_field_wizard(
                 _restart_group_creation(group_key)
                 continue
             group["preset"] = str(preset).strip()
-            selected_capacity_has_reservations = (
-                _choice_reserved_vm_count(_choice_by_value(preset_choices, group["preset"])) > 0
-            )
             _maybe_print_selected_gpu_preset_guidance(
                 payload=payload,
                 entry=entry,
@@ -22693,86 +22884,19 @@ def _run_component_field_wizard(
                         )
                     )
                 if allow_gpu_cluster is True:
-                    enable_gpu_cluster, status = _prompt_loop_value(
-                        f"{group_prefix}.gpu_cluster.enabled",
-                        True,
-                        type_hint="bool",
+                    _materialize_node_group_gpu_cluster_fabric(
+                        inputs=inputs,
+                        component_path_label=component_path_label,
+                        group_key=group_key,
+                        group=group,
+                        platform_label=platform_label,
+                        preset_label=preset_label,
+                        reservation_policy=reservation_policy,
                     )
-                    if status == "quit":
-                        return None, True
-                    if status == "back":
-                        _restart_group_creation(group_key)
-                        continue
-                    if bool(enable_gpu_cluster):
-                        fabric_label = (
-                            f"{component_path_label}.inputs.gpu_clusters.{group_key}"
-                            ".infiniband_fabric"
-                        )
-                        fabric_choices = _mk8s_provider_choices(
-                            provider="mk8s_infiniband_fabrics",
-                            args={
-                                "platform_path": platform_label,
-                                "preset_path": preset_label,
-                            },
-                            field_path=fabric_label,
-                            required=True,
-                        )
-                        fabric, status = _prompt_loop_value(
-                            fabric_label,
-                            None,
-                            choices=fabric_choices,
-                            required=True,
-                        )
-                        if status == "quit":
-                            return None, True
-                        if status == "back":
-                            _restart_group_creation(group_key)
-                            continue
-                        selected_fabric_choice = _choice_by_value(fabric_choices, fabric)
-                        if selected_fabric_choice is not None:
-                            selected_capacity_has_reservations = (
-                                _choice_reserved_vm_count(selected_fabric_choice) > 0
-                            )
-                        gpu_clusters = inputs.setdefault("gpu_clusters", {})
-                        if isinstance(gpu_clusters, dict):
-                            gpu_clusters[group_key] = {"infiniband_fabric": str(fabric).strip()}
-                            group["gpu_cluster_key"] = group_key
 
-                reservation_default = "AUTO" if selected_capacity_has_reservations else "FORBID"
-                if selected_capacity_has_reservations:
-                    guidance_key = f"{group_prefix}.reservation.policy.reserved-default"
-                    if guidance_key not in emitted_guidance:
-                        console.print(
-                            "[dim]Reservation guidance: the selected GPU shape/fabric has "
-                            "live reserved capacity, so cxcli defaults reservation.policy "
-                            "to AUTO. Choose FORBID only when you intentionally want "
-                            "on-demand capacity.[/dim]"
-                        )
-                        emitted_guidance.add(guidance_key)
-                reservation_policy, status = _prompt_loop_value(
-                    f"{group_prefix}.reservation.policy",
-                    reservation_default,
-                    choices=[
-                        OptionChoice(value="FORBID", label="FORBID  (do not use reservations)"),
-                        OptionChoice(
-                            value="AUTO",
-                            label="AUTO  (try selected reservations, then suitable capacity)",
-                        ),
-                        OptionChoice(
-                            value="STRICT",
-                            label="STRICT  (use only selected/suitable reservations)",
-                        ),
-                    ],
-                    required=True,
-                )
-                if status == "quit":
-                    return None, True
-                if status == "back":
-                    _restart_group_creation(group_key)
-                    continue
-                reservation_policy = str(reservation_policy).strip().upper()
                 if reservation_policy != "FORBID":
-                    reservation: dict[str, Any] = {"policy": reservation_policy}
+                    reservation: dict[str, Any] = dict(group.get("reservation", {}))
+                    reservation["policy"] = reservation_policy
                     reservation_choices = _mk8s_provider_choices(
                         provider="capacity_block_groups",
                         args={
@@ -24720,6 +24844,7 @@ def _run_component_field_wizard(
                     payload=payload,
                     entry=entry,
                     full_path_label=full_path_label,
+                    provider_lookup=provider_lookup,
                     emitted_guidance=emitted_prompt_guidance,
                 )
                 _maybe_print_mk8s_gpu_validation_prompt_guidance(
