@@ -2710,29 +2710,34 @@ Profile concepts:
   `inputs.soperator.system_node_count`,
   `controller_node_count`, `login_node_count`, and `accounting_node_count`.
   It also exposes `inputs.soperator.*_autoscaling` helpers for `system`,
-  `controller`, `login`, `accounting`, and `worker`; `system` defaults to
-  autoscaling 3..5, while the other service-role and worker autoscaling helpers
-  default off. Enabling a helper writes concrete
+  `controller`, `login`, `accounting`, `worker_cpu`, and `worker_gpu`;
+  `system` defaults to autoscaling 3..5, while the other service-role and
+  worker autoscaling helpers default off. Enabling a helper writes concrete
   `inputs.node_groups.*.autoscaling` and suppresses the fixed count for that
   role. Disabling it restores that role's fixed profile count and removes any
-  stale concrete autoscaling block. Worker fixed capacity
-  still uses `inputs.soperator.worker_total_nodes` and `worker_nodes_per_group`
-  because workers can shard into multiple MK8s groups. `worker_total_nodes` is
-  the Kubernetes worker host count, not total GPU count; Soperator worker
-  replicas match those hosts, and GPU count per host is written to
+  stale concrete autoscaling block. Worker fixed capacity is shape-specific:
+  `inputs.soperator.worker_cpu_total_nodes` /
+  `worker_cpu_nodes_per_group` for CPU workers and
+  `inputs.soperator.worker_gpu_total_nodes` /
+  `worker_gpu_nodes_per_group` for GPU workers, because workers can shard into
+  multiple MK8s groups independently by shape. Each `worker_*_total_nodes`
+  value is the Kubernetes worker host count for that shape, not total GPU count
+  and not an aggregate CPU/GPU split; Soperator worker replicas match those
+  hosts, and GPU count per host is written to
   `nodesets[].slurmd.resources.gpu`. For example, 5 x `1gpu-*` hosts means five
   Slurm worker replicas with `gpu: 1`, while 5 x `8gpu-*` hosts means five
-  replicas with `gpu: 8` and 40 total GPUs. Worker autoscaling uses
-  the same shard size with `max_node_count` as the desired upper capacity and
-  preserves an explicit `0..0` scale-to-zero range. By itself that is
+  replicas with `gpu: 8` and 40 total GPUs. Worker autoscaling uses the same
+  shape-specific shard size with `max_node_count` as the desired upper capacity
+  and preserves an explicit `0..0` scale-to-zero range. By itself that is
   maximum-capacity materialization, not upstream Soperator Slurm-demand
   elasticity: without ephemeral NodeSets, the rendered NodeSet replicas still
   desire the maximum worker pods. True Slurm-demand worker elasticity is enabled
   only when `inputs.soperator.worker_ephemeral_nodes.enabled=true`; then cxcli
-  requires worker autoscaling, materializes `ephemeralNodes: true`, derives
-  `initialNumberEphemeralNodes` from `worker_autoscaling.min_node_count`, writes
-  finite non-negative `slurmConfig.suspendTime`, and keeps the same
-  one-worker-pod to one-Kubernetes-worker-VM resource shape. Service-role
+  requires autoscaling for every active worker shape, materializes
+  `ephemeralNodes: true`, derives `initialNumberEphemeralNodes` from each
+  shape's matching `worker_*_autoscaling.min_node_count`, writes finite
+  non-negative `slurmConfig.suspendTime`, and keeps the same one-worker-pod to
+  one-Kubernetes-worker-VM resource shape. Service-role
   autoscaling must keep `max_node_count` at least `1` because those groups back
   required Soperator placement.
   Profile-owned NodeSet values leave worker `slurmd` and `munge` image

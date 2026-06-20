@@ -1511,12 +1511,26 @@ _SOPERATOR_SERVICE_ROLE_NODE_COUNT_FIELDS = (
     "login_node_count",
     "accounting_node_count",
 )
+_SOPERATOR_WORKER_SHAPE_ROLES = ("worker_cpu", "worker_gpu")
 _SOPERATOR_NODE_GROUP_AUTOSCALING_ROLES = (
     "system",
     "controller",
     "login",
     "accounting",
-    "worker",
+    *_SOPERATOR_WORKER_SHAPE_ROLES,
+)
+_SOPERATOR_WORKER_SHAPE_TOTAL_NODE_FIELDS = {
+    "worker_cpu": "worker_cpu_total_nodes",
+    "worker_gpu": "worker_gpu_total_nodes",
+}
+_SOPERATOR_WORKER_SHAPE_NODES_PER_GROUP_FIELDS = {
+    "worker_cpu": "worker_cpu_nodes_per_group",
+    "worker_gpu": "worker_gpu_nodes_per_group",
+}
+_SOPERATOR_LEGACY_WORKER_INPUT_FIELDS = (
+    "worker_total_nodes",
+    "worker_nodes_per_group",
+    "worker_autoscaling",
 )
 _SOPERATOR_WORKER_EPHEMERAL_INPUT = "soperator.worker_ephemeral_nodes"
 _SOPERATOR_ONBOARDING_STORAGE_MODES = (
@@ -12880,6 +12894,26 @@ def _required_nonnegative_int(value: Any, *, field: str) -> int:
     return parsed
 
 
+def _required_positive_int(value: Any, *, field: str) -> int:
+    if isinstance(value, bool) or value is None:
+        raise ValueError(f"{field} must be a positive integer")
+    if isinstance(value, int):
+        if value > 0:
+            return value
+        raise ValueError(f"{field} must be a positive integer")
+    if isinstance(value, float):
+        if value.is_integer() and value > 0:
+            return int(value)
+        raise ValueError(f"{field} must be a positive integer")
+    try:
+        parsed = int(str(value).strip())
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{field} must be a positive integer") from exc
+    if parsed <= 0:
+        raise ValueError(f"{field} must be a positive integer")
+    return parsed
+
+
 def _config_bool(value: Any, *, default: bool = False) -> bool:
     if isinstance(value, bool):
         return value
@@ -13115,6 +13149,72 @@ def _soperator_has_external_node_groups(
     return False
 
 
+def _mapping_path_value_with_presence(
+    node: Mapping[str, Any],
+    dotted_path: str,
+) -> tuple[bool, Any]:
+    current: Any = node
+    for raw_segment in dotted_path.split("."):
+        segment = raw_segment.strip()
+        if not segment or not isinstance(current, Mapping):
+            return False, None
+        candidates = (segment, segment.replace("-", "_"), segment.replace("_", "-"))
+        found = False
+        for candidate in candidates:
+            if candidate in current:
+                current = current[candidate]
+                found = True
+                break
+        if not found:
+            return False, None
+    return True, current
+
+
+def _soperator_worker_shape_for_profile_worker(raw_worker: Mapping[str, Any]) -> str:
+    return "worker_cpu" if raw_worker.get("gpu", True) is False else "worker_gpu"
+
+
+def _soperator_profile_worker_shapes(profile: Mapping[str, Any]) -> set[str]:
+    mk8s_profile = _profile_mapping(profile, "mk8s")
+    shapes: set[str] = set()
+    for raw_worker in _profile_list(mk8s_profile, "worker_nodesets"):
+        if isinstance(raw_worker, Mapping):
+            shapes.add(_soperator_worker_shape_for_profile_worker(raw_worker))
+    return shapes
+
+
+def _soperator_worker_template_gpu_flags(profile: Mapping[str, Any]) -> dict[str, bool]:
+    mk8s_profile = _profile_mapping(profile, "mk8s")
+    flags: dict[str, bool] = {}
+    for raw_worker in _profile_list(mk8s_profile, "worker_nodesets"):
+        if not isinstance(raw_worker, Mapping):
+            continue
+        gpu = bool(raw_worker.get("gpu", True))
+        for field_name in ("name", "nodeset_name", "node_group_prefix"):
+            template_name = normalize_component_token(raw_worker.get(field_name))
+            if template_name:
+                flags[template_name] = gpu
+    return flags
+
+
+def _raise_if_legacy_soperator_worker_inputs(inputs: Mapping[str, Any]) -> None:
+    soperator_inputs = inputs.get("soperator")
+    if not isinstance(soperator_inputs, Mapping):
+        return
+    legacy_fields = [
+        field for field in _SOPERATOR_LEGACY_WORKER_INPUT_FIELDS if field in soperator_inputs
+    ]
+    if not legacy_fields:
+        return
+    joined = ", ".join(f"inputs.soperator.{field}" for field in legacy_fields)
+    verb = "is" if len(legacy_fields) == 1 else "are"
+    raise ValueError(
+        f"{joined} {verb} no longer supported. Use worker_cpu_total_nodes, "
+        "worker_cpu_nodes_per_group, worker_cpu_autoscaling, worker_gpu_total_nodes, "
+        "worker_gpu_nodes_per_group, and worker_gpu_autoscaling instead."
+    )
+
+
 def _soperator_worker_profile_total_nodes(
     *,
     inputs: Mapping[str, Any],
@@ -13126,18 +13226,25 @@ def _soperator_worker_profile_total_nodes(
     node_groups_input = _non_empty_text(raw_worker.get("node_groups_input"))
     nodes_per_group_input = _non_empty_text(raw_worker.get("nodes_per_group_input"))
     if total_nodes_input:
-        return _positive_int(
-            _mapping_path_value(inputs, total_nodes_input),
-            default=default_total_nodes,
-        )
+        present, value = _mapping_path_value_with_presence(inputs, total_nodes_input)
+        if not present:
+            return default_total_nodes
+        return _required_positive_int(value, field=total_nodes_input)
     if node_groups_input or nodes_per_group_input:
-        requested_groups = _positive_int(
-            _mapping_path_value(inputs, node_groups_input),
-            default=1,
+        groups_present, raw_groups = _mapping_path_value_with_presence(inputs, node_groups_input)
+        requested_groups = (
+            _required_positive_int(raw_groups, field=node_groups_input)
+            if groups_present
+            else 1
         )
-        requested_nodes_per_group = _positive_int(
-            _mapping_path_value(inputs, nodes_per_group_input),
-            default=default_nodes_per_group,
+        nodes_present, raw_nodes_per_group = _mapping_path_value_with_presence(
+            inputs,
+            nodes_per_group_input,
+        )
+        requested_nodes_per_group = (
+            _required_positive_int(raw_nodes_per_group, field=nodes_per_group_input)
+            if nodes_present
+            else default_nodes_per_group
         )
         return requested_groups * requested_nodes_per_group
     return default_total_nodes
@@ -13151,9 +13258,13 @@ def _soperator_worker_profile_nodes_per_group(
     max_nodes_per_group: int,
 ) -> int:
     nodes_per_group_input = _non_empty_text(raw_worker.get("nodes_per_group_input"))
-    requested_nodes_per_group = _positive_int(
-        _mapping_path_value(inputs, nodes_per_group_input),
-        default=default_nodes_per_group,
+    if not nodes_per_group_input:
+        return min(default_nodes_per_group, max_nodes_per_group)
+    present, value = _mapping_path_value_with_presence(inputs, nodes_per_group_input)
+    requested_nodes_per_group = (
+        _required_positive_int(value, field=nodes_per_group_input)
+        if present
+        else default_nodes_per_group
     )
     return min(requested_nodes_per_group, max_nodes_per_group)
 
@@ -13452,6 +13563,60 @@ def _soperator_placements_match_generated_profile(
         if inferred and placements == inferred:
             return True
     return False
+
+
+def _soperator_profile_template_placement_refs(
+    profile: Mapping[str, Any],
+    *,
+    placement_name: str,
+) -> set[str]:
+    refs: set[str] = set()
+    raw_config = _soperator_profile_placements(profile).get(placement_name)
+    if isinstance(raw_config, Mapping):
+        explicit_node_group = _non_empty_text(raw_config.get("node_group"))
+        if explicit_node_group:
+            refs.add(explicit_node_group)
+        refs.update(_soperator_role_nodeset_template_names(raw_config))
+    if placement_name:
+        refs.add(placement_name)
+    mk8s_profile = _profile_mapping(profile, "mk8s")
+    if placement_name in _profile_mapping(mk8s_profile, "node_groups"):
+        refs.add(placement_name)
+    for raw_worker in _profile_list(mk8s_profile, "worker_nodesets"):
+        if not isinstance(raw_worker, Mapping):
+            continue
+        for field_name in ("name", "nodeset_name", "node_group_prefix"):
+            ref = _non_empty_text(raw_worker.get(field_name))
+            if ref:
+                refs.add(ref)
+    return refs
+
+
+def _soperator_placements_are_stale_profile_templates(
+    *,
+    placements: Mapping[str, list[str]],
+    profile: Mapping[str, Any],
+    inferred_placements: Mapping[str, list[str]],
+) -> bool:
+    if not placements or not inferred_placements:
+        return False
+    profile_placements = _soperator_profile_placements(profile)
+    stale = False
+    for placement_name, refs in placements.items():
+        if placement_name not in profile_placements:
+            return False
+        inferred_refs = set(inferred_placements.get(placement_name, []))
+        if not inferred_refs:
+            return False
+        template_refs = _soperator_profile_template_placement_refs(
+            profile,
+            placement_name=placement_name,
+        )
+        if not refs or not set(refs) <= (template_refs | inferred_refs):
+            return False
+        if list(refs) != list(inferred_placements.get(placement_name, [])):
+            stale = True
+    return stale
 
 
 def _soperator_role_filesystem_keys(raw_role_config: Mapping[str, Any]) -> list[str]:
@@ -14593,6 +14758,7 @@ def _materialize_soperator_mapping_chart_values(
         )
 
     template_nodesets = _soperator_nodeset_templates(profile=profile, values=values)
+    worker_template_gpu_flags = _soperator_worker_template_gpu_flags(profile)
     generated_nodesets: list[dict[str, Any]] = []
     nodeset_ref_replacements: dict[str, list[str]] = {}
     storage_groups: dict[str, list[str]] = {}
@@ -14615,7 +14781,22 @@ def _materialize_soperator_mapping_chart_values(
             if normalize_component_token(group_key) == normalized_template
             or normalize_component_token(group_key).startswith(f"{normalized_template}-")
         ]
-        return matched or normalized_groups
+        if matched:
+            return matched
+        template_gpu = worker_template_gpu_flags.get(normalized_template)
+        if template_gpu is None:
+            return normalized_groups
+        groups_by_key = {group.key: group for group in iter_mk8s_node_groups(inputs)}
+        known_group_keys = [
+            group_key for group_key in normalized_groups if group_key in groups_by_key
+        ]
+        if not known_group_keys:
+            return normalized_groups
+        return [
+            group_key
+            for group_key in known_group_keys
+            if (group := groups_by_key.get(group_key)) is not None and group.gpu == template_gpu
+        ]
 
     def _generate_nodesets_from_template(
         *,
@@ -14964,8 +15145,6 @@ def _materialize_soperator_worker_node_groups(
             default_total_nodes=default_total_nodes,
             default_nodes_per_group=default_nodes_per_group,
         )
-        if total_nodes <= 0:
-            total_nodes = default_total_nodes
         autoscaling = _soperator_profile_autoscaling_input(
             inputs=inputs,
             raw_group=raw_worker,
@@ -14977,12 +15156,12 @@ def _materialize_soperator_worker_node_groups(
             if autoscaling is None:
                 raise ValueError(
                     f"{_SOPERATOR_WORKER_EPHEMERAL_INPUT}.enabled requires "
-                    f"{autoscaling_input or 'soperator.worker_autoscaling'}.enabled=true"
+                    f"{autoscaling_input or 'worker_nodesets.autoscaling_input'}.enabled=true"
                 )
             if autoscaling["max_node_count"] < 1:
                 raise ValueError(
                     f"{_SOPERATOR_WORKER_EPHEMERAL_INPUT}.enabled requires "
-                    f"{autoscaling_input or 'soperator.worker_autoscaling'}.max_node_count "
+                    f"{autoscaling_input or 'worker_nodesets.autoscaling_input'}.max_node_count "
                     "to be at least 1"
                 )
         desired_total_nodes = autoscaling["max_node_count"] if autoscaling else total_nodes
@@ -15115,6 +15294,7 @@ def _materialize_soperator_mk8s_profile(
     mk8s_profile = _profile_mapping(profile, "mk8s")
     defaults = _profile_mapping(mk8s_profile, "inputs")
     _merge_missing_mapping(inputs, defaults)
+    _raise_if_legacy_soperator_worker_inputs(inputs)
 
     node_groups = inputs.setdefault("node_groups", {})
     explicit_placements = dict(placements)
@@ -15594,10 +15774,23 @@ def _materialize_soperator_component_defaults(payload: dict[str, Any]) -> bool:
                 inputs=mk8s_inputs_by_target.get(target_ref, {}),
                 profile=profile_by_target.get(target_ref, {}),
             )
+            replace_generated_placements = generated_placements_by_target.get(
+                target_ref,
+                False,
+            )
+            current_placements = _soperator_row_placements(row)
+            if not replace_generated_placements:
+                replace_generated_placements = _soperator_placements_are_stale_profile_templates(
+                    placements=current_placements,
+                    profile=profile_by_target.get(target_ref, {}),
+                    inferred_placements=inferred_placements,
+                )
+            if replace_generated_placements:
+                generated_placements_by_target[target_ref] = True
             _soperator_set_app_placements(
                 row,
                 inferred_placements,
-                replace=generated_placements_by_target.get(target_ref, False),
+                replace=replace_generated_placements,
             )
             placements = _soperator_row_placements(row)
             soperator_placements_by_target[target_ref] = placements
@@ -18786,10 +18979,12 @@ def _prompt_path_sort_key(
         "controller_node_count": 39,
         "login_node_count": 40,
         "accounting_node_count": 41,
-        "worker_total_nodes": 42,
-        "worker_nodes_per_group": 43,
-        "worker_ephemeral_nodes": 44,
-        "suspend_time_seconds": 45,
+        "worker_cpu_total_nodes": 42,
+        "worker_cpu_nodes_per_group": 43,
+        "worker_gpu_total_nodes": 44,
+        "worker_gpu_nodes_per_group": 45,
+        "worker_ephemeral_nodes": 46,
+        "suspend_time_seconds": 47,
     }
     full_label = _format_payload_path(path)
     nested_order_hints = {
@@ -18830,13 +19025,18 @@ def _prompt_path_sort_key(
         "infra.components[].inputs.soperator.accounting_autoscaling.min_node_count": 51,
         "infra.components[].inputs.soperator.accounting_autoscaling.max_node_count": 52,
         "infra.components[].inputs.soperator.accounting_node_count": 53,
-        "infra.components[].inputs.soperator.worker_autoscaling.enabled": 54,
-        "infra.components[].inputs.soperator.worker_autoscaling.min_node_count": 55,
-        "infra.components[].inputs.soperator.worker_autoscaling.max_node_count": 56,
-        "infra.components[].inputs.soperator.worker_ephemeral_nodes.enabled": 57,
-        "infra.components[].inputs.soperator.worker_ephemeral_nodes.suspend_time_seconds": 58,
-        "infra.components[].inputs.soperator.worker_total_nodes": 59,
-        "infra.components[].inputs.soperator.worker_nodes_per_group": 60,
+        "infra.components[].inputs.soperator.worker_cpu_autoscaling.enabled": 54,
+        "infra.components[].inputs.soperator.worker_cpu_autoscaling.min_node_count": 55,
+        "infra.components[].inputs.soperator.worker_cpu_autoscaling.max_node_count": 56,
+        "infra.components[].inputs.soperator.worker_cpu_total_nodes": 57,
+        "infra.components[].inputs.soperator.worker_cpu_nodes_per_group": 58,
+        "infra.components[].inputs.soperator.worker_gpu_autoscaling.enabled": 59,
+        "infra.components[].inputs.soperator.worker_gpu_autoscaling.min_node_count": 60,
+        "infra.components[].inputs.soperator.worker_gpu_autoscaling.max_node_count": 61,
+        "infra.components[].inputs.soperator.worker_gpu_total_nodes": 62,
+        "infra.components[].inputs.soperator.worker_gpu_nodes_per_group": 63,
+        "infra.components[].inputs.soperator.worker_ephemeral_nodes.enabled": 64,
+        "infra.components[].inputs.soperator.worker_ephemeral_nodes.suspend_time_seconds": 65,
     }
     leaf = path[-1] if path else ""
     leaf_name = _normalize_leaf_name(str(leaf)) if isinstance(leaf, str) else ""
@@ -19571,10 +19771,10 @@ def _maybe_print_soperator_mk8s_sizing_prompt_guidance(
         return
     console.print(
         "[dim]Soperator production sizing: system, controller, login, and "
-        "accounting counts size the CPU service role node groups. "
-        "worker_total_nodes sizes Kubernetes worker hosts and matching "
-        "Slurm worker replicas, GPU count per host comes from the preset, and "
-        "worker_nodes_per_group controls generated worker group sharding.[/dim]"
+        "accounting counts size the CPU service role node groups. Worker sizing "
+        "is shape-specific: worker_cpu_* sizes CPU worker hosts, worker_gpu_* "
+        "sizes GPU worker hosts, GPU count per host comes from the preset, and "
+        "*_nodes_per_group controls generated worker group sharding.[/dim]"
     )
     emitted_guidance.add("soperator_mk8s_sizing")
 
@@ -20498,8 +20698,16 @@ def _soperator_count_role_from_prompt(full_path_label: str) -> str:
     for role in ("system", "controller", "login", "accounting"):
         if full_path_label.endswith(f".inputs.soperator.{role}_node_count"):
             return role
-    if full_path_label.endswith(".inputs.soperator.worker_total_nodes"):
-        return "worker"
+    for role, input_field in _SOPERATOR_WORKER_SHAPE_TOTAL_NODE_FIELDS.items():
+        if full_path_label.endswith(f".inputs.soperator.{input_field}"):
+            return role
+    return ""
+
+
+def _soperator_nodes_per_group_role_from_prompt(full_path_label: str) -> str:
+    for role, input_field in _SOPERATOR_WORKER_SHAPE_NODES_PER_GROUP_FIELDS.items():
+        if full_path_label.endswith(f".inputs.soperator.{input_field}"):
+            return role
     return ""
 
 
@@ -20521,6 +20729,28 @@ def _soperator_autoscaling_enabled_for_prompt(
         f"{component_prefix}.inputs.soperator.{role}_autoscaling.enabled",
     )
     return _config_bool(enabled, default=False)
+
+
+def _soperator_worker_shape_active_for_prompt(
+    *,
+    payload: dict[str, Any],
+    entry: ComponentEntry,
+    full_path_label: str,
+    role: str,
+) -> bool:
+    if role not in _SOPERATOR_WORKER_SHAPE_ROLES:
+        return True
+    target_ref = _component_instance_id_for_prompt_field(
+        payload=payload,
+        entry=entry,
+        full_path_label=full_path_label,
+    )
+    if not target_ref:
+        return False
+    profile = _soperator_profile_by_target(payload).get(target_ref, {})
+    if not isinstance(profile, Mapping):
+        return False
+    return role in _soperator_profile_worker_shapes(profile)
 
 
 def _soperator_worker_ephemeral_enabled_for_prompt(
@@ -20555,18 +20785,31 @@ def _skip_soperator_managed_mk8s_prompt(
         entry=entry,
         full_path_label=full_path_label,
     )
-    soperator_count_field_suffixes = tuple(
+    soperator_fixed_count_field_suffixes = tuple(
         f".inputs.soperator.{field}"
         for field in (
             *_SOPERATOR_SERVICE_ROLE_NODE_COUNT_FIELDS,
-            "worker_total_nodes",
-            "worker_nodes_per_group",
+            *_SOPERATOR_WORKER_SHAPE_TOTAL_NODE_FIELDS.values(),
         )
+    )
+    soperator_nodes_per_group_field_suffixes = tuple(
+        f".inputs.soperator.{field}"
+        for field in _SOPERATOR_WORKER_SHAPE_NODES_PER_GROUP_FIELDS.values()
+    )
+    soperator_legacy_worker_field_suffixes = tuple(
+        f".inputs.soperator.{field}" for field in _SOPERATOR_LEGACY_WORKER_INPUT_FIELDS
     )
     autoscaling_prompt = _soperator_autoscaling_role_from_prompt(full_path_label)
     if autoscaling_prompt is not None:
         role, field = autoscaling_prompt
         if not has_soperator_target or install_mode != _SOPERATOR_INSTALL_MODE_PRODUCTION:
+            return True
+        if not _soperator_worker_shape_active_for_prompt(
+            payload=payload,
+            entry=entry,
+            full_path_label=full_path_label,
+            role=role,
+        ):
             return True
         return field != "enabled" and not _soperator_autoscaling_enabled_for_prompt(
             payload=payload,
@@ -20588,11 +20831,30 @@ def _skip_soperator_managed_mk8s_prompt(
                 full_path_label=full_path_label,
             )
         return True
-    if full_path_label.endswith(soperator_count_field_suffixes):
+    if full_path_label.endswith(soperator_legacy_worker_field_suffixes):
+        return True
+    if full_path_label.endswith(soperator_fixed_count_field_suffixes):
         if not has_soperator_target or install_mode != _SOPERATOR_INSTALL_MODE_PRODUCTION:
             return True
         role = _soperator_count_role_from_prompt(full_path_label)
+        if not _soperator_worker_shape_active_for_prompt(
+            payload=payload,
+            entry=entry,
+            full_path_label=full_path_label,
+            role=role,
+        ):
+            return True
         return bool(role) and _soperator_autoscaling_enabled_for_prompt(
+            payload=payload,
+            entry=entry,
+            full_path_label=full_path_label,
+            role=role,
+        )
+    if full_path_label.endswith(soperator_nodes_per_group_field_suffixes):
+        if not has_soperator_target or install_mode != _SOPERATOR_INSTALL_MODE_PRODUCTION:
+            return True
+        role = _soperator_nodes_per_group_role_from_prompt(full_path_label)
+        return not _soperator_worker_shape_active_for_prompt(
             payload=payload,
             entry=entry,
             full_path_label=full_path_label,

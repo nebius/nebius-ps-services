@@ -734,9 +734,9 @@ components:
                     workload: worker
                     gpu: false
                     jail: true
-                    total_nodes_input: soperator.worker_total_nodes
-                    nodes_per_group_input: soperator.worker_nodes_per_group
-                    autoscaling_input: soperator.worker_autoscaling
+                    total_nodes_input: soperator.worker_cpu_total_nodes
+                    nodes_per_group_input: soperator.worker_cpu_nodes_per_group
+                    autoscaling_input: soperator.worker_cpu_autoscaling
                     default_total_nodes: 1
                     default_nodes_per_group: 100
                     max_nodes_per_group: 100
@@ -1268,9 +1268,9 @@ components:
                     workload: worker
                     gpu: false
                     jail: true
-                    total_nodes_input: soperator.worker_total_nodes
-                    nodes_per_group_input: soperator.worker_nodes_per_group
-                    autoscaling_input: soperator.worker_autoscaling
+                    total_nodes_input: soperator.worker_cpu_total_nodes
+                    nodes_per_group_input: soperator.worker_cpu_nodes_per_group
+                    autoscaling_input: soperator.worker_cpu_autoscaling
                     default_total_nodes: 1
                     default_nodes_per_group: 100
                     max_nodes_per_group: 100
@@ -1280,9 +1280,9 @@ components:
                     workload: worker
                     gpu: true
                     jail: true
-                    total_nodes_input: soperator.worker_total_nodes
-                    nodes_per_group_input: soperator.worker_nodes_per_group
-                    autoscaling_input: soperator.worker_autoscaling
+                    total_nodes_input: soperator.worker_gpu_total_nodes
+                    nodes_per_group_input: soperator.worker_gpu_nodes_per_group
+                    autoscaling_input: soperator.worker_gpu_autoscaling
                     default_total_nodes: 1
                     default_nodes_per_group: 100
                     max_nodes_per_group: 100
@@ -1936,9 +1936,9 @@ components:
                     workload: worker
                     gpu: true
                     jail: true
-                    total_nodes_input: soperator.worker_total_nodes
-                    nodes_per_group_input: soperator.worker_nodes_per_group
-                    autoscaling_input: soperator.worker_autoscaling
+                    total_nodes_input: soperator.worker_gpu_total_nodes
+                    nodes_per_group_input: soperator.worker_gpu_nodes_per_group
+                    autoscaling_input: soperator.worker_gpu_autoscaling
                     default_total_nodes: 1
                     default_nodes_per_group: 100
                     max_nodes_per_group: 100

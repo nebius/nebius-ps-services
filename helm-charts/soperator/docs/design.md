@@ -308,7 +308,10 @@ kept compatible with the worker hosts that need host preparation.
 
 Direct Helm users configure these chart-native values directly. cxcli owns a
 higher-level placement intent outside Helm values and compiles that intent into
-the same chart-native values during render.
+the same chart-native values during render. The chart fails fast if cxcli
+helper inputs or the old `nodeGroupMapping` value are passed directly to Helm,
+because the chart boundary starts at rendered `nodesets[]` and partition
+`nodeSetRefs`.
 
 ### Runtime Components And Roles
 
@@ -647,22 +650,27 @@ A `NodeSet` is not the same thing as an MK8s node group:
 - MK8s node group: cloud host pool created by Terraform.
 - Soperator `NodeSet`: in-cluster worker definition created by Helm.
 
-Our default logical worker NodeSet is `worker`. cxcli can create many MK8s
-node-group shards behind it with canonical node-group keys generated from the selected profile.
-Those host pools share this Kubernetes label:
+Our default logical GPU worker NodeSet is `worker`. cxcli can either keep that
+single NodeSet name or, when a worker shape is sharded, generate concrete
+NodeSet names from the selected shape template. For example, GPU-only shards
+use names such as `worker-0` and `worker-1`, while mixed CPU+GPU shards use
+names such as `worker-cpu-0` and `worker-gpu-0`. Each generated NodeSet selects
+the matching Kubernetes host pool label:
 
 ```yaml
-slurm.nebius.ai/nodeset-name: worker
+slurm.nebius.ai/nodeset-name: <generated-node-group-key>
 ```
 
-The `NodeSet` uses that label to schedule worker pods onto the right hosts.
-That default does not mean the chart only supports GPU workers. CPU-only and
-mixed clusters use the same pattern with different NodeSet names:
+The `NodeSet` uses that label to schedule worker pods onto the right hosts, and
+`partitionConfiguration.partitions[].nodeSetRefs` must reference the rendered
+`nodesets[].name` values, not the cxcli template names. The default `worker`
+name does not mean the chart only supports GPU workers. CPU-only and mixed
+clusters use the same pattern with different NodeSet names:
 
 ```text
-CPU-only:        worker-cpu -> slurm.nebius.ai/nodeset-name=worker-cpu
-GPU-only:        worker -> slurm.nebius.ai/nodeset-name=worker
-Mixed CPU+GPU:   worker-cpu and worker-gpu, each with its own label
+CPU-only:        worker-cpu or worker-cpu-* -> CPU worker host pools
+GPU-only:        worker or worker-* -> GPU worker host pools
+Mixed CPU+GPU:   worker-cpu* and worker-gpu*, each with its own label
 H100/H200 split: worker-h100 and worker-h200, each with its own label
 ```
 
@@ -822,15 +830,18 @@ The NodeSet label is also a Kubernetes node label:
 slurm.nebius.ai/nodeset-name: worker
 ```
 
-It maps MK8s host pools to a logical Soperator `NodeSet`.
-
-Several MK8s node groups can share the same logical NodeSet label:
+It maps MK8s host pools to a Soperator `NodeSet`. Direct Helm users can choose
+to put several MK8s node groups behind one logical NodeSet by applying the same
+label to each host pool:
 
 ```text
-worker-0 -> slurm.nebius.ai/nodeset-name=worker
-worker-1 -> slurm.nebius.ai/nodeset-name=worker
-worker-2 -> slurm.nebius.ai/nodeset-name=worker
+gpu-pool-a -> slurm.nebius.ai/nodeset-name=worker
+gpu-pool-b -> slurm.nebius.ai/nodeset-name=worker
 ```
+
+cxcli-managed sharding uses a stricter generated-name contract instead: each
+generated worker shard gets its own NodeSet name and matching node-group label,
+such as `worker-0`, `worker-cpu-0`, or `worker-gpu-0`.
 
 The rendered `NodeSet` uses this label through `spec.nodeSelector`:
 
@@ -1285,17 +1296,18 @@ nodesets:
       slurm.nebius.ai/nodeset-name: worker
 ```
 
-Terraform can create one or more MK8s host pools behind that logical NodeSet.
-For example:
+Direct Terraform/Helm wiring can create more than one MK8s host pool behind
+that logical NodeSet by applying the same label. cxcli-managed sharding instead
+generates concrete NodeSet names and labels per shard:
 
 ```text
-worker-0 -> label slurm.nebius.ai/nodeset-name=worker
-worker-1 -> label slurm.nebius.ai/nodeset-name=worker
-worker-2 -> label slurm.nebius.ai/nodeset-name=worker
+worker-0     -> label slurm.nebius.ai/nodeset-name=worker-0
+worker-cpu-0 -> label slurm.nebius.ai/nodeset-name=worker-cpu-0
+worker-gpu-0 -> label slurm.nebius.ai/nodeset-name=worker-gpu-0
 ```
 
-Slurm sees one logical worker group. Kubernetes may use many cloud node groups
-to host it.
+In that generated path, Slurm partitions reference the rendered NodeSet names
+directly through `partitionConfiguration.partitions[].nodeSetRefs`.
 
 ## Worker And Partition Design
 
@@ -1339,19 +1351,20 @@ MK8s worker shape:
 | `1gpu-*` | 5 | 1 | 5 | 5 |
 | `8gpu-*` | 5 | 8 | 5 | 5 |
 
-For cxcli-managed profiles, `inputs.soperator.worker_total_nodes` means
-Kubernetes worker hosts. It should match the worker node group host count and
-the Soperator worker `nodesets[].replicas` count; it is not total GPU count. GPU
-count per host goes into `nodesets[].slurmd.resources.gpu`, derived from the
-selected worker preset.
+For cxcli-managed profiles, `inputs.soperator.worker_cpu_total_nodes` and
+`inputs.soperator.worker_gpu_total_nodes` mean Kubernetes worker hosts for the
+matching worker shape. Each value should match that shape's worker node group
+host count and Soperator worker `nodesets[].replicas` count; it is not total GPU
+count and not an aggregate CPU/GPU split. GPU count per host goes into
+`nodesets[].slurmd.resources.gpu`, derived from the selected worker preset.
 
 Example: 5 x 1-GPU worker hosts:
 
 ```yaml
 inputs:
   soperator:
-    worker_total_nodes: 5
-    worker_nodes_per_group: 100
+    worker_gpu_total_nodes: 5
+    worker_gpu_nodes_per_group: 100
   node_groups:
     worker:
       node_count: 5
@@ -1380,8 +1393,8 @@ Example: 5 x 8-GPU worker hosts:
 ```yaml
 inputs:
   soperator:
-    worker_total_nodes: 5
-    worker_nodes_per_group: 100
+    worker_gpu_total_nodes: 5
+    worker_gpu_nodes_per_group: 100
   gpu_clusters:
     workers:
       infiniband_fabric: fabric-6
@@ -2218,7 +2231,7 @@ Current cxcli worker autoscaling without
 bound as the Soperator desired worker count:
 
 ```yaml
-worker_autoscaling:
+worker_gpu_autoscaling:
   enabled: true
   min_node_count: 1
   max_node_count: 5
@@ -2288,7 +2301,7 @@ with worker autoscaling:
 ```yaml
 inputs:
   soperator:
-    worker_autoscaling:
+    worker_gpu_autoscaling:
       enabled: true
       min_node_count: 1
       max_node_count: 5
@@ -2696,17 +2709,24 @@ The cxcli Soperator profile lives in:
 
 The default profile is `nebius-gpu-v1`.
 
-It seeds MK8s `node_groups` as data:
+It seeds MK8s `node_groups` and rendered Soperator worker `nodesets[]` as data:
 
 - `system`
 - `controller`
 - `login`
 - `accounting`
-- `worker` for the default one-group production profile
-- `worker-0`, `worker-1`, and so on only when the profile is explicitly sharded
+- `worker` for the default one-group GPU production profile
+- `worker-0`, `worker-1`, and so on for sharded GPU-only workers
+- `worker-cpu`, `worker-gpu`, or sharded names such as `worker-cpu-0` and
+  `worker-gpu-0` for mixed CPU+GPU workers
 
 The Terraform `mk8s` module does not hardcode those names. It accepts a generic
 `node_groups` map and creates one MK8s node group per enabled map entry.
+The Soperator chart likewise does not hardcode them: `templates/nodesets`
+renders one `NodeSet` per `nodesets[]` entry and structured partitions reference
+those rendered names through `partitionConfiguration.partitions[].nodeSetRefs`.
+The chart intentionally rejects cxcli helper inputs at this boundary; use cxcli
+to render them first, or pass chart-native `nodesets[]` directly.
 
 The same profile also seeds SFS filesystems:
 

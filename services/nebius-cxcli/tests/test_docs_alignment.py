@@ -716,8 +716,9 @@ def test_soperator_docs_define_worker_autoscaling_boundary() -> None:
     assert "Soperator does not enforce this with a DaemonSet" in chart_flat
     assert "| `1gpu-*` | 5 | 1 | 5 | 5 |" in chart_design
     assert "| `8gpu-*` | 5 | 8 | 5 | 5 |" in chart_design
-    assert "`inputs.soperator.worker_total_nodes` means Kubernetes worker hosts" in (chart_flat)
-    assert "it is not total GPU count" in chart_flat
+    assert "`inputs.soperator.worker_cpu_total_nodes` and" in chart_flat
+    assert "`inputs.soperator.worker_gpu_total_nodes` mean Kubernetes worker hosts" in chart_flat
+    assert "not total GPU count and not an aggregate CPU/GPU split" in chart_flat
     assert "# no gpu_clusters" in chart_design
     assert "gpu_cluster_key: workers" in chart_design
     assert "Meaning: 5 Slurm worker nodes, 1 GPU each, total 5 GPUs." in chart_design
@@ -731,10 +732,10 @@ def test_soperator_docs_define_worker_autoscaling_boundary() -> None:
     assert "`slurmConfig.suspendTime` must be finite and non-negative" in chart_flat
 
     assert "one Slurm worker pod equals one Kubernetes worker VM" in chart_readme_flat
-    assert (
-        "When cxcli manages the profile, `inputs.soperator.worker_total_nodes` is "
-        "the Kubernetes worker host count, not total GPU count"
-    ) in chart_readme_flat
+    assert "`inputs.soperator.worker_cpu_total_nodes` and" in chart_readme_flat
+    assert "`inputs.soperator.worker_gpu_total_nodes` are Kubernetes worker host counts" in (
+        chart_readme_flat
+    )
     assert (
         "without ephemeral NodeSets, a NodeSet with `replicas: 5` still desires five worker pods"
         in chart_readme_flat
@@ -747,9 +748,9 @@ def test_soperator_docs_define_worker_autoscaling_boundary() -> None:
     assert "`initialNumberEphemeralNodes <= replicas`" in (_squash(chart_changelog))
 
     assert "maximum-capacity materialization, not Slurm-demand worker elasticity" in readme_flat
-    assert "`worker_total_nodes` is the Kubernetes worker host count, not total GPU count" in (
-        readme_flat
-    )
+    assert "`soperator.worker_cpu_total_nodes`" in readme_flat
+    assert "`soperator.worker_gpu_total_nodes`" in readme_flat
+    assert "not total GPU count and not an aggregate CPU/GPU split" in readme_flat
     assert "5 x `1gpu-*` hosts means five Slurm worker replicas with `gpu: 1`" in (readme_flat)
     assert "5 x `8gpu-*` hosts means five replicas with `gpu: 8` and 40 total GPUs" in (readme_flat)
     assert "`inputs.soperator.worker_ephemeral_nodes.enabled=true`" in (readme_flat)
@@ -759,17 +760,28 @@ def test_soperator_docs_define_worker_autoscaling_boundary() -> None:
     assert "not upstream Soperator Slurm-demand elasticity" in design_flat
     assert "one-worker-pod to one-Kubernetes-worker-VM resource shape" in design_flat
     assert "`inputs.soperator.worker_ephemeral_nodes.enabled=true`" in design_flat
-    assert "`worker_total_nodes` is the Kubernetes worker host count, not total GPU count" in (
-        design_flat
-    )
+    assert "`inputs.soperator.worker_cpu_total_nodes`" in design_flat
+    assert "`inputs.soperator.worker_gpu_total_nodes`" in design_flat
+    assert "not total GPU count and not an aggregate CPU/GPU split" in design_flat
     assert "5 x `1gpu-*` hosts means five Slurm worker replicas with `gpu: 1`" in (design_flat)
     assert "5 x `8gpu-*` hosts means five replicas with `gpu: 8` and 40 total GPUs" in (design_flat)
     assert "Added explicit Soperator worker ephemeral-node support" in (_squash(changelog))
-    assert "`initialNumberEphemeralNodes` from `worker_autoscaling.min_node_count`" in (
+    assert "Changed Soperator production worker sizing to shape-specific CPU/GPU helpers" in (
         _squash(changelog)
     )
-    assert "worker_total_nodes sizes Kubernetes worker hosts and matching" in cli_text
+    assert "`initialNumberEphemeralNodes` from each shape's matching" in _squash(changelog)
+    assert "Worker sizing " in cli_text
+    assert "is shape-specific: worker_cpu_*" in cli_text
     assert "GPU count per host comes from the preset" in cli_text
+    for retired_helper in (
+        "worker_total_nodes",
+        "worker_nodes_per_group",
+        "worker_autoscaling",
+    ):
+        assert retired_helper not in readme_flat
+        assert retired_helper not in design_flat
+        assert retired_helper not in chart_flat
+        assert retired_helper not in chart_readme_flat
 
 
 def test_soperator_docs_lock_production_training_child_chart_defaults() -> None:
@@ -1399,9 +1411,8 @@ def test_design_defines_soperator_profile_policy_model() -> None:
     assert "Node group mapping connects Slurm roles to MK8s node groups" in design
     assert "curated CPU service-role count helpers" in design
     assert "`inputs.soperator.system_node_count`" in design
-    assert "`worker_nodes_per_group` because workers can shard into multiple MK8s groups" in (
-        design_flat
-    )
+    assert "`worker_cpu_nodes_per_group` for CPU workers" in design_flat
+    assert "`worker_gpu_nodes_per_group` for GPU workers" in design_flat
     assert "The Helm chart remains the Slurm resource owner" in design
     assert "moving the prompt map out of YAML does not change `config.yaml`" in design_flat
 

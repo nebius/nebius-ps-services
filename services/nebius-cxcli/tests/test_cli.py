@@ -3978,8 +3978,8 @@ def test_create_soperator_cpu_worker_count_prompt_updates_persisted_node_groups(
         )
         mk8s.setdefault("inputs", {}).setdefault("soperator", {}).update(
             {
-                "worker_total_nodes": 3,
-                "worker_nodes_per_group": 2,
+                "worker_cpu_total_nodes": 3,
+                "worker_cpu_nodes_per_group": 2,
             }
         )
         return yaml.safe_dump(payload, sort_keys=False), True

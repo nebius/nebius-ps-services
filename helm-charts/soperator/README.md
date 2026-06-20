@@ -246,8 +246,12 @@ Common direct Helm settings:
   `nodesets[].slurmd.resources.gpu` to the GPU count of one worker VM, for
   example five `1gpu-*` hosts means five replicas with `gpu: 1`, and five
   `8gpu-*` hosts means five replicas with `gpu: 8`. When cxcli manages the
-  profile, `inputs.soperator.worker_total_nodes` is the Kubernetes worker host
-  count, not total GPU count.
+  profile, `inputs.soperator.worker_cpu_total_nodes` and
+  `inputs.soperator.worker_gpu_total_nodes` are Kubernetes worker host counts
+  for the matching worker shape, not total GPU count or an aggregate CPU/GPU
+  split. Those `inputs.soperator.*` helpers are cxcli inputs, not Helm values;
+  the chart expects the rendered `nodesets[]` contract and fails fast if helper
+  inputs or the old `nodeGroupMapping` value are passed directly to Helm.
 - `partitionConfiguration`: Slurm partitions and their NodeSet mappings.
   Each partition supports a typed `policy` block (`priorityTier`,
   `preemptMode`, `default`, `hidden`, `state`, `maxTime`, `defaultTime`,
@@ -316,9 +320,10 @@ Common direct Helm settings:
   autoscaling; without ephemeral NodeSets, a NodeSet with `replicas: 5` still
   desires five worker pods. For cxcli-managed production profiles, use
   `inputs.soperator.worker_ephemeral_nodes.enabled=true`; cxcli derives
-  `initialNumberEphemeralNodes` from the matching worker autoscaling
-  `min_node_count`. Day-2 active-node changes happen through Slurm power control
-  and Soperator `NodeSetPowerState`, not by changing that initial value.
+  `initialNumberEphemeralNodes` from each active shape's matching worker
+  autoscaling `min_node_count`. Day-2 active-node changes happen through Slurm
+  power control and Soperator `NodeSetPowerState`, not by changing that initial
+  value.
   See [Soperator Autoscaling](#soperator-autoscaling).
 - `soperator-checks.enabled`, `soperator-activechecks.enabled`,
   `soperator-notifier.enabled`, `soperator-backup-config.enabled`,
@@ -448,7 +453,7 @@ worker host autoscaling:
 ```yaml
 inputs:
   soperator:
-    worker_autoscaling:
+    worker_gpu_autoscaling:
       enabled: true
       min_node_count: 1
       max_node_count: 5

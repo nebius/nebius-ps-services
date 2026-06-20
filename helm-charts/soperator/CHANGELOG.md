@@ -4,6 +4,11 @@ All notable changes to this chart are tracked here.
 
 ## [Unreleased]
 
+- Aligned the mixed CPU+GPU worker examples and design guide with cxcli's
+  shape-specific generated NodeSet names. The chart now has a mixed worker
+  test fixture covering separate CPU/GPU NodeSets and generated shard
+  `nodeSetRefs`, and it fails fast if stale cxcli worker helper inputs or the
+  old `nodeGroupMapping` value are passed directly to Helm.
 - Added explicit chart schema, validation, and tests for upstream Soperator
   ephemeral worker NodeSets. Ephemeral NodeSets now require non-negative integer
   `slurmConfig.suspendTime`, explicit non-negative `replicas`, and

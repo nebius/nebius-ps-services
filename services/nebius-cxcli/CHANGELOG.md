@@ -26,12 +26,18 @@ All notable changes to this project are tracked here. This changelog follows
   Kubernetes autoscaler pressure that brings GPU hosts up. Also downsized
   generated GPU worker `nodeConfig.static` CPU topology when a selected preset,
   such as `1gpu-16vcpu-200gb`, has fewer vCPUs than the profile template.
+- Changed Soperator production worker sizing to shape-specific CPU/GPU helpers:
+  `worker_cpu_total_nodes`, `worker_cpu_nodes_per_group`,
+  `worker_cpu_autoscaling`, `worker_gpu_total_nodes`,
+  `worker_gpu_nodes_per_group`, and `worker_gpu_autoscaling`. The legacy
+  generic worker helpers now fail fast.
 - Added explicit Soperator worker ephemeral-node support for production MK8s
-  profiles. `worker_autoscaling` still materializes maximum worker capacity by
-  itself, but `worker_ephemeral_nodes.enabled=true` now requires worker
-  autoscaling, renders upstream Soperator ephemeral NodeSet fields, derives
-  `initialNumberEphemeralNodes` from `worker_autoscaling.min_node_count`, and
-  writes finite non-negative `slurmConfig.suspendTime`.
+  profiles. Shape-specific worker autoscaling still materializes maximum worker
+  capacity by itself, but `worker_ephemeral_nodes.enabled=true` now requires
+  autoscaling for every active worker shape, renders upstream Soperator
+  ephemeral NodeSet fields, derives `initialNumberEphemeralNodes` from each
+  shape's matching `worker_*_autoscaling.min_node_count`, and writes finite
+  non-negative `slurmConfig.suspendTime`.
 - Refactored lifecycle report naming under the single `generated/reports/`
   folder. `upgrade node-template` now writes
   `upgrade-node-template-report.md` / `.json` after readiness verification,

@@ -19560,8 +19560,8 @@ def test_soperator_production_worker_count_shards_mk8s_groups_and_nodesets() -> 
                     "enabled": True,
                     "inputs": {
                         "soperator": {
-                            "worker_total_nodes": 1000,
-                            "worker_nodes_per_group": 100,
+                            "worker_gpu_total_nodes": 1000,
+                            "worker_gpu_nodes_per_group": 100,
                         }
                     },
                 },
@@ -19612,6 +19612,37 @@ def test_soperator_production_worker_count_shards_mk8s_groups_and_nodesets() -> 
     assert worker_partition["nodeSetRefs"] == [f"worker-{index}" for index in range(10)]
 
 
+def test_soperator_production_worker_count_replaces_stale_generated_placements() -> None:
+    payload = _soperator_production_payload(
+        {
+            "soperator": {
+                "worker_gpu_total_nodes": 3,
+                "worker_gpu_nodes_per_group": 2,
+            }
+        }
+    )
+    payload["apps"]["charts"][0]["placements"] = {"worker": ["worker"]}
+
+    assert cli._materialize_soperator_component_defaults(payload) is True
+
+    app_row = payload["apps"]["charts"][0]
+    assert app_row["placements"]["worker"] == ["worker-0", "worker-1"]
+    values = app_row["values"]
+    worker_nodesets = [
+        item for item in values["nodesets"] if str(item.get("name", "")).startswith("worker")
+    ]
+    assert [(item["name"], item["replicas"]) for item in worker_nodesets] == [
+        ("worker-0", 2),
+        ("worker-1", 1),
+    ]
+    worker_partition = next(
+        partition
+        for partition in values["partitionConfiguration"]["partitions"]
+        if partition["name"] == "gpu"
+    )
+    assert worker_partition["nodeSetRefs"] == ["worker-0", "worker-1"]
+
+
 def _soperator_production_payload(mk8s_inputs: Mapping[str, Any]) -> dict[str, Any]:
     return {
         "infra": {
@@ -19644,6 +19675,42 @@ def _soperator_production_payload(mk8s_inputs: Mapping[str, Any]) -> dict[str, A
     }
 
 
+@pytest.mark.parametrize(
+    "soperator_inputs",
+    [
+        {"worker_total_nodes": 1},
+        {"worker_nodes_per_group": 100},
+        {"worker_autoscaling": {"enabled": True, "min_node_count": 1, "max_node_count": 1}},
+    ],
+)
+def test_soperator_production_rejects_legacy_worker_sizing_helpers(
+    soperator_inputs: Mapping[str, Any],
+) -> None:
+    payload = _soperator_production_payload({"soperator": soperator_inputs})
+
+    with pytest.raises(
+        ValueError,
+        match="no longer supported.*worker_cpu_total_nodes.*worker_gpu_autoscaling",
+    ):
+        cli._materialize_soperator_component_defaults(payload)
+
+
+@pytest.mark.parametrize(
+    "soperator_inputs",
+    [
+        {"worker_gpu_total_nodes": 0},
+        {"worker_gpu_nodes_per_group": 0},
+    ],
+)
+def test_soperator_production_rejects_invalid_fixed_worker_sizing(
+    soperator_inputs: Mapping[str, Any],
+) -> None:
+    payload = _soperator_production_payload({"soperator": soperator_inputs})
+
+    with pytest.raises(ValueError, match="soperator\\.worker_gpu_.*must be a positive integer"):
+        cli._materialize_soperator_component_defaults(payload)
+
+
 def test_soperator_production_worker_autoscaling_shards_mk8s_groups_and_nodesets() -> None:
     payload = {
         "infra": {
@@ -19654,9 +19721,9 @@ def test_soperator_production_worker_autoscaling_shards_mk8s_groups_and_nodesets
                     "enabled": True,
                     "inputs": {
                         "soperator": {
-                            "worker_total_nodes": 10,
-                            "worker_nodes_per_group": 100,
-                            "worker_autoscaling": {
+                            "worker_gpu_total_nodes": 10,
+                            "worker_gpu_nodes_per_group": 100,
+                            "worker_gpu_autoscaling": {
                                 "enabled": True,
                                 "min_node_count": 1,
                                 "max_node_count": 250,
@@ -19725,7 +19792,7 @@ def test_soperator_production_worker_ephemeral_nodes_materialize_from_autoscalin
     payload = _soperator_production_payload(
         {
             "soperator": {
-                "worker_autoscaling": {
+                "worker_gpu_autoscaling": {
                     "enabled": True,
                     "min_node_count": 1,
                     "max_node_count": 5,
@@ -19759,8 +19826,8 @@ def test_soperator_production_worker_ephemeral_nodes_shard_initial_active_counts
     payload = _soperator_production_payload(
         {
             "soperator": {
-                "worker_nodes_per_group": 100,
-                "worker_autoscaling": {
+                "worker_gpu_nodes_per_group": 100,
+                "worker_gpu_autoscaling": {
                     "enabled": True,
                     "min_node_count": 3,
                     "max_node_count": 250,
@@ -19838,7 +19905,7 @@ def test_soperator_production_worker_ephemeral_nodes_keep_per_host_gpu_count(
                 }
             },
             "soperator": {
-                "worker_autoscaling": {
+                "worker_gpu_autoscaling": {
                     "enabled": True,
                     "min_node_count": 5,
                     "max_node_count": 5,
@@ -19871,7 +19938,7 @@ def test_soperator_production_worker_ephemeral_nodes_clear_when_disabled() -> No
     payload = _soperator_production_payload(
         {
             "soperator": {
-                "worker_autoscaling": {
+                "worker_gpu_autoscaling": {
                     "enabled": True,
                     "min_node_count": 1,
                     "max_node_count": 5,
@@ -19907,11 +19974,11 @@ def test_soperator_production_worker_ephemeral_nodes_clear_when_disabled() -> No
                     "suspend_time_seconds": 300,
                 },
             },
-            "worker_ephemeral_nodes\\.enabled requires soperator\\.worker_autoscaling\\.enabled=true",
+            "worker_ephemeral_nodes\\.enabled requires soperator\\.worker_gpu_autoscaling\\.enabled=true",
         ),
         (
             {
-                "worker_autoscaling": {
+                "worker_gpu_autoscaling": {
                     "enabled": True,
                     "min_node_count": 0,
                     "max_node_count": 0,
@@ -19921,11 +19988,11 @@ def test_soperator_production_worker_ephemeral_nodes_clear_when_disabled() -> No
                     "suspend_time_seconds": 300,
                 },
             },
-            "worker_ephemeral_nodes\\.enabled requires soperator\\.worker_autoscaling\\.max_node_count to be at least 1",
+            "worker_ephemeral_nodes\\.enabled requires soperator\\.worker_gpu_autoscaling\\.max_node_count to be at least 1",
         ),
         (
             {
-                "worker_autoscaling": {
+                "worker_gpu_autoscaling": {
                     "enabled": True,
                     "min_node_count": 1,
                     "max_node_count": 5,
@@ -19959,7 +20026,7 @@ def test_soperator_production_worker_autoscaling_allows_scale_to_zero() -> None:
                     "enabled": True,
                     "inputs": {
                         "soperator": {
-                            "worker_autoscaling": {
+                            "worker_gpu_autoscaling": {
                                 "enabled": True,
                                 "min_node_count": 0,
                                 "max_node_count": 0,
@@ -20015,8 +20082,8 @@ def test_soperator_production_disabled_worker_autoscaling_clears_stale_shards() 
                     "enabled": True,
                     "inputs": {
                         "soperator": {
-                            "worker_nodes_per_group": 100,
-                            "worker_autoscaling": {
+                            "worker_gpu_nodes_per_group": 100,
+                            "worker_gpu_autoscaling": {
                                 "enabled": True,
                                 "min_node_count": 1,
                                 "max_node_count": 250,
@@ -20053,7 +20120,7 @@ def test_soperator_production_disabled_worker_autoscaling_clears_stale_shards() 
         "worker-2",
     ]
 
-    mk8s_inputs["soperator"]["worker_autoscaling"] = {"enabled": False}
+    mk8s_inputs["soperator"]["worker_gpu_autoscaling"] = {"enabled": False}
     assert cli._materialize_soperator_component_defaults(payload) is True
 
     node_groups = mk8s_inputs["node_groups"]
@@ -20355,8 +20422,8 @@ def test_soperator_shape_defaults_preserve_materialized_boot_disk_sizes() -> Non
                             },
                         },
                         "soperator": {
-                            "worker_total_nodes": 2,
-                            "worker_nodes_per_group": 1,
+                            "worker_gpu_total_nodes": 2,
+                            "worker_gpu_nodes_per_group": 1,
                         },
                     },
                 },
@@ -20515,7 +20582,14 @@ def test_soperator_mixed_profile_materializes_cpu_and_gpu_workers() -> None:
                     "id": "mk8s",
                     "instance_id": "cluster1",
                     "enabled": True,
-                    "inputs": {},
+                    "inputs": {
+                        "soperator": {
+                            "worker_cpu_total_nodes": 2,
+                            "worker_cpu_nodes_per_group": 1,
+                            "worker_gpu_total_nodes": 3,
+                            "worker_gpu_nodes_per_group": 2,
+                        }
+                    },
                 },
                 {
                     "id": "sfs",
@@ -20552,15 +20626,25 @@ def test_soperator_mixed_profile_materializes_cpu_and_gpu_workers() -> None:
     assert mk8s_inputs["node_groups"]["controller"]["node_count"] == 2
     assert mk8s_inputs["node_groups"]["login"]["node_count"] == 2
     assert mk8s_inputs["node_groups"]["accounting"]["node_count"] == 2
-    assert mk8s_inputs["node_groups"]["worker-cpu"]["nodeset_name"] == "worker-cpu"
-    assert mk8s_inputs["node_groups"]["worker-cpu"]["node_count"] == 1
-    assert mk8s_inputs["node_groups"]["worker-cpu"]["gpu"] is False
-    assert mk8s_inputs["node_groups"]["worker-cpu"]["jail"] is True
-    assert mk8s_inputs["node_groups"]["worker-gpu"]["nodeset_name"] == "worker-gpu"
-    assert mk8s_inputs["node_groups"]["worker-gpu"]["node_count"] == 1
-    assert mk8s_inputs["node_groups"]["worker-gpu"]["gpu"] is True
-    assert mk8s_inputs["node_groups"]["worker-gpu"]["jail"] is True
-    assert mk8s_inputs["node_groups"]["worker-gpu"]["reservation"] == {"policy": "AUTO"}
+    assert {
+        key: group["node_count"]
+        for key, group in mk8s_inputs["node_groups"].items()
+        if str(key).startswith("worker-cpu")
+    } == {"worker-cpu-0": 1, "worker-cpu-1": 1}
+    assert {
+        key: group["node_count"]
+        for key, group in mk8s_inputs["node_groups"].items()
+        if str(key).startswith("worker-gpu")
+    } == {"worker-gpu-0": 2, "worker-gpu-1": 1}
+    for key in ("worker-cpu-0", "worker-cpu-1"):
+        assert mk8s_inputs["node_groups"][key]["nodeset_name"] == "worker-cpu"
+        assert mk8s_inputs["node_groups"][key]["gpu"] is False
+        assert mk8s_inputs["node_groups"][key]["jail"] is True
+    for key in ("worker-gpu-0", "worker-gpu-1"):
+        assert mk8s_inputs["node_groups"][key]["nodeset_name"] == "worker-gpu"
+        assert mk8s_inputs["node_groups"][key]["gpu"] is True
+        assert mk8s_inputs["node_groups"][key]["jail"] is True
+        assert mk8s_inputs["node_groups"][key]["reservation"] == {"policy": "AUTO"}
 
     soperator_values = payload["apps"]["charts"][0]["values"]
     assert soperator_values["mariadb-operator"]["installOperator"] is True
@@ -20568,24 +20652,157 @@ def test_soperator_mixed_profile_materializes_cpu_and_gpu_workers() -> None:
     assert soperator_values["slurmNodes"]["accounting"]["enabled"] is True
     assert soperator_values["slurmNodes"]["accounting"]["mariadbOperator"]["enabled"] is True
     assert payload["apps"]["charts"][0]["placements"]["worker"] == [
-        "worker-cpu",
-        "worker-gpu",
+        "worker-cpu-0",
+        "worker-cpu-1",
+        "worker-gpu-0",
+        "worker-gpu-1",
     ]
     assert [node["name"] for node in soperator_values["nodesets"]] == [
-        "worker-cpu",
-        "worker-gpu",
+        "worker-cpu-0",
+        "worker-cpu-1",
+        "worker-gpu-0",
+        "worker-gpu-1",
     ]
-    worker_cpu = next(node for node in soperator_values["nodesets"] if node["name"] == "worker-cpu")
-    worker_gpu = next(node for node in soperator_values["nodesets"] if node["name"] == "worker-gpu")
+    worker_cpu = next(
+        node for node in soperator_values["nodesets"] if node["name"] == "worker-cpu-0"
+    )
+    worker_gpu_0 = next(
+        node for node in soperator_values["nodesets"] if node["name"] == "worker-gpu-0"
+    )
+    worker_gpu_1 = next(
+        node for node in soperator_values["nodesets"] if node["name"] == "worker-gpu-1"
+    )
     assert worker_cpu["replicas"] == 1
     assert worker_cpu["slurmd"]["resources"]["cpu"] == "24"
     assert worker_cpu["slurmd"]["resources"]["memory"] == "96Gi"
-    assert worker_gpu["replicas"] == 1
+    assert worker_gpu_0["replicas"] == 2
+    assert worker_gpu_1["replicas"] == 1
     assert {
         "name": "NVIDIA_DRIVER_CAPABILITIES",
         "value": "compute,graphics,utility,video",
-    } in worker_gpu["slurmd"]["customEnv"]
+    } in worker_gpu_0["slurmd"]["customEnv"]
     assert soperator_values["partitionConfiguration"]["partitions"] == [
+        {
+            "name": "cpu",
+            "nodeSetRefs": ["worker-cpu-0", "worker-cpu-1"],
+            "policy": {
+                "default": True,
+                "state": "UP",
+                "maxTime": "INFINITE",
+                "priorityTier": 5,
+            },
+        },
+        {
+            "name": "gpu",
+            "nodeSetRefs": ["worker-gpu-0", "worker-gpu-1"],
+            "policy": {
+                "default": False,
+                "state": "UP",
+                "maxTime": "INFINITE",
+                "priorityTier": 10,
+            },
+        },
+    ]
+
+
+def test_soperator_mixed_profile_replaces_stale_generated_worker_placements() -> None:
+    payload = _soperator_production_payload(
+        {
+            "soperator": {
+                "worker_cpu_total_nodes": 2,
+                "worker_cpu_nodes_per_group": 1,
+                "worker_gpu_total_nodes": 3,
+                "worker_gpu_nodes_per_group": 2,
+            }
+        }
+    )
+    payload["apps"]["charts"][0]["profile"] = "nebius-mixed-v1"
+    payload["apps"]["charts"][0]["placements"] = {"worker": ["worker-cpu", "worker-gpu"]}
+
+    assert cli._materialize_soperator_component_defaults(payload) is True
+
+    app_row = payload["apps"]["charts"][0]
+    assert app_row["placements"]["worker"] == [
+        "worker-cpu-0",
+        "worker-cpu-1",
+        "worker-gpu-0",
+        "worker-gpu-1",
+    ]
+    values = app_row["values"]
+    assert [
+        (item["name"], item["replicas"])
+        for item in values["nodesets"]
+        if str(item.get("name", "")).startswith("worker-")
+    ] == [
+        ("worker-cpu-0", 1),
+        ("worker-cpu-1", 1),
+        ("worker-gpu-0", 2),
+        ("worker-gpu-1", 1),
+    ]
+    assert values["partitionConfiguration"]["partitions"] == [
+        {
+            "name": "cpu",
+            "nodeSetRefs": ["worker-cpu-0", "worker-cpu-1"],
+            "policy": {
+                "default": True,
+                "state": "UP",
+                "maxTime": "INFINITE",
+                "priorityTier": 5,
+            },
+        },
+        {
+            "name": "gpu",
+            "nodeSetRefs": ["worker-gpu-0", "worker-gpu-1"],
+            "policy": {
+                "default": False,
+                "state": "UP",
+                "maxTime": "INFINITE",
+                "priorityTier": 10,
+            },
+        },
+    ]
+
+
+def test_soperator_mixed_profile_custom_worker_placement_splits_by_group_shape() -> None:
+    payload = _soperator_production_payload(
+        {
+            "node_groups": {
+                "custom-cpu": {
+                    "node_count": 2,
+                    "gpu": False,
+                    "platform": "cpu-d3",
+                    "preset": "32vcpu-128gb",
+                },
+                "custom-gpu": {
+                    "node_count": 3,
+                    "gpu": True,
+                    "platform": "gpu-h100-sxm",
+                    "preset": "1gpu-16vcpu-200gb",
+                },
+            },
+        }
+    )
+    payload["apps"]["charts"][0]["profile"] = "nebius-mixed-v1"
+    payload["apps"]["charts"][0]["placements"] = {"worker": ["custom-cpu", "custom-gpu"]}
+
+    assert cli._materialize_soperator_component_defaults(payload) is True
+
+    values = payload["apps"]["charts"][0]["values"]
+    worker_nodesets = [
+        item for item in values["nodesets"] if str(item.get("name", "")).startswith("worker-")
+    ]
+    assert [(item["name"], item["replicas"]) for item in worker_nodesets] == [
+        ("worker-cpu", 2),
+        ("worker-gpu", 3),
+    ]
+    worker_by_name = {item["name"]: item for item in worker_nodesets}
+    assert worker_by_name["worker-cpu"]["nodeSelector"] == {
+        "nebius.com/node-group": "custom-cpu",
+    }
+    assert worker_by_name["worker-gpu"]["nodeSelector"] == {
+        "nebius.com/node-group": "custom-gpu",
+    }
+    assert values["partitionConfiguration"]["partitions"] == [
         {
             "name": "cpu",
             "nodeSetRefs": ["worker-cpu"],
@@ -20607,6 +20824,87 @@ def test_soperator_mixed_profile_materializes_cpu_and_gpu_workers() -> None:
             },
         },
     ]
+
+
+def test_soperator_mixed_profile_autoscaling_shards_cpu_and_gpu_independently() -> None:
+    payload = _soperator_production_payload(
+        {
+            "soperator": {
+                "worker_cpu_nodes_per_group": 2,
+                "worker_cpu_autoscaling": {
+                    "enabled": True,
+                    "min_node_count": 1,
+                    "max_node_count": 3,
+                },
+                "worker_gpu_nodes_per_group": 3,
+                "worker_gpu_autoscaling": {
+                    "enabled": True,
+                    "min_node_count": 2,
+                    "max_node_count": 4,
+                },
+            }
+        }
+    )
+    payload["apps"]["charts"][0]["profile"] = "nebius-mixed-v1"
+
+    assert cli._materialize_soperator_component_defaults(payload) is True
+
+    node_groups = payload["infra"]["components"][0]["inputs"]["node_groups"]
+    assert {
+        key: group["autoscaling"]
+        for key, group in node_groups.items()
+        if str(key).startswith("worker-cpu")
+    } == {
+        "worker-cpu-0": {"min_node_count": 1, "max_node_count": 2},
+        "worker-cpu-1": {"min_node_count": 0, "max_node_count": 1},
+    }
+    assert {
+        key: group["autoscaling"]
+        for key, group in node_groups.items()
+        if str(key).startswith("worker-gpu")
+    } == {
+        "worker-gpu-0": {"min_node_count": 2, "max_node_count": 3},
+        "worker-gpu-1": {"min_node_count": 0, "max_node_count": 1},
+    }
+    values = payload["apps"]["charts"][0]["values"]
+    assert [
+        (item["name"], item["replicas"])
+        for item in values["nodesets"]
+        if str(item.get("name", "")).startswith("worker-")
+    ] == [
+        ("worker-cpu-0", 2),
+        ("worker-cpu-1", 1),
+        ("worker-gpu-0", 3),
+        ("worker-gpu-1", 1),
+    ]
+
+
+def test_soperator_mixed_profile_ephemeral_requires_autoscaling_for_every_worker_shape() -> None:
+    payload = _soperator_production_payload(
+        {
+            "soperator": {
+                "worker_gpu_autoscaling": {
+                    "enabled": True,
+                    "min_node_count": 1,
+                    "max_node_count": 1,
+                },
+                "worker_ephemeral_nodes": {
+                    "enabled": True,
+                    "suspend_time_seconds": 300,
+                },
+            }
+        }
+    )
+    payload["apps"]["charts"][0]["profile"] = "nebius-mixed-v1"
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "worker_ephemeral_nodes\\.enabled requires "
+            "soperator\\.worker_cpu_autoscaling\\.enabled=true"
+        ),
+    ):
+        cli._materialize_soperator_component_defaults(payload)
 
 
 def test_soperator_onboarding_maps_external_mk8s_node_groups_without_creating_role_groups() -> None:
@@ -20763,7 +21061,7 @@ def test_soperator_onboarding_ignores_stale_worker_ephemeral_inputs() -> None:
                     "kube_context": "nebius-cluster1-mk8scluster-123-external",
                     "inventory": {
                         "soperator": {
-                            "worker_autoscaling": {
+                            "worker_gpu_autoscaling": {
                                 "enabled": True,
                                 "min_node_count": 1,
                                 "max_node_count": 2,

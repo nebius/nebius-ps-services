@@ -196,7 +196,7 @@ def _soperator_placement_fields() -> dict[str, dict[str, Any]]:
 
 def _mk8s_soperator_autoscaling_fields() -> dict[str, dict[str, Any]]:
     fields: dict[str, dict[str, Any]] = {}
-    for role in ("system", "controller", "login", "accounting", "worker"):
+    for role in ("system", "controller", "login", "accounting", "worker_cpu", "worker_gpu"):
         prefix = f"inputs.soperator.{role}_autoscaling"
         fields[f"{prefix}.enabled"] = (
             {
@@ -229,6 +229,22 @@ def _mk8s_soperator_worker_ephemeral_fields() -> dict[str, dict[str, Any]]:
             "type_hint": "number",
         },
     }
+
+
+def _mk8s_soperator_worker_shape_fields() -> dict[str, dict[str, Any]]:
+    fields: dict[str, dict[str, Any]] = {}
+    for shape in ("cpu", "gpu"):
+        fields[f"inputs.soperator.worker_{shape}_total_nodes"] = {
+            "default": 1,
+            "write_default_to_config": True,
+            "type_hint": "number",
+        }
+        fields[f"inputs.soperator.worker_{shape}_nodes_per_group"] = {
+            "default": 100,
+            "write_default_to_config": True,
+            "type_hint": "number",
+        }
+    return fields
 
 
 def _soperator_wizard_profile() -> dict[str, dict[str, Any]]:
@@ -613,16 +629,7 @@ BUILTIN_WIZARD_PROFILES: dict[str, dict[str, dict[str, Any]]] = {
         },
         **_mk8s_soperator_autoscaling_fields(),
         **_mk8s_soperator_worker_ephemeral_fields(),
-        "inputs.soperator.worker_total_nodes": {
-            "default": 1,
-            "write_default_to_config": True,
-            "type_hint": "number",
-        },
-        "inputs.soperator.worker_nodes_per_group": {
-            "default": 100,
-            "write_default_to_config": True,
-            "type_hint": "number",
-        },
+        **_mk8s_soperator_worker_shape_fields(),
         "deploy.targets[].secrets.mysterybox.enabled": {
             "default": True,
             "write_default_to_config": True,

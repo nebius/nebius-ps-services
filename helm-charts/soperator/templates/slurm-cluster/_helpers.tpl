@@ -66,6 +66,33 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end -}}
 {{- end -}}
 
+{{- define "validateCxcliRenderedConfig" -}}
+{{- if hasKey .Values "nodeGroupMapping" -}}
+  {{- fail "values.nodeGroupMapping is not supported. Use chart-native nodesets[] and partitionConfiguration.partitions[].nodeSetRefs; cxcli must materialize worker groups before Helm." -}}
+{{- end -}}
+{{- $inputs := get .Values "inputs" | default dict -}}
+{{- if kindIs "map" $inputs -}}
+  {{- $soperatorInputs := get $inputs "soperator" | default dict -}}
+  {{- if kindIs "map" $soperatorInputs -}}
+    {{- range $key := list
+      "worker_total_nodes"
+      "worker_nodes_per_group"
+      "worker_autoscaling"
+      "worker_cpu_total_nodes"
+      "worker_cpu_nodes_per_group"
+      "worker_cpu_autoscaling"
+      "worker_gpu_total_nodes"
+      "worker_gpu_nodes_per_group"
+      "worker_gpu_autoscaling"
+    -}}
+      {{- if hasKey $soperatorInputs $key -}}
+        {{- fail (printf "inputs.soperator.%s is a cxcli helper input, not a Soperator chart value. Render through cxcli or pass chart-native nodesets[] and partitionConfiguration.partitions[].nodeSetRefs." $key) -}}
+      {{- end -}}
+    {{- end -}}
+  {{- end -}}
+{{- end -}}
+{{- end -}}
+
 {{- define "validateNodeSets" -}}
 {{- $names := list -}}
 {{- $hasEphemeralNodes := false -}}

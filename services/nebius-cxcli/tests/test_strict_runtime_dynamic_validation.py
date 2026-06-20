@@ -231,8 +231,8 @@ def test_strict_validation_allows_mk8s_wizard_helper_inputs(
             }
         },
         "soperator": {
-            "worker_total_nodes": 2,
-            "worker_nodes_per_group": 100,
+            "worker_gpu_total_nodes": 2,
+            "worker_gpu_nodes_per_group": 100,
         },
     }
 

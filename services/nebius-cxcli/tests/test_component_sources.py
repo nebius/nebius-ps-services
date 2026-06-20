@@ -579,14 +579,14 @@ def test_bundled_catalog_exposes_soperator_and_nfs_local_sources() -> None:
             )
     cpu_profile = soperator.soperator_nodesets.profiles["nebius-cpu-v1"]
     assert cpu_profile["mk8s"]["worker_nodesets"][0]["total_nodes_input"] == (
-        "soperator.worker_total_nodes"
+        "soperator.worker_cpu_total_nodes"
     )
     assert cpu_profile["mk8s"]["worker_nodesets"][0]["nodes_per_group_input"] == (
-        "soperator.worker_nodes_per_group"
+        "soperator.worker_cpu_nodes_per_group"
     )
     assert (
         cpu_profile["mk8s"]["worker_nodesets"][0]["autoscaling_input"]
-        == "soperator.worker_autoscaling"
+        == "soperator.worker_cpu_autoscaling"
     )
     assert "srunReadyPartition" not in cpu_profile["chart"]["values"]["soperator-activechecks"]
     assert cpu_profile["chart"]["activechecks"]["srunReadyPartition"] == "cpu"
@@ -641,8 +641,14 @@ def test_bundled_catalog_exposes_soperator_and_nfs_local_sources() -> None:
         "controller-spool",
     ]
     assert profile["mk8s"]["worker_nodesets"][0]["max_nodes_per_group"] == 100
+    assert profile["mk8s"]["worker_nodesets"][0]["total_nodes_input"] == (
+        "soperator.worker_gpu_total_nodes"
+    )
+    assert profile["mk8s"]["worker_nodesets"][0]["nodes_per_group_input"] == (
+        "soperator.worker_gpu_nodes_per_group"
+    )
     assert profile["mk8s"]["worker_nodesets"][0]["autoscaling_input"] == (
-        "soperator.worker_autoscaling"
+        "soperator.worker_gpu_autoscaling"
     )
     assert profile["mk8s"]["worker_nodesets"][0]["node_group_prefix"] == "worker"
     assert profile["mk8s"]["worker_nodesets"][0]["nodeset_name"] == "worker"
@@ -702,20 +708,37 @@ def test_bundled_catalog_exposes_soperator_and_nfs_local_sources() -> None:
         for worker in mixed_profile["mk8s"]["worker_nodesets"]
     } == {
         "worker-cpu": (
-            "soperator.worker_total_nodes",
-            "soperator.worker_nodes_per_group",
-            "soperator.worker_autoscaling",
+            "soperator.worker_cpu_total_nodes",
+            "soperator.worker_cpu_nodes_per_group",
+            "soperator.worker_cpu_autoscaling",
             1,
             100,
         ),
         "worker-gpu": (
-            "soperator.worker_total_nodes",
-            "soperator.worker_nodes_per_group",
-            "soperator.worker_autoscaling",
+            "soperator.worker_gpu_total_nodes",
+            "soperator.worker_gpu_nodes_per_group",
+            "soperator.worker_gpu_autoscaling",
             1,
             100,
         ),
     }
+    all_worker_inputs = {
+        value
+        for profile_name in ("nebius-cpu-v1", "nebius-gpu-v1", "nebius-mixed-v1")
+        for worker in soperator.soperator_nodesets.profiles[profile_name]["mk8s"][
+            "worker_nodesets"
+        ]
+        for value in (
+            worker["total_nodes_input"],
+            worker["nodes_per_group_input"],
+            worker["autoscaling_input"],
+        )
+    }
+    assert {
+        "soperator.worker_total_nodes",
+        "soperator.worker_nodes_per_group",
+        "soperator.worker_autoscaling",
+    }.isdisjoint(all_worker_inputs)
     assert mixed_profile["placements"]["worker"]["nodeset_templates"] == [
         "worker-cpu",
         "worker-gpu",
@@ -2977,6 +3000,24 @@ def test_bundled_soperator_profile_service_role_defaults_are_consistent() -> Non
             },
             r"components\.apps\.soperator\.cli\.soperator_nodesets_profile\.profiles\.bad\.mk8s\.worker_nodesets\[0\]\.node_group_key_prefix is no longer supported",
         ),
+        (
+            {
+                "placements": {
+                    "worker": {
+                        "kind": "slurm-worker-nodeset",
+                    }
+                },
+                "mk8s": {
+                    "worker_nodesets": [
+                        {
+                            "nodeset_name": "worker",
+                            "total_nodes_input": "soperator.worker_total_nodes",
+                        }
+                    ]
+                },
+            },
+            r"components\.apps\.soperator\.cli\.soperator_nodesets_profile\.profiles\.bad\.mk8s\.worker_nodesets\[0\]\.total_nodes_input must not use removed helper soperator\.worker_total_nodes",
+        ),
     ],
 )
 def test_load_component_sources_rejects_legacy_soperator_placement_profile_keys(
@@ -3162,11 +3203,30 @@ def test_bundled_mk8s_declares_optional_wizard_field_override() -> None:
         },
         "prompt": False,
     }
-    assert mk8s_wizard_fields["inputs.soperator.worker_total_nodes"] == {
-        "default": 1,
-        "write_default_to_config": True,
-        "type_hint": "number",
-    }
+    for field in (
+        "worker_cpu_total_nodes",
+        "worker_gpu_total_nodes",
+    ):
+        assert mk8s_wizard_fields[f"inputs.soperator.{field}"] == {
+            "default": 1,
+            "write_default_to_config": True,
+            "type_hint": "number",
+        }
+    for field in (
+        "worker_cpu_nodes_per_group",
+        "worker_gpu_nodes_per_group",
+    ):
+        assert mk8s_wizard_fields[f"inputs.soperator.{field}"] == {
+            "default": 100,
+            "write_default_to_config": True,
+            "type_hint": "number",
+        }
+    for legacy_field in (
+        "worker_total_nodes",
+        "worker_nodes_per_group",
+        "worker_autoscaling.enabled",
+    ):
+        assert f"inputs.soperator.{legacy_field}" not in mk8s_wizard_fields
     assert mk8s_wizard_fields["inputs.soperator.worker_ephemeral_nodes.enabled"] == {
         "default": False,
         "write_default_to_config": True,
@@ -3203,7 +3263,7 @@ def test_bundled_mk8s_declares_optional_wizard_field_override() -> None:
         "write_default_to_config": True,
         "type_hint": "number",
     }
-    for role in ("controller", "login", "accounting", "worker"):
+    for role in ("controller", "login", "accounting", "worker_cpu", "worker_gpu"):
         assert mk8s_wizard_fields[f"inputs.soperator.{role}_autoscaling.enabled"] == {
             "default": False,
             "write_default_to_config": True,

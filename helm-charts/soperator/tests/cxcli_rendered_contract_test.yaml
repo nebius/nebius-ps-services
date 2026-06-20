@@ -1,0 +1,30 @@
+suite: cxcli rendered worker contract
+templates:
+  - templates/slurm-cluster/slurm-cluster-cr.yaml
+tests:
+  - it: fails when legacy nodeGroupMapping is passed to the chart
+    set:
+      nodeGroupMapping:
+        worker:
+          label: worker
+    asserts:
+      - failedTemplate:
+          errorMessage: "values.nodeGroupMapping is not supported. Use chart-native nodesets[] and partitionConfiguration.partitions[].nodeSetRefs; cxcli must materialize worker groups before Helm."
+
+  - it: fails when legacy cxcli worker helper inputs are passed directly
+    set:
+      inputs:
+        soperator:
+          worker_total_nodes: 2
+    asserts:
+      - failedTemplate:
+          errorMessage: "inputs.soperator.worker_total_nodes is a cxcli helper input, not a Soperator chart value. Render through cxcli or pass chart-native nodesets[] and partitionConfiguration.partitions[].nodeSetRefs."
+
+  - it: fails when shape-specific cxcli worker helper inputs are passed directly
+    set:
+      inputs:
+        soperator:
+          worker_cpu_total_nodes: 2
+    asserts:
+      - failedTemplate:
+          errorMessage: "inputs.soperator.worker_cpu_total_nodes is a cxcli helper input, not a Soperator chart value. Render through cxcli or pass chart-native nodesets[] and partitionConfiguration.partitions[].nodeSetRefs."

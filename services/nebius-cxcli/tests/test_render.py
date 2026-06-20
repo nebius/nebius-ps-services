@@ -2419,12 +2419,114 @@ def test_soperator_chart_schema_rejects_unknown_nodeconfigurator_container_keys(
     assert "additional properties 'args' not allowed" in result.stderr
 
 
-def test_render_local_soperator_mixed_profile_writes_two_nodesets(tmp_path: Path) -> None:
+def test_render_local_soperator_mixed_profile_writes_shape_specific_nodesets(
+    tmp_path: Path,
+) -> None:
     config_path = _project_config_path(tmp_path)
     config_path.parent.mkdir(parents=True, exist_ok=True)
     paths = resolve_project_paths(config_path)
 
     payload = _starter_payload(selected_infra={"mk8s", "sfs"}, selected_apps={"soperator"})
+    mk8s = next(
+        row
+        for row in payload["infra"]["components"]
+        if isinstance(row, dict) and row.get("id") == "mk8s"
+    )
+    mk8s.setdefault("inputs", {}).setdefault("soperator", {}).update(
+        {
+            "worker_cpu_total_nodes": 2,
+            "worker_cpu_nodes_per_group": 1,
+            "worker_gpu_total_nodes": 3,
+            "worker_gpu_nodes_per_group": 2,
+        }
+    )
+    for chart in payload["apps"]["charts"]:
+        if isinstance(chart, dict) and chart.get("id") == "soperator":
+            chart["profile"] = "nebius-mixed-v1"
+            chart["placements"] = {"worker": ["worker-cpu", "worker-gpu"]}
+            chart["values"] = {}
+    cli._materialize_soperator_component_defaults(payload)
+    config_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    render_project(load_config(config_path), paths, source_profile=SourceProfile.LOCAL)
+
+    rendered_chart = _target_flux_dir(paths, "mk8s") / "post-flux-helmrender-slurm-soperator.yaml"
+    rendered_docs = [
+        doc
+        for doc in yaml.safe_load_all(rendered_chart.read_text(encoding="utf-8"))
+        if isinstance(doc, dict)
+    ]
+    node_sets = {
+        doc["metadata"]["name"]: doc
+        for doc in rendered_docs
+        if doc.get("apiVersion") == "slurm.nebius.ai/v1alpha1" and doc.get("kind") == "NodeSet"
+    }
+    assert set(node_sets) == {"worker-cpu-0", "worker-cpu-1", "worker-gpu-0", "worker-gpu-1"}
+    assert node_sets["worker-cpu-0"]["spec"]["replicas"] == 1
+    assert node_sets["worker-cpu-1"]["spec"]["replicas"] == 1
+    assert node_sets["worker-gpu-0"]["spec"]["replicas"] == 2
+    assert node_sets["worker-gpu-1"]["spec"]["replicas"] == 1
+    worker_cpu_resources = node_sets["worker-cpu-0"]["spec"]["slurmd"]["resources"]
+    assert worker_cpu_resources["cpu"] == "24"
+    assert worker_cpu_resources["memory"] == "96Gi"
+    assert "nvidia.com/gpu" not in worker_cpu_resources
+    assert node_sets["worker-gpu-0"]["spec"]["slurmd"]["resources"]["nvidia.com/gpu"] == 8
+    assert node_sets["worker-gpu-0"]["spec"]["slurmd"]["resources"]["cpu"] == "32"
+    assert node_sets["worker-cpu-0"]["spec"]["nodeConfig"]["static"] == (
+        "Boards=1 SocketsPerBoard=1 CoresPerSocket=12 ThreadsPerCore=2"
+    )
+    assert node_sets["worker-gpu-0"]["spec"]["nodeConfig"]["static"] == (
+        "Boards=1 SocketsPerBoard=1 CoresPerSocket=32 ThreadsPerCore=1 Gres=gpu:8"
+    )
+
+    slurm_cluster = next(doc for doc in rendered_docs if doc.get("kind") == "SlurmCluster")
+    assert slurm_cluster["spec"]["partitionConfiguration"]["partitions"] == [
+        {
+            "name": "cpu",
+            "nodeSetRefs": ["worker-cpu-0", "worker-cpu-1"],
+            "config": "Default=YES State=UP MaxTime=INFINITE PriorityTier=5",
+        },
+        {
+            "name": "gpu",
+            "nodeSetRefs": ["worker-gpu-0", "worker-gpu-1"],
+            "config": "Default=NO State=UP MaxTime=INFINITE PriorityTier=10",
+        },
+    ]
+
+
+def test_render_local_soperator_mixed_profile_writes_ephemeral_shape_nodesets(
+    tmp_path: Path,
+) -> None:
+    config_path = _project_config_path(tmp_path)
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    paths = resolve_project_paths(config_path)
+
+    payload = _starter_payload(selected_infra={"mk8s", "sfs"}, selected_apps={"soperator"})
+    mk8s = next(
+        row
+        for row in payload["infra"]["components"]
+        if isinstance(row, dict) and row.get("id") == "mk8s"
+    )
+    mk8s.setdefault("inputs", {}).setdefault("soperator", {}).update(
+        {
+            "worker_cpu_nodes_per_group": 2,
+            "worker_cpu_autoscaling": {
+                "enabled": True,
+                "min_node_count": 1,
+                "max_node_count": 3,
+            },
+            "worker_gpu_nodes_per_group": 3,
+            "worker_gpu_autoscaling": {
+                "enabled": True,
+                "min_node_count": 2,
+                "max_node_count": 4,
+            },
+            "worker_ephemeral_nodes": {
+                "enabled": True,
+                "suspend_time_seconds": 300,
+            },
+        }
+    )
     for chart in payload["apps"]["charts"]:
         if isinstance(chart, dict) and chart.get("id") == "soperator":
             chart["profile"] = "nebius-mixed-v1"
@@ -2445,30 +2547,32 @@ def test_render_local_soperator_mixed_profile_writes_two_nodesets(tmp_path: Path
         for doc in rendered_docs
         if doc.get("apiVersion") == "slurm.nebius.ai/v1alpha1" and doc.get("kind") == "NodeSet"
     }
-    assert set(node_sets) == {"worker-cpu", "worker-gpu"}
-    worker_cpu_resources = node_sets["worker-cpu"]["spec"]["slurmd"]["resources"]
-    assert worker_cpu_resources["cpu"] == "24"
-    assert worker_cpu_resources["memory"] == "96Gi"
-    assert "nvidia.com/gpu" not in worker_cpu_resources
-    assert node_sets["worker-gpu"]["spec"]["slurmd"]["resources"]["nvidia.com/gpu"] == 8
-    assert node_sets["worker-gpu"]["spec"]["slurmd"]["resources"]["cpu"] == "32"
-    assert node_sets["worker-cpu"]["spec"]["nodeConfig"]["static"] == (
-        "Boards=1 SocketsPerBoard=1 CoresPerSocket=12 ThreadsPerCore=2"
-    )
-    assert node_sets["worker-gpu"]["spec"]["nodeConfig"]["static"] == (
-        "Boards=1 SocketsPerBoard=1 CoresPerSocket=32 ThreadsPerCore=1 Gres=gpu:8"
-    )
+    assert {
+        name: (
+            node_set["spec"]["replicas"],
+            node_set["spec"]["ephemeralNodes"],
+            node_set["spec"]["initialNumberEphemeralNodes"],
+        )
+        for name, node_set in node_sets.items()
+        if name.startswith("worker-")
+    } == {
+        "worker-cpu-0": (2, True, 1),
+        "worker-cpu-1": (1, True, 0),
+        "worker-gpu-0": (3, True, 2),
+        "worker-gpu-1": (1, True, 0),
+    }
 
     slurm_cluster = next(doc for doc in rendered_docs if doc.get("kind") == "SlurmCluster")
+    assert slurm_cluster["spec"]["slurmConfig"]["suspendTime"] == 300
     assert slurm_cluster["spec"]["partitionConfiguration"]["partitions"] == [
         {
             "name": "cpu",
-            "nodeSetRefs": ["worker-cpu"],
+            "nodeSetRefs": ["worker-cpu-0", "worker-cpu-1"],
             "config": "Default=YES State=UP MaxTime=INFINITE PriorityTier=5",
         },
         {
             "name": "gpu",
-            "nodeSetRefs": ["worker-gpu"],
+            "nodeSetRefs": ["worker-gpu-0", "worker-gpu-1"],
             "config": "Default=NO State=UP MaxTime=INFINITE PriorityTier=10",
         },
     ]
