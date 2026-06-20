@@ -42,6 +42,7 @@ REQUIRED_SDLC_SKILLS = (
 DESCRIPTION_PREFIX = "Use only as part of the Agentic SDLC workflow;"
 DEFAULT_PROJECT_ID = "sdlc-verification-project"
 DEFAULT_RUN_ID = "active"
+DESIGN_RELATIVE = Path("docs") / "agentic-sdlc-design.md"
 
 
 @dataclass
@@ -78,12 +79,25 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     )
     parser.add_argument("--skills-root", type=Path, default=skills_root)
     parser.add_argument("--repo-root", type=Path, default=repo_root)
-    parser.add_argument("--design", type=Path, default=skills_root / "docs" / "agentic-sdlc-design.md")
+    parser.add_argument("--design", type=Path, default=default_design_path(skills_root))
     parser.add_argument("--global-skills-dir", type=Path, default=Path.home() / ".agents" / "skills")
     parser.add_argument("--codex-home", type=Path, default=codex_home)
     parser.add_argument("--verification-root", type=Path, default=codex_home / "sdlc-verification")
     parser.add_argument("--report", type=Path, default=None)
     return parser.parse_args(argv)
+
+
+def default_design_path(skills_root: Path) -> Path:
+    cwd = Path.cwd().resolve(strict=False)
+    candidates = (
+        cwd / DESIGN_RELATIVE,
+        cwd / "skills" / DESIGN_RELATIVE,
+        skills_root / DESIGN_RELATIVE,
+    )
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    return skills_root / DESIGN_RELATIVE
 
 
 def run(
@@ -163,6 +177,12 @@ def check_design(ctx: Context) -> None:
         "Full workflow test",
         "$agentic-sdlc-test",
         "~/.codex/sdlc-verification/report.md",
+        "$CODEX_HOME/AGENTS.md",
+        "apply_patch",
+        "Deleting or moving that file remains blocked",
+        "shell writes, MCP writes",
+        "$CODEX_HOME/config.toml",
+        "$CODEX_HOME/hooks",
     ]
     missing = [term for term in required_terms if term not in text]
     status = "PASS" if not missing else "FAIL"

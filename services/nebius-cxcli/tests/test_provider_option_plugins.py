@@ -1988,7 +1988,7 @@ def test_compute_platform_presets_rank_gpu_shapes_by_live_capacity_advice(monkey
     assert [(choice.value, choice.label, choice.recommended) for choice in resolved_forbid] == [
         (
             "8gpu-128vcpu-1600gb",
-            "8gpu-128vcpu-1600gb, regular-vm 2 VMs (2 x 8-GPU = 16 GPUs), reserved 0 VMs, best fabric fabric-2, recommended",
+            "8gpu-128vcpu-1600gb, regular-vm 2 VMs (2 x 8-GPU = 16 GPUs), best fabric fabric-2, recommended",
             True,
         )
     ]
@@ -2003,6 +2003,162 @@ def test_compute_platform_presets_rank_gpu_shapes_by_live_capacity_advice(monkey
         field_path="infra.components[0].inputs.node_group_defaults.gpu.preset",
     )
     assert list(resolved_strict) == []
+
+
+def test_mk8s_gpu_capacity_choices_materialize_preset_and_clusterable_fabric(
+    monkeypatch,
+) -> None:
+    _install_fake_compute_module(
+        monkeypatch,
+        platforms=[("gpu-h100-sxm", "GPU H100 SXM")],
+        presets_by_platform={
+            "gpu-h100-sxm": [
+                {
+                    "name": "1gpu-16vcpu-200gb",
+                    "vcpu_count": 16,
+                    "memory_gibibytes": 200,
+                    "gpu_count": 1,
+                    "allow_gpu_clustering": False,
+                },
+                {
+                    "name": "8gpu-128vcpu-1600gb",
+                    "vcpu_count": 128,
+                    "memory_gibibytes": 1600,
+                    "gpu_count": 8,
+                    "allow_gpu_clustering": True,
+                },
+            ]
+        },
+    )
+    _install_fake_capacity_module(
+        monkeypatch,
+        resource_advice_items=[
+            {
+                "region": "eu-north1",
+                "platform": "gpu-h100-sxm",
+                "preset": "1gpu-16vcpu-200gb",
+                "fabric": "fabric-2",
+                "on_demand_available": 32,
+                "on_demand_level": "AVAILABILITY_LEVEL_HIGH",
+            },
+            {
+                "region": "eu-north1",
+                "platform": "gpu-h100-sxm",
+                "preset": "1gpu-16vcpu-200gb",
+                "fabric": "fabric-3",
+                "on_demand_available": 32,
+                "on_demand_level": "AVAILABILITY_LEVEL_HIGH",
+            },
+            {
+                "region": "eu-north1",
+                "platform": "gpu-h100-sxm",
+                "preset": "8gpu-128vcpu-1600gb",
+                "fabric": "fabric-6",
+                "on_demand_available": 4,
+                "on_demand_level": "AVAILABILITY_LEVEL_HIGH",
+            },
+            {
+                "region": "eu-north1",
+                "platform": "gpu-h100-sxm",
+                "preset": "8gpu-128vcpu-1600gb",
+                "fabric": "fabric-3",
+                "on_demand_available": 3,
+                "on_demand_level": "AVAILABILITY_LEVEL_HIGH",
+            },
+        ],
+    )
+
+    lookup = ProviderOptionLookup()
+    monkeypatch.setattr(lookup, "_sdk_or_none", lambda: object())
+    payload = {
+        "client_info": {
+            "nebius": {
+                "tenant_id": "tenant-123",
+                "project_id": "project-123",
+                "region_id": "eu-north1",
+            }
+        },
+        "infra": {"components": [{"inputs": _mk8s_gpu_defaults(platform="gpu-h100-sxm")}]},
+    }
+
+    resolved = lookup.resolve(
+        provider="mk8s_gpu_capacity_choices",
+        args={
+            "platform_path": "infra.components[0].inputs.node_group_defaults.gpu.platform",
+            "reservation_policy": "FORBID",
+        },
+        payload=payload,
+        field_path="infra.components[0].inputs.node_group_defaults.gpu.preset",
+    )
+
+    assert [(choice.value, choice.recommended) for choice in resolved] == [
+        ("1gpu-16vcpu-200gb|fabric-2", True),
+        ("1gpu-16vcpu-200gb|fabric-3", False),
+        ("8gpu-128vcpu-1600gb|fabric-6", False),
+        ("8gpu-128vcpu-1600gb|fabric-3", False),
+    ]
+    assert resolved[0].label == (
+        "1gpu-16vcpu-200gb on fabric-2: regular-vm 32 VMs (32 x 1-GPU = 32 GPUs), recommended"
+    )
+    assert resolved[0].metadata["preset"] == "1gpu-16vcpu-200gb"
+    assert resolved[0].metadata["fabric"] == ""
+    assert resolved[2].label == (
+        "8gpu-128vcpu-1600gb on fabric-6: regular-vm 4 VMs (4 x 8-GPU = 32 GPUs)"
+    )
+    assert resolved[2].metadata["preset"] == "8gpu-128vcpu-1600gb"
+    assert resolved[2].metadata["fabric"] == "fabric-6"
+
+
+def test_mk8s_gpu_capacity_choices_require_live_preset_metadata(monkeypatch) -> None:
+    _install_fake_compute_module(
+        monkeypatch,
+        platforms=[("gpu-h100-sxm", "GPU H100 SXM")],
+        presets_by_platform={"gpu-h100-sxm": []},
+    )
+    _install_fake_capacity_module(
+        monkeypatch,
+        resource_advice_items=[
+            {
+                "region": "eu-north1",
+                "platform": "gpu-h100-sxm",
+                "preset": "8gpu-128vcpu-1600gb",
+                "fabric": "fabric-6",
+                "on_demand_available": 4,
+                "on_demand_level": "AVAILABILITY_LEVEL_HIGH",
+            },
+        ],
+    )
+
+    lookup = ProviderOptionLookup()
+    monkeypatch.setattr(lookup, "_sdk_or_none", lambda: object())
+    payload = {
+        "client_info": {
+            "nebius": {
+                "tenant_id": "tenant-123",
+                "project_id": "project-123",
+                "region_id": "eu-north1",
+            }
+        },
+        "infra": {"components": [{"inputs": _mk8s_gpu_defaults(platform="gpu-h100-sxm")}]},
+    }
+
+    resolved = lookup.resolve(
+        provider="mk8s_gpu_capacity_choices",
+        args={
+            "platform_path": "infra.components[0].inputs.node_group_defaults.gpu.platform",
+            "reservation_policy": "FORBID",
+        },
+        payload=payload,
+        field_path="infra.components[0].inputs.node_group_defaults.gpu.preset",
+    )
+
+    assert list(resolved) == []
+    assert lookup.last_error() == (
+        "Live Capacity Dashboard returned GPU capacity rows for selected platform "
+        "gpu-h100-sxm in eu-north1, but Compute preset metadata was unavailable "
+        "for: 8gpu-128vcpu-1600gb. Cannot determine GPU clustering support for "
+        "row materialization."
+    )
 
 
 def test_compute_platform_presets_prefer_reserved_gpu_shapes(monkeypatch) -> None:
@@ -2105,7 +2261,7 @@ def test_compute_platform_presets_prefer_reserved_gpu_shapes(monkeypatch) -> Non
     assert [(choice.value, choice.label, choice.recommended) for choice in resolved_forbid] == [
         (
             "1gpu-16vcpu-200gb",
-            "1gpu-16vcpu-200gb, regular-vm 10 VMs (10 x 1-GPU = 10 GPUs), reserved 0 VMs, recommended",
+            "1gpu-16vcpu-200gb, regular-vm 10 VMs (10 x 1-GPU = 10 GPUs), recommended",
             True,
         )
     ]
@@ -2122,7 +2278,7 @@ def test_compute_platform_presets_prefer_reserved_gpu_shapes(monkeypatch) -> Non
     assert [(choice.value, choice.label, choice.recommended) for choice in resolved_strict] == [
         (
             "8gpu-128vcpu-1600gb",
-            "8gpu-128vcpu-1600gb, regular-vm 0 VMs, reserved 1 VM (1 x 8-GPU = 8 GPUs), best fabric fabric-8, recommended for reservations",
+            "8gpu-128vcpu-1600gb, reserved 1 VM (1 x 8-GPU = 8 GPUs), best reserved fabric fabric-8, recommended for reservations",
             True,
         )
     ]
@@ -2873,7 +3029,7 @@ def test_mk8s_infiniband_fabrics_prefer_reserved_capacity_fabric(
     assert [(choice.value, choice.label, choice.recommended) for choice in resolved_forbid] == [
         (
             "fabric-4",
-            "fabric-4  (gpu-h100-sxm, eu-north1), regular-vm 4 VMs (4 x 8-GPU = 32 GPUs), reserved 0 VMs, recommended",
+            "fabric-4  (gpu-h100-sxm, eu-north1), regular-vm 4 VMs (4 x 8-GPU = 32 GPUs), recommended",
             True,
         )
     ]
@@ -2909,7 +3065,7 @@ def test_mk8s_infiniband_fabrics_prefer_reserved_capacity_fabric(
     assert [(choice.value, choice.label, choice.recommended) for choice in resolved_strict] == [
         (
             "fabric-6",
-            "fabric-6  (gpu-h100-sxm, eu-north1), regular-vm 0 VMs, reserved 3 VMs (3 x 8-GPU = 24 GPUs), recommended for reservations",
+            "fabric-6  (gpu-h100-sxm, eu-north1), reserved 3 VMs (3 x 8-GPU = 24 GPUs), recommended for reservations",
             True,
         )
     ]

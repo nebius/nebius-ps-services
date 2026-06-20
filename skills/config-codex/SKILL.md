@@ -48,6 +48,10 @@ read-only agents that support `global-context-management`.
   confirmation.
 - Treat full-access settings as intended only for trusted local developer
   machines.
+- If a local hook or permission guard blocks an otherwise safe local Codex
+  config patch, do not bypass the guard. Report the exact blocked surface,
+  the smallest intended change, and the manual out-of-band step the user can
+  apply after reviewing it.
 
 ## Patch-Only Contract
 
@@ -129,8 +133,13 @@ For existing `$CODEX_HOME/config.toml`:
    discoverable, or explicitly enabled as skill folders. Do not add explicit
    skill entries if discovery already works.
 10. Validate local hook scripts, TOML, JSON, feature flags, idempotency, and
-   secret hygiene.
-11. Tell the user to restart Codex, open `/hooks`, review the two
+    secret hygiene.
+11. Produce an alignment report that lists each checked surface as
+    `Aligned`, `Not aligned`, or `Blocked`, with exact manual remediation for
+    every `Not aligned` or `Blocked` item. Include the minimal file/scope to
+    change, whether Codex attempted the patch, whether a backup was made, and
+    which files must not be touched.
+12. Tell the user to restart Codex, open `/hooks`, review the two
     global-context hooks, and trust them only after confirming the paths are
     expected. If other workflows add their own hooks, review those separately
     and keep event ownership distinct.
@@ -177,7 +186,10 @@ Use the focused checks in `references/local-setup.md`. At minimum:
   a laptop already expected to match the canonical global `AGENTS.md` template.
   This script is read-only and allows extra reviewed hook registrations in
   `hooks.json` when the required global hooks are present.
-- Python-compile hook scripts.
+- For source changes to the idempotency script, run
+  `python3 scripts/test-check-local-idempotency.py`; it uses disposable local
+  fixtures and does not inspect the user's real Codex home.
+- Syntax-check hook scripts with non-writing `compile(...)`.
 - Parse `config.toml` with `tomllib`.
 - Parse `hooks.json` with `json`.
 - Confirm `codex features list` reports `hooks` and `multi_agent` enabled.
@@ -195,11 +207,11 @@ not visible, and `tool_search` is available, the fresh session should first
 search for multi-agent/subagent tools before reporting delegation unavailable.
 If a local hook policy is enabled, verify it in a fresh trusted-hook session
 before claiming hook-assisted delegation works. Do not claim that hooks,
-skills, `multi_agent`, or `[agents.*]` config force automatic delegation; they
-only make delegation possible when the runtime policy allows it. After a prompt
-or local hook policy request authorizes delegation, the fresh session may choose
-targeted read-only helper roles itself; the prompt does not need to name the
-exact role.
+skills, `multi_agent`, or `[agents.*]` config directly spawn subagents. They
+make delegation possible when the runtime policy allows it. After a prompt or
+local hook policy request authorizes delegation, the fresh session should
+dynamically choose and spawn targeted read-only helper roles itself when useful;
+the prompt does not need to name the exact role.
 
 ## References
 
@@ -211,10 +223,20 @@ exact role.
 
 Return:
 
+- an `Aligned` / `Not aligned` / `Blocked` status list for each checked local
+  surface, including at least:
+  - `AGENTS.md`
+  - `config.toml` feature flags and read-only custom-agent references
+  - hook scripts and optional hook policy
+  - `hooks.json` required global entries and preserved workflow hooks
+  - task-state directory
 - what local files were created or patched
 - what backups were made
 - what validations passed or failed
 - which values still need user-specific replacement
+- for every `Not aligned` or `Blocked` item, the exact manual out-of-band
+  action the user can take, including the narrow file or bullet to edit and
+  any files that should be left untouched
 - how to restart Codex and trust hooks
 - whether optional hook-assisted read-only subagent delegation was enabled
 - any remaining risk or unverified runtime behavior

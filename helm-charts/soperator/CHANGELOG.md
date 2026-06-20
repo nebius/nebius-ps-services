@@ -4,6 +4,17 @@ All notable changes to this chart are tracked here.
 
 ## [Unreleased]
 
+- Added explicit chart schema, validation, and tests for upstream Soperator
+  ephemeral worker NodeSets. Ephemeral NodeSets now require non-negative integer
+  `slurmConfig.suspendTime`, explicit non-negative `replicas`, and
+  `initialNumberEphemeralNodes <= replicas`; explicit `replicas: 0` now renders
+  as zero instead of falling back to one. The docs describe the cxcli
+  `worker_ephemeral_nodes.enabled=true` helper and preserve the one Slurm worker
+  pod to one Kubernetes worker VM scaling contract.
+- Expanded the README and design guide with a dedicated Soperator autoscaling
+  section covering fixed workers, infrastructure autoscaling, ephemeral
+  NodeSets, `NodeSetPowerState`, `power-manager`, `suspendTime`, and the cxcli
+  materialization boundary.
 - Clarified the design guide's Soperator resource model: `slurmNodes.*`
   renders Slurm service roles inside `SlurmCluster`, `nodesets[]` renders
   worker `NodeSet` resources, structured partitions reference only NodeSet

@@ -32,16 +32,22 @@ _NCCL_RUN_RE = re.compile(
 _NCCL_LARGE_MESSAGE_BYTES = (2 * 1024**3, 4 * 1024**3, 8 * 1024**3)
 _SOPERATOR_CLUSTER_READY_WAIT_SECONDS = 20 * 60
 _SOPERATOR_CLUSTER_READY_POLL_SECONDS = 15.0
+_SRUN_SMOKE_IMMEDIATE_SECONDS = 60
+_SRUN_SMOKE_CLOUD_IMMEDIATE_SECONDS = 600
 
 
-def _smoke_script(*, partition: str = "") -> str:
+def _smoke_script(
+    *,
+    partition: str = "",
+    immediate_seconds: int = _SRUN_SMOKE_IMMEDIATE_SECONDS,
+) -> str:
     partition_arg = f" --partition={shlex.quote(partition)}" if partition else ""
     return "\n".join(
         [
             "set -euo pipefail",
             "srun --job-name=cxcli-soperator-smoke"
             f"{partition_arg} --nodes=1 --ntasks=1 "
-            "--cpus-per-task=1 --time=00:02:00 --immediate=60 "
+            f"--cpus-per-task=1 --time=00:02:00 --immediate={immediate_seconds} "
             "bash -lc 'set -euo pipefail; echo cxcli-soperator-srun-ok; hostname'",
         ]
     )
@@ -85,26 +91,26 @@ def _nccl_script(*, partition: str) -> str:
             'done <<< "$sinfo_output"',
             "target_nodes=0",
             "benchmark_mode=",
-            'if (( ${#total_gpu_nodes[@]} == 0 )); then',
+            "if (( ${#total_gpu_nodes[@]} == 0 )); then",
             '  echo "cxcli-soperator-nccl-skipped: full Slurm NCCL benchmark requires '
             'at least one GPU node on partition $partition; found 0 GPU node(s)."',
             "  exit 0",
             "fi",
-            'if (( ${#total_gpu_nodes[@]} >= 2 )); then',
+            "if (( ${#total_gpu_nodes[@]} >= 2 )); then",
             "  target_nodes=2",
             '  benchmark_mode="multi-node"',
-            '  if (( ${#idle_gpu_nodes[@]} < target_nodes )); then',
+            "  if (( ${#idle_gpu_nodes[@]} < target_nodes )); then",
             '    echo "cxcli-soperator-nccl-skipped: full Slurm NCCL benchmark requires '
-            '2 idle GPU nodes on partition $partition; found ${#idle_gpu_nodes[@]} idle '
+            "2 idle GPU nodes on partition $partition; found ${#idle_gpu_nodes[@]} idle "
             'GPU node(s), ${#total_gpu_nodes[@]} total GPU node(s)."',
             "    exit 0",
             "  fi",
             "else",
             "  target_nodes=1",
             '  benchmark_mode="single-node-multi-gpu"',
-            '  if (( ${#idle_gpu_nodes[@]} < target_nodes )); then',
+            "  if (( ${#idle_gpu_nodes[@]} < target_nodes )); then",
             '    echo "cxcli-soperator-nccl-skipped: full Slurm NCCL benchmark requires '
-            'the only GPU node on partition $partition to be idle; found '
+            "the only GPU node on partition $partition to be idle; found "
             '${#idle_gpu_nodes[@]} idle GPU node(s), ${#total_gpu_nodes[@]} total GPU node(s)."',
             "    exit 0",
             "  fi",
@@ -112,7 +118,7 @@ def _nccl_script(*, partition: str) -> str:
             "selected=()",
             "gpus_per_node=999999",
             "cpus_per_node=999999",
-            "for entry in \"${idle_gpu_nodes[@]:0:$target_nodes}\"; do",
+            'for entry in "${idle_gpu_nodes[@]:0:$target_nodes}"; do',
             '  IFS="|" read -r node gpu_count cpu_count <<< "$entry"',
             '  selected+=("$node")',
             "  if (( gpu_count < gpus_per_node )); then",
@@ -131,9 +137,9 @@ def _nccl_script(*, partition: str) -> str:
             "  cpus_per_node=$((gpus_per_node * 4))",
             "fi",
             'reported_gpus_per_node="$gpus_per_node"',
-            'if (( target_nodes == 1 && gpus_per_node < 2 )); then',
+            "if (( target_nodes == 1 && gpus_per_node < 2 )); then",
             '  echo "cxcli-soperator-nccl-skipped: full Slurm NCCL benchmark requires '
-            'at least 2 GPUs on the only GPU node in partition $partition; found '
+            "at least 2 GPUs on the only GPU node in partition $partition; found "
             '$gpus_per_node GPU(s)."',
             "  exit 0",
             "fi",
@@ -142,7 +148,7 @@ def _nccl_script(*, partition: str) -> str:
             "allocatable_cpus_per_task=0",
             "probe_output=",
             'probe_file="$(mktemp)"',
-            'trap \'rm -f "$probe_file"\' EXIT',
+            "trap 'rm -f \"$probe_file\"' EXIT",
             'candidate_gpus="$gpus_per_node"',
             "while (( candidate_gpus >= 1 )); do",
             "  candidate_cpus=$((candidate_gpus * 4))",
@@ -164,15 +170,15 @@ def _nccl_script(*, partition: str) -> str:
             "done",
             "if (( allocatable_gpus_per_node < 1 )); then",
             '  echo "cxcli-soperator-nccl-allocation-failed: could not allocate any GPU '
-            'count on $target_nodes selected node(s) from reported $reported_gpus_per_node '
+            "count on $target_nodes selected node(s) from reported $reported_gpus_per_node "
             'GPU(s) per node. Last probe: ${probe_output:-empty}" >&2',
             "  exit 1",
             "fi",
             'gpus_per_node="$allocatable_gpus_per_node"',
             'cpus_per_task="$allocatable_cpus_per_task"',
-            'if (( target_nodes == 1 && gpus_per_node < 2 )); then',
+            "if (( target_nodes == 1 && gpus_per_node < 2 )); then",
             '  echo "cxcli-soperator-nccl-skipped: full Slurm NCCL benchmark requires '
-            'at least 2 allocatable GPUs on the only GPU node in partition $partition; '
+            "at least 2 allocatable GPUs on the only GPU node in partition $partition; "
             'reported $reported_gpus_per_node GPU(s), allocatable $gpus_per_node."',
             "  exit 0",
             "fi",
@@ -186,8 +192,8 @@ def _nccl_script(*, partition: str) -> str:
             "runner_script=$(cat <<'CXCLI_NCCL_RUNNER'",
             "set -euo pipefail",
             'echo "cxcli-soperator-nccl-ok mode=${CXCLI_NCCL_MODE} '
-            'partition=${CXCLI_NCCL_PARTITION} nodes=${CXCLI_NCCL_NODES} '
-            'gpus_per_node=${CXCLI_NCCL_GPUS_PER_NODE} ranks=${CXCLI_NCCL_RANKS} '
+            "partition=${CXCLI_NCCL_PARTITION} nodes=${CXCLI_NCCL_NODES} "
+            "gpus_per_node=${CXCLI_NCCL_GPUS_PER_NODE} ranks=${CXCLI_NCCL_RANKS} "
             'reported_gpus_per_node=${CXCLI_NCCL_REPORTED_GPUS_PER_NODE}"',
             "export PATH=/usr/mpi/gcc/openmpi-4.1.7a1/bin:$PATH",
             "export OMPI_ALLOW_RUN_AS_ROOT=1",
@@ -195,14 +201,14 @@ def _nccl_script(*, partition: str) -> str:
             "command -v mpirun",
             "command -v /usr/bin/all_reduce_perf_mpi",
             'hostfile="$(mktemp)"',
-            'trap \'rm -f "$hostfile"\' EXIT',
+            "trap 'rm -f \"$hostfile\"' EXIT",
             'scontrol show hostnames "$SLURM_JOB_NODELIST" '
             '| awk -v slots="$CXCLI_NCCL_GPUS_PER_NODE" '
             '\'{print $1 " slots=" slots}\' > "$hostfile"',
             'echo "cxcli-soperator-nccl-hostfile"',
             'cat "$hostfile"',
-            "mpirun --allow-run-as-root --hostfile \"$hostfile\" "
-            "-np \"$CXCLI_NCCL_RANKS\" -N \"$CXCLI_NCCL_GPUS_PER_NODE\" --bind-to none "
+            'mpirun --allow-run-as-root --hostfile "$hostfile" '
+            '-np "$CXCLI_NCCL_RANKS" -N "$CXCLI_NCCL_GPUS_PER_NODE" --bind-to none '
             "--oversubscribe -mca coll ^hcoll "
             "/usr/bin/all_reduce_perf_mpi -b 512M -e 8G -f 2 -g 1",
             "CXCLI_NCCL_RUNNER",
@@ -213,8 +219,8 @@ def _nccl_script(*, partition: str) -> str:
             "--kill-on-bad-exit=1 bash -lc %q' "
             '"$cpus_per_task" "$gpus_per_node" "$runner_script")',
             "salloc --job-name=cxcli-soperator-nccl "
-            "--partition=\"$partition\" --nodelist=\"$node_list\" "
-            "--nodes=\"$target_nodes\" --ntasks=\"$target_nodes\" --ntasks-per-node=1 "
+            '--partition="$partition" --nodelist="$node_list" '
+            '--nodes="$target_nodes" --ntasks="$target_nodes" --ntasks-per-node=1 '
             '--gres="gpu:$gpus_per_node" '
             '--cpus-per-task="$cpus_per_task" --time=00:30:00 --immediate=60 '
             'bash -lc "$launcher_script"',
@@ -359,7 +365,9 @@ def _validation_report_file(target_ref: str) -> str:
 
 def _soperator_cluster_name(row: Mapping[str, Any], *, target_ref: str) -> str:
     values = _as_mapping(row.get("values"))
-    cluster_name = str(values.get("clusterName", "") or values.get("cluster_name", "") or "").strip()
+    cluster_name = str(
+        values.get("clusterName", "") or values.get("cluster_name", "") or ""
+    ).strip()
     return cluster_name or target_ref
 
 
@@ -902,6 +910,27 @@ def _sinfo_partition_candidates(stdout: str) -> tuple[str, ...]:
     return tuple(dict.fromkeys([*preferred, *fallback]))
 
 
+def _partition_has_powered_down_nodes(
+    runner: SoperatorValidationCommandRunner,
+    spec: Mapping[str, Any],
+    *,
+    partition: str,
+) -> bool:
+    args = ["sinfo", "-h", "-N", "-o", "%T"]
+    if partition:
+        args[3:3] = ["-p", partition]
+    sinfo = _exec_login(
+        runner,
+        spec,
+        tuple(args),
+        timeout_seconds=120,
+    )
+    if sinfo.returncode != 0:
+        return False
+    states = [line.strip().lower() for line in sinfo.stdout.splitlines() if line.strip()]
+    return any("~" in state or "%" in state or "power" in state for state in states)
+
+
 def _sinfo_gpu_partition_candidates(stdout: str) -> tuple[str, ...]:
     preferred: list[str] = []
     for line in stdout.splitlines():
@@ -958,11 +987,16 @@ def _check_srun_smoke(
     checks: list[dict[str, Any]],
 ) -> None:
     partition = _select_srun_smoke_partition(runner, spec)
+    immediate_seconds = _SRUN_SMOKE_IMMEDIATE_SECONDS
+    timeout_seconds = 360
+    if _partition_has_powered_down_nodes(runner, spec, partition=partition):
+        immediate_seconds = _SRUN_SMOKE_CLOUD_IMMEDIATE_SECONDS
+        timeout_seconds = immediate_seconds + 300
     result = _exec_login(
         runner,
         spec,
-        ("bash", "-lc", _smoke_script(partition=partition)),
-        timeout_seconds=360,
+        ("bash", "-lc", _smoke_script(partition=partition, immediate_seconds=immediate_seconds)),
+        timeout_seconds=timeout_seconds,
     )
     if result.returncode == 0 and _SMOKE_MARKER in result.stdout:
         partition_summary = f" on partition {partition}" if partition else ""
@@ -1003,7 +1037,11 @@ def _check_slurm_gpu_visibility(
         ("bash", "-lc", _gpu_visibility_script(partition=partition)),
         timeout_seconds=420,
     )
-    if result.returncode == 0 and _GPU_VISIBILITY_MARKER in result.stdout and "GPU " in result.stdout:
+    if (
+        result.returncode == 0
+        and _GPU_VISIBILITY_MARKER in result.stdout
+        and "GPU " in result.stdout
+    ):
         _append_check(
             checks,
             name="Slurm GPU visibility test",
@@ -1055,9 +1093,7 @@ def _check_slurm_nccl_benchmark(
             extra={"skipped": True, "skip_reason": summary},
         )
         return
-    avg_bus_bandwidth, large_message_bus_bandwidth = _nccl_large_message_bus_bandwidth_gbps(
-        output
-    )
+    avg_bus_bandwidth, large_message_bus_bandwidth = _nccl_large_message_bus_bandwidth_gbps(output)
     metadata = _nccl_run_metadata(output)
     if result.returncode == 0 and _NCCL_MARKER in output and avg_bus_bandwidth is not None:
         nodes = metadata.get("nodes", 2)
@@ -1082,8 +1118,7 @@ def _check_slurm_nccl_benchmark(
             name="Slurm NCCL benchmark",
             status="passed",
             summary=(
-                benchmark_summary
-                + f"average bus bandwidth {avg_bus_bandwidth:.1f} Gbps across "
+                benchmark_summary + f"average bus bandwidth {avg_bus_bandwidth:.1f} Gbps across "
                 f"{bandwidth_sizes} message sizes."
             ),
             command=result.args,
@@ -1129,12 +1164,14 @@ def run_soperator_cluster_validations(
         if emit:
             emit(f"Starting validation {index}/{len(validations)}: {spec.get('name')}.")
         runner = command_runner or (
-            lambda args, *, input_text=None, timeout_seconds=300, check=True: _default_command_runner(
-                args,
-                input_text=input_text,
-                timeout_seconds=timeout_seconds,
-                check=check,
-                extra_env=extra_env,
+            lambda args, *, input_text=None, timeout_seconds=300, check=True: (
+                _default_command_runner(
+                    args,
+                    input_text=input_text,
+                    timeout_seconds=timeout_seconds,
+                    check=check,
+                    extra_env=extra_env,
+                )
             )
         )
         checks: list[dict[str, Any]] = []
@@ -1179,7 +1216,9 @@ def run_soperator_cluster_validations(
         report_path = reports_dir / str(
             spec.get("report_file") or _validation_report_file(str(spec.get("target_ref") or ""))
         )
-        report_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        report_path.write_text(
+            json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
         written.append(report_path)
         if failed:
             names = ", ".join(str(item.get("name") or "check") for item in failed)

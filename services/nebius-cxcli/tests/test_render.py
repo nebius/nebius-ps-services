@@ -2256,9 +2256,12 @@ def test_render_local_soperator_cpu_profile_writes_single_cpu_nodeset(tmp_path: 
         if doc.get("apiVersion") == "slurm.nebius.ai/v1alpha1" and doc.get("kind") == "NodeSet"
     }
     assert set(node_sets) == {"worker-cpu"}
-    assert "nvidia.com/gpu" not in node_sets["worker-cpu"]["spec"]["slurmd"]["resources"]
+    worker_cpu_resources = node_sets["worker-cpu"]["spec"]["slurmd"]["resources"]
+    assert worker_cpu_resources["cpu"] == "24"
+    assert worker_cpu_resources["memory"] == "96Gi"
+    assert "nvidia.com/gpu" not in worker_cpu_resources
     assert node_sets["worker-cpu"]["spec"]["nodeConfig"]["static"] == (
-        "Boards=1 SocketsPerBoard=1 CoresPerSocket=8 ThreadsPerCore=1"
+        "Boards=1 SocketsPerBoard=1 CoresPerSocket=12 ThreadsPerCore=2"
     )
 
     slurm_cluster = next(doc for doc in rendered_docs if doc.get("kind") == "SlurmCluster")
@@ -2443,11 +2446,14 @@ def test_render_local_soperator_mixed_profile_writes_two_nodesets(tmp_path: Path
         if doc.get("apiVersion") == "slurm.nebius.ai/v1alpha1" and doc.get("kind") == "NodeSet"
     }
     assert set(node_sets) == {"worker-cpu", "worker-gpu"}
-    assert "nvidia.com/gpu" not in node_sets["worker-cpu"]["spec"]["slurmd"]["resources"]
+    worker_cpu_resources = node_sets["worker-cpu"]["spec"]["slurmd"]["resources"]
+    assert worker_cpu_resources["cpu"] == "24"
+    assert worker_cpu_resources["memory"] == "96Gi"
+    assert "nvidia.com/gpu" not in worker_cpu_resources
     assert node_sets["worker-gpu"]["spec"]["slurmd"]["resources"]["nvidia.com/gpu"] == 8
     assert node_sets["worker-gpu"]["spec"]["slurmd"]["resources"]["cpu"] == "32"
     assert node_sets["worker-cpu"]["spec"]["nodeConfig"]["static"] == (
-        "Boards=1 SocketsPerBoard=1 CoresPerSocket=8 ThreadsPerCore=1"
+        "Boards=1 SocketsPerBoard=1 CoresPerSocket=12 ThreadsPerCore=2"
     )
     assert node_sets["worker-gpu"]["spec"]["nodeConfig"]["static"] == (
         "Boards=1 SocketsPerBoard=1 CoresPerSocket=32 ThreadsPerCore=1 Gres=gpu:8"

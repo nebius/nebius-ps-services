@@ -1518,6 +1518,7 @@ _SOPERATOR_NODE_GROUP_AUTOSCALING_ROLES = (
     "accounting",
     "worker",
 )
+_SOPERATOR_WORKER_EPHEMERAL_INPUT = "soperator.worker_ephemeral_nodes"
 _SOPERATOR_ONBOARDING_STORAGE_MODES = (
     ONBOARDING_STORAGE_MODE_KEEP_EXISTING,
     ONBOARDING_STORAGE_MODE_CREATE_ALIGNED_SFS,
@@ -12887,6 +12888,26 @@ def _config_bool(value: Any, *, default: bool = False) -> bool:
     return _non_empty_text(value).lower() in {"1", "true", "yes", "on"}
 
 
+def _soperator_worker_ephemeral_input(inputs: Mapping[str, Any]) -> Mapping[str, Any]:
+    raw_value = _mapping_path_value(inputs, _SOPERATOR_WORKER_EPHEMERAL_INPUT)
+    return raw_value if isinstance(raw_value, Mapping) else {}
+
+
+def _soperator_worker_ephemeral_enabled(inputs: Mapping[str, Any]) -> bool:
+    raw_value = _soperator_worker_ephemeral_input(inputs)
+    return _config_bool(raw_value.get("enabled"), default=False)
+
+
+def _soperator_worker_ephemeral_suspend_time_seconds(inputs: Mapping[str, Any]) -> int:
+    raw_value = _soperator_worker_ephemeral_input(inputs)
+    if raw_value.get("suspend_time_seconds") is None:
+        return 300
+    return _required_nonnegative_int(
+        raw_value.get("suspend_time_seconds"),
+        field=f"{_SOPERATOR_WORKER_EPHEMERAL_INPUT}.suspend_time_seconds",
+    )
+
+
 def _required_profile_positive_int(value: Any, *, field: str) -> int:
     if isinstance(value, bool) or value is None:
         raise ValueError(f"Soperator nodesets profile field '{field}' must be a positive integer.")
@@ -13033,6 +13054,43 @@ def _soperator_prune_stale_profile_gpu_clusters(
             gpu_clusters.pop(raw_key, None)
     if not gpu_clusters:
         inputs.pop("gpu_clusters", None)
+
+
+def _soperator_selected_gpu_defaults_are_ethernet_only(inputs: Mapping[str, Any]) -> bool:
+    defaults = inputs.get("node_group_defaults")
+    if not isinstance(defaults, Mapping):
+        return False
+    gpu_defaults = defaults.get("gpu")
+    if not isinstance(gpu_defaults, Mapping):
+        return False
+    preset = _non_empty_text(gpu_defaults.get("preset")).lower()
+    return preset.startswith("1gpu-")
+
+
+def _soperator_prune_profile_gpu_cluster_path_for_selected_shape(
+    *,
+    inputs: dict[str, Any],
+    profile: Mapping[str, Any],
+) -> None:
+    if not _soperator_selected_gpu_defaults_are_ethernet_only(inputs):
+        return
+    managed_keys = _soperator_profile_managed_gpu_cluster_keys(profile)
+    if not managed_keys:
+        return
+    gpu_clusters = inputs.get("gpu_clusters")
+    if isinstance(gpu_clusters, dict):
+        for raw_key in list(gpu_clusters):
+            if str(raw_key) in managed_keys:
+                gpu_clusters.pop(raw_key, None)
+        if not gpu_clusters:
+            inputs.pop("gpu_clusters", None)
+    node_groups = inputs.get("node_groups")
+    if isinstance(node_groups, dict):
+        for group in node_groups.values():
+            if not isinstance(group, dict):
+                continue
+            if _non_empty_text(group.get("gpu_cluster_key")) in managed_keys:
+                group.pop("gpu_cluster_key", None)
 
 
 def _soperator_has_external_node_groups(
@@ -14043,6 +14101,55 @@ def _soperator_cpu_node_config_static(cpu_millicores: int | None) -> str:
     )
 
 
+def _soperator_node_config_static_cpu_count(value: Any) -> int | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+
+    def _field(name: str, default: int | None = None) -> int | None:
+        match = re.search(rf"(?:^|\s){re.escape(name)}=([0-9]+)(?:\s|$)", text)
+        if match is None:
+            return default
+        with suppress(ValueError):
+            return int(match.group(1))
+        return default
+
+    explicit_cpus = _field("CPUs")
+    if explicit_cpus is not None:
+        return explicit_cpus
+    cores_per_socket = _field("CoresPerSocket")
+    if cores_per_socket is None:
+        return None
+    return (
+        (_field("Boards", 1) or 1)
+        * (_field("SocketsPerBoard", 1) or 1)
+        * cores_per_socket
+        * (_field("ThreadsPerCore", 1) or 1)
+    )
+
+
+def _soperator_fit_gpu_node_config_to_group(
+    nodeset: dict[str, Any],
+    *,
+    group_cpu_millicores: int | None,
+    slurmd_cpu_millicores: int | None,
+    gpu_count: int | None,
+) -> None:
+    if group_cpu_millicores is None or group_cpu_millicores <= 0 or gpu_count is None:
+        return
+    node_config = nodeset.setdefault("nodeConfig", {})
+    if not isinstance(node_config, dict):
+        return
+    static_cpu_count = _soperator_node_config_static_cpu_count(node_config.get("static"))
+    group_cpu_count = max(1, math.ceil(group_cpu_millicores / 1000))
+    if static_cpu_count is not None and static_cpu_count <= group_cpu_count:
+        return
+    effective_cpu_millicores = slurmd_cpu_millicores or group_cpu_millicores
+    node_config["static"] = (
+        f"{_soperator_cpu_node_config_static(effective_cpu_millicores)} Gres=gpu:{gpu_count}"
+    )
+
+
 def _soperator_resource_memory_gib(value: Any) -> int | None:
     text = str(value or "").strip()
     match = re.fullmatch(r"([0-9]+)(?:Gi|G|GB|gb)?", text)
@@ -14088,15 +14195,20 @@ def _soperator_fit_nodeset_resources_to_group(
                 node_config["static"] = _soperator_cpu_node_config_static(cpu_millicores)
         return
 
-    if cpu_millicores is not None and current_cpu is not None and current_cpu > cpu_millicores:
-        slurmd_resources["cpu"] = _soperator_format_cpu_millicores(
-            max(1000, int(cpu_millicores * 0.75))
-        )
+    if cpu_millicores is not None and (
+        not gpu_enabled or (current_cpu is not None and current_cpu > cpu_millicores)
+    ):
+        target_cpu_millicores = max(1000, int(cpu_millicores * 0.75))
+        slurmd_resources["cpu"] = _soperator_format_cpu_millicores(target_cpu_millicores)
+        current_cpu = _soperator_parse_cpu_millicores(slurmd_resources.get("cpu"))
 
     memory_mib = resources.get("memory_mib")
     current_memory = _soperator_parse_memory_mib(slurmd_resources.get("memory"))
-    if memory_mib is not None and current_memory is not None and current_memory > memory_mib:
-        slurmd_resources["memory"] = _soperator_format_memory_mib(max(1024, int(memory_mib * 0.75)))
+    if memory_mib is not None and (
+        not gpu_enabled or (current_memory is not None and current_memory > memory_mib)
+    ):
+        target_memory_mib = max(1024, int(memory_mib * 0.75))
+        slurmd_resources["memory"] = _soperator_format_memory_mib(target_memory_mib)
 
     # Keep the legacy whole-node fallback for managed profile presets that do
     # not expose allocatable data.
@@ -14109,6 +14221,7 @@ def _soperator_fit_nodeset_resources_to_group(
             and legacy_current_cpu > vcpu_count
         ):
             slurmd_resources["cpu"] = str(max(1, vcpu_count // 2))
+            current_cpu = _soperator_parse_cpu_millicores(slurmd_resources.get("cpu"))
     if "memory_mib" not in resources:
         memory_gib = resources.get("memory")
         legacy_current_memory = _soperator_resource_memory_gib(slurmd_resources.get("memory"))
@@ -14118,6 +14231,18 @@ def _soperator_fit_nodeset_resources_to_group(
             and legacy_current_memory > memory_gib
         ):
             slurmd_resources["memory"] = f"{max(1, memory_gib // 4)}Gi"
+
+    if gpu_enabled:
+        _soperator_fit_gpu_node_config_to_group(
+            nodeset,
+            group_cpu_millicores=cpu_millicores,
+            slurmd_cpu_millicores=current_cpu,
+            gpu_count=gpu_count,
+        )
+    else:
+        node_config = nodeset.setdefault("nodeConfig", {})
+        if isinstance(node_config, dict):
+            node_config["static"] = _soperator_cpu_node_config_static(current_cpu or cpu_millicores)
 
 
 def _soperator_template_nodesets_by_name(values: Mapping[str, Any]) -> dict[str, Mapping[str, Any]]:
@@ -14244,6 +14369,11 @@ def _soperator_merge_nodeset_with_generated(
         merged.pop("nodeSelector", None)
     if preserve_existing_node_config:
         _soperator_strip_nodeset_image_overrides(merged)
+    for nodeset_field in ("ephemeralNodes", "initialNumberEphemeralNodes"):
+        if nodeset_field in generated:
+            merged[nodeset_field] = copy.deepcopy(generated[nodeset_field])
+        else:
+            merged.pop(nodeset_field, None)
 
     generated_tolerations = generated.get("tolerations")
     if isinstance(generated_tolerations, list):
@@ -14437,6 +14567,10 @@ def _materialize_soperator_mapping_chart_values(
     if not profile_placements:
         return
     use_profile_filters = not placements
+    worker_ephemeral_enabled = (
+        install_mode == _SOPERATOR_INSTALL_MODE_PRODUCTION
+        and _soperator_worker_ephemeral_enabled(inputs)
+    )
 
     existing_filters = values.get("k8sNodeFilters")
     if isinstance(existing_filters, list):
@@ -14496,11 +14630,17 @@ def _materialize_soperator_mapping_chart_values(
         replacement_names: list[str] = []
         for group_key in group_keys:
             nodeset = copy.deepcopy(to_plain_data(template))
-            nodeset_name = (
-                template_name
-                if len(group_keys) == 1
-                else normalize_component_token(f"{template_name}-{group_key}")
-            )
+            normalized_template_name = normalize_component_token(template_name)
+            normalized_group_key = normalize_component_token(group_key)
+            if len(group_keys) == 1:
+                nodeset_name = template_name
+            elif (
+                normalized_group_key == normalized_template_name
+                or normalized_group_key.startswith(f"{normalized_template_name}-")
+            ):
+                nodeset_name = normalized_group_key
+            else:
+                nodeset_name = normalize_component_token(f"{template_name}-{group_key}")
             nodeset["name"] = nodeset_name
             node_group = next(
                 (
@@ -14519,6 +14659,18 @@ def _materialize_soperator_mapping_chart_values(
                     if node_group.node_count is not None
                     else node_group.autoscaling_max_node_count
                 )
+                if (
+                    worker_ephemeral_enabled
+                    and template_name.startswith("worker")
+                    and node_group.autoscaling_max_node_count is not None
+                ):
+                    nodeset["ephemeralNodes"] = True
+                    nodeset["initialNumberEphemeralNodes"] = int(
+                        node_group.autoscaling_min_node_count or 0
+                    )
+                else:
+                    nodeset.pop("ephemeralNodes", None)
+                    nodeset.pop("initialNumberEphemeralNodes", None)
             selector_expression = _soperator_node_group_selector_expression(inputs, group_key)
             if (
                 selector_expression.get("operator") == "In"
@@ -14786,6 +14938,9 @@ def _materialize_soperator_worker_node_groups(
     node_groups: dict[str, Any],
     worker_profiles: list[Any],
 ) -> None:
+    worker_ephemeral_enabled = _soperator_worker_ephemeral_enabled(inputs)
+    if worker_ephemeral_enabled:
+        _soperator_worker_ephemeral_suspend_time_seconds(inputs)
     for raw_worker in worker_profiles:
         if not isinstance(raw_worker, Mapping):
             continue
@@ -14817,6 +14972,19 @@ def _materialize_soperator_worker_node_groups(
             default_min_node_count=min(default_total_nodes, total_nodes),
             default_max_node_count=total_nodes,
         )
+        if worker_ephemeral_enabled:
+            autoscaling_input = _non_empty_text(raw_worker.get("autoscaling_input"))
+            if autoscaling is None:
+                raise ValueError(
+                    f"{_SOPERATOR_WORKER_EPHEMERAL_INPUT}.enabled requires "
+                    f"{autoscaling_input or 'soperator.worker_autoscaling'}.enabled=true"
+                )
+            if autoscaling["max_node_count"] < 1:
+                raise ValueError(
+                    f"{_SOPERATOR_WORKER_EPHEMERAL_INPUT}.enabled requires "
+                    f"{autoscaling_input or 'soperator.worker_autoscaling'}.max_node_count "
+                    "to be at least 1"
+                )
         desired_total_nodes = autoscaling["max_node_count"] if autoscaling else total_nodes
         if autoscaling is None and desired_total_nodes <= 0:
             desired_total_nodes = default_total_nodes
@@ -14956,6 +15124,10 @@ def _materialize_soperator_mk8s_profile(
     if not existing_mode:
         _soperator_prune_stale_profile_node_groups(inputs=inputs, profile=profile)
         _soperator_prune_stale_profile_gpu_clusters(inputs=inputs, profile=profile)
+        _soperator_prune_profile_gpu_cluster_path_for_selected_shape(
+            inputs=inputs,
+            profile=profile,
+        )
     if existing_mode or (
         not replace_profile_managed_groups
         and explicit_placements
@@ -14973,7 +15145,7 @@ def _materialize_soperator_mk8s_profile(
         return
 
     gpu_clusters = _profile_mapping(mk8s_profile, "gpu_clusters")
-    if gpu_clusters:
+    if gpu_clusters and not _soperator_selected_gpu_defaults_are_ethernet_only(inputs):
         target_gpu_clusters = inputs.setdefault("gpu_clusters", {})
         if isinstance(target_gpu_clusters, dict):
             _merge_missing_mapping(target_gpu_clusters, gpu_clusters)
@@ -15001,6 +15173,11 @@ def _materialize_soperator_mk8s_profile(
         node_groups=node_groups,
         worker_profiles=_profile_list(mk8s_profile, "worker_nodesets"),
     )
+    if not existing_mode:
+        _soperator_prune_profile_gpu_cluster_path_for_selected_shape(
+            inputs=inputs,
+            profile=profile,
+        )
 
 
 def _materialize_soperator_sfs_profile(
@@ -15219,6 +15396,28 @@ def _materialize_soperator_dcgm_exporter_values(
         return
     if isinstance(dcgm_exporter, dict):
         dcgm_exporter.setdefault("validateToolkit", False)
+
+
+def _materialize_soperator_worker_ephemeral_values(
+    *,
+    values: dict[str, Any],
+    inputs: Mapping[str, Any],
+    install_mode: str,
+) -> None:
+    if install_mode != _SOPERATOR_INSTALL_MODE_PRODUCTION:
+        return
+    slurm_config = values.get("slurmConfig")
+    if not _soperator_worker_ephemeral_enabled(inputs):
+        if isinstance(slurm_config, dict):
+            slurm_config.pop("suspendTime", None)
+            if not slurm_config:
+                values.pop("slurmConfig", None)
+        return
+    suspend_time_seconds = _soperator_worker_ephemeral_suspend_time_seconds(inputs)
+    if not isinstance(slurm_config, dict):
+        slurm_config = {}
+        values["slurmConfig"] = slurm_config
+    slurm_config["suspendTime"] = suspend_time_seconds
 
 
 def _materialize_soperator_onboarding_storage_mode(
@@ -15473,6 +15672,11 @@ def _materialize_soperator_component_defaults(payload: dict[str, Any]) -> bool:
                 placements=placements,
                 install_mode=install_mode,
                 preserve_existing_worker_nodesets=preserve_adopted_worker_nodesets,
+            )
+            _materialize_soperator_worker_ephemeral_values(
+                values=values,
+                inputs=mk8s_inputs_by_target.get(target_ref, {}),
+                install_mode=install_mode,
             )
             _materialize_soperator_guided_sssd_values(values)
             _soperator_extend_nodeconfigurator_tolerations_from_nodesets(values)
@@ -18112,10 +18316,20 @@ def _provider_allowed_values_for_field(
             payload=payload,
             field_path=full_path_label,
         ):
-            value = str(item.value).strip()
-            if value:
-                allowed.add(value)
+            allowed.update(_provider_choice_allowed_values(item))
     return allowed, providers
+
+
+def _provider_choice_allowed_values(choice: OptionChoice) -> set[str]:
+    values: set[str] = set()
+    value = str(choice.value).strip()
+    if value:
+        values.add(value)
+    if bool(choice.metadata.get("mk8s_gpu_capacity_choice")):
+        preset = _non_empty_text(choice.metadata.get("preset"))
+        if preset:
+            values.add(preset)
+    return values
 
 
 def _provider_prompt_dependencies_ready(
@@ -18574,6 +18788,8 @@ def _prompt_path_sort_key(
         "accounting_node_count": 41,
         "worker_total_nodes": 42,
         "worker_nodes_per_group": 43,
+        "worker_ephemeral_nodes": 44,
+        "suspend_time_seconds": 45,
     }
     full_label = _format_payload_path(path)
     nested_order_hints = {
@@ -18617,8 +18833,10 @@ def _prompt_path_sort_key(
         "infra.components[].inputs.soperator.worker_autoscaling.enabled": 54,
         "infra.components[].inputs.soperator.worker_autoscaling.min_node_count": 55,
         "infra.components[].inputs.soperator.worker_autoscaling.max_node_count": 56,
-        "infra.components[].inputs.soperator.worker_total_nodes": 57,
-        "infra.components[].inputs.soperator.worker_nodes_per_group": 58,
+        "infra.components[].inputs.soperator.worker_ephemeral_nodes.enabled": 57,
+        "infra.components[].inputs.soperator.worker_ephemeral_nodes.suspend_time_seconds": 58,
+        "infra.components[].inputs.soperator.worker_total_nodes": 59,
+        "infra.components[].inputs.soperator.worker_nodes_per_group": 60,
     }
     leaf = path[-1] if path else ""
     leaf_name = _normalize_leaf_name(str(leaf)) if isinstance(leaf, str) else ""
@@ -18759,6 +18977,95 @@ def _maybe_clear_gpu_cluster_fabric_after_shape_change(
     )
 
 
+def _choice_by_value(
+    choices: Sequence[OptionChoice] | None,
+    value: object,
+) -> OptionChoice | None:
+    selected = str(value).strip()
+    if not selected:
+        return None
+    for choice in choices or ():
+        if choice.value == selected:
+            return choice
+    return None
+
+
+def _mk8s_gpu_capacity_choice_preset(choice: OptionChoice | None) -> str:
+    if choice is None or not bool(choice.metadata.get("mk8s_gpu_capacity_choice")):
+        return ""
+    return _non_empty_text(choice.metadata.get("preset"))
+
+
+def _mk8s_gpu_capacity_choice_fabric(choice: OptionChoice | None) -> str:
+    if choice is None or not bool(choice.metadata.get("mk8s_gpu_capacity_choice")):
+        return ""
+    return _non_empty_text(choice.metadata.get("fabric"))
+
+
+def _mk8s_gpu_cluster_labels_for_preset_prompt(
+    *,
+    payload: dict[str, Any],
+    entry: ComponentEntry,
+    full_path_label: str,
+) -> tuple[str, str]:
+    if entry.scope != "infra" or entry.id != "mk8s":
+        return "", ""
+    if not full_path_label.endswith(".node_group_defaults.gpu.preset"):
+        return "", ""
+    component_prefix = _dynamic_component_prefix(entry=entry, full_path_label=full_path_label)
+    if not component_prefix:
+        return "", ""
+    target_ref = _component_instance_id_for_prompt_field(
+        payload=payload,
+        entry=entry,
+        full_path_label=full_path_label,
+    )
+    profile = _soperator_profile_by_target(payload).get(target_ref, {})
+    managed_gpu_cluster_keys = (
+        sorted(_soperator_profile_managed_gpu_cluster_keys(profile))
+        if isinstance(profile, Mapping)
+        else []
+    )
+    gpu_cluster_key = managed_gpu_cluster_keys[0] if len(managed_gpu_cluster_keys) == 1 else ""
+    if not gpu_cluster_key and isinstance(profile, Mapping):
+        gpu_cluster_key = _non_empty_text(_profile_mapping(profile, "mk8s").get("gpu_cluster_key"))
+    if not gpu_cluster_key:
+        gpu_cluster_key = "workers"
+    cluster_label = f"{component_prefix}.inputs.gpu_clusters.{gpu_cluster_key}"
+    return cluster_label, f"{cluster_label}.infiniband_fabric"
+
+
+def _materialize_mk8s_gpu_capacity_choice(
+    *,
+    payload: dict[str, Any],
+    entry: ComponentEntry,
+    full_path_label: str,
+    choice: OptionChoice | None,
+    emit_selection: bool = False,
+) -> object:
+    preset = _mk8s_gpu_capacity_choice_preset(choice)
+    if not preset:
+        return choice.value if choice is not None else None
+
+    fabric = _mk8s_gpu_capacity_choice_fabric(choice)
+    cluster_label, fabric_label = _mk8s_gpu_cluster_labels_for_preset_prompt(
+        payload=payload,
+        entry=entry,
+        full_path_label=full_path_label,
+    )
+    if fabric and fabric_label:
+        fabric_path = _parse_payload_path_label(fabric_label)
+        if fabric_path is not None:
+            _set_payload_value_creating_containers(payload, fabric_path, fabric)
+            if emit_selection:
+                _print_wizard_selected_field(fabric_label, fabric)
+    elif cluster_label:
+        cluster_path = _parse_payload_path_label(cluster_label)
+        if cluster_path is not None and _payload_path_exists(payload, cluster_path):
+            _delete_payload_value(payload, cluster_path)
+    return preset
+
+
 def _is_compute_boot_disk_type_field(full_path_label: str) -> bool:
     return full_path_label.endswith(
         (
@@ -18858,14 +19165,22 @@ def _live_gpu_capacity_rows(
     )
 
 
-def _format_live_gpu_capacity_row(item: CapacityResourceAdvice) -> str:
+def _format_live_gpu_capacity_row(
+    item: CapacityResourceAdvice,
+    *,
+    reservation_policy: str,
+) -> str:
     preset = item.preset or "(unknown preset)"
     fabric = item.fabric or "(no fabric)"
-    return (
-        f"  - {preset} on {fabric}: regular-vm "
-        f"{capacity_vm_slots_text(item.on_demand.available, item.gpu_count)}; "
-        f"reserved {capacity_vm_slots_text(item.reserved.available, item.gpu_count)}"
-    )
+    policy = reservation_policy.upper()
+    parts: list[str] = []
+    if policy != "STRICT":
+        parts.append(
+            f"regular-vm {capacity_vm_slots_text(item.on_demand.available, item.gpu_count)}"
+        )
+    if policy != "FORBID":
+        parts.append(f"reserved {capacity_vm_slots_text(item.reserved.available, item.gpu_count)}")
+    return f"  - {preset} on {fabric}: {'; '.join(parts)}"
 
 
 def _maybe_print_live_gpu_capacity_summary(
@@ -18921,7 +19236,11 @@ def _maybe_print_live_gpu_capacity_summary(
         "(Capacity Dashboard VM slots):[/dim]"
     )
     for row in rows:
-        console.print(f"[dim]{escape(_format_live_gpu_capacity_row(row))}[/dim]")
+        row_text = _format_live_gpu_capacity_row(
+            row,
+            reservation_policy=reservation_policy,
+        )
+        console.print(f"[dim]{escape(row_text)}[/dim]")
     emitted_guidance.add(guidance_key)
 
 
@@ -18938,13 +19257,17 @@ def _maybe_print_gpu_preset_prompt_guidance(
         is None
     ):
         return
-    _maybe_print_live_gpu_capacity_summary(
-        payload=payload,
+    if "mk8s_gpu_capacity_choices" not in _provider_sources_for_field(
         entry=entry,
         full_path_label=full_path_label,
-        provider_lookup=provider_lookup,
-        emitted_guidance=emitted_guidance,
-    )
+    ):
+        _maybe_print_live_gpu_capacity_summary(
+            payload=payload,
+            entry=entry,
+            full_path_label=full_path_label,
+            provider_lookup=provider_lookup,
+            emitted_guidance=emitted_guidance,
+        )
     if "gpu_preset_interconnect" in emitted_guidance:
         return
     console.print(
@@ -19019,8 +19342,8 @@ def _maybe_print_selected_gpu_preset_guidance(
         if entry.id == "mk8s":
             console.print(
                 "[dim]Selected GPU shape supports InfiniBand / GPUDirect-RDMA. "
-                "cxcli will select the provider-ranked fabric automatically when "
-                "live Capacity Dashboard rows are available.[/dim]"
+                "When the selected capacity row includes a fabric, cxcli writes that "
+                "fabric to the MK8s GPU cluster config automatically.[/dim]"
             )
             emitted_guidance.add(guidance_key)
             return
@@ -19249,7 +19572,8 @@ def _maybe_print_soperator_mk8s_sizing_prompt_guidance(
     console.print(
         "[dim]Soperator production sizing: system, controller, login, and "
         "accounting counts size the CPU service role node groups. "
-        "worker_total_nodes sizes Slurm worker capacity, and "
+        "worker_total_nodes sizes Kubernetes worker hosts and matching "
+        "Slurm worker replicas, GPU count per host comes from the preset, and "
         "worker_nodes_per_group controls generated worker group sharding.[/dim]"
     )
     emitted_guidance.add("soperator_mk8s_sizing")
@@ -20199,6 +20523,25 @@ def _soperator_autoscaling_enabled_for_prompt(
     return _config_bool(enabled, default=False)
 
 
+def _soperator_worker_ephemeral_enabled_for_prompt(
+    *,
+    payload: dict[str, Any],
+    entry: ComponentEntry,
+    full_path_label: str,
+) -> bool:
+    component_prefix = _component_prefix_for_prompt_field(
+        entry=entry,
+        full_path_label=full_path_label,
+    )
+    if not component_prefix:
+        return False
+    enabled = _read_payload_field(
+        payload,
+        f"{component_prefix}.inputs.soperator.worker_ephemeral_nodes.enabled",
+    )
+    return _config_bool(enabled, default=False)
+
+
 def _skip_soperator_managed_mk8s_prompt(
     *,
     payload: dict[str, Any],
@@ -20231,6 +20574,20 @@ def _skip_soperator_managed_mk8s_prompt(
             full_path_label=full_path_label,
             role=role,
         )
+    if ".inputs.soperator.worker_ephemeral_nodes." in full_path_label:
+        if not has_soperator_target or install_mode != _SOPERATOR_INSTALL_MODE_PRODUCTION:
+            return True
+        if full_path_label.endswith(".inputs.soperator.worker_ephemeral_nodes.enabled"):
+            return False
+        if full_path_label.endswith(
+            ".inputs.soperator.worker_ephemeral_nodes.suspend_time_seconds"
+        ):
+            return not _soperator_worker_ephemeral_enabled_for_prompt(
+                payload=payload,
+                entry=entry,
+                full_path_label=full_path_label,
+            )
+        return True
     if full_path_label.endswith(soperator_count_field_suffixes):
         if not has_soperator_target or install_mode != _SOPERATOR_INSTALL_MODE_PRODUCTION:
             return True
@@ -22459,6 +22816,7 @@ def _run_component_field_wizard(
             type_hint: str | None = None,
             required: bool = False,
             unset_on_skip: bool = False,
+            print_selected: bool = True,
         ) -> tuple[object, str]:
             _print_wizard_component_selection_context(
                 current_label=context_label,
@@ -22476,7 +22834,8 @@ def _run_component_field_wizard(
                 return current, "quit"
             if _wizard_backtrack_requested(updated):
                 return current, "back"
-            _print_wizard_selected_field(path_label, updated)
+            if print_selected:
+                _print_wizard_selected_field(path_label, updated)
             return updated, "ok"
 
         def _prompt_required_text(path_label: str, current: str) -> tuple[str, str]:
@@ -22799,7 +23158,7 @@ def _run_component_field_wizard(
             if gpu:
                 preset_args["reservation_policy"] = reservation_policy
             preset_choices = _mk8s_provider_choices(
-                provider="compute_platform_presets",
+                provider="mk8s_gpu_capacity_choices" if gpu else "compute_platform_presets",
                 args=preset_args,
                 field_path=preset_label,
                 required=True,
@@ -22811,18 +23170,45 @@ def _run_component_field_wizard(
                 provider_lookup=provider_lookup,
                 emitted_guidance=emitted_guidance,
             )
-            preset, status = _prompt_loop_value(
-                preset_label,
-                None,
-                choices=preset_choices,
-                required=True,
-            )
-            if status == "quit":
-                return None, True
-            if status == "back":
-                _restart_group_creation(group_key)
+            restart_current_group = False
+            selected_preset_choice: OptionChoice | None = None
+            while True:
+                preset, status = _prompt_loop_value(
+                    preset_label,
+                    None,
+                    choices=preset_choices,
+                    required=True,
+                    print_selected=not gpu,
+                )
+                if status == "quit":
+                    return None, True
+                if status == "back":
+                    _restart_group_creation(group_key)
+                    restart_current_group = True
+                    break
+                selected_preset_choice = _choice_by_value(preset_choices, preset)
+                if not gpu or not preset_choices or selected_preset_choice is not None:
+                    break
+                console.print(
+                    f"{error_markup('Invalid value')} for "
+                    f"'{preset_label}'. Select one of the live GPU capacity rows."
+                )
+            if restart_current_group:
                 continue
-            group["preset"] = str(preset).strip()
+            selected_preset = _mk8s_gpu_capacity_choice_preset(selected_preset_choice)
+            group["preset"] = selected_preset or str(preset).strip()
+            if gpu:
+                _print_wizard_selected_field(preset_label, group["preset"])
+                selected_fabric = _mk8s_gpu_capacity_choice_fabric(selected_preset_choice)
+                if selected_fabric:
+                    gpu_clusters = inputs.setdefault("gpu_clusters", {})
+                    if isinstance(gpu_clusters, dict):
+                        gpu_clusters[group_key] = {"infiniband_fabric": selected_fabric}
+                        group["gpu_cluster_key"] = group_key
+                        _print_wizard_selected_field(
+                            f"{component_path_label}.inputs.gpu_clusters.{group_key}.infiniband_fabric",
+                            selected_fabric,
+                        )
             _maybe_print_selected_gpu_preset_guidance(
                 payload=payload,
                 entry=entry,
@@ -22893,7 +23279,7 @@ def _run_component_field_wizard(
                             preset_name=group["preset"],
                         )
                     )
-                if allow_gpu_cluster is True:
+                if allow_gpu_cluster is True and not _non_empty_text(group.get("gpu_cluster_key")):
                     _materialize_node_group_gpu_cluster_fabric(
                         inputs=inputs,
                         component_path_label=component_path_label,
@@ -24985,6 +25371,17 @@ def _run_component_field_wizard(
                         break
                 if backtracked:
                     continue
+                selected_choice = _choice_by_value(field_choices, updated)
+                if selected_choice is not None:
+                    materialized = _materialize_mk8s_gpu_capacity_choice(
+                        payload=payload,
+                        entry=entry,
+                        full_path_label=full_path_label,
+                        choice=selected_choice,
+                        emit_selection=True,
+                    )
+                    if materialized is not None:
+                        updated = materialized
                 if not prompt_history or prompt_history[-1] != full_path:
                     prompt_history.append(full_path)
                 if full_path in virtual_prompt_defaults:
@@ -25773,14 +26170,14 @@ def _provider_allowed_values(
     field_path: str,
 ) -> set[str]:
     return {
-        str(choice.value).strip()
+        value
         for choice in provider_lookup.resolve(
             provider=provider,
             args=args,
             payload=payload,
             field_path=field_path,
         )
-        if str(choice.value).strip()
+        for value in _provider_choice_allowed_values(choice)
     }
 
 
@@ -26832,7 +27229,13 @@ def _materialize_singleton_provider_defaults(
             target_path = _parse_payload_path_label(full_path_label)
             if target_path is None:
                 continue
-            _set_payload_value_creating_containers(payload, target_path, choices[0].value)
+            selected_value = _materialize_mk8s_gpu_capacity_choice(
+                payload=payload,
+                entry=entry,
+                full_path_label=full_path_label,
+                choice=choices[0],
+            )
+            _set_payload_value_creating_containers(payload, target_path, selected_value)
 
 
 def _field_option_name(field_name: str) -> str:
@@ -27837,6 +28240,26 @@ def _validate_strict_config(
         _enabled_custom_module_input_schema_issues(payload=payload, infra_entries=infra_entries)
     )
     issues.extend(_placeholder_value_issues(payload))
+    try:
+        from .runtime_component_validation import validate_component_runtime_rules
+
+        def _strict_runtime_get_path(
+            node: Mapping[str, Any],
+            path: str,
+            default: Any = None,
+        ) -> Any:
+            resolved = read_path_with_catalog(node, path)
+            return default if resolved is None else resolved
+
+        validate_component_runtime_rules(
+            payload,
+            get_path=_strict_runtime_get_path,
+            as_text=lambda value: "" if value is None else str(value).strip(),
+            id_pattern=re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$"),
+            env_var_pattern=re.compile(r"^[A-Z_][A-Z0-9_]*$"),
+        )
+    except ValueError as exc:
+        issues.append(str(exc))
     if issues:
         raise RuntimeError("Strict validation failed:\n  - " + "\n  - ".join(issues))
 
@@ -30908,11 +31331,68 @@ def _pre_soperator_gpu_validations(
         return []
     if not _enabled_soperator_release_refs_for_target(config, target_ref=target_ref):
         return []
+    if _target_has_scale_from_zero_gpu_worker(config, target_ref=target_ref):
+        return []
     return [
         item
         for item in validations
         if str(item.get("kind", "") or "").strip() in _MK8S_GPU_VALIDATION_KINDS
     ]
+
+
+def _node_group_label_value(raw_group: Mapping[str, Any], key: str) -> str:
+    for labels_field in ("labels", "node_labels"):
+        labels = raw_group.get(labels_field)
+        if isinstance(labels, Mapping):
+            value = _non_empty_text(labels.get(key))
+            if value:
+                return value
+    return ""
+
+
+def _node_group_is_soperator_worker(raw_key: object, raw_group: Mapping[str, Any]) -> bool:
+    role_candidates = (
+        raw_key,
+        raw_group.get("nodeset_name"),
+        raw_group.get("placement_name"),
+        _node_group_label_value(raw_group, "slurm.nebius.ai/nodeset"),
+        _node_group_label_value(raw_group, "slurm.nebius.ai/nodeset-name"),
+    )
+    if any(
+        normalize_component_token(candidate).startswith("worker") for candidate in role_candidates
+    ):
+        return True
+    workload = normalize_component_token(
+        raw_group.get("workload") or _node_group_label_value(raw_group, "slurm.nebius.ai/workload")
+    )
+    return workload == "worker"
+
+
+def _node_group_autoscaling_starts_from_zero(raw_group: Mapping[str, Any]) -> bool:
+    autoscaling = _state_mapping(raw_group.get("autoscaling"))
+    if not autoscaling or _config_bool(autoscaling.get("enabled"), default=True) is False:
+        return False
+    min_node_count = _state_positive_int(autoscaling.get("min_node_count"))
+    max_node_count = _state_positive_int(autoscaling.get("max_node_count"))
+    return min_node_count == 0 and max_node_count is not None and max_node_count > 0
+
+
+def _target_has_scale_from_zero_gpu_worker(config: Any, *, target_ref: str) -> bool:
+    normalized_target_ref = normalize_component_token(target_ref)
+    for row in _enabled_mk8s_rows_from_config(config):
+        if normalize_component_token(component_instance_id(row)) != normalized_target_ref:
+            continue
+        inputs = _state_mapping(row.get("inputs"))
+        for raw_group_key, raw_group in _state_mapping(inputs.get("node_groups")).items():
+            if not isinstance(raw_group, Mapping) or raw_group.get("enabled") is False:
+                continue
+            if not bool(raw_group.get("gpu", False)):
+                continue
+            if not _node_group_is_soperator_worker(raw_group_key, raw_group):
+                continue
+            if _node_group_autoscaling_starts_from_zero(raw_group):
+                return True
+    return False
 
 
 def _enabled_cluster_handoffs(config: Any) -> list[dict[str, str]]:

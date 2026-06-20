@@ -220,6 +220,17 @@ def _mk8s_soperator_autoscaling_fields() -> dict[str, dict[str, Any]]:
     return fields
 
 
+def _mk8s_soperator_worker_ephemeral_fields() -> dict[str, dict[str, Any]]:
+    return {
+        "inputs.soperator.worker_ephemeral_nodes.enabled": _disabled_bool_wizard_field(),
+        "inputs.soperator.worker_ephemeral_nodes.suspend_time_seconds": {
+            "default": 300,
+            "write_default_to_config": True,
+            "type_hint": "number",
+        },
+    }
+
+
 def _soperator_wizard_profile() -> dict[str, dict[str, Any]]:
     fields: dict[str, dict[str, Any]] = {
         **_suppressed_prompt_fields("namespace", "release-name", "values"),
@@ -445,7 +456,7 @@ BUILTIN_WIZARD_PROFILES: dict[str, dict[str, dict[str, Any]]] = {
         },
         "inputs.node_group_defaults.gpu.preset": {
             "options": {
-                "from": "compute_platform_presets",
+                "from": "mk8s_gpu_capacity_choices",
                 "depends_on": "inputs.node_group_defaults.gpu.platform",
                 "args": {
                     "reservation_policy_path": "inputs.node_group_defaults.gpu.reservation.policy",
@@ -601,6 +612,7 @@ BUILTIN_WIZARD_PROFILES: dict[str, dict[str, dict[str, Any]]] = {
             "type_hint": "number",
         },
         **_mk8s_soperator_autoscaling_fields(),
+        **_mk8s_soperator_worker_ephemeral_fields(),
         "inputs.soperator.worker_total_nodes": {
             "default": 1,
             "write_default_to_config": True,

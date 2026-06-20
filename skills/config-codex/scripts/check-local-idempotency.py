@@ -93,6 +93,14 @@ def load_json(path: Path, label: str, failures: list[str]) -> dict:
     return {}
 
 
+def truthy(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return False
+
+
 def check_agents_md(codex_home: Path, strict: bool, failures: list[str]) -> None:
     agents_path = codex_home / "AGENTS.md"
     template_path = skill_root() / "assets" / "AGENTS.md.template"
@@ -226,8 +234,23 @@ def check_runtime_files(codex_home: Path, failures: list[str]) -> None:
 
     policy = codex_home / "hooks/global_context_policy.json"
     if policy.exists():
-        if load_json(policy, "global_context_policy.json", failures):
+        failure_count = len(failures)
+        policy_data = load_json(policy, "global_context_policy.json", failures)
+        if len(failures) == failure_count:
             ok("optional global_context_policy.json is valid JSON")
+            if truthy(policy_data.get("auto_read_only_subagents")) or truthy(
+                policy_data.get("enabled")
+            ):
+                ok(
+                    "optional global_context_policy.json enables read-only "
+                    "subagent delegation"
+                )
+            else:
+                fail(
+                    "optional global_context_policy.json does not enable "
+                    "read-only subagent delegation",
+                    failures,
+                )
 
 
 def check_hooks_json(codex_home: Path, failures: list[str]) -> None:

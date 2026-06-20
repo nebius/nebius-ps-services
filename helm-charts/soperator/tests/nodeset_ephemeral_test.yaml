@@ -1,0 +1,153 @@
+suite: NodeSet ephemeral workers
+templates:
+  - templates/nodesets/nodeset.yaml
+  - templates/slurm-cluster/slurm-cluster-cr.yaml
+tests:
+  - it: renders ephemeral worker NodeSet fields
+    template: templates/nodesets/nodeset.yaml
+    set:
+      slurmConfig:
+        suspendTime: 300
+      nodesets:
+        - name: worker
+          replicas: 5
+          ephemeralNodes: true
+          initialNumberEphemeralNodes: 1
+          ephemeralTopologyWaitTimeout: 0
+          slurmd:
+            resources:
+              cpu: "1"
+              memory: 1Gi
+            volumes:
+              spool:
+                emptyDir: {}
+              jail:
+                emptyDir: {}
+          munge:
+            resources:
+              cpu: 100m
+              memory: 128Mi
+    asserts:
+      - equal:
+          path: spec.replicas
+          value: 5
+      - equal:
+          path: spec.ephemeralNodes
+          value: true
+      - equal:
+          path: spec.initialNumberEphemeralNodes
+          value: 1
+      - equal:
+          path: spec.ephemeralTopologyWaitTimeout
+          value: 0
+
+  - it: renders suspendTime with ephemeral worker NodeSets
+    template: templates/slurm-cluster/slurm-cluster-cr.yaml
+    set:
+      slurmConfig:
+        suspendTime: 300
+      nodesets:
+        - name: worker
+          replicas: 5
+          ephemeralNodes: true
+          initialNumberEphemeralNodes: 1
+          slurmd:
+            resources:
+              cpu: "1"
+              memory: 1Gi
+            volumes:
+              spool:
+                emptyDir: {}
+              jail:
+                emptyDir: {}
+          munge:
+            resources:
+              cpu: 100m
+              memory: 128Mi
+    asserts:
+      - equal:
+          path: spec.slurmConfig.suspendTime
+          value: 300
+
+  - it: renders explicit zero replicas for scale-to-zero ephemeral workers
+    template: templates/nodesets/nodeset.yaml
+    set:
+      slurmConfig:
+        suspendTime: 300
+      nodesets:
+        - name: worker
+          replicas: 0
+          ephemeralNodes: true
+          initialNumberEphemeralNodes: 0
+          slurmd:
+            resources:
+              cpu: "1"
+              memory: 1Gi
+            volumes:
+              spool:
+                emptyDir: {}
+              jail:
+                emptyDir: {}
+          munge:
+            resources:
+              cpu: 100m
+              memory: 128Mi
+    asserts:
+      - equal:
+          path: spec.replicas
+          value: 0
+      - equal:
+          path: spec.initialNumberEphemeralNodes
+          value: 0
+
+  - it: fails when ephemeral workers omit suspendTime
+    template: templates/slurm-cluster/slurm-cluster-cr.yaml
+    set:
+      nodesets:
+        - name: worker
+          replicas: 5
+          ephemeralNodes: true
+          initialNumberEphemeralNodes: 1
+          slurmd:
+            resources:
+              cpu: "1"
+              memory: 1Gi
+            volumes:
+              spool:
+                emptyDir: {}
+              jail:
+                emptyDir: {}
+          munge:
+            resources:
+              cpu: 100m
+              memory: 128Mi
+    asserts:
+      - failedTemplate:
+          errorMessage: ".Values.slurmConfig.suspendTime is required when any nodeset has ephemeralNodes=true."
+
+  - it: fails when initial ephemeral workers exceed replicas
+    template: templates/slurm-cluster/slurm-cluster-cr.yaml
+    set:
+      slurmConfig:
+        suspendTime: 300
+      nodesets:
+        - name: worker
+          replicas: 2
+          ephemeralNodes: true
+          initialNumberEphemeralNodes: 3
+          slurmd:
+            resources:
+              cpu: "1"
+              memory: 1Gi
+            volumes:
+              spool:
+                emptyDir: {}
+              jail:
+                emptyDir: {}
+          munge:
+            resources:
+              cpu: 100m
+              memory: 128Mi
+    asserts:
+      - failedTemplate:
+          errorMessage: ".Values.nodesets[worker].initialNumberEphemeralNodes must be less than or equal to replicas."

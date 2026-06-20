@@ -102,6 +102,9 @@ All notable changes to the reusable Codex skills are tracked here.
 - Hardened `agentic-sdlc-test` hook fixture execution so subprocesses disable
   Python bytecode writes and do not create `__pycache__` artifacts in skill
   source folders.
+- Aligned `global-context-management` and `config-codex` local setup guidance
+  to syntax-check rendered hooks without bytecode writes, and clarified that
+  installable global-context hook bundle sync is owned by `config-codex`.
 - Strengthened `agentic-sdlc-test` design-contract preflight so it verifies the
   Agentic SDLC design document includes the workflow verification procedure and
   report path, not only the core SDLC lifecycle terms.
@@ -126,6 +129,22 @@ All notable changes to the reusable Codex skills are tracked here.
   instructions as hard gates; `SKILL.md` now also has explicit stateful
   workflow sections for inputs, required reads, writes, idempotency, failure
   handling, must-not rules, process, and completion criteria.
+- Aligned optional hook-assisted subagent delegation so the opt-in policy
+  template is enabled, hook context explicitly asks the parent Codex agent to
+  dynamically spawn useful read-only helpers, the local idempotency preflight
+  flags present-but-disabled policy files, and docs keep hook-direct tool calls
+  out of scope.
+- Updated `config-codex` output guidance so local setup runs report aligned,
+  not-aligned, and locally blocked surfaces explicitly, including exact manual
+  out-of-band remediation steps when a PreToolUse or permission guard blocks a
+  safe patch, and added disposable fixture coverage for local idempotency
+  policy-file edge cases.
+- Narrowed the Agentic SDLC PreToolUse guard so `apply_patch` may align only the
+  exact resolved `$CODEX_HOME/AGENTS.md` file, while deletion, moves, shell
+  writes, MCP writes, `$CODEX_HOME/config.toml`, and `$CODEX_HOME/hooks` remain
+  blocked; the Agentic SDLC verifier now requires this contract in the design
+  document and can locate the repo design doc when run from an installed skill
+  copy.
 - Renamed SDLC-only workflow skills and the coordinator to `sdlc-*` names, and
   made their front matter descriptions start with
   `Use only as part of the Agentic SDLC workflow;` so tool discovery separates
@@ -262,11 +281,12 @@ All notable changes to the reusable Codex skills are tracked here.
   `${CODEX_HOME:-$HOME/.codex}`, and the skill READMEs plus `SKILL.md`
   contracts now state the same installer-versus-runtime split.
 - Clarified that `multi_agent`, configured `[agents.*]` roles, hooks, and skill
-  activation make subagent delegation possible but do not force automatic
-  delegation. Current runtime probes must explicitly ask Codex to use or spawn
-  subagents, use delegation, or run parallel agents; the `codex exec` examples
-  now use the current `--sandbox read-only` flag instead of the obsolete
-  `--ask-for-approval` option.
+  activation make subagent delegation possible but do not directly spawn
+  helpers. Current runtime probes must explicitly ask Codex to use or spawn
+  subagents, use delegation, or run parallel agents, or rely on a user-enabled
+  local hook policy that injects that explicit request; the `codex exec`
+  examples now use the current `--sandbox read-only` flag instead of the
+  obsolete `--ask-for-approval` option.
 - Added opt-in hook-assisted read-only subagent delegation for
   `global-context-management`: the `UserPromptSubmit` hook can now discover
   configured read-only agents from `$CODEX_HOME/config.toml` and

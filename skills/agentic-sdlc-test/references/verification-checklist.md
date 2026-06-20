@@ -51,6 +51,8 @@ Verify `docs/agentic-sdlc-design.md` includes:
 - `Full workflow test`
 - `$agentic-sdlc-test`
 - `~/.codex/sdlc-verification/report.md`
+- the exact `$CODEX_HOME/AGENTS.md` `apply_patch` exception, including
+  delete/move denial and shell/MCP/config/hooks non-exceptions
 
 ## Static Discovery
 
@@ -105,6 +107,9 @@ Deny cases:
 - Broad destructive shell commands.
 - Credential-path writes.
 - Patches containing obvious secret material.
+- Deleting or moving the exact `$CODEX_HOME/AGENTS.md` file.
+- Shell or MCP writes to the exact `$CODEX_HOME/AGENTS.md` file.
+- `apply_patch` edits to `$CODEX_HOME/config.toml` or `$CODEX_HOME/hooks`.
 
 Authorization handoff:
 

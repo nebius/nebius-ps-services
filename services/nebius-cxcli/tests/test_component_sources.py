@@ -3092,7 +3092,7 @@ def test_bundled_mk8s_declares_optional_wizard_field_override() -> None:
         "args": {"platform_prefix": "gpu-"},
     }
     assert mk8s_wizard_fields["inputs.node_group_defaults.gpu.preset"]["options"] == {
-        "from": "compute_platform_presets",
+        "from": "mk8s_gpu_capacity_choices",
         "args": {
             "platform_path": "inputs.node_group_defaults.gpu.platform",
             "reservation_policy_path": "inputs.node_group_defaults.gpu.reservation.policy",
@@ -3164,6 +3164,16 @@ def test_bundled_mk8s_declares_optional_wizard_field_override() -> None:
     }
     assert mk8s_wizard_fields["inputs.soperator.worker_total_nodes"] == {
         "default": 1,
+        "write_default_to_config": True,
+        "type_hint": "number",
+    }
+    assert mk8s_wizard_fields["inputs.soperator.worker_ephemeral_nodes.enabled"] == {
+        "default": False,
+        "write_default_to_config": True,
+        "type_hint": "bool",
+    }
+    assert mk8s_wizard_fields["inputs.soperator.worker_ephemeral_nodes.suspend_time_seconds"] == {
+        "default": 300,
         "write_default_to_config": True,
         "type_hint": "number",
     }

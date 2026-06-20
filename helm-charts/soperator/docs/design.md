@@ -59,7 +59,7 @@ The short version:
 - [Production Operations](#production-operations)
   - [Uninstall Model](#uninstall-model)
   - [Persistent Slurm Config](#persistent-slurm-config)
-  - [Scaling Workers](#scaling-workers)
+  - [Soperator Autoscaling](#soperator-autoscaling)
   - [Immutable NodeSet Storage](#immutable-nodeset-storage)
   - [Accounting And QoS](#accounting-and-qos)
   - [Enroot And Pyxis Cleanup](#enroot-and-pyxis-cleanup)
@@ -1326,6 +1326,92 @@ the rendered worker pod plus sidecars and system overhead. Separately,
 `nodesets[].nodeConfig.static` describes the Slurm topology advertised to
 Slurm, such as sockets, cores, and threads.
 
+For Nebius production profiles, keep one Slurm worker pod aligned with one
+Kubernetes worker VM. Soperator does not enforce this with a DaemonSet; worker
+pods come from Soperator `NodeSet` resources reconciled into OpenKruise
+StatefulSets, so Kubernetes can place more than one worker pod on a host if the
+pod resources and scheduling rules allow it. The production contract gets the
+one-to-one layout by matching each worker pod's resource request to the selected
+MK8s worker shape:
+
+| MK8s worker shape | MK8s workers | `slurmd.resources.gpu` | NodeSet replicas | Slurm workers |
+| --- | ---: | ---: | ---: | ---: |
+| `1gpu-*` | 5 | 1 | 5 | 5 |
+| `8gpu-*` | 5 | 8 | 5 | 5 |
+
+For cxcli-managed profiles, `inputs.soperator.worker_total_nodes` means
+Kubernetes worker hosts. It should match the worker node group host count and
+the Soperator worker `nodesets[].replicas` count; it is not total GPU count. GPU
+count per host goes into `nodesets[].slurmd.resources.gpu`, derived from the
+selected worker preset.
+
+Example: 5 x 1-GPU worker hosts:
+
+```yaml
+inputs:
+  soperator:
+    worker_total_nodes: 5
+    worker_nodes_per_group: 100
+  node_groups:
+    worker:
+      node_count: 5
+      platform: gpu-h100-sxm
+      preset: 1gpu-16vcpu-200gb
+      gpu: true
+      # no gpu_cluster_key
+  # no gpu_clusters
+```
+
+Soperator materializes:
+
+```yaml
+nodesets:
+  - name: worker
+    replicas: 5
+    slurmd:
+      resources:
+        gpu: 1
+```
+
+Meaning: 5 Slurm worker nodes, 1 GPU each, total 5 GPUs.
+
+Example: 5 x 8-GPU worker hosts:
+
+```yaml
+inputs:
+  soperator:
+    worker_total_nodes: 5
+    worker_nodes_per_group: 100
+  gpu_clusters:
+    workers:
+      infiniband_fabric: fabric-6
+  node_groups:
+    worker:
+      node_count: 5
+      platform: gpu-h100-sxm
+      preset: 8gpu-128vcpu-1600gb
+      gpu: true
+      gpu_cluster_key: workers
+```
+
+Soperator materializes:
+
+```yaml
+nodesets:
+  - name: worker
+    replicas: 5
+    slurmd:
+      resources:
+        gpu: 8
+```
+
+Meaning: 5 Slurm worker nodes, 8 GPUs each, total 40 GPUs.
+
+Do not model one 8-GPU VM as eight Slurm worker pods unless the product is
+deliberately adding a multi-worker-per-host mode. That mode changes Slurm
+topology, GPU accounting, failure boundaries, and InfiniBand / GPUDirect-RDMA
+assumptions, and it needs explicit placement and validation coverage.
+
 Common NodeSet names:
 
 ```text
@@ -2087,9 +2173,9 @@ kubectl -n soperator exec login-0 -c sshd -- scontrol show config
 kubectl -n soperator exec login-0 -c sshd -- scontrol show partition high
 ```
 
-### Scaling Workers
+### Soperator Autoscaling
 
-Worker scaling has two separate desired states:
+Soperator worker autoscaling is designed around two separate desired states:
 
 - MK8s node group size: Kubernetes host capacity.
 - Soperator `NodeSet.spec.replicas`: Slurm worker pod count.
@@ -2099,6 +2185,205 @@ Kubernetes capacity. Scaling only the OpenKruise StatefulSet is temporary and
 can be undone by Soperator. In cxcli, the Soperator profile should update the
 MK8s node group count and the matching `nodesets[].replicas` value in the same
 rendered config.
+
+There are three supported operating modes.
+
+#### Fixed Worker Capacity
+
+Fixed worker capacity is the default chart model. Keep the one-to-one contract
+direct:
+
+```yaml
+node_groups:
+  worker:
+    node_count: 5
+
+nodesets:
+  - name: worker
+    replicas: 5
+```
+
+This means the chart declares five Slurm worker pods. With five matching
+Kubernetes worker hosts, Slurm sees five worker nodes. If fewer matching hosts
+exist, the missing pods can remain pending until host capacity appears.
+
+#### Infrastructure Autoscaling Without Slurm Demand Scaling
+
+MK8s node-group autoscaling by itself changes the host capacity range. It does
+not change the fact that a non-ephemeral Soperator NodeSet desires its full
+replica count.
+
+Current cxcli worker autoscaling without
+`inputs.soperator.worker_ephemeral_nodes.enabled=true` materializes the upper
+bound as the Soperator desired worker count:
+
+```yaml
+worker_autoscaling:
+  enabled: true
+  min_node_count: 1
+  max_node_count: 5
+```
+
+renders conceptually as:
+
+```yaml
+node_groups:
+  worker:
+    autoscaling:
+      min_node_count: 1
+      max_node_count: 5
+
+nodesets:
+  - name: worker
+    replicas: 5
+```
+
+That is maximum-capacity materialization, not Slurm-demand autoscaling. Because
+the non-ephemeral NodeSet desires five worker pods, missing pods can remain
+pending when the Kubernetes node group is below five workers, and those pending
+pods can themselves drive the MK8s autoscaler back toward the maximum.
+
+This mode can still be useful when operators want the Kubernetes worker group to
+have a min/max range while Soperator always declares the maximum Slurm capacity.
+It is not the right mode for idle worker scale-down.
+
+#### Ephemeral NodeSet Slurm-Demand Scaling
+
+Slurm-demand elasticity uses upstream Soperator ephemeral NodeSets. In this
+mode, `NodeSet.spec.replicas` is the maximum worker ordinal range, while
+runtime active workers are stored in a `NodeSetPowerState` object.
+
+Direct chart values:
+
+```yaml
+slurmConfig:
+  suspendTime: 300
+
+nodesets:
+  - name: worker
+    replicas: 5
+    ephemeralNodes: true
+    initialNumberEphemeralNodes: 1
+```
+
+The important semantics are:
+
+- `replicas` is the maximum Slurm worker range, not the current active pod
+  count.
+- `ephemeralNodes: true` marks the NodeSet as power-managed.
+- `initialNumberEphemeralNodes` is used only when the `NodeSetPowerState` is
+  first created. It is not a permanent minimum, and changing it later does not
+  scale an already-created `NodeSetPowerState`; use Slurm power control /
+  `NodeSetPowerState` for day-2 active-node changes.
+- `slurmConfig.suspendTime` is the idle time in seconds after which ephemeral
+  cloud nodes are eligible for Slurm power down. It must be finite and
+  non-negative. With infinite suspend time, Slurm power-save behavior does not
+  call the suspend path needed by Soperator ephemeral nodes.
+- `ephemeralTopologyWaitTimeout` can be set per NodeSet when topology-aware
+  ephemeral startup needs an explicit wait bound.
+
+For cxcli-managed Slurm-demand workers, enable the explicit helper together
+with worker autoscaling:
+
+```yaml
+inputs:
+  soperator:
+    worker_autoscaling:
+      enabled: true
+      min_node_count: 1
+      max_node_count: 5
+    worker_ephemeral_nodes:
+      enabled: true
+      suspend_time_seconds: 300
+```
+
+cxcli materializes the chart contract:
+
+```yaml
+node_groups:
+  worker:
+    autoscaling:
+      min_node_count: 1
+      max_node_count: 5
+
+slurmConfig:
+  suspendTime: 300
+
+nodesets:
+  - name: worker
+    replicas: 5
+    ephemeralNodes: true
+    initialNumberEphemeralNodes: 1
+```
+
+The cxcli contract validates and materializes these fields together:
+
+- MK8s worker node groups use autoscaling `min_node_count` / `max_node_count`.
+- Soperator worker `nodesets[].replicas` equals the matching maximum capacity.
+- Worker NodeSets set `ephemeralNodes: true`.
+- Worker NodeSets set `initialNumberEphemeralNodes` from the matching worker
+  autoscaling `min_node_count`.
+- `slurmConfig.suspendTime` must be finite and non-negative.
+- The worker pod resource request still matches the selected MK8s worker VM
+  shape so one Slurm worker pod equals one Kubernetes worker VM.
+
+#### Runtime Power-Management Flow
+
+The runtime control loop is:
+
+1. Soperator creates one `NodeSetPowerState` per ephemeral NodeSet.
+2. `NodeSetPowerState.spec.activeNodes` stores the active worker ordinals, such
+   as `[0, 3, 5]`.
+3. Slurm treats inactive workers as cloud/powered-down nodes.
+4. When jobs need more workers, Slurm calls `ResumeProgram`.
+5. When workers are idle for at least `slurmConfig.suspendTime`, Slurm calls
+   `SuspendProgram`.
+6. Both programs invoke Soperator `power-manager` from the `slurmctld` pod.
+7. `power-manager` updates `NodeSetPowerState.spec.activeNodes`.
+8. Soperator reconciles the worker OpenKruise StatefulSet so pods exist only
+   for active ordinals.
+9. Kubernetes schedules those pods; the cloud node-group autoscaler adds hosts
+   for pending active worker pods and can remove idle hosts after workers power
+   down.
+
+The chart defaults the controller service account and Role/RoleBinding on so
+`slurmctld` can run `power-manager` and update `NodeSetPowerState`:
+
+```yaml
+slurmNodes:
+  controller:
+    serviceAccount:
+      create: true
+      name: ""
+    rbac:
+      create: true
+```
+
+If direct Helm users disable that service account or RBAC, ephemeral nodes can
+render but runtime power management will not be able to update
+`NodeSetPowerState`.
+
+#### Validation And Boundaries
+
+The chart rejects unsafe partial ephemeral configuration:
+
+- `nodesets[].replicas` must be present and an integer greater than or equal to
+  zero when `ephemeralNodes: true`.
+- `nodesets[].initialNumberEphemeralNodes` must be present, non-negative, and
+  less than or equal to `replicas`.
+- `slurmConfig.suspendTime` must be present and non-negative when any NodeSet
+  is ephemeral.
+- `partitionConfiguration.partitions[].nodeSetRefs` must still reference real
+  NodeSet names.
+
+Ephemeral NodeSets apply only to worker NodeSets. They do not autoscale
+controller, login, accounting, REST, exporter, populate-jail, SConfigController,
+or child-chart workloads. Those roles keep their own Kubernetes scheduling and
+replica settings.
+
+Do not use ephemeral NodeSets to hide a worker shape mismatch. The pod request
+still has to fit the selected Kubernetes worker VM shape, and production Nebius
+profiles still keep one Slurm worker pod per Kubernetes worker VM.
 
 ### Immutable NodeSet Storage
 

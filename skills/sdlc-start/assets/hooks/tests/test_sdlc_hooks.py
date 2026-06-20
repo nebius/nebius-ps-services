@@ -171,6 +171,92 @@ class HookTestCase(unittest.TestCase):
         result = run_hook(PRE_TOOL, self.pre_payload("apply_patch", patch), self.codex_home)
         self.assertEqual(result, {})
 
+    def test_pretool_allows_global_agents_apply_patch(self) -> None:
+        codex_home = Path("/codex-hook-fixture")
+        agents_path = codex_home / "AGENTS.md"
+        patch = f"*** Begin Patch\n*** Add File: {agents_path}\n+# Global AGENTS.md\n*** End Patch\n"
+        result = run_hook(PRE_TOOL, self.pre_payload("apply_patch", patch), codex_home)
+        self.assertEqual(result, {})
+
+    def test_pretool_denies_global_agents_delete_patch(self) -> None:
+        codex_home = Path("/codex-hook-fixture")
+        agents_path = codex_home / "AGENTS.md"
+        patch = f"*** Begin Patch\n*** Delete File: {agents_path}\n*** End Patch\n"
+        result = run_hook(PRE_TOOL, self.pre_payload("apply_patch", patch), codex_home)
+        self.assert_denied(result, "AGENTS.md may be patched but not deleted")
+
+    def test_pretool_denies_move_from_global_agents(self) -> None:
+        codex_home = Path("/codex-hook-fixture")
+        agents_path = codex_home / "AGENTS.md"
+        patch = (
+            "*** Begin Patch\n"
+            f"*** Update File: {agents_path}\n"
+            "*** Move to: docs/moved-agents.md\n"
+            "@@\n"
+            "-# Global AGENTS.md\n"
+            "+# Moved\n"
+            "*** End Patch\n"
+        )
+        result = run_hook(PRE_TOOL, self.pre_payload("apply_patch", patch), codex_home)
+        self.assert_denied(result, "AGENTS.md may be patched but not moved")
+
+    def test_pretool_denies_move_to_global_agents(self) -> None:
+        codex_home = Path("/codex-hook-fixture")
+        agents_path = codex_home / "AGENTS.md"
+        patch = (
+            "*** Begin Patch\n"
+            "*** Update File: src/module.py\n"
+            f"*** Move to: {agents_path}\n"
+            "@@\n"
+            "-print('hello')\n"
+            "+# Global AGENTS.md\n"
+            "*** End Patch\n"
+        )
+        result = run_hook(PRE_TOOL, self.pre_payload("apply_patch", patch), codex_home)
+        self.assert_denied(result, "AGENTS.md may be patched but not moved")
+
+    def test_pretool_denies_global_hooks_apply_patch(self) -> None:
+        codex_home = Path("/codex-hook-fixture")
+        hook_path = codex_home / "hooks" / "user_prompt_context.py"
+        patch = f"*** Begin Patch\n*** Add File: {hook_path}\n+print('blocked')\n*** End Patch\n"
+        result = run_hook(PRE_TOOL, self.pre_payload("apply_patch", patch), codex_home)
+        self.assert_denied(result, "outside the project root")
+
+    def test_pretool_denies_global_config_apply_patch(self) -> None:
+        codex_home = Path("/codex-hook-fixture")
+        config_path = codex_home / "config.toml"
+        patch = f"*** Begin Patch\n*** Add File: {config_path}\n+[features]\n*** End Patch\n"
+        result = run_hook(PRE_TOOL, self.pre_payload("apply_patch", patch), codex_home)
+        self.assert_denied(result, "outside the project root")
+
+    def test_pretool_denies_bash_global_agents_write(self) -> None:
+        codex_home = Path("/codex-hook-fixture")
+        result = run_hook(PRE_TOOL, self.pre_payload("Bash", f"tee {codex_home / 'AGENTS.md'}"), codex_home)
+        self.assert_denied(result, "simple read-only shell commands")
+
+    def test_pretool_denies_non_obvious_bash_global_agents_write(self) -> None:
+        codex_home = Path("/codex-hook-fixture")
+        command = f"python3 -c \"open('{codex_home / 'AGENTS.md'}','w').write('x')\""
+        result = run_hook(PRE_TOOL, self.pre_payload("Bash", command), codex_home)
+        self.assert_denied(result, "simple read-only shell commands")
+
+    def test_pretool_allows_bash_global_agents_read_only_inspection(self) -> None:
+        codex_home = Path("/codex-hook-fixture")
+        result = run_hook(PRE_TOOL, self.pre_payload("Bash", f"cat {codex_home / 'AGENTS.md'}"), codex_home)
+        self.assertEqual(result, {})
+
+    def test_pretool_denies_mcp_global_agents_write(self) -> None:
+        codex_home = Path("/codex-hook-fixture")
+        result = run_hook(
+            PRE_TOOL,
+            self.pre_payload(
+                "mcp__filesystem__write_file",
+                tool_input={"path": str(codex_home / "AGENTS.md"), "content": "# Global AGENTS.md\n"},
+            ),
+            codex_home,
+        )
+        self.assert_denied(result, "outside the project root")
+
     def test_pretool_allows_mcp_read(self) -> None:
         result = run_hook(
             PRE_TOOL,

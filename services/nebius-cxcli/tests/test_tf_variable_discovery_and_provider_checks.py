@@ -805,6 +805,7 @@ def test_wizard_auto_enables_gpu_apps_after_plain_mk8s_gpu_node_group_loop(
     monkeypatch.setattr("nebius_cxcli.cli.resolve_mk8s_gpu_app_selection", _fake_gpu_selection)
 
     prompted_paths: list[str] = []
+    gpu_preset_answers = iter(("1gpu-16vcpu-200gb", "1gpu-16vcpu-200gb|fabric-2"))
 
     def _fake_prompt(
         path_label: str,
@@ -840,7 +841,7 @@ def test_wizard_auto_enables_gpu_apps_after_plain_mk8s_gpu_node_group_loop(
         if path_label.endswith(".inputs.node_groups.gpu.platform"):
             return "gpu-h100-sxm", False
         if path_label.endswith(".inputs.node_groups.gpu.preset"):
-            return "1gpu-16vcpu-200gb", False
+            return next(gpu_preset_answers), False
         if path_label.endswith(".inputs.node_groups.gpu.gpu_stack_source"):
             return "nebius_image", False
         if path_label.endswith(".inputs.node_groups.gpu.gpu_stack_preset"):
@@ -874,6 +875,20 @@ def test_wizard_auto_enables_gpu_apps_after_plain_mk8s_gpu_node_group_loop(
                 return [OptionChoice(value="cuda13.0", label="cuda13.0  (ubuntu24.04)")]
             if provider == "mk8s_node_group_os_values":
                 return [OptionChoice(value="ubuntu24.04", label="ubuntu24.04")]
+            if provider == "mk8s_gpu_capacity_choices" and field_path.endswith(
+                ".inputs.node_groups.gpu.preset"
+            ):
+                return [
+                    OptionChoice(
+                        value="1gpu-16vcpu-200gb|fabric-2",
+                        label="1gpu-16vcpu-200gb on fabric-2",
+                        metadata={
+                            "mk8s_gpu_capacity_choice": True,
+                            "preset": "1gpu-16vcpu-200gb",
+                            "fabric": "",
+                        },
+                    )
+                ]
             if provider == "compute_boot_disk_types":
                 return [OptionChoice(value="NETWORK_SSD", label="NETWORK_SSD")]
             return []
@@ -900,11 +915,15 @@ def test_wizard_auto_enables_gpu_apps_after_plain_mk8s_gpu_node_group_loop(
     ]
     assert "infra.components[0].inputs.node_groups.gpu.resource" in prompted_paths
     assert "infra.components[0].inputs.node_groups.gpu.gpu_stack_source" in prompted_paths
+    assert prompted_paths.count("infra.components[0].inputs.node_groups.gpu.preset") == 2
     assert "infra.components[0].inputs.node_groups.gpu.os" not in prompted_paths
     payload = yaml.safe_load(updated_yaml)
     inputs = payload["infra"]["components"][0]["inputs"]
     assert inputs["node_groups"]["gpu"]["gpu"] is True
     assert inputs["node_groups"]["gpu"]["platform"] == "gpu-h100-sxm"
+    assert inputs["node_groups"]["gpu"]["preset"] == "1gpu-16vcpu-200gb"
+    assert "gpu_cluster_key" not in inputs["node_groups"]["gpu"]
+    assert "gpu_clusters" not in inputs
     assert inputs["node_groups"]["gpu"]["gpu_stack_source"] == "nebius_image"
     assert inputs["node_groups"]["gpu"]["os"] == "ubuntu24.04"
     assert inputs["node_groups"]["gpu"]["boot_disk"] == {
@@ -4250,6 +4269,238 @@ def test_materialize_singleton_provider_defaults_sets_hidden_mk8s_gpu_fabric() -
         payload["infra"]["components"][0]["inputs"]["gpu_clusters"]["workers"]["infiniband_fabric"]
         == "fabric-2"
     )
+
+
+def test_materialize_singleton_provider_defaults_decodes_mk8s_gpu_capacity_choice() -> None:
+    payload = {
+        "version": "v1",
+        "client_info": {
+            "client_name": "demo",
+            "nebius": {
+                "tenant_id": "tenant-1",
+                "project_id": "project-1",
+                "region_id": "us-central1",
+            },
+            "notifications": {"email_enabled": False, "email": None},
+        },
+        "infra": {
+            "components": [
+                {
+                    "id": "mk8s",
+                    "instance_id": "mk8s",
+                    "enabled": True,
+                    "inputs": {
+                        "node_group_defaults": {"gpu": {"platform": "gpu-h100-sxm"}},
+                        "gpu_clusters": {"workers": {}},
+                    },
+                }
+            ]
+        },
+        "apps": {"charts": []},
+    }
+
+    entry = ComponentEntry(
+        id="mk8s",
+        scope="infra",
+        config_path="infra.mk8s",
+        description="Managed Kubernetes",
+        source="../../platform-infra/modules/mk8s",
+        wizard_fields={
+            "inputs.node_group_defaults.gpu.preset": {
+                "options": {
+                    "from": "mk8s_gpu_capacity_choices",
+                    "args": {"platform_path": "inputs.node_group_defaults.gpu.platform"},
+                    "auto_select_single": True,
+                },
+            }
+        },
+    )
+
+    class _Lookup(ProviderOptionLookup):
+        def resolve(self, *, provider, args, payload, field_path):
+            _ = args, payload
+            if provider == "mk8s_gpu_capacity_choices" and field_path.endswith(
+                ".node_group_defaults.gpu.preset"
+            ):
+                return [
+                    OptionChoice(
+                        value="8gpu-128vcpu-1600gb|fabric-6",
+                        label="8gpu-128vcpu-1600gb on fabric-6",
+                        metadata={
+                            "mk8s_gpu_capacity_choice": True,
+                            "preset": "8gpu-128vcpu-1600gb",
+                            "fabric": "fabric-6",
+                        },
+                    )
+                ]
+            return []
+
+        def last_error(self):
+            return None
+
+    _materialize_singleton_provider_defaults(
+        payload=payload,
+        selected_infra={"mk8s"},
+        infra_entries=(entry,),
+        provider_lookup=_Lookup(),
+    )
+
+    inputs = payload["infra"]["components"][0]["inputs"]
+    assert inputs["node_group_defaults"]["gpu"]["preset"] == "8gpu-128vcpu-1600gb"
+    assert inputs["gpu_clusters"] == {"workers": {"infiniband_fabric": "fabric-6"}}
+
+
+def test_provider_allowed_values_include_materialized_mk8s_gpu_capacity_preset() -> None:
+    payload = {
+        "infra": {
+            "components": [
+                {
+                    "id": "mk8s",
+                    "instance_id": "mk8s",
+                    "enabled": True,
+                    "inputs": {
+                        "node_group_defaults": {
+                            "gpu": {
+                                "platform": "gpu-h100-sxm",
+                                "preset": "8gpu-128vcpu-1600gb",
+                            }
+                        }
+                    },
+                }
+            ]
+        }
+    }
+    entry = ComponentEntry(
+        id="mk8s",
+        scope="infra",
+        config_path="infra.mk8s",
+        description="Managed Kubernetes",
+        source="../../platform-infra/modules/mk8s",
+        wizard_fields={
+            "inputs.node_group_defaults.gpu.preset": {
+                "options": {
+                    "from": "mk8s_gpu_capacity_choices",
+                    "args": {"platform_path": "inputs.node_group_defaults.gpu.platform"},
+                },
+            }
+        },
+    )
+
+    class _Lookup(ProviderOptionLookup):
+        def resolve(self, *, provider, args, payload, field_path):
+            _ = args, payload, field_path
+            if provider == "mk8s_gpu_capacity_choices":
+                return [
+                    OptionChoice(
+                        value="8gpu-128vcpu-1600gb|fabric-6",
+                        label="8gpu-128vcpu-1600gb on fabric-6",
+                        metadata={
+                            "mk8s_gpu_capacity_choice": True,
+                            "preset": "8gpu-128vcpu-1600gb",
+                            "fabric": "fabric-6",
+                        },
+                    )
+                ]
+            return []
+
+        def last_error(self):
+            return None
+
+    field_path = "infra.components[0].inputs.node_group_defaults.gpu.preset"
+
+    allowed, providers = cli._provider_allowed_values_for_field(
+        payload=payload,
+        entry=entry,
+        full_path_label=field_path,
+        provider_lookup=_Lookup(),
+    )
+
+    assert providers == ("mk8s_gpu_capacity_choices",)
+    assert allowed == {
+        "8gpu-128vcpu-1600gb",
+        "8gpu-128vcpu-1600gb|fabric-6",
+    }
+
+
+def test_materialize_singleton_provider_defaults_keeps_one_gpu_capacity_choice_ethernet_only() -> (
+    None
+):
+    payload = {
+        "version": "v1",
+        "client_info": {
+            "client_name": "demo",
+            "nebius": {
+                "tenant_id": "tenant-1",
+                "project_id": "project-1",
+                "region_id": "us-central1",
+            },
+            "notifications": {"email_enabled": False, "email": None},
+        },
+        "infra": {
+            "components": [
+                {
+                    "id": "mk8s",
+                    "instance_id": "mk8s",
+                    "enabled": True,
+                    "inputs": {
+                        "node_group_defaults": {"gpu": {"platform": "gpu-h100-sxm"}},
+                        "gpu_clusters": {"workers": {"infiniband_fabric": "fabric-old"}},
+                    },
+                }
+            ]
+        },
+        "apps": {"charts": []},
+    }
+
+    entry = ComponentEntry(
+        id="mk8s",
+        scope="infra",
+        config_path="infra.mk8s",
+        description="Managed Kubernetes",
+        source="../../platform-infra/modules/mk8s",
+        wizard_fields={
+            "inputs.node_group_defaults.gpu.preset": {
+                "options": {
+                    "from": "mk8s_gpu_capacity_choices",
+                    "args": {"platform_path": "inputs.node_group_defaults.gpu.platform"},
+                    "auto_select_single": True,
+                },
+            }
+        },
+    )
+
+    class _Lookup(ProviderOptionLookup):
+        def resolve(self, *, provider, args, payload, field_path):
+            _ = args, payload
+            if provider == "mk8s_gpu_capacity_choices" and field_path.endswith(
+                ".node_group_defaults.gpu.preset"
+            ):
+                return [
+                    OptionChoice(
+                        value="1gpu-16vcpu-200gb|fabric-2",
+                        label="1gpu-16vcpu-200gb on fabric-2",
+                        metadata={
+                            "mk8s_gpu_capacity_choice": True,
+                            "preset": "1gpu-16vcpu-200gb",
+                            "fabric": "",
+                        },
+                    )
+                ]
+            return []
+
+        def last_error(self):
+            return None
+
+    _materialize_singleton_provider_defaults(
+        payload=payload,
+        selected_infra={"mk8s"},
+        infra_entries=(entry,),
+        provider_lookup=_Lookup(),
+    )
+
+    inputs = payload["infra"]["components"][0]["inputs"]
+    assert inputs["node_group_defaults"]["gpu"]["preset"] == "1gpu-16vcpu-200gb"
+    assert "gpu_clusters" not in inputs
 
 
 def test_materialize_vm_image_defaults_sets_first_live_image_family() -> None:

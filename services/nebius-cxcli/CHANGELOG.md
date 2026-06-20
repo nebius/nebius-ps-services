@@ -6,6 +6,29 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Fixed Soperator CPU worker NodeSet materialization so profile-managed
+  non-GPU workers request a host-sized CPU/memory slice from the selected MK8s
+  worker preset and advertise matching Slurm CPU topology. This preserves the
+  one Slurm worker pod to one Kubernetes worker VM contract and gives MK8s
+  autoscaling real scheduler pressure for CPU-only worker pools.
+- Fixed sharded Soperator worker NodeSet names so generated NodeSets use the
+  matching MK8s worker shard key (`worker-0`, `worker-cpu-0`) instead of
+  duplicating the template prefix (`worker-worker-0`,
+  `worker-cpu-worker-cpu-0`).
+- Fixed Soperator smoke validation for ephemeral worker clusters so the
+  one-task `srun` check allows a longer Slurm resume window when the selected
+  partition is backed by cloud/powered-down workers.
+- Fixed Soperator GPU worker autoscaling from zero so cxcli runs MK8s GPU
+  validations after applying Soperator, letting worker pods create the
+  Kubernetes autoscaler pressure that brings GPU hosts up. Also downsized
+  generated GPU worker `nodeConfig.static` CPU topology when a selected preset,
+  such as `1gpu-16vcpu-200gb`, has fewer vCPUs than the profile template.
+- Added explicit Soperator worker ephemeral-node support for production MK8s
+  profiles. `worker_autoscaling` still materializes maximum worker capacity by
+  itself, but `worker_ephemeral_nodes.enabled=true` now requires worker
+  autoscaling, renders upstream Soperator ephemeral NodeSet fields, derives
+  `initialNumberEphemeralNodes` from `worker_autoscaling.min_node_count`, and
+  writes finite non-negative `slurmConfig.suspendTime`.
 - Refactored lifecycle report naming under the single `generated/reports/`
   folder. `upgrade node-template` now writes
   `upgrade-node-template-report.md` / `.json` after readiness verification,
@@ -43,17 +66,31 @@ All notable changes to this project are tracked here. This changelog follows
   `inputs.gpu_clusters.<key>.infiniband_fabric` from live Capacity Dashboard
   rows without a raw fabric prompt, and validation/quota checks now reject or
   report keyed GPU clusters missing that fabric.
-- Expanded MK8s GPU preset prompts to print all live Capacity Dashboard rows
-  for the selected platform and region by preset, fabric, regular-vm slots,
-  and reserved VM slots before the preset menu. Soperator GPU profile-backed
-  creates now also keep regular 1-GPU presets selectable when a previous
-  derived fabric exists, ask `inputs.node_group_defaults.gpu.reservation.policy`,
-  default it to `AUTO`, materialize it into generated GPU worker node groups,
-  and validate edited GPU `reservation.policy` values.
+- Changed MK8s GPU preset prompts to use live Capacity Dashboard rows as the
+  selectable choices for the selected platform and region. Selecting a
+  cluster-capable multi-GPU row now materializes both the Terraform preset and
+  `inputs.gpu_clusters.<key>.infiniband_fabric`, while selecting a 1-GPU
+  Ethernet-only row materializes only the preset and omits the GPU-cluster
+  fabric. Soperator GPU profile-backed creates now also keep regular 1-GPU
+  presets selectable when a previous derived fabric exists, ask
+  `inputs.node_group_defaults.gpu.reservation.policy`, default it to `AUTO`,
+  materialize it into generated GPU worker node groups, and validate edited GPU
+  `reservation.policy` values.
+- Fixed Soperator profile-backed 1-GPU materialization to clear
+  profile-managed `inputs.gpu_clusters` entries and worker `gpu_cluster_key`
+  references together. Strict validation now runs the bundled component runtime
+  rules before live quota/capacity checks, so stale GPU-cluster references fail
+  deterministically instead of being masked by unrelated quota shortages.
+- Made MK8s GPU capacity row selection fail closed when live Capacity Dashboard
+  rows exist but matching Compute preset metadata is unavailable, preventing
+  cluster-capable rows from being silently treated as Ethernet-only.
 - Moved MK8s GPU reservation policy before GPU preset selection for both
   profile-backed and plain node-group flows. The selected policy now filters
   live Capacity Dashboard preset/fabric choices (`AUTO`, `STRICT`, `FORBID`),
   and GPU preset menu labels omit redundant vCPU/RAM/GPU parentheticals.
+- Fixed MK8s GPU capacity display for selected reservation policies: `FORBID`
+  live rows and menu labels now show only regular-vm slots, while `STRICT`
+  labels show only reserved slots.
 - Improved GPU Capacity Dashboard choice labels and recommendations: live
   advice rows now display VM slots with the selected preset's GPU totals, and
   GPU preset/fabric recommendations prefer matching reserved-capacity rows

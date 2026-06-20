@@ -473,6 +473,13 @@
         }
       }
     },
+    "slurmConfig": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "suspendTime": { "type": "integer", "minimum": 0 }
+      }
+    },
     "nodesets": {
       "type": "array",
       "minItems": 1,
@@ -482,6 +489,10 @@
         "required": ["name", "slurmd", "munge"],
         "properties": {
           "name": { "type": "string", "minLength": 1 },
+          "replicas": { "type": "integer", "minimum": 0 },
+          "ephemeralNodes": { "type": "boolean" },
+          "initialNumberEphemeralNodes": { "type": "integer", "minimum": 0 },
+          "ephemeralTopologyWaitTimeout": { "type": "integer", "minimum": 0 },
           "slurmd": {
             "type": "object",
             "additionalProperties": true,

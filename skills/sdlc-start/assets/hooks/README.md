@@ -25,6 +25,12 @@ local Codex home.
 - The PreToolUse hook should keep out-of-scope writes blocked. Do not weaken
   it to allow arbitrary edits to `$CODEX_HOME/hooks` from unrelated project
   workspaces.
+- The PreToolUse hook may allow `apply_patch` edits to the exact resolved
+  `$CODEX_HOME/AGENTS.md` file so reviewed global Codex guidance can be
+  aligned. Do not allow that file to be deleted or moved, and do not extend
+  the exception to shell writes, MCP writes, `$CODEX_HOME/config.toml`, or
+  `$CODEX_HOME/hooks`. Shell commands that reference global `AGENTS.md` must
+  be simple read-only inspections.
 - The PreToolUse hook must allow writes under `$CODEX_HOME/task-state` so the
   global-context-management task-state file can be created and updated by the
   parent agent. This global continuity state is separate from private SDLC run
@@ -36,11 +42,18 @@ From the `skills/` directory:
 
 ```bash
 python3 sdlc-start/assets/hooks/tests/test_sdlc_hooks.py
-python3 -m py_compile \
-  sdlc-start/assets/hooks/pre_tool_use_sdlc_policy.py \
-  sdlc-start/assets/hooks/stop_sdlc_continue.py \
-  sdlc-start/assets/hooks/lib/sdlc_policy.py \
-  sdlc-start/assets/hooks/lib/sdlc_state.py
+python3 - <<'PY'
+from pathlib import Path
+
+for path in (
+    Path("sdlc-start/assets/hooks/pre_tool_use_sdlc_policy.py"),
+    Path("sdlc-start/assets/hooks/stop_sdlc_continue.py"),
+    Path("sdlc-start/assets/hooks/lib/sdlc_policy.py"),
+    Path("sdlc-start/assets/hooks/lib/sdlc_state.py"),
+):
+    compile(path.read_text(encoding="utf-8"), str(path), "exec")
+print("hook scripts parse")
+PY
 ```
 
 ## Install To Local Runtime

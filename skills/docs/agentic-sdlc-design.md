@@ -169,7 +169,11 @@ private SDLC state leaks into the repository, destructive Git commands,
 protected-branch commit or push attempts, force pushes, branch deletion, and
 guarded Git or GitHub actions without valid short-lived authorization. It also
 allows writes under `$CODEX_HOME/task-state` so global task-state checkpoints
-remain separate from private SDLC run state.
+remain separate from private SDLC run state. The only reviewed global Codex
+configuration write exception is an `apply_patch` edit to the exact resolved
+`$CODEX_HOME/AGENTS.md` file. Deleting or moving that file remains blocked, and
+shell writes, MCP writes, `$CODEX_HOME/config.toml`, and `$CODEX_HOME/hooks`
+remain outside that exception.
 
 The hook bundle is source code in the skills repository. Installed copies under
 `$CODEX_HOME/hooks` are runtime artifacts and can drift. Hook fixes should be

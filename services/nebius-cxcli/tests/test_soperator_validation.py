@@ -378,9 +378,7 @@ def test_soperator_cluster_validation_fails_on_active_old_source_flux(
         )
 
     report = json.loads(
-        (tmp_path / "soperator-cluster-validation-report-training.json").read_text(
-            encoding="utf-8"
-        )
+        (tmp_path / "soperator-cluster-validation-report-training.json").read_text(encoding="utf-8")
     )
     failed = [check for check in report["checks"] if check["status"] == "failed"]
     assert failed[0]["name"] == "Old source Flux desired state"
@@ -478,9 +476,7 @@ def test_soperator_cluster_validation_reports_pending_soperator_pods(
         )
 
     report = json.loads(
-        (tmp_path / "soperator-cluster-validation-report-training.json").read_text(
-            encoding="utf-8"
-        )
+        (tmp_path / "soperator-cluster-validation-report-training.json").read_text(encoding="utf-8")
     )
     failed = [check for check in report["checks"] if check["status"] == "failed"]
     assert failed[0]["name"] == "Soperator pod scheduling"
@@ -551,7 +547,13 @@ def test_soperator_cluster_validation_runs_slurm_gpu_and_nccl_benchmark(
             return SoperatorValidationCommandResult(
                 command,
                 0,
-                json.dumps({"items": [{"metadata": {"name": "training"}, "status": {"phase": "Available"}}]}),
+                json.dumps(
+                    {
+                        "items": [
+                            {"metadata": {"name": "training"}, "status": {"phase": "Available"}}
+                        ]
+                    }
+                ),
                 "",
             )
         if command[:8] == (
@@ -649,7 +651,7 @@ def test_soperator_cluster_validation_runs_slurm_gpu_and_nccl_benchmark(
     assert any("mpirun --allow-run-as-root" in script for script in smoke_scripts)
     assert any("salloc --job-name=cxcli-soperator-nccl" in script for script in smoke_scripts)
     assert any(
-        "--nodes=\"$target_nodes\" --ntasks=\"$target_nodes\" --ntasks-per-node=1" in script
+        '--nodes="$target_nodes" --ntasks="$target_nodes" --ntasks-per-node=1' in script
         for script in smoke_scripts
     )
     assert any(
@@ -722,7 +724,11 @@ def test_soperator_cluster_validation_runs_slurm_nccl_benchmark_on_one_8_gpu_nod
                 command,
                 0,
                 json.dumps(
-                    {"items": [{"metadata": {"name": "training"}, "status": {"phase": "Available"}}]}
+                    {
+                        "items": [
+                            {"metadata": {"name": "training"}, "status": {"phase": "Available"}}
+                        ]
+                    }
                 ),
                 "",
             )
@@ -874,7 +880,11 @@ def test_soperator_cluster_validation_skips_slurm_nccl_benchmark_on_one_total_gp
                 command,
                 0,
                 json.dumps(
-                    {"items": [{"metadata": {"name": "training"}, "status": {"phase": "Available"}}]}
+                    {
+                        "items": [
+                            {"metadata": {"name": "training"}, "status": {"phase": "Available"}}
+                        ]
+                    }
                 ),
                 "",
             )
@@ -1004,7 +1014,13 @@ def test_soperator_cluster_validation_prefers_idle_cpu_partition_for_smoke(
             return SoperatorValidationCommandResult(
                 command,
                 0,
-                json.dumps({"items": [{"metadata": {"name": "training"}, "status": {"phase": "Available"}}]}),
+                json.dumps(
+                    {
+                        "items": [
+                            {"metadata": {"name": "training"}, "status": {"phase": "Available"}}
+                        ]
+                    }
+                ),
                 "",
             )
         if command[:8] == (
@@ -1048,6 +1064,122 @@ def test_soperator_cluster_validation_prefers_idle_cpu_partition_for_smoke(
     assert report["passed"] is True
     assert smoke_commands
     assert "--partition=cpu" in smoke_commands[0][10]
+
+
+def test_soperator_cluster_validation_allows_cloud_node_resume_for_smoke(
+    tmp_path: Path,
+) -> None:
+    spec = {
+        "kind": SOPERATOR_CLUSTER_VALIDATION_KIND,
+        "name": "Soperator cluster smoke test (training)",
+        "target_ref": "training",
+        "namespace": "soperator",
+        "cluster_name": "training",
+        "kube_context": "training-context",
+        "report_file": "soperator-cluster-validation-report-training.json",
+    }
+    smoke_scripts: list[str] = []
+    smoke_timeouts: list[int] = []
+
+    def _runner(
+        args,
+        *,
+        input_text: str | None = None,
+        timeout_seconds: int = 300,
+        check: bool = True,
+    ) -> SoperatorValidationCommandResult:
+        del input_text, check
+        command = tuple(str(item) for item in args)
+        if command[:7] == (
+            "kubectl",
+            "--context",
+            "training-context",
+            "-n",
+            "soperator",
+            "get",
+            "pods",
+        ):
+            return SoperatorValidationCommandResult(
+                command,
+                0,
+                json.dumps(
+                    {
+                        "items": [
+                            {
+                                "metadata": {
+                                    "name": "login-0",
+                                    "labels": {"app.kubernetes.io/component": "login"},
+                                },
+                                "status": {"phase": "Running"},
+                            }
+                        ]
+                    }
+                ),
+                "",
+            )
+        if command[:8] == (
+            "kubectl",
+            "--context",
+            "training-context",
+            "-n",
+            "soperator",
+            "get",
+            "slurmclusters",
+            "-o",
+        ):
+            return SoperatorValidationCommandResult(
+                command,
+                0,
+                json.dumps(
+                    {
+                        "items": [
+                            {"metadata": {"name": "training"}, "status": {"phase": "Available"}}
+                        ]
+                    }
+                ),
+                "",
+            )
+        if command[:8] == (
+            "kubectl",
+            "--context",
+            "training-context",
+            "-n",
+            "soperator",
+            "exec",
+            "login-0",
+            "--",
+        ):
+            if command[8:11] == ("sinfo", "-h", "-o") and command[11] == "%t":
+                return SoperatorValidationCommandResult(command, 0, "idle~\n", "")
+            if command[8:11] == ("sinfo", "-h", "-o") and command[11] == "%P|%t|%G":
+                return SoperatorValidationCommandResult(command, 0, "cpu|idle~|(null)\n", "")
+            if command[8:12] == ("sinfo", "-h", "-N", "-p"):
+                return SoperatorValidationCommandResult(command, 0, "idle~\n", "")
+            if command[8:10] == ("squeue", "-h"):
+                return SoperatorValidationCommandResult(command, 0, "", "")
+            if command[8:10] == ("bash", "-lc"):
+                smoke_scripts.append(command[10])
+                smoke_timeouts.append(timeout_seconds)
+                return SoperatorValidationCommandResult(
+                    command,
+                    0,
+                    "cxcli-soperator-srun-ok\nworker-cpu-0\n",
+                    "",
+                )
+        return SoperatorValidationCommandResult(command, 0, "ok\n", "")
+
+    written = run_soperator_cluster_validations(
+        [spec],
+        reports_dir=tmp_path,
+        command_runner=_runner,
+    )
+
+    report = json.loads(written[0].read_text(encoding="utf-8"))
+    assert report["passed"] is True
+    assert smoke_scripts
+    assert "--partition=cpu" in smoke_scripts[0]
+    assert "--immediate=600" in smoke_scripts[0]
+    assert smoke_timeouts == [900]
     assert "partition cpu" in report["checks"][-1]["summary"]
 
 
@@ -1111,7 +1243,13 @@ def test_soperator_cluster_validation_marks_inval_nodes_unhealthy(tmp_path: Path
             return SoperatorValidationCommandResult(
                 command,
                 0,
-                json.dumps({"items": [{"metadata": {"name": "training"}, "status": {"phase": "Available"}}]}),
+                json.dumps(
+                    {
+                        "items": [
+                            {"metadata": {"name": "training"}, "status": {"phase": "Available"}}
+                        ]
+                    }
+                ),
                 "",
             )
         if command[:8] == (
@@ -1147,9 +1285,7 @@ def test_soperator_cluster_validation_marks_inval_nodes_unhealthy(tmp_path: Path
         )
 
     report = json.loads(
-        (tmp_path / "soperator-cluster-validation-report-training.json").read_text(
-            encoding="utf-8"
-        )
+        (tmp_path / "soperator-cluster-validation-report-training.json").read_text(encoding="utf-8")
     )
     assert report["passed"] is False
     node_status = next(check for check in report["checks"] if check["name"] == "Slurm node status")

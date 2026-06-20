@@ -32,8 +32,10 @@ metadata:
     {{- end }}
 
 spec:
-  {{- with (.replicas | default 1) }}
-  replicas: {{ . }}
+  {{- if hasKey . "replicas" }}
+  replicas: {{ .replicas }}
+  {{- else }}
+  replicas: 1
   {{- end }}
 
   {{- with (.maxUnavailable | default "20%") }}
@@ -48,8 +50,8 @@ spec:
   initialNumberEphemeralNodes: {{ .initialNumberEphemeralNodes }}
   {{- end }}
 
-  {{- with .ephemeralTopologyWaitTimeout }}
-  ephemeralTopologyWaitTimeout: {{ . }}
+  {{- if hasKey . "ephemeralTopologyWaitTimeout" }}
+  ephemeralTopologyWaitTimeout: {{ .ephemeralTopologyWaitTimeout }}
   {{- end }}
 
   {{- with .gpu }}

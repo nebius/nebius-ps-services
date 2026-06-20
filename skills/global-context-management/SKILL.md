@@ -44,9 +44,10 @@ implementation and final judgment.
 - Do not treat skill activation, generic hook context, or configured
   `[agents.*]` roles as delegation authorization. Authorization comes from the
   user prompt or from a user-enabled local hook policy that deliberately
-  injects a lightweight delegation request for the current prompt. After one of
-  those sources authorizes delegation, do not ask for another confirmation just
-  because the prompt did not name a specific helper role; check usefulness,
+  injects an explicit delegation request for the current prompt. After one of
+  those sources authorizes delegation, dynamically choose and spawn targeted
+  helper roles yourself when useful; do not ask for another confirmation just
+  because the prompt did not name a specific helper role. Check usefulness,
   tool availability, and active runtime policy instead.
 - Do not claim runtime hook or skill activation is proven unless it was
   observed in the current Codex surface.
@@ -109,9 +110,12 @@ prompt-based authorization, the prompt must clearly ask Codex to use or spawn
 subagents, use delegation, or run parallel agents. For policy-based
 authorization, the hook output must explicitly request bounded read-only
 delegation for the current prompt and the current runtime must accept that hook
-context. Once authorization is present, choose targeted helper roles yourself
-when useful; the user does not need to name `repo_mapper`, `test_strategist`,
-or `risk_reviewer`.
+context. Once authorization is present, choose and spawn targeted helper roles
+yourself when useful; the user does not need to name `repo_mapper`,
+`test_strategist`, or `risk_reviewer`. This is the automatic mode from the
+user's perspective: the user enables the local policy once, the hook injects a
+per-turn request, and the parent agent makes the dynamic delegation decision.
+The hook still does not call subagent tools directly.
 
 This skill's hook layer owns only non-SDLC global-context events:
 `SessionStart` for stable context and task-state path injection, and
@@ -226,12 +230,12 @@ when their work is useful and independent, close completed helpers after
 consolidating their summaries, and reserve `risk_reviewer` for near-final
 review of non-trivial or risky changes.
 
-After delegation is authorized, the default decision should be to spawn one or
-two targeted read-only helpers for independent sidecar work. Skip delegation
-only when the task is tiny, the next step is blocked on the same investigation,
-there is no independent read-heavy work, subagent controls are unavailable or
-denied, or active instructions forbid delegation. Do not skip only because the
-user did not name the exact role.
+After delegation is authorized, the default decision should be to dynamically
+spawn one or two targeted read-only helpers for independent sidecar work. Skip
+delegation only when the task is tiny, the next step is blocked on the same
+investigation, there is no independent read-heavy work, subagent controls are
+unavailable or denied, or active instructions forbid delegation. Do not skip
+only because the user did not name the exact role.
 
 Ask subagents for concise final summaries only, and tell them to stop after
 returning the result instead of waiting for follow-up prompts. The parent

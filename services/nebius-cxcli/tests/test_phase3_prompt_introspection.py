@@ -398,9 +398,7 @@ def test_soperator_target_prompts_cxcli_workload_gpu_validations() -> None:
         entry=entry,
         full_path_label="deploy.targets[0].validations.mk8s_gpu.nccl.enabled",
     )
-    payload["deploy"]["targets"][0]["validations"]["mk8s_gpu"]["gpu_visibility"] = {
-        "enabled": True
-    }
+    payload["deploy"]["targets"][0]["validations"]["mk8s_gpu"]["gpu_visibility"] = {"enabled": True}
     payload["deploy"]["targets"][0]["validations"]["mk8s_gpu"]["nccl"] = {"enabled": True}
     assert not _skip_mk8s_gpu_validation_prompt(
         payload=payload,
@@ -682,8 +680,33 @@ def test_soperator_managed_mk8s_skips_raw_node_group_prompts() -> None:
         entry=entry,
         full_path_label="infra.components[0].inputs.soperator.worker_nodes_per_group",
     )
+    assert not _skip_soperator_managed_mk8s_prompt(
+        payload=payload,
+        entry=entry,
+        full_path_label="infra.components[0].inputs.soperator.worker_ephemeral_nodes.enabled",
+    )
+    assert _skip_soperator_managed_mk8s_prompt(
+        payload=payload,
+        entry=entry,
+        full_path_label=(
+            "infra.components[0].inputs.soperator.worker_ephemeral_nodes.suspend_time_seconds"
+        ),
+    )
+    soperator_inputs["worker_ephemeral_nodes"] = {"enabled": True}
+    assert not _skip_soperator_managed_mk8s_prompt(
+        payload=payload,
+        entry=entry,
+        full_path_label=(
+            "infra.components[0].inputs.soperator.worker_ephemeral_nodes.suspend_time_seconds"
+        ),
+    )
 
     payload["apps"]["charts"][0]["install_mode"] = "onboard-existing-cluster"
+    assert _skip_soperator_managed_mk8s_prompt(
+        payload=payload,
+        entry=entry,
+        full_path_label="infra.components[0].inputs.soperator.worker_ephemeral_nodes.enabled",
+    )
     assert _skip_soperator_managed_mk8s_prompt(
         payload=payload,
         entry=entry,

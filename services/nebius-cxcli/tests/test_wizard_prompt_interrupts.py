@@ -4359,6 +4359,7 @@ def test_maybe_print_gpu_preset_prompt_guidance_lists_live_capacity_rows(
             ),
         )
     )
+    emitted_guidance: set[str] = set()
 
     cli._maybe_print_gpu_preset_prompt_guidance(
         payload={
@@ -4390,7 +4391,7 @@ def test_maybe_print_gpu_preset_prompt_guidance_lists_live_capacity_rows(
         ),
         full_path_label="infra.components[0].inputs.node_group_defaults.gpu.preset",
         provider_lookup=provider_lookup,
-        emitted_guidance=set(),
+        emitted_guidance=emitted_guidance,
     )
 
     output = "\n".join(captured)
@@ -4401,6 +4402,48 @@ def test_maybe_print_gpu_preset_prompt_guidance_lists_live_capacity_rows(
     assert "4 VMs (4 x 8-GPU = 32 GPUs)" in output
     assert "1 VM (1 x 8-GPU = 8 GPUs)" in output
     assert "1gpu-16vcpu-200gb" not in output
+
+    captured.clear()
+    cli._maybe_print_gpu_preset_prompt_guidance(
+        payload={
+            "client_info": {
+                "nebius": {
+                    "tenant_id": "tenant-123",
+                    "region_id": "us-central1",
+                }
+            },
+            "infra": {
+                "components": [
+                    {
+                        "inputs": {
+                            "node_group_defaults": {
+                                "gpu": {
+                                    "platform": "gpu-h100-sxm",
+                                    "reservation": {"policy": "FORBID"},
+                                }
+                            },
+                        }
+                    }
+                ]
+            },
+        },
+        entry=ComponentEntry(
+            id="mk8s",
+            scope="infra",
+            config_path="infra.mk8s",
+            description="mk8s",
+        ),
+        full_path_label="infra.components[0].inputs.node_group_defaults.gpu.preset",
+        provider_lookup=provider_lookup,
+        emitted_guidance=emitted_guidance,
+    )
+
+    forbid_output = "\n".join(captured)
+    assert "fabric-a" in forbid_output
+    assert "fabric-b" in forbid_output
+    assert "regular-vm" in forbid_output
+    assert "reserved" not in forbid_output
+    assert "1gpu-16vcpu-200gb" not in forbid_output
 
 
 def test_maybe_print_selected_gpu_preset_guidance_for_single_gpu_shape(monkeypatch) -> None:

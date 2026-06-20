@@ -4033,8 +4033,8 @@ def test_create_soperator_cpu_worker_count_prompt_updates_persisted_node_groups(
         if str(item.get("name", "")).startswith("worker-cpu")
     ]
     assert [(item["name"], item["replicas"]) for item in worker_nodesets] == [
-        ("worker-cpu-worker-cpu-0", 2),
-        ("worker-cpu-worker-cpu-1", 1),
+        ("worker-cpu-0", 2),
+        ("worker-cpu-1", 1),
     ]
     assert "Enabled apps components: cert-manager, soperator" in result.output
     assert "nvidia-gpu-operator" not in result.output
