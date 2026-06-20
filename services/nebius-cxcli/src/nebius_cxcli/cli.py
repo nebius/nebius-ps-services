@@ -15946,6 +15946,8 @@ def _materialize_soperator_component_defaults(payload: dict[str, Any]) -> bool:
                                 ]
         if row != before:
             changed = True
+    if _prune_sfs_single_filesystem_inputs_for_mapped_filesystems(payload):
+        changed = True
     return changed
 
 
@@ -19004,6 +19006,7 @@ def _prompt_path_sort_key(
         "deploy.targets[].secrets.mysterybox.enabled": 240,
         "deploy.targets[].secrets.mysterybox.allow_all_namespaces": 241,
         "deploy.targets[].secrets.mysterybox.sync_namespaces": 242,
+        "infra.components[].inputs.type": 90,
         "infra.components[].inputs.node_group_defaults.cpu.platform": 21,
         "infra.components[].inputs.node_group_defaults.cpu.preset": 22,
         "infra.components[].inputs.node_group_defaults.gpu.platform": 23,
@@ -20903,6 +20906,26 @@ def _prune_mk8s_node_group_defaults_without_soperator(
     prune_inactive_mk8s_node_group_defaults(payload, infra_entries=infra_entries)
 
 
+def _prune_sfs_single_filesystem_inputs_for_mapped_filesystems(
+    payload: dict[str, Any],
+) -> bool:
+    changed = False
+    for row in _scope_rows(payload, scope="infra"):
+        if not isinstance(row, dict) or component_type_id(row) != "sfs":
+            continue
+        inputs = row.get("inputs")
+        if not isinstance(inputs, dict):
+            continue
+        filesystems = inputs.get("filesystems")
+        if not (isinstance(filesystems, Mapping) and bool(filesystems)):
+            continue
+        for key in ("name", "size_gib", "mount_tag"):
+            if key in inputs:
+                del inputs[key]
+                changed = True
+    return changed
+
+
 def _skip_sfs_single_filesystem_prompt(
     *,
     payload: dict[str, Any],
@@ -22609,6 +22632,7 @@ def _run_component_field_wizard(
             payload,
             infra_entries=infra_entries,
         )
+        _prune_sfs_single_filesystem_inputs_for_mapped_filesystems(payload)
         return yaml.safe_dump(payload, sort_keys=False)
 
     def _selected_infra_component_ids() -> set[str]:

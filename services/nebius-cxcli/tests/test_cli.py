@@ -8065,6 +8065,7 @@ def test_create_field_wizard_uses_entered_cluster_name_for_app_defaults(
     )
 
     previewed_app_targets: list[tuple[str, str, str]] = []
+    prompted_paths: list[str] = []
     sfs_name_prompt_defaults: dict[str, str] = {}
     sfs_mount_tag_prompt_defaults: dict[str, str] = {}
 
@@ -8082,6 +8083,7 @@ def test_create_field_wizard_uses_entered_cluster_name_for_app_defaults(
         )
 
     def _prompt_scalar_override(path_label, current, **_kwargs):  # type: ignore[no-untyped-def]
+        prompted_paths.append(path_label)
         if path_label.endswith(".inputs.cluster.cluster_name"):
             return "soperator-cluster1", False
         if path_label.endswith(".inputs.cluster.network_id"):
@@ -8129,8 +8131,18 @@ def test_create_field_wizard_uses_entered_cluster_name_for_app_defaults(
     assert charts["cert-manager"]["instance_id"] == "soperator-cluster1"
     assert ("soperator", "soperator-cluster1", "soperator-cluster1") in previewed_app_targets
     assert all(target != "mk8s" for _app_id, target, _cluster_name in previewed_app_targets)
+    assert "infra.components[1].inputs.type" in prompted_paths
+    assert "infra.components[1].inputs.name" not in prompted_paths
+    assert "infra.components[1].inputs.size_gib" not in prompted_paths
+    assert "infra.components[1].inputs.mount_tag" not in prompted_paths
+    assert prompted_paths.index("infra.components[1].inputs.type") < prompted_paths.index(
+        "infra.components[1].inputs.filesystems.jail.name"
+    )
 
     sfs = next(row for row in updated["infra"]["components"] if row["id"] == "sfs")
+    assert "name" not in sfs["inputs"]
+    assert "size_gib" not in sfs["inputs"]
+    assert "mount_tag" not in sfs["inputs"]
     sfs_filesystems = sfs["inputs"]["filesystems"]
     assert sfs_filesystems["jail"]["name"] == "soperator-cluster1-jail"
     assert sfs_filesystems["controller-spool"]["name"] == ("soperator-cluster1-controller-spool")
@@ -8148,6 +8160,67 @@ def test_create_field_wizard_uses_entered_cluster_name_for_app_defaults(
         sfs_mount_tag_prompt_defaults["infra.components[1].inputs.filesystems.accounting.mount_tag"]
         == "soperator-cluster1-accounting"
     )
+
+
+def test_create_field_wizard_keeps_standalone_sfs_when_mk8s_has_no_soperator(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    infra_entries = cli_module._with_infra_provider_groups(component_entries("infra"))
+    app_entries = component_entries("apps")
+    payload = cli_module._starter_component_payload(
+        client_name="client-a",
+        tenant_id="tenant-123",
+        project_id="project-456",
+        region_id="eu-north1",
+        email=None,
+        selected_infra={"mk8s", "sfs"},
+        selected_apps=set(),
+        infra_entries=infra_entries,
+        app_entries=app_entries,
+    )
+
+    decisions = iter([False, True])
+    monkeypatch.setattr(
+        cli_module,
+        "_wizard_continue_phase",
+        lambda *_args, **_kwargs: next(decisions, False),
+    )
+    monkeypatch.setattr(cli_module, "_resolve_dynamic_field_choices", lambda **_kwargs: [])
+    monkeypatch.setattr(
+        cli_module,
+        "_provider_allowed_values_for_field",
+        lambda **_kwargs: (set(), ()),
+    )
+
+    prompted_paths: list[str] = []
+
+    def _prompt_scalar_override(path_label, current, **_kwargs):  # type: ignore[no-untyped-def]
+        prompted_paths.append(path_label)
+        return current, False
+
+    monkeypatch.setattr(cli_module, "_prompt_scalar_override", _prompt_scalar_override)
+
+    updated_yaml, completed = cli_module._run_component_field_wizard(
+        config_yaml=yaml.safe_dump(payload, sort_keys=False),
+        selected_infra={"mk8s", "sfs"},
+        selected_apps=set(),
+        infra_entries=infra_entries,
+        app_entries=app_entries,
+    )
+
+    assert completed is True
+    updated = yaml.safe_load(updated_yaml)
+    sfs = next(row for row in updated["infra"]["components"] if row["id"] == "sfs")
+    assert sfs["inputs"]["name"] == "sfs"
+    assert sfs["inputs"]["size_gib"] == 1024
+    assert sfs["inputs"]["type"] == "NETWORK_SSD"
+    assert sfs["inputs"]["block_size_kib"] == 4
+    assert sfs["inputs"]["forbid_deletion"] is False
+    assert "mount_tag" not in sfs["inputs"]
+    assert "filesystems" not in sfs["inputs"]
+    assert "infra.components[1].inputs.type" in prompted_paths
+    assert "infra.components[1].inputs.name" in prompted_paths
+    assert not any(".inputs.filesystems." in path for path in prompted_paths)
 
 
 def test_create_auto_enables_observability_agent_when_wizard_turns_on_observability(

@@ -18962,7 +18962,11 @@ def test_soperator_selection_seeds_required_infra_and_defaults() -> None:
                     "id": "sfs",
                     "instance_id": "sfs",
                     "enabled": True,
-                    "inputs": {},
+                    "inputs": {
+                        "name": "stale-single-sfs",
+                        "size_gib": 1024,
+                        "mount_tag": "stale-single-sfs",
+                    },
                 },
             ]
         },
@@ -19017,6 +19021,9 @@ def test_soperator_selection_seeds_required_infra_and_defaults() -> None:
         "worker"
     )
     sfs_inputs = payload["infra"]["components"][1]["inputs"]
+    assert "name" not in sfs_inputs
+    assert "size_gib" not in sfs_inputs
+    assert "mount_tag" not in sfs_inputs
     assert sfs_inputs["filesystems"]["jail"]["name"] == "cluster1-jail"
     assert sfs_inputs["filesystems"]["jail"]["block_size_kib"] == 4
     assert sfs_inputs["filesystems"]["accounting"]["mount_tag"] == "cluster1-accounting"

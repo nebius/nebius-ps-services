@@ -108,6 +108,28 @@ def test_prompt_path_sort_key_orders_mk8s_cpu_defaults_before_gpu_defaults() -> 
     ]
 
 
+def test_prompt_path_sort_key_orders_sfs_type_before_filesystem_entries() -> None:
+    paths = [
+        ("infra", "components", 1, "inputs", "filesystems", "jail", "size_gib"),
+        ("infra", "components", 1, "inputs", "type"),
+        (
+            "infra",
+            "components",
+            1,
+            "inputs",
+            "filesystems",
+            "controller-spool",
+            "size_gib",
+        ),
+    ]
+
+    ordered = sorted(
+        paths, key=lambda path: cli._prompt_path_sort_key(path, required_leaf_names=set())
+    )
+
+    assert ordered[0] == ("infra", "components", 1, "inputs", "type")
+
+
 def test_module_variable_discovery_includes_optional_and_required(tmp_path: Path) -> None:
     module_dir = tmp_path / "demo-module"
     module_dir.mkdir(parents=True)

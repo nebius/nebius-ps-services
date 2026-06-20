@@ -1315,6 +1315,10 @@ Wizard field behavior:
   accounting SFS filesystems for a target, the single-filesystem prompts are
   skipped and the guided fields move to each generated filesystem entry:
   `name`, `size_gib`, `block_size_kib`, `mount_tag`, and `forbid_deletion`.
+  The component-level `type` prompt remains the shared default for those
+  generated filesystems and is asked before the generated entry fields; final
+  multi-filesystem configs omit single-filesystem-only `name`, `size_gib`, and
+  `mount_tag` inputs.
   The guided standalone defaults are `name=sfs`, `size_gib=1024`,
   `type=NETWORK_SSD`, `block_size_kib=4`, and `forbid_deletion=false`. The
   provider-backed filesystem type enum is
@@ -2342,10 +2346,14 @@ sbatch -p train --qos=train --requeue --time=04:00:00 --wrap 'hostname; sleep 60
 
 How to read the common outputs:
 
-- `shape-default` CPU profile should show `hidden` and `cpu` partitions. The
-  baseline profile does not add QOS/fairshare policy or QOS objects; if your
-  cluster shows extra `PreemptType`, `PriorityWeight*`, or QOS rows, those came
-  from explicit chart values, image defaults, or operator-managed settings.
+- `shape-default` should show only the selected worker-shape partitions:
+  CPU-only shows `cpu*`, GPU-only shows `gpu*`, and mixed CPU+GPU shows `cpu*`
+  plus `gpu`. The baseline profile does not add QOS/fairshare policy or QOS
+  objects; if your cluster shows extra `PreemptType`, `PriorityWeight*`, or QOS
+  rows, those came from explicit chart values, image defaults, or
+  operator-managed settings. When ActiveChecks are enabled for GPU-capable
+  profiles, cxcli can add an internal `hidden` readiness partition during
+  render; that partition is profile plumbing, not a user queue.
 - `with-debug-long` should add `debug` and `long` partitions. `debug` is the
   high-tier short queue; `long` is the low-tier seven-day queue. Because these
   are partition policies, `sacctmgr show qos` still does not need to show

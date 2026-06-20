@@ -291,7 +291,10 @@ Sections:
   controller-spool, and accounting entries through guided `name`, `size_gib`,
   `block_size_kib`, `mount_tag`, and `forbid_deletion` prompts. Soperator SFS
   `name` and `mount_tag` defaults use `<cluster-name>-<role>` so the visible
-  Nebius filesystem identity and mount tag stay target-scoped. Standalone SFS
+  Nebius filesystem identity and mount tag stay target-scoped. The shared
+  SFS `type` prompt remains component-scoped and is ordered before generated
+  filesystem-entry prompts, while final mapped configs omit single-filesystem
+  `name`, `size_gib`, and `mount_tag` inputs. Standalone SFS
   prompts default to `name=sfs`, `size_gib=1024`, `type=NETWORK_SSD`,
   `block_size_kib=4`, and `forbid_deletion=false`.
 - `status` is the canonical Nebius status-polling contract for infra components; if polling is needed, `status.kind` must be declared explicitly

@@ -1460,6 +1460,23 @@ def test_readme_explains_soperator_slurm_concept_ownership() -> None:
     assert "Actual preemption for these queues requires an explicit" not in section_flat
 
 
+def test_readme_soperator_shape_default_partitions_match_render_contract() -> None:
+    readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+    section = readme.split("How to read the common outputs:", 1)[1].split(
+        "For operator changes, prefer profile-level config first:",
+        1,
+    )[0]
+    section_flat = _squash(section)
+
+    assert "`shape-default` should show only the selected worker-shape partitions" in section
+    assert (
+        "CPU-only shows `cpu*`, GPU-only shows `gpu*`, and mixed CPU+GPU shows `cpu*` plus `gpu`"
+        in section_flat
+    )
+    assert "`shape-default` CPU profile should show `hidden` and `cpu` partitions" not in section
+    assert "internal `hidden` readiness partition during render" in section_flat
+
+
 def test_readme_guides_soperator_slurm_checks_through_login_service() -> None:
     readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
     section = readme.split("After the cluster is provisioned, connect to the Slurm", 1)[1].split(

@@ -6,6 +6,14 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Fixed SFS/Soperator wizard output so the component-level filesystem `type`
+  prompt is ordered before generated `jail`, `controller-spool`, and
+  `accounting` fields, and mapped SFS configs prune stale single-filesystem
+  `name`, `size_gib`, and `mount_tag` inputs.
+- Clarified Soperator `shape-default` partition documentation so CPU-only,
+  GPU-only, and mixed profiles match the rendered default partition contract,
+  while the internal `hidden` partition is documented only as render-time
+  ActiveChecks plumbing.
 - Fixed `create <deployments-root>` so the customer-repository privacy warning
   prints only when the target deployments root is inside a git repository, not
   for operator-local non-git folders.
