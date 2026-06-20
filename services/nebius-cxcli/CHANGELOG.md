@@ -6,6 +6,9 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Fixed `create <deployments-root>` so the customer-repository privacy warning
+  prints only when the target deployments root is inside a git repository, not
+  for operator-local non-git folders.
 - Fixed Soperator CPU worker NodeSet materialization so profile-managed
   non-GPU workers request a host-sized CPU/memory slice from the selected MK8s
   worker preset and advertise matching Slurm CPU topology. This preserves the

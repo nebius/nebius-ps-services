@@ -35406,6 +35406,11 @@ class SoperatorOnboardConfigTarget:
 class DeploymentsGitignoreResult:
     path: Path | None
     wrote: bool
+    repo_root: Path | None = None
+
+    @property
+    def inside_git_repo(self) -> bool:
+        return self.repo_root is not None
 
 
 _DEPLOYMENTS_GITIGNORE_BEGIN = "# >>> nebius-cxcli managed ignores >>>"
@@ -35445,8 +35450,12 @@ def _gitignore_has_managed_deployments_block(path: Path) -> bool:
     return _DEPLOYMENTS_GITIGNORE_BEGIN in content and _DEPLOYMENTS_GITIGNORE_END in content
 
 
-def _parent_managed_deployments_gitignore(deployments_root: Path) -> Path | None:
-    repo_root = _try_git_root(deployments_root)
+def _parent_managed_deployments_gitignore(
+    deployments_root: Path,
+    *,
+    repo_root: Path | None = None,
+) -> Path | None:
+    repo_root = repo_root or _try_git_root(deployments_root)
     if repo_root is None:
         return None
 
@@ -35464,8 +35473,15 @@ def _parent_managed_deployments_gitignore(deployments_root: Path) -> Path | None
     return None
 
 
-def _assert_not_nested_deployments_root(deployments_root: Path) -> None:
-    parent_gitignore = _parent_managed_deployments_gitignore(deployments_root)
+def _assert_not_nested_deployments_root(
+    deployments_root: Path,
+    *,
+    repo_root: Path | None = None,
+) -> None:
+    parent_gitignore = _parent_managed_deployments_gitignore(
+        deployments_root,
+        repo_root=repo_root,
+    )
     if parent_gitignore is None:
         return
     parent_root = parent_gitignore.parent
@@ -35480,10 +35496,11 @@ def _ensure_deployments_gitignore(
     *,
     deployments_root: Path,
 ) -> DeploymentsGitignoreResult:
-    if _try_git_root(deployments_root) is None:
+    repo_root = _try_git_root(deployments_root)
+    if repo_root is None:
         return DeploymentsGitignoreResult(path=None, wrote=False)
 
-    _assert_not_nested_deployments_root(deployments_root)
+    _assert_not_nested_deployments_root(deployments_root, repo_root=repo_root)
     gitignore_path = deployments_root / ".gitignore"
     block = _render_deployments_gitignore_block()
     existing = gitignore_path.read_text(encoding="utf-8") if gitignore_path.exists() else ""
@@ -35502,8 +35519,16 @@ def _ensure_deployments_gitignore(
 
     if updated != existing:
         gitignore_path.write_text(updated, encoding="utf-8")
-        return DeploymentsGitignoreResult(path=gitignore_path, wrote=True)
-    return DeploymentsGitignoreResult(path=gitignore_path, wrote=False)
+        return DeploymentsGitignoreResult(
+            path=gitignore_path,
+            wrote=True,
+            repo_root=repo_root,
+        )
+    return DeploymentsGitignoreResult(
+        path=gitignore_path,
+        wrote=False,
+        repo_root=repo_root,
+    )
 
 
 def _ensure_wireguard_output_gitignore(output_dir: Path, paths: ProjectPaths) -> Path | None:
@@ -37231,10 +37256,11 @@ def create_command(
             console.print(f"[yellow]NOTE:[/yellow] {_private_cluster_handoff_note()}")
         console.print(f"Ensured generated skeleton: {result.config_path.parent / 'generated'}")
         _print_create_next_steps(result.config_path)
-        console.print(
-            f"{warning_markup('Security warning:')} keep this customer repository private "
-            "because the deployments root contains sensitive operational metadata."
-        )
+        if gitignore_result.inside_git_repo:
+            console.print(
+                f"{warning_markup('Security warning:')} keep this customer repository private "
+                "because the deployments root contains sensitive operational metadata."
+            )
     except typer.Exit:
         raise
     except (KeyboardInterrupt, EOFError, typer.Abort):

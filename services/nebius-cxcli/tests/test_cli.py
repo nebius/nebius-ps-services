@@ -3052,6 +3052,7 @@ def test_create_writes_deployments_gitignore_when_target_is_in_git_repo(tmp_path
 
     result = _create_non_interactive(deployments_root)
     assert result.exit_code == 0, result.output
+    assert "keep this customer repository private" in result.output
 
     gitignore_path = deployments_root / ".gitignore"
     assert gitignore_path.exists()
@@ -3080,11 +3081,14 @@ def test_create_writes_deployments_gitignore_when_target_is_in_git_repo(tmp_path
 def test_create_skips_deployments_gitignore_when_target_not_in_git_repo(tmp_path: Path) -> None:
     deployments_root = tmp_path / "deployments"
     deployments_root.mkdir(parents=True, exist_ok=True)
+    local_gitignore = deployments_root / ".gitignore"
+    local_gitignore.write_text("# local ignores\n", encoding="utf-8")
 
     result = _create_non_interactive(deployments_root)
     assert result.exit_code == 0, result.output
+    assert "keep this customer repository private" not in result.output
 
-    assert not (deployments_root / ".gitignore").exists()
+    assert local_gitignore.read_text(encoding="utf-8") == "# local ignores\n"
 
 
 def test_create_rejects_nested_deployments_root_with_managed_parent_gitignore(
