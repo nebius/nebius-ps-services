@@ -84,6 +84,8 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
       "worker_gpu_total_nodes"
       "worker_gpu_nodes_per_group"
       "worker_gpu_autoscaling"
+      "worker_node_groups"
+      "worker_ephemeral_nodes"
     -}}
       {{- if hasKey $soperatorInputs $key -}}
         {{- fail (printf "inputs.soperator.%s is a cxcli helper input, not a Soperator chart value. Render through cxcli or pass chart-native nodesets[] and partitionConfiguration.partitions[].nodeSetRefs." $key) -}}

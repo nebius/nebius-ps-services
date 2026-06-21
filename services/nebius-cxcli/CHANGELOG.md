@@ -6,6 +6,12 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Fixed Soperator deploy smoke validation so first-run storage convergence no
+  longer fails immediately on transient `jail-pv` `FailedMount` Pending pods.
+  The validation now waits for `jail-pvc`/`jail-pv` binding, `jail-mount`
+  DaemonSet readiness, and storage-related Pending pods to clear before final
+  sign-off, while persistent Pending pods report Kubernetes event causes such
+  as `FailedMount`.
 - Fixed SFS/Soperator wizard output so the component-level filesystem `type`
   prompt is ordered before generated `jail`, `controller-spool`, and
   `accounting` fields, and mapped SFS configs prune stale single-filesystem
@@ -34,18 +40,17 @@ All notable changes to this project are tracked here. This changelog follows
   Kubernetes autoscaler pressure that brings GPU hosts up. Also downsized
   generated GPU worker `nodeConfig.static` CPU topology when a selected preset,
   such as `1gpu-16vcpu-200gb`, has fewer vCPUs than the profile template.
-- Changed Soperator production worker sizing to shape-specific CPU/GPU helpers:
-  `worker_cpu_total_nodes`, `worker_cpu_nodes_per_group`,
-  `worker_cpu_autoscaling`, `worker_gpu_total_nodes`,
-  `worker_gpu_nodes_per_group`, and `worker_gpu_autoscaling`. The legacy
-  generic worker helpers now fail fast.
-- Added explicit Soperator worker ephemeral-node support for production MK8s
-  profiles. Shape-specific worker autoscaling still materializes maximum worker
-  capacity by itself, but `worker_ephemeral_nodes.enabled=true` now requires
-  autoscaling for every active worker shape, renders upstream Soperator
-  ephemeral NodeSet fields, derives `initialNumberEphemeralNodes` from each
-  shape's matching `worker_*_autoscaling.min_node_count`, and writes finite
-  non-negative `slurmConfig.suspendTime`.
+- Changed Soperator production worker sizing to shape-specific fixed capacity
+  plus per-generated-shard `worker_node_groups` controls. cxcli now writes
+  disabled `autoscaling` and `ephemeral_nodes` controls for each generated
+  worker shard, such as `worker-cpu-0` and `worker-gpu-2`; enabled shard
+  autoscaling renders K8s autoscaling min/max instead of fixed `node_count`.
+  Enabled shard `ephemeral_nodes` requires that same shard's autoscaling,
+  renders upstream Soperator ephemeral NodeSet fields, derives
+  `initialNumberEphemeralNodes` from the shard's autoscaling `min_node_count`,
+  and writes finite non-negative global `slurmConfig.suspendTime` from
+  `worker_ephemeral_nodes.suspend_time_seconds`. Legacy worker autoscaling and
+  `worker_ephemeral_nodes.enabled` helpers now fail fast.
 - Refactored lifecycle report naming under the single `generated/reports/`
   folder. `upgrade node-template` now writes
   `upgrade-node-template-report.md` / `.json` after readiness verification,

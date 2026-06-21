@@ -2646,10 +2646,15 @@ def _validate_soperator_nodesets_profile(raw_profile: dict[str, Any], *, field_l
                         f"{field_label}.mk8s.worker_nodesets[{index}].node_group_key_prefix "
                         "is no longer supported; use node_group_prefix"
                     )
+                if "autoscaling_input" in raw_worker:
+                    raise ValueError(
+                        f"{field_label}.mk8s.worker_nodesets[{index}].autoscaling_input "
+                        "is no longer supported; worker autoscaling is controlled through "
+                        "inputs.soperator.worker_node_groups.<worker>.autoscaling"
+                    )
                 for input_field, legacy_path in {
                     "total_nodes_input": "soperator.worker_total_nodes",
                     "nodes_per_group_input": "soperator.worker_nodes_per_group",
-                    "autoscaling_input": "soperator.worker_autoscaling",
                 }.items():
                     if _as_text(raw_worker.get(input_field)) == legacy_path:
                         raise ValueError(

@@ -19688,6 +19688,9 @@ def _soperator_production_payload(mk8s_inputs: Mapping[str, Any]) -> dict[str, A
         {"worker_total_nodes": 1},
         {"worker_nodes_per_group": 100},
         {"worker_autoscaling": {"enabled": True, "min_node_count": 1, "max_node_count": 1}},
+        {"worker_cpu_autoscaling": {"enabled": True, "min_node_count": 1, "max_node_count": 1}},
+        {"worker_gpu_autoscaling": {"enabled": True, "min_node_count": 1, "max_node_count": 1}},
+        {"worker_ephemeral_nodes": {"enabled": True, "suspend_time_seconds": 300}},
     ],
 )
 def test_soperator_production_rejects_legacy_worker_sizing_helpers(
@@ -19697,7 +19700,7 @@ def test_soperator_production_rejects_legacy_worker_sizing_helpers(
 
     with pytest.raises(
         ValueError,
-        match="no longer supported.*worker_cpu_total_nodes.*worker_gpu_autoscaling",
+        match="no longer supported.*worker_node_groups\\.<worker>\\.autoscaling",
     ):
         cli._materialize_soperator_component_defaults(payload)
 
@@ -19718,65 +19721,98 @@ def test_soperator_production_rejects_invalid_fixed_worker_sizing(
         cli._materialize_soperator_component_defaults(payload)
 
 
-def test_soperator_production_worker_autoscaling_shards_mk8s_groups_and_nodesets() -> None:
-    payload = {
-        "infra": {
-            "components": [
-                {
-                    "id": "mk8s",
-                    "instance_id": "cluster1",
-                    "enabled": True,
-                    "inputs": {
-                        "soperator": {
-                            "worker_gpu_total_nodes": 10,
-                            "worker_gpu_nodes_per_group": 100,
-                            "worker_gpu_autoscaling": {
-                                "enabled": True,
-                                "min_node_count": 1,
-                                "max_node_count": 250,
-                            },
-                        }
-                    },
-                },
-                {
-                    "id": "sfs",
-                    "instance_id": "sfs",
-                    "enabled": True,
-                    "inputs": {},
-                },
-            ]
-        },
-        "apps": {
-            "charts": [
-                {
-                    "id": "soperator",
-                    "instance_id": "cluster1",
-                    "enabled": True,
-                    "install_mode": "production-cluster",
-                    "values": {},
-                }
-            ]
-        },
+def test_soperator_production_worker_shards_write_default_controls() -> None:
+    payload = _soperator_production_payload(
+        {
+            "soperator": {
+                "worker_cpu_total_nodes": 300,
+                "worker_cpu_nodes_per_group": 100,
+                "worker_gpu_total_nodes": 300,
+                "worker_gpu_nodes_per_group": 100,
+            }
+        }
+    )
+    payload["apps"]["charts"][0]["profile"] = "nebius-mixed-v1"
+
+    assert cli._materialize_soperator_component_defaults(payload) is True
+
+    mk8s_inputs = payload["infra"]["components"][0]["inputs"]
+    expected_group_keys = [
+        "worker-cpu-0",
+        "worker-cpu-1",
+        "worker-cpu-2",
+        "worker-gpu-0",
+        "worker-gpu-1",
+        "worker-gpu-2",
+    ]
+    assert mk8s_inputs["soperator"]["worker_node_groups"] == {
+        group_key: {
+            "autoscaling": {"enabled": False},
+            "ephemeral_nodes": {"enabled": False},
+        }
+        for group_key in expected_group_keys
     }
+    assert {
+        group_key: mk8s_inputs["node_groups"][group_key]["node_count"]
+        for group_key in expected_group_keys
+    } == {group_key: 100 for group_key in expected_group_keys}
+
+    app_row = payload["apps"]["charts"][0]
+    values = app_row["values"]
+    assert app_row["placements"]["worker"] == expected_group_keys
+    assert [
+        (item["name"], item["replicas"])
+        for item in values["nodesets"]
+        if str(item.get("name", "")).startswith("worker-")
+    ] == [(group_key, 100) for group_key in expected_group_keys]
+
+
+def test_soperator_production_worker_autoscaling_shards_mk8s_groups_and_nodesets() -> None:
+    worker_node_groups = {
+        group_key: {
+            "autoscaling": {
+                "enabled": True,
+                "min_node_count": 5,
+                "max_node_count": 100,
+            },
+            "ephemeral_nodes": {"enabled": False},
+        }
+        for group_key in (
+            "worker-cpu-0",
+            "worker-cpu-1",
+            "worker-cpu-2",
+            "worker-gpu-0",
+            "worker-gpu-1",
+            "worker-gpu-2",
+        )
+    }
+    payload = _soperator_production_payload(
+        {
+            "soperator": {
+                "worker_cpu_total_nodes": 300,
+                "worker_cpu_nodes_per_group": 100,
+                "worker_gpu_total_nodes": 300,
+                "worker_gpu_nodes_per_group": 100,
+                "worker_node_groups": worker_node_groups,
+            }
+        }
+    )
+    payload["apps"]["charts"][0]["profile"] = "nebius-mixed-v1"
 
     assert cli._materialize_soperator_component_defaults(payload) is True
 
     mk8s_inputs = payload["infra"]["components"][0]["inputs"]
     node_groups = mk8s_inputs["node_groups"]
-    worker_group_keys = [key for key in node_groups if str(key).startswith("worker")]
-    assert worker_group_keys == ["worker-0", "worker-1", "worker-2"]
-    assert node_groups["worker-0"]["autoscaling"] == {
-        "min_node_count": 1,
-        "max_node_count": 100,
-    }
-    assert node_groups["worker-1"]["autoscaling"] == {
-        "min_node_count": 0,
-        "max_node_count": 100,
-    }
-    assert node_groups["worker-2"]["autoscaling"] == {
-        "min_node_count": 0,
-        "max_node_count": 50,
-    }
+    worker_group_keys = [key for key in node_groups if str(key).startswith("worker-")]
+    assert worker_group_keys == list(worker_node_groups)
+    assert mk8s_inputs["soperator"]["worker_node_groups"] == worker_node_groups
+    assert all(
+        node_groups[group_key]["autoscaling"] == {
+            "min_node_count": 5,
+            "max_node_count": 100,
+        }
+        for group_key in worker_group_keys
+    )
     assert all("node_count" not in node_groups[group_key] for group_key in worker_group_keys)
 
     app_row = payload["apps"]["charts"][0]
@@ -19786,9 +19822,12 @@ def test_soperator_production_worker_autoscaling_shards_mk8s_groups_and_nodesets
         item for item in values["nodesets"] if str(item.get("name", "")).startswith("worker-")
     ]
     assert [(item["name"], item["replicas"]) for item in worker_nodesets] == [
-        ("worker-0", 100),
-        ("worker-1", 100),
-        ("worker-2", 50),
+        ("worker-cpu-0", 100),
+        ("worker-cpu-1", 100),
+        ("worker-cpu-2", 100),
+        ("worker-gpu-0", 100),
+        ("worker-gpu-1", 100),
+        ("worker-gpu-2", 100),
     ]
     assert all("ephemeralNodes" not in item for item in worker_nodesets)
     assert all("initialNumberEphemeralNodes" not in item for item in worker_nodesets)
@@ -19799,14 +19838,19 @@ def test_soperator_production_worker_ephemeral_nodes_materialize_from_autoscalin
     payload = _soperator_production_payload(
         {
             "soperator": {
-                "worker_gpu_autoscaling": {
-                    "enabled": True,
-                    "min_node_count": 1,
-                    "max_node_count": 5,
-                },
+                "worker_gpu_total_nodes": 5,
                 "worker_ephemeral_nodes": {
-                    "enabled": True,
                     "suspend_time_seconds": 300,
+                },
+                "worker_node_groups": {
+                    "worker": {
+                        "autoscaling": {
+                            "enabled": True,
+                            "min_node_count": 1,
+                            "max_node_count": 5,
+                        },
+                        "ephemeral_nodes": {"enabled": True},
+                    },
                 },
             }
         }
@@ -19833,15 +19877,36 @@ def test_soperator_production_worker_ephemeral_nodes_shard_initial_active_counts
     payload = _soperator_production_payload(
         {
             "soperator": {
+                "worker_gpu_total_nodes": 250,
                 "worker_gpu_nodes_per_group": 100,
-                "worker_gpu_autoscaling": {
-                    "enabled": True,
-                    "min_node_count": 3,
-                    "max_node_count": 250,
-                },
                 "worker_ephemeral_nodes": {
-                    "enabled": True,
                     "suspend_time_seconds": 300,
+                },
+                "worker_node_groups": {
+                    "worker-0": {
+                        "autoscaling": {
+                            "enabled": True,
+                            "min_node_count": 3,
+                            "max_node_count": 100,
+                        },
+                        "ephemeral_nodes": {"enabled": True},
+                    },
+                    "worker-1": {
+                        "autoscaling": {
+                            "enabled": True,
+                            "min_node_count": 0,
+                            "max_node_count": 100,
+                        },
+                        "ephemeral_nodes": {"enabled": True},
+                    },
+                    "worker-2": {
+                        "autoscaling": {
+                            "enabled": True,
+                            "min_node_count": 0,
+                            "max_node_count": 50,
+                        },
+                        "ephemeral_nodes": {"enabled": True},
+                    },
                 },
             }
         }
@@ -19912,14 +19977,19 @@ def test_soperator_production_worker_ephemeral_nodes_keep_per_host_gpu_count(
                 }
             },
             "soperator": {
-                "worker_gpu_autoscaling": {
-                    "enabled": True,
-                    "min_node_count": 5,
-                    "max_node_count": 5,
-                },
+                "worker_gpu_total_nodes": 5,
                 "worker_ephemeral_nodes": {
-                    "enabled": True,
                     "suspend_time_seconds": 300,
+                },
+                "worker_node_groups": {
+                    "worker": {
+                        "autoscaling": {
+                            "enabled": True,
+                            "min_node_count": 5,
+                            "max_node_count": 5,
+                        },
+                        "ephemeral_nodes": {"enabled": True},
+                    },
                 },
             },
         }
@@ -19945,14 +20015,19 @@ def test_soperator_production_worker_ephemeral_nodes_clear_when_disabled() -> No
     payload = _soperator_production_payload(
         {
             "soperator": {
-                "worker_gpu_autoscaling": {
-                    "enabled": True,
-                    "min_node_count": 1,
-                    "max_node_count": 5,
-                },
+                "worker_gpu_total_nodes": 5,
                 "worker_ephemeral_nodes": {
-                    "enabled": True,
                     "suspend_time_seconds": 300,
+                },
+                "worker_node_groups": {
+                    "worker": {
+                        "autoscaling": {
+                            "enabled": True,
+                            "min_node_count": 1,
+                            "max_node_count": 5,
+                        },
+                        "ephemeral_nodes": {"enabled": True},
+                    },
                 },
             }
         }
@@ -19960,7 +20035,9 @@ def test_soperator_production_worker_ephemeral_nodes_clear_when_disabled() -> No
     assert cli._materialize_soperator_component_defaults(payload) is True
     mk8s_inputs = payload["infra"]["components"][0]["inputs"]
 
-    mk8s_inputs["soperator"]["worker_ephemeral_nodes"] = {"enabled": False}
+    mk8s_inputs["soperator"]["worker_node_groups"]["worker"]["ephemeral_nodes"] = {
+        "enabled": False
+    }
     assert cli._materialize_soperator_component_defaults(payload) is True
 
     values = payload["apps"]["charts"][0]["values"]
@@ -19976,37 +20053,45 @@ def test_soperator_production_worker_ephemeral_nodes_clear_when_disabled() -> No
     [
         (
             {
-                "worker_ephemeral_nodes": {
-                    "enabled": True,
-                    "suspend_time_seconds": 300,
+                "worker_node_groups": {
+                    "worker": {"ephemeral_nodes": {"enabled": True}},
                 },
             },
-            "worker_ephemeral_nodes\\.enabled requires soperator\\.worker_gpu_autoscaling\\.enabled=true",
+            "worker_node_groups\\.worker\\.ephemeral_nodes\\.enabled requires "
+            "soperator\\.worker_node_groups\\.worker\\.autoscaling\\.enabled=true",
         ),
         (
             {
-                "worker_gpu_autoscaling": {
-                    "enabled": True,
-                    "min_node_count": 0,
-                    "max_node_count": 0,
-                },
-                "worker_ephemeral_nodes": {
-                    "enabled": True,
-                    "suspend_time_seconds": 300,
+                "worker_ephemeral_nodes": {"suspend_time_seconds": 300},
+                "worker_node_groups": {
+                    "worker": {
+                        "autoscaling": {
+                            "enabled": True,
+                            "min_node_count": 0,
+                            "max_node_count": 0,
+                        },
+                        "ephemeral_nodes": {"enabled": True},
+                    },
                 },
             },
-            "worker_ephemeral_nodes\\.enabled requires soperator\\.worker_gpu_autoscaling\\.max_node_count to be at least 1",
+            "worker_node_groups\\.worker\\.ephemeral_nodes\\.enabled requires "
+            "soperator\\.worker_node_groups\\.worker\\.autoscaling\\.max_node_count to be at least 1",
         ),
         (
             {
-                "worker_gpu_autoscaling": {
-                    "enabled": True,
-                    "min_node_count": 1,
-                    "max_node_count": 5,
-                },
+                "worker_gpu_total_nodes": 5,
                 "worker_ephemeral_nodes": {
-                    "enabled": True,
                     "suspend_time_seconds": -1,
+                },
+                "worker_node_groups": {
+                    "worker": {
+                        "autoscaling": {
+                            "enabled": True,
+                            "min_node_count": 1,
+                            "max_node_count": 5,
+                        },
+                        "ephemeral_nodes": {"enabled": True},
+                    },
                 },
             },
             "worker_ephemeral_nodes\\.suspend_time_seconds must be an integer >= 0",
@@ -20023,6 +20108,113 @@ def test_soperator_production_worker_ephemeral_nodes_reject_invalid_partial_conf
         cli._materialize_soperator_component_defaults(payload)
 
 
+@pytest.mark.parametrize(
+    ("worker_node_groups", "error_match"),
+    [
+        (
+            {
+                "worker": {
+                    "autoscaling": {
+                        "enabled": True,
+                        "min_node_count": 3,
+                        "max_node_count": 2,
+                    }
+                }
+            },
+            "worker_node_groups\\.worker\\.autoscaling\\.max_node_count must be "
+            "greater than or equal to "
+            "soperator\\.worker_node_groups\\.worker\\.autoscaling\\.min_node_count",
+        ),
+        (
+            {
+                "worker": {
+                    "autoscaling": {
+                        "enabled": True,
+                        "min_node_count": 0,
+                        "max_node_count": 2,
+                    }
+                }
+            },
+            "worker_node_groups\\.worker\\.autoscaling\\.max_node_count must be "
+            "less than or equal to the shard capacity 1",
+        ),
+    ],
+)
+def test_soperator_production_worker_node_group_autoscaling_rejects_invalid_bounds(
+    worker_node_groups: Mapping[str, Any],
+    error_match: str,
+) -> None:
+    payload = _soperator_production_payload(
+        {"soperator": {"worker_node_groups": dict(worker_node_groups)}}
+    )
+
+    with pytest.raises(ValueError, match=error_match):
+        cli._materialize_soperator_component_defaults(payload)
+
+
+@pytest.mark.parametrize(
+    ("worker_node_groups", "error_match"),
+    [
+        (
+            {"worker": True},
+            "worker_node_groups\\.worker must be a mapping",
+        ),
+        (
+            {"worker": {"autoscaling": True}},
+            "worker_node_groups\\.worker\\.autoscaling must be a mapping",
+        ),
+        (
+            {"worker": {"ephemeral_nodes": True}},
+            "worker_node_groups\\.worker\\.ephemeral_nodes must be a mapping",
+        ),
+    ],
+)
+def test_soperator_production_worker_node_group_controls_reject_malformed_mappings(
+    worker_node_groups: Mapping[str, Any],
+    error_match: str,
+) -> None:
+    payload = _soperator_production_payload(
+        {"soperator": {"worker_node_groups": dict(worker_node_groups)}}
+    )
+
+    with pytest.raises(ValueError, match=error_match):
+        cli._materialize_soperator_component_defaults(payload)
+
+
+def test_soperator_production_worker_node_group_prunes_stale_unmatched_controls() -> None:
+    payload = _soperator_production_payload(
+        {
+            "soperator": {
+                "worker_ephemeral_nodes": {"suspend_time_seconds": 300},
+                "worker_node_groups": {
+                    "stale-worker": {
+                        "autoscaling": {
+                            "enabled": True,
+                            "min_node_count": 1,
+                            "max_node_count": 1,
+                        },
+                        "ephemeral_nodes": {"enabled": True},
+                    }
+                },
+            }
+        }
+    )
+
+    assert cli._materialize_soperator_component_defaults(payload) is True
+
+    mk8s_inputs = payload["infra"]["components"][0]["inputs"]
+    assert mk8s_inputs["soperator"]["worker_node_groups"] == {
+        "worker": {
+            "autoscaling": {"enabled": False},
+            "ephemeral_nodes": {"enabled": False},
+        }
+    }
+    values = payload["apps"]["charts"][0]["values"]
+    worker_nodeset = next(item for item in values["nodesets"] if item["name"] == "worker")
+    assert "ephemeralNodes" not in worker_nodeset
+    assert "suspendTime" not in values.get("slurmConfig", {})
+
+
 def test_soperator_production_worker_autoscaling_allows_scale_to_zero() -> None:
     payload = {
         "infra": {
@@ -20033,10 +20225,14 @@ def test_soperator_production_worker_autoscaling_allows_scale_to_zero() -> None:
                     "enabled": True,
                     "inputs": {
                         "soperator": {
-                            "worker_gpu_autoscaling": {
-                                "enabled": True,
-                                "min_node_count": 0,
-                                "max_node_count": 0,
+                            "worker_node_groups": {
+                                "worker": {
+                                    "autoscaling": {
+                                        "enabled": True,
+                                        "min_node_count": 0,
+                                        "max_node_count": 0,
+                                    }
+                                }
                             },
                         }
                     },
@@ -20089,11 +20285,30 @@ def test_soperator_production_disabled_worker_autoscaling_clears_stale_shards() 
                     "enabled": True,
                     "inputs": {
                         "soperator": {
+                            "worker_gpu_total_nodes": 250,
                             "worker_gpu_nodes_per_group": 100,
-                            "worker_gpu_autoscaling": {
-                                "enabled": True,
-                                "min_node_count": 1,
-                                "max_node_count": 250,
+                            "worker_node_groups": {
+                                "worker-0": {
+                                    "autoscaling": {
+                                        "enabled": True,
+                                        "min_node_count": 1,
+                                        "max_node_count": 100,
+                                    }
+                                },
+                                "worker-1": {
+                                    "autoscaling": {
+                                        "enabled": True,
+                                        "min_node_count": 0,
+                                        "max_node_count": 100,
+                                    }
+                                },
+                                "worker-2": {
+                                    "autoscaling": {
+                                        "enabled": True,
+                                        "min_node_count": 0,
+                                        "max_node_count": 50,
+                                    }
+                                },
                             },
                         }
                     },
@@ -20127,13 +20342,18 @@ def test_soperator_production_disabled_worker_autoscaling_clears_stale_shards() 
         "worker-2",
     ]
 
-    mk8s_inputs["soperator"]["worker_gpu_autoscaling"] = {"enabled": False}
+    mk8s_inputs["soperator"]["worker_gpu_total_nodes"] = 1
     assert cli._materialize_soperator_component_defaults(payload) is True
 
     node_groups = mk8s_inputs["node_groups"]
     assert [key for key in node_groups if str(key).startswith("worker")] == ["worker"]
     assert node_groups["worker"]["node_count"] == 1
     assert "autoscaling" not in node_groups["worker"]
+    assert list(mk8s_inputs["soperator"]["worker_node_groups"]) == ["worker"]
+    assert mk8s_inputs["soperator"]["worker_node_groups"]["worker"] == {
+        "autoscaling": {"enabled": False},
+        "ephemeral_nodes": {"enabled": False},
+    }
     app_row = payload["apps"]["charts"][0]
     values = app_row["values"]
     assert app_row["placements"]["worker"] == ["worker"]
@@ -20837,17 +21057,39 @@ def test_soperator_mixed_profile_autoscaling_shards_cpu_and_gpu_independently() 
     payload = _soperator_production_payload(
         {
             "soperator": {
+                "worker_cpu_total_nodes": 3,
                 "worker_cpu_nodes_per_group": 2,
-                "worker_cpu_autoscaling": {
-                    "enabled": True,
-                    "min_node_count": 1,
-                    "max_node_count": 3,
-                },
+                "worker_gpu_total_nodes": 4,
                 "worker_gpu_nodes_per_group": 3,
-                "worker_gpu_autoscaling": {
-                    "enabled": True,
-                    "min_node_count": 2,
-                    "max_node_count": 4,
+                "worker_node_groups": {
+                    "worker-cpu-0": {
+                        "autoscaling": {
+                            "enabled": True,
+                            "min_node_count": 1,
+                            "max_node_count": 2,
+                        },
+                    },
+                    "worker-cpu-1": {
+                        "autoscaling": {
+                            "enabled": True,
+                            "min_node_count": 0,
+                            "max_node_count": 1,
+                        },
+                    },
+                    "worker-gpu-0": {
+                        "autoscaling": {
+                            "enabled": True,
+                            "min_node_count": 2,
+                            "max_node_count": 3,
+                        },
+                    },
+                    "worker-gpu-1": {
+                        "autoscaling": {
+                            "enabled": True,
+                            "min_node_count": 0,
+                            "max_node_count": 1,
+                        },
+                    },
                 },
             }
         }
@@ -20886,32 +21128,40 @@ def test_soperator_mixed_profile_autoscaling_shards_cpu_and_gpu_independently() 
     ]
 
 
-def test_soperator_mixed_profile_ephemeral_requires_autoscaling_for_every_worker_shape() -> None:
+def test_soperator_mixed_profile_ephemeral_can_target_one_worker_shard() -> None:
     payload = _soperator_production_payload(
         {
             "soperator": {
-                "worker_gpu_autoscaling": {
-                    "enabled": True,
-                    "min_node_count": 1,
-                    "max_node_count": 1,
-                },
                 "worker_ephemeral_nodes": {
-                    "enabled": True,
                     "suspend_time_seconds": 300,
+                },
+                "worker_node_groups": {
+                    "worker-gpu": {
+                        "autoscaling": {
+                            "enabled": True,
+                            "min_node_count": 1,
+                            "max_node_count": 1,
+                        },
+                        "ephemeral_nodes": {"enabled": True},
+                    },
                 },
             }
         }
     )
     payload["apps"]["charts"][0]["profile"] = "nebius-mixed-v1"
 
-    with pytest.raises(
-        ValueError,
-        match=(
-            "worker_ephemeral_nodes\\.enabled requires "
-            "soperator\\.worker_cpu_autoscaling\\.enabled=true"
-        ),
-    ):
-        cli._materialize_soperator_component_defaults(payload)
+    assert cli._materialize_soperator_component_defaults(payload) is True
+
+    values = payload["apps"]["charts"][0]["values"]
+    worker_nodesets = {
+        item["name"]: item
+        for item in values["nodesets"]
+        if str(item.get("name", "")).startswith("worker-")
+    }
+    assert "ephemeralNodes" not in worker_nodesets["worker-cpu"]
+    assert worker_nodesets["worker-gpu"]["ephemeralNodes"] is True
+    assert worker_nodesets["worker-gpu"]["initialNumberEphemeralNodes"] == 1
+    assert values["slurmConfig"]["suspendTime"] == 300
 
 
 def test_soperator_onboarding_maps_external_mk8s_node_groups_without_creating_role_groups() -> None:
@@ -21056,7 +21306,7 @@ def test_soperator_onboarding_maps_external_mk8s_node_groups_without_creating_ro
     ]
 
 
-def test_soperator_onboarding_ignores_stale_worker_ephemeral_inputs() -> None:
+def test_soperator_onboarding_ignores_worker_node_group_ephemeral_inputs() -> None:
     payload = {
         "deploy": {
             "targets": [
@@ -21068,14 +21318,16 @@ def test_soperator_onboarding_ignores_stale_worker_ephemeral_inputs() -> None:
                     "kube_context": "nebius-cluster1-mk8scluster-123-external",
                     "inventory": {
                         "soperator": {
-                            "worker_gpu_autoscaling": {
-                                "enabled": True,
-                                "min_node_count": 1,
-                                "max_node_count": 2,
-                            },
-                            "worker_ephemeral_nodes": {
-                                "enabled": True,
-                                "suspend_time_seconds": 300,
+                            "worker_ephemeral_nodes": {"suspend_time_seconds": 300},
+                            "worker_node_groups": {
+                                "h100": {
+                                    "autoscaling": {
+                                        "enabled": True,
+                                        "min_node_count": 1,
+                                        "max_node_count": 2,
+                                    },
+                                    "ephemeral_nodes": {"enabled": True},
+                                },
                             },
                         },
                         "node_groups": {

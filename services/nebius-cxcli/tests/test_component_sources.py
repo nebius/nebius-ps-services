@@ -584,10 +584,7 @@ def test_bundled_catalog_exposes_soperator_and_nfs_local_sources() -> None:
     assert cpu_profile["mk8s"]["worker_nodesets"][0]["nodes_per_group_input"] == (
         "soperator.worker_cpu_nodes_per_group"
     )
-    assert (
-        cpu_profile["mk8s"]["worker_nodesets"][0]["autoscaling_input"]
-        == "soperator.worker_cpu_autoscaling"
-    )
+    assert "autoscaling_input" not in cpu_profile["mk8s"]["worker_nodesets"][0]
     assert "srunReadyPartition" not in cpu_profile["chart"]["values"]["soperator-activechecks"]
     assert cpu_profile["chart"]["activechecks"]["srunReadyPartition"] == "cpu"
     assert (
@@ -647,9 +644,7 @@ def test_bundled_catalog_exposes_soperator_and_nfs_local_sources() -> None:
     assert profile["mk8s"]["worker_nodesets"][0]["nodes_per_group_input"] == (
         "soperator.worker_gpu_nodes_per_group"
     )
-    assert profile["mk8s"]["worker_nodesets"][0]["autoscaling_input"] == (
-        "soperator.worker_gpu_autoscaling"
-    )
+    assert "autoscaling_input" not in profile["mk8s"]["worker_nodesets"][0]
     assert profile["mk8s"]["worker_nodesets"][0]["node_group_prefix"] == "worker"
     assert profile["mk8s"]["worker_nodesets"][0]["nodeset_name"] == "worker"
     assert profile["chart"]["values"]["partitionConfiguration"]["partitions"][0]["name"] == "gpu"
@@ -701,7 +696,6 @@ def test_bundled_catalog_exposes_soperator_and_nfs_local_sources() -> None:
         worker["nodeset_name"]: (
             worker["total_nodes_input"],
             worker["nodes_per_group_input"],
-            worker["autoscaling_input"],
             worker["default_total_nodes"],
             worker["default_nodes_per_group"],
         )
@@ -710,18 +704,20 @@ def test_bundled_catalog_exposes_soperator_and_nfs_local_sources() -> None:
         "worker-cpu": (
             "soperator.worker_cpu_total_nodes",
             "soperator.worker_cpu_nodes_per_group",
-            "soperator.worker_cpu_autoscaling",
             1,
             100,
         ),
         "worker-gpu": (
             "soperator.worker_gpu_total_nodes",
             "soperator.worker_gpu_nodes_per_group",
-            "soperator.worker_gpu_autoscaling",
             1,
             100,
         ),
     }
+    assert all(
+        "autoscaling_input" not in worker
+        for worker in mixed_profile["mk8s"]["worker_nodesets"]
+    )
     all_worker_inputs = {
         value
         for profile_name in ("nebius-cpu-v1", "nebius-gpu-v1", "nebius-mixed-v1")
@@ -731,7 +727,6 @@ def test_bundled_catalog_exposes_soperator_and_nfs_local_sources() -> None:
         for value in (
             worker["total_nodes_input"],
             worker["nodes_per_group_input"],
-            worker["autoscaling_input"],
         )
     }
     assert {
@@ -3225,13 +3220,11 @@ def test_bundled_mk8s_declares_optional_wizard_field_override() -> None:
         "worker_total_nodes",
         "worker_nodes_per_group",
         "worker_autoscaling.enabled",
+        "worker_cpu_autoscaling.enabled",
+        "worker_gpu_autoscaling.enabled",
+        "worker_ephemeral_nodes.enabled",
     ):
         assert f"inputs.soperator.{legacy_field}" not in mk8s_wizard_fields
-    assert mk8s_wizard_fields["inputs.soperator.worker_ephemeral_nodes.enabled"] == {
-        "default": False,
-        "write_default_to_config": True,
-        "type_hint": "bool",
-    }
     assert mk8s_wizard_fields["inputs.soperator.worker_ephemeral_nodes.suspend_time_seconds"] == {
         "default": 300,
         "write_default_to_config": True,
@@ -3263,7 +3256,7 @@ def test_bundled_mk8s_declares_optional_wizard_field_override() -> None:
         "write_default_to_config": True,
         "type_hint": "number",
     }
-    for role in ("controller", "login", "accounting", "worker_cpu", "worker_gpu"):
+    for role in ("controller", "login", "accounting"):
         assert mk8s_wizard_fields[f"inputs.soperator.{role}_autoscaling.enabled"] == {
             "default": False,
             "write_default_to_config": True,

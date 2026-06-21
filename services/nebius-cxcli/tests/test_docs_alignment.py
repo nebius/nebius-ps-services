@@ -725,7 +725,10 @@ def test_soperator_docs_define_worker_autoscaling_boundary() -> None:
     assert "Meaning: 5 Slurm worker nodes, 8 GPUs each, total 40 GPUs." in chart_design
     assert "That is maximum-capacity materialization, not Slurm-demand autoscaling" in chart_flat
     assert "the non-ephemeral NodeSet desires five worker pods" in chart_flat
-    assert "`inputs.soperator.worker_ephemeral_nodes.enabled=true`" in chart_flat
+    assert "`inputs.soperator.worker_node_groups.<worker>.ephemeral_nodes.enabled=true`" in (
+        chart_flat
+    )
+    assert "worker_gpu_total_nodes: 5" in chart_design
     assert "ephemeralNodes: true" in chart_design
     assert "initialNumberEphemeralNodes: 1" in chart_design
     assert "not a permanent minimum" in chart_flat
@@ -741,7 +744,10 @@ def test_soperator_docs_define_worker_autoscaling_boundary() -> None:
         in chart_readme_flat
     )
     assert "- [Soperator Autoscaling](#soperator-autoscaling)" in chart_readme
-    assert "`inputs.soperator.worker_ephemeral_nodes.enabled=true`" in chart_readme_flat
+    assert "`inputs.soperator.worker_node_groups.<worker>.ephemeral_nodes.enabled=true`" in (
+        chart_readme_flat
+    )
+    assert "worker_gpu_total_nodes: 5" in chart_readme
     assert "Added explicit chart schema, validation, and tests for upstream Soperator" in _squash(
         chart_changelog
     )
@@ -751,25 +757,33 @@ def test_soperator_docs_define_worker_autoscaling_boundary() -> None:
     assert "`soperator.worker_cpu_total_nodes`" in readme_flat
     assert "`soperator.worker_gpu_total_nodes`" in readme_flat
     assert "not total GPU count and not an aggregate CPU/GPU split" in readme_flat
+    assert "service-role autoscaling helpers" in readme_flat
+    assert "Worker autoscaling is controlled per generated shard" in readme_flat
     assert "5 x `1gpu-*` hosts means five Slurm worker replicas with `gpu: 1`" in (readme_flat)
     assert "5 x `8gpu-*` hosts means five replicas with `gpu: 8` and 40 total GPUs" in (readme_flat)
-    assert "`inputs.soperator.worker_ephemeral_nodes.enabled=true`" in (readme_flat)
+    assert "`inputs.soperator.worker_node_groups.<worker>.ephemeral_nodes.enabled=true`" in (
+        readme_flat
+    )
     assert (
         "`initialNumberEphemeralNodes` is only the initial active Slurm worker pods" in readme_flat
     )
     assert "not upstream Soperator Slurm-demand elasticity" in design_flat
     assert "one-worker-pod to one-Kubernetes-worker-VM resource shape" in design_flat
-    assert "`inputs.soperator.worker_ephemeral_nodes.enabled=true`" in design_flat
+    assert "`inputs.soperator.worker_node_groups.<worker>.ephemeral_nodes.enabled=true`" in (
+        design_flat
+    )
     assert "`inputs.soperator.worker_cpu_total_nodes`" in design_flat
     assert "`inputs.soperator.worker_gpu_total_nodes`" in design_flat
+    assert "`inputs.soperator.worker_node_groups`" in design_flat
+    assert "Worker autoscaling is controlled per generated worker shard" in design_flat
     assert "not total GPU count and not an aggregate CPU/GPU split" in design_flat
     assert "5 x `1gpu-*` hosts means five Slurm worker replicas with `gpu: 1`" in (design_flat)
     assert "5 x `8gpu-*` hosts means five replicas with `gpu: 8` and 40 total GPUs" in (design_flat)
-    assert "Added explicit Soperator worker ephemeral-node support" in (_squash(changelog))
-    assert "Changed Soperator production worker sizing to shape-specific CPU/GPU helpers" in (
+    assert "per-generated-shard `worker_node_groups` controls" in (_squash(changelog))
+    assert "Changed Soperator production worker sizing to shape-specific fixed capacity" in (
         _squash(changelog)
     )
-    assert "`initialNumberEphemeralNodes` from each shape's matching" in _squash(changelog)
+    assert "`initialNumberEphemeralNodes` from the shard's autoscaling" in _squash(changelog)
     assert "Worker sizing " in cli_text
     assert "is shape-specific: worker_cpu_*" in cli_text
     assert "GPU count per host comes from the preset" in cli_text
@@ -777,6 +791,9 @@ def test_soperator_docs_define_worker_autoscaling_boundary() -> None:
         "worker_total_nodes",
         "worker_nodes_per_group",
         "worker_autoscaling",
+        "worker_cpu_autoscaling",
+        "worker_gpu_autoscaling",
+        "worker_ephemeral_nodes.enabled",
     ):
         assert retired_helper not in readme_flat
         assert retired_helper not in design_flat

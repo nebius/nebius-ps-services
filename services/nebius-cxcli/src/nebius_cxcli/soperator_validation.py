@@ -34,6 +34,16 @@ _SOPERATOR_CLUSTER_READY_WAIT_SECONDS = 20 * 60
 _SOPERATOR_CLUSTER_READY_POLL_SECONDS = 15.0
 _SRUN_SMOKE_IMMEDIATE_SECONDS = 60
 _SRUN_SMOKE_CLOUD_IMMEDIATE_SECONDS = 600
+_SOPERATOR_STORAGE_VOLUME_NAME = "jail"
+_SOPERATOR_STORAGE_PVC_NAME = "jail-pvc"
+_SOPERATOR_STORAGE_PV_NAME = "jail-pv"
+_SOPERATOR_STORAGE_MOUNT_DAEMONSET_NAME = "jail-mount"
+_SOPERATOR_STORAGE_LOCAL_PATH = "/mnt/jail"
+_SOPERATOR_STORAGE_PENDING_MARKERS = (
+    "failedmount",
+    "mountvolume",
+    "volume",
+)
 
 
 def _smoke_script(
@@ -236,6 +246,21 @@ class SoperatorValidationCommandResult:
     stderr: str = ""
 
 
+@dataclass(frozen=True)
+class _PendingSoperatorPod:
+    name: str
+    message: str
+    storage_related: bool = False
+
+
+@dataclass(frozen=True)
+class _SoperatorJailStorage:
+    pvc_name: str = _SOPERATOR_STORAGE_PVC_NAME
+    pv_name: str = _SOPERATOR_STORAGE_PV_NAME
+    mount_daemonset_name: str = _SOPERATOR_STORAGE_MOUNT_DAEMONSET_NAME
+    local_path: str = _SOPERATOR_STORAGE_LOCAL_PATH
+
+
 class SoperatorValidationCommandRunner(Protocol):
     def __call__(
         self,
@@ -375,6 +400,28 @@ def _soperator_chart_version(row: Mapping[str, Any]) -> str:
     return str(row.get("version", "") or row.get("chart_version", "") or "").strip()
 
 
+def _soperator_storage_mashed_kebab(value: Any) -> str:
+    text = str(value or "").strip()
+    text = re.sub(r"([a-z])([A-Z])", r"\1-\2", text)
+    text = re.sub(r"([A-Z])([A-Z][a-z])", r"\1-\2", text)
+    text = re.sub(r"[^a-z0-9]+", "-", text.lower())
+    return re.sub(r"-{2,}", "-", text)
+
+
+def _soperator_jail_storage_from_chart_row(row: Mapping[str, Any]) -> dict[str, str]:
+    values = _as_mapping(row.get("values"))
+    volume = _as_mapping(values.get("volume"))
+    jail = _as_mapping(volume.get("jail"))
+    volume_name = _soperator_storage_mashed_kebab(jail.get("name")) or _SOPERATOR_STORAGE_VOLUME_NAME
+    local_path = str(jail.get("localPath", "") or _SOPERATOR_STORAGE_LOCAL_PATH).strip()
+    return {
+        "pvc_name": _soperator_storage_mashed_kebab(f"{volume_name} pvc"),
+        "pv_name": _soperator_storage_mashed_kebab(f"{volume_name} pv"),
+        "mount_daemonset_name": _soperator_storage_mashed_kebab(f"{volume_name} mount"),
+        "local_path": local_path or _SOPERATOR_STORAGE_LOCAL_PATH,
+    }
+
+
 def soperator_cluster_validation_specs(payload_or_config: Any) -> list[dict[str, Any]]:
     payload = to_plain_data(payload_or_config)
     if not isinstance(payload, Mapping):
@@ -412,6 +459,7 @@ def soperator_cluster_validation_specs(payload_or_config: Any) -> list[dict[str,
                 "namespace": SOPERATOR_NAMESPACE,
                 "cluster_name": _soperator_cluster_name(row, target_ref=target_ref),
                 "target_version": _soperator_chart_version(row),
+                "jail_storage": _soperator_jail_storage_from_chart_row(row),
                 "kube_context": target_context_by_ref.get(target_ref, ""),
                 "report_file": _validation_report_file(target_ref),
                 "readiness_timeout_seconds": _SOPERATOR_CLUSTER_READY_WAIT_SECONDS,
@@ -714,27 +762,115 @@ def _pending_pod_scheduling_message(item: Mapping[str, Any]) -> str:
             continue
         if str(condition.get("type", "") or "").strip() != "PodScheduled":
             continue
+        condition_status = str(condition.get("status", "") or "").strip().lower()
+        if condition_status == "true":
+            continue
         message = str(condition.get("message", "") or "").strip()
         if message:
             return message
     return str(status.get("message", "") or "").strip()
 
 
-def _check_soperator_pod_scheduling(
+def _soperator_pod_event_messages(
     runner: SoperatorValidationCommandRunner,
     spec: Mapping[str, Any],
-    checks: list[dict[str, Any]],
-) -> None:
+    *,
+    pod_name: str,
+) -> list[str]:
     namespace = str(spec.get("namespace", "") or SOPERATOR_NAMESPACE).strip()
-    command = _kubectl_args(spec, "-n", namespace, "get", "pods", "-o", "json")
+    command = _kubectl_args(
+        spec,
+        "-n",
+        namespace,
+        "get",
+        "events",
+        "--field-selector",
+        f"involvedObject.name={pod_name}",
+        "-o",
+        "json",
+    )
     result = runner(command, timeout_seconds=120, check=False)
     if result.returncode != 0:
-        return
+        return []
     try:
         payload = json.loads(result.stdout or "{}")
     except json.JSONDecodeError:
-        return
-    pending: list[str] = []
+        return []
+    messages: list[str] = []
+    for item in _as_sequence(payload.get("items")):
+        if not isinstance(item, Mapping):
+            continue
+        event_type = str(item.get("type", "") or "").strip().lower()
+        reason = str(item.get("reason", "") or "").strip()
+        message = str(item.get("message", "") or "").strip()
+        if event_type and event_type != "warning" and reason not in {"FailedMount"}:
+            continue
+        if not reason and not message:
+            continue
+        if reason and message:
+            messages.append(f"{reason}: {message}")
+        else:
+            messages.append(reason or message)
+    return [_compact_output(message, limit=300) for message in messages[-3:]]
+
+
+def _soperator_jail_storage(spec: Mapping[str, Any]) -> _SoperatorJailStorage:
+    raw = _as_mapping(spec.get("jail_storage"))
+    return _SoperatorJailStorage(
+        pvc_name=str(raw.get("pvc_name") or _SOPERATOR_STORAGE_PVC_NAME).strip()
+        or _SOPERATOR_STORAGE_PVC_NAME,
+        pv_name=str(raw.get("pv_name") or _SOPERATOR_STORAGE_PV_NAME).strip()
+        or _SOPERATOR_STORAGE_PV_NAME,
+        mount_daemonset_name=str(
+            raw.get("mount_daemonset_name") or _SOPERATOR_STORAGE_MOUNT_DAEMONSET_NAME
+        ).strip()
+        or _SOPERATOR_STORAGE_MOUNT_DAEMONSET_NAME,
+        local_path=str(raw.get("local_path") or _SOPERATOR_STORAGE_LOCAL_PATH).strip()
+        or _SOPERATOR_STORAGE_LOCAL_PATH,
+    )
+
+
+def _pod_uses_soperator_jail_pvc(item: Mapping[str, Any], *, pvc_name: str) -> bool:
+    spec = _as_mapping(item.get("spec"))
+    for volume in _as_sequence(spec.get("volumes")):
+        if not isinstance(volume, Mapping):
+            continue
+        claim = _as_mapping(volume.get("persistentVolumeClaim"))
+        claim_name = str(claim.get("claimName", "") or "").strip()
+        if claim_name == pvc_name:
+            return True
+    return False
+
+
+def _pending_message_is_storage_related(message: str, *, storage: _SoperatorJailStorage) -> bool:
+    text = str(message or "").lower()
+    markers = (
+        *_SOPERATOR_STORAGE_PENDING_MARKERS,
+        storage.pvc_name.lower(),
+        storage.pv_name.lower(),
+        storage.mount_daemonset_name.lower(),
+        storage.local_path.lower(),
+    )
+    return any(marker and marker in text for marker in markers)
+
+
+def _pending_soperator_pods(
+    runner: SoperatorValidationCommandRunner,
+    spec: Mapping[str, Any],
+    *,
+    include_events: bool = False,
+) -> tuple[list[_PendingSoperatorPod], Sequence[str]]:
+    namespace = str(spec.get("namespace", "") or SOPERATOR_NAMESPACE).strip()
+    storage = _soperator_jail_storage(spec)
+    command = _kubectl_args(spec, "-n", namespace, "get", "pods", "-o", "json")
+    result = runner(command, timeout_seconds=120, check=False)
+    if result.returncode != 0:
+        return [], command
+    try:
+        payload = json.loads(result.stdout or "{}")
+    except json.JSONDecodeError:
+        return [], command
+    pending: list[_PendingSoperatorPod] = []
     for item in _as_sequence(payload.get("items")):
         if not isinstance(item, Mapping):
             continue
@@ -746,7 +882,162 @@ def _check_soperator_pod_scheduling(
         if not name:
             continue
         message = _pending_pod_scheduling_message(item)
-        pending.append(f"{name}: {message or 'Pending'}")
+        event_messages = (
+            _soperator_pod_event_messages(runner, spec, pod_name=name) if include_events else []
+        )
+        if event_messages:
+            event_text = "; ".join(event_messages)
+            message = f"{message}; {event_text}" if message else event_text
+        storage_related = _pod_uses_soperator_jail_pvc(
+            item,
+            pvc_name=storage.pvc_name,
+        ) or _pending_message_is_storage_related(
+            message,
+            storage=storage,
+        )
+        pending.append(
+            _PendingSoperatorPod(
+                name=name,
+                message=message or "Pending",
+                storage_related=storage_related,
+            )
+        )
+    return pending, command
+
+
+def _soperator_storage_unready_summaries(
+    runner: SoperatorValidationCommandRunner,
+    spec: Mapping[str, Any],
+) -> list[str]:
+    namespace = str(spec.get("namespace", "") or SOPERATOR_NAMESPACE).strip()
+    storage = _soperator_jail_storage(spec)
+    summaries: list[str] = []
+
+    pvc_command = _kubectl_args(
+        spec,
+        "-n",
+        namespace,
+        "get",
+        "pvc",
+        storage.pvc_name,
+        "-o",
+        "json",
+    )
+    pvc_result = runner(pvc_command, timeout_seconds=120, check=False)
+    if pvc_result.returncode != 0:
+        summaries.append(
+            f"pvc/{storage.pvc_name} lookup failed: "
+            f"{_compact_output(_command_detail(pvc_result), limit=300)}"
+        )
+    else:
+        try:
+            pvc_payload = json.loads(pvc_result.stdout or "{}")
+        except json.JSONDecodeError:
+            pvc_payload = {}
+        phase = str(_as_mapping(pvc_payload.get("status")).get("phase", "") or "").strip()
+        if phase and phase != "Bound":
+            summaries.append(f"pvc/{storage.pvc_name}={phase}")
+
+    pv_command = _kubectl_args(spec, "get", "pv", storage.pv_name, "-o", "json")
+    pv_result = runner(pv_command, timeout_seconds=120, check=False)
+    if pv_result.returncode != 0:
+        summaries.append(
+            f"pv/{storage.pv_name} lookup failed: "
+            f"{_compact_output(_command_detail(pv_result), limit=300)}"
+        )
+    else:
+        try:
+            pv_payload = json.loads(pv_result.stdout or "{}")
+        except json.JSONDecodeError:
+            pv_payload = {}
+        phase = str(_as_mapping(pv_payload.get("status")).get("phase", "") or "").strip()
+        if phase and phase != "Bound":
+            summaries.append(f"pv/{storage.pv_name}={phase}")
+
+    daemonset_command = _kubectl_args(
+        spec,
+        "-n",
+        namespace,
+        "get",
+        "daemonset",
+        storage.mount_daemonset_name,
+        "-o",
+        "json",
+    )
+    daemonset_result = runner(daemonset_command, timeout_seconds=120, check=False)
+    if daemonset_result.returncode != 0:
+        summaries.append(
+            f"daemonset/{storage.mount_daemonset_name} lookup failed: "
+            f"{_compact_output(_command_detail(daemonset_result), limit=300)}"
+        )
+    else:
+        try:
+            daemonset_payload = json.loads(daemonset_result.stdout or "{}")
+        except json.JSONDecodeError:
+            daemonset_payload = {}
+        status = _as_mapping(daemonset_payload.get("status"))
+        desired = int(status.get("desiredNumberScheduled") or 0)
+        ready = int(status.get("numberReady") or 0)
+        available = int(status.get("numberAvailable") or ready)
+        if desired > 0 and (ready < desired or available < desired):
+            summaries.append(
+                f"daemonset/{storage.mount_daemonset_name} "
+                f"ready={ready}/{desired} available={available}/{desired}"
+            )
+    return summaries
+
+
+def _wait_for_soperator_storage_and_pods(
+    runner: SoperatorValidationCommandRunner,
+    spec: Mapping[str, Any],
+) -> None:
+    timeout_seconds = _float_setting(spec.get("readiness_timeout_seconds"), default=0.0)
+    if timeout_seconds <= 0:
+        return
+    poll_seconds = _float_setting(
+        spec.get("readiness_poll_seconds"),
+        default=_SOPERATOR_CLUSTER_READY_POLL_SECONDS,
+    )
+    deadline = time.monotonic() + timeout_seconds
+    while True:
+        storage_unready = _soperator_storage_unready_summaries(runner, spec)
+        pending, _command = _pending_soperator_pods(runner, spec, include_events=True)
+        if not storage_unready and not pending:
+            return
+        if pending and not storage_unready and not any(item.storage_related for item in pending):
+            return
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return
+        time.sleep(min(max(poll_seconds, 0.1), remaining))
+
+
+def _check_soperator_storage_readiness(
+    runner: SoperatorValidationCommandRunner,
+    spec: Mapping[str, Any],
+    checks: list[dict[str, Any]],
+) -> None:
+    unready = _soperator_storage_unready_summaries(runner, spec)
+    if not unready:
+        return
+    shown = "; ".join(unready[:5])
+    if len(unready) > 5:
+        shown += f"; +{len(unready) - 5} more"
+    _append_check(
+        checks,
+        name="Soperator storage mounts",
+        status="failed",
+        summary="Soperator jail storage is not ready: " + shown,
+    )
+
+
+def _check_soperator_pod_scheduling(
+    runner: SoperatorValidationCommandRunner,
+    spec: Mapping[str, Any],
+    checks: list[dict[str, Any]],
+) -> None:
+    pending_items, command = _pending_soperator_pods(runner, spec, include_events=True)
+    pending = [f"{item.name}: {item.message}" for item in pending_items]
     if not pending:
         return
     shown = "; ".join(pending[:5])
@@ -1179,6 +1470,8 @@ def run_soperator_cluster_validations(
             _check_rollout(runner, spec, checks)
             _check_old_source_flux_desired_state(runner, spec, checks)
             _wait_for_slurmcluster_available(runner, spec)
+            _wait_for_soperator_storage_and_pods(runner, spec)
+            _check_soperator_storage_readiness(runner, spec, checks)
             _check_soperator_pod_scheduling(runner, spec, checks)
             _check_slurmcluster(runner, spec, checks)
             _check_slurm_status(runner, spec, checks)

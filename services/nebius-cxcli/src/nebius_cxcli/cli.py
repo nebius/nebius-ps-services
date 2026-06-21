@@ -1517,7 +1517,6 @@ _SOPERATOR_NODE_GROUP_AUTOSCALING_ROLES = (
     "controller",
     "login",
     "accounting",
-    *_SOPERATOR_WORKER_SHAPE_ROLES,
 )
 _SOPERATOR_WORKER_SHAPE_TOTAL_NODE_FIELDS = {
     "worker_cpu": "worker_cpu_total_nodes",
@@ -1531,8 +1530,11 @@ _SOPERATOR_LEGACY_WORKER_INPUT_FIELDS = (
     "worker_total_nodes",
     "worker_nodes_per_group",
     "worker_autoscaling",
+    "worker_cpu_autoscaling",
+    "worker_gpu_autoscaling",
 )
 _SOPERATOR_WORKER_EPHEMERAL_INPUT = "soperator.worker_ephemeral_nodes"
+_SOPERATOR_WORKER_NODE_GROUPS_INPUT = "soperator.worker_node_groups"
 _SOPERATOR_ONBOARDING_STORAGE_MODES = (
     ONBOARDING_STORAGE_MODE_KEEP_EXISTING,
     ONBOARDING_STORAGE_MODE_CREATE_ALIGNED_SFS,
@@ -12927,11 +12929,6 @@ def _soperator_worker_ephemeral_input(inputs: Mapping[str, Any]) -> Mapping[str,
     return raw_value if isinstance(raw_value, Mapping) else {}
 
 
-def _soperator_worker_ephemeral_enabled(inputs: Mapping[str, Any]) -> bool:
-    raw_value = _soperator_worker_ephemeral_input(inputs)
-    return _config_bool(raw_value.get("enabled"), default=False)
-
-
 def _soperator_worker_ephemeral_suspend_time_seconds(inputs: Mapping[str, Any]) -> int:
     raw_value = _soperator_worker_ephemeral_input(inputs)
     if raw_value.get("suspend_time_seconds") is None:
@@ -12940,6 +12937,106 @@ def _soperator_worker_ephemeral_suspend_time_seconds(inputs: Mapping[str, Any]) 
         raw_value.get("suspend_time_seconds"),
         field=f"{_SOPERATOR_WORKER_EPHEMERAL_INPUT}.suspend_time_seconds",
     )
+
+
+def _soperator_worker_node_groups_input(inputs: Mapping[str, Any]) -> Mapping[str, Any]:
+    raw_value = _mapping_path_value(inputs, _SOPERATOR_WORKER_NODE_GROUPS_INPUT)
+    if raw_value is None:
+        return {}
+    if not isinstance(raw_value, Mapping):
+        raise ValueError(f"{_SOPERATOR_WORKER_NODE_GROUPS_INPUT} must be a mapping")
+    return raw_value
+
+
+def _soperator_worker_node_groups_mutable(inputs: dict[str, Any]) -> dict[str, Any]:
+    soperator_inputs = inputs.setdefault("soperator", {})
+    if not isinstance(soperator_inputs, dict):
+        soperator_inputs = {}
+        inputs["soperator"] = soperator_inputs
+    worker_node_groups = soperator_inputs.get("worker_node_groups")
+    if worker_node_groups is None:
+        worker_node_groups = {}
+        soperator_inputs["worker_node_groups"] = worker_node_groups
+    if not isinstance(worker_node_groups, dict):
+        raise ValueError(f"{_SOPERATOR_WORKER_NODE_GROUPS_INPUT} must be a mapping")
+    return worker_node_groups
+
+
+def _soperator_worker_node_group_control(
+    inputs: Mapping[str, Any],
+    group_key: str,
+) -> Mapping[str, Any]:
+    raw_groups = _soperator_worker_node_groups_input(inputs)
+    raw_control = raw_groups.get(group_key)
+    return raw_control if isinstance(raw_control, Mapping) else {}
+
+
+def _soperator_worker_node_group_ephemeral_enabled(
+    inputs: Mapping[str, Any],
+    group_key: str,
+) -> bool:
+    raw_control = _soperator_worker_node_group_control(inputs, group_key)
+    raw_ephemeral = raw_control.get("ephemeral_nodes")
+    if not isinstance(raw_ephemeral, Mapping):
+        return False
+    return _config_bool(raw_ephemeral.get("enabled"), default=False)
+
+
+def _soperator_any_worker_node_group_ephemeral_enabled(inputs: Mapping[str, Any]) -> bool:
+    raw_groups = _soperator_worker_node_groups_input(inputs)
+    return any(
+        _soperator_worker_node_group_ephemeral_enabled(inputs, str(group_key))
+        for group_key in raw_groups
+    )
+
+
+def _soperator_worker_node_group_autoscaling(
+    *,
+    inputs: Mapping[str, Any],
+    group_key: str,
+    shard_size: int,
+) -> dict[str, int] | None:
+    raw_control = _soperator_worker_node_group_control(inputs, group_key)
+    raw_autoscaling = raw_control.get("autoscaling")
+    field_prefix = f"{_SOPERATOR_WORKER_NODE_GROUPS_INPUT}.{group_key}.autoscaling"
+    if not isinstance(raw_autoscaling, Mapping):
+        return None
+    if not _config_bool(raw_autoscaling.get("enabled"), default=False):
+        return None
+    min_node_count = (
+        0
+        if raw_autoscaling.get("min_node_count") is None
+        else _required_nonnegative_int(
+            raw_autoscaling.get("min_node_count"),
+            field=f"{field_prefix}.min_node_count",
+        )
+    )
+    max_node_count = (
+        shard_size
+        if raw_autoscaling.get("max_node_count") is None
+        else _required_nonnegative_int(
+            raw_autoscaling.get("max_node_count"),
+            field=f"{field_prefix}.max_node_count",
+        )
+    )
+    if max_node_count < min_node_count:
+        raise ValueError(
+            f"{field_prefix}.max_node_count must be greater than or equal to "
+            f"{field_prefix}.min_node_count"
+        )
+    if max_node_count > shard_size:
+        raise ValueError(
+            f"{field_prefix}.max_node_count must be less than or equal to "
+            f"the shard capacity {shard_size}"
+        )
+    return {
+        "min_node_count": min_node_count,
+        "max_node_count": max_node_count,
+    }
+
+
+def _soperator_worker_control_key_matches_prefix(key: str, key_prefix: str) -> bool:
+    return key == key_prefix or bool(re.fullmatch(rf"{re.escape(key_prefix)}-[0-9]+", key))
 
 
 def _required_profile_positive_int(value: Any, *, field: str) -> int:
@@ -13204,15 +13301,18 @@ def _raise_if_legacy_soperator_worker_inputs(inputs: Mapping[str, Any]) -> None:
     legacy_fields = [
         field for field in _SOPERATOR_LEGACY_WORKER_INPUT_FIELDS if field in soperator_inputs
     ]
-    if not legacy_fields:
-        return
-    joined = ", ".join(f"inputs.soperator.{field}" for field in legacy_fields)
-    verb = "is" if len(legacy_fields) == 1 else "are"
-    raise ValueError(
-        f"{joined} {verb} no longer supported. Use worker_cpu_total_nodes, "
-        "worker_cpu_nodes_per_group, worker_cpu_autoscaling, worker_gpu_total_nodes, "
-        "worker_gpu_nodes_per_group, and worker_gpu_autoscaling instead."
-    )
+    worker_ephemeral_nodes = soperator_inputs.get("worker_ephemeral_nodes")
+    if isinstance(worker_ephemeral_nodes, Mapping) and "enabled" in worker_ephemeral_nodes:
+        legacy_fields.append("worker_ephemeral_nodes.enabled")
+    if legacy_fields:
+        joined = ", ".join(f"inputs.soperator.{field}" for field in legacy_fields)
+        verb = "is" if len(legacy_fields) == 1 else "are"
+        raise ValueError(
+            f"{joined} {verb} no longer supported. Use worker_cpu_total_nodes, "
+            "worker_cpu_nodes_per_group, worker_gpu_total_nodes, worker_gpu_nodes_per_group, "
+            "worker_node_groups.<worker>.autoscaling, and "
+            "worker_node_groups.<worker>.ephemeral_nodes instead."
+        )
 
 
 def _soperator_worker_profile_total_nodes(
@@ -14732,10 +14832,6 @@ def _materialize_soperator_mapping_chart_values(
     if not profile_placements:
         return
     use_profile_filters = not placements
-    worker_ephemeral_enabled = (
-        install_mode == _SOPERATOR_INSTALL_MODE_PRODUCTION
-        and _soperator_worker_ephemeral_enabled(inputs)
-    )
 
     existing_filters = values.get("k8sNodeFilters")
     if isinstance(existing_filters, list):
@@ -14841,8 +14937,9 @@ def _materialize_soperator_mapping_chart_values(
                     else node_group.autoscaling_max_node_count
                 )
                 if (
-                    worker_ephemeral_enabled
+                    install_mode == _SOPERATOR_INSTALL_MODE_PRODUCTION
                     and template_name.startswith("worker")
+                    and _soperator_worker_node_group_ephemeral_enabled(inputs, group_key)
                     and node_group.autoscaling_max_node_count is not None
                 ):
                     nodeset["ephemeralNodes"] = True
@@ -15119,9 +15216,7 @@ def _materialize_soperator_worker_node_groups(
     node_groups: dict[str, Any],
     worker_profiles: list[Any],
 ) -> None:
-    worker_ephemeral_enabled = _soperator_worker_ephemeral_enabled(inputs)
-    if worker_ephemeral_enabled:
-        _soperator_worker_ephemeral_suspend_time_seconds(inputs)
+    active_worker_control_keys: set[str] = set()
     for raw_worker in worker_profiles:
         if not isinstance(raw_worker, Mapping):
             continue
@@ -15145,28 +15240,7 @@ def _materialize_soperator_worker_node_groups(
             default_total_nodes=default_total_nodes,
             default_nodes_per_group=default_nodes_per_group,
         )
-        autoscaling = _soperator_profile_autoscaling_input(
-            inputs=inputs,
-            raw_group=raw_worker,
-            default_min_node_count=min(default_total_nodes, total_nodes),
-            default_max_node_count=total_nodes,
-        )
-        if worker_ephemeral_enabled:
-            autoscaling_input = _non_empty_text(raw_worker.get("autoscaling_input"))
-            if autoscaling is None:
-                raise ValueError(
-                    f"{_SOPERATOR_WORKER_EPHEMERAL_INPUT}.enabled requires "
-                    f"{autoscaling_input or 'worker_nodesets.autoscaling_input'}.enabled=true"
-                )
-            if autoscaling["max_node_count"] < 1:
-                raise ValueError(
-                    f"{_SOPERATOR_WORKER_EPHEMERAL_INPUT}.enabled requires "
-                    f"{autoscaling_input or 'worker_nodesets.autoscaling_input'}.max_node_count "
-                    "to be at least 1"
-                )
-        desired_total_nodes = autoscaling["max_node_count"] if autoscaling else total_nodes
-        if autoscaling is None and desired_total_nodes <= 0:
-            desired_total_nodes = default_total_nodes
+        desired_total_nodes = total_nodes
 
         max_nodes_per_group = _required_profile_positive_int(
             raw_worker.get("max_nodes_per_group"),
@@ -15180,20 +15254,69 @@ def _materialize_soperator_worker_node_groups(
         )
         shard_count = max(1, (desired_total_nodes + nodes_per_group - 1) // nodes_per_group)
         desired_counts: dict[str, int] = {}
-        desired_autoscaling: dict[str, dict[str, int]] = {}
-        remaining_min_nodes = autoscaling["min_node_count"] if autoscaling else 0
         for index in range(shard_count):
             remaining = desired_total_nodes - (index * nodes_per_group)
             shard_size = min(nodes_per_group, remaining)
             group_key = key_prefix if shard_count == 1 else f"{key_prefix}-{index}"
             desired_counts[group_key] = shard_size
+        active_worker_control_keys.update(desired_counts)
+        worker_node_groups = _soperator_worker_node_groups_mutable(inputs)
+        desired_key_set = set(desired_counts)
+        for raw_key in list(worker_node_groups):
+            group_key = str(raw_key)
+            if (
+                _soperator_worker_control_key_matches_prefix(group_key, key_prefix)
+                and group_key not in desired_key_set
+            ):
+                worker_node_groups.pop(raw_key, None)
+        for group_key in desired_counts:
+            control = worker_node_groups.setdefault(group_key, {})
+            if not isinstance(control, dict):
+                raise ValueError(
+                    f"{_SOPERATOR_WORKER_NODE_GROUPS_INPUT}.{group_key} must be a mapping"
+                )
+            autoscaling_control = control.setdefault("autoscaling", {})
+            if not isinstance(autoscaling_control, dict):
+                raise ValueError(
+                    f"{_SOPERATOR_WORKER_NODE_GROUPS_INPUT}.{group_key}.autoscaling "
+                    "must be a mapping"
+                )
+            autoscaling_control.setdefault("enabled", False)
+            ephemeral_control = control.setdefault("ephemeral_nodes", {})
+            if not isinstance(ephemeral_control, dict):
+                raise ValueError(
+                    f"{_SOPERATOR_WORKER_NODE_GROUPS_INPUT}.{group_key}.ephemeral_nodes "
+                    "must be a mapping"
+                )
+            ephemeral_control.setdefault("enabled", False)
+
+        desired_autoscaling: dict[str, dict[str, int]] = {}
+        for group_key, shard_size in desired_counts.items():
+            autoscaling = _soperator_worker_node_group_autoscaling(
+                inputs=inputs,
+                group_key=group_key,
+                shard_size=shard_size,
+            )
             if autoscaling:
-                shard_min = min(shard_size, max(0, remaining_min_nodes))
-                remaining_min_nodes -= shard_min
                 desired_autoscaling[group_key] = {
-                    "min_node_count": shard_min,
-                    "max_node_count": shard_size,
+                    "min_node_count": autoscaling["min_node_count"],
+                    "max_node_count": autoscaling["max_node_count"],
                 }
+            if _soperator_worker_node_group_ephemeral_enabled(inputs, group_key):
+                if autoscaling is None:
+                    raise ValueError(
+                        f"{_SOPERATOR_WORKER_NODE_GROUPS_INPUT}.{group_key}"
+                        ".ephemeral_nodes.enabled requires "
+                        f"{_SOPERATOR_WORKER_NODE_GROUPS_INPUT}.{group_key}"
+                        ".autoscaling.enabled=true"
+                    )
+                if autoscaling["max_node_count"] < 1:
+                    raise ValueError(
+                        f"{_SOPERATOR_WORKER_NODE_GROUPS_INPUT}.{group_key}"
+                        ".ephemeral_nodes.enabled requires "
+                        f"{_SOPERATOR_WORKER_NODE_GROUPS_INPUT}.{group_key}"
+                        ".autoscaling.max_node_count to be at least 1"
+                    )
 
         base_group = raw_worker.get("node_group")
         base_group = copy.deepcopy(base_group) if isinstance(base_group, Mapping) else {}
@@ -15280,6 +15403,11 @@ def _materialize_soperator_worker_node_groups(
                     inputs=inputs,
                     prefer_shape_defaults=True,
                 )
+    worker_node_groups = _soperator_worker_node_groups_mutable(inputs)
+    for raw_key in list(worker_node_groups):
+        group_key = str(raw_key)
+        if group_key not in active_worker_control_keys:
+            worker_node_groups.pop(raw_key, None)
 
 
 def _materialize_soperator_mk8s_profile(
@@ -15587,7 +15715,7 @@ def _materialize_soperator_worker_ephemeral_values(
     if install_mode != _SOPERATOR_INSTALL_MODE_PRODUCTION:
         return
     slurm_config = values.get("slurmConfig")
-    if not _soperator_worker_ephemeral_enabled(inputs):
+    if not _soperator_any_worker_node_group_ephemeral_enabled(inputs):
         if isinstance(slurm_config, dict):
             slurm_config.pop("suspendTime", None)
             if not slurm_config:
@@ -19028,18 +19156,12 @@ def _prompt_path_sort_key(
         "infra.components[].inputs.soperator.accounting_autoscaling.min_node_count": 51,
         "infra.components[].inputs.soperator.accounting_autoscaling.max_node_count": 52,
         "infra.components[].inputs.soperator.accounting_node_count": 53,
-        "infra.components[].inputs.soperator.worker_cpu_autoscaling.enabled": 54,
-        "infra.components[].inputs.soperator.worker_cpu_autoscaling.min_node_count": 55,
-        "infra.components[].inputs.soperator.worker_cpu_autoscaling.max_node_count": 56,
-        "infra.components[].inputs.soperator.worker_cpu_total_nodes": 57,
-        "infra.components[].inputs.soperator.worker_cpu_nodes_per_group": 58,
-        "infra.components[].inputs.soperator.worker_gpu_autoscaling.enabled": 59,
-        "infra.components[].inputs.soperator.worker_gpu_autoscaling.min_node_count": 60,
-        "infra.components[].inputs.soperator.worker_gpu_autoscaling.max_node_count": 61,
-        "infra.components[].inputs.soperator.worker_gpu_total_nodes": 62,
-        "infra.components[].inputs.soperator.worker_gpu_nodes_per_group": 63,
-        "infra.components[].inputs.soperator.worker_ephemeral_nodes.enabled": 64,
-        "infra.components[].inputs.soperator.worker_ephemeral_nodes.suspend_time_seconds": 65,
+        "infra.components[].inputs.soperator.worker_cpu_total_nodes": 54,
+        "infra.components[].inputs.soperator.worker_cpu_nodes_per_group": 55,
+        "infra.components[].inputs.soperator.worker_gpu_total_nodes": 56,
+        "infra.components[].inputs.soperator.worker_gpu_nodes_per_group": 57,
+        "infra.components[].inputs.soperator.worker_node_groups": 58,
+        "infra.components[].inputs.soperator.worker_ephemeral_nodes.suspend_time_seconds": 59,
     }
     leaf = path[-1] if path else ""
     leaf_name = _normalize_leaf_name(str(leaf)) if isinstance(leaf, str) else ""
@@ -19777,7 +19899,9 @@ def _maybe_print_soperator_mk8s_sizing_prompt_guidance(
         "accounting counts size the CPU service role node groups. Worker sizing "
         "is shape-specific: worker_cpu_* sizes CPU worker hosts, worker_gpu_* "
         "sizes GPU worker hosts, GPU count per host comes from the preset, and "
-        "*_nodes_per_group controls generated worker group sharding.[/dim]"
+        "*_nodes_per_group controls generated worker group sharding; "
+        "worker_node_groups controls each shard's autoscaling and ephemeral "
+        "NodeSet state.[/dim]"
     )
     emitted_guidance.add("soperator_mk8s_sizing")
 
@@ -20756,25 +20880,6 @@ def _soperator_worker_shape_active_for_prompt(
     return role in _soperator_profile_worker_shapes(profile)
 
 
-def _soperator_worker_ephemeral_enabled_for_prompt(
-    *,
-    payload: dict[str, Any],
-    entry: ComponentEntry,
-    full_path_label: str,
-) -> bool:
-    component_prefix = _component_prefix_for_prompt_field(
-        entry=entry,
-        full_path_label=full_path_label,
-    )
-    if not component_prefix:
-        return False
-    enabled = _read_payload_field(
-        payload,
-        f"{component_prefix}.inputs.soperator.worker_ephemeral_nodes.enabled",
-    )
-    return _config_bool(enabled, default=False)
-
-
 def _skip_soperator_managed_mk8s_prompt(
     *,
     payload: dict[str, Any],
@@ -20802,6 +20907,9 @@ def _skip_soperator_managed_mk8s_prompt(
     soperator_legacy_worker_field_suffixes = tuple(
         f".inputs.soperator.{field}" for field in _SOPERATOR_LEGACY_WORKER_INPUT_FIELDS
     )
+    soperator_legacy_worker_field_prefixes = tuple(
+        f".inputs.soperator.{field}." for field in _SOPERATOR_LEGACY_WORKER_INPUT_FIELDS
+    )
     autoscaling_prompt = _soperator_autoscaling_role_from_prompt(full_path_label)
     if autoscaling_prompt is not None:
         role, field = autoscaling_prompt
@@ -20823,18 +20931,12 @@ def _skip_soperator_managed_mk8s_prompt(
     if ".inputs.soperator.worker_ephemeral_nodes." in full_path_label:
         if not has_soperator_target or install_mode != _SOPERATOR_INSTALL_MODE_PRODUCTION:
             return True
-        if full_path_label.endswith(".inputs.soperator.worker_ephemeral_nodes.enabled"):
-            return False
-        if full_path_label.endswith(
+        return not full_path_label.endswith(
             ".inputs.soperator.worker_ephemeral_nodes.suspend_time_seconds"
-        ):
-            return not _soperator_worker_ephemeral_enabled_for_prompt(
-                payload=payload,
-                entry=entry,
-                full_path_label=full_path_label,
-            )
-        return True
-    if full_path_label.endswith(soperator_legacy_worker_field_suffixes):
+        )
+    if full_path_label.endswith(soperator_legacy_worker_field_suffixes) or any(
+        prefix in full_path_label for prefix in soperator_legacy_worker_field_prefixes
+    ):
         return True
     if full_path_label.endswith(soperator_fixed_count_field_suffixes):
         if not has_soperator_target or install_mode != _SOPERATOR_INSTALL_MODE_PRODUCTION:

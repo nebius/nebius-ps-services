@@ -2509,21 +2509,46 @@ def test_render_local_soperator_mixed_profile_writes_ephemeral_shape_nodesets(
     )
     mk8s.setdefault("inputs", {}).setdefault("soperator", {}).update(
         {
+            "worker_cpu_total_nodes": 3,
             "worker_cpu_nodes_per_group": 2,
-            "worker_cpu_autoscaling": {
-                "enabled": True,
-                "min_node_count": 1,
-                "max_node_count": 3,
-            },
+            "worker_gpu_total_nodes": 4,
             "worker_gpu_nodes_per_group": 3,
-            "worker_gpu_autoscaling": {
-                "enabled": True,
-                "min_node_count": 2,
-                "max_node_count": 4,
-            },
             "worker_ephemeral_nodes": {
-                "enabled": True,
                 "suspend_time_seconds": 300,
+            },
+            "worker_node_groups": {
+                "worker-cpu-0": {
+                    "autoscaling": {
+                        "enabled": True,
+                        "min_node_count": 1,
+                        "max_node_count": 2,
+                    },
+                    "ephemeral_nodes": {"enabled": True},
+                },
+                "worker-cpu-1": {
+                    "autoscaling": {
+                        "enabled": True,
+                        "min_node_count": 0,
+                        "max_node_count": 1,
+                    },
+                    "ephemeral_nodes": {"enabled": True},
+                },
+                "worker-gpu-0": {
+                    "autoscaling": {
+                        "enabled": True,
+                        "min_node_count": 2,
+                        "max_node_count": 3,
+                    },
+                    "ephemeral_nodes": {"enabled": True},
+                },
+                "worker-gpu-1": {
+                    "autoscaling": {
+                        "enabled": True,
+                        "min_node_count": 0,
+                        "max_node_count": 1,
+                    },
+                    "ephemeral_nodes": {"enabled": True},
+                },
             },
         }
     )

@@ -45,6 +45,12 @@ def test_soperator_cluster_validation_specs_for_enabled_soperator_target() -> No
             "namespace": "soperator",
             "cluster_name": "slurm-training",
             "target_version": "",
+            "jail_storage": {
+                "pvc_name": "jail-pvc",
+                "pv_name": "jail-pv",
+                "mount_daemonset_name": "jail-mount",
+                "local_path": "/mnt/jail",
+            },
             "kube_context": "training-context",
             "report_file": "soperator-cluster-validation-report-training.json",
             "readiness_timeout_seconds": 1200,
@@ -52,6 +58,34 @@ def test_soperator_cluster_validation_specs_for_enabled_soperator_target() -> No
             "required": True,
         }
     ]
+
+
+def test_soperator_cluster_validation_specs_use_custom_jail_storage_names() -> None:
+    payload = {
+        "apps": {
+            "charts": [
+                {
+                    "id": "soperator",
+                    "instance_id": "training",
+                    "enabled": True,
+                    "values": {
+                        "clusterName": "slurm-training",
+                        "volume": {"jail": {"name": "TrainingJail!", "localPath": "/mnt/train"}},
+                    },
+                }
+            ]
+        },
+        "deploy": {"targets": [{"instance_id": "training"}]},
+    }
+
+    specs = soperator_cluster_validation_specs(payload)
+
+    assert specs[0]["jail_storage"] == {
+        "pvc_name": "training-jail-pvc",
+        "pv_name": "training-jail-pv",
+        "mount_daemonset_name": "training-jail-mount",
+        "local_path": "/mnt/train",
+    }
 
 
 def test_run_soperator_cluster_validation_writes_smoke_report(tmp_path: Path) -> None:
@@ -482,6 +516,431 @@ def test_soperator_cluster_validation_reports_pending_soperator_pods(
     assert failed[0]["name"] == "Soperator pod scheduling"
     assert "mk8s-acct-db-0" in failed[0]["summary"]
     assert "unschedulable" in failed[0]["summary"]
+
+
+def test_soperator_cluster_validation_waits_for_jail_mount_pending_pods(
+    tmp_path: Path,
+) -> None:
+    spec = {
+        "kind": SOPERATOR_CLUSTER_VALIDATION_KIND,
+        "name": "Soperator cluster smoke test (training)",
+        "target_ref": "training",
+        "namespace": "soperator",
+        "cluster_name": "training",
+        "report_file": "soperator-cluster-validation-report-training.json",
+        "readiness_timeout_seconds": 2,
+        "readiness_poll_seconds": 0,
+    }
+    pod_gets = 0
+    daemonset_gets = 0
+
+    def _pod_payload(*, pending: bool) -> dict:
+        items = [
+            {
+                "metadata": {
+                    "name": "login-0",
+                    "labels": {"app.kubernetes.io/component": "login"},
+                },
+                "status": {"phase": "Running", "conditions": [{"type": "Ready", "status": "True"}]},
+            }
+        ]
+        if pending:
+            items.append(
+                {
+                    "metadata": {"name": "worker-cpu-1"},
+                    "spec": {
+                        "volumes": [
+                            {
+                                "name": "jail",
+                                "persistentVolumeClaim": {"claimName": "jail-pvc"},
+                            }
+                        ]
+                    },
+                    "status": {
+                        "phase": "Pending",
+                        "conditions": [{"type": "PodScheduled", "status": "True"}],
+                    },
+                }
+            )
+        else:
+            items.append(
+                {
+                    "metadata": {"name": "worker-cpu-1"},
+                    "status": {"phase": "Running", "conditions": [{"type": "Ready", "status": "True"}]},
+                }
+            )
+        return {"items": items}
+
+    def _runner(
+        args,
+        *,
+        input_text: str | None = None,
+        timeout_seconds: int = 300,
+        check: bool = True,
+    ) -> SoperatorValidationCommandResult:
+        nonlocal pod_gets, daemonset_gets
+        del input_text, timeout_seconds, check
+        command = tuple(str(item) for item in args)
+        if command[:5] == ("kubectl", "-n", "soperator", "get", "pods"):
+            pod_gets += 1
+            return SoperatorValidationCommandResult(
+                command,
+                0,
+                json.dumps(_pod_payload(pending=pod_gets == 1)),
+                "",
+            )
+        if command[:5] == ("kubectl", "-n", "soperator", "get", "events"):
+            return SoperatorValidationCommandResult(
+                command,
+                0,
+                json.dumps(
+                    {
+                        "items": [
+                            {
+                                "type": "Warning",
+                                "reason": "FailedMount",
+                                "message": (
+                                    'MountVolume.NewMounter initialization failed for volume '
+                                    '"jail-pv" : path "/mnt/jail" does not exist'
+                                ),
+                            }
+                        ]
+                    }
+                ),
+                "",
+            )
+        if command[:7] == ("kubectl", "-n", "soperator", "get", "pvc", "jail-pvc", "-o"):
+            return SoperatorValidationCommandResult(
+                command,
+                0,
+                json.dumps({"status": {"phase": "Bound"}}),
+                "",
+            )
+        if command[:5] == ("kubectl", "get", "pv", "jail-pv", "-o"):
+            return SoperatorValidationCommandResult(
+                command,
+                0,
+                json.dumps({"status": {"phase": "Bound"}}),
+                "",
+            )
+        if command[:7] == ("kubectl", "-n", "soperator", "get", "daemonset", "jail-mount", "-o"):
+            daemonset_gets += 1
+            ready = daemonset_gets > 1
+            return SoperatorValidationCommandResult(
+                command,
+                0,
+                json.dumps(
+                    {
+                        "status": {
+                            "desiredNumberScheduled": 3,
+                            "numberReady": 3 if ready else 2,
+                            "numberAvailable": 3 if ready else 2,
+                        }
+                    }
+                ),
+                "",
+            )
+        if command[:6] == ("kubectl", "-n", "soperator", "get", "slurmclusters", "-o"):
+            return SoperatorValidationCommandResult(
+                command,
+                0,
+                json.dumps(
+                    {
+                        "items": [
+                            {
+                                "metadata": {"name": "training"},
+                                "status": {"phase": "Available"},
+                            }
+                        ]
+                    }
+                ),
+                "",
+            )
+        if command[:6] == ("kubectl", "-n", "soperator", "exec", "login-0", "--"):
+            if command[6:9] == ("sinfo", "-h", "-o"):
+                return SoperatorValidationCommandResult(command, 0, "idle\n", "")
+            if command[6:8] == ("squeue", "-h"):
+                return SoperatorValidationCommandResult(command, 0, "", "")
+            if command[6:8] == ("bash", "-lc"):
+                return SoperatorValidationCommandResult(
+                    command,
+                    0,
+                    "cxcli-soperator-srun-ok\nworker-0\n",
+                    "",
+                )
+        return SoperatorValidationCommandResult(command, 0, "ok\n", "")
+
+    written = run_soperator_cluster_validations(
+        [spec],
+        reports_dir=tmp_path,
+        command_runner=_runner,
+    )
+
+    report = json.loads(written[0].read_text(encoding="utf-8"))
+    assert report["passed"] is True
+    assert pod_gets >= 2
+    assert daemonset_gets >= 2
+    assert all(check["name"] != "Soperator pod scheduling" for check in report["checks"])
+
+
+def test_soperator_cluster_validation_reports_failed_mount_event_for_pending_pod(
+    tmp_path: Path,
+) -> None:
+    spec = {
+        "kind": SOPERATOR_CLUSTER_VALIDATION_KIND,
+        "name": "Soperator cluster smoke test (training)",
+        "target_ref": "training",
+        "namespace": "soperator",
+        "cluster_name": "training",
+        "report_file": "soperator-cluster-validation-report-training.json",
+        "readiness_timeout_seconds": 0,
+    }
+
+    def _runner(
+        args,
+        *,
+        input_text: str | None = None,
+        timeout_seconds: int = 300,
+        check: bool = True,
+    ) -> SoperatorValidationCommandResult:
+        del input_text, timeout_seconds, check
+        command = tuple(str(item) for item in args)
+        if command[:5] == ("kubectl", "-n", "soperator", "get", "pods"):
+            return SoperatorValidationCommandResult(
+                command,
+                0,
+                json.dumps(
+                    {
+                        "items": [
+                            {
+                                "metadata": {
+                                    "name": "login-0",
+                                    "labels": {"app.kubernetes.io/component": "login"},
+                                },
+                                "status": {"phase": "Running"},
+                            },
+                            {
+                                "metadata": {"name": "worker-cpu-1"},
+                                "spec": {
+                                    "volumes": [
+                                        {
+                                            "name": "jail",
+                                            "persistentVolumeClaim": {"claimName": "jail-pvc"},
+                                        }
+                                    ]
+                                },
+                                "status": {
+                                    "phase": "Pending",
+                                    "conditions": [{"type": "PodScheduled", "status": "True"}],
+                                },
+                            },
+                        ]
+                    }
+                ),
+                "",
+            )
+        if command[:5] == ("kubectl", "-n", "soperator", "get", "events"):
+            return SoperatorValidationCommandResult(
+                command,
+                0,
+                json.dumps(
+                    {
+                        "items": [
+                            {
+                                "type": "Warning",
+                                "reason": "FailedMount",
+                                "message": (
+                                    'MountVolume.NewMounter initialization failed for volume '
+                                    '"jail-pv" : path "/mnt/jail" does not exist'
+                                ),
+                            }
+                        ]
+                    }
+                ),
+                "",
+            )
+        if command[:7] == ("kubectl", "-n", "soperator", "get", "pvc", "jail-pvc", "-o"):
+            return SoperatorValidationCommandResult(
+                command,
+                0,
+                json.dumps({"status": {"phase": "Bound"}}),
+                "",
+            )
+        if command[:5] == ("kubectl", "get", "pv", "jail-pv", "-o"):
+            return SoperatorValidationCommandResult(
+                command,
+                0,
+                json.dumps({"status": {"phase": "Bound"}}),
+                "",
+            )
+        if command[:7] == ("kubectl", "-n", "soperator", "get", "daemonset", "jail-mount", "-o"):
+            return SoperatorValidationCommandResult(
+                command,
+                0,
+                json.dumps(
+                    {
+                        "status": {
+                            "desiredNumberScheduled": 3,
+                            "numberReady": 3,
+                            "numberAvailable": 3,
+                        }
+                    }
+                ),
+                "",
+            )
+        if command[:6] == ("kubectl", "-n", "soperator", "get", "slurmclusters", "-o"):
+            return SoperatorValidationCommandResult(
+                command,
+                0,
+                json.dumps(
+                    {
+                        "items": [
+                            {
+                                "metadata": {"name": "training"},
+                                "status": {"phase": "Available"},
+                            }
+                        ]
+                    }
+                ),
+                "",
+            )
+        if command[:6] == ("kubectl", "-n", "soperator", "exec", "login-0", "--"):
+            if command[6:9] == ("sinfo", "-h", "-o"):
+                return SoperatorValidationCommandResult(command, 0, "idle\n", "")
+            if command[6:8] == ("squeue", "-h"):
+                return SoperatorValidationCommandResult(command, 0, "", "")
+            if command[6:8] == ("bash", "-lc"):
+                return SoperatorValidationCommandResult(
+                    command,
+                    0,
+                    "cxcli-soperator-srun-ok\nworker-0\n",
+                    "",
+                )
+        return SoperatorValidationCommandResult(command, 0, "ok\n", "")
+
+    with pytest.raises(RuntimeError, match="Soperator pod scheduling"):
+        run_soperator_cluster_validations(
+            [spec],
+            reports_dir=tmp_path,
+            command_runner=_runner,
+        )
+
+    report = json.loads(
+        (tmp_path / "soperator-cluster-validation-report-training.json").read_text(encoding="utf-8")
+    )
+    failed = [check for check in report["checks"] if check["status"] == "failed"]
+    assert failed[0]["name"] == "Soperator pod scheduling"
+    assert "worker-cpu-1" in failed[0]["summary"]
+    assert "FailedMount" in failed[0]["summary"]
+    assert "jail-pv" in failed[0]["summary"]
+
+
+def test_soperator_cluster_validation_fails_when_jail_storage_resources_are_missing(
+    tmp_path: Path,
+) -> None:
+    spec = {
+        "kind": SOPERATOR_CLUSTER_VALIDATION_KIND,
+        "name": "Soperator cluster smoke test (training)",
+        "target_ref": "training",
+        "namespace": "soperator",
+        "cluster_name": "training",
+        "report_file": "soperator-cluster-validation-report-training.json",
+        "readiness_timeout_seconds": 0,
+    }
+
+    def _runner(
+        args,
+        *,
+        input_text: str | None = None,
+        timeout_seconds: int = 300,
+        check: bool = True,
+    ) -> SoperatorValidationCommandResult:
+        del input_text, timeout_seconds, check
+        command = tuple(str(item) for item in args)
+        if command[:5] == ("kubectl", "-n", "soperator", "get", "pods"):
+            return SoperatorValidationCommandResult(
+                command,
+                0,
+                json.dumps(
+                    {
+                        "items": [
+                            {
+                                "metadata": {
+                                    "name": "login-0",
+                                    "labels": {"app.kubernetes.io/component": "login"},
+                                },
+                                "status": {"phase": "Running"},
+                            }
+                        ]
+                    }
+                ),
+                "",
+            )
+        if command[:7] == ("kubectl", "-n", "soperator", "get", "pvc", "jail-pvc", "-o"):
+            return SoperatorValidationCommandResult(
+                command,
+                1,
+                "",
+                'Error from server (NotFound): persistentvolumeclaims "jail-pvc" not found',
+            )
+        if command[:5] == ("kubectl", "get", "pv", "jail-pv", "-o"):
+            return SoperatorValidationCommandResult(
+                command,
+                1,
+                "",
+                'Error from server (NotFound): persistentvolumes "jail-pv" not found',
+            )
+        if command[:7] == ("kubectl", "-n", "soperator", "get", "daemonset", "jail-mount", "-o"):
+            return SoperatorValidationCommandResult(
+                command,
+                1,
+                "",
+                'Error from server (NotFound): daemonsets.apps "jail-mount" not found',
+            )
+        if command[:6] == ("kubectl", "-n", "soperator", "get", "slurmclusters", "-o"):
+            return SoperatorValidationCommandResult(
+                command,
+                0,
+                json.dumps(
+                    {
+                        "items": [
+                            {
+                                "metadata": {"name": "training"},
+                                "status": {"phase": "Available"},
+                            }
+                        ]
+                    }
+                ),
+                "",
+            )
+        if command[:6] == ("kubectl", "-n", "soperator", "exec", "login-0", "--"):
+            if command[6:9] == ("sinfo", "-h", "-o"):
+                return SoperatorValidationCommandResult(command, 0, "idle\n", "")
+            if command[6:8] == ("squeue", "-h"):
+                return SoperatorValidationCommandResult(command, 0, "", "")
+            if command[6:8] == ("bash", "-lc"):
+                return SoperatorValidationCommandResult(
+                    command,
+                    0,
+                    "cxcli-soperator-srun-ok\nworker-0\n",
+                    "",
+                )
+        return SoperatorValidationCommandResult(command, 0, "ok\n", "")
+
+    with pytest.raises(RuntimeError, match="Soperator storage mounts"):
+        run_soperator_cluster_validations(
+            [spec],
+            reports_dir=tmp_path,
+            command_runner=_runner,
+        )
+
+    report = json.loads(
+        (tmp_path / "soperator-cluster-validation-report-training.json").read_text(encoding="utf-8")
+    )
+    failed = [check for check in report["checks"] if check["status"] == "failed"]
+    assert failed[0]["name"] == "Soperator storage mounts"
+    assert "pvc/jail-pvc lookup failed" in failed[0]["summary"]
+    assert "daemonset/jail-mount lookup failed" in failed[0]["summary"]
 
 
 def test_soperator_cluster_validation_runs_slurm_gpu_and_nccl_benchmark(

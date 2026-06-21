@@ -680,7 +680,7 @@ def test_soperator_managed_mk8s_skips_raw_node_group_prompts() -> None:
             full_path_label=f"infra.components[0].inputs.soperator.{field}",
         )
     payload["apps"]["charts"][0].pop("profile")
-    assert not _skip_soperator_managed_mk8s_prompt(
+    assert _skip_soperator_managed_mk8s_prompt(
         payload=payload,
         entry=entry,
         full_path_label="infra.components[0].inputs.soperator.worker_gpu_autoscaling.enabled",
@@ -727,37 +727,23 @@ def test_soperator_managed_mk8s_skips_raw_node_group_prompts() -> None:
         entry=entry,
         full_path_label="infra.components[0].inputs.soperator.system_node_count",
     )
-    soperator_inputs["worker_gpu_autoscaling"] = {"enabled": True}
-    assert _skip_soperator_managed_mk8s_prompt(
-        payload=payload,
-        entry=entry,
-        full_path_label="infra.components[0].inputs.soperator.worker_gpu_total_nodes",
-    )
     assert not _skip_soperator_managed_mk8s_prompt(
         payload=payload,
         entry=entry,
         full_path_label="infra.components[0].inputs.soperator.worker_gpu_nodes_per_group",
     )
-    assert not _skip_soperator_managed_mk8s_prompt(
+    assert _skip_soperator_managed_mk8s_prompt(
         payload=payload,
         entry=entry,
         full_path_label=(
             "infra.components[0].inputs.soperator.worker_gpu_autoscaling.max_node_count"
         ),
     )
-    assert not _skip_soperator_managed_mk8s_prompt(
+    assert _skip_soperator_managed_mk8s_prompt(
         payload=payload,
         entry=entry,
         full_path_label="infra.components[0].inputs.soperator.worker_ephemeral_nodes.enabled",
     )
-    assert _skip_soperator_managed_mk8s_prompt(
-        payload=payload,
-        entry=entry,
-        full_path_label=(
-            "infra.components[0].inputs.soperator.worker_ephemeral_nodes.suspend_time_seconds"
-        ),
-    )
-    soperator_inputs["worker_ephemeral_nodes"] = {"enabled": True}
     assert not _skip_soperator_managed_mk8s_prompt(
         payload=payload,
         entry=entry,

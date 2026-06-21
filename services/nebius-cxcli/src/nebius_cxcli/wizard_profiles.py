@@ -196,7 +196,7 @@ def _soperator_placement_fields() -> dict[str, dict[str, Any]]:
 
 def _mk8s_soperator_autoscaling_fields() -> dict[str, dict[str, Any]]:
     fields: dict[str, dict[str, Any]] = {}
-    for role in ("system", "controller", "login", "accounting", "worker_cpu", "worker_gpu"):
+    for role in ("system", "controller", "login", "accounting"):
         prefix = f"inputs.soperator.{role}_autoscaling"
         fields[f"{prefix}.enabled"] = (
             {
@@ -222,7 +222,6 @@ def _mk8s_soperator_autoscaling_fields() -> dict[str, dict[str, Any]]:
 
 def _mk8s_soperator_worker_ephemeral_fields() -> dict[str, dict[str, Any]]:
     return {
-        "inputs.soperator.worker_ephemeral_nodes.enabled": _disabled_bool_wizard_field(),
         "inputs.soperator.worker_ephemeral_nodes.suspend_time_seconds": {
             "default": 300,
             "write_default_to_config": True,

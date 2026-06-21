@@ -28,3 +28,27 @@ tests:
     asserts:
       - failedTemplate:
           errorMessage: "inputs.soperator.worker_cpu_total_nodes is a cxcli helper input, not a Soperator chart value. Render through cxcli or pass chart-native nodesets[] and partitionConfiguration.partitions[].nodeSetRefs."
+
+  - it: fails when per-shard cxcli worker controls are passed directly
+    set:
+      inputs:
+        soperator:
+          worker_node_groups:
+            worker:
+              autoscaling:
+                enabled: true
+                min_node_count: 1
+                max_node_count: 5
+    asserts:
+      - failedTemplate:
+          errorMessage: "inputs.soperator.worker_node_groups is a cxcli helper input, not a Soperator chart value. Render through cxcli or pass chart-native nodesets[] and partitionConfiguration.partitions[].nodeSetRefs."
+
+  - it: fails when cxcli worker ephemeral helper is passed directly
+    set:
+      inputs:
+        soperator:
+          worker_ephemeral_nodes:
+            suspend_time_seconds: 300
+    asserts:
+      - failedTemplate:
+          errorMessage: "inputs.soperator.worker_ephemeral_nodes is a cxcli helper input, not a Soperator chart value. Render through cxcli or pass chart-native nodesets[] and partitionConfiguration.partitions[].nodeSetRefs."

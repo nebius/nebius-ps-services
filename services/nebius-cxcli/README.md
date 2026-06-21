@@ -1587,16 +1587,17 @@ Wizard field behavior:
   generic cluster workloads. The production wizard now exposes curated service-role
   node count helpers under `inputs.soperator.system_node_count`,
   `controller_node_count`, `login_node_count`, and `accounting_node_count`,
-  plus per-role autoscaling helpers under
-  `inputs.soperator.<role>_autoscaling.*` for `system`, `controller`,
-  `login`, `accounting`, and `worker`. Production profiles default the
-  `system` role to autoscaling from 3 to 5 nodes. `controller`, `login`, and
-  `accounting` default to two fixed nodes each, and worker capacity defaults to
-  one node. Other autoscaling helpers are disabled by default. When one is
+  plus service-role autoscaling helpers under
+  `inputs.soperator.<role>_autoscaling.*` for `system`, `controller`, `login`,
+  and `accounting`. Production profiles default the `system` role to
+  autoscaling from 3 to 5 nodes. `controller`, `login`, and `accounting`
+  default to two fixed nodes each, and worker capacity defaults to one node.
+  Other service-role autoscaling helpers are disabled by default. When one is
   enabled, cxcli materializes the matching concrete
   `inputs.node_groups.*.autoscaling` block and omits `node_count`; otherwise it
-  writes the fixed count. Raw profile-owned `inputs.node_groups.*` prompts stay
-  hidden.
+  writes the fixed count. Worker autoscaling is controlled per generated shard
+  through `inputs.soperator.worker_node_groups.<worker>.autoscaling`. Raw
+  profile-owned `inputs.node_groups.*` prompts stay hidden.
   The wizard lists the target's node groups for each role so the operator can
   override the proposed mapping, then cxcli renders role filters, worker
   NodeSets, storage selectors, partition refs, and NodeConfigurator rebooter
@@ -1645,19 +1646,24 @@ Wizard field behavior:
   to matching worker NodeSet replicas, while GPU count per host comes from the
   selected preset and is written to `slurmd.resources.gpu`. For example, 5 x
   `1gpu-*` hosts means five Slurm worker replicas with `gpu: 1`, while 5 x
-  `8gpu-*` hosts means five replicas with `gpu: 8` and 40 total GPUs. When
-  `inputs.soperator.worker_cpu_autoscaling.enabled=true` or
-  `inputs.soperator.worker_gpu_autoscaling.enabled=true`, that shape's
-  `max_node_count` is sharded by the matching `*_nodes_per_group`, minimum
-  nodes are distributed across the generated groups, and NodeSet replicas
-  reflect each shard's max, including an explicit `0..0` scale-to-zero worker
-  range. By itself this remains maximum-capacity materialization, not
-  Slurm-demand worker elasticity. To enable Slurm-demand workers, set
-  `inputs.soperator.worker_ephemeral_nodes.enabled=true`; cxcli then requires
-  autoscaling for every active worker shape, renders
+  `8gpu-*` hosts means five replicas with `gpu: 8` and 40 total GPUs. cxcli
+  writes and refreshes `inputs.soperator.worker_node_groups` for each generated
+  worker shard, such as `worker-cpu-0` or `worker-gpu-2`. Each shard has
+  discoverable disabled defaults for `autoscaling.enabled` and
+  `ephemeral_nodes.enabled`. When
+  `inputs.soperator.worker_node_groups.<worker>.autoscaling.enabled=true`, that
+  shard renders Kubernetes autoscaling min/max values instead of fixed
+  `node_count`; `max_node_count` cannot exceed the shard capacity, and NodeSet
+  replicas reflect that shard's max, including an explicit `0..0`
+  scale-to-zero worker range. By itself this remains maximum-capacity
+  materialization, not Slurm-demand worker elasticity. To enable Slurm-demand
+  workers for one shard, set
+  `inputs.soperator.worker_node_groups.<worker>.ephemeral_nodes.enabled=true`;
+  cxcli then requires autoscaling on that same shard, renders
   `nodesets[].ephemeralNodes: true`, derives `initialNumberEphemeralNodes` from
-  each shape's matching worker autoscaling `min_node_count`, and writes finite
-  non-negative `slurmConfig.suspendTime`.
+  that shard's autoscaling `min_node_count`, and writes finite non-negative
+  `slurmConfig.suspendTime` from the global
+  `inputs.soperator.worker_ephemeral_nodes.suspend_time_seconds`.
   `initialNumberEphemeralNodes` is only the initial active Slurm worker pods; day-2
   active-node changes happen through Slurm power control and Soperator
   `NodeSetPowerState`.
@@ -1961,7 +1967,7 @@ Local `deploy`/`flux bootstrap` behavior when apps + the bundled `mk8s` componen
 - `destroy` and `flux destroy` still use the same built-in MK8s handoff for temporary cluster access when they need to reach rendered app resources directly, but they do not persist or switch the user's local `~/.kube/config`.
 - When the selected cluster-access endpoint is private, `deploy`, `flux apply`, `flux bootstrap`, `destroy`, and `flux destroy` require the current machine to already have a private network path to the MK8s API. The CLI does not hardcode or auto-provision that path; customer environments can satisfy it with VPNs, routed private networks, subnet routers, SSH/WireGuard tunnels, or by running the command from an in-network runner.
 - When app charts are enabled, `deploy`, `flux apply`, and `flux bootstrap` now print a Kubernetes node-status snapshot first, then proceed directly into Flux or validation-specific readiness checks instead of blocking on a generic "all nodes Ready" gate before useful work starts.
-- When the generated manifest declares deploy-time validations, local `deploy` uses the same handed-off kubeconfig after Terraform/Flux work to run them directly with `kubectl`, keeps compact ordered JSON detail reports under `generated/reports/`, refreshes the combined customer-facing `generated/reports/deploy-report.md`, and prints a shorter target-grouped validation footer in the terminal. GPU-enabled targets can declare GPU readiness, visibility, and NCCL checks from `deploy.targets[].validations.mk8s_gpu.*`. Enabled Soperator targets also get a required `soperator_cluster_smoke` validation that fails with explicit evidence when old source-family Flux HelmReleases are still active or Soperator pods are Pending, then waits for the `soperator-manager` rollout, verifies the target `SlurmCluster` is `Available`, checks Slurm CLI access from a login pod with `sinfo` and `squeue`, runs one short synchronous `srun` smoke job, runs Slurm-side one-GPU visibility when a GPU partition is available, and runs one Slurm-owned NCCL benchmark that uses two idle GPU Slurm nodes when available or the only idle multi-GPU Slurm node otherwise. During local Soperator post-Flux apply, deploy also removes legacy source-family ActiveChecks CronJobs/jobs/pods before applying target Slurm custom resources, so old v1/v2 check pods cannot keep blocking target smoke validation. Observability-enabled MK8s targets get a generated in-cluster Observability Agent ingestion guardrail when the active settings catalog leaves `primary_agent.validation` enabled; its live Kubernetes reads are bounded for large clusters. Native ESO MysteryBox sync targets get a required `mysterybox_eso_connectivity` guardrail that validates in-cluster API TLS, `ClusterSecretStore Ready=True`, every configured `ExternalSecret Ready=True`, and ESO controller log errors since the current validation started. The JSON files remain the machine-readable detail contract; the Markdown report is the single human-readable rollup with grouped `Infra`, `Apps`, `Grafana`, and `Validations` sections. Its infra status list and enabled infra/app component reports are generated from `component_sources.yaml`, so new catalog components get a concise report without a Python allowlist; sensitive inputs such as keys, passwords, secrets, tokens, credentials, and MysteryBox payloads are omitted. MK8s cluster rows report CPU and GPU node counts with the same total-node wording, with GPU group geometry shown as additional context. Validation sections keep the one-line summary and also render a numbered list from each detail report's `checks[]` array when one is present. In multi-target MK8s deployments, the report lists each cluster shape under `Infra` > `MK8s Clusters`, groups Grafana links per target, and keeps validation headings target-scoped so repeated checks such as GPU visibility, NCCL, Soperator smoke, Observability ingestion, and ESO MysteryBox connectivity remain distinguishable. A plain deploy and `--all-targets` report every selected target. When a run selects one target with `--target <target-id>`, the refreshed validation section is scoped to that selected target instead of marking unselected target validations as not run. On Soperator targets whose worker pods reserve all Kubernetes GPUs, raw Kubernetes GPU Visibility and NCCL detail reports can still record the scheduler skip; when the same target's required Soperator smoke report passes the Slurm-side GPU visibility or NCCL benchmark, the human `deploy-report.md` validation summary leads with that Soperator-owned Slurm pass instead of the Kubernetes skip.
+- When the generated manifest declares deploy-time validations, local `deploy` uses the same handed-off kubeconfig after Terraform/Flux work to run them directly with `kubectl`, keeps compact ordered JSON detail reports under `generated/reports/`, refreshes the combined customer-facing `generated/reports/deploy-report.md`, and prints a shorter target-grouped validation footer in the terminal. GPU-enabled targets can declare GPU readiness, visibility, and NCCL checks from `deploy.targets[].validations.mk8s_gpu.*`. Enabled Soperator targets also get a required `soperator_cluster_smoke` validation that fails with explicit evidence when old source-family Flux HelmReleases are still active, waits for the `soperator-manager` rollout, waits for the shared jail storage to converge when the chart exposes `jail-pvc`, `jail-pv`, and `jail-mount`, verifies the target `SlurmCluster` is `Available`, checks Slurm CLI access from a login pod with `sinfo` and `squeue`, runs one short synchronous `srun` smoke job, runs Slurm-side one-GPU visibility when a GPU partition is available, and runs one Slurm-owned NCCL benchmark that uses two idle GPU Slurm nodes when available or the only idle multi-GPU Slurm node otherwise. Persistent Pending Soperator pods still fail the required validation, but the report includes Kubernetes event causes such as `FailedMount` instead of only a generic Pending summary. During local Soperator post-Flux apply, deploy also removes legacy source-family ActiveChecks CronJobs/jobs/pods before applying target Slurm custom resources, so old v1/v2 check pods cannot keep blocking target smoke validation. Observability-enabled MK8s targets get a generated in-cluster Observability Agent ingestion guardrail when the active settings catalog leaves `primary_agent.validation` enabled; its live Kubernetes reads are bounded for large clusters. Native ESO MysteryBox sync targets get a required `mysterybox_eso_connectivity` guardrail that validates in-cluster API TLS, `ClusterSecretStore Ready=True`, every configured `ExternalSecret Ready=True`, and ESO controller log errors since the current validation started. The JSON files remain the machine-readable detail contract; the Markdown report is the single human-readable rollup with grouped `Infra`, `Apps`, `Grafana`, and `Validations` sections. Its infra status list and enabled infra/app component reports are generated from `component_sources.yaml`, so new catalog components get a concise report without a Python allowlist; sensitive inputs such as keys, passwords, secrets, tokens, credentials, and MysteryBox payloads are omitted. MK8s cluster rows report CPU and GPU node counts with the same total-node wording, with GPU group geometry shown as additional context. Validation sections keep the one-line summary and also render a numbered list from each detail report's `checks[]` array when one is present. In multi-target MK8s deployments, the report lists each cluster shape under `Infra` > `MK8s Clusters`, groups Grafana links per target, and keeps validation headings target-scoped so repeated checks such as GPU visibility, NCCL, Soperator smoke, Observability ingestion, and ESO MysteryBox connectivity remain distinguishable. A plain deploy and `--all-targets` report every selected target. When a run selects one target with `--target <target-id>`, the refreshed validation section is scoped to that selected target instead of marking unselected target validations as not run. On Soperator targets whose worker pods reserve all Kubernetes GPUs, raw Kubernetes GPU Visibility and NCCL detail reports can still record the scheduler skip; when the same target's required Soperator smoke report passes the Slurm-side GPU visibility or NCCL benchmark, the human `deploy-report.md` validation summary leads with that Soperator-owned Slurm pass instead of the Kubernetes skip.
 - Generated bundles are expected to carry manifest `deploy.validations` metadata from `render`. If that metadata is missing or malformed, `deploy` now fails fast and requires a rerender instead of recomputing validation specs from the runtime config.
 - During deploy-time validations, `deploy` keeps one continuous spinner alive across validation boundaries and live in-cluster progress updates, so the command does not go visually idle between operator readiness, GPU visibility, NCCL, Observability Agent, or ESO MysteryBox phases.
 - Once the built-in MK8s handoff is ready, the local Flux phase now keeps one continuous spinner alive and updates its message through cluster reachability, Flux API discovery, rendered manifest apply, and the final rendered-resource readiness wait so the command does not go visually idle between phases.
@@ -2199,18 +2205,20 @@ their autoscaling helpers disabled unless the operator enables them. Worker
 fixed sizing is shape-specific:
 `soperator.worker_cpu_total_nodes` / `worker_cpu_nodes_per_group` for CPU
 workers and `soperator.worker_gpu_total_nodes` /
-`worker_gpu_nodes_per_group` for GPU workers. Worker autoscaling uses
-`worker_cpu_autoscaling.max_node_count` or
-`worker_gpu_autoscaling.max_node_count` with that shape's shard size and
-preserves an explicit `0..0` scale-to-zero range. Each
+`worker_gpu_nodes_per_group` for GPU workers. cxcli writes
+`soperator.worker_node_groups.<worker>` entries for the generated shards, with
+disabled `autoscaling` and `ephemeral_nodes` controls ready to edit. Enabling a
+shard's `autoscaling` block renders K8s autoscaling min/max values instead of
+fixed `node_count`, and preserves an explicit `0..0` scale-to-zero range. Each
 `worker_*_total_nodes` value is a Kubernetes worker host count for that shape,
 not total GPU count: Soperator worker replicas match the worker hosts, and GPU
 count per host is written to `slurmd.resources.gpu`.
 Current worker autoscaling remains maximum-capacity materialization unless
-`worker_ephemeral_nodes.enabled=true`. In that mode cxcli derives
-`initialNumberEphemeralNodes` from each active shape's matching
-`worker_*_autoscaling.min_node_count`, writes `slurmConfig.suspendTime`, and
-leaves day-2 active-node changes to Slurm power control / `NodeSetPowerState`.
+that same shard's `ephemeral_nodes.enabled=true`. In that mode cxcli derives
+`initialNumberEphemeralNodes` from the shard's autoscaling `min_node_count`,
+writes global `slurmConfig.suspendTime` from
+`worker_ephemeral_nodes.suspend_time_seconds`, and leaves day-2 active-node
+changes to Slurm power control / `NodeSetPowerState`.
 CPU service-role counts are independent of worker sharding. CPU service-role
 autoscaling must keep `max_node_count` at least `1`.
 
@@ -2663,8 +2671,9 @@ hold runs the target-scoped
 operator readiness, GPU Visibility, and NCCL when enabled. NCCL is the
 long-running GPU validation when it is enabled. The hold also runs the
 required Soperator/Slurm smoke validation: Soperator manager rollout,
-SlurmCluster availability, login-pod `sinfo`/`squeue`, and one short
-synchronous `srun` job that prefers an idle non-GPU partition when one exists.
+SlurmCluster availability, shared jail storage convergence, login-pod
+`sinfo`/`squeue`, and one short synchronous `srun` job that prefers an idle
+non-GPU partition when one exists.
 Slurm nodes reported as `inval` remain an unhealthy validation gate. The
 migration run writes `generated/reports/ext-soperator-migrate-report.md` with migration
 phase, remediation, upgrade, layout, validation, and event summaries, including

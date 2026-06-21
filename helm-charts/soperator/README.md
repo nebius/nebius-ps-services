@@ -319,11 +319,13 @@ Common direct Helm settings:
   down. Do not treat MK8s node-group autoscaling by itself as Slurm-demand
   autoscaling; without ephemeral NodeSets, a NodeSet with `replicas: 5` still
   desires five worker pods. For cxcli-managed production profiles, use
-  `inputs.soperator.worker_ephemeral_nodes.enabled=true`; cxcli derives
-  `initialNumberEphemeralNodes` from each active shape's matching worker
-  autoscaling `min_node_count`. Day-2 active-node changes happen through Slurm
-  power control and Soperator `NodeSetPowerState`, not by changing that initial
-  value.
+  `inputs.soperator.worker_node_groups.<worker>.ephemeral_nodes.enabled=true`
+  together with the same shard's autoscaling block; cxcli derives
+  `initialNumberEphemeralNodes` from that shard's autoscaling `min_node_count`
+  and writes global `suspendTime` from
+  `inputs.soperator.worker_ephemeral_nodes.suspend_time_seconds`. Day-2
+  active-node changes happen through Slurm power control and Soperator
+  `NodeSetPowerState`, not by changing that initial value.
   See [Soperator Autoscaling](#soperator-autoscaling).
 - `soperator-checks.enabled`, `soperator-activechecks.enabled`,
   `soperator-notifier.enabled`, `soperator-backup-config.enabled`,
@@ -447,25 +449,29 @@ The runtime flow is:
 6. The Kubernetes autoscaler adds hosts for newly active worker pods and can
    remove idle hosts after workers power down.
 
-For cxcli-managed production clusters, enable the explicit helper together with
-worker host autoscaling:
+For cxcli-managed production clusters, enable a shard's explicit helper
+together with that same shard's worker host autoscaling:
 
 ```yaml
 inputs:
   soperator:
-    worker_gpu_autoscaling:
-      enabled: true
-      min_node_count: 1
-      max_node_count: 5
+    worker_gpu_total_nodes: 5
     worker_ephemeral_nodes:
-      enabled: true
       suspend_time_seconds: 300
+    worker_node_groups:
+      worker:
+        autoscaling:
+          enabled: true
+          min_node_count: 1
+          max_node_count: 5
+        ephemeral_nodes:
+          enabled: true
 ```
 
 cxcli then renders the MK8s node-group range, `nodesets[].replicas: 5`,
 `ephemeralNodes: true`, `initialNumberEphemeralNodes: 1`, and
 `slurmConfig.suspendTime: 300` together. It derives the initial active worker
-count from the worker autoscaling minimum so the Kubernetes baseline and initial
+count from the same shard's worker autoscaling minimum so the Kubernetes baseline and initial
 Slurm active baseline cannot drift.
 
 The chart fails fast when an ephemeral NodeSet is partially configured:

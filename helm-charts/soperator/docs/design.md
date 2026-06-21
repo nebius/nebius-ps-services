@@ -2226,15 +2226,17 @@ MK8s node-group autoscaling by itself changes the host capacity range. It does
 not change the fact that a non-ephemeral Soperator NodeSet desires its full
 replica count.
 
-Current cxcli worker autoscaling without
-`inputs.soperator.worker_ephemeral_nodes.enabled=true` materializes the upper
-bound as the Soperator desired worker count:
+Current cxcli worker autoscaling without the same shard's
+`inputs.soperator.worker_node_groups.<worker>.ephemeral_nodes.enabled=true`
+materializes the upper bound as the Soperator desired worker count:
 
 ```yaml
-worker_gpu_autoscaling:
-  enabled: true
-  min_node_count: 1
-  max_node_count: 5
+worker_node_groups:
+  worker:
+    autoscaling:
+      enabled: true
+      min_node_count: 1
+      max_node_count: 5
 ```
 
 renders conceptually as:
@@ -2295,19 +2297,23 @@ The important semantics are:
 - `ephemeralTopologyWaitTimeout` can be set per NodeSet when topology-aware
   ephemeral startup needs an explicit wait bound.
 
-For cxcli-managed Slurm-demand workers, enable the explicit helper together
-with worker autoscaling:
+For cxcli-managed Slurm-demand workers, enable a shard's explicit helper
+together with that same shard's worker autoscaling:
 
 ```yaml
 inputs:
   soperator:
-    worker_gpu_autoscaling:
-      enabled: true
-      min_node_count: 1
-      max_node_count: 5
+    worker_gpu_total_nodes: 5
     worker_ephemeral_nodes:
-      enabled: true
       suspend_time_seconds: 300
+    worker_node_groups:
+      worker:
+        autoscaling:
+          enabled: true
+          min_node_count: 1
+          max_node_count: 5
+        ephemeral_nodes:
+          enabled: true
 ```
 
 cxcli materializes the chart contract:
@@ -2333,10 +2339,13 @@ The cxcli contract validates and materializes these fields together:
 
 - MK8s worker node groups use autoscaling `min_node_count` / `max_node_count`.
 - Soperator worker `nodesets[].replicas` equals the matching maximum capacity.
-- Worker NodeSets set `ephemeralNodes: true`.
-- Worker NodeSets set `initialNumberEphemeralNodes` from the matching worker
+- Only worker shards with `ephemeral_nodes.enabled=true` set
+  `ephemeralNodes: true`.
+- Worker NodeSets set `initialNumberEphemeralNodes` from the same shard's
   autoscaling `min_node_count`.
-- `slurmConfig.suspendTime` must be finite and non-negative.
+- Global `worker_ephemeral_nodes.suspend_time_seconds` materializes as
+  `slurmConfig.suspendTime`; `slurmConfig.suspendTime` must be finite and
+  non-negative.
 - The worker pod resource request still matches the selected MK8s worker VM
   shape so one Slurm worker pod equals one Kubernetes worker VM.
 
