@@ -239,6 +239,15 @@ Sections:
   defaults come from the shared compute boot-disk policy and selected shape, SSH
   defaults to enabled only as a prompt default, and `q` inside a draft group
   restarts that group instead of leaving the loop.
+- Soperator `production-cluster` is a profile-backed managed-MK8s layout, not a
+  retrofit path for arbitrary existing worker pools. `component add
+  apps:soperator` preflights the authored MK8s row before context
+  normalization and fails fast when non-empty `inputs.node_groups` lacks the
+  required service-role groups (`system`, `controller`, `login`, and
+  `accounting`) unless a complete explicit `apps.charts[].placements` map is
+  already present. Existing clusters that need role mapping should use
+  `ext-soperator onboard` or an explicit placement-bearing config path instead
+  of generated production placement inference.
 - the bundled VPC profile suppresses the raw `inputs.subnets` map and makes
   planned subnet collection optional. Live `project_networks` choices recommend
   `default-network` when it exists, and the `inputs.network.existing_id` skip

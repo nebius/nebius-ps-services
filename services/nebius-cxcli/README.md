@@ -1576,7 +1576,11 @@ Wizard field behavior:
   `install_mode`: `production-cluster` materializes the complete production
   path with five logical host groups `system`, `controller`, `login`,
   `accounting`, and `worker`, plus SFS jail/controller-spool/accounting
-  filesystems. `onboard-existing-cluster` is written by
+  filesystems. Adding `apps:soperator` in `production-cluster` mode to an
+  existing managed MK8s target with non-empty `inputs.node_groups` now fails
+  fast unless the target already has the required Soperator service-role groups
+  or the app row provides an explicit complete `apps.charts[].placements` map.
+  `onboard-existing-cluster` is written by
   `nebius-cxcli ext-soperator onboard <config.yaml-or-deployments-root>` for an
   external Nebius MK8s target; it writes `apps.charts[].placements` from
   `deploy.targets[].inventory.node_groups` and the selected profile instead of
@@ -3955,7 +3959,11 @@ nebius-cxcli auth --project-config /path/to/config.yaml --validate-profile
     creates the complete MK8s+SFS+Soperator five-role bundle with `system`
     autoscaling from 3 to 5 nodes, two fixed `controller`, `login`, and
     `accounting` nodes, one worker node by default, and skips external
-    placement prompts. Existing external Nebius MK8s targets should use
+    placement prompts. If an existing managed MK8s target already has custom
+    node groups such as `cpu-nodes`/`gpu-nodes` but not the Soperator
+    `system`, `controller`, `login`, and `accounting` service-role groups,
+    `component add apps:soperator` rejects it before writing config changes.
+    Existing external Nebius MK8s targets should use
     `nebius-cxcli ext-soperator onboard <config.yaml-or-deployments-root>`; see
     [Soperator Commands](#soperator-commands) for onboarding, migration, and
     managed-vs-external upgrade rules.

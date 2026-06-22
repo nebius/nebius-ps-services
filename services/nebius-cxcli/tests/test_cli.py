@@ -11140,6 +11140,59 @@ def test_component_add_explains_soperator_required_component_selection(
     assert apps_enabled["cert-manager"] is True
 
 
+def test_component_add_rejects_soperator_on_managed_mk8s_without_service_roles(
+    tmp_path: Path,
+) -> None:
+    deployments_root = tmp_path / "deployments"
+    deployments_root.mkdir(parents=True, exist_ok=True)
+
+    created = _create_non_interactive(
+        deployments_root,
+        "--infra",
+        "mk8s",
+        "--app",
+        "none",
+        "--no-validate-config",
+    )
+    assert created.exit_code == 0, created.output
+
+    config_path = _project_config_path(deployments_root)
+    payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    mk8s_row = next(
+        row
+        for row in payload["infra"]["components"]
+        if isinstance(row, dict) and row.get("id") == "mk8s"
+    )
+    mk8s_inputs = mk8s_row.setdefault("inputs", {})
+    mk8s_inputs["node_groups"] = {
+        "cpu-nodes": {
+            "node_count": 2,
+            "gpu": False,
+            "platform": "cpu-d3",
+            "preset": "32vcpu-128gb",
+        },
+        "gpu-nodes": {
+            "node_count": 2,
+            "gpu": True,
+            "platform": "gpu-h100-sxm",
+            "preset": "1gpu-16vcpu-200gb",
+        },
+    }
+    original_config = yaml.safe_dump(payload, sort_keys=False)
+    config_path.write_text(original_config, encoding="utf-8")
+
+    result = _component_add(config_path, "soperator", "--no-interactive")
+
+    assert result.exit_code != 0
+    output = _normalized_cli_output(result.output)
+    assert "apps:soperator production-cluster cannot be added" in output
+    assert (
+        "missing required Soperator service-role node groups: accounting, controller, "
+        "login, system"
+    ) in output
+    assert config_path.read_text(encoding="utf-8") == original_config
+
+
 def test_component_add_prompts_soperator_profile_before_field_wizard(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

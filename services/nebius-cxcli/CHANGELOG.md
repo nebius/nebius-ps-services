@@ -6,6 +6,18 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Changed `component add apps:soperator` so production-cluster adds fail fast on
+  existing managed MK8s targets whose non-empty `inputs.node_groups` do not
+  include the required Soperator service-role groups (`system`, `controller`,
+  `login`, and `accounting`) and do not provide a complete explicit
+  `apps.charts[].placements` map. The guard runs before raw config
+  normalization can auto-enable GPU app rows, so non-standard existing clusters
+  should use `ext-soperator onboard` or an explicit placement-bearing config
+  path instead of generated production placement inference.
+- Aligned `nebius-cxcli component` help examples so the group and
+  `list`/`add`/`remove` subcommands consistently show `--config` as the
+  required config path option, matching the enforced day-2 component editing
+  contract.
 - Added a required MK8s node inventory smoke validation for every MK8s deploy
   target. It performs one read-only all-node Kubernetes inventory query,
   reports Ready/CPU/GPU/node-group totals, checks scheduler-visible

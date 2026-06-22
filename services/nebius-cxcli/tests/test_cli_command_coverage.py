@@ -17311,6 +17311,18 @@ def test_command_help_usage_labels_positional_target_types() -> None:
         in normalized_component_help
     )
     assert "config.yaml is not a positional component selector" in normalized_component_help
+    assert (
+        "nebius-cxcli component list --config ./deployments/tenant/project/config.yaml"
+        in normalized_component_help
+    )
+    assert (
+        "nebius-cxcli component add apps:soperator --config "
+        "./deployments/tenant/project/config.yaml"
+    ) in normalized_component_help
+    assert (
+        "nebius-cxcli component remove apps:soperator@target-mk8s-prod "
+        "--config ./deployments/tenant/project/config.yaml --no-interactive"
+    ) in normalized_component_help
     normalized_create_help = " ".join(create_help.split())
     assert (
         "bootstrap one name-based tenant/project folder with config.yaml plus generated/ skeleton"
@@ -17353,6 +17365,10 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "list [OPTIONS]" in component_list_help
     assert "--config CONFIG_YAML" in normalized_component_list_help
     assert "nebius-cxcli component list --config <config.yaml>" in normalized_component_list_help
+    assert "auto-resolves" not in normalized_component_list_help
+    assert "nebius-cxcli component list (auto-resolves ./config.yaml)" not in (
+        normalized_component_list_help
+    )
     assert "add [OPTIONS] [COMPONENT_SELECTOR]..." in component_add_help
     assert "--config CONFIG_YAML" in normalized_component_add_help
     assert "Required project config.yaml" in normalized_component_add_help
@@ -17682,6 +17698,20 @@ def test_command_help_usage_labels_positional_target_types() -> None:
         "nebius-cxcli component remove managed-postgresql@analytics-pg "
         "--config <config.yaml> --no-interactive"
     ) in normalized_component_remove_help
+    assert (
+        "nebius-cxcli component remove 'apps:soperator@target-mk8s-prod' "
+        "--config ./deployments/tenant/project/config.yaml --no-interactive"
+    ) in normalized_component_remove_help
+    assert (
+        "nebius-cxcli component remove infra:mk8s "
+        "--config ./deployments/tenant/project/config.yaml --no-interactive"
+    ) in normalized_component_remove_help
+    assert "component remove 'apps:soperator@target-mk8s-prod' (removes" not in (
+        normalized_component_remove_help
+    )
+    assert "component remove infra:mk8s --no-interactive (non-interactive" not in (
+        normalized_component_remove_help
+    )
     assert "nebius-cxcli component remove vm@worker-vm" in normalized_component_remove_help
     assert "<id>@<resource-name-or-target-id>" in normalized_component_remove_help
     assert "infra:<id>" in normalized_component_remove_help
@@ -20273,6 +20303,21 @@ def test_soperator_production_disabled_service_autoscaling_clears_first_render_s
                                 "platform": "cpu-d3",
                                 "preset": "32vcpu-128gb",
                             },
+                            "controller": {
+                                "gpu": False,
+                                "platform": "cpu-d3",
+                                "preset": "32vcpu-128gb",
+                            },
+                            "login": {
+                                "gpu": False,
+                                "platform": "cpu-d3",
+                                "preset": "32vcpu-128gb",
+                            },
+                            "accounting": {
+                                "gpu": False,
+                                "platform": "cpu-d3",
+                                "preset": "32vcpu-128gb",
+                            },
                         },
                     },
                 },
@@ -20427,6 +20472,75 @@ def _soperator_production_payload(mk8s_inputs: Mapping[str, Any]) -> dict[str, A
             ]
         },
     }
+
+
+def test_soperator_production_rejects_existing_managed_mk8s_without_service_roles() -> None:
+    payload = _soperator_production_payload(
+        {
+            "node_groups": {
+                "cpu-nodes": {
+                    "node_count": 2,
+                    "gpu": False,
+                    "platform": "cpu-d3",
+                    "preset": "32vcpu-128gb",
+                },
+                "gpu-nodes": {
+                    "node_count": 2,
+                    "gpu": True,
+                    "platform": "gpu-h100-sxm",
+                    "preset": "1gpu-16vcpu-200gb",
+                },
+            }
+        }
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            "missing required Soperator service-role node groups: "
+            "accounting, controller, login, system"
+        ),
+    ):
+        cli._materialize_soperator_component_defaults(payload)
+
+    node_groups = payload["infra"]["components"][0]["inputs"]["node_groups"]
+    assert set(node_groups) == {"cpu-nodes", "gpu-nodes"}
+
+
+def test_soperator_production_accepts_existing_managed_mk8s_with_full_placements() -> None:
+    payload = _soperator_production_payload(
+        {
+            "node_groups": {
+                "cpu-nodes": {
+                    "node_count": 2,
+                    "gpu": False,
+                    "platform": "cpu-d3",
+                    "preset": "32vcpu-128gb",
+                },
+                "gpu-nodes": {
+                    "node_count": 2,
+                    "gpu": True,
+                    "platform": "gpu-h100-sxm",
+                    "preset": "1gpu-16vcpu-200gb",
+                },
+            }
+        }
+    )
+    payload["apps"]["charts"][0]["placements"] = {
+        "system": "cpu-nodes",
+        "controller": "cpu-nodes",
+        "login": "cpu-nodes",
+        "accounting": "cpu-nodes",
+        "worker": ["gpu-nodes"],
+    }
+
+    assert cli._materialize_soperator_component_defaults(payload) is True
+
+    node_groups = payload["infra"]["components"][0]["inputs"]["node_groups"]
+    assert set(node_groups) == {"cpu-nodes", "gpu-nodes"}
+    values = payload["apps"]["charts"][0]["values"]
+    worker = next(item for item in values["nodesets"] if item["name"] == "worker")
+    assert worker["nodeSelector"] == {"nebius.com/node-group": "gpu-nodes"}
 
 
 @pytest.mark.parametrize(
@@ -21838,7 +21952,13 @@ def test_soperator_mixed_profile_custom_worker_placement_splits_by_group_shape()
         }
     )
     payload["apps"]["charts"][0]["profile"] = "nebius-mixed-v1"
-    payload["apps"]["charts"][0]["placements"] = {"worker": ["custom-cpu", "custom-gpu"]}
+    payload["apps"]["charts"][0]["placements"] = {
+        "system": "custom-cpu",
+        "controller": "custom-cpu",
+        "login": "custom-cpu",
+        "accounting": "custom-cpu",
+        "worker": ["custom-cpu", "custom-gpu"],
+    }
 
     assert cli._materialize_soperator_component_defaults(payload) is True
 
@@ -23133,7 +23253,10 @@ def test_soperator_placements_preserve_explicit_node_group_sfs_keys() -> None:
                     "instance_id": "cluster1",
                     "enabled": True,
                     "placements": {
+                        "system": "controller",
                         "controller": "controller",
+                        "login": "controller",
+                        "accounting": "controller",
                         "worker": ["worker"],
                     },
                     "values": {},

@@ -1744,7 +1744,15 @@ component_app = typer.Typer(
         "existing config.yaml. Use --config CONFIG_YAML after create for day-2 "
         "add/remove/list changes; config.yaml is not a positional component "
         "selector."
-    )
+    ),
+    epilog=(
+        "Examples: "
+        "nebius-cxcli component list --config ./deployments/tenant/project/config.yaml; "
+        "nebius-cxcli component add apps:soperator --config "
+        "./deployments/tenant/project/config.yaml; "
+        "nebius-cxcli component remove apps:soperator@target-mk8s-prod "
+        "--config ./deployments/tenant/project/config.yaml --no-interactive."
+    ),
 )
 terraform_app = typer.Typer(
     help="Run infra-only Terraform operations against generated/ or generated/infra."
@@ -12182,6 +12190,107 @@ def _infer_soperator_component_add_install_mode(
     return None
 
 
+def _soperator_component_add_managed_target_refs(
+    *,
+    payload: Mapping[str, Any],
+    add_targets: Sequence[_ComponentAddTarget],
+) -> tuple[str, ...]:
+    cluster_refs = list(enabled_cluster_target_refs(payload))
+    infra_node = payload.get("infra")
+    infra_rows = infra_node.get("components") if isinstance(infra_node, Mapping) else None
+    if isinstance(infra_rows, list):
+        for row in infra_rows:
+            if not isinstance(row, Mapping) or not bool(row.get("enabled", False)):
+                continue
+            if component_type_id(row) != "mk8s":
+                continue
+            target_ref = component_instance_id(row)
+            if target_ref and target_ref not in cluster_refs:
+                cluster_refs.append(target_ref)
+    existing_soperator_targets = set(_soperator_app_target_refs(payload))
+    refs: list[str] = []
+    for target in add_targets:
+        if target.scope != "apps" or target.component_id != _SOPERATOR_APP_ID:
+            continue
+        requested_target = normalize_component_token(target.requested_instance_id)
+        if requested_target:
+            candidate_refs = (requested_target,)
+        elif len(cluster_refs) == 1:
+            candidate_refs = (cluster_refs[0],)
+        else:
+            candidate_refs = ()
+        for target_ref in candidate_refs:
+            if target_ref in existing_soperator_targets or target_ref in refs:
+                continue
+            refs.append(target_ref)
+    return tuple(refs)
+
+
+def _raise_if_soperator_component_add_production_layout_invalid(
+    *,
+    payload: Mapping[str, Any],
+    add_targets: Sequence[_ComponentAddTarget],
+    profile_name: str | None,
+) -> None:
+    target_refs = _soperator_component_add_managed_target_refs(
+        payload=payload,
+        add_targets=add_targets,
+    )
+    if not target_refs:
+        return
+    profile = _soperator_profile_by_name(profile_name)
+    infra_node = payload.get("infra")
+    infra_rows = infra_node.get("components") if isinstance(infra_node, Mapping) else None
+    if not isinstance(infra_rows, list):
+        return
+    target_ref_set = set(target_refs)
+    for row in infra_rows:
+        if not isinstance(row, Mapping) or not bool(row.get("enabled", False)):
+            continue
+        if component_type_id(row) != "mk8s" or component_instance_id(row) not in target_ref_set:
+            continue
+        inputs = row.get("inputs")
+        if not isinstance(inputs, Mapping):
+            continue
+        _raise_if_soperator_production_missing_service_node_groups(
+            inputs=inputs,
+            profile=profile,
+            placements={},
+        )
+
+
+def _raise_if_raw_soperator_component_add_layout_invalid(
+    *,
+    config_path: Path,
+    component_ids: Sequence[str] | None,
+) -> None:
+    raw_tokens = _split_multi_value_tokens(component_ids)
+    if not raw_tokens:
+        return
+    payload = _load_config_payload(config_path.resolve())
+    if not isinstance(payload, Mapping):
+        return
+    add_targets = _resolve_component_add_targets(
+        tokens=raw_tokens,
+        infra_entries=_with_infra_provider_groups(component_entries("infra")),
+        app_entries=component_entries("apps"),
+    )
+    requested_apps = {target.component_id for target in add_targets if target.scope == "apps"}
+    if _SOPERATOR_APP_ID not in requested_apps:
+        return
+    install_mode = _infer_soperator_component_add_install_mode(
+        payload=payload,
+        add_targets=add_targets,
+    )
+    if install_mode == _SOPERATOR_INSTALL_MODE_ONBOARD_EXISTING_CLUSTER:
+        return
+    _raise_if_soperator_component_add_production_layout_invalid(
+        payload=payload,
+        add_targets=add_targets,
+        profile_name=None,
+    )
+
+
 def _retarget_added_soperator_onboarding_dependency_rows(
     payload: dict[str, Any],
     *,
@@ -12678,6 +12787,21 @@ def _soperator_nodesets_profiles() -> tuple[str, Mapping[str, Mapping[str, Any]]
     if not isinstance(profiles, Mapping):
         profiles = {}
     return default, profiles
+
+
+def _soperator_profile_by_name(profile_name: str | None) -> Mapping[str, Any]:
+    default_profile, profiles = _soperator_nodesets_profiles()
+    selected_profile = _non_empty_text(profile_name) or default_profile
+    if not selected_profile:
+        return {}
+    profile = profiles.get(selected_profile)
+    if not isinstance(profile, Mapping):
+        available = ", ".join(sorted(str(name) for name in profiles)) or "(none)"
+        raise ValueError(
+            f"Soperator profile references unknown nodesets profile '{selected_profile}'. "
+            f"Available profiles: {available}"
+        )
+    return profile
 
 
 def _soperator_profile_by_target(payload: Mapping[str, Any]) -> dict[str, Mapping[str, Any]]:
@@ -13279,6 +13403,11 @@ def _soperator_profile_managed_node_group_keys(profile: Mapping[str, Any]) -> se
     return managed
 
 
+def _soperator_profile_static_node_group_keys(profile: Mapping[str, Any]) -> set[str]:
+    mk8s_profile = _profile_mapping(profile, "mk8s")
+    return {str(key) for key in _profile_mapping(mk8s_profile, "node_groups")}
+
+
 def _soperator_node_group_key_matches_managed(key: str, managed_keys: set[str]) -> bool:
     if key in managed_keys:
         return True
@@ -13435,6 +13564,110 @@ def _soperator_has_external_node_groups(
             continue
         return True
     return False
+
+
+def _soperator_placements_cover_existing_profile_groups(
+    *,
+    inputs: Mapping[str, Any],
+    profile: Mapping[str, Any],
+    placements: Mapping[str, list[str]],
+) -> bool:
+    node_groups = inputs.get("node_groups")
+    if not isinstance(node_groups, Mapping) or not node_groups or not placements:
+        return False
+    present_keys = {str(key) for key in node_groups}
+    required_placements = [
+        str(placement).strip()
+        for placement in _soperator_profile_placements(profile)
+        if str(placement).strip()
+    ]
+    if not required_placements:
+        return False
+    for placement in required_placements:
+        group_keys = placements.get(placement, [])
+        if not group_keys:
+            return False
+        if any(str(group_key) not in present_keys for group_key in group_keys):
+            return False
+    return True
+
+
+def _raise_if_soperator_production_missing_service_node_groups(
+    *,
+    inputs: Mapping[str, Any],
+    profile: Mapping[str, Any],
+    placements: Mapping[str, list[str]],
+) -> None:
+    node_groups = inputs.get("node_groups")
+    if not isinstance(node_groups, Mapping) or not node_groups:
+        return
+    required_keys = _soperator_profile_static_node_group_keys(profile)
+    if not required_keys:
+        return
+    present_keys = {str(key) for key in node_groups}
+    missing_keys = sorted(required_keys - present_keys)
+    if not missing_keys:
+        return
+    if _soperator_placements_cover_existing_profile_groups(
+        inputs=inputs,
+        profile=profile,
+        placements=placements,
+    ):
+        return
+    raise ValueError(
+        "apps:soperator production-cluster cannot be added to the selected managed MK8s "
+        "target because infra.components[].inputs.node_groups is missing required "
+        f"Soperator service-role node groups: {', '.join(missing_keys)}. "
+        f"Existing node groups: {', '.join(sorted(present_keys))}. "
+        "Use a fresh Soperator production bundle, add the missing service-role node "
+        "groups before adding Soperator, or onboard the existing cluster with explicit "
+        "placements."
+    )
+
+
+def _raise_if_soperator_production_service_layout_invalid(payload: Mapping[str, Any]) -> None:
+    soperator_targets = _soperator_app_target_refs(payload)
+    if not soperator_targets:
+        return
+
+    profile_by_target = _soperator_profile_by_target(payload)
+    install_mode_by_target = _soperator_install_mode_by_target(payload)
+    placements_by_target: dict[str, dict[str, list[str]]] = {}
+    apps_node = payload.get("apps")
+    app_rows = apps_node.get("charts") if isinstance(apps_node, Mapping) else None
+    if isinstance(app_rows, list):
+        for row in app_rows:
+            if not isinstance(row, Mapping) or not bool(row.get("enabled", False)):
+                continue
+            if component_type_id(row) != _SOPERATOR_APP_ID:
+                continue
+            target_ref = app_chart_target_ref(row) or component_instance_id(row)
+            if target_ref:
+                placements_by_target[target_ref] = _soperator_row_placements(row)
+
+    infra_node = payload.get("infra")
+    infra_rows = infra_node.get("components") if isinstance(infra_node, Mapping) else None
+    if not isinstance(infra_rows, list):
+        return
+    for row in infra_rows:
+        if not isinstance(row, Mapping) or not bool(row.get("enabled", False)):
+            continue
+        if component_type_id(row) != "mk8s":
+            continue
+        target_ref = component_instance_id(row)
+        if target_ref not in soperator_targets:
+            continue
+        install_mode = install_mode_by_target.get(target_ref, _default_soperator_install_mode())
+        if install_mode == _SOPERATOR_INSTALL_MODE_ONBOARD_EXISTING_CLUSTER:
+            continue
+        inputs = row.get("inputs")
+        if not isinstance(inputs, Mapping):
+            continue
+        _raise_if_soperator_production_missing_service_node_groups(
+            inputs=inputs,
+            profile=profile_by_target.get(target_ref, {}),
+            placements=placements_by_target.get(target_ref, {}),
+        )
 
 
 def _mapping_path_value_with_presence(
@@ -15623,6 +15856,7 @@ def _materialize_soperator_mk8s_profile(
     placements: Mapping[str, list[str]],
     install_mode: str,
     replace_profile_managed_groups: bool = False,
+    placements_configured: bool = True,
 ) -> None:
     mk8s_profile = _profile_mapping(profile, "mk8s")
     defaults = _profile_mapping(mk8s_profile, "inputs")
@@ -15635,6 +15869,11 @@ def _materialize_soperator_mk8s_profile(
     if not isinstance(node_groups, dict):
         return
     if not existing_mode:
+        _raise_if_soperator_production_missing_service_node_groups(
+            inputs=inputs,
+            profile=profile,
+            placements=explicit_placements if placements_configured else {},
+        )
         _soperator_prune_stale_profile_node_groups(inputs=inputs, profile=profile)
         _soperator_prune_stale_profile_gpu_clusters(inputs=inputs, profile=profile)
         _soperator_prune_profile_gpu_cluster_path_for_selected_shape(
@@ -15642,7 +15881,7 @@ def _materialize_soperator_mk8s_profile(
             profile=profile,
         )
     if existing_mode or (
-        not replace_profile_managed_groups
+        (placements_configured or not replace_profile_managed_groups)
         and explicit_placements
         and _soperator_has_external_node_groups(
             inputs=inputs,
@@ -16016,6 +16255,7 @@ def _materialize_soperator_component_defaults(payload: dict[str, Any]) -> bool:
     soperator_values_by_target: dict[str, dict[str, Any]] = {}
     soperator_placements_by_target: dict[str, dict[str, list[str]]] = {}
     generated_placements_by_target: dict[str, bool] = {}
+    configured_placements_by_target: dict[str, bool] = {}
     for row in apps_rows:
         if not isinstance(row, dict) or not bool(row.get("enabled", False)):
             continue
@@ -16034,6 +16274,7 @@ def _materialize_soperator_component_defaults(payload: dict[str, Any]) -> bool:
             soperator_values_by_target[target_ref] = values
             placements = _soperator_row_placements(row)
             soperator_placements_by_target[target_ref] = placements
+            configured_placements_by_target[target_ref] = bool(placements)
             generated_placements = _soperator_placements_match_generated_profile(
                 row=row,
                 inputs=mk8s_inputs_by_target.get(target_ref, {}),
@@ -16074,6 +16315,7 @@ def _materialize_soperator_component_defaults(payload: dict[str, Any]) -> bool:
                     target_ref,
                     False,
                 ),
+                placements_configured=configured_placements_by_target.get(target_ref, False),
             )
         elif component_id == "sfs":
             sfs_instance_id = component_instance_id(row)
@@ -38575,8 +38817,7 @@ def create_command(
     epilog=(
         "Examples: "
         "nebius-cxcli component list --config ./deployments/tenant/project/config.yaml "
-        "(shows enabled mk8s/sfs/soperator instances and their target_ref bindings); "
-        "from the project folder: nebius-cxcli component list (auto-resolves ./config.yaml)."
+        "(shows enabled mk8s/sfs/soperator instances and their target_ref bindings)."
     ),
 )
 def component_list_command(
@@ -38864,6 +39105,10 @@ def component_add_command(
     """
     try:
         config_path = _require_component_config_option(config_path)
+        _raise_if_raw_soperator_component_add_layout_invalid(
+            config_path=config_path,
+            component_ids=component_ids,
+        )
         _config, _paths = _load_context(config_path)
         payload = _load_config_payload(config_path.resolve())
         if validate_sources:
@@ -39029,6 +39274,12 @@ def component_add_command(
                 except _WizardQuitRequested:
                     console.print("No component changes applied.")
                     return
+            if soperator_install_mode == _SOPERATOR_INSTALL_MODE_PRODUCTION:
+                _raise_if_soperator_component_add_production_layout_invalid(
+                    payload=payload,
+                    add_targets=add_targets,
+                    profile_name=soperator_profile,
+                )
         selected_infra_raw, skipped_onboarding_infra = _prune_soperator_onboarding_infra_selection(
             selected_infra=selected_infra_raw,
             selected_apps=selected_apps_raw,
@@ -39300,6 +39551,7 @@ def component_add_command(
                 for row in added_app_rows
             ]
             added_apps_labels = list(dict.fromkeys(added_apps_selectors))
+        _raise_if_soperator_production_service_layout_invalid(next_payload)
         _ensure_provider_scope_validated()
         _seed_infra_project_scope_defaults(
             payload=next_payload,
@@ -41215,10 +41467,13 @@ def soperator_migrate_command(
     epilog=(
         "Examples: "
         "nebius-cxcli component remove apps:soperator --config ./deployments/tenant/project/config.yaml "
+        "--no-interactive "
         "(removes a Soperator app; cascades target_ref cleanup on MK8s deploy.targets[]); "
         "nebius-cxcli component remove 'apps:soperator@target-mk8s-prod' "
+        "--config ./deployments/tenant/project/config.yaml --no-interactive "
         "(removes only the binding for a specific MK8s target_ref, keeps other Soperator instances); "
-        "nebius-cxcli component remove infra:mk8s --no-interactive "
+        "nebius-cxcli component remove infra:mk8s "
+        "--config ./deployments/tenant/project/config.yaml --no-interactive "
         "(non-interactive; removes the MK8s row and any apps bound to its target_ref)."
     ),
 )
