@@ -1954,6 +1954,15 @@ def test_cluster_smoke_validation_reports_all_nodes_without_workload_pods(
             "rdma_resource_node_count": 0,
             "nvidia_resource_names": [],
             "rdma_resource_names": [],
+            "nodes": [
+                {
+                    "node_name": "cpu-node-a",
+                    "ready": True,
+                    "node_group": "cpu-workers",
+                    "instance_type": "cpu-d3",
+                    "gpu_count": 0,
+                }
+            ],
         },
         {
             "node_group": "gpu-workers",
@@ -1965,13 +1974,37 @@ def test_cluster_smoke_validation_reports_all_nodes_without_workload_pods(
             "rdma_resource_node_count": 2,
             "nvidia_resource_names": ["nvidia.com/gpu"],
             "rdma_resource_names": ["rdma/shared_device"],
+            "nodes": [
+                {
+                    "node_name": "gpu-node-a",
+                    "ready": True,
+                    "node_group": "gpu-workers",
+                    "instance_type": "gpu-h100-sxm",
+                    "gpu_count": 8,
+                    "allocatable_resources": {
+                        "nvidia.com/gpu": "8",
+                        "rdma/shared_device": "8",
+                    },
+                },
+                {
+                    "node_name": "gpu-node-b",
+                    "ready": True,
+                    "node_group": "gpu-workers",
+                    "instance_type": "gpu-h100-sxm",
+                    "gpu_count": 8,
+                    "allocatable_resources": {
+                        "nvidia.com/gpu": "8",
+                        "rdma/shared_device": "8",
+                    },
+                },
+            ],
         },
     ]
     assert report["device_plugin_snapshot"]["ready_gpu_node_count"] == 2
     checks = {item["name"]: item for item in report["checks"]}
-    assert checks["Expected GPU node lower bound"]["passed"] is True
+    assert checks["Minimum expected Ready GPU nodes"]["passed"] is True
     assert checks["Expected GPU node groups"]["passed"] is True
-    assert checks["Expected GPU node group lower bounds"]["passed"] is True
+    assert checks["Minimum expected Ready GPU nodes per group"]["passed"] is True
     assert "3/3 Kubernetes node(s) Ready" in emits[0]
 
 
@@ -2127,14 +2160,14 @@ def test_cluster_smoke_validation_fails_when_expected_gpu_group_is_missing(
     )
     checks = {item["name"]: item for item in report["checks"]}
     assert report["passed"] is False
-    assert checks["Expected GPU node lower bound"]["passed"] is True
+    assert checks["Minimum expected Ready GPU nodes"]["passed"] is True
     assert checks["Expected GPU node groups"]["passed"] is False
     assert checks["Expected GPU node groups"]["summary"] == (
         "Missing Ready GPU nodes in expected group(s): ethernet"
     )
-    assert checks["Expected GPU node group lower bounds"]["passed"] is False
-    assert checks["Expected GPU node group lower bounds"]["summary"] == (
-        "Ready GPU node lower bounds missed for expected group(s): ethernet=0/1"
+    assert checks["Minimum expected Ready GPU nodes per group"]["passed"] is False
+    assert checks["Minimum expected Ready GPU nodes per group"]["summary"] == (
+        "Minimum expected Ready GPU nodes per group missed: ethernet=0/1"
     )
 
 
@@ -2177,9 +2210,9 @@ def test_cluster_smoke_validation_fails_below_expected_gpu_node_count(
     )
     assert report["passed"] is False
     checks = {item["name"]: item for item in report["checks"]}
-    assert checks["Expected GPU node lower bound"]["passed"] is False
-    assert checks["Expected GPU node lower bound"]["summary"] == (
-        "1 Ready GPU node(s) discovered; expected at least 2"
+    assert checks["Minimum expected Ready GPU nodes"]["passed"] is False
+    assert checks["Minimum expected Ready GPU nodes"]["summary"] == (
+        "1 Ready GPU node(s) discovered; configured minimum expected Ready GPU nodes: 2"
     )
 
 

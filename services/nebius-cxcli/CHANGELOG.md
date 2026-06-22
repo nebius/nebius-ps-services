@@ -10,11 +10,17 @@ All notable changes to this project are tracked here. This changelog follows
   target. It performs one read-only all-node Kubernetes inventory query,
   reports Ready/CPU/GPU/node-group totals, checks scheduler-visible
   `nvidia.com/gpu` inventory before workload validation, enforces configured
-  or inventoried GPU node-group presence and node-count lower bounds when
-  available, keeps validation reports target-scoped for multi-target and
+  or inventoried GPU node-group presence and minimum expected Ready GPU node
+  counts when available, keeps validation reports target-scoped for multi-target and
   multi-GPU-node-group deployments, is generated outside the configurable
   `deploy.targets[].validations.mk8s_gpu.*` block so it cannot be disabled, and
   keeps the existing sampled CUDA smoke and NCCL node caps unchanged.
+- Fixed rendered MK8s node groups so they carry the canonical
+  `nebius.com/node-group` label. The required node inventory smoke can now match
+  live Kubernetes nodes back to configured node-group names on plain MK8s GPU
+  deployments and reports nodes grouped by node group instead of failing minimum
+  expected Ready GPU node checks when Nebius exposes only
+  `nebius.com/node-group-id` on the nodes.
 - Added the `generated/reports/` validation-detail directory to the final
   `deploy` Deployment summary footer so the per-validation JSON smoke reports
   are visible beside the customer-facing `deploy-report.md`.

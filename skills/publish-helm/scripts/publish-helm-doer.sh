@@ -109,17 +109,18 @@ ensure_named_branch() {
   fi
 }
 
-branch_has_upstream() {
-  git rev-parse --abbrev-ref --symbolic-full-name "${1}@{upstream}" >/dev/null 2>&1
-}
-
 push_current_branch() {
   local branch="$1"
   ensure_named_branch "${branch}"
-  if branch_has_upstream "${branch}"; then
-    git push
-  else
-    git push --set-upstream origin "${branch}"
+  git push --set-upstream origin "HEAD:${branch}"
+}
+
+ensure_not_default_branch() {
+  local branch="$1"
+  local main_branch="$2"
+  if [[ "${branch}" == "${main_branch}" ]]; then
+    log_error "--mode prep must run from a feature branch, not ${main_branch}."
+    exit 1
   fi
 }
 
@@ -244,6 +245,16 @@ def normal(content: str) -> str:
         return "\n\n"
     return "\n\n" + stripped + "\n\n"
 
+def merge_content(new_part: str, existing: str) -> str:
+    parts = []
+    if new_part.strip():
+        parts.append(new_part.strip("\n"))
+    if existing.strip():
+        parts.append(existing.strip("\n"))
+    if not parts:
+        return "\n\n"
+    return "\n\n" + "\n\n".join(parts) + "\n\n"
+
 unreleased_idx = None
 tag_idx = None
 for idx, (header, _) in enumerate(sections):
@@ -265,6 +276,9 @@ if tag_idx is None:
             new_sections.append((header, content))
     sections = new_sections
 else:
+    if payload.strip():
+        tag_header, tag_content = sections[tag_idx]
+        sections[tag_idx] = (tag_header, merge_content(payload, tag_content))
     sections[unreleased_idx] = (unreleased_header, "\n\n")
 path.write_text(preamble + "".join(f"{h}{c}" for h, c in sections), encoding="utf-8")
 PY
@@ -377,19 +391,30 @@ prep_release() {
   local changelog="$5"
   local do_push="$6"
   local branch="$7"
+  local main_branch="$8"
   local chart_file="${chart_dir}/Chart.yaml"
+  local staged_paths=("${changelog}" "${chart_file}")
   ensure_clean_worktree
   ensure_named_branch "${branch}"
+  ensure_not_default_branch "${branch}" "${main_branch}"
   ensure_tag_absent "${tag}"
   ensure_unreleased_changelog_note "${version}" "${chart_name}" "${changelog}"
   update_changelog "${tag}" "${changelog}"
   update_chart_version "${chart_file}" "${version}"
   validate_chart "${chart_dir}" "${chart_name}"
   git add "${changelog}" "${chart_file}"
-  if git diff --cached --quiet -- "${changelog}" "${chart_file}"; then
+  if [[ -f "${chart_dir}/Chart.lock" ]]; then
+    git add "${chart_dir}/Chart.lock"
+    staged_paths+=("${chart_dir}/Chart.lock")
+  fi
+  if [[ -d "${chart_dir}/charts" ]]; then
+    git add -A "${chart_dir}/charts"
+    staged_paths+=("${chart_dir}/charts")
+  fi
+  if git diff --cached --quiet -- "${staged_paths[@]}"; then
     log_note "No chart release changes to commit."
   else
-    git commit -m "Prepare chart release ${tag}" -- "${changelog}" "${chart_file}"
+    git commit -m "Prepare chart release ${tag}" -- "${staged_paths[@]}"
     log_success "Committed chart release prep."
   fi
   if [[ "${do_push}" -eq 1 ]]; then
@@ -479,7 +504,7 @@ main() {
 
   case "${mode}" in
     prep)
-      prep_release "${tag}" "${version}" "${chart_dir}" "${chart_name}" "${changelog}" "$((1 - no_push))" "${branch}"
+      prep_release "${tag}" "${version}" "${chart_dir}" "${chart_name}" "${changelog}" "$((1 - no_push))" "${branch}" "${main_branch}"
       ;;
     publish)
       if [[ "${allow_non_main}" -eq 0 ]]; then

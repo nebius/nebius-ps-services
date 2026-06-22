@@ -111,17 +111,18 @@ ensure_named_branch() {
   fi
 }
 
-branch_has_upstream() {
-  git rev-parse --abbrev-ref --symbolic-full-name "${1}@{upstream}" >/dev/null 2>&1
-}
-
 push_current_branch() {
   local branch="$1"
   ensure_named_branch "${branch}"
-  if branch_has_upstream "${branch}"; then
-    git push
-  else
-    git push --set-upstream origin "${branch}"
+  git push --set-upstream origin "HEAD:${branch}"
+}
+
+ensure_not_default_branch() {
+  local branch="$1"
+  local main_branch="$2"
+  if [[ "${branch}" == "${main_branch}" ]]; then
+    log_error "--mode prep must run from a feature branch, not ${main_branch}."
+    exit 1
   fi
 }
 
@@ -219,6 +220,16 @@ def normal(content: str) -> str:
         return "\n\n"
     return "\n\n" + stripped + "\n\n"
 
+def merge_content(new_part: str, existing: str) -> str:
+    parts = []
+    if new_part.strip():
+        parts.append(new_part.strip("\n"))
+    if existing.strip():
+        parts.append(existing.strip("\n"))
+    if not parts:
+        return "\n\n"
+    return "\n\n" + "\n\n".join(parts) + "\n\n"
+
 unreleased_idx = None
 tag_idx = None
 for idx, (header, _) in enumerate(sections):
@@ -240,6 +251,9 @@ if tag_idx is None:
             new_sections.append((header, content))
     sections = new_sections
 else:
+    if payload.strip():
+        tag_header, tag_content = sections[tag_idx]
+        sections[tag_idx] = (tag_header, merge_content(payload, tag_content))
     sections[unreleased_idx] = (unreleased_header, "\n\n")
 path.write_text(preamble + "".join(f"{h}{c}" for h, c in sections), encoding="utf-8")
 PY
@@ -309,8 +323,10 @@ prep_release() {
   local changelog="$2"
   local do_push="$3"
   local branch="$4"
+  local main_branch="$5"
   ensure_clean_worktree
   ensure_named_branch "${branch}"
+  ensure_not_default_branch "${branch}" "${main_branch}"
   ensure_tag_absent "${tag}"
   update_changelog "${tag}" "${changelog}"
   git add "${changelog}"
@@ -385,7 +401,7 @@ main() {
 
   case "${mode}" in
     prep)
-      prep_release "${tag}" "${changelog}" "$((1 - no_push))" "${branch}"
+      prep_release "${tag}" "${changelog}" "$((1 - no_push))" "${branch}" "${main_branch}"
       ;;
     publish)
       if [[ "${allow_non_main}" -eq 0 ]]; then

@@ -3252,6 +3252,7 @@ def _node_inventory_group_summary(nodes: list[dict[str, Any]]) -> list[dict[str,
                 "rdma_resource_node_count": 0,
                 "nvidia_resource_names": set(),
                 "rdma_resource_names": set(),
+                "nodes": [],
             },
         )
         gpu_count = int(node.get("gpu_count", 0) or 0)
@@ -3275,12 +3276,17 @@ def _node_inventory_group_summary(nodes: list[dict[str, Any]]) -> list[dict[str,
         group["nvidia_resource_names"].update(
             key for key in allocatable_resources if _is_nvidia_extended_resource_name(key)
         )
+        group["nodes"].append(_node_inventory_report_node(node))
 
     summaries: list[dict[str, Any]] = []
     for group_name in sorted(groups):
         group = dict(groups[group_name])
         group["nvidia_resource_names"] = sorted(group["nvidia_resource_names"])
         group["rdma_resource_names"] = sorted(group["rdma_resource_names"])
+        group["nodes"] = sorted(
+            group["nodes"],
+            key=lambda item: _as_text(item.get("node_name")),
+        )
         summaries.append(group)
     return summaries
 
@@ -3395,11 +3401,11 @@ def _run_cluster_smoke_validation(
     if expected_gpu_node_count is not None:
         checks.append(
             _cluster_smoke_check(
-                name="Expected GPU node lower bound",
+                name="Minimum expected Ready GPU nodes",
                 passed=expected_gpu_count_passed,
                 summary=(
                     f"{len(ready_gpu_nodes)} Ready GPU node(s) discovered; "
-                    f"expected at least {expected_gpu_node_count}"
+                    f"configured minimum expected Ready GPU nodes: {expected_gpu_node_count}"
                 ),
             )
         )
@@ -3423,7 +3429,7 @@ def _run_cluster_smoke_validation(
     if expected_gpu_node_group_counts:
         if expected_group_counts_passed:
             expected_group_counts_summary = (
-                "Ready GPU node lower bounds met for expected group(s): "
+                "Minimum expected Ready GPU nodes per group met: "
                 + ", ".join(
                     f"{group_name}={ready_gpu_node_counts_by_group.get(group_name, 0)}/{expected_count}"
                     for group_name, expected_count in expected_gpu_node_group_counts.items()
@@ -3431,7 +3437,7 @@ def _run_cluster_smoke_validation(
             )
         else:
             expected_group_counts_summary = (
-                "Ready GPU node lower bounds missed for expected group(s): "
+                "Minimum expected Ready GPU nodes per group missed: "
                 + ", ".join(
                     f"{group_name}={failure['ready']}/{failure['expected']}"
                     for group_name, failure in expected_group_count_failures.items()
@@ -3439,7 +3445,7 @@ def _run_cluster_smoke_validation(
             )
         checks.append(
             _cluster_smoke_check(
-                name="Expected GPU node group lower bounds",
+                name="Minimum expected Ready GPU nodes per group",
                 passed=expected_group_counts_passed,
                 summary=expected_group_counts_summary,
             )
@@ -3473,7 +3479,16 @@ def _run_cluster_smoke_validation(
         "node_groups": _node_inventory_group_summary(nodes),
         "device_plugin_snapshot": _gpu_device_plugin_snapshot(ready_gpu_nodes),
         "checks": checks,
-        "nodes": [_node_inventory_report_node(node) for node in nodes],
+        "nodes": [
+            _node_inventory_report_node(node)
+            for node in sorted(
+                nodes,
+                key=lambda item: (
+                    _as_text(item.get("node_group")) or "<none>",
+                    _as_text(item.get("name")),
+                ),
+            )
+        ],
     }
     _write_report(report_path, report)
     if not passed:

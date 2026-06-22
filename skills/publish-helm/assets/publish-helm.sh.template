@@ -123,22 +123,18 @@ ensure_named_branch() {
   fi
 }
 
-branch_has_upstream() {
-  local branch="$1"
-  git rev-parse --abbrev-ref --symbolic-full-name "${branch}@{upstream}" >/dev/null 2>&1
-}
-
 push_current_branch() {
   local branch="$1"
   ensure_named_branch "${branch}"
+  git push --set-upstream origin "HEAD:${branch}"
+}
 
-  if branch_has_upstream "${branch}"; then
-    git push
-    return 0
+ensure_not_default_branch() {
+  local branch="$1"
+  if [[ "${branch}" == "${MAIN_BRANCH}" ]]; then
+    log_error "--prep must run from a feature branch, not ${MAIN_BRANCH}."
+    exit 1
   fi
-
-  log_note "No upstream configured for ${branch}; pushing to origin and setting upstream..."
-  git push --set-upstream origin "${branch}"
 }
 
 ensure_branch_synced() {
@@ -366,9 +362,55 @@ ensure_chart_version_matches_tag() {
   fi
 }
 
+chart_dependency_remote_repositories() {
+  helm dependency list "${CHART_DIR}" | awk '
+    NR == 1 { next }
+    $3 ~ /^https?:\/\// {
+      name = $1
+      gsub(/[^A-Za-z0-9_.-]/, "-", name)
+      if (name == "") { name = "repo-" NR }
+      if (!seen_url[$3]++) {
+        base = name
+        candidate = base
+        suffix = 2
+        while (seen_name[candidate]) {
+          candidate = base "-" suffix
+          suffix += 1
+        }
+        seen_name[candidate] = 1
+        print candidate "\t" $3
+      }
+    }
+  '
+}
+
+seed_chart_dependency_repositories() {
+  local repo_name repo_url
+  while IFS=$'\t' read -r repo_name repo_url; do
+    [[ -n "${repo_name}" && -n "${repo_url}" ]] || continue
+    helm repo add "${repo_name}" "${repo_url}" >/dev/null
+  done < <(chart_dependency_remote_repositories)
+}
+
 validate_chart() {
+  local state_dir=""
+  state_dir="$(mktemp -d)"
+  (
+    trap 'rm -rf "${state_dir}"' EXIT
+    mkdir -p "${state_dir}/repository"
+    export HELM_REPOSITORY_CACHE="${state_dir}/repository"
+    export HELM_REPOSITORY_CONFIG="${state_dir}/repositories.yaml"
+    if grep -q '^dependencies:' "${CHART_FILE}"; then
+      seed_chart_dependency_repositories
+      if [[ -f "${CHART_DIR}/Chart.lock" ]]; then
+        helm dependency build "${CHART_DIR}"
+      else
+        helm dependency update "${CHART_DIR}"
+      fi
+    fi
+  )
   log_note "Running helm lint for ${CHART_DIR}..."
-  helm lint "${CHART_DIR}"
+  helm lint --strict --with-subcharts "${CHART_DIR}"
   log_note "Rendering smoke template for ${CHART_DIR}..."
   helm template smoke "${CHART_DIR}" --namespace "${CHART_NAME}" >/dev/null
 }
@@ -378,9 +420,11 @@ prep_release() {
   local do_push="$2"
   local branch="$3"
   local version="${tag##*-v}"
+  local staged_paths=("${CHANGELOG_FILE}" "${CHART_FILE}")
 
   ensure_clean_worktree
   ensure_named_branch "${branch}"
+  ensure_not_default_branch "${branch}"
   ensure_tag_absent "${tag}"
 
   log_note "Updating ${CHANGELOG_FILE} for ${tag}..."
@@ -391,10 +435,18 @@ prep_release() {
   validate_chart
 
   git add "${CHANGELOG_FILE}" "${CHART_FILE}"
-  if git diff --cached --quiet -- "${CHANGELOG_FILE}" "${CHART_FILE}"; then
+  if [[ -f "${CHART_DIR}/Chart.lock" ]]; then
+    git add "${CHART_DIR}/Chart.lock"
+    staged_paths+=("${CHART_DIR}/Chart.lock")
+  fi
+  if [[ -d "${CHART_DIR}/charts" ]]; then
+    git add -A "${CHART_DIR}/charts"
+    staged_paths+=("${CHART_DIR}/charts")
+  fi
+  if git diff --cached --quiet -- "${staged_paths[@]}"; then
     log_note "No chart release prep changes to commit."
   else
-    git commit -m "Prepare chart release ${tag}" -- "${CHANGELOG_FILE}" "${CHART_FILE}"
+    git commit -m "Prepare chart release ${tag}" -- "${staged_paths[@]}"
     log_success "Committed chart release prep for ${tag}."
   fi
 

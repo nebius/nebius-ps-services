@@ -142,6 +142,9 @@ def test_readme_mk8s_gpu_workload_validation_defaults_include_soperator() -> Non
         "MK8s node inventory smoke is required for every MK8s deploy target as a fast read-only all-node gate"
         in readme
     )
+    assert "minimum expected Ready GPU node counts" in readme
+    assert "groups node details by node group in the JSON detail report" in readme
+    assert "Rendered MK8s node groups carry the canonical `nebius.com/node-group` label" in readme
     assert (
         "NCCL test is enabled by default for GPU-cluster / InfiniBand-capable MK8s shapes"
         in readme
@@ -157,6 +160,9 @@ def test_readme_mk8s_gpu_workload_validation_defaults_include_soperator() -> Non
         "NCCL is a separate deploy-time validation that defaults on for GPU-cluster / InfiniBand-capable MK8s shapes"
         in design
     )
+    assert "Render materializes `nebius.com/node-group` on each MK8s node group" in design
+    assert "grouped node details" in design
+    assert "minimum expected Ready GPU node counts" in design
     assert "required read-only all-node Kubernetes inventory gate generated for every MK8s target" in design
     assert (
         "defaults off for 1-GPU Ethernet-only test/dev shapes unless the operator explicitly sets"

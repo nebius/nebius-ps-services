@@ -569,6 +569,12 @@ def test_render_passes_typed_mk8s_node_group_scale_and_preemptible_inputs(
     assert "node_count" not in tfvars["mk8s_node_groups"]["cpu"]
     assert tfvars["mk8s_node_groups"]["cpu"]["preemptible"] is True
     assert tfvars["mk8s_node_groups"]["worker"]["preemptible"] is True
+    assert tfvars["mk8s_node_groups"]["cpu"]["node_labels"]["nebius.com/node-group"] == "cpu"
+    assert (
+        tfvars["mk8s_node_groups"]["worker"]["node_labels"]["nebius.com/node-group"]
+        == "worker"
+    )
+    assert tfvars["mk8s_node_groups"]["worker"]["node_labels"]["nebius.com/gpu"] == "true"
 
 
 def test_render_passes_vm_preemptible_contract_inputs(

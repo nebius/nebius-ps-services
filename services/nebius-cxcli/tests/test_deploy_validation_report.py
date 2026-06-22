@@ -69,6 +69,21 @@ def test_build_deploy_validation_report_aggregates_results(tmp_path: Path) -> No
                 "ready_gpu_node_count": 4,
                 "allocatable_gpu_count": 32,
                 "expected_gpu_node_count": 4,
+                "checks": [
+                    {
+                        "name": "Minimum expected Ready GPU nodes",
+                        "passed": True,
+                        "summary": (
+                            "4 Ready GPU node(s) discovered; "
+                            "configured minimum expected Ready GPU nodes: 4"
+                        ),
+                    },
+                    {
+                        "name": "Minimum expected Ready GPU nodes per group",
+                        "passed": True,
+                        "summary": "Minimum expected Ready GPU nodes per group met: gpu=4/4",
+                    },
+                ],
             }
         )
         + "\n",
@@ -122,7 +137,7 @@ def test_build_deploy_validation_report_aggregates_results(tmp_path: Path) -> No
         "Deploy validation summary:",
         "  Overall: INCOMPLETE (4/5 completed, 1 not run)",
         "  PASS GPU stack readiness: GPU Operator and Network Operator ready on 2 Ready GPU node(s); RDMA resources rdma/shared_device on 2 Ready GPU node(s); GPUDirect mode dma-buf.",
-        "  PASS MK8s node inventory smoke: 5/5 Kubernetes node(s) Ready; 1 CPU-only node(s); 4 Ready GPU node(s) advertise 32 allocatable GPU(s); expected at least 4 GPU node(s).",
+        "  PASS MK8s node inventory smoke: 5/5 Kubernetes node(s) Ready; 1 CPU-only node(s); 4 Ready GPU node(s) advertise 32 allocatable GPU(s); configured minimum expected Ready GPU nodes: 4.",
         "  PASS CUDA smoke test: 2/2 selected node(s) passed; total Ready GPU nodes 4; skipped 2.",
         "  NOT RUN NCCL test: No deploy validation results recorded yet.",
         "  PASS Observability ingestion (cluster1): 3/3 check(s) passed; DaemonSet pods ready 2/2; OTLP/gRPC endpoints ready 2/2.",
@@ -151,7 +166,10 @@ def test_build_deploy_validation_report_aggregates_results(tmp_path: Path) -> No
         "",
         "- Status: `PASS`",
         "- Detail report: `mk8s-node-inventory-smoke-report.json`",
-        "- Summary: 5/5 Kubernetes node(s) Ready; 1 CPU-only node(s); 4 Ready GPU node(s) advertise 32 allocatable GPU(s); expected at least 4 GPU node(s).",
+        "- Summary: 5/5 Kubernetes node(s) Ready; 1 CPU-only node(s); 4 Ready GPU node(s) advertise 32 allocatable GPU(s); configured minimum expected Ready GPU nodes: 4.",
+        "- Checks (2):",
+        "  1. `PASS` Minimum expected Ready GPU nodes: 4 Ready GPU node(s) discovered; configured minimum expected Ready GPU nodes: 4",
+        "  2. `PASS` Minimum expected Ready GPU nodes per group: Minimum expected Ready GPU nodes per group met: gpu=4/4",
         "",
         "### CUDA smoke test",
         "",

@@ -510,7 +510,7 @@ def _cluster_smoke_summary(payload: Mapping[str, Any]) -> str:
     ]
     expected_gpu_nodes = int(payload.get("expected_gpu_node_count", 0) or 0)
     if expected_gpu_nodes > 0:
-        parts.append(f"expected at least {expected_gpu_nodes} GPU node(s)")
+        parts.append(f"configured minimum expected Ready GPU nodes: {expected_gpu_nodes}")
     return "; ".join(parts) + "."
 
 

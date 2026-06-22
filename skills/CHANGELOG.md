@@ -104,6 +104,17 @@ All notable changes to the reusable Codex skills are tracked here.
   container images, and GitHub Releases, including strict clean-worktree checks,
   tag normalization, duplicate tag prevention, changelog release-section
   validation, upstream push setup, and artifact-specific publish verification.
+- Hardened the skill-owned publish helpers so rerunning prep for an existing
+  unreleased tag section merges new `Unreleased` bullets into that section
+  instead of clearing them.
+- Hardened publish helper scripts and setup templates to reject prep on the
+  default branch and push feature branches explicitly to `origin`.
+- Updated Helm chart prep to include generated dependency lock/archive outputs
+  in the release-prep commit when `helm dependency update` creates them.
+- Aligned the Helm setup helper template with the canonical doer so generated
+  project-local helpers build or update chart dependencies before linting.
+- Added image publish workflow tag ancestry validation and removed shallow
+  history from release publish ancestry checks.
 - Aligned `merge-pr` with GitHub merge-queue behavior by using the no-strategy
   `gh pr merge --match-head-commit` path for merge-queue branches instead of
   treating a ready queue as an admin-bypass case.

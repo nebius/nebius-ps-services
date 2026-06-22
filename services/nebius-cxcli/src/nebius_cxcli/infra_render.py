@@ -636,6 +636,30 @@ def _truthy(value: Any) -> bool:
     return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _materialize_mk8s_node_group_labels(
+    *,
+    component_id: str,
+    module_inputs: dict[str, Any],
+) -> None:
+    if component_id != "mk8s":
+        return
+    node_groups = module_inputs.get("node_groups")
+    if not isinstance(node_groups, dict):
+        return
+    for raw_key, raw_group in node_groups.items():
+        if not isinstance(raw_group, dict) or raw_group.get("enabled") is False:
+            continue
+        group_name = str(raw_group.get("name") or raw_key or "").strip()
+        if not group_name:
+            continue
+        node_labels = raw_group.setdefault("node_labels", {})
+        if not isinstance(node_labels, dict):
+            continue
+        node_labels.setdefault("nebius.com/node-group", group_name)
+        if _truthy(raw_group.get("gpu")):
+            node_labels.setdefault("nebius.com/gpu", "true")
+
+
 def _materialize_mk8s_sfs_attachments(
     *,
     payload: dict[str, Any],
@@ -790,6 +814,10 @@ def _build_module_plans(
             if str(key).strip().replace("-", "_").lower() not in helper_keys
         }
         module_inputs = _module_inputs_for_terraform(component_id, module_inputs)
+        _materialize_mk8s_node_group_labels(
+            component_id=component_id,
+            module_inputs=module_inputs,
+        )
         if declared_argument_names:
             for raw_arg_name in sorted(module_inputs.keys()):
                 argument_name = str(raw_arg_name).strip().replace("-", "_")

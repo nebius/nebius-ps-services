@@ -94,11 +94,35 @@ normalize_tag() {
 }
 
 ensure_clean_worktree() {
-  if ! git diff --quiet || ! git diff --cached --quiet; then
+  local status_output=""
+  status_output="$(git status --short --untracked-files=all)"
+  if [[ -n "${status_output}" ]]; then
     log_error "Working tree is not clean."
-    git status --short
+    printf '%s\n' "${status_output}" >&2
     exit 1
   fi
+}
+
+ensure_named_branch() {
+  local branch="$1"
+  if [[ -z "${branch}" || "${branch}" == "HEAD" ]]; then
+    log_error "This operation must run from a local branch, not a detached HEAD."
+    exit 1
+  fi
+}
+
+ensure_not_default_branch() {
+  local branch="$1"
+  if [[ "${branch}" == "${MAIN_BRANCH}" ]]; then
+    log_error "--prep must run from a feature branch, not ${MAIN_BRANCH}."
+    exit 1
+  fi
+}
+
+push_current_branch() {
+  local branch="$1"
+  ensure_named_branch "${branch}"
+  git push --set-upstream origin "HEAD:${branch}"
 }
 
 ensure_branch_synced() {
@@ -207,6 +231,12 @@ PY
 prep_release() {
   local tag="$1"
   local do_push="$2"
+  local branch="$3"
+
+  ensure_clean_worktree
+  ensure_named_branch "${branch}"
+  ensure_not_default_branch "${branch}"
+  ensure_tag_absent "${tag}"
 
   log_note "Updating ${CHANGELOG_FILE} for ${tag}..."
   update_changelog "${tag}"
@@ -221,7 +251,7 @@ prep_release() {
 
   if [[ "${do_push}" -eq 1 ]]; then
     log_note "Pushing current branch..."
-    git push
+    push_current_branch "${branch}"
     log_success "Branch pushed."
   fi
 }
@@ -317,7 +347,7 @@ main() {
 
   case "${mode}" in
     prep)
-      prep_release "${tag}" "$(( 1 - no_push ))"
+      prep_release "${tag}" "$(( 1 - no_push ))" "${branch}"
       ;;
     publish)
       ensure_clean_worktree
