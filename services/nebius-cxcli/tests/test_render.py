@@ -3847,7 +3847,7 @@ def test_render_instance_resets_generated_bundle_and_removes_stale_files(
     stale_flux_file = paths.flux_dir / "stale.yaml"
     stale_report = paths.reports_dir / "old.json"
     deploy_report = paths.reports_dir / "deploy-report.md"
-    deploy_detail_report = paths.reports_dir / "gpu-visibility-report-mk8s.json"
+    deploy_detail_report = paths.reports_dir / "cuda-smoke-report-mk8s.json"
     onboard_report = paths.reports_dir / "ext-soperator-onboard-source-discovery-report.json"
     migrate_report = paths.reports_dir / "ext-soperator-migrate-report.md"
     migration_detail_report = (
@@ -3876,7 +3876,7 @@ def test_render_instance_resets_generated_bundle_and_removes_stale_files(
     stale_flux_file.write_text("apiVersion: v1\nkind: Secret\n", encoding="utf-8")
     stale_report.write_text("{}\n", encoding="utf-8")
     deploy_report.write_text(
-        "# Deploy Report\n\n### GPU visibility\n\n- Detail report: `gpu-visibility-report-mk8s.json`\n",
+        "# Deploy Report\n\n### CUDA smoke\n\n- Detail report: `cuda-smoke-report-mk8s.json`\n",
         encoding="utf-8",
     )
     deploy_detail_report.write_text('{"status": "passed"}\n', encoding="utf-8")
@@ -4942,7 +4942,7 @@ def test_render_ignores_declared_mk8s_gpu_validation_helper_inputs(
                 "validations": {
                     "mk8s_gpu": {
                         "operator_readiness": {"enabled": False},
-                        "gpu_visibility": {"enabled": True, "max_nodes": 2},
+                        "cuda_smoke": {"enabled": True, "max_nodes": 2},
                     }
                 },
             }

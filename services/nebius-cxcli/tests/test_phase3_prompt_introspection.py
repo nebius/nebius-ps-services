@@ -391,14 +391,14 @@ def test_soperator_target_prompts_cxcli_workload_gpu_validations() -> None:
     assert not _skip_mk8s_gpu_validation_prompt(
         payload=payload,
         entry=entry,
-        full_path_label="deploy.targets[0].validations.mk8s_gpu.gpu_visibility.enabled",
+        full_path_label="deploy.targets[0].validations.mk8s_gpu.cuda_smoke.enabled",
     )
     assert not _skip_mk8s_gpu_validation_prompt(
         payload=payload,
         entry=entry,
         full_path_label="deploy.targets[0].validations.mk8s_gpu.nccl.enabled",
     )
-    payload["deploy"]["targets"][0]["validations"]["mk8s_gpu"]["gpu_visibility"] = {"enabled": True}
+    payload["deploy"]["targets"][0]["validations"]["mk8s_gpu"]["cuda_smoke"] = {"enabled": True}
     payload["deploy"]["targets"][0]["validations"]["mk8s_gpu"]["nccl"] = {"enabled": True}
     assert not _skip_mk8s_gpu_validation_prompt(
         payload=payload,
@@ -414,20 +414,20 @@ def test_mk8s_gpu_validation_max_nodes_required_only_when_section_enabled() -> N
         config_path="infra.mk8s",
         description="mk8s",
     )
-    label = "deploy.targets[0].validations.mk8s_gpu.gpu_visibility.max_nodes"
+    label = "deploy.targets[0].validations.mk8s_gpu.cuda_smoke.max_nodes"
     payload = {
         "deploy": {
             "targets": [
                 {
                     "instance_id": "cluster1",
-                    "validations": {"mk8s_gpu": {"gpu_visibility": {"enabled": True}}},
+                    "validations": {"mk8s_gpu": {"cuda_smoke": {"enabled": True}}},
                 }
             ]
         }
     }
 
     assert _dynamic_required_prompt(payload=payload, entry=entry, full_path_label=label)
-    payload["deploy"]["targets"][0]["validations"]["mk8s_gpu"]["gpu_visibility"]["enabled"] = False
+    payload["deploy"]["targets"][0]["validations"]["mk8s_gpu"]["cuda_smoke"]["enabled"] = False
     assert not _dynamic_required_prompt(payload=payload, entry=entry, full_path_label=label)
     assert _skip_mk8s_gpu_validation_prompt(
         payload={

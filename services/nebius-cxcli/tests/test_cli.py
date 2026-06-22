@@ -260,7 +260,7 @@ def test_deploy_managed_soperator_runs_gpu_validations_before_full_flux(
     }
     validations = [
         {"kind": "mk8s_gpu_operator_readiness", "target_ref": "mk8s"},
-        {"kind": "mk8s_gpu_visibility", "target_ref": "mk8s"},
+        {"kind": "mk8s_cuda_smoke", "target_ref": "mk8s"},
         {"kind": "mk8s_nccl", "target_ref": "mk8s"},
         {"kind": "soperator_cluster_smoke", "target_ref": "mk8s", "required": True},
     ]
@@ -351,7 +351,7 @@ def test_deploy_managed_soperator_runs_gpu_validations_before_full_flux(
             "validations",
             (
                 "mk8s_gpu_operator_readiness",
-                "mk8s_gpu_visibility",
+                "mk8s_cuda_smoke",
                 "mk8s_nccl",
             ),
         ),
@@ -7621,7 +7621,7 @@ def test_soperator_onboard_gpu_cluster_inventory_adds_network_operator(
     }
     mk8s_gpu_validations = payload["deploy"]["targets"][0]["validations"]["mk8s_gpu"]
     assert mk8s_gpu_validations["operator_readiness"]["enabled"] is True
-    assert mk8s_gpu_validations["gpu_visibility"]["enabled"] is True
+    assert mk8s_gpu_validations["cuda_smoke"]["enabled"] is True
     assert mk8s_gpu_validations["nccl"]["enabled"] is True
 
 

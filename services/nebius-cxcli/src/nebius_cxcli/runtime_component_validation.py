@@ -540,7 +540,7 @@ def _validate_mk8s_inputs(
 
     for validation_label, project_gpu_validations in project_gpu_validations_by_label:
         operator_readiness = project_gpu_validations.get("operator_readiness", {})
-        gpu_visibility = project_gpu_validations.get("gpu_visibility", {})
+        cuda_smoke = project_gpu_validations.get("cuda_smoke", {})
         nccl = project_gpu_validations.get("nccl", {})
         health_checker = project_gpu_validations.get("health_checker", {})
         operator_enabled = (
@@ -550,8 +550,8 @@ def _validate_mk8s_inputs(
         for field_label, value in (
             (f"{validation_label}.operator_readiness.enabled", operator_enabled),
             (
-                f"{validation_label}.gpu_visibility.enabled",
-                gpu_visibility.get("enabled") if isinstance(gpu_visibility, Mapping) else None,
+                f"{validation_label}.cuda_smoke.enabled",
+                cuda_smoke.get("enabled") if isinstance(cuda_smoke, Mapping) else None,
             ),
             (
                 f"{validation_label}.nccl.enabled",
@@ -565,14 +565,14 @@ def _validate_mk8s_inputs(
             if value is not None and not isinstance(value, bool):
                 raise ValueError(f"{field_label} must be true or false when set")
 
-        gpu_visibility_max_nodes = (
-            gpu_visibility.get("max_nodes") if isinstance(gpu_visibility, Mapping) else None
+        cuda_smoke_max_nodes = (
+            cuda_smoke.get("max_nodes") if isinstance(cuda_smoke, Mapping) else None
         )
         if (
-            gpu_visibility_max_nodes is not None
-            and _coerce_int(gpu_visibility_max_nodes, default=0) <= 0
+            cuda_smoke_max_nodes is not None
+            and _coerce_int(cuda_smoke_max_nodes, default=0) <= 0
         ):
-            raise ValueError(f"{validation_label}.gpu_visibility.max_nodes must be > 0")
+            raise ValueError(f"{validation_label}.cuda_smoke.max_nodes must be > 0")
 
         nccl_max_nodes = nccl.get("max_nodes") if isinstance(nccl, Mapping) else None
         if nccl_max_nodes is not None and _coerce_int(nccl_max_nodes, default=0) <= 0:

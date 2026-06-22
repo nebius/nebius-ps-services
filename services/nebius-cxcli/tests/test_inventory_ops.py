@@ -1289,7 +1289,7 @@ def test_write_inventory_merges_validation_status_into_deploy_report(tmp_path: P
     paths = resolve_project_paths(config_path)
     validate_path_alignment(config, paths)
     paths.reports_dir.mkdir(parents=True, exist_ok=True)
-    (paths.reports_dir / "gpu-visibility-report.json").write_text(
+    (paths.reports_dir / "cuda-smoke-report.json").write_text(
         json.dumps(
             {
                 "passed": True,
@@ -1308,9 +1308,9 @@ def test_write_inventory_merges_validation_status_into_deploy_report(tmp_path: P
         paths,
         validations=[
             {
-                "kind": "mk8s_gpu_visibility",
-                "name": "GPU Visibility test",
-                "report_file": "gpu-visibility-report.json",
+                "kind": "mk8s_cuda_smoke",
+                "name": "CUDA smoke test",
+                "report_file": "cuda-smoke-report.json",
             }
         ],
     )
@@ -1320,8 +1320,8 @@ def test_write_inventory_merges_validation_status_into_deploy_report(tmp_path: P
     assert "## Apps" in markdown
     assert "## Validations" in markdown
     assert "- Overall status: `PASS`" in markdown
-    assert "### GPU Visibility test" in markdown
-    assert "- Detail report: `gpu-visibility-report.json`" in markdown
+    assert "### CUDA smoke test" in markdown
+    assert "- Detail report: `cuda-smoke-report.json`" in markdown
     assert not markdown.endswith("\n\n")
 
 

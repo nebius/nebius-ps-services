@@ -1,4 +1,4 @@
 interface:
   display_name: "Publish Image"
-  short_description: "Generate container image release artifacts"
-  default_prompt: "Use $publish-image to create CHANGELOG.md, publish-image.sh, and a hardened tag-driven GitHub Actions image publish workflow."
+  short_description: "Publish container images end to end"
+  default_prompt: "Use $publish-image --mode complete --tag X.Y.Z to prep, PR, merge, tag, wait for CI, and verify a container image release."

@@ -135,7 +135,11 @@ def test_readme_mk8s_gpu_workload_validation_defaults_include_soperator() -> Non
     design_flat = _squash(design)
 
     assert (
-        "GPU Visibility test is enabled by default for GPU-backed MK8s deploys, including Soperator production targets"
+        "CUDA smoke test is enabled by default for GPU-backed MK8s deploys, including Soperator production targets"
+        in readme
+    )
+    assert (
+        "MK8s node inventory smoke is required for every MK8s deploy target as a fast read-only all-node gate"
         in readme
     )
     assert (
@@ -153,12 +157,13 @@ def test_readme_mk8s_gpu_workload_validation_defaults_include_soperator() -> Non
         "NCCL is a separate deploy-time validation that defaults on for GPU-cluster / InfiniBand-capable MK8s shapes"
         in design
     )
+    assert "required read-only all-node Kubernetes inventory gate generated for every MK8s target" in design
     assert (
         "defaults off for 1-GPU Ethernet-only test/dev shapes unless the operator explicitly sets"
         in design_flat
     )
-    assert "GPU Visibility pods use the cxcli-owned `gpu-visibility-validation`" in readme
-    assert "`gpu-visibility-validation` ServiceAccount with token automount disabled" in design
+    assert "CUDA smoke pods use the cxcli-owned `cuda-smoke-validation`" in readme
+    assert "`cuda-smoke-validation` ServiceAccount with token automount disabled" in design
     assert "leave that generic NCCL path off" not in readme
     assert "Soperator targets suppress this generic workload prompt" not in readme
     assert "Soperator targets suppress the generic deploy-time NCCL workload" not in readme

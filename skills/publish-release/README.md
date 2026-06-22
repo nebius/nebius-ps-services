@@ -1,45 +1,54 @@
 # Publish Release
 
-`publish-release` generates a default application release publication flow with
-GitHub Releases.
+`publish-release` publishes application/package artifacts to GitHub Releases
+end to end from the current project folder. It can still set up release assets,
+but its primary job is to execute a release and return a completion report.
 
 ## What It Does
 
-- Creates a project-local `CHANGELOG.md`.
-- Creates a `publish-release.sh` helper.
-- Creates a tag-driven GitHub Release workflow.
-- Adds artifact and version verification where applicable.
+- Collects or derives project, package, tag, branch, and workflow inputs.
+- Runs release prep on the current feature branch.
+- Uses `create-pr` and `merge-pr` for the release-prep PR path.
+- Tags from a clean synced default branch.
+- Verifies package runtime version before tag push when configured.
+- Waits for the tag-triggered GitHub Release workflow when requested.
+- Verifies the GitHub Release and expected assets.
 
 ## Architecture
 
 ```text
 Application project
   |
-  +--> changelog
-  +--> publish-release.sh
-  `--> release publish workflow
+  +--> setup assets when missing or requested
+  +--> skill-owned publish-release-doer.sh
+  +--> create-pr -> merge-pr
+  `--> tag-triggered release workflow
         |
         v
-Tag-driven GitHub Release
+GitHub Release with assets
 ```
 
 ## Workflow
 
-1. Collect project name, artifact paths, version source, and tag pattern.
-2. Add or update release assets from templates.
-3. Wire the GitHub Actions workflow.
-4. Validate shell syntax, workflow YAML, and artifact assumptions.
-5. Report release prep and publication steps.
+1. Resolve release inputs and normalize the release tag.
+2. Run setup mode only when requested or required assets are missing.
+3. Prep the release branch with the skill-owned helper.
+4. Create and merge the release-prep PR in complete mode.
+5. Publish the tag from the default branch.
+6. Wait for the workflow and verify the GitHub Release assets.
+7. Return the final report.
 
 ## Core Concepts
 
-- Prefer tag-driven GitHub Releases for default release automation.
-- Keep release metadata close to the project being released.
-- Use `release-generator` only when the user explicitly wants local manual
-  releases and no CI workflow.
+- Doer mode does not depend on a project-local `publish-release.sh`.
+- Package import name and asset glob are inputs, not hardcoded skill knowledge.
+- Secret values stay in GitHub secrets or local auth state, not in skill
+  sources.
+- Human-required approvals and failing checks are blockers.
 
 ## Files
 
-- `SKILL.md`: application release workflow and guardrails.
-- `assets/`: changelog, shell helper, and workflow templates.
+- `SKILL.md`: Runtime workflow, inputs, guardrails, and output contract.
+- `scripts/publish-release-doer.sh`: Local prep/publish/verify primitives.
+- `assets/`: Optional setup templates for changelog, helper, and workflow.
 - `agents/openai.yaml`: UI metadata.

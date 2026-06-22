@@ -1,0 +1,4 @@
+interface:
+  display_name: "Merge PR"
+  short_description: "Safely merge ready GitHub pull requests"
+  default_prompt: "Use $merge-pr to verify and merge a ready GitHub pull request without bypassing branch protection."

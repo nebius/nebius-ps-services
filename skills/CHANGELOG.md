@@ -67,6 +67,9 @@ All notable changes to the reusable Codex skills are tracked here.
   remote GitHub repositories that are not cloned locally by reading a temporary
   repository archive with local GitHub token discovery when needed.
 - Added the `create-pr` Codex skill for branch-safe GitHub PR creation.
+- Added the `merge-pr` Codex skill for non-SDLC GitHub PR merging that verifies
+  PR metadata, checks, reviews, mergeability, base branch, and head SHA before
+  calling `gh pr merge --match-head-commit` without admin bypass.
 - Added the `config-codex` Codex skill for bootstrapping public-safe local
   Codex runtime setup, including global `AGENTS.md`, `config.toml` features
   and MCP servers, hooks, task-state layout, read-only custom agents, and a
@@ -88,13 +91,22 @@ All notable changes to the reusable Codex skills are tracked here.
   `services/nebius-cxcli`, including catalog-first onboarding and optional
   code-owned layers for wizard/provider, runtime validation, status polling,
   and cluster handoff behavior.
-- Added the `publish-helm` Codex skill for creating Nebius OCI Helm chart
-  publication flows.
+- Added the `publish-helm` Codex skill for OCI Helm chart publishing.
 - Added the `review-pr` Codex skill for GitHub-backed PR review and
   merge-readiness work.
 
 ### Changed
 
+- Refactored `publish-helm`, `publish-image`, and `publish-release` from
+  generator-first guidance into doer-first release skills that can run setup,
+  prep, publish, or complete end-to-end flows from the current project folder.
+- Added deterministic skill-owned publish helper scripts for Helm charts,
+  container images, and GitHub Releases, including strict clean-worktree checks,
+  tag normalization, duplicate tag prevention, changelog release-section
+  validation, upstream push setup, and artifact-specific publish verification.
+- Aligned `merge-pr` with GitHub merge-queue behavior by using the no-strategy
+  `gh pr merge --match-head-commit` path for merge-queue branches instead of
+  treating a ready queue as an admin-bypass case.
 - Expanded `docs/agentic-sdlc-design.md` with an explicit SDLC workflow
   verification procedure, including quick preflight usage, full disposable
   golden-path testing, report status interpretation, and fix/rerun policy for

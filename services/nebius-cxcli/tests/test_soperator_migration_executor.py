@@ -3186,10 +3186,10 @@ def test_execute_runs_configured_mk8s_gpu_validations_during_validation_hold(
             "report_file": "external-cluster-gpu-stack-readiness-report.json",
         },
         {
-            "kind": "mk8s_gpu_visibility",
+            "kind": "mk8s_cuda_smoke",
             "target_ref": "external-cluster",
-            "name": "GPU Visibility test",
-            "report_file": "external-cluster-gpu-visibility-report.json",
+            "name": "CUDA smoke test",
+            "report_file": "external-cluster-cuda-smoke-report.json",
         },
         {
             "kind": "mk8s_nccl",
@@ -3258,7 +3258,7 @@ def test_execute_runs_configured_mk8s_gpu_validations_during_validation_hold(
     assert len(calls) == 1
     assert [item["kind"] for item in calls[0]["validations"]] == [
         "mk8s_gpu_operator_readiness",
-        "mk8s_gpu_visibility",
+        "mk8s_cuda_smoke",
         "mk8s_nccl",
     ]
     assert calls[0]["extra_env"] == {
@@ -3284,7 +3284,7 @@ def test_execute_runs_configured_mk8s_gpu_validations_during_validation_hold(
     assert "### MK8s GPU" in migrate_report
     assert "soperator-cluster-validation-report-external-cluster.json" in migrate_report
     assert "`external-cluster-gpu-stack-readiness-report.json`: `PASS`" in migrate_report
-    assert "`external-cluster-gpu-visibility-report.json`: `PASS`" in migrate_report
+    assert "`external-cluster-cuda-smoke-report.json`: `PASS`" in migrate_report
     assert "`external-cluster-nccl-test-report.json`: `PASS`" in migrate_report
     soperator_report = json.loads(
         (reports_dir / "soperator-cluster-validation-report-external-cluster.json").read_text(

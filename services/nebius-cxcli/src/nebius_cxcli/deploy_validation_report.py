@@ -112,7 +112,7 @@ def _apply_soperator_owned_gpu_summaries(
     unique_soperator = tuple(item for item in results if item.kind == "soperator_cluster_smoke")
     updated: list[DeployValidationResult] = []
     for item in results:
-        if item.kind not in {"mk8s_gpu_visibility", "mk8s_nccl"}:
+        if item.kind not in {"mk8s_cuda_smoke", "mk8s_nccl"}:
             updated.append(item)
             continue
         if not _is_soperator_gpu_ownership_skip(item.summary):
@@ -148,7 +148,7 @@ def _soperator_owned_gpu_summary(
 ) -> str:
     if soperator is None or soperator.status != "passed":
         return ""
-    if item.kind == "mk8s_gpu_visibility":
+    if item.kind == "mk8s_cuda_smoke":
         check_name = "Slurm GPU allocation check"
         lead = "Soperator-owned Slurm GPU allocation passed"
     elif item.kind == "mk8s_nccl":
@@ -356,8 +356,10 @@ def _validation_summary(kind: str, payload: Mapping[str, Any]) -> str:
         return f"Failed before completion: {error}"
     if kind == "mk8s_gpu_operator_readiness":
         return _operator_readiness_summary(payload)
-    if kind == "mk8s_gpu_visibility":
-        return _gpu_visibility_summary(payload)
+    if kind == "mk8s_cluster_smoke":
+        return _cluster_smoke_summary(payload)
+    if kind == "mk8s_cuda_smoke":
+        return _cuda_smoke_summary(payload)
     if kind == "mk8s_nccl":
         return _nccl_summary(payload)
     if kind == "mk8s_observability_ingestion":
@@ -381,6 +383,8 @@ def _validation_footer_summary(
         return fallback
     if kind == "mk8s_gpu_operator_readiness":
         return _operator_readiness_footer_summary(payload)
+    if kind == "mk8s_cluster_smoke":
+        return _cluster_smoke_summary(payload)
     if kind == "mk8s_nccl":
         return _nccl_footer_summary(payload)
     return fallback
@@ -493,7 +497,24 @@ def _operator_readiness_summary(payload: Mapping[str, Any]) -> str:
     return "; ".join(parts) + "."
 
 
-def _gpu_visibility_summary(payload: Mapping[str, Any]) -> str:
+def _cluster_smoke_summary(payload: Mapping[str, Any]) -> str:
+    total = int(payload.get("total_node_count", 0) or 0)
+    ready = int(payload.get("ready_node_count", 0) or 0)
+    cpu_nodes = int(payload.get("cpu_node_count", 0) or 0)
+    gpu_nodes = int(payload.get("ready_gpu_node_count", 0) or 0)
+    allocatable_gpus = int(payload.get("allocatable_gpu_count", 0) or 0)
+    parts = [
+        f"{ready}/{total} Kubernetes node(s) Ready",
+        f"{cpu_nodes} CPU-only node(s)",
+        f"{gpu_nodes} Ready GPU node(s) advertise {allocatable_gpus} allocatable GPU(s)",
+    ]
+    expected_gpu_nodes = int(payload.get("expected_gpu_node_count", 0) or 0)
+    if expected_gpu_nodes > 0:
+        parts.append(f"expected at least {expected_gpu_nodes} GPU node(s)")
+    return "; ".join(parts) + "."
+
+
+def _cuda_smoke_summary(payload: Mapping[str, Any]) -> str:
     if bool(payload.get("skipped")):
         reason = str(payload.get("skip_reason", "") or "").strip()
         total = int(payload.get("total_gpu_node_count", 0) or 0)

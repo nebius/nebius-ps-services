@@ -20,9 +20,14 @@ def test_build_deploy_validation_report_aggregates_results(tmp_path: Path) -> No
             "report_file": "gpu-stack-readiness-report.json",
         },
         {
-            "kind": "mk8s_gpu_visibility",
-            "name": "GPU Visibility test",
-            "report_file": "gpu-visibility-report.json",
+            "kind": "mk8s_cluster_smoke",
+            "name": "MK8s node inventory smoke",
+            "report_file": "mk8s-node-inventory-smoke-report.json",
+        },
+        {
+            "kind": "mk8s_cuda_smoke",
+            "name": "CUDA smoke test",
+            "report_file": "cuda-smoke-report.json",
         },
         {
             "kind": "mk8s_nccl",
@@ -54,7 +59,22 @@ def test_build_deploy_validation_report_aggregates_results(tmp_path: Path) -> No
         + "\n",
         encoding="utf-8",
     )
-    (tmp_path / "gpu-visibility-report.json").write_text(
+    (tmp_path / "mk8s-node-inventory-smoke-report.json").write_text(
+        json.dumps(
+            {
+                "passed": True,
+                "total_node_count": 5,
+                "ready_node_count": 5,
+                "cpu_node_count": 1,
+                "ready_gpu_node_count": 4,
+                "allocatable_gpu_count": 32,
+                "expected_gpu_node_count": 4,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "cuda-smoke-report.json").write_text(
         json.dumps(
             {
                 "passed": True,
@@ -94,28 +114,30 @@ def test_build_deploy_validation_report_aggregates_results(tmp_path: Path) -> No
 
     assert report.markdown_path == tmp_path / DEPLOY_REPORT_FILENAME
     assert report.overall_status == "incomplete"
-    assert report.completed_count == 3
-    assert report.passed_count == 3
+    assert report.completed_count == 4
+    assert report.passed_count == 4
     assert report.failed_count == 0
     assert report.not_run_count == 1
     assert format_deploy_validation_summary_lines(report) == [
         "Deploy validation summary:",
-        "  Overall: INCOMPLETE (3/4 completed, 1 not run)",
+        "  Overall: INCOMPLETE (4/5 completed, 1 not run)",
         "  PASS GPU stack readiness: GPU Operator and Network Operator ready on 2 Ready GPU node(s); RDMA resources rdma/shared_device on 2 Ready GPU node(s); GPUDirect mode dma-buf.",
-        "  PASS GPU Visibility test: 2/2 selected node(s) passed; total Ready GPU nodes 4; skipped 2.",
+        "  PASS MK8s node inventory smoke: 5/5 Kubernetes node(s) Ready; 1 CPU-only node(s); 4 Ready GPU node(s) advertise 32 allocatable GPU(s); expected at least 4 GPU node(s).",
+        "  PASS CUDA smoke test: 2/2 selected node(s) passed; total Ready GPU nodes 4; skipped 2.",
         "  NOT RUN NCCL test: No deploy validation results recorded yet.",
         "  PASS Observability ingestion (cluster1): 3/3 check(s) passed; DaemonSet pods ready 2/2; OTLP/gRPC endpoints ready 2/2.",
         f"  Combined report: {tmp_path / DEPLOY_REPORT_FILENAME}",
         f"  JSON detail: {tmp_path / 'gpu-stack-readiness-report.json'}",
-        f"  JSON detail: {tmp_path / 'gpu-visibility-report.json'}",
+        f"  JSON detail: {tmp_path / 'mk8s-node-inventory-smoke-report.json'}",
+        f"  JSON detail: {tmp_path / 'cuda-smoke-report.json'}",
         f"  JSON detail: {tmp_path / 'observability-ingestion-report-cluster1.json'}",
     ]
     assert validation_section_lines(report) == [
         "## Validations",
         "",
         "- Overall status: `INCOMPLETE`",
-        "- Completed validations: `3/4`",
-        "- Passed: `3`",
+        "- Completed validations: `4/5`",
+        "- Passed: `4`",
         "- Failed: `0`",
         "- Not run: `1`",
         "",
@@ -125,10 +147,16 @@ def test_build_deploy_validation_report_aggregates_results(tmp_path: Path) -> No
         "- Detail report: `gpu-stack-readiness-report.json`",
         "- Summary: GPU Operator and Network Operator ready on 2 Ready GPU node(s); RDMA resources rdma/shared_device on 2 Ready GPU node(s); GPUDirect mode dma-buf.",
         "",
-        "### GPU Visibility test",
+        "### MK8s node inventory smoke",
         "",
         "- Status: `PASS`",
-        "- Detail report: `gpu-visibility-report.json`",
+        "- Detail report: `mk8s-node-inventory-smoke-report.json`",
+        "- Summary: 5/5 Kubernetes node(s) Ready; 1 CPU-only node(s); 4 Ready GPU node(s) advertise 32 allocatable GPU(s); expected at least 4 GPU node(s).",
+        "",
+        "### CUDA smoke test",
+        "",
+        "- Status: `PASS`",
+        "- Detail report: `cuda-smoke-report.json`",
         "- Summary: 2/2 selected node(s) passed; total Ready GPU nodes 4; skipped 2.",
         "",
         "### NCCL test",
@@ -152,13 +180,18 @@ def test_build_deploy_validation_report_aggregates_results(tmp_path: Path) -> No
 
 def test_clear_deploy_validation_artifacts_removes_stale_outputs(tmp_path: Path) -> None:
     validations = [
-        {"kind": "mk8s_gpu_visibility", "report_file": "gpu-visibility-report.json"},
+        {
+            "kind": "mk8s_cluster_smoke",
+            "report_file": "mk8s-node-inventory-smoke-report.json",
+        },
+        {"kind": "mk8s_cuda_smoke", "report_file": "cuda-smoke-report.json"},
         {"kind": "mk8s_nccl", "report_file": "nccl-test-report.json"},
     ]
     for name in (
         DEPLOY_REPORT_FILENAME,
         "deploy-validation-report.md",
-        "gpu-visibility-report.json",
+        "mk8s-node-inventory-smoke-report.json",
+        "cuda-smoke-report.json",
         "nccl-test-report.json",
     ):
         (tmp_path / name).write_text("data\n", encoding="utf-8")
@@ -167,7 +200,8 @@ def test_clear_deploy_validation_artifacts_removes_stale_outputs(tmp_path: Path)
 
     assert not (tmp_path / DEPLOY_REPORT_FILENAME).exists()
     assert not (tmp_path / "deploy-validation-report.md").exists()
-    assert not (tmp_path / "gpu-visibility-report.json").exists()
+    assert not (tmp_path / "mk8s-node-inventory-smoke-report.json").exists()
+    assert not (tmp_path / "cuda-smoke-report.json").exists()
     assert not (tmp_path / "nccl-test-report.json").exists()
 
 
@@ -367,9 +401,9 @@ def test_build_deploy_validation_report_formats_skipped_gpu_workload_summary(
 ) -> None:
     validations = [
         {
-            "kind": "mk8s_gpu_visibility",
-            "name": "GPU Visibility test",
-            "report_file": "gpu-visibility-report.json",
+            "kind": "mk8s_cuda_smoke",
+            "name": "CUDA smoke test",
+            "report_file": "cuda-smoke-report.json",
         },
         {
             "kind": "mk8s_nccl",
@@ -378,7 +412,7 @@ def test_build_deploy_validation_report_formats_skipped_gpu_workload_summary(
         },
     ]
     for report_name, validation in (
-        ("gpu-visibility-report.json", "GPU Visibility test"),
+        ("cuda-smoke-report.json", "CUDA smoke test"),
         ("nccl-test-report.json", "NCCL test"),
     ):
         (tmp_path / report_name).write_text(
@@ -400,10 +434,10 @@ def test_build_deploy_validation_report_formats_skipped_gpu_workload_summary(
     assert format_deploy_validation_summary_lines(report) == [
         "Deploy validation summary:",
         "  Overall: PASS (2/2 completed, 0 not run)",
-        "  PASS GPU Visibility test: Skipped: all Ready GPU nodes already have their GPUs allocated to existing workloads; total Ready GPU nodes 2.",
+        "  PASS CUDA smoke test: Skipped: all Ready GPU nodes already have their GPUs allocated to existing workloads; total Ready GPU nodes 2.",
         "  PASS NCCL test: Skipped: all Ready GPU nodes already have their GPUs allocated to existing workloads; total Ready GPU nodes 2.",
         f"  Combined report: {tmp_path / DEPLOY_REPORT_FILENAME}",
-        f"  JSON detail: {tmp_path / 'gpu-visibility-report.json'}",
+        f"  JSON detail: {tmp_path / 'cuda-smoke-report.json'}",
         f"  JSON detail: {tmp_path / 'nccl-test-report.json'}",
     ]
 
@@ -413,10 +447,10 @@ def test_build_deploy_validation_report_uses_soperator_owned_gpu_smoke_for_skips
 ) -> None:
     validations = [
         {
-            "kind": "mk8s_gpu_visibility",
-            "name": "GPU Visibility test (mk8s)",
+            "kind": "mk8s_cuda_smoke",
+            "name": "CUDA smoke test (mk8s)",
             "target_ref": "mk8s",
-            "report_file": "gpu-visibility-report-mk8s.json",
+            "report_file": "cuda-smoke-report-mk8s.json",
         },
         {
             "kind": "mk8s_nccl",
@@ -432,7 +466,7 @@ def test_build_deploy_validation_report_uses_soperator_owned_gpu_smoke_for_skips
         },
     ]
     for report_name, validation in (
-        ("gpu-visibility-report-mk8s.json", "GPU Visibility test"),
+        ("cuda-smoke-report-mk8s.json", "CUDA smoke test"),
         ("nccl-test-report-mk8s.json", "NCCL test"),
     ):
         (tmp_path / report_name).write_text(
@@ -485,7 +519,7 @@ def test_build_deploy_validation_report_uses_soperator_owned_gpu_smoke_for_skips
 
     summary_lines = format_deploy_validation_summary_lines(report)
     assert (
-        "  PASS GPU Visibility test (mk8s): Soperator-owned Slurm GPU allocation passed: "
+        "  PASS CUDA smoke test (mk8s): Soperator-owned Slurm GPU allocation passed: "
         "one-GPU Slurm allocations reported NVIDIA GPUs across all reported GPU "
         "partition nodes: gpu=2. "
         "The Kubernetes workload check was not scheduled because Soperator worker pods "
@@ -500,7 +534,7 @@ def test_build_deploy_validation_report_uses_soperator_owned_gpu_smoke_for_skips
         "reserve all Ready GPU nodes."
     ) in summary_lines
     markdown = "\n".join(validation_section_lines(report))
-    assert "### GPU Visibility test (mk8s)" in markdown
+    assert "### CUDA smoke test (mk8s)" in markdown
     assert "### NCCL test (mk8s)" in markdown
     assert "Summary: Skipped: all Ready GPU nodes" not in markdown
     assert "Soperator-owned Slurm GPU allocation passed" in markdown

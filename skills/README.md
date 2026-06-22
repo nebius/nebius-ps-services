@@ -36,6 +36,7 @@ For skill-specific release notes, see [CHANGELOG.md](CHANGELOG.md).
 - Fast local whole-repository commits on the current branch: `commit`
 - Commit and push the current feature branch: `commit-push`
 - Branch-safe GitHub pull request creation with safe check repair: `create-pr`
+- Branch-protection-respecting GitHub pull request merging: `merge-pr`
 - Read-only copy/paste-friendly local or GitHub repo code metrics: `code-info`
 - Public-safe local Codex runtime configuration: `config-codex`
 - GitHub Actions authoring and review: `github-workflows`
@@ -47,9 +48,9 @@ For skill-specific release notes, see [CHANGELOG.md](CHANGELOG.md).
 - Shell, Markdown, and Python linting: `linter`
 - Nebius cloud automation, quota, and MK8s GPU workflows: `nebius`
 - Nebius cxcli component onboarding: `onboard-nebius-cxcli`
-- Helm chart release publishing: `publish-helm`
-- Container image release publishing: `publish-image`
-- Application release publishing: `publish-release`
+- End-to-end OCI Helm chart publishing: `publish-helm`
+- End-to-end container image publishing: `publish-image`
+- End-to-end GitHub Release publishing: `publish-release`
 - Python project scaffolding and hardening: `python-project`
 - Manual release-script generation: `release-generator`
 - GitHub pull request review and merge-readiness repair: `review-pr`
@@ -78,6 +79,10 @@ $review-pr Review PR #110 against the base branch, fix safe issues on the branch
 
 $review-pr Review https://github.com/example-org/example-repo/pull/42, resolve straightforward conflicts against main if the branch is writable, and report remaining blockers.
 
+$merge-pr Merge PR #110 with squash after verifying checks, reviews, mergeability, and the head SHA without using admin bypass.
+
+$publish-image --mode complete --tag 1.2.3 --image-name ghcr.io/example-org/example-app prep, PR, merge, tag, wait for CI, verify the image digest, and report the published artifact.
+
 $agentic-sdlc-test Verify the Agentic SDLC workflow against docs/agentic-sdlc-design.md and write a safe report.
 
 $align-skill Review and standardize skills/foo against the canonical skill structure and official vendor docs.
@@ -101,15 +106,16 @@ $review-pr Review this Helm chart PR, apply the relevant sibling skills, resolve
 
 These prompts should work when the skill is installed and the local environment
 matches the task. For Git-backed flows such as `commit`, `commit-push`,
-`create-pr`, and `review-pr`, that means the current directory is inside a Git
-repository. For remote-backed flows such as `commit-push`, `create-pr`, and
-`review-pr`, that also means:
+`create-pr`, `merge-pr`, and `review-pr`, that means the current directory is
+inside a Git repository. For remote-backed flows such as `commit-push`,
+`create-pr`, `merge-pr`, `review-pr`, and the `publish-*` complete flows, that
+also means:
 
 - the repository has an `origin` remote
 - the branch state allows the requested operation
 
-For GitHub CLI backed flows such as `create-pr` and `review-pr`, that also
-means:
+For GitHub CLI backed flows such as `create-pr`, `merge-pr`, `review-pr`, and
+the `publish-*` complete flows, that also means:
 
 - `gh` is authenticated for the target repository
 
@@ -266,6 +272,17 @@ non-default branch without creating another branch, push with explicit
 refspecs, wait for available GitHub checks before calling the PR ready, and
 report readiness plus manual merge order.
 
+### `merge-pr`
+
+`merge-pr` verifies and merges a GitHub pull request outside the Agentic SDLC
+workflow. It checks PR metadata, checks, review state, mergeability, base
+branch, and the exact head SHA, waits for pending checks when useful, then
+merges with `gh pr merge --match-head-commit` using `squash` by default, or the
+no-strategy merge-queue path when the base branch requires one. It does not use
+admin bypass, force-push, delete branches by default, or merge when branch
+protection, required reviews, environment approvals, conflicts, or failing
+checks still block the PR.
+
 ### `code-info`
 
 `code-info` summarizes a local project folder or a GitHub repository with
@@ -348,21 +365,31 @@ Terraform-backed components into `nebius-cxcli`.
 
 ### `publish-helm`
 
-`publish-helm` generates a Nebius OCI Helm chart publication flow with a
-chart-local `CHANGELOG.md`, `publish-helm.sh`, and a tag-driven GitHub Actions
-workflow.
+`publish-helm` publishes an OCI Helm chart end to end from the current project
+folder. It collects chart and OCI repository inputs, can create setup assets
+when missing or explicitly requested, preps chart release changes on a feature
+branch, hands off to `create-pr` and `merge-pr`, tags from the default branch,
+waits for the tag-triggered workflow, verifies the pushed chart with
+`helm pull`, and returns a publish report.
 
 ### `publish-image`
 
-`publish-image` generates the release assets for container images, including
-`CHANGELOG.md`, `publish-image.sh`, and a tag-driven image publication
-workflow.
+`publish-image` publishes a container image end to end from the current project
+folder. It collects image and registry inputs without storing secret values,
+can create setup assets when missing or explicitly requested, preps changelog
+release changes on a feature branch, hands off to `create-pr` and `merge-pr`,
+tags from the default branch, waits for the tag-triggered workflow, verifies
+the image with `docker buildx imagetools inspect`, and returns a publish
+report.
 
 ### `publish-release`
 
-`publish-release` generates the default application release flow for this skill
-set: a `CHANGELOG.md`, `publish-release.sh`, and a tag-driven GitHub Release
-workflow.
+`publish-release` publishes a package or application release to GitHub Releases
+end to end from the current project folder. It collects package and artifact
+inputs, can create setup assets when missing or explicitly requested, preps
+release changes on a feature branch, hands off to `create-pr` and `merge-pr`,
+tags from the default branch, waits for the tag-triggered workflow, verifies
+the GitHub Release and expected assets, and returns a publish report.
 
 ### `python-project`
 

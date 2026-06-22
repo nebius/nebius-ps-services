@@ -61,7 +61,7 @@ _NCCL_DMABUF_ENV_NAME = "NCCL_DMABUF_ENABLE"
 _VALIDATION_POLL_INTERVAL_SECONDS = 5.0
 _VALIDATION_REPEAT_INTERVAL_SECONDS = 20.0
 _GPU_STACK_VALIDATION_NAME = "GPU stack readiness"
-_GPU_VISIBILITY_SERVICE_ACCOUNT = "gpu-visibility-validation"
+_CUDA_SMOKE_SERVICE_ACCOUNT = "cuda-smoke-validation"
 # Only the ActiveCheck fields that determine whether an NCCL check can launch.
 _SOPERATOR_NCCL_ACTIVECHECK_DEFAULTS: dict[str, dict[str, Any]] = {
     "all-reduce-perf-nccl-in-docker": {
@@ -110,6 +110,8 @@ class Mk8sGpuClusterContext:
     gpu_preset: str
     gpu_cluster_enabled: bool
     gpu_stack_source: str
+    gpu_node_group_names: tuple[str, ...] = ()
+    expected_gpu_node_count: int | None = None
 
 
 @dataclass(frozen=True)
@@ -124,8 +126,8 @@ class Mk8sGpuAppSelection:
 @dataclass(frozen=True)
 class Mk8sGpuValidationOverrides:
     operator_readiness_enabled: bool
-    gpu_visibility_enabled: bool
-    gpu_visibility_max_nodes: int
+    cuda_smoke_enabled: bool
+    cuda_smoke_max_nodes: int
     nccl_enabled: bool
     nccl_max_nodes: int
     nccl_average_bus_bandwidth_threshold_gbps: float
@@ -282,9 +284,9 @@ def mk8s_gpu_project_validation_defaults(
         "operator_readiness": {
             "enabled": validations.operator_readiness.enabled_by_default,
         },
-        "gpu_visibility": {
-            "enabled": validations.gpu_visibility.enabled_by_default,
-            "max_nodes": validations.gpu_visibility.max_nodes,
+        "cuda_smoke": {
+            "enabled": validations.cuda_smoke.enabled_by_default,
+            "max_nodes": validations.cuda_smoke.max_nodes,
         },
         "nccl": {
             "enabled": nccl_enabled_default,
@@ -450,6 +452,10 @@ def _prune_unavailable_health_checker_setting(settings: dict[str, Any]) -> bool:
     return True
 
 
+def _prune_non_configurable_cluster_smoke_setting(settings: dict[str, Any]) -> bool:
+    return settings.pop("cluster_smoke", None) is not None
+
+
 def normalize_mk8s_gpu_project_validation_settings(payload: dict[str, Any]) -> bool:
     payload_map = _as_payload(payload)
     if not payload_map:
@@ -536,6 +542,8 @@ def normalize_mk8s_gpu_project_validation_settings(payload: dict[str, Any]) -> b
                     disabled_by_ref=disabled_by_ref,
                 ),
             )
+        if _prune_non_configurable_cluster_smoke_setting(merged):
+            changed = True
         if _prune_unavailable_health_checker_setting(merged):
             changed = True
         if validations.get("mk8s_gpu") != merged:
@@ -689,21 +697,21 @@ def _effective_mk8s_gpu_validation_overrides(
             default=validations.operator_readiness.enabled_by_default,
             field_label="deploy.targets[].validations.mk8s_gpu.operator_readiness.enabled",
         ),
-        gpu_visibility_enabled=_resolve_project_gpu_validation_setting(
+        cuda_smoke_enabled=_resolve_project_gpu_validation_setting(
             payload,
             target_ref=target_ref,
-            dotted_path="gpu_visibility.enabled",
+            dotted_path="cuda_smoke.enabled",
             coerce=_coerce_optional_bool,
-            default=validations.gpu_visibility.enabled_by_default,
-            field_label="deploy.targets[].validations.mk8s_gpu.gpu_visibility.enabled",
+            default=validations.cuda_smoke.enabled_by_default,
+            field_label="deploy.targets[].validations.mk8s_gpu.cuda_smoke.enabled",
         ),
-        gpu_visibility_max_nodes=_resolve_project_gpu_validation_setting(
+        cuda_smoke_max_nodes=_resolve_project_gpu_validation_setting(
             payload,
             target_ref=target_ref,
-            dotted_path="gpu_visibility.max_nodes",
+            dotted_path="cuda_smoke.max_nodes",
             coerce=_coerce_optional_positive_int,
-            default=validations.gpu_visibility.max_nodes,
-            field_label="deploy.targets[].validations.mk8s_gpu.gpu_visibility.max_nodes",
+            default=validations.cuda_smoke.max_nodes,
+            field_label="deploy.targets[].validations.mk8s_gpu.cuda_smoke.max_nodes",
         ),
         nccl_enabled=_resolve_project_gpu_validation_setting(
             payload,
@@ -799,6 +807,26 @@ def _inventory_group_gpu_stack_source(raw_group: Mapping[str, Any]) -> str:
     return "nebius_image"
 
 
+def _node_group_expected_node_count(group: Any) -> int | None:
+    node_count = getattr(group, "node_count", None)
+    if isinstance(node_count, int) and not isinstance(node_count, bool):
+        return max(0, node_count)
+    min_node_count = getattr(group, "autoscaling_min_node_count", None)
+    if isinstance(min_node_count, int) and not isinstance(min_node_count, bool):
+        return max(0, min_node_count)
+    return None
+
+
+def _raw_node_group_expected_node_count(raw_group: Mapping[str, Any]) -> int | None:
+    explicit = _coerce_optional_positive_int(raw_group.get("node_count"))
+    if explicit is not None:
+        return explicit
+    autoscaling = raw_group.get("autoscaling")
+    if isinstance(autoscaling, Mapping):
+        return _coerce_optional_positive_int(autoscaling.get("min_node_count"))
+    return None
+
+
 def _external_mk8s_gpu_contexts(payload: Mapping[str, Any]) -> tuple[Mk8sGpuClusterContext, ...]:
     deploy = payload.get("deploy")
     targets = deploy.get("targets") if isinstance(deploy, Mapping) else None
@@ -841,6 +869,8 @@ def _external_mk8s_gpu_contexts(payload: Mapping[str, Any]) -> tuple[Mk8sGpuClus
                     gpu_preset=preset,
                     gpu_cluster_enabled=_inventory_group_gpu_cluster_enabled(raw_group),
                     gpu_stack_source=_inventory_group_gpu_stack_source(raw_group),
+                    gpu_node_group_names=(_as_text(raw_key),),
+                    expected_gpu_node_count=_raw_node_group_expected_node_count(raw_group),
                 )
             )
     return tuple(contexts)
@@ -878,6 +908,8 @@ def _enabled_mk8s_gpu_contexts(payload: dict[str, Any]) -> tuple[Mk8sGpuClusterC
                                 gpu_group.gpu_cluster_key or gpu_group.gpu_cluster_id
                             ),
                             gpu_stack_source=gpu_group.gpu_stack_source,
+                            gpu_node_group_names=(gpu_group.name or gpu_group.key,),
+                            expected_gpu_node_count=_node_group_expected_node_count(gpu_group),
                         )
                     )
     managed_context_refs = {context.instance_id for context in contexts}
@@ -887,6 +919,67 @@ def _enabled_mk8s_gpu_contexts(payload: dict[str, Any]) -> tuple[Mk8sGpuClusterC
         if context.instance_id not in managed_context_refs
     )
     return tuple(contexts)
+
+
+def _mk8s_gpu_contexts_by_target(
+    contexts: tuple[Mk8sGpuClusterContext, ...],
+) -> dict[str, tuple[Mk8sGpuClusterContext, ...]]:
+    grouped: dict[str, list[Mk8sGpuClusterContext]] = {}
+    for context in contexts:
+        grouped.setdefault(context.instance_id, []).append(context)
+    return {target_ref: tuple(items) for target_ref, items in grouped.items()}
+
+
+def _target_gpu_cluster_enabled(contexts: tuple[Mk8sGpuClusterContext, ...]) -> bool:
+    return any(context.gpu_cluster_enabled for context in contexts)
+
+
+def _target_expected_gpu_node_count(
+    contexts: tuple[Mk8sGpuClusterContext, ...],
+) -> int | None:
+    counts = [
+        context.expected_gpu_node_count
+        for context in contexts
+        if context.expected_gpu_node_count is not None
+    ]
+    return sum(counts) if counts else None
+
+
+def _target_expected_gpu_node_group_counts(
+    contexts: tuple[Mk8sGpuClusterContext, ...],
+) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for context in contexts:
+        if context.expected_gpu_node_count is None or context.expected_gpu_node_count <= 0:
+            continue
+        names = tuple(name for name in context.gpu_node_group_names if _as_text(name))
+        if len(names) != 1:
+            continue
+        name = names[0]
+        counts[name] = counts.get(name, 0) + context.expected_gpu_node_count
+    return dict(sorted(counts.items()))
+
+
+def _target_gpu_node_group_names(
+    contexts: tuple[Mk8sGpuClusterContext, ...],
+) -> tuple[str, ...]:
+    names = {
+        name
+        for context in contexts
+        if context.expected_gpu_node_count is None or context.expected_gpu_node_count > 0
+        for name in context.gpu_node_group_names
+        if _as_text(name)
+    }
+    return tuple(sorted(names))
+
+
+def _preferred_nccl_context(
+    contexts: tuple[Mk8sGpuClusterContext, ...],
+) -> Mk8sGpuClusterContext:
+    for context in contexts:
+        if context.gpu_cluster_enabled:
+            return context
+    return contexts[0]
 
 
 def _app_chart_row(payload: dict[str, Any], app_id: str) -> dict[str, Any] | None:
@@ -1683,20 +1776,21 @@ def mk8s_gpu_validation_specs(
     contexts = _enabled_mk8s_gpu_contexts(payload)
     if not contexts:
         return []
+    contexts_by_target = _mk8s_gpu_contexts_by_target(contexts)
     validation_overrides_by_target = {
-        context.instance_id: _effective_mk8s_gpu_validation_overrides(
+        target_ref: _effective_mk8s_gpu_validation_overrides(
             payload,
-            target_ref=context.instance_id,
+            target_ref=target_ref,
             gpu_settings=settings,
         )
-        for context in contexts
+        for target_ref in contexts_by_target
     }
     validations: list[dict[str, Any]] = []
     app_entry_by_id = {entry.id: entry for entry in component_entries("apps")}
     role_map = _mk8s_gpu_app_id_by_role()
-    # Keep the validation chain layered from cheapest to most expensive:
+    # Keep the optional GPU validation chain layered from cheapest to most expensive:
     # 1. operator/network control-plane readiness
-    # 2. bounded single-node CUDA workload visibility
+    # 2. bounded single-node CUDA workload smoke
     # 3. optional multi-node NCCL communication/performance
     # The checks are intentionally complementary rather than interchangeable.
     operator_readiness = settings.validations.operator_readiness
@@ -1719,13 +1813,13 @@ def mk8s_gpu_validation_specs(
                 "cli.mk8s_gpu_policy.role: gpu_operator, and component_sources.yaml "
                 "must declare that app release namespace"
             )
-        for context in contexts:
-            validation_overrides = validation_overrides_by_target[context.instance_id]
+        for target_ref, target_contexts in contexts_by_target.items():
+            validation_overrides = validation_overrides_by_target[target_ref]
             if not validation_overrides.operator_readiness_enabled:
                 continue
             required_app_ids = set(
                 _required_gpu_app_ids(
-                    (context,),
+                    target_contexts,
                     gpu_settings=settings,
                     health_checker_enabled=validation_overrides.health_checker_enabled,
                 )
@@ -1739,49 +1833,49 @@ def mk8s_gpu_validation_specs(
             validations.append(
                 {
                     "kind": "mk8s_gpu_operator_readiness",
-                    "target_ref": context.instance_id,
+                    "target_ref": target_ref,
                     "name": _target_scoped_validation_name(
                         _GPU_STACK_VALIDATION_NAME,
-                        target_ref=context.instance_id,
+                        target_ref=target_ref,
                     ),
                     "timeout": operator_readiness.timeout,
                     "gpu_operator_namespace": gpu_operator_namespace,
                     "network_operator_namespace": network_operator_namespace,
                     "network_operator_required": network_operator_id in required_app_ids,
-                    "gpu_cluster_enabled": context.gpu_cluster_enabled,
+                    "gpu_cluster_enabled": _target_gpu_cluster_enabled(target_contexts),
                     "report_file": _target_scoped_report_file(
                         "gpu-stack-readiness-report.json",
-                        target_ref=context.instance_id,
+                        target_ref=target_ref,
                     ),
                 }
             )
 
-    gpu_visibility = settings.validations.gpu_visibility
-    if any(item.gpu_visibility_enabled for item in validation_overrides_by_target.values()):
-        if not gpu_visibility.namespace or not gpu_visibility.image or not gpu_visibility.timeout:
+    cuda_smoke = settings.validations.cuda_smoke
+    if any(item.cuda_smoke_enabled for item in validation_overrides_by_target.values()):
+        if not cuda_smoke.namespace or not cuda_smoke.image or not cuda_smoke.timeout:
             raise ValueError(
-                "components.infra.mk8s.cli.gpu.validations.gpu_visibility must set namespace, image, and timeout"
+                "components.infra.mk8s.cli.gpu.validations.cuda_smoke must set namespace, image, and timeout"
             )
-        for context in contexts:
-            validation_overrides = validation_overrides_by_target[context.instance_id]
-            if not validation_overrides.gpu_visibility_enabled:
+        for target_ref in contexts_by_target:
+            validation_overrides = validation_overrides_by_target[target_ref]
+            if not validation_overrides.cuda_smoke_enabled:
                 continue
             validations.append(
                 {
-                    "kind": "mk8s_gpu_visibility",
-                    "target_ref": context.instance_id,
+                    "kind": "mk8s_cuda_smoke",
+                    "target_ref": target_ref,
                     "name": _target_scoped_validation_name(
-                        "GPU Visibility test",
-                        target_ref=context.instance_id,
+                        "CUDA smoke test",
+                        target_ref=target_ref,
                     ),
-                    "namespace": gpu_visibility.namespace,
-                    "image": gpu_visibility.image,
-                    "timeout": gpu_visibility.timeout,
-                    "cleanup": gpu_visibility.cleanup,
-                    "max_nodes": validation_overrides.gpu_visibility_max_nodes,
+                    "namespace": cuda_smoke.namespace,
+                    "image": cuda_smoke.image,
+                    "timeout": cuda_smoke.timeout,
+                    "cleanup": cuda_smoke.cleanup,
+                    "max_nodes": validation_overrides.cuda_smoke_max_nodes,
                     "report_file": _target_scoped_report_file(
-                        "gpu-visibility-report.json",
-                        target_ref=context.instance_id,
+                        "cuda-smoke-report.json",
+                        target_ref=target_ref,
                     ),
                 }
             )
@@ -1818,10 +1912,11 @@ def mk8s_gpu_validation_specs(
             _defaults_to_mapping(chart_entry.defaults, strip_root="values"),
         )
         namespace = _as_text(chart_entry.namespace) or nccl.chart_component_id
-        for context in contexts:
-            validation_overrides = validation_overrides_by_target[context.instance_id]
+        for target_ref, target_contexts in contexts_by_target.items():
+            validation_overrides = validation_overrides_by_target[target_ref]
             if not validation_overrides.nccl_enabled:
                 continue
+            context = _preferred_nccl_context(target_contexts)
             gpu_count, allow_gpu_clustering = _mk8s_gpu_shape_capabilities(payload, context=context)
             nccl_context = Mk8sNcclValidationContext(
                 context=context,
@@ -1865,10 +1960,10 @@ def mk8s_gpu_validation_specs(
             validations.append(
                 {
                     "kind": "mk8s_nccl",
-                    "target_ref": context.instance_id,
+                    "target_ref": target_ref,
                     "name": _target_scoped_validation_name(
                         "NCCL test",
-                        target_ref=context.instance_id,
+                        target_ref=target_ref,
                     ),
                     "chart_component_id": nccl.chart_component_id,
                     "chart_name_or_ref": chart_name_or_ref,
@@ -1887,11 +1982,44 @@ def mk8s_gpu_validation_specs(
                     "transport_mode": nccl_context.transport_mode,
                     "report_file": _target_scoped_report_file(
                         "nccl-test-report.json",
-                        target_ref=context.instance_id,
+                        target_ref=target_ref,
                     ),
                 }
             )
 
+    return validations
+
+
+def mk8s_cluster_smoke_validation_specs(payload_or_config: Any) -> list[dict[str, Any]]:
+    payload = _as_payload(payload_or_config)
+    target_refs = enabled_cluster_target_refs(payload)
+    if not target_refs:
+        return []
+    contexts_by_target = _mk8s_gpu_contexts_by_target(_enabled_mk8s_gpu_contexts(payload))
+    validations: list[dict[str, Any]] = []
+    for target_ref in target_refs:
+        target_contexts = contexts_by_target.get(target_ref, ())
+        spec: dict[str, Any] = {
+            "kind": "mk8s_cluster_smoke",
+            "target_ref": target_ref,
+            "name": _target_scoped_validation_name(
+                "MK8s node inventory smoke",
+                target_ref=target_ref,
+            ),
+            "required": True,
+            "expect_gpu_nodes": bool(target_contexts),
+            "expected_gpu_node_count": _target_expected_gpu_node_count(target_contexts),
+            "expected_gpu_node_groups": _target_gpu_node_group_names(target_contexts),
+            "expected_gpu_node_group_counts": _target_expected_gpu_node_group_counts(
+                target_contexts
+            ),
+            "gpu_cluster_enabled": _target_gpu_cluster_enabled(target_contexts),
+            "report_file": _target_scoped_report_file(
+                "mk8s-node-inventory-smoke-report.json",
+                target_ref=target_ref,
+            ),
+        }
+        validations.append(spec)
     return validations
 
 
@@ -2398,7 +2526,7 @@ def _report_log_excerpt(logs: str, *, limit: int) -> str:
     return text[-limit:]
 
 
-def _gpu_visibility_node_report(
+def _cuda_smoke_node_report(
     *,
     node_name: str,
     pod_name: str,
@@ -2700,6 +2828,17 @@ def _gpu_nodes(*, extra_env: dict[str, str] | None) -> list[dict[str, Any]]:
     ]
 
 
+def _node_ready(conditions: Any) -> bool:
+    if not isinstance(conditions, list):
+        return False
+    return any(
+        isinstance(condition, dict)
+        and _as_text(condition.get("type")) == "Ready"
+        and _as_text(condition.get("status")) == "True"
+        for condition in conditions
+    )
+
+
 def _parse_kubernetes_quantity(raw: Any) -> Decimal | None:
     normalized = _as_text(raw)
     if not normalized:
@@ -2746,7 +2885,7 @@ def _format_memory_bytes_as_binary_quantity(bytes_value: int) -> str:
     return f"{mebibytes}Mi"
 
 
-def _ready_node_inventory(*, extra_env: dict[str, str] | None) -> list[dict[str, Any]]:
+def _node_inventory(*, extra_env: dict[str, str] | None) -> list[dict[str, Any]]:
     payload = _kubectl_json(["get", "nodes", "-o", "json"], extra_env=extra_env)
     items = payload.get("items")
     if not isinstance(items, list):
@@ -2760,21 +2899,22 @@ def _ready_node_inventory(*, extra_env: dict[str, str] | None) -> list[dict[str,
         if not isinstance(metadata, dict) or not isinstance(status, dict):
             continue
         name = _as_text(metadata.get("name"))
+        labels = metadata.get("labels")
+        if not isinstance(labels, Mapping):
+            labels = {}
         allocatable = status.get("allocatable")
         conditions = status.get("conditions")
         if not name or not isinstance(allocatable, dict) or not isinstance(conditions, list):
             continue
-        ready = any(
-            isinstance(condition, dict)
-            and _as_text(condition.get("type")) == "Ready"
-            and _as_text(condition.get("status")) == "True"
-            for condition in conditions
-        )
-        if not ready:
-            continue
         nodes.append(
             {
                 "name": name,
+                "ready": _node_ready(conditions),
+                "node_group": _as_text(labels.get("nebius.com/node-group")) or "<none>",
+                "instance_type": (
+                    _as_text(labels.get("node.kubernetes.io/instance-type"))
+                    or _as_text(labels.get("beta.kubernetes.io/instance-type"))
+                ),
                 "gpu_count": _parse_gpu_quantity(allocatable.get("nvidia.com/gpu")),
                 "allocatable_cpu_millicores": _parse_cpu_millicores(allocatable.get("cpu")),
                 "allocatable_memory_bytes": _parse_memory_bytes(allocatable.get("memory")),
@@ -2782,6 +2922,10 @@ def _ready_node_inventory(*, extra_env: dict[str, str] | None) -> list[dict[str,
             }
         )
     return nodes
+
+
+def _ready_node_inventory(*, extra_env: dict[str, str] | None) -> list[dict[str, Any]]:
+    return [node for node in _node_inventory(extra_env=extra_env) if bool(node.get("ready"))]
 
 
 def _pod_request_totals_by_node(
@@ -3092,6 +3236,251 @@ def _nccl_live_runtime_overrides(
     return overrides, metadata
 
 
+def _node_inventory_group_summary(nodes: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    groups: dict[str, dict[str, Any]] = {}
+    for node in nodes:
+        group_name = _as_text(node.get("node_group")) or "<none>"
+        group = groups.setdefault(
+            group_name,
+            {
+                "node_group": group_name,
+                "node_count": 0,
+                "ready_node_count": 0,
+                "cpu_node_count": 0,
+                "gpu_node_count": 0,
+                "allocatable_gpu_count": 0,
+                "rdma_resource_node_count": 0,
+                "nvidia_resource_names": set(),
+                "rdma_resource_names": set(),
+            },
+        )
+        gpu_count = int(node.get("gpu_count", 0) or 0)
+        allocatable_resources = (
+            node.get("allocatable_resources", {})
+            if isinstance(node.get("allocatable_resources"), Mapping)
+            else {}
+        )
+        group["node_count"] += 1
+        if bool(node.get("ready")):
+            group["ready_node_count"] += 1
+        if gpu_count > 0:
+            group["gpu_node_count"] += 1
+            group["allocatable_gpu_count"] += gpu_count
+        else:
+            group["cpu_node_count"] += 1
+        rdma_keys = _rdma_resource_keys(allocatable_resources)
+        if rdma_keys:
+            group["rdma_resource_node_count"] += 1
+            group["rdma_resource_names"].update(rdma_keys)
+        group["nvidia_resource_names"].update(
+            key for key in allocatable_resources if _is_nvidia_extended_resource_name(key)
+        )
+
+    summaries: list[dict[str, Any]] = []
+    for group_name in sorted(groups):
+        group = dict(groups[group_name])
+        group["nvidia_resource_names"] = sorted(group["nvidia_resource_names"])
+        group["rdma_resource_names"] = sorted(group["rdma_resource_names"])
+        summaries.append(group)
+    return summaries
+
+
+def _node_inventory_report_node(node: Mapping[str, Any]) -> dict[str, Any]:
+    report = {
+        "node_name": _as_text(node.get("name")),
+        "ready": bool(node.get("ready")),
+        "node_group": _as_text(node.get("node_group")) or "<none>",
+        "instance_type": _as_text(node.get("instance_type")),
+        "gpu_count": int(node.get("gpu_count", 0) or 0),
+    }
+    allocatable_resources = node.get("allocatable_resources")
+    if isinstance(allocatable_resources, Mapping) and allocatable_resources:
+        report["allocatable_resources"] = dict(allocatable_resources)
+    return report
+
+
+def _cluster_smoke_check(
+    *,
+    name: str,
+    passed: bool,
+    summary: str,
+) -> dict[str, Any]:
+    return {
+        "name": name,
+        "status": "passed" if passed else "failed",
+        "passed": passed,
+        "summary": summary,
+    }
+
+
+def _run_cluster_smoke_validation(
+    *,
+    spec: dict[str, Any],
+    reports_dir: Path,
+    extra_env: dict[str, str] | None,
+    emit: Callable[[str], None] | None,
+) -> Path:
+    report_path = reports_dir / _as_text(spec.get("report_file"))
+    nodes = _node_inventory(extra_env=extra_env)
+    ready_nodes = [node for node in nodes if bool(node.get("ready"))]
+    non_ready_nodes = [node for node in nodes if not bool(node.get("ready"))]
+    gpu_nodes = [node for node in nodes if int(node.get("gpu_count", 0) or 0) > 0]
+    ready_gpu_nodes = [node for node in gpu_nodes if bool(node.get("ready"))]
+    cpu_nodes = [node for node in nodes if int(node.get("gpu_count", 0) or 0) <= 0]
+    ready_gpu_count = sum(int(node.get("gpu_count", 0) or 0) for node in ready_gpu_nodes)
+    expect_gpu_nodes = bool(spec.get("expect_gpu_nodes", True))
+    expected_gpu_node_count = _coerce_optional_positive_int(spec.get("expected_gpu_node_count"))
+    raw_expected_groups = spec.get("expected_gpu_node_groups")
+    expected_gpu_node_groups = (
+        tuple(_as_text(item) for item in raw_expected_groups if _as_text(item))
+        if isinstance(raw_expected_groups, list | tuple)
+        else ()
+    )
+    raw_expected_group_counts = spec.get("expected_gpu_node_group_counts")
+    expected_gpu_node_group_counts: dict[str, int] = {}
+    if isinstance(raw_expected_group_counts, Mapping):
+        for raw_group_name, raw_count in raw_expected_group_counts.items():
+            group_name = _as_text(raw_group_name)
+            count = _coerce_optional_positive_int(raw_count)
+            if group_name and count is not None:
+                expected_gpu_node_group_counts[group_name] = count
+    ready_gpu_node_counts_by_group: dict[str, int] = {}
+    for node in ready_gpu_nodes:
+        group_name = _as_text(node.get("node_group")) or "<none>"
+        ready_gpu_node_counts_by_group[group_name] = (
+            ready_gpu_node_counts_by_group.get(group_name, 0) + 1
+        )
+
+    node_inventory_passed = bool(nodes) and not non_ready_nodes
+    gpu_inventory_passed = not expect_gpu_nodes or bool(ready_gpu_nodes)
+    expected_gpu_count_passed = (
+        expected_gpu_node_count is None or len(ready_gpu_nodes) >= expected_gpu_node_count
+    )
+    missing_expected_groups = [
+        group_name
+        for group_name in expected_gpu_node_groups
+        if ready_gpu_node_counts_by_group.get(group_name, 0) <= 0
+    ]
+    expected_groups_passed = not missing_expected_groups
+    expected_group_count_failures = {
+        group_name: {
+            "ready": ready_gpu_node_counts_by_group.get(group_name, 0),
+            "expected": expected_count,
+        }
+        for group_name, expected_count in expected_gpu_node_group_counts.items()
+        if ready_gpu_node_counts_by_group.get(group_name, 0) < expected_count
+    }
+    expected_group_counts_passed = not expected_group_count_failures
+    node_summary = (
+        f"{len(ready_nodes)}/{len(nodes)} Kubernetes node(s) Ready"
+        if nodes
+        else "Kubernetes API returned no nodes"
+    )
+    gpu_summary = (
+        f"{len(ready_gpu_nodes)} Ready GPU node(s) advertise "
+        f"{ready_gpu_count} allocatable GPU(s)"
+    )
+    checks = [
+        _cluster_smoke_check(
+            name="Kubernetes node readiness",
+            passed=node_inventory_passed,
+            summary=node_summary,
+        ),
+        _cluster_smoke_check(
+            name="Scheduler-visible GPU inventory",
+            passed=gpu_inventory_passed,
+            summary=gpu_summary,
+        ),
+    ]
+    if expected_gpu_node_count is not None:
+        checks.append(
+            _cluster_smoke_check(
+                name="Expected GPU node lower bound",
+                passed=expected_gpu_count_passed,
+                summary=(
+                    f"{len(ready_gpu_nodes)} Ready GPU node(s) discovered; "
+                    f"expected at least {expected_gpu_node_count}"
+                ),
+            )
+        )
+    if expected_gpu_node_groups:
+        if expected_groups_passed:
+            expected_groups_summary = "Ready GPU nodes found in expected group(s): " + ", ".join(
+                f"{group_name}={ready_gpu_node_counts_by_group.get(group_name, 0)}"
+                for group_name in expected_gpu_node_groups
+            )
+        else:
+            expected_groups_summary = "Missing Ready GPU nodes in expected group(s): " + ", ".join(
+                missing_expected_groups
+            )
+        checks.append(
+            _cluster_smoke_check(
+                name="Expected GPU node groups",
+                passed=expected_groups_passed,
+                summary=expected_groups_summary,
+            )
+        )
+    if expected_gpu_node_group_counts:
+        if expected_group_counts_passed:
+            expected_group_counts_summary = (
+                "Ready GPU node lower bounds met for expected group(s): "
+                + ", ".join(
+                    f"{group_name}={ready_gpu_node_counts_by_group.get(group_name, 0)}/{expected_count}"
+                    for group_name, expected_count in expected_gpu_node_group_counts.items()
+                )
+            )
+        else:
+            expected_group_counts_summary = (
+                "Ready GPU node lower bounds missed for expected group(s): "
+                + ", ".join(
+                    f"{group_name}={failure['ready']}/{failure['expected']}"
+                    for group_name, failure in expected_group_count_failures.items()
+                )
+            )
+        checks.append(
+            _cluster_smoke_check(
+                name="Expected GPU node group lower bounds",
+                passed=expected_group_counts_passed,
+                summary=expected_group_counts_summary,
+            )
+        )
+    passed = all(bool(item["passed"]) for item in checks)
+    if emit:
+        emit(f"MK8s node inventory smoke: {node_summary}; {gpu_summary}.")
+
+    report = {
+        "validation": "MK8s node inventory smoke",
+        "kind": "mk8s_cluster_smoke",
+        "target_ref": _as_text(spec.get("target_ref")),
+        "read_only": True,
+        "passed": passed,
+        "summary": f"{node_summary}; {gpu_summary}.",
+        "total_node_count": len(nodes),
+        "ready_node_count": len(ready_nodes),
+        "non_ready_node_count": len(non_ready_nodes),
+        "cpu_node_count": len(cpu_nodes),
+        "gpu_node_count": len(gpu_nodes),
+        "ready_gpu_node_count": len(ready_gpu_nodes),
+        "allocatable_gpu_count": ready_gpu_count,
+        "expected_gpu_node_count": expected_gpu_node_count,
+        "expected_gpu_node_groups": list(expected_gpu_node_groups),
+        "expected_gpu_node_group_counts": expected_gpu_node_group_counts,
+        "ready_gpu_node_counts_by_expected_group": {
+            group_name: ready_gpu_node_counts_by_group.get(group_name, 0)
+            for group_name in expected_gpu_node_groups
+        },
+        "gpu_cluster_enabled": bool(spec.get("gpu_cluster_enabled")),
+        "node_groups": _node_inventory_group_summary(nodes),
+        "device_plugin_snapshot": _gpu_device_plugin_snapshot(ready_gpu_nodes),
+        "checks": checks,
+        "nodes": [_node_inventory_report_node(node) for node in nodes],
+    }
+    _write_report(report_path, report)
+    if not passed:
+        raise RuntimeError(f"MK8s node inventory smoke failed. Report: {report_path}")
+    return report_path
+
+
 def _select_gpu_validation_nodes(
     nodes: list[dict[str, Any]],
     *,
@@ -3147,16 +3536,16 @@ def _delete_resource(
         return
 
 
-def _gpu_visibility_pod_name(node_name: str, *, run_token: str) -> str:
+def _cuda_smoke_pod_name(node_name: str, *, run_token: str) -> str:
     slug = re.sub(r"[^a-z0-9-]+", "-", node_name.strip().lower()).strip("-")
-    return f"gpu-visibility-{slug[:39]}-{run_token[:8]}"
+    return f"cuda-smoke-{slug[:39]}-{run_token[:8]}"
 
 
-def _gpu_visibility_selector(*, run_token: str) -> str:
+def _cuda_smoke_selector(*, run_token: str) -> str:
     return ",".join(
         (
-            "app.kubernetes.io/name=gpu-visibility-test",
-            "app.kubernetes.io/component=gpu-visibility-validation",
+            "app.kubernetes.io/name=cuda-smoke-test",
+            "app.kubernetes.io/component=cuda-smoke-validation",
             f"nebius.cxcli.validation-run={run_token}",
         )
     )
@@ -3196,7 +3585,7 @@ def _pod_phase_snapshot(
     return phase_by_name, all_terminal, any_failed, summary
 
 
-def _run_gpu_visibility_validation(
+def _run_cuda_smoke_validation(
     *,
     spec: dict[str, Any],
     reports_dir: Path,
@@ -3212,7 +3601,7 @@ def _run_gpu_visibility_validation(
     all_nodes = _gpu_nodes(extra_env=extra_env)
     if not all_nodes:
         raise RuntimeError(
-            "GPU Visibility test could not find any Ready Kubernetes node with allocatable GPUs"
+            "CUDA smoke test could not find any Ready Kubernetes node with allocatable GPUs"
         )
     requested_by_node = _pod_request_totals_by_node(extra_env=extra_env)
     free_nodes, saturated_nodes = _gpu_nodes_with_free_capacity(all_nodes, requested_by_node)
@@ -3221,9 +3610,9 @@ def _run_gpu_visibility_validation(
     if not free_nodes:
         skip_reason = "all Ready GPU nodes already have their GPUs allocated to existing workloads"
         if emit:
-            emit(f"Skipping GPU Visibility test: {skip_reason}.")
+            emit(f"Skipping CUDA smoke test: {skip_reason}.")
         report = {
-            "validation": "GPU Visibility test",
+            "validation": "CUDA smoke test",
             "namespace": namespace,
             "image": image,
             "max_nodes": max_nodes,
@@ -3253,11 +3642,11 @@ def _run_gpu_visibility_validation(
     nodes, _free_gpu_node_count = _select_gpu_validation_nodes(free_nodes, max_nodes=max_nodes)
     skipped_nodes = max(0, total_gpu_nodes - len(nodes))
     run_token = _validation_run_token()
-    label_selector = _gpu_visibility_selector(run_token=run_token)
+    label_selector = _cuda_smoke_selector(run_token=run_token)
 
     if emit:
         message = (
-            f"Running GPU Visibility test on {len(nodes)} of {total_gpu_nodes} Ready GPU node(s)"
+            f"Running CUDA smoke test on {len(nodes)} of {total_gpu_nodes} Ready GPU node(s)"
             f" (max_nodes={max_nodes})."
         )
         if skipped_nodes:
@@ -3273,11 +3662,11 @@ def _run_gpu_visibility_validation(
         "apiVersion": "v1",
         "kind": "ServiceAccount",
         "metadata": {
-            "name": _GPU_VISIBILITY_SERVICE_ACCOUNT,
+            "name": _CUDA_SMOKE_SERVICE_ACCOUNT,
             "namespace": namespace,
             "labels": {
-                "app.kubernetes.io/name": "gpu-visibility-test",
-                "app.kubernetes.io/component": "gpu-visibility-validation",
+                "app.kubernetes.io/name": "cuda-smoke-test",
+                "app.kubernetes.io/component": "cuda-smoke-validation",
             },
         },
     }
@@ -3286,7 +3675,7 @@ def _run_gpu_visibility_validation(
     try:
         docs: list[dict[str, Any]] = [service_account_doc]
         for node in nodes:
-            pod_name = _gpu_visibility_pod_name(node["name"], run_token=run_token)
+            pod_name = _cuda_smoke_pod_name(node["name"], run_token=run_token)
             pod_names.append(pod_name)
             docs.append(
                 {
@@ -3296,14 +3685,14 @@ def _run_gpu_visibility_validation(
                         "name": pod_name,
                         "namespace": namespace,
                         "labels": {
-                            "app.kubernetes.io/name": "gpu-visibility-test",
-                            "app.kubernetes.io/component": "gpu-visibility-validation",
+                            "app.kubernetes.io/name": "cuda-smoke-test",
+                            "app.kubernetes.io/component": "cuda-smoke-validation",
                             "nebius.cxcli.validation-run": run_token,
                         },
                     },
                     "spec": {
                         "restartPolicy": "Never",
-                        "serviceAccountName": _GPU_VISIBILITY_SERVICE_ACCOUNT,
+                        "serviceAccountName": _CUDA_SMOKE_SERVICE_ACCOUNT,
                         "automountServiceAccountToken": False,
                         "nodeName": node["name"],
                         "tolerations": [{"operator": "Exists"}],
@@ -3345,7 +3734,7 @@ def _run_gpu_visibility_validation(
             ):
                 elapsed = int(max(0.0, now - (deadline - timeout_seconds)))
                 emit(
-                    f"GPU Visibility test [{elapsed}s] "
+                    f"CUDA smoke test [{elapsed}s] "
                     f"{len([phase for phase in phases.values() if phase in {'Succeeded', 'Failed'}])}/{len(pod_names)} terminal; "
                     f"{summary}"
                 )
@@ -3356,7 +3745,7 @@ def _run_gpu_visibility_validation(
             if now >= deadline:
                 detail = f" Last pod poll error: {last_poll_error}" if last_poll_error else ""
                 raise RuntimeError(
-                    f"Timed out waiting for GPU Visibility pods in namespace '{namespace}' to finish.{detail}"
+                    f"Timed out waiting for CUDA smoke pods in namespace '{namespace}' to finish.{detail}"
                 )
             time.sleep(_VALIDATION_POLL_INTERVAL_SECONDS)
         results: list[dict[str, Any]] = []
@@ -3376,7 +3765,7 @@ def _run_gpu_visibility_validation(
                 pod_passed = True
             passed = passed and pod_passed and phase == "Succeeded"
             results.append(
-                _gpu_visibility_node_report(
+                _cuda_smoke_node_report(
                     node_name=node["name"],
                     pod_name=pod_name,
                     gpu_count=node["gpu_count"],
@@ -3392,7 +3781,7 @@ def _run_gpu_visibility_validation(
             )
         passed_node_count = sum(1 for item in results if bool(item.get("passed")))
         report = {
-            "validation": "GPU Visibility test",
+            "validation": "CUDA smoke test",
             "namespace": namespace,
             "image": image,
             "max_nodes": max_nodes,
@@ -3407,7 +3796,7 @@ def _run_gpu_visibility_validation(
         }
         _write_report(report_path, report)
         if not passed:
-            raise RuntimeError(f"GPU Visibility test failed. Report: {report_path}")
+            raise RuntimeError(f"CUDA smoke test failed. Report: {report_path}")
         return report_path
     finally:
         if cleanup:
@@ -4224,9 +4613,18 @@ def run_mk8s_gpu_validations(
                         emit=emit,
                     )
                 )
-            elif kind == "mk8s_gpu_visibility":
+            elif kind == "mk8s_cluster_smoke":
                 written_reports.append(
-                    _run_gpu_visibility_validation(
+                    _run_cluster_smoke_validation(
+                        spec=spec,
+                        reports_dir=reports_dir,
+                        extra_env=extra_env,
+                        emit=emit,
+                    )
+                )
+            elif kind == "mk8s_cuda_smoke":
+                written_reports.append(
+                    _run_cuda_smoke_validation(
                         spec=spec,
                         reports_dir=reports_dir,
                         extra_env=extra_env,
@@ -4260,6 +4658,7 @@ __all__ = [
     "mk8s_gpu_flux_release_post_render_patches",
     "mk8s_gpu_nccl_enabled_default",
     "mk8s_gpu_validation_specs",
+    "mk8s_cluster_smoke_validation_specs",
     "mk8s_gpu_validation_warnings",
     "prune_inactive_mk8s_gpu_app_rows",
     "resolve_mk8s_gpu_app_selection",

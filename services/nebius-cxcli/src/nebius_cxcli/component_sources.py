@@ -187,7 +187,7 @@ class Mk8sGpuOperatorReadinessSettings:
 
 
 @dataclass(frozen=True)
-class Mk8sGpuVisibilitySettings:
+class Mk8sCudaSmokeSettings:
     enabled_by_default: bool = False
     namespace: str = ""
     image: str = ""
@@ -216,7 +216,7 @@ class Mk8sGpuHealthCheckerSettings:
 @dataclass(frozen=True)
 class Mk8sGpuValidationSettings:
     operator_readiness: Mk8sGpuOperatorReadinessSettings = Mk8sGpuOperatorReadinessSettings()
-    gpu_visibility: Mk8sGpuVisibilitySettings = Mk8sGpuVisibilitySettings()
+    cuda_smoke: Mk8sCudaSmokeSettings = Mk8sCudaSmokeSettings()
     nccl: Mk8sNcclSettings = Mk8sNcclSettings()
     health_checker: Mk8sGpuHealthCheckerSettings = Mk8sGpuHealthCheckerSettings()
 
@@ -1558,13 +1558,13 @@ def _parse_mk8s_gpu_operator_readiness_settings(
     )
 
 
-def _parse_mk8s_gpu_visibility_settings(
+def _parse_mk8s_cuda_smoke_settings(
     raw: Any,
     *,
     field_label: str,
-) -> Mk8sGpuVisibilitySettings:
+) -> Mk8sCudaSmokeSettings:
     if raw is None:
-        return Mk8sGpuVisibilitySettings()
+        return Mk8sCudaSmokeSettings()
     if not isinstance(raw, dict):
         raise ValueError(f"{field_label} must be a mapping")
     supported_keys = {"enabled_by_default", "namespace", "image", "timeout", "cleanup", "max_nodes"}
@@ -1574,14 +1574,14 @@ def _parse_mk8s_gpu_visibility_settings(
     timeout = _as_text(raw.get("timeout"))
     if timeout and not GO_DURATION_RE.fullmatch(timeout):
         raise ValueError(f"{field_label}.timeout must be a Go-style duration like '10m' or '45s'")
-    max_nodes_raw = raw.get("max_nodes", Mk8sGpuVisibilitySettings().max_nodes)
+    max_nodes_raw = raw.get("max_nodes", Mk8sCudaSmokeSettings().max_nodes)
     try:
         max_nodes = int(max_nodes_raw)
     except (TypeError, ValueError) as exc:
         raise ValueError(f"{field_label}.max_nodes must be an integer >= 1") from exc
     if max_nodes < 1:
         raise ValueError(f"{field_label}.max_nodes must be >= 1")
-    return Mk8sGpuVisibilitySettings(
+    return Mk8sCudaSmokeSettings(
         enabled_by_default=bool(raw.get("enabled_by_default", True)),
         namespace=_as_text(raw.get("namespace")),
         image=_as_text(raw.get("image")),
@@ -1686,7 +1686,12 @@ def _parse_mk8s_gpu_validation_settings(
         return Mk8sGpuValidationSettings()
     if not isinstance(raw, dict):
         raise ValueError(f"{field_label} must be a mapping")
-    supported_keys = {"operator_readiness", "gpu_visibility", "nccl", "health_checker"}
+    supported_keys = {
+        "operator_readiness",
+        "cuda_smoke",
+        "nccl",
+        "health_checker",
+    }
     unknown = sorted(str(key) for key in raw if str(key) not in supported_keys)
     if unknown:
         raise ValueError(f"{field_label} has unsupported field(s): " + ", ".join(unknown))
@@ -1695,9 +1700,9 @@ def _parse_mk8s_gpu_validation_settings(
             raw.get("operator_readiness"),
             field_label=f"{field_label}.operator_readiness",
         ),
-        gpu_visibility=_parse_mk8s_gpu_visibility_settings(
-            raw.get("gpu_visibility"),
-            field_label=f"{field_label}.gpu_visibility",
+        cuda_smoke=_parse_mk8s_cuda_smoke_settings(
+            raw.get("cuda_smoke"),
+            field_label=f"{field_label}.cuda_smoke",
         ),
         nccl=_parse_mk8s_nccl_settings(
             raw.get("nccl"),
@@ -1783,7 +1788,7 @@ def _parse_mk8s_gpu_app_policy(
     )
     supported_target_validations = {
         "operator_readiness",
-        "gpu_visibility",
+        "cuda_smoke",
         "nccl",
         "health_checker",
     }
@@ -3446,14 +3451,14 @@ def _derived_mk8s_gpu_validation_wizard_fields(
             "required": True,
             "type_hint": "bool",
         },
-        "deploy.targets[].validations.mk8s_gpu.gpu_visibility.enabled": {
-            "default": validations.gpu_visibility.enabled_by_default,
+        "deploy.targets[].validations.mk8s_gpu.cuda_smoke.enabled": {
+            "default": validations.cuda_smoke.enabled_by_default,
             "write_default_to_config": True,
             "required": True,
             "type_hint": "bool",
         },
-        "deploy.targets[].validations.mk8s_gpu.gpu_visibility.max_nodes": {
-            "default": validations.gpu_visibility.max_nodes,
+        "deploy.targets[].validations.mk8s_gpu.cuda_smoke.max_nodes": {
+            "default": validations.cuda_smoke.max_nodes,
             "write_default_to_config": True,
             "type_hint": "number",
         },

@@ -2180,7 +2180,7 @@ def analyze_soperator_onboarding_snapshot(
             gpu_stack_message = (
                 "Live GPU stack evidence is healthy for the discovered GPU node groups; "
                 "cxcli will keep the target GPU stack selected for adoption/reconciliation "
-                "and deploy-time GPU readiness, GPU Visibility, and NCCL validations. "
+                "and deploy-time GPU readiness, CUDA smoke, and NCCL validations. "
                 "This is not a failure signal."
             )
         elif gpu_stack_evidence.get("live_evidence_available"):
@@ -2190,7 +2190,7 @@ def analyze_soperator_onboarding_snapshot(
                 "GPU node groups were discovered, but live GPU-stack evidence is incomplete "
                 "or not fully healthy in the onboarding snapshot; cxcli will reconcile the "
                 "target GPU Operator, Network Operator when GPU-cluster/RDMA-capable, and "
-                "deploy-time GPU readiness, GPU Visibility, and NCCL validations."
+                "deploy-time GPU readiness, CUDA smoke, and NCCL validations."
             )
         else:
             gpu_stack_status = "reconcile-planned"
@@ -2198,7 +2198,7 @@ def analyze_soperator_onboarding_snapshot(
             gpu_stack_message = (
                 "GPU node groups were discovered; cxcli will manage the target GPU stack as "
                 "desired state, including GPU Operator, Network Operator when the target is "
-                "GPU-cluster/RDMA-capable, and deploy-time GPU readiness, GPU Visibility, "
+                "GPU-cluster/RDMA-capable, and deploy-time GPU readiness, CUDA smoke, "
                 "and NCCL validations. This does not mean the current stack is broken."
             )
         findings.append(

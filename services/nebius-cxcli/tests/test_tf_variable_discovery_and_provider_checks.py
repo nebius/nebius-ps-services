@@ -5267,8 +5267,8 @@ def test_wizard_skips_irrelevant_mk8s_gpu_validation_prompts_until_gpu_cluster_i
         source="../../platform-infra/modules/mk8s",
         wizard_fields={
             "deploy.targets[].validations.mk8s_gpu.operator_readiness.enabled": {"default": True},
-            "deploy.targets[].validations.mk8s_gpu.gpu_visibility.enabled": {"default": True},
-            "deploy.targets[].validations.mk8s_gpu.gpu_visibility.max_nodes": {"default": 3},
+            "deploy.targets[].validations.mk8s_gpu.cuda_smoke.enabled": {"default": True},
+            "deploy.targets[].validations.mk8s_gpu.cuda_smoke.max_nodes": {"default": 3},
             "deploy.targets[].validations.mk8s_gpu.nccl.enabled": {
                 "default": True,
                 "write_default_to_config": True,
@@ -5325,8 +5325,8 @@ def test_wizard_skips_irrelevant_mk8s_gpu_validation_prompts_until_gpu_cluster_i
 
     assert completed is True
     assert "deploy.targets[0].validations.mk8s_gpu.operator_readiness.enabled" in prompted_paths
-    assert "deploy.targets[0].validations.mk8s_gpu.gpu_visibility.enabled" in prompted_paths
-    assert "deploy.targets[0].validations.mk8s_gpu.gpu_visibility.max_nodes" in prompted_paths
+    assert "deploy.targets[0].validations.mk8s_gpu.cuda_smoke.enabled" in prompted_paths
+    assert "deploy.targets[0].validations.mk8s_gpu.cuda_smoke.max_nodes" in prompted_paths
     assert "deploy.targets[0].validations.mk8s_gpu.nccl.enabled" in prompted_paths
     assert prompt_currents["deploy.targets[0].validations.mk8s_gpu.nccl.enabled"] == [True]
     assert "deploy.targets[0].validations.mk8s_gpu.nccl.max_nodes" in prompted_paths
@@ -5382,8 +5382,8 @@ def test_wizard_defaults_mk8s_nccl_off_for_single_gpu_shape(monkeypatch) -> None
         source="../../platform-infra/modules/mk8s",
         wizard_fields={
             "deploy.targets[].validations.mk8s_gpu.operator_readiness.enabled": {"default": True},
-            "deploy.targets[].validations.mk8s_gpu.gpu_visibility.enabled": {"default": True},
-            "deploy.targets[].validations.mk8s_gpu.gpu_visibility.max_nodes": {"default": 3},
+            "deploy.targets[].validations.mk8s_gpu.cuda_smoke.enabled": {"default": True},
+            "deploy.targets[].validations.mk8s_gpu.cuda_smoke.max_nodes": {"default": 3},
             "deploy.targets[].validations.mk8s_gpu.nccl.enabled": {
                 "default": True,
                 "write_default_to_config": True,

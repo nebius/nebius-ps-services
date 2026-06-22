@@ -234,6 +234,7 @@ from .mk8s_gpu import (
     ensure_mk8s_gpu_app_rows,
     has_mk8s_gpu_health_checker_app,
     materialize_mk8s_gpu_app_values,
+    mk8s_cluster_smoke_validation_specs,
     mk8s_gpu_dependency_issues,
     mk8s_gpu_disabled_target_validations,
     mk8s_gpu_nccl_enabled_default,
@@ -19343,8 +19344,8 @@ def _prompt_path_sort_key(
         "deploy.targets[].observability.kubernetes.metrics.collect_k8s_cluster_metrics": 203,
         "deploy.targets[].observability.kubernetes.traces.enabled": 204,
         "deploy.targets[].validations.mk8s_gpu.operator_readiness.enabled": 220,
-        "deploy.targets[].validations.mk8s_gpu.gpu_visibility.enabled": 221,
-        "deploy.targets[].validations.mk8s_gpu.gpu_visibility.max_nodes": 222,
+        "deploy.targets[].validations.mk8s_gpu.cuda_smoke.enabled": 221,
+        "deploy.targets[].validations.mk8s_gpu.cuda_smoke.max_nodes": 222,
         "deploy.targets[].validations.mk8s_gpu.nccl.enabled": 223,
         "deploy.targets[].validations.mk8s_gpu.nccl.max_nodes": 224,
         "deploy.targets[].validations.mk8s_gpu.nccl.average_bus_bandwidth_threshold_gbps": 225,
@@ -20049,7 +20050,7 @@ def _maybe_print_mk8s_gpu_validation_prompt_guidance(
         return
     console.print(
         "[dim]MK8s GPU validation guidance: operator readiness checks the operator "
-        "control-plane state plus allocatable GPUs on Ready nodes. GPU visibility "
+        "control-plane state plus allocatable GPUs on Ready nodes. CUDA smoke "
         "runs a CUDA sample pod on selected GPU nodes. NCCL auto-selects "
         "Socket/TCPIP or RDMA transport from the configured GPU shape; the "
         "bandwidth threshold is only enforced on RDMA runs. Health checker "
@@ -21431,7 +21432,7 @@ def _dynamic_required_prompt(
     if (
         entry.scope == "infra"
         and entry.id == "mk8s"
-        and full_path_label.endswith((".gpu_visibility.max_nodes", ".nccl.max_nodes"))
+        and full_path_label.endswith((".cuda_smoke.max_nodes", ".nccl.max_nodes"))
     ):
         section = _mk8s_gpu_validation_prompt_section(full_path_label)
         return bool(
@@ -21498,7 +21499,7 @@ def _skip_mk8s_gpu_validation_prompt(
     if section and section in disabled_sections:
         return True
     if (
-        section in {"gpu_visibility", "nccl"}
+        section in {"cuda_smoke", "nccl"}
         and not full_path_label.endswith(f".{section}.enabled")
         and not _mk8s_gpu_validation_section_enabled_for_prompt(
             payload,
@@ -27782,14 +27783,14 @@ def _validate_component_sources_registry(
                 f"mk8s gpu app role '{role_name}' is declared more than once: {', '.join(sorted(app_ids))}"
             )
     if mk8s_gpu_settings is not None and "mk8s" in active_entry_ids:
-        gpu_visibility_settings = mk8s_gpu_settings.validations.gpu_visibility
-        if gpu_visibility_settings.enabled_by_default and (
-            not gpu_visibility_settings.namespace
-            or not gpu_visibility_settings.image
-            or not gpu_visibility_settings.timeout
+        cuda_smoke_settings = mk8s_gpu_settings.validations.cuda_smoke
+        if cuda_smoke_settings.enabled_by_default and (
+            not cuda_smoke_settings.namespace
+            or not cuda_smoke_settings.image
+            or not cuda_smoke_settings.timeout
         ):
             issues.append(
-                "components.infra.mk8s.cli.gpu.validations.gpu_visibility must set namespace, image, and timeout when enabled_by_default=true"
+                "components.infra.mk8s.cli.gpu.validations.cuda_smoke must set namespace, image, and timeout when enabled_by_default=true"
             )
         nccl_settings = mk8s_gpu_settings.validations.nccl
         if nccl_settings.enabled_by_default and (
@@ -31971,23 +31972,29 @@ def _filter_validations_for_target_refs(
     return selected
 
 
+_MK8S_CLUSTER_SMOKE_VALIDATION_KINDS = {"mk8s_cluster_smoke"}
 _MK8S_GPU_VALIDATION_KINDS = {
     "mk8s_gpu_operator_readiness",
-    "mk8s_gpu_visibility",
+    "mk8s_cuda_smoke",
     "mk8s_nccl",
 }
 _OBSERVABILITY_VALIDATION_KINDS = {OBSERVABILITY_INGESTION_VALIDATION_KIND}
 _MYSTERYBOX_ESO_VALIDATION_KINDS = {MYSTERYBOX_ESO_CONNECTIVITY_VALIDATION_KIND}
 _DEPLOY_VALIDATION_KINDS = (
-    _MK8S_GPU_VALIDATION_KINDS
+    _MK8S_CLUSTER_SMOKE_VALIDATION_KINDS
+    | _MK8S_GPU_VALIDATION_KINDS
     | _OBSERVABILITY_VALIDATION_KINDS
     | _MYSTERYBOX_ESO_VALIDATION_KINDS
     | {SOPERATOR_CLUSTER_VALIDATION_KIND}
+)
+_PRE_SOPERATOR_MK8S_VALIDATION_KINDS = (
+    _MK8S_CLUSTER_SMOKE_VALIDATION_KINDS | _MK8S_GPU_VALIDATION_KINDS
 )
 
 
 def _deploy_validation_specs(config: Any) -> list[dict[str, Any]]:
     return [
+        *mk8s_cluster_smoke_validation_specs(config),
         *mk8s_gpu_validation_specs(config),
         *soperator_cluster_validation_specs(config),
         *observability_validation_specs(config),
@@ -32000,7 +32007,7 @@ def _deploy_validation_kind(item: Mapping[str, Any]) -> str:
 
 
 def _deploy_validation_runner_group(kind: str) -> str:
-    if kind in _MK8S_GPU_VALIDATION_KINDS:
+    if kind in _PRE_SOPERATOR_MK8S_VALIDATION_KINDS:
         return "mk8s_gpu"
     if kind in _OBSERVABILITY_VALIDATION_KINDS:
         return "observability"
@@ -32025,7 +32032,9 @@ def _ordered_post_soperator_validations(
         if _deploy_validation_kind(item) == SOPERATOR_CLUSTER_VALIDATION_KIND
     ]
     gpu_validations = [
-        item for item in validations if _deploy_validation_kind(item) in _MK8S_GPU_VALIDATION_KINDS
+        item
+        for item in validations
+        if _deploy_validation_kind(item) in _PRE_SOPERATOR_MK8S_VALIDATION_KINDS
     ]
     if not soperator_validations or not gpu_validations:
         return validations
@@ -32036,7 +32045,7 @@ def _ordered_post_soperator_validations(
         kind = _deploy_validation_kind(item)
         if kind == SOPERATOR_CLUSTER_VALIDATION_KIND:
             continue
-        if kind in _MK8S_GPU_VALIDATION_KINDS and not inserted_soperator:
+        if kind in _PRE_SOPERATOR_MK8S_VALIDATION_KINDS and not inserted_soperator:
             ordered.extend(soperator_validations)
             inserted_soperator = True
         ordered.append(item)
@@ -32166,8 +32175,8 @@ def _run_target_deploy_validations(
 _DEPLOY_VALIDATION_SKIP_KIND_MAP = {
     "operator-readiness": "mk8s_gpu_operator_readiness",
     "operator_readiness": "mk8s_gpu_operator_readiness",
-    "gpu-visibility": "mk8s_gpu_visibility",
-    "gpu_visibility": "mk8s_gpu_visibility",
+    "cuda-smoke": "mk8s_cuda_smoke",
+    "cuda_smoke": "mk8s_cuda_smoke",
     "nccl": "mk8s_nccl",
     "observability-ingestion": OBSERVABILITY_INGESTION_VALIDATION_KIND,
     "observability_ingestion": OBSERVABILITY_INGESTION_VALIDATION_KIND,
@@ -32429,7 +32438,18 @@ def _pre_soperator_gpu_validations(
     return [
         item
         for item in validations
-        if str(item.get("kind", "") or "").strip() in _MK8S_GPU_VALIDATION_KINDS
+        if str(item.get("kind", "") or "").strip() in _PRE_SOPERATOR_MK8S_VALIDATION_KINDS
+    ]
+
+
+def _pre_app_cluster_smoke_validations(
+    validations: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    return [
+        item
+        for item in validations
+        if str(item.get("kind", "") or "").strip() in _MK8S_CLUSTER_SMOKE_VALIDATION_KINDS
+        and not bool(item.get("expect_gpu_nodes"))
     ]
 
 
@@ -35198,13 +35218,22 @@ def _deploy_generated_artifacts(
                 deploy_validations,
                 target_ref=target_ref,
             )
+            pre_app_validations = (
+                _pre_app_cluster_smoke_validations(target_validations)
+                if target_has_apps
+                else []
+            )
             pre_soperator_validations = _pre_soperator_gpu_validations(
                 config,
                 target=target,
-                validations=target_validations,
+                validations=[
+                    item for item in target_validations if item not in pre_app_validations
+                ],
             )
             post_soperator_validations = [
-                item for item in target_validations if item not in pre_soperator_validations
+                item
+                for item in target_validations
+                if item not in pre_app_validations and item not in pre_soperator_validations
             ]
             post_soperator_validations = _ordered_post_soperator_validations(
                 config,
@@ -35257,6 +35286,17 @@ def _deploy_generated_artifacts(
                     _report_cluster_nodes_status(
                         extra_env=kube_env, emit=lambda message: console.print(message)
                     )
+                if target_has_apps and pre_app_validations:
+                    try:
+                        _run_target_deploy_validations(
+                            pre_app_validations,
+                            target_ref=target_ref,
+                            reports_dir=paths.reports_dir,
+                            extra_env=kube_env,
+                        )
+                    except Exception as exc:
+                        validation_error = exc
+                        break
                 if target_has_apps:
                     if pre_soperator_validations:
                         console.print(
@@ -35532,6 +35572,7 @@ def _deploy_footer_line_is_command(line: str) -> bool:
 def _deploy_footer_path_lines(paths: ProjectPaths, summary: DeployRunSummary) -> list[str]:
     return [
         f"  Generated bundle: {paths.generated_dir}",
+        f"  Validation detail reports: {paths.reports_dir}",
         f"  Deploy report: {paths.reports_dir / DEPLOY_REPORT_FILENAME}",
     ]
 
@@ -40183,10 +40224,11 @@ _SOPERATOR_MIGRATION_EXECUTOR_CONTRACT_LINES = (
     "migration status; target remediation phases report MK8s health, storage "
     "phases report SFS/PVC progress and continuity, while compute and cutover "
     "phases report MK8s, Slurm, and Soperator health.",
-    "Validation contract: validation-and-rollback-hold runs the target-scoped "
-    "deploy.targets[].validations.mk8s_gpu.* checks from config.yaml, including "
-    "operator readiness, GPU Visibility, and NCCL when enabled; it also runs "
-    "the required Soperator/Slurm smoke validation, including SlurmCluster "
+    "Validation contract: validation-and-rollback-hold runs the required MK8s "
+    "node inventory smoke plus target-scoped deploy.targets[].validations.mk8s_gpu.* "
+    "checks from config.yaml, including operator readiness, CUDA smoke, "
+    "and NCCL when those checks are enabled; it also runs the required "
+    "Soperator/Slurm smoke validation, including SlurmCluster "
     "availability, Slurm CLI access, a one-task srun job, all-partition "
     "hostname jobs, a Slurm GPU allocation check across reported GPU "
     "partitions, and a Slurm NCCL benchmark only on selected 8-GPU Slurm "
@@ -43960,7 +44002,8 @@ def mk8s_token_command(
         "nebius-cxcli deploy ./deployments/tenant/project/config.yaml --target mk8s-prod "
         "(restricts the run to a single deploy.targets[] row by id); "
         "nebius-cxcli deploy ./deployments/tenant/project/config.yaml --skip-validation operator-readiness "
-        "(skips a single MK8s GPU validation kind; repeatable; --skip-validations skips all); "
+        "(skips a single optional MK8s GPU validation kind; repeatable; "
+        "--skip-validations skips optional validations only); "
         "nebius-cxcli deploy ./deployments/tenant/project/config.yaml --no-auto-auth-bootstrap "
         "(fails on missing service-account credentials instead of refreshing them). "
         "For external Soperator onboarding targets with migration-owned actions, deploy "
@@ -44002,8 +44045,8 @@ def deploy_command(
             "--skip-validation",
             help=(
                 "Skip one optional deploy-time validation for this run only. "
-                "Repeatable. Supported values: operator-readiness, gpu-visibility, nccl, "
-                "observability-ingestion."
+                "Repeatable. Supported values: operator-readiness, cuda-smoke, "
+                "nccl, observability-ingestion."
             ),
         ),
     ] = None,

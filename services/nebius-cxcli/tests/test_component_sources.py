@@ -3284,7 +3284,8 @@ def test_bundled_mk8s_declares_optional_wizard_field_override() -> None:
         "required": True,
         "type_hint": "bool",
     }
-    assert mk8s_wizard_fields["deploy.targets[].validations.mk8s_gpu.gpu_visibility.max_nodes"] == {
+    assert "deploy.targets[].validations.mk8s_gpu.cluster_smoke.enabled" not in mk8s_wizard_fields
+    assert mk8s_wizard_fields["deploy.targets[].validations.mk8s_gpu.cuda_smoke.max_nodes"] == {
         "default": 3,
         "write_default_to_config": True,
         "type_hint": "number",
@@ -4128,7 +4129,7 @@ def test_load_component_sources_parses_mk8s_gpu_cli_settings(tmp_path: Path) -> 
                                     "enabled_by_default": True,
                                     "timeout": "20m",
                                 },
-                                "gpu_visibility": {
+                                "cuda_smoke": {
                                     "enabled_by_default": True,
                                     "namespace": "gpu-validation",
                                     "image": "nvcr.io/example/vectoradd:latest",
@@ -4471,8 +4472,8 @@ def test_load_component_sources_parses_mk8s_gpu_cli_settings(tmp_path: Path) -> 
         "values.nfd.enabled",
     ]
     assert mk8s.mk8s_gpu.validations.operator_readiness.timeout == "20m"
-    assert mk8s.mk8s_gpu.validations.gpu_visibility.namespace == "gpu-validation"
-    assert mk8s.mk8s_gpu.validations.gpu_visibility.max_nodes == 4
+    assert mk8s.mk8s_gpu.validations.cuda_smoke.namespace == "gpu-validation"
+    assert mk8s.mk8s_gpu.validations.cuda_smoke.max_nodes == 4
     assert mk8s.mk8s_gpu.validations.nccl.chart_component_id == "nccl-test"
     assert mk8s.mk8s_gpu.validations.nccl.max_nodes == 6
     assert nccl_chart.usage.lifecycle == "transient"
@@ -4505,6 +4506,45 @@ def test_load_component_sources_parses_mk8s_gpu_cli_settings(tmp_path: Path) -> 
     assert gpu_operator.observability.metric_targets[0].required_gpu_node_label_stack_sources == (
         "nebius_image",
     )
+
+
+def test_load_component_sources_rejects_legacy_gpu_visibility_settings(tmp_path: Path) -> None:
+    sources_file = tmp_path / "component_sources.yaml"
+    _write_catalog_file(
+        sources_file,
+        _catalog(
+            infra={
+                "mk8s": {
+                    "source": {
+                        "portable": "git::https://example.invalid/modules/mk8s?ref=main",
+                        "local": "../../platform-infra/modules/mk8s",
+                    },
+                    "ui": {"enabled": True},
+                    "cli": {
+                        "gpu": {
+                            "validations": {
+                                "gpu_visibility": {
+                                    "enabled_by_default": True,
+                                    "namespace": "gpu-validation",
+                                    "image": "nvcr.io/example/vectoradd:latest",
+                                    "timeout": "10m",
+                                },
+                            },
+                        },
+                    },
+                },
+            },
+        ),
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            r"components\.infra\.mk8s\.cli\.gpu\.validations "
+            r"has unsupported field\(s\): gpu_visibility"
+        ),
+    ):
+        load_component_sources(explicit=sources_file)
 
 
 def test_load_component_sources_parses_vm_cli_settings(tmp_path: Path) -> None:

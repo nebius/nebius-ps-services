@@ -1,75 +1,93 @@
 ---
 name: publish-helm
-description: Generate a Nebius OCI Helm chart publication flow by creating a chart-local CHANGELOG.md and publish-helm.sh, then registering the chart in the shared .github/workflows/helm-chart-publish.yml workflow with tag-driven releases and public pull verification.
+description: "Use to publish Helm charts end to end from the current project: collect chart and OCI inputs, optionally set up changelog/helper/workflow assets, prep chart release changes, create and merge a PR, tag from the default branch, wait for the chart publish workflow, verify the pushed OCI chart, and report the result. Also supports explicit setup-only guidance."
 ---
 
 # Publish Helm
 
-Create a repeatable Helm chart publication setup for charts released to Nebius
-Container Registry as OCI artifacts.
+Publish a Helm chart release from the current project folder. This is a
+doer-first skill: setup/guidance is still supported, but release execution is
+the primary workflow when the user asks to publish.
 
 ## Use This Skill For
 
-- Adding a release process to a new Helm chart.
-- Standardizing Helm chart publication across chart directories in this repo.
-- Enforcing a two-step release flow:
-  - `--prep` on branch
-  - merge the prep branch to `main`
-  - `--publish` on clean synced `main`
+- Publishing a Helm chart to an OCI registry end to end.
+- Setting up chart release assets only when requested or missing.
+- Running one explicit phase: `setup`, `prep`, `publish`, or `complete`.
+- Producing a final publish report with PR, tag, workflow, chart ref, and pull
+  verification.
 
-## Output Contract
+## Inputs Accepted
 
-Generate or update exactly these artifacts for the target chart:
+Common flags:
 
-1. `<chart_dir>/CHANGELOG.md`
-2. `<chart_dir>/publish-helm.sh`
-3. `.github/helm-chart-publish.json`
-4. `.github/workflows/helm-chart-publish.yml`
+- `--mode setup|prep|publish|complete`; use `complete` for an end-to-end
+  publish request.
+- `--tag X.Y.Z` or `<tag-prefix>-vX.Y.Z`.
+- `--project-dir <path>`; default current working directory.
+- `--main-branch <branch>`; default the repository default branch.
+- `--tag-prefix <prefix>`; derive from chart name only when unambiguous.
+- `--merge-method squash|merge|rebase`; default `squash`.
+- `--wait` or `--no-wait`; default `--wait` for `publish` and `complete`.
 
-## Inputs to Collect
+Helm inputs:
 
-- `project_tag_prefix` (for example `nccl-test-chart`)
-- `main_branch` (default `main`)
-- `chart_dir` (for example `helm-charts/nccl-test`)
-- `chart_name` (the name from `Chart.yaml`)
-- `publish_environment` (default `nb-image-chart-publish`)
+- `--chart-dir`
+- `--chart-name`
+- `--oci-repository`, such as `oci://registry.example.com/org/charts`
+- `--public-verify` when anonymous pull verification is expected
+- optional extra lint or template smoke arguments
 
-The templates assume the GitHub Actions environment exposes these Nebius
-variables and secret:
-
-- Variables:
-  `NB_REGION_ID`, `NB_REGISTRY_ID`, `NB_PROJECT_ID`,
-  `NB_SERVICE_ACCOUNT_ID`, `NB_SERVICE_ACCOUNT_PUBLIC_KEY_ID`
-- Optional variables:
-  `NB_TENANT_ID`, `NB_REGISTRY_NAME`
-- Secret:
-  `NB_SERVICE_ACCOUNT_PRIVATE_KEY`
+`--oci-repository` is the repository base. It must not include the chart
+basename or chart version tag; Helm infers those from chart metadata.
 
 ## Workflow
 
-1. Copy chart-local templates from `assets/` into the target chart paths.
-2. Replace placeholders:
-   - `__PROJECT_TAG_PREFIX__`
-   - `__MAIN_BRANCH__`
-   - `__CHART_DIR__`
-   - `__CHART_NAME__`
-3. Register the chart tag pattern, chart metadata, and optional extra render
-   smoke arguments in `.github/helm-chart-publish.json`.
-4. Keep the shared
-   `.github/workflows/helm-chart-publish.yml` workflow.
-5. Keep `publish-helm.sh` executable.
-6. Validate:
-   - `bash -n <chart_dir>/publish-helm.sh`
-   - JSON parse for `.github/helm-chart-publish.json`
-   - YAML parse for `.github/workflows/helm-chart-publish.yml`
-   - `helm lint <chart_dir>`
-   - `helm template smoke <chart_dir> --namespace <chart_name> >/dev/null`
-7. Document runtime usage in the chart README:
-   - `./publish-helm.sh --prep X.Y.Z`
-   - `./publish-helm.sh --publish X.Y.Z`
-   - note that the prep step updates both the chart-local changelog and
-     `Chart.yaml`
-   - note that the publish step only tags; CI does the OCI package/push work
+1. Inspect the current project folder and Git repository.
+2. Parse the requested mode and tag. Helm supports SemVer prerelease tags such
+   as `1.2.3-rc.1`.
+3. For `setup`, create or update chart-local release assets from `assets/` and
+   validate the chart publish registration/workflow. Stop with a setup report.
+4. For `prep`, run the skill-owned helper script:
+   `scripts/publish-helm-doer.sh --mode prep ...`
+   It updates the chart changelog and `Chart.yaml`, validates dependencies,
+   runs strict chart lint/template checks, commits release prep, and pushes the
+   current branch.
+5. For `complete`, run `prep`, invoke `create-pr`, then invoke `merge-pr` after
+   checks pass.
+6. After merge, switch to the default branch, fetch, and fast-forward only.
+   Verify the merged changelog and `Chart.yaml` contain the release version.
+7. Run `publish` from clean synced default branch:
+   `scripts/publish-helm-doer.sh --mode publish ...`
+   The helper creates and pushes only the annotated tag.
+8. If waiting is enabled, find the tag-triggered workflow with `gh run list`,
+   wait with `gh run watch --exit-status`, and inspect the terminal run.
+9. Verify the published chart with
+   `helm pull <oci-repository>/<chart-name> --version <version>`.
+10. Return the final publish report.
+
+## Setup Assets
+
+Use setup mode when the chart does not already have a release flow:
+
+- `assets/CHANGELOG.md.template`
+- `assets/publish-helm.sh.template`
+
+The project-local helper script is optional after this refactor. The skill-owned
+`scripts/publish-helm-doer.sh` remains the canonical doer path.
+
+## Guardrails
+
+- Do not hardcode registry URLs, repository names, project IDs, endpoints, or
+  secrets in skill sources or generated examples.
+- Store only GitHub variable and secret names in workflow templates.
+- Do not print, request, or persist secret values.
+- Do not include chart basename or version in `--oci-repository`.
+- Do not commit release prep directly on the default branch.
+- Do not force-push, use admin merge, bypass branch protection, or ignore
+  required checks/reviews.
+- Stop when GitHub approvals, environment approvals, registry credentials, or
+  branch protection require human action.
 
 ## Learning Loop
 
@@ -88,28 +106,19 @@ Do not capture secrets, private URLs, customer data, raw logs, one-off local
 state, or unverified/vendor-specific claims. If a useful learning is not safe,
 not evidence-backed, or outside this skill's scope, report that it was skipped.
 
-## Guardrails
+## Output Contract
 
-- Keep one canonical release path. Do not add a chart-specific publish workflow
-  beside `publish-helm.sh` plus the shared tag-driven workflow.
-- `--prep` should start from a strictly clean worktree, including untracked
-  files, so the release-prep commit stays isolated.
-- `--prep` should fail before editing files if the target tag already exists
-  locally or on `origin`.
-- `--prep` should update the chart-local `CHANGELOG.md` and `Chart.yaml`
-  together, then validate the chart before committing.
-- `--publish` only creates and pushes the tag; no content edits.
-- `--publish` must fail if `Chart.yaml` does not already declare version
-  `X.Y.Z`, or if the target release section is missing or empty.
-- The workflow should publish from the pushed tag only. Do not keep a separate
-  workflow-dispatch release version override unless the user explicitly asks
-  for one.
-- The workflow should verify the published chart is anonymously pullable when
-  the target registry is intended to be public.
-- Artifact names and step summaries should include `chart_name` to avoid
-  ambiguous publish output across monorepos.
+Return:
+
+- mode, chart directory, chart name, tag, version, tag prefix
+- PR URL and merge result when `complete` mode is used
+- pushed tag and workflow run URL/conclusion
+- OCI chart reference and pull verification result
+- validation commands run
+- blockers, skipped live checks, or required user approvals
 
 ## Resources
 
+- `scripts/publish-helm-doer.sh`
 - `assets/CHANGELOG.md.template`
 - `assets/publish-helm.sh.template`
