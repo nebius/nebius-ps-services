@@ -160,12 +160,14 @@ components:
               # Multi-node communication validation. This is intentionally
               # separate from GPU visibility because it validates distributed
               # communication correctness and bandwidth, not just single-node
-              # CUDA execution. cxcli schedules it for GPU-enabled MK8s
-              # clusters, auto-selects Socket/TCPIP on Ethernet-only shapes,
-              # and switches to RDMA transport on GPU-cluster / InfiniBand
-              # shapes. The RDMA bandwidth threshold is enforced only on the
-              # RDMA path so Ethernet-only runs stay informative instead of
-              # failing against an InfiniBand expectation.
+              # CUDA execution. cxcli keeps it default-on for GPU-cluster /
+              # InfiniBand-capable shapes and default-off for 1-GPU
+              # Ethernet-only test/dev shapes unless the operator explicitly
+              # enables it. Enabled Ethernet-only runs use Socket/TCPIP, while
+              # GPU-cluster / InfiniBand shapes switch to RDMA transport. The
+              # RDMA bandwidth threshold is enforced only on the RDMA path so
+              # Ethernet-only runs stay informative instead of failing against
+              # an InfiniBand expectation.
               # Keep the dedicated namespace, but delete the transient MPIJob
               # and transient Training Operator install after each run.
               enabled_by_default: true

@@ -61,6 +61,7 @@ _NCCL_DMABUF_ENV_NAME = "NCCL_DMABUF_ENABLE"
 _VALIDATION_POLL_INTERVAL_SECONDS = 5.0
 _VALIDATION_REPEAT_INTERVAL_SECONDS = 20.0
 _GPU_STACK_VALIDATION_NAME = "GPU stack readiness"
+_GPU_VISIBILITY_SERVICE_ACCOUNT = "gpu-visibility-validation"
 # Only the ActiveCheck fields that determine whether an NCCL check can launch.
 _SOPERATOR_NCCL_ACTIVECHECK_DEFAULTS: dict[str, dict[str, Any]] = {
     "all-reduce-perf-nccl-in-docker": {
@@ -267,9 +268,16 @@ def _nested_path_value(value: Any, dotted_path: str) -> Any:
 def mk8s_gpu_project_validation_defaults(
     *,
     gpu_settings: Mk8sGpuSettings | None = None,
+    payload: dict[str, Any] | None = None,
+    target_ref: str = "",
 ) -> dict[str, Any]:
     settings = gpu_settings or _mk8s_gpu_settings()
     validations = settings.validations
+    nccl_enabled_default = _mk8s_gpu_nccl_enabled_default(
+        payload or {},
+        target_ref=target_ref,
+        gpu_settings=settings,
+    )
     defaults = {
         "operator_readiness": {
             "enabled": validations.operator_readiness.enabled_by_default,
@@ -279,7 +287,7 @@ def mk8s_gpu_project_validation_defaults(
             "max_nodes": validations.gpu_visibility.max_nodes,
         },
         "nccl": {
-            "enabled": validations.nccl.enabled_by_default,
+            "enabled": nccl_enabled_default,
             "max_nodes": validations.nccl.max_nodes,
             "average_bus_bandwidth_threshold_gbps": (
                 validations.nccl.average_bus_bandwidth_threshold_gbps
@@ -383,10 +391,11 @@ def _soperator_nccl_activechecks_target_refs(payload: Mapping[str, Any]) -> set[
 
 def _target_mk8s_gpu_project_validation_defaults(
     *,
+    payload: dict[str, Any],
     target_ref: str,
     disabled_by_ref: Mapping[str, set[str]],
 ) -> dict[str, Any]:
-    defaults = mk8s_gpu_project_validation_defaults()
+    defaults = mk8s_gpu_project_validation_defaults(payload=payload, target_ref=target_ref)
     for validation_name in disabled_by_ref.get(target_ref, set()):
         section = defaults.get(validation_name)
         if isinstance(section, dict):
@@ -408,13 +417,14 @@ def _gpu_enabled_target_refs(payload: Mapping[str, Any]) -> tuple[str, ...]:
 def _drop_generated_default_validation_overrides(
     existing: Mapping[str, Any],
     *,
+    payload: dict[str, Any],
     target_ref: str,
     disabled_by_ref: Mapping[str, set[str]],
 ) -> dict[str, Any]:
     disabled = disabled_by_ref.get(target_ref, set())
     if not disabled:
         return dict(existing)
-    enabled_defaults = mk8s_gpu_project_validation_defaults()
+    enabled_defaults = mk8s_gpu_project_validation_defaults(payload=payload, target_ref=target_ref)
     retained = dict(existing)
     for validation_name in disabled:
         existing_section = existing.get(validation_name)
@@ -512,6 +522,7 @@ def normalize_mk8s_gpu_project_validation_settings(payload: dict[str, Any]) -> b
             changed = True
         existing = validations.get("mk8s_gpu")
         merged = _target_mk8s_gpu_project_validation_defaults(
+            payload=payload_map,
             target_ref=target_ref,
             disabled_by_ref=disabled_by_ref,
         )
@@ -520,6 +531,7 @@ def normalize_mk8s_gpu_project_validation_settings(payload: dict[str, Any]) -> b
                 merged,
                 _drop_generated_default_validation_overrides(
                     existing,
+                    payload=payload_map,
                     target_ref=target_ref,
                     disabled_by_ref=disabled_by_ref,
                 ),
@@ -698,7 +710,11 @@ def _effective_mk8s_gpu_validation_overrides(
             target_ref=target_ref,
             dotted_path="nccl.enabled",
             coerce=_coerce_optional_bool,
-            default=validations.nccl.enabled_by_default,
+            default=_mk8s_gpu_nccl_enabled_default(
+                payload,
+                target_ref=target_ref,
+                gpu_settings=settings,
+            ),
             field_label="deploy.targets[].validations.mk8s_gpu.nccl.enabled",
         ),
         nccl_max_nodes=_resolve_project_gpu_validation_setting(
@@ -1057,6 +1073,63 @@ def _mk8s_gpu_shape_capabilities(
         )
     )
     return gpu_count, allow_gpu_clustering
+
+
+def _normalized_target_ref(value: object) -> str:
+    return _as_text(value).lower().replace("_", "-")
+
+
+def _mk8s_gpu_contexts_for_target(
+    payload: dict[str, Any],
+    *,
+    target_ref: str,
+) -> tuple[Mk8sGpuClusterContext, ...]:
+    normalized_target_ref = _normalized_target_ref(target_ref)
+    if not normalized_target_ref:
+        return ()
+    return tuple(
+        context
+        for context in _enabled_mk8s_gpu_contexts(payload)
+        if _normalized_target_ref(context.instance_id) == normalized_target_ref
+    )
+
+
+def mk8s_gpu_nccl_enabled_default(
+    payload_or_config: Any,
+    *,
+    target_ref: str,
+    gpu_settings: Mk8sGpuSettings | None = None,
+) -> bool:
+    payload = _as_payload(payload_or_config)
+    settings = gpu_settings or _mk8s_gpu_settings()
+    catalog_default = settings.validations.nccl.enabled_by_default
+    if not catalog_default:
+        return False
+
+    contexts = _mk8s_gpu_contexts_for_target(payload, target_ref=target_ref)
+    if not contexts:
+        return catalog_default
+
+    for context in contexts:
+        if context.gpu_cluster_enabled:
+            return catalog_default
+        gpu_count = _parse_gpu_quantity(context.gpu_preset)
+        if gpu_count != 1:
+            return catalog_default
+    return False
+
+
+def _mk8s_gpu_nccl_enabled_default(
+    payload: dict[str, Any],
+    *,
+    target_ref: str,
+    gpu_settings: Mk8sGpuSettings | None = None,
+) -> bool:
+    return mk8s_gpu_nccl_enabled_default(
+        payload,
+        target_ref=target_ref,
+        gpu_settings=gpu_settings,
+    )
 
 
 def _parse_preset_resource_hint(preset_name: str) -> tuple[int | None, int | None, int | None]:
@@ -3191,11 +3264,27 @@ def _run_gpu_visibility_validation(
             message += f" Skipping {skipped_nodes} additional GPU node(s) to keep deploy-time validation bounded."
         emit(message)
 
-    docs: list[dict[str, Any]] = [
-        {"apiVersion": "v1", "kind": "Namespace", "metadata": {"name": namespace}}
-    ]
+    namespace_doc: dict[str, Any] = {
+        "apiVersion": "v1",
+        "kind": "Namespace",
+        "metadata": {"name": namespace},
+    }
+    service_account_doc: dict[str, Any] = {
+        "apiVersion": "v1",
+        "kind": "ServiceAccount",
+        "metadata": {
+            "name": _GPU_VISIBILITY_SERVICE_ACCOUNT,
+            "namespace": namespace,
+            "labels": {
+                "app.kubernetes.io/name": "gpu-visibility-test",
+                "app.kubernetes.io/component": "gpu-visibility-validation",
+            },
+        },
+    }
     pod_names: list[str] = []
+    _apply_docs([namespace_doc], extra_env=extra_env)
     try:
+        docs: list[dict[str, Any]] = [service_account_doc]
         for node in nodes:
             pod_name = _gpu_visibility_pod_name(node["name"], run_token=run_token)
             pod_names.append(pod_name)
@@ -3214,6 +3303,8 @@ def _run_gpu_visibility_validation(
                     },
                     "spec": {
                         "restartPolicy": "Never",
+                        "serviceAccountName": _GPU_VISIBILITY_SERVICE_ACCOUNT,
+                        "automountServiceAccountToken": False,
                         "nodeName": node["name"],
                         "tolerations": [{"operator": "Exists"}],
                         "containers": [
@@ -4167,6 +4258,7 @@ __all__ = [
     "mk8s_gpu_disabled_target_validations",
     "mk8s_gpu_flux_release_dependencies",
     "mk8s_gpu_flux_release_post_render_patches",
+    "mk8s_gpu_nccl_enabled_default",
     "mk8s_gpu_validation_specs",
     "mk8s_gpu_validation_warnings",
     "prune_inactive_mk8s_gpu_app_rows",

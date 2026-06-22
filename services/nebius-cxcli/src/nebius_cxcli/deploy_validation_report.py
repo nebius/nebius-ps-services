@@ -149,8 +149,8 @@ def _soperator_owned_gpu_summary(
     if soperator is None or soperator.status != "passed":
         return ""
     if item.kind == "mk8s_gpu_visibility":
-        check_name = "Slurm GPU visibility test"
-        lead = "Soperator-owned Slurm GPU visibility passed"
+        check_name = "Slurm GPU allocation check"
+        lead = "Soperator-owned Slurm GPU allocation passed"
     elif item.kind == "mk8s_nccl":
         check_name = "Slurm NCCL benchmark"
         lead = "Soperator-owned Slurm NCCL benchmark passed"
@@ -226,6 +226,7 @@ def status_label(status: str) -> str:
     return {
         "passed": "PASS",
         "failed": "FAIL",
+        "skipped": "SKIPPED",
         "not_run": "NOT RUN",
         "incomplete": "INCOMPLETE",
     }.get(status, status.upper() if status else "UNKNOWN")
@@ -335,7 +336,10 @@ def _validation_checks(payload: Mapping[str, Any]) -> tuple[DeployValidationChec
         name = str(item.get("name") or "").strip()
         if not name:
             continue
-        status = "passed" if bool(item.get("passed")) else "failed"
+        raw_status = str(item.get("status") or "").strip().lower()
+        status = raw_status if raw_status in {"passed", "failed", "skipped"} else ""
+        if not status:
+            status = "passed" if bool(item.get("passed")) else "failed"
         checks.append(
             DeployValidationCheck(
                 name=name,

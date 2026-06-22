@@ -3890,6 +3890,48 @@ def test_prompt_scalar_override_unset_on_skip_leaves_non_choice_scalars_unset(
     assert "blank keeps unset" in str(captured["text"])
 
 
+def test_soperator_bulk_apply_prompt_uses_short_label_and_true_default(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(cli, "_is_tty_session", lambda: False)
+    captured: dict[str, Any] = {}
+
+    def _fake_prompt(text: str, default=None):
+        captured["text"] = text
+        captured["default"] = default
+        return default
+
+    monkeypatch.setattr(cli.typer, "prompt", _fake_prompt)
+
+    value, should_stop = cli._prompt_scalar_override(
+        "infra.components[0].inputs.soperator.worker_node_groups.all_worker_shards_apply_to_all",
+        True,
+        type_hint="bool",
+        required=False,
+        unset_on_skip=False,
+    )
+
+    assert should_stop is False
+    assert value is True
+    assert "all_worker_shards_apply_to_all" in str(captured["text"])
+    assert "all_worker_shards.apply_to_all" not in str(captured["text"])
+    assert captured["default"] == "true"
+
+
+def test_soperator_bulk_prompt_comment_explains_apply_to_all(monkeypatch) -> None:
+    messages: list[str] = []
+    monkeypatch.setattr(cli.console, "print", lambda message: messages.append(str(message)))
+
+    cli._maybe_print_soperator_worker_bulk_prompt_comment(
+        "infra.components[0].inputs.soperator.worker_node_groups.all_worker_shards_apply_to_all"
+    )
+
+    assert messages == [
+        "[dim]Bulk worker shard choice: true applies one autoscaling/ephemeral "
+        "choice to all worker shards; false asks each shard separately.[/dim]"
+    ]
+
+
 def test_upgrade_node_template_node_group_prompt_mentions_blank_selects_all(
     monkeypatch,
 ) -> None:

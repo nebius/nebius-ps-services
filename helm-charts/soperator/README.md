@@ -322,7 +322,9 @@ Common direct Helm settings:
   `inputs.soperator.worker_node_groups.<worker>.ephemeral_nodes.enabled=true`
   together with the same shard's autoscaling block; cxcli derives
   `initialNumberEphemeralNodes` from that shard's autoscaling `min_node_count`
-  and writes global `suspendTime` from
+  for CPU workers, raises GPU worker shards to at least one initial active
+  worker when max capacity is positive so Soperator can seed GPU libraries into
+  the jail, and writes global `suspendTime` from
   `inputs.soperator.worker_ephemeral_nodes.suspend_time_seconds`. Day-2
   active-node changes happen through Slurm power control and Soperator
   `NodeSetPowerState`, not by changing that initial value.
@@ -471,8 +473,10 @@ inputs:
 cxcli then renders the MK8s node-group range, `nodesets[].replicas: 5`,
 `ephemeralNodes: true`, `initialNumberEphemeralNodes: 1`, and
 `slurmConfig.suspendTime: 300` together. It derives the initial active worker
-count from the same shard's worker autoscaling minimum so the Kubernetes baseline and initial
-Slurm active baseline cannot drift.
+count from the same shard's worker autoscaling minimum for CPU workers and keeps
+at least one positive-capacity GPU worker active at first bootstrap so Soperator
+can populate GPU libraries into the shared jail before Slurm power management
+later suspends idle workers.
 
 The chart fails fast when an ephemeral NodeSet is partially configured:
 

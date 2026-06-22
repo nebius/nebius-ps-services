@@ -422,6 +422,7 @@ BUILTIN_WIZARD_PROFILES: dict[str, dict[str, dict[str, Any]]] = {
             },
             "required": True,
             "type_hint": "string",
+            "write_default_to_config": True,
         },
         "inputs.cluster.public_endpoint": {
             "default": True,

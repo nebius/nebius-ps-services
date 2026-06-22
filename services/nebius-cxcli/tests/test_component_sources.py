@@ -3100,6 +3100,7 @@ def test_bundled_mk8s_declares_optional_wizard_field_override() -> None:
         "auto_select_first": True,
     }
     assert mk8s_wizard_fields["inputs.cluster.k8s_version"]["required"] is True
+    assert mk8s_wizard_fields["inputs.cluster.k8s_version"]["write_default_to_config"] is True
     assert mk8s_wizard_fields["inputs.cluster.public_endpoint"] == {
         "default": True,
         "write_default_to_config": True,

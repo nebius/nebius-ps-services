@@ -9926,6 +9926,358 @@ def test_pre_soperator_gpu_validations_wait_for_scale_from_zero_gpu_workers() ->
     )
 
 
+def test_deploy_generated_artifacts_runs_soperator_smoke_before_post_gpu_validations_for_scale_zero(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_paths = _fake_paths(tmp_path)
+    config = _config_with_enabled_mk8s(
+        charts=[
+            {
+                "id": "soperator",
+                "instance_id": "mk8s",
+                "target_ref": "mk8s",
+                "enabled": True,
+            }
+        ]
+    )
+    config["infra"]["components"][0]["inputs"] = {
+        "node_groups": {
+            "worker-gpu": {
+                "gpu": True,
+                "workload": "worker",
+                "autoscaling": {
+                    "enabled": True,
+                    "min_node_count": 0,
+                    "max_node_count": 4,
+                },
+            }
+        }
+    }
+    gpu_stack_validation = {
+        "kind": "mk8s_gpu_operator_readiness",
+        "name": "GPU stack readiness",
+        "report_file": "gpu-stack-readiness-report.json",
+        "target_ref": "mk8s",
+    }
+    gpu_visibility_validation = {
+        "kind": "mk8s_gpu_visibility",
+        "name": "GPU Visibility test",
+        "report_file": "gpu-visibility-report.json",
+        "target_ref": "mk8s",
+    }
+    soperator_validation = {
+        "kind": cli.SOPERATOR_CLUSTER_VALIDATION_KIND,
+        "name": "Soperator cluster smoke test (mk8s)",
+        "report_file": "soperator-cluster-smoke-report-mk8s.json",
+        "target_ref": "mk8s",
+        "required": True,
+    }
+    manifest = {
+        "deploy": {
+            "targets": [_mk8s_target(fake_paths)],
+            "validations": [
+                gpu_stack_validation,
+                gpu_visibility_validation,
+                soperator_validation,
+            ],
+        }
+    }
+    calls: list[tuple[str, Any]] = []
+
+    monkeypatch.setattr(cli, "_run_deploy_preflight", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(cli, "_run_terraform_apply_with_status", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        cli,
+        "write_inventory",
+        lambda _config, paths, **_kwargs: SimpleNamespace(
+            markdown=paths.reports_dir / "deploy-report.md"
+        ),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_prepare_cluster_handoff_kube_env",
+        lambda *_args, **_kwargs: {"KUBECONFIG": "/tmp/kubeconfig"},
+    )
+    monkeypatch.setattr(cli, "_report_cluster_nodes_status", lambda *, extra_env, emit: None)
+    monkeypatch.setattr(cli, "_reconcile_observability_gpu_node_labels", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(cli, "_ensure_mysterybox_eso_runtime_before_flux", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(cli, "_ensure_grafana_runtime_before_flux", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(cli, "_ensure_soperator_notifier_runtime_before_flux", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(cli, "_ensure_soperator_backup_runtime_before_flux", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(cli, "_retire_deploy_owned_soperator_source_state", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        cli,
+        "_apply_rendered_flux",
+        lambda paths, *, extra_env=None: calls.append(("flux", paths)),
+    )
+    monkeypatch.setattr(cli, "_collect_grafana_status_after_flux", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(cli, "_warn_if_flux_gitops_not_bootstrapped", lambda *_args, **_kwargs: "")
+    monkeypatch.setattr(cli.console, "print", lambda *_args, **_kwargs: None)
+
+    @contextmanager
+    def _fake_status(_message: str, **_kwargs: object):
+        yield SimpleNamespace(update=lambda *_args, **_kwargs: None)
+
+    monkeypatch.setattr(cli.console, "status", _fake_status)
+
+    def _fake_run_soperator_cluster_validations(
+        validations: list[dict[str, Any]],
+        *,
+        reports_dir: Path,
+        extra_env: dict[str, str] | None,
+        emit=None,
+    ) -> list[Path]:
+        assert validations == [soperator_validation]
+        assert extra_env == {"KUBECONFIG": "/tmp/kubeconfig"}
+        calls.append(("soperator", validations))
+        reports_dir.mkdir(parents=True, exist_ok=True)
+        report_path = reports_dir / "soperator-cluster-smoke-report-mk8s.json"
+        report_path.write_text(
+            json.dumps(
+                {
+                    "kind": cli.SOPERATOR_CLUSTER_VALIDATION_KIND,
+                    "name": "Soperator cluster smoke test (mk8s)",
+                    "passed": True,
+                    "summary": "7/7 Soperator/Slurm checks passed.",
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        return [report_path]
+
+    def _fake_run_mk8s_gpu_validations(
+        validations: list[dict[str, Any]],
+        *,
+        reports_dir: Path,
+        extra_env: dict[str, str] | None,
+        emit=None,
+    ) -> list[Path]:
+        assert validations == [gpu_stack_validation, gpu_visibility_validation]
+        assert extra_env == {"KUBECONFIG": "/tmp/kubeconfig"}
+        calls.append(("gpu", validations))
+        reports_dir.mkdir(parents=True, exist_ok=True)
+        stack_report = reports_dir / "gpu-stack-readiness-report.json"
+        stack_report.write_text(
+            json.dumps(
+                {
+                    "passed": True,
+                    "gpu_operator": {"gpu_nodes": [{"name": "gpu-node-a"}]},
+                    "network_operator": {"required": False},
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        visibility_report = reports_dir / "gpu-visibility-report.json"
+        visibility_report.write_text(
+            json.dumps(
+                {
+                    "passed": True,
+                    "selected_node_count": 1,
+                    "total_gpu_node_count": 1,
+                    "passed_node_count": 1,
+                    "skipped_node_count": 0,
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        return [stack_report, visibility_report]
+
+    monkeypatch.setattr(
+        cli, "run_soperator_cluster_validations", _fake_run_soperator_cluster_validations
+    )
+    monkeypatch.setattr(cli, "run_mk8s_gpu_validations", _fake_run_mk8s_gpu_validations)
+
+    cli._deploy_generated_artifacts(
+        config,
+        fake_paths,
+        manifest,
+        auto_auth_bootstrap=True,
+        skip_validations=False,
+        skip_validation_kinds=set(),
+    )
+
+    assert calls == [
+        ("flux", _target_paths(fake_paths)),
+        ("soperator", [soperator_validation]),
+        ("gpu", [gpu_stack_validation, gpu_visibility_validation]),
+    ]
+
+
+def test_ensure_soperator_gpu_ephemeral_bootstrap_power_state_patches_empty_power_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    commands: list[list[str]] = []
+    power_state_gets = 0
+    sleeps: list[float] = []
+
+    def _fake_run(cmd: list[str], **_kwargs: object) -> SimpleNamespace:
+        nonlocal power_state_gets
+        commands.append(cmd)
+        if cmd[1:5] == ["-n", "soperator", "get", "slurmclusters"]:
+            return SimpleNamespace(
+                returncode=0,
+                stdout=json.dumps({"items": [{"status": {"phase": "Not available"}}]}),
+                stderr="",
+            )
+        if cmd[1:5] == ["-n", "soperator", "get", "nodesets"]:
+            return SimpleNamespace(
+                returncode=0,
+                stdout=json.dumps(
+                    {
+                        "items": [
+                            {
+                                "metadata": {"name": "worker-gpu"},
+                                "spec": {
+                                    "ephemeralNodes": True,
+                                    "initialNumberEphemeralNodes": 1,
+                                    "gpu": {"enabled": True},
+                                },
+                            }
+                        ]
+                    }
+                ),
+                stderr="",
+            )
+        if cmd[1:6] == ["-n", "soperator", "get", "nodesetpowerstate", "worker-gpu"]:
+            power_state_gets += 1
+            if power_state_gets == 1:
+                return SimpleNamespace(
+                    returncode=1,
+                    stdout="",
+                    stderr='Error from server (NotFound): nodesetpowerstates "worker-gpu" not found',
+                )
+            return SimpleNamespace(
+                returncode=0,
+                stdout=json.dumps({"spec": {"nodeSetRef": "worker-gpu"}}),
+                stderr="",
+            )
+        if cmd[1:6] == ["-n", "soperator", "patch", "nodesetpowerstate", "worker-gpu"]:
+            return SimpleNamespace(returncode=0, stdout="patched", stderr="")
+        raise AssertionError(f"unexpected command: {cmd}")
+
+    monkeypatch.setattr(cli, "_target_has_scale_from_zero_gpu_worker", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(
+        cli,
+        "_enabled_soperator_release_refs_for_target",
+        lambda *_args, **_kwargs: (cli._SoperatorReleaseRef("soperator", "soperator"),),
+    )
+    monkeypatch.setattr(cli.shutil, "which", lambda _name: "/usr/bin/kubectl")
+    monkeypatch.setattr(cli.subprocess, "run", _fake_run)
+    monkeypatch.setattr(cli.time, "sleep", lambda seconds: sleeps.append(seconds))
+    monkeypatch.setattr(cli.console, "print", lambda *_args, **_kwargs: None)
+
+    cli._ensure_soperator_gpu_ephemeral_bootstrap_power_state(
+        {"infra": {"components": []}},
+        target_ref="soperator-cluster1",
+        extra_env={"KUBECONFIG": "/tmp/kubeconfig"},
+    )
+
+    patch_commands = [cmd for cmd in commands if "patch" in cmd]
+    assert len(patch_commands) == 1
+    assert json.loads(patch_commands[0][-1]) == {"spec": {"activeNodes": [0]}}
+    assert power_state_gets == 2
+    assert sleeps == [5.0]
+
+
+def test_ensure_soperator_gpu_ephemeral_bootstrap_power_state_skips_missing_power_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    commands: list[list[str]] = []
+
+    def _fake_run(cmd: list[str], **_kwargs: object) -> SimpleNamespace:
+        commands.append(cmd)
+        if cmd[1:5] == ["-n", "soperator", "get", "slurmclusters"]:
+            return SimpleNamespace(
+                returncode=0,
+                stdout=json.dumps({"items": [{"status": {"phase": "Not available"}}]}),
+                stderr="",
+            )
+        if cmd[1:5] == ["-n", "soperator", "get", "nodesets"]:
+            return SimpleNamespace(
+                returncode=0,
+                stdout=json.dumps(
+                    {
+                        "items": [
+                            {
+                                "metadata": {"name": "worker-gpu"},
+                                "spec": {
+                                    "ephemeralNodes": True,
+                                    "initialNumberEphemeralNodes": 1,
+                                    "gpu": {"enabled": True},
+                                },
+                            }
+                        ]
+                    }
+                ),
+                stderr="",
+            )
+        if cmd[1:6] == ["-n", "soperator", "get", "nodesetpowerstate", "worker-gpu"]:
+            return SimpleNamespace(
+                returncode=1,
+                stdout="",
+                stderr='Error from server (NotFound): nodesetpowerstates "worker-gpu" not found',
+            )
+        raise AssertionError(f"unexpected command: {cmd}")
+
+    monkeypatch.setattr(cli, "_target_has_scale_from_zero_gpu_worker", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(
+        cli,
+        "_enabled_soperator_release_refs_for_target",
+        lambda *_args, **_kwargs: (cli._SoperatorReleaseRef("soperator", "soperator"),),
+    )
+    monkeypatch.setattr(cli.shutil, "which", lambda _name: "/usr/bin/kubectl")
+    monkeypatch.setattr(cli.subprocess, "run", _fake_run)
+    monkeypatch.setattr(cli.time, "sleep", lambda _seconds: None)
+
+    cli._ensure_soperator_gpu_ephemeral_bootstrap_power_state(
+        {"infra": {"components": []}},
+        target_ref="soperator-cluster1",
+        extra_env={"KUBECONFIG": "/tmp/kubeconfig"},
+    )
+
+    power_state_gets = [
+        cmd for cmd in commands if cmd[1:6] == ["-n", "soperator", "get", "nodesetpowerstate", "worker-gpu"]
+    ]
+    assert len(power_state_gets) == 12
+    assert not any("patch" in cmd for cmd in commands)
+
+
+def test_ensure_soperator_gpu_ephemeral_bootstrap_power_state_skips_available_cluster(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    commands: list[list[str]] = []
+
+    def _fake_run(cmd: list[str], **_kwargs: object) -> SimpleNamespace:
+        commands.append(cmd)
+        if cmd[1:5] == ["-n", "soperator", "get", "slurmclusters"]:
+            return SimpleNamespace(
+                returncode=0,
+                stdout=json.dumps({"items": [{"status": {"phase": "Available"}}]}),
+                stderr="",
+            )
+        raise AssertionError(f"unexpected command: {cmd}")
+
+    monkeypatch.setattr(cli, "_target_has_scale_from_zero_gpu_worker", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(
+        cli,
+        "_enabled_soperator_release_refs_for_target",
+        lambda *_args, **_kwargs: (cli._SoperatorReleaseRef("soperator", "soperator"),),
+    )
+    monkeypatch.setattr(cli.shutil, "which", lambda _name: "/usr/bin/kubectl")
+    monkeypatch.setattr(cli.subprocess, "run", _fake_run)
+
+    cli._ensure_soperator_gpu_ephemeral_bootstrap_power_state(
+        {"infra": {"components": []}},
+        target_ref="soperator-cluster1",
+        extra_env={"KUBECONFIG": "/tmp/kubeconfig"},
+    )
+
+    assert not any("patch" in cmd for cmd in commands)
+
+
 def test_deploy_generated_artifacts_rejects_manifest_missing_deploy_validations(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -16901,10 +17253,13 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     assert "creates or reuses aligned SFS filesystems" in normalized_soperator_migrate_help
     assert "Soperator/Slurm smoke validation" in normalized_soperator_migrate_help
     assert "one-task srun job" in normalized_soperator_migrate_help
-    assert (
-        "Slurm NCCL benchmark using two idle GPU Slurm nodes" in normalized_soperator_migrate_help
+    assert "all-partition hostname jobs" in normalized_soperator_migrate_help
+    assert "Slurm GPU allocation check across reported GPU partitions" in (
+        normalized_soperator_migrate_help
     )
-    assert "only idle multi-GPU Slurm node" in normalized_soperator_migrate_help
+    assert "Slurm NCCL benchmark only on selected 8-GPU Slurm nodes" in (
+        normalized_soperator_migrate_help
+    )
     assert "ext-soperator-migrate-report.md" in normalized_soperator_migrate_help
     assert "shows an interactive progress spinner and phase-aware Soperator migration status" in (
         normalized_soperator_migrate_help
@@ -19721,6 +20076,26 @@ def test_soperator_production_rejects_invalid_fixed_worker_sizing(
         cli._materialize_soperator_component_defaults(payload)
 
 
+@pytest.mark.parametrize(
+    "soperator_inputs",
+    [
+        {"worker_cpu_nodes_per_group": 101},
+        {"worker_gpu_nodes_per_group": 101},
+    ],
+)
+def test_soperator_production_rejects_worker_nodes_per_group_above_profile_max(
+    soperator_inputs: Mapping[str, Any],
+) -> None:
+    payload = _soperator_production_payload({"soperator": soperator_inputs})
+    payload["apps"]["charts"][0]["profile"] = "nebius-mixed-v1"
+
+    with pytest.raises(
+        ValueError,
+        match="soperator\\.worker_.*_nodes_per_group must be less than or equal to 100",
+    ):
+        cli._materialize_soperator_component_defaults(payload)
+
+
 def test_soperator_production_worker_shards_write_default_controls() -> None:
     payload = _soperator_production_payload(
         {
@@ -19765,6 +20140,67 @@ def test_soperator_production_worker_shards_write_default_controls() -> None:
         for item in values["nodesets"]
         if str(item.get("name", "")).startswith("worker-")
     ] == [(group_key, 100) for group_key in expected_group_keys]
+
+
+def test_soperator_mixed_large_worker_counts_shard_to_100_node_groups() -> None:
+    payload = _soperator_production_payload(
+        {
+            "soperator": {
+                "worker_cpu_total_nodes": 500,
+                "worker_cpu_nodes_per_group": 100,
+                "worker_gpu_total_nodes": 1000,
+                "worker_gpu_nodes_per_group": 100,
+            }
+        }
+    )
+    payload["apps"]["charts"][0]["profile"] = "nebius-mixed-v1"
+
+    assert cli._materialize_soperator_component_defaults(payload) is True
+
+    mk8s_inputs = payload["infra"]["components"][0]["inputs"]
+    node_groups = mk8s_inputs["node_groups"]
+    expected_cpu_keys = [f"worker-cpu-{index}" for index in range(5)]
+    expected_gpu_keys = [f"worker-gpu-{index}" for index in range(10)]
+    expected_group_keys = [*expected_cpu_keys, *expected_gpu_keys]
+    assert [key for key in node_groups if str(key).startswith("worker-")] == expected_group_keys
+    assert {
+        key: (
+            node_groups[key].get("node_count"),
+            node_groups[key].get("autoscaling"),
+            node_groups[key].get("nodeset_name"),
+        )
+        for key in expected_group_keys
+    } == {
+        **{key: (100, None, "worker-cpu") for key in expected_cpu_keys},
+        **{key: (100, None, "worker-gpu") for key in expected_gpu_keys},
+    }
+    assert mk8s_inputs["soperator"]["worker_node_groups"] == {
+        key: {
+            "autoscaling": {"enabled": False},
+            "ephemeral_nodes": {"enabled": False},
+        }
+        for key in expected_group_keys
+    }
+
+    app_row = payload["apps"]["charts"][0]
+    values = app_row["values"]
+    assert app_row["placements"]["worker"] == expected_group_keys
+    worker_nodesets = [
+        item for item in values["nodesets"] if str(item.get("name", "")).startswith("worker-")
+    ]
+    assert [(item["name"], item["replicas"]) for item in worker_nodesets] == [
+        (key, 100) for key in expected_group_keys
+    ]
+    assert all("ephemeralNodes" not in item for item in worker_nodesets)
+    assert all("initialNumberEphemeralNodes" not in item for item in worker_nodesets)
+    assert "suspendTime" not in values.get("slurmConfig", {})
+
+    partitions = {
+        partition["name"]: partition["nodeSetRefs"]
+        for partition in values["partitionConfiguration"]["partitions"]
+        if partition["name"] in {"cpu", "gpu"}
+    }
+    assert partitions == {"cpu": expected_cpu_keys, "gpu": expected_gpu_keys}
 
 
 def test_soperator_production_worker_autoscaling_shards_mk8s_groups_and_nodesets() -> None:
@@ -19940,8 +20376,8 @@ def test_soperator_production_worker_ephemeral_nodes_shard_initial_active_counts
         for name, nodeset in worker_nodesets.items()
     } == {
         "worker-0": (100, True, 3),
-        "worker-1": (100, True, 0),
-        "worker-2": (50, True, 0),
+        "worker-1": (100, True, 1),
+        "worker-2": (50, True, 1),
     }
 
 

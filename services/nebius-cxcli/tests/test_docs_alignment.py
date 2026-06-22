@@ -131,18 +131,35 @@ def test_docs_document_managed_tool_checksum_verification() -> None:
 
 def test_readme_mk8s_gpu_workload_validation_defaults_include_soperator() -> None:
     readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+    design = (REPO_ROOT / "docs" / "design.md").read_text(encoding="utf-8")
+    design_flat = _squash(design)
 
     assert (
         "GPU Visibility test is enabled by default for GPU-backed MK8s deploys, including Soperator production targets"
         in readme
     )
     assert (
-        "NCCL test is enabled by default for GPU-enabled MK8s clusters, including Soperator production targets"
+        "NCCL test is enabled by default for GPU-cluster / InfiniBand-capable MK8s shapes"
+        in readme
+    )
+    assert (
+        "defaults to disabled for 1-GPU Ethernet-only test/dev shapes unless the operator explicitly sets"
         in readme
     )
     assert (
         "Soperator ActiveChecks stay as the opt-in Slurm-side benchmark/diagnostic path" in readme
     )
+    assert (
+        "NCCL is a separate deploy-time validation that defaults on for GPU-cluster / InfiniBand-capable MK8s shapes"
+        in design
+    )
+    assert (
+        "defaults off for 1-GPU Ethernet-only test/dev shapes unless the operator explicitly sets"
+        in design_flat
+    )
+    assert "GPU Visibility pods use the cxcli-owned `gpu-visibility-validation`" in readme
+    assert "`gpu-visibility-validation` ServiceAccount with token automount disabled" in design
+    assert "leave that generic NCCL path off" not in readme
     assert "Soperator targets suppress this generic workload prompt" not in readme
     assert "Soperator targets suppress the generic deploy-time NCCL workload" not in readme
 
@@ -733,6 +750,7 @@ def test_soperator_docs_define_worker_autoscaling_boundary() -> None:
     assert "initialNumberEphemeralNodes: 1" in chart_design
     assert "not a permanent minimum" in chart_flat
     assert "`slurmConfig.suspendTime` must be finite and non-negative" in chart_flat
+    assert "seed GPU libraries into the shared jail" in chart_flat
 
     assert "one Slurm worker pod equals one Kubernetes worker VM" in chart_readme_flat
     assert "`inputs.soperator.worker_cpu_total_nodes` and" in chart_readme_flat
@@ -757,8 +775,23 @@ def test_soperator_docs_define_worker_autoscaling_boundary() -> None:
     assert "`soperator.worker_cpu_total_nodes`" in readme_flat
     assert "`soperator.worker_gpu_total_nodes`" in readme_flat
     assert "not total GPU count and not an aggregate CPU/GPU split" in readme_flat
+    assert "worker_*_nodes_per_group` value must be less than or equal to" in readme_flat
+    assert "cap worker shards at 100 MK8s nodes per generated group" in readme_flat
     assert "service-role autoscaling helpers" in readme_flat
     assert "Worker autoscaling is controlled per generated shard" in readme_flat
+    assert "uses `autoscaling.enabled` as the per-shard Infra/MK8s worker" in (
+        readme_flat
+    )
+    assert "answering `true` also writes same-shard `ephemeral_nodes.enabled=true`" in (
+        readme_flat
+    )
+    assert "with max defaulting to that shard's generated capacity" in readme_flat
+    assert "answering `false` clears same-shard autoscaling bounds" in readme_flat
+    assert "synthetic bulk apply-to-all choice for all CPU worker shards" in readme_flat
+    assert "all worker shards in mixed CPU+GPU layouts" in readme_flat
+    assert "`all_worker_shards_apply_to_all` and defaults to `true`" in readme_flat
+    assert "No bulk key is saved" in readme_flat
+    assert "suspend_time_seconds` only after at least one shard has" in readme_flat
     assert "5 x `1gpu-*` hosts means five Slurm worker replicas with `gpu: 1`" in (readme_flat)
     assert "5 x `8gpu-*` hosts means five replicas with `gpu: 8` and 40 total GPUs" in (readme_flat)
     assert "`inputs.soperator.worker_node_groups.<worker>.ephemeral_nodes.enabled=true`" in (
@@ -767,6 +800,8 @@ def test_soperator_docs_define_worker_autoscaling_boundary() -> None:
     assert (
         "`initialNumberEphemeralNodes` is only the initial active Slurm worker pods" in readme_flat
     )
+    assert "raises GPU worker shards to at least one initial active worker" in readme_flat
+    assert "seed GPU libraries into the jail" in readme_flat
     assert "not upstream Soperator Slurm-demand elasticity" in design_flat
     assert "one-worker-pod to one-Kubernetes-worker-VM resource shape" in design_flat
     assert "`inputs.soperator.worker_node_groups.<worker>.ephemeral_nodes.enabled=true`" in (
@@ -775,18 +810,43 @@ def test_soperator_docs_define_worker_autoscaling_boundary() -> None:
     assert "`inputs.soperator.worker_cpu_total_nodes`" in design_flat
     assert "`inputs.soperator.worker_gpu_total_nodes`" in design_flat
     assert "`inputs.soperator.worker_node_groups`" in design_flat
+    assert "worker_*_nodes_per_group` value must be less than or equal to" in design_flat
+    assert "cap worker shards at 100 MK8s nodes per generated group" in design_flat
     assert "Worker autoscaling is controlled per generated worker shard" in design_flat
+    assert "wizard uses `autoscaling.enabled` as the per-shard Infra/MK8s worker" in (
+        design_flat
+    )
+    assert "answering `true` writes same-shard `ephemeral_nodes.enabled=true`" in design_flat
+    assert "with max defaulting to that shard's generated capacity" in design_flat
+    assert "answering `false` clears same-shard autoscaling bounds" in design_flat
+    assert "synthetic bulk apply-to-all choice for all CPU worker shards" in design_flat
+    assert "`all_worker_shards_apply_to_all` and defaults to `true`" in design_flat
+    assert "No bulk key is saved" in design_flat
+    assert "only after at least one shard has autoscaling-backed ephemeral nodes" in design_flat
+    assert "raises GPU worker shards to at least one initial active worker" in design_flat
+    assert "seed GPU libraries into the jail" in design_flat
     assert "not total GPU count and not an aggregate CPU/GPU split" in design_flat
     assert "5 x `1gpu-*` hosts means five Slurm worker replicas with `gpu: 1`" in (design_flat)
     assert "5 x `8gpu-*` hosts means five replicas with `gpu: 8` and 40 total GPUs" in (design_flat)
     assert "per-generated-shard `worker_node_groups` controls" in (_squash(changelog))
+    assert "as the per-shard Infra/MK8s worker autoscaling toggle" in _squash(changelog)
+    assert "max prompt defaults to the generated shard capacity" in _squash(changelog)
+    assert "synthetic bulk apply-to-all wizard choice" in _squash(changelog)
+    assert "all_worker_shards_apply_to_all" in _squash(changelog)
+    assert "defaults to `true`" in _squash(changelog)
+    assert "saves no bulk key" in _squash(changelog)
+    assert "fail fast when they exceed the selected profile's per-group limit" in _squash(
+        changelog
+    )
     assert "Changed Soperator production worker sizing to shape-specific fixed capacity" in (
         _squash(changelog)
     )
     assert "`initialNumberEphemeralNodes` from the shard's autoscaling" in _squash(changelog)
+    assert "raises GPU worker shards to at least one initial active worker" in _squash(changelog)
     assert "Worker sizing " in cli_text
     assert "is shape-specific: worker_cpu_*" in cli_text
     assert "GPU count per host comes from the preset" in cli_text
+    assert "selected profile's per-group limit" in cli_text
     for retired_helper in (
         "worker_total_nodes",
         "worker_nodes_per_group",
@@ -1157,11 +1217,18 @@ def test_docs_define_component_selector_contract() -> None:
     assert "required Soperator/Slurm smoke validation" in readme_flat
     assert "one short synchronous `srun` job" in readme_flat
     assert "Slurm-owned `mpirun /usr/bin/all_reduce_perf_mpi` benchmark" in readme_flat
-    assert "only idle multi-GPU Slurm node" in readme_flat
+    assert "all-partition hostname jobs" in readme_flat
+    assert "drive autoscaled workers up to partition capacity" in readme_flat
+    assert "all-GPU-partition `nvidia-smi -L` allocations" in readme_flat
     assert (
-        "Single-GPU-only Slurm test clusters report that Slurm NCCL benchmark as skipped"
+        "1-GPU Slurm test clusters skip the Slurm NCCL benchmark"
         in readme_flat
     )
+    assert "nebius-cxcli-soperator-cluster-validation/v2" in readme_flat
+    assert "command `stdout`/`stderr` as arrays of lines" in readme_flat
+    assert "structured per-partition `partition_hostnames` and `gpu_allocations` lists" in readme_flat
+    assert "selected Slurm GPU nodes are 8-GPU nodes" in readme_flat
+    assert "exactly one total 8-GPU Slurm node and it is idle" in readme_flat
     assert "prefers an idle non-GPU partition when one exists" in readme_flat
     assert "Slurm nodes reported as `inval` remain an unhealthy validation gate" in readme_flat
     assert "same catalog-owned post-render patches that Flux would apply" in readme_flat
@@ -1339,8 +1406,13 @@ def test_docs_define_component_selector_contract() -> None:
     assert "runs Kubernetes data-copy Jobs when old and target PVC pairs exist" in design_flat
     assert "required Soperator/Slurm smoke validation" in design_flat
     assert "one-task `srun` job" in design_flat
-    assert "falls back to the only idle multi-GPU Slurm node" in design_flat
-    assert "skipped only when Slurm cannot provide at least two GPU ranks" in design_flat
+    assert "runs hostname jobs across every reported Slurm partition" in design_flat
+    assert "one-GPU `nvidia-smi -L` allocations across every reported GPU partition" in design_flat
+    assert "nebius-cxcli-soperator-cluster-validation/v2" in design_flat
+    assert "command `stdout`/`stderr` are arrays of lines" in design_flat
+    assert "structured `partition_hostnames` and `gpu_allocations` arrays" in design_flat
+    assert "selected Slurm GPU nodes are 8-GPU nodes" in design_flat
+    assert "exactly one total 8-GPU Slurm node and it is idle" in design_flat
     assert "prefers an idle non-GPU partition when one exists" in design_flat
     assert "Slurm nodes reported as `inval` remain an unhealthy validation gate" in design_flat
     assert "same catalog-owned post-render patches that Flux would apply" in design_flat

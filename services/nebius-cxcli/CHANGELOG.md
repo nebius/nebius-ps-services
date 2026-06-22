@@ -6,6 +6,54 @@ All notable changes to this project are tracked here. This changelog follows
 
 ## [Unreleased]
 
+- Changed MK8s GPU validation defaults so `deploy.targets[].validations.mk8s_gpu.nccl.enabled`
+  defaults to `false` for clearly 1-GPU Ethernet-only MK8s test/dev shapes and
+  stays default-on for GPU-cluster / InfiniBand-capable shapes. Operators can
+  still explicitly set `nccl.enabled=true` on 1-GPU shapes to run the slower
+  Socket/TCPIP NCCL smoke check.
+- Fixed the MK8s create wizard so the auto-selected Kubernetes version is
+  written before `mk8s_compatible_platforms` resolves CPU/GPU platform choices.
+  This prevents required platform prompts from falling back to manual input
+  after `inputs.cluster.public_endpoint` when the provider depends on
+  `inputs.cluster.k8s_version`.
+- Changed required Soperator smoke validation so it no longer runs the expensive
+  Slurm NCCL benchmark on 1-GPU Slurm nodes. The required Slurm path now covers
+  broad scheduling and device wiring with all-partition hostname jobs and
+  all-GPU-partition one-GPU `nvidia-smi -L` allocations. The hostname jobs
+  request the full node count reported by each Slurm partition, so scale-from-zero
+  worker shards are driven up to their configured capacity before later
+  Kubernetes GPU checks evaluate the node data plane. The Slurm
+  `mpirun /usr/bin/all_reduce_perf_mpi` benchmark runs only when the selected
+  Slurm GPU nodes are 8-GPU nodes, and the Slurm GPU sub-check is now reported
+  as `Slurm GPU allocation check` so it is not confused with the Kubernetes GPU
+  Visibility validation. The Soperator validation JSON detail report schema is
+  now `nebius-cxcli-soperator-cluster-validation/v2`; it stores command output
+  as line arrays and adds structured per-partition `partition_hostnames` and
+  `gpu_allocations` lists so thousand-node clusters remain inspectable without
+  parsing escaped multiline strings.
+- Fixed deploy-time GPU Visibility validation so fresh `gpu-validation`
+  namespaces no longer race Kubernetes creation of the implicit `default`
+  ServiceAccount. cxcli now applies the namespace before the sampled CUDA pods,
+  creates a dedicated `gpu-visibility-validation` ServiceAccount, and has the
+  pods explicitly use it with token automount disabled.
+- Fixed the Soperator `create` wizard so generated worker shards use
+  `worker_node_groups.<worker>.autoscaling.enabled` as the per-shard Infra/MK8s
+  worker autoscaling toggle. Answering `true` automatically writes the matching
+  `worker_node_groups.<worker>.ephemeral_nodes.enabled=true` and asks min/max;
+  the max prompt defaults to the generated shard capacity, such as `4` for a
+  single CPU worker shard created from `worker_cpu_total_nodes=4`. Answering
+  `false` clears the same shard's autoscaling bounds and writes
+  `ephemeral_nodes.enabled=false`. The wizard now asks
+  `worker_ephemeral_nodes.suspend_time_seconds` only after at least one shard has
+  autoscaling-backed ephemeral nodes enabled. Multi-shard worker layouts now
+  get a synthetic bulk apply-to-all wizard choice for all CPU worker shards,
+  all GPU worker shards, or all worker shards in mixed CPU+GPU layouts. The
+  mixed-layout helper is shown as `all_worker_shards_apply_to_all`, defaults to
+  `true`, writes only canonical per-shard controls when accepted, and saves no
+  bulk key.
+  `worker_*_nodes_per_group` values now fail fast when they exceed the selected
+  profile's per-group limit instead of silently clamping the generated shard
+  size.
 - Fixed Soperator deploy smoke validation so first-run storage convergence no
   longer fails immediately on transient `jail-pv` `FailedMount` Pending pods.
   The validation now waits for `jail-pvc`/`jail-pv` binding, `jail-mount`
@@ -35,11 +83,14 @@ All notable changes to this project are tracked here. This changelog follows
 - Fixed Soperator smoke validation for ephemeral worker clusters so the
   one-task `srun` check allows a longer Slurm resume window when the selected
   partition is backed by cloud/powered-down workers.
-- Fixed Soperator GPU worker autoscaling from zero so cxcli runs MK8s GPU
-  validations after applying Soperator, letting worker pods create the
-  Kubernetes autoscaler pressure that brings GPU hosts up. Also downsized
-  generated GPU worker `nodeConfig.static` CPU topology when a selected preset,
-  such as `1gpu-16vcpu-200gb`, has fewer vCPUs than the profile template.
+- Fixed Soperator GPU worker autoscaling from zero so cxcli applies Soperator,
+  runs the required Soperator smoke validation first to create Slurm/GPU
+  allocation pressure, and only then runs MK8s GPU validations. This keeps GPU
+  stack readiness from failing on an intentionally empty scale-to-zero worker
+  pool while still surfacing Soperator/Slurm resume failures from the smoke
+  report. Also downsized generated GPU worker `nodeConfig.static` CPU topology
+  when a selected preset, such as `1gpu-16vcpu-200gb`, has fewer vCPUs than the
+  profile template.
 - Changed Soperator production worker sizing to shape-specific fixed capacity
   plus per-generated-shard `worker_node_groups` controls. cxcli now writes
   disabled `autoscaling` and `ephemeral_nodes` controls for each generated
@@ -47,8 +98,10 @@ All notable changes to this project are tracked here. This changelog follows
   autoscaling renders K8s autoscaling min/max instead of fixed `node_count`.
   Enabled shard `ephemeral_nodes` requires that same shard's autoscaling,
   renders upstream Soperator ephemeral NodeSet fields, derives
-  `initialNumberEphemeralNodes` from the shard's autoscaling `min_node_count`,
-  and writes finite non-negative global `slurmConfig.suspendTime` from
+  `initialNumberEphemeralNodes` from the shard's autoscaling `min_node_count`
+  for CPU workers, raises GPU worker shards to at least one initial active
+  worker when max capacity is positive so Soperator can seed GPU libraries into
+  the jail, and writes finite non-negative global `slurmConfig.suspendTime` from
   `worker_ephemeral_nodes.suspend_time_seconds`. Legacy worker autoscaling and
   `worker_ephemeral_nodes.enabled` helpers now fail fast.
 - Refactored lifecycle report naming under the single `generated/reports/`
@@ -202,10 +255,10 @@ All notable changes to this project are tracked here. This changelog follows
 - Fixed cxcli-managed Soperator GPU NodeSet defaults so 8-GPU worker profiles
   expose/request 32 Slurm CPUs, matching the chart's `DefCpuPerGPU=4` default
   and avoiding impossible CPU under-reporting for GPU jobs.
-- Made the Soperator Slurm NCCL smoke validation probe the largest GPU count
-  Slurm can allocate on the selected nodes before running `all_reduce_perf_mpi`,
-  so the report reflects live Slurm policy instead of assuming every reported
-  GPU can be allocated by one task.
+- Made the Soperator Slurm NCCL smoke validation probe allocatable GPU count on
+  the selected 8-GPU Slurm nodes before running `all_reduce_perf_mpi`, so the
+  report reflects live Slurm policy and skips the full benchmark when fewer than
+  8 GPUs per selected node are allocatable.
 - Fixed Soperator mixed-profile rematerialization so configs edited from the
   generated GPU baseline to `nebius-mixed-v1` prune stale managed `worker`
   state, materialize `worker-cpu` and `worker-gpu` MK8s groups, and render only
@@ -358,13 +411,12 @@ All notable changes to this project are tracked here. This changelog follows
   row-level planned VPC network/subnet bindings.
 - Improved Soperator-owned Slurm NCCL validation. The Soperator validation now
   replaces the old one-rank smoke with one Slurm-owned
-  `mpirun /usr/bin/all_reduce_perf_mpi` benchmark that uses two idle GPU Slurm
-  nodes when available and otherwise uses the only idle multi-GPU Slurm node,
-  parses the 2G/4G/8G large-message `busbw` rows, records
+  `mpirun /usr/bin/all_reduce_perf_mpi` benchmark that uses selected 8-GPU Slurm
+  nodes, parses the 2G/4G/8G large-message `busbw` rows, records
   `avg_large_message_bus_bandwidth_gbps` plus per-size bandwidths in the JSON
   check, and includes that value in deploy/migration summaries when Kubernetes
   NCCL is skipped because Soperator workers already own the Ready GPUs.
-  Single-GPU-only Slurm clusters report the Slurm NCCL benchmark as skipped.
+  One-GPU Slurm clusters report the Slurm NCCL benchmark as skipped.
 - Fixed external Soperator migration validation resume. The Slurm NCCL
   validation now holds the selected multi-node allocation with `salloc` and
   launches the MPI benchmark once from a nested one-task `srun`, so Slurm does
@@ -542,13 +594,13 @@ All notable changes to this project are tracked here. This changelog follows
 - Improved required Soperator/Slurm smoke validation: the one-task `srun`
   smoke job now prefers an idle non-GPU partition when available, while Slurm
   node status treats `inval` as unhealthy so invalid GPU workers remain a
-  visible pending validation gate. When Slurm exposes an idle or mixed GPU
-  partition, the smoke report now also runs Slurm-side one-GPU visibility and
-  a Slurm NCCL benchmark that uses two idle GPU Slurm nodes when available or
-  one idle multi-GPU Slurm node when it is the only GPU node.
+  visible pending validation gate. The smoke report now also runs Slurm-side
+  hostname jobs across every reported partition, one-GPU `nvidia-smi -L`
+  allocations across every reported GPU partition, and the Slurm NCCL benchmark
+  only on selected 8-GPU Slurm nodes.
 - Fixed `deploy-report.md` Soperator GPU validation summaries so Kubernetes
   GPU Visibility and NCCL scheduler skips caused by Soperator worker pod GPU
-  reservations lead with the same target's passed Slurm-side GPU visibility or
+  reservations lead with the same target's passed Slurm-side GPU allocation or
   NCCL benchmark result, while raw detail JSON keeps the Kubernetes skip
   evidence.
 - Changed local `deploy` for cxcli-managed Soperator targets to stage app

@@ -230,6 +230,46 @@ def test_build_deploy_validation_report_formats_soperator_smoke_summary(
     assert "Slurm srun smoke job" in "\n".join(validation_section_lines(report))
 
 
+def test_build_deploy_validation_report_preserves_skipped_soperator_subchecks(
+    tmp_path: Path,
+) -> None:
+    validations = [
+        {
+            "kind": "soperator_cluster_smoke",
+            "name": "Soperator cluster smoke test (training)",
+            "report_file": "soperator-cluster-validation-report-training.json",
+        }
+    ]
+    (tmp_path / "soperator-cluster-validation-report-training.json").write_text(
+        json.dumps(
+            {
+                "passed": True,
+                "status": "passed",
+                "summary": "7/8 Soperator/Slurm checks passed. 1 skipped.",
+                "checks": [
+                    {
+                        "name": "Slurm NCCL benchmark",
+                        "status": "skipped",
+                        "passed": False,
+                        "summary": (
+                            "Skipped: full Slurm NCCL benchmark runs only on 8-GPU Slurm nodes."
+                        ),
+                    }
+                ],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    report = build_deploy_validation_report(validations, reports_dir=tmp_path)
+    markdown = "\n".join(validation_section_lines(report))
+
+    assert report.overall_status == "passed"
+    assert "`SKIPPED` Slurm NCCL benchmark: Skipped:" in markdown
+    assert "`FAIL` Slurm NCCL benchmark" not in markdown
+
+
 def test_build_deploy_validation_report_formats_socket_mode_nccl_summary(tmp_path: Path) -> None:
     validations = [
         {
@@ -418,9 +458,12 @@ def test_build_deploy_validation_report_uses_soperator_owned_gpu_smoke_for_skips
                 "summary": "7/7 Soperator/Slurm checks passed.",
                 "checks": [
                     {
-                        "name": "Slurm GPU visibility test",
+                        "name": "Slurm GPU allocation check",
                         "passed": True,
-                        "summary": "one-GPU Slurm allocation reported NVIDIA GPUs on partition gpu.",
+                        "summary": (
+                            "one-GPU Slurm allocations reported NVIDIA GPUs across all reported "
+                            "GPU partition nodes: gpu=2."
+                        ),
                     },
                     {
                         "name": "Slurm NCCL benchmark",
@@ -442,8 +485,9 @@ def test_build_deploy_validation_report_uses_soperator_owned_gpu_smoke_for_skips
 
     summary_lines = format_deploy_validation_summary_lines(report)
     assert (
-        "  PASS GPU Visibility test (mk8s): Soperator-owned Slurm GPU visibility passed: "
-        "one-GPU Slurm allocation reported NVIDIA GPUs on partition gpu. "
+        "  PASS GPU Visibility test (mk8s): Soperator-owned Slurm GPU allocation passed: "
+        "one-GPU Slurm allocations reported NVIDIA GPUs across all reported GPU "
+        "partition nodes: gpu=2. "
         "The Kubernetes workload check was not scheduled because Soperator worker pods "
         "reserve all Ready GPU nodes."
     ) in summary_lines
@@ -459,9 +503,76 @@ def test_build_deploy_validation_report_uses_soperator_owned_gpu_smoke_for_skips
     assert "### GPU Visibility test (mk8s)" in markdown
     assert "### NCCL test (mk8s)" in markdown
     assert "Summary: Skipped: all Ready GPU nodes" not in markdown
-    assert "Soperator-owned Slurm GPU visibility passed" in markdown
+    assert "Soperator-owned Slurm GPU allocation passed" in markdown
     assert "Soperator-owned Slurm NCCL benchmark passed" in markdown
     assert "average bus bandwidth **580.2** Gbps" in markdown
+
+
+def test_build_deploy_validation_report_does_not_promote_skipped_soperator_nccl(
+    tmp_path: Path,
+) -> None:
+    validations = [
+        {
+            "kind": "mk8s_nccl",
+            "name": "NCCL test (mk8s)",
+            "target_ref": "mk8s",
+            "report_file": "nccl-test-report-mk8s.json",
+        },
+        {
+            "kind": "soperator_cluster_smoke",
+            "name": "Soperator cluster smoke test (mk8s)",
+            "target_ref": "mk8s",
+            "report_file": "soperator-cluster-validation-report-mk8s.json",
+        },
+    ]
+    (tmp_path / "nccl-test-report-mk8s.json").write_text(
+        json.dumps(
+            {
+                "validation": "NCCL test",
+                "passed": True,
+                "skipped": True,
+                "skip_reason": "all Ready GPU nodes already have their GPUs allocated to existing workloads",
+                "total_gpu_node_count": 2,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "soperator-cluster-validation-report-mk8s.json").write_text(
+        json.dumps(
+            {
+                "kind": "soperator_cluster_smoke",
+                "target_ref": "mk8s",
+                "passed": True,
+                "status": "passed",
+                "summary": "7/8 Soperator/Slurm checks passed. 1 skipped.",
+                "checks": [
+                    {
+                        "name": "Slurm NCCL benchmark",
+                        "status": "skipped",
+                        "passed": False,
+                        "summary": (
+                            "Skipped: full Slurm NCCL benchmark runs only on 8-GPU Slurm nodes; "
+                            "selected partition gpu reported 1 GPU(s) per node."
+                        ),
+                    }
+                ],
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    report = build_deploy_validation_report(validations, reports_dir=tmp_path)
+    summary_lines = format_deploy_validation_summary_lines(report)
+    markdown = "\n".join(validation_section_lines(report))
+
+    assert (
+        "  PASS NCCL test (mk8s): Skipped: all Ready GPU nodes already have their GPUs "
+        "allocated to existing workloads; total Ready GPU nodes 2."
+    ) in summary_lines
+    assert "Soperator-owned Slurm NCCL benchmark passed" not in markdown
+    assert "`SKIPPED` Slurm NCCL benchmark: Skipped:" in markdown
 
 
 def test_build_deploy_validation_report_formats_rdma_dmabuf_summary(tmp_path: Path) -> None:

@@ -5269,7 +5269,10 @@ def test_wizard_skips_irrelevant_mk8s_gpu_validation_prompts_until_gpu_cluster_i
             "deploy.targets[].validations.mk8s_gpu.operator_readiness.enabled": {"default": True},
             "deploy.targets[].validations.mk8s_gpu.gpu_visibility.enabled": {"default": True},
             "deploy.targets[].validations.mk8s_gpu.gpu_visibility.max_nodes": {"default": 3},
-            "deploy.targets[].validations.mk8s_gpu.nccl.enabled": {"default": True},
+            "deploy.targets[].validations.mk8s_gpu.nccl.enabled": {
+                "default": True,
+                "write_default_to_config": True,
+            },
             "deploy.targets[].validations.mk8s_gpu.nccl.max_nodes": {"default": 8},
             "deploy.targets[].validations.mk8s_gpu.nccl.average_bus_bandwidth_threshold_gbps": {
                 "default": 300
@@ -5293,6 +5296,7 @@ def test_wizard_skips_irrelevant_mk8s_gpu_validation_prompts_until_gpu_cluster_i
     monkeypatch.setattr("nebius_cxcli.cli._wizard_continue_phase", lambda *_args, **_kwargs: True)
 
     prompted_paths: list[str] = []
+    prompt_currents: dict[str, list[object]] = {}
 
     def _fake_prompt(
         path_label: str,
@@ -5305,6 +5309,7 @@ def test_wizard_skips_irrelevant_mk8s_gpu_validation_prompts_until_gpu_cluster_i
     ) -> tuple[object, bool]:
         _ = choices, type_hint, required, unset_on_skip
         prompted_paths.append(path_label)
+        prompt_currents.setdefault(path_label, []).append(current)
         return current, False
 
     monkeypatch.setattr("nebius_cxcli.cli._prompt_scalar_override", _fake_prompt)
@@ -5323,12 +5328,123 @@ def test_wizard_skips_irrelevant_mk8s_gpu_validation_prompts_until_gpu_cluster_i
     assert "deploy.targets[0].validations.mk8s_gpu.gpu_visibility.enabled" in prompted_paths
     assert "deploy.targets[0].validations.mk8s_gpu.gpu_visibility.max_nodes" in prompted_paths
     assert "deploy.targets[0].validations.mk8s_gpu.nccl.enabled" in prompted_paths
+    assert prompt_currents["deploy.targets[0].validations.mk8s_gpu.nccl.enabled"] == [True]
     assert "deploy.targets[0].validations.mk8s_gpu.nccl.max_nodes" in prompted_paths
     assert (
         "deploy.targets[0].validations.mk8s_gpu.nccl.average_bus_bandwidth_threshold_gbps"
         not in prompted_paths
     )
     assert "deploy.targets[0].validations.mk8s_gpu.health_checker.enabled" not in prompted_paths
+
+
+def test_wizard_defaults_mk8s_nccl_off_for_single_gpu_shape(monkeypatch) -> None:
+    config_yaml = yaml.safe_dump(
+        {
+            "version": "v1",
+            "client_info": {
+                "client_name": "demo",
+                "nebius": {
+                    "tenant_id": "tenant-1",
+                    "project_id": "project-1",
+                    "region_id": "us-central1",
+                },
+                "notifications": {"email_enabled": True, "email": None},
+            },
+            "infra": {
+                "components": [
+                    {
+                        "id": "mk8s",
+                        "enabled": True,
+                        "source": "../../platform-infra/modules/mk8s",
+                        "inputs": {
+                            "node_groups": {
+                                "worker": {
+                                    "gpu": True,
+                                    "platform": "gpu-h100-sxm",
+                                    "preset": "1gpu-16vcpu-200gb",
+                                    "node_count": 1,
+                                }
+                            },
+                        },
+                    }
+                ],
+            },
+            "apps": {"charts": []},
+        },
+        sort_keys=False,
+    )
+
+    entry = ComponentEntry(
+        id="mk8s",
+        scope="infra",
+        config_path="infra.mk8s",
+        description="Managed Kubernetes",
+        source="../../platform-infra/modules/mk8s",
+        wizard_fields={
+            "deploy.targets[].validations.mk8s_gpu.operator_readiness.enabled": {"default": True},
+            "deploy.targets[].validations.mk8s_gpu.gpu_visibility.enabled": {"default": True},
+            "deploy.targets[].validations.mk8s_gpu.gpu_visibility.max_nodes": {"default": 3},
+            "deploy.targets[].validations.mk8s_gpu.nccl.enabled": {
+                "default": True,
+                "write_default_to_config": True,
+            },
+            "deploy.targets[].validations.mk8s_gpu.nccl.max_nodes": {"default": 8},
+            "deploy.targets[].validations.mk8s_gpu.nccl.average_bus_bandwidth_threshold_gbps": {
+                "default": 300
+            },
+            "deploy.targets[].validations.mk8s_gpu.health_checker.enabled": {"default": False},
+        },
+    )
+
+    monkeypatch.setattr(
+        "nebius_cxcli.cli.module_required_variables",
+        lambda _source: (),
+    )
+    monkeypatch.setattr(
+        "nebius_cxcli.cli._runtime_required_input_leaf_names",
+        lambda _entry: set(),
+    )
+    monkeypatch.setattr(
+        "nebius_cxcli.cli.module_variables",
+        lambda _source: (),
+    )
+    monkeypatch.setattr("nebius_cxcli.cli._wizard_continue_phase", lambda *_args, **_kwargs: True)
+
+    prompted_paths: list[str] = []
+    prompt_currents: dict[str, list[object]] = {}
+
+    def _fake_prompt(
+        path_label: str,
+        current: object,
+        *,
+        choices=None,
+        type_hint=None,
+        required=False,
+        unset_on_skip=False,
+    ) -> tuple[object, bool]:
+        _ = choices, type_hint, required, unset_on_skip
+        prompted_paths.append(path_label)
+        prompt_currents.setdefault(path_label, []).append(current)
+        return current, False
+
+    monkeypatch.setattr("nebius_cxcli.cli._prompt_scalar_override", _fake_prompt)
+
+    updated_yaml, completed = _run_component_field_wizard(
+        config_yaml=config_yaml,
+        selected_infra={"mk8s"},
+        selected_apps=set(),
+        infra_entries=(entry,),
+        app_entries=(),
+        provider_lookup=None,
+    )
+
+    assert completed is True
+    assert "deploy.targets[0].validations.mk8s_gpu.nccl.enabled" in prompted_paths
+    assert prompt_currents["deploy.targets[0].validations.mk8s_gpu.nccl.enabled"] == [False]
+    assert "deploy.targets[0].validations.mk8s_gpu.nccl.max_nodes" not in prompted_paths
+    payload = yaml.safe_load(updated_yaml)
+    mk8s_gpu_validations = payload["deploy"]["targets"][0]["validations"]["mk8s_gpu"]
+    assert mk8s_gpu_validations["nccl"]["enabled"] is False
 
 
 def test_wizard_auto_enabled_mk8s_gpu_apps_are_prompted_in_same_pass(monkeypatch) -> None:

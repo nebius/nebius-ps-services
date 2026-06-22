@@ -2584,7 +2584,7 @@ def test_render_local_soperator_mixed_profile_writes_ephemeral_shape_nodesets(
         "worker-cpu-0": (2, True, 1),
         "worker-cpu-1": (1, True, 0),
         "worker-gpu-0": (3, True, 2),
-        "worker-gpu-1": (1, True, 0),
+        "worker-gpu-1": (1, True, 1),
     }
 
     slurm_cluster = next(doc for doc in rendered_docs if doc.get("kind") == "SlurmCluster")

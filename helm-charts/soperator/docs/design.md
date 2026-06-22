@@ -2342,7 +2342,10 @@ The cxcli contract validates and materializes these fields together:
 - Only worker shards with `ephemeral_nodes.enabled=true` set
   `ephemeralNodes: true`.
 - Worker NodeSets set `initialNumberEphemeralNodes` from the same shard's
-  autoscaling `min_node_count`.
+  autoscaling `min_node_count` for CPU workers. GPU worker NodeSets render at
+  least one initial active worker when max capacity is positive so Soperator can
+  seed GPU libraries into the shared jail before Slurm power management later
+  suspends idle workers.
 - Global `worker_ephemeral_nodes.suspend_time_seconds` materializes as
   `slurmConfig.suspendTime`; `slurmConfig.suspendTime` must be finite and
   non-negative.

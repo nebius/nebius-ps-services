@@ -513,6 +513,28 @@ def test_mk8s_component_prompts_sort_before_target_observability_prompts() -> No
     )
 
 
+def test_mk8s_k8s_version_sorts_before_public_endpoint_and_platform() -> None:
+    labels = [
+        "infra.components[0].inputs.cluster.public_endpoint",
+        "infra.components[0].inputs.node_group_defaults.cpu.platform",
+        "infra.components[0].inputs.cluster.k8s_version",
+    ]
+
+    sorted_labels = sorted(
+        labels,
+        key=lambda label: _prompt_path_sort_key(
+            tuple(label.split(".")),
+            required_leaf_names=set(),
+        ),
+    )
+
+    assert sorted_labels == [
+        "infra.components[0].inputs.cluster.k8s_version",
+        "infra.components[0].inputs.cluster.public_endpoint",
+        "infra.components[0].inputs.node_group_defaults.cpu.platform",
+    ]
+
+
 def test_run_component_field_wizard_can_skip_preselected_soperator_profile(monkeypatch) -> None:
     prompted_paths: list[str] = []
     payload = {
@@ -744,7 +766,125 @@ def test_soperator_managed_mk8s_skips_raw_node_group_prompts() -> None:
         entry=entry,
         full_path_label="infra.components[0].inputs.soperator.worker_ephemeral_nodes.enabled",
     )
+    assert _skip_soperator_managed_mk8s_prompt(
+        payload=payload,
+        entry=entry,
+        full_path_label=(
+            "infra.components[0].inputs.soperator.worker_ephemeral_nodes.suspend_time_seconds"
+        ),
+    )
+    soperator_inputs["worker_node_groups"] = {
+        "worker-gpu": {
+            "autoscaling": {"enabled": False},
+            "ephemeral_nodes": {"enabled": False},
+        },
+    }
     assert not _skip_soperator_managed_mk8s_prompt(
+        payload=payload,
+        entry=entry,
+        full_path_label=(
+            "infra.components[0].inputs.soperator.worker_node_groups.worker-gpu"
+            ".autoscaling.enabled"
+        ),
+    )
+    assert _skip_soperator_managed_mk8s_prompt(
+        payload=payload,
+        entry=entry,
+        full_path_label=(
+            "infra.components[0].inputs.soperator.worker_node_groups.worker-gpu"
+            ".autoscaling.min_node_count"
+        ),
+    )
+    assert _skip_soperator_managed_mk8s_prompt(
+        payload=payload,
+        entry=entry,
+        full_path_label=(
+            "infra.components[0].inputs.soperator.worker_node_groups.worker-gpu"
+            ".ephemeral_nodes.enabled"
+        ),
+    )
+    soperator_inputs["worker_node_groups"]["worker-gpu"]["autoscaling"]["enabled"] = True
+    assert not _skip_soperator_managed_mk8s_prompt(
+        payload=payload,
+        entry=entry,
+        full_path_label=(
+            "infra.components[0].inputs.soperator.worker_node_groups.worker-gpu"
+            ".autoscaling.min_node_count"
+        ),
+    )
+    assert not _skip_soperator_managed_mk8s_prompt(
+        payload=payload,
+        entry=entry,
+        full_path_label=(
+            "infra.components[0].inputs.soperator.worker_node_groups.worker-gpu"
+            ".autoscaling.max_node_count"
+        ),
+    )
+    assert _skip_soperator_managed_mk8s_prompt(
+        payload=payload,
+        entry=entry,
+        full_path_label=(
+            "infra.components[0].inputs.soperator.worker_node_groups.worker-gpu"
+            ".ephemeral_nodes.enabled"
+        ),
+    )
+    assert _skip_soperator_managed_mk8s_prompt(
+        payload=payload,
+        entry=entry,
+        full_path_label=(
+            "infra.components[0].inputs.soperator.worker_ephemeral_nodes.suspend_time_seconds"
+        ),
+    )
+    soperator_inputs["worker_node_groups"]["worker-gpu"]["ephemeral_nodes"]["enabled"] = True
+    assert not _skip_soperator_managed_mk8s_prompt(
+        payload=payload,
+        entry=entry,
+        full_path_label=(
+            "infra.components[0].inputs.soperator.worker_node_groups.worker-gpu"
+            ".autoscaling.enabled"
+        ),
+    )
+    assert not _skip_soperator_managed_mk8s_prompt(
+        payload=payload,
+        entry=entry,
+        full_path_label=(
+            "infra.components[0].inputs.soperator.worker_node_groups.worker-gpu"
+            ".autoscaling.min_node_count"
+        ),
+    )
+    assert not _skip_soperator_managed_mk8s_prompt(
+        payload=payload,
+        entry=entry,
+        full_path_label=(
+            "infra.components[0].inputs.soperator.worker_node_groups.worker-gpu"
+            ".autoscaling.max_node_count"
+        ),
+    )
+    assert not _skip_soperator_managed_mk8s_prompt(
+        payload=payload,
+        entry=entry,
+        full_path_label=(
+            "infra.components[0].inputs.soperator.worker_ephemeral_nodes.suspend_time_seconds"
+        ),
+    )
+    soperator_inputs["worker_node_groups"]["worker-gpu"]["autoscaling"]["enabled"] = False
+    assert _skip_soperator_managed_mk8s_prompt(
+        payload=payload,
+        entry=entry,
+        full_path_label=(
+            "infra.components[0].inputs.soperator.worker_node_groups.worker-gpu"
+            ".ephemeral_nodes.enabled"
+        ),
+    )
+    assert _skip_soperator_managed_mk8s_prompt(
+        payload=payload,
+        entry=entry,
+        full_path_label=(
+            "infra.components[0].inputs.soperator.worker_node_groups.worker-gpu"
+            ".autoscaling.min_node_count"
+        ),
+    )
+    assert _skip_soperator_managed_mk8s_prompt(
         payload=payload,
         entry=entry,
         full_path_label=(
@@ -753,6 +893,14 @@ def test_soperator_managed_mk8s_skips_raw_node_group_prompts() -> None:
     )
 
     payload["apps"]["charts"][0]["install_mode"] = "onboard-existing-cluster"
+    assert _skip_soperator_managed_mk8s_prompt(
+        payload=payload,
+        entry=entry,
+        full_path_label=(
+            "infra.components[0].inputs.soperator.worker_node_groups.worker-gpu"
+            ".autoscaling.enabled"
+        ),
+    )
     assert _skip_soperator_managed_mk8s_prompt(
         payload=payload,
         entry=entry,
@@ -767,6 +915,14 @@ def test_soperator_managed_mk8s_skips_raw_node_group_prompts() -> None:
         payload=payload,
         entry=entry,
         full_path_label="infra.components[0].inputs.soperator.system_node_count",
+    )
+    assert _skip_soperator_managed_mk8s_prompt(
+        payload=payload,
+        entry=entry,
+        full_path_label=(
+            "infra.components[0].inputs.soperator.worker_node_groups.worker-gpu"
+            ".autoscaling.enabled"
+        ),
     )
     assert _skip_soperator_managed_mk8s_prompt(
         payload=payload,
@@ -823,6 +979,1363 @@ def test_soperator_managed_mk8s_skips_raw_node_group_prompts() -> None:
         entry=entry,
         full_path_label="infra.components[0].inputs.node_groups.system.node_count",
     )
+
+
+def test_run_component_field_wizard_prompts_soperator_worker_controls_per_shard(
+    monkeypatch,
+) -> None:
+    prompted_paths: list[str] = []
+    prompt_currents: dict[str, list[object]] = {}
+    payload = {
+        "version": "v1",
+        "infra": {
+            "components": [
+                {
+                    "id": "mk8s",
+                    "instance_id": "cluster1",
+                    "enabled": True,
+                    "inputs": {},
+                }
+            ]
+        },
+        "apps": {
+            "charts": [
+                {
+                    "id": "soperator",
+                    "instance_id": "cluster1",
+                    "enabled": True,
+                    "install_mode": "production-cluster",
+                    "profile": "nebius-mixed-v1",
+                    "values": {},
+                }
+            ]
+        },
+    }
+    mk8s_entry = ComponentEntry(
+        id="mk8s",
+        scope="infra",
+        config_path="infra.mk8s",
+        description="mk8s",
+        source="../../platform-infra/modules/mk8s",
+        wizard_fields={
+            "inputs.soperator.worker_cpu_total_nodes": {
+                "default": 1,
+                "write_default_to_config": True,
+                "type_hint": "number",
+            },
+            "inputs.soperator.worker_cpu_nodes_per_group": {
+                "default": 100,
+                "write_default_to_config": True,
+                "type_hint": "number",
+            },
+            "inputs.soperator.worker_gpu_total_nodes": {
+                "default": 1,
+                "write_default_to_config": True,
+                "type_hint": "number",
+            },
+            "inputs.soperator.worker_gpu_nodes_per_group": {
+                "default": 100,
+                "write_default_to_config": True,
+                "type_hint": "number",
+            },
+            "inputs.soperator.worker_ephemeral_nodes.suspend_time_seconds": {
+                "default": 300,
+                "write_default_to_config": True,
+                "type_hint": "number",
+            },
+        },
+    )
+    worker_size_answers = {
+        "infra.components[0].inputs.soperator.worker_cpu_total_nodes": 2,
+        "infra.components[0].inputs.soperator.worker_cpu_nodes_per_group": 1,
+        "infra.components[0].inputs.soperator.worker_gpu_total_nodes": 2,
+        "infra.components[0].inputs.soperator.worker_gpu_nodes_per_group": 1,
+    }
+    bulk_apply_path = (
+        "infra.components[0].inputs.soperator.worker_node_groups."
+        "all_worker_shards_apply_to_all"
+    )
+    bulk_enabled_path = (
+        "infra.components[0].inputs.soperator.worker_node_groups."
+        "all_worker_shards_autoscaling_enabled"
+    )
+    autoscaling_enabled_paths = {
+        "infra.components[0].inputs.soperator.worker_node_groups.worker-cpu-0"
+        ".autoscaling.enabled",
+        "infra.components[0].inputs.soperator.worker_node_groups.worker-gpu-1"
+        ".autoscaling.enabled",
+    }
+
+    def _capture_continue_phase(
+        label: str, *, default: bool = True, allow_back: bool = False
+    ) -> bool:
+        _ = default, allow_back
+        return label.startswith("Configure 'mk8s")
+
+    def _capture_prompt(path_label: str, current, **_kwargs):
+        prompted_paths.append(path_label)
+        prompt_currents.setdefault(path_label, []).append(current)
+        if path_label in worker_size_answers:
+            return worker_size_answers[path_label], False
+        if path_label == bulk_apply_path:
+            return False, False
+        if path_label in autoscaling_enabled_paths:
+            return True, False
+        if path_label.endswith(".autoscaling.enabled"):
+            return False, False
+        return current, False
+
+    monkeypatch.setattr("nebius_cxcli.cli.module_variables", lambda _source: ())
+    monkeypatch.setattr("nebius_cxcli.cli.module_required_variables", lambda _source: ())
+    monkeypatch.setattr("nebius_cxcli.cli.helm_chart_default_values", lambda **_kwargs: {})
+    monkeypatch.setattr("nebius_cxcli.cli._wizard_continue_phase", _capture_continue_phase)
+    monkeypatch.setattr("nebius_cxcli.cli._prompt_scalar_override", _capture_prompt)
+
+    updated_yaml, completed = _run_component_field_wizard(
+        config_yaml=yaml.safe_dump(payload, sort_keys=False),
+        selected_infra={"cluster1"},
+        selected_apps=set(),
+        infra_entries=(mk8s_entry,),
+        app_entries=(),
+        provider_lookup=None,
+    )
+
+    assert completed is True
+    assert bulk_apply_path in prompted_paths
+    assert prompt_currents[bulk_apply_path] == [True]
+    assert bulk_enabled_path not in prompted_paths
+    assert (
+        "infra.components[0].inputs.soperator.worker_node_groups.worker-cpu"
+        ".autoscaling.enabled"
+        not in prompted_paths
+    )
+    assert (
+        "infra.components[0].inputs.soperator.worker_node_groups.worker-gpu"
+        ".autoscaling.enabled"
+        not in prompted_paths
+    )
+    assert (
+        "infra.components[0].inputs.soperator.worker_node_groups.worker-cpu-0"
+        ".autoscaling.enabled"
+        in prompted_paths
+    )
+    assert (
+        "infra.components[0].inputs.soperator.worker_node_groups.worker-cpu-1"
+        ".autoscaling.enabled"
+        in prompted_paths
+    )
+    assert (
+        "infra.components[0].inputs.soperator.worker_node_groups.worker-gpu-0"
+        ".autoscaling.enabled"
+        in prompted_paths
+    )
+    assert (
+        "infra.components[0].inputs.soperator.worker_node_groups.worker-gpu-1"
+        ".autoscaling.enabled"
+        in prompted_paths
+    )
+    assert (
+        "infra.components[0].inputs.soperator.worker_node_groups.worker-cpu-0"
+        ".autoscaling.min_node_count"
+        in prompted_paths
+    )
+    assert (
+        "infra.components[0].inputs.soperator.worker_node_groups.worker-cpu-0"
+        ".autoscaling.max_node_count"
+        in prompted_paths
+    )
+    assert (
+        "infra.components[0].inputs.soperator.worker_node_groups.worker-gpu-1"
+        ".autoscaling.min_node_count"
+        in prompted_paths
+    )
+    assert (
+        "infra.components[0].inputs.soperator.worker_node_groups.worker-gpu-1"
+        ".autoscaling.max_node_count"
+        in prompted_paths
+    )
+    assert not any(path.endswith(".ephemeral_nodes.enabled") for path in prompted_paths)
+    worker_enabled_prompt_order = [
+        path
+        for path in prompted_paths
+        if ".inputs.soperator.worker_node_groups." in path
+        and path.endswith(".autoscaling.enabled")
+    ]
+    assert worker_enabled_prompt_order == [
+        "infra.components[0].inputs.soperator.worker_node_groups.worker-cpu-0"
+        ".autoscaling.enabled",
+        "infra.components[0].inputs.soperator.worker_node_groups.worker-cpu-1"
+        ".autoscaling.enabled",
+        "infra.components[0].inputs.soperator.worker_node_groups.worker-gpu-0"
+        ".autoscaling.enabled",
+        "infra.components[0].inputs.soperator.worker_node_groups.worker-gpu-1"
+        ".autoscaling.enabled",
+    ]
+    assert prompted_paths.index(bulk_apply_path) < prompted_paths.index(
+        "infra.components[0].inputs.soperator.worker_node_groups.worker-cpu-0"
+        ".autoscaling.enabled"
+    )
+    assert prompted_paths.index(
+        "infra.components[0].inputs.soperator.worker_node_groups.worker-cpu-0"
+        ".autoscaling.enabled"
+    ) < prompted_paths.index(
+        "infra.components[0].inputs.soperator.worker_node_groups.worker-cpu-0"
+        ".autoscaling.min_node_count"
+    )
+    assert prompted_paths.index(
+        "infra.components[0].inputs.soperator.worker_node_groups.worker-cpu-0"
+        ".autoscaling.max_node_count"
+    ) < prompted_paths.index(
+        "infra.components[0].inputs.soperator.worker_node_groups.worker-cpu-1"
+        ".autoscaling.enabled"
+    )
+    assert (
+        prompted_paths.index(
+            "infra.components[0].inputs.soperator.worker_node_groups.worker-gpu-1"
+            ".autoscaling.enabled"
+        )
+        < prompted_paths.index(
+            "infra.components[0].inputs.soperator.worker_ephemeral_nodes.suspend_time_seconds"
+        )
+    )
+
+    updated_payload = yaml.safe_load(updated_yaml)
+    worker_groups = updated_payload["infra"]["components"][0]["inputs"]["soperator"][
+        "worker_node_groups"
+    ]
+    assert set(worker_groups) == {
+        "worker-cpu-0",
+        "worker-cpu-1",
+        "worker-gpu-0",
+        "worker-gpu-1",
+    }
+    assert worker_groups["worker-cpu-0"]["ephemeral_nodes"]["enabled"] is True
+    assert worker_groups["worker-cpu-1"]["ephemeral_nodes"]["enabled"] is False
+    assert worker_groups["worker-gpu-0"]["ephemeral_nodes"]["enabled"] is False
+    assert worker_groups["worker-gpu-1"]["ephemeral_nodes"]["enabled"] is True
+    assert worker_groups["worker-cpu-0"]["autoscaling"]["enabled"] is True
+    assert worker_groups["worker-cpu-1"]["autoscaling"]["enabled"] is False
+    assert worker_groups["worker-gpu-0"]["autoscaling"]["enabled"] is False
+    assert worker_groups["worker-gpu-1"]["autoscaling"]["enabled"] is True
+    assert (
+        updated_payload["infra"]["components"][0]["inputs"]["soperator"][
+            "worker_ephemeral_nodes"
+        ]["suspend_time_seconds"]
+        == 300
+    )
+
+
+def test_run_component_field_wizard_bulk_enables_soperator_worker_controls(
+    monkeypatch,
+) -> None:
+    prompted_paths: list[str] = []
+    prompt_currents: dict[str, list[object]] = {}
+    payload = {
+        "version": "v1",
+        "infra": {
+            "components": [
+                {
+                    "id": "mk8s",
+                    "instance_id": "cluster1",
+                    "enabled": True,
+                    "inputs": {},
+                }
+            ]
+        },
+        "apps": {
+            "charts": [
+                {
+                    "id": "soperator",
+                    "instance_id": "cluster1",
+                    "enabled": True,
+                    "install_mode": "production-cluster",
+                    "profile": "nebius-mixed-v1",
+                    "values": {},
+                }
+            ]
+        },
+    }
+    mk8s_entry = ComponentEntry(
+        id="mk8s",
+        scope="infra",
+        config_path="infra.mk8s",
+        description="mk8s",
+        source="../../platform-infra/modules/mk8s",
+        wizard_fields={
+            "inputs.soperator.worker_cpu_total_nodes": {
+                "default": 1,
+                "write_default_to_config": True,
+                "type_hint": "number",
+            },
+            "inputs.soperator.worker_cpu_nodes_per_group": {
+                "default": 100,
+                "write_default_to_config": True,
+                "type_hint": "number",
+            },
+            "inputs.soperator.worker_gpu_total_nodes": {
+                "default": 1,
+                "write_default_to_config": True,
+                "type_hint": "number",
+            },
+            "inputs.soperator.worker_gpu_nodes_per_group": {
+                "default": 100,
+                "write_default_to_config": True,
+                "type_hint": "number",
+            },
+            "inputs.soperator.worker_ephemeral_nodes.suspend_time_seconds": {
+                "default": 300,
+                "write_default_to_config": True,
+                "type_hint": "number",
+            },
+        },
+    )
+    worker_size_answers = {
+        "infra.components[0].inputs.soperator.worker_cpu_total_nodes": 3,
+        "infra.components[0].inputs.soperator.worker_cpu_nodes_per_group": 2,
+        "infra.components[0].inputs.soperator.worker_gpu_total_nodes": 3,
+        "infra.components[0].inputs.soperator.worker_gpu_nodes_per_group": 2,
+    }
+    bulk_apply_path = (
+        "infra.components[0].inputs.soperator.worker_node_groups."
+        "all_worker_shards_apply_to_all"
+    )
+    bulk_enabled_path = (
+        "infra.components[0].inputs.soperator.worker_node_groups."
+        "all_worker_shards_autoscaling_enabled"
+    )
+
+    def _capture_continue_phase(
+        label: str, *, default: bool = True, allow_back: bool = False
+    ) -> bool:
+        _ = default, allow_back
+        return label.startswith("Configure 'mk8s")
+
+    def _capture_prompt(path_label: str, current, **_kwargs):
+        prompted_paths.append(path_label)
+        prompt_currents.setdefault(path_label, []).append(current)
+        if path_label in worker_size_answers:
+            return worker_size_answers[path_label], False
+        if path_label == bulk_apply_path:
+            return True, False
+        if path_label == bulk_enabled_path:
+            return True, False
+        return current, False
+
+    monkeypatch.setattr("nebius_cxcli.cli.module_variables", lambda _source: ())
+    monkeypatch.setattr("nebius_cxcli.cli.module_required_variables", lambda _source: ())
+    monkeypatch.setattr("nebius_cxcli.cli.helm_chart_default_values", lambda **_kwargs: {})
+    monkeypatch.setattr("nebius_cxcli.cli._wizard_continue_phase", _capture_continue_phase)
+    monkeypatch.setattr("nebius_cxcli.cli._prompt_scalar_override", _capture_prompt)
+
+    updated_yaml, completed = _run_component_field_wizard(
+        config_yaml=yaml.safe_dump(payload, sort_keys=False),
+        selected_infra={"cluster1"},
+        selected_apps=set(),
+        infra_entries=(mk8s_entry,),
+        app_entries=(),
+        provider_lookup=None,
+    )
+
+    assert completed is True
+    assert prompted_paths.count(bulk_apply_path) == 1
+    assert prompted_paths.count(bulk_enabled_path) == 1
+    assert prompt_currents[bulk_apply_path] == [True]
+    assert prompt_currents[bulk_enabled_path] == [False]
+    assert not any(
+        ".inputs.soperator.worker_node_groups.worker-" in path
+        and ".autoscaling." in path
+        for path in prompted_paths
+    )
+    assert not any(path.endswith(".ephemeral_nodes.enabled") for path in prompted_paths)
+    assert (
+        "infra.components[0].inputs.soperator.worker_ephemeral_nodes.suspend_time_seconds"
+        in prompted_paths
+    )
+
+    updated_payload = yaml.safe_load(updated_yaml)
+    inputs = updated_payload["infra"]["components"][0]["inputs"]
+    worker_groups = inputs["soperator"]["worker_node_groups"]
+    assert set(worker_groups) == {
+        "worker-cpu-0",
+        "worker-cpu-1",
+        "worker-gpu-0",
+        "worker-gpu-1",
+    }
+    expected_worker_max = {
+        "worker-cpu-0": 2,
+        "worker-cpu-1": 1,
+        "worker-gpu-0": 2,
+        "worker-gpu-1": 1,
+    }
+    for group_key, worker_group in worker_groups.items():
+        assert worker_group["autoscaling"] == {
+            "enabled": True,
+            "min_node_count": 0,
+            "max_node_count": expected_worker_max[group_key],
+        }
+        assert worker_group["ephemeral_nodes"]["enabled"] is True
+    for group_key, node_group in inputs["node_groups"].items():
+        if node_group.get("workload") == "worker":
+            assert node_group["autoscaling"] == {
+                "min_node_count": 0,
+                "max_node_count": expected_worker_max[group_key],
+            }
+            assert "node_count" not in node_group
+    assert inputs["soperator"]["worker_ephemeral_nodes"]["suspend_time_seconds"] == 300
+
+
+def test_run_component_field_wizard_bulk_disables_soperator_worker_controls(
+    monkeypatch,
+) -> None:
+    prompted_paths: list[str] = []
+    prompt_currents: dict[str, list[object]] = {}
+    payload = {
+        "version": "v1",
+        "infra": {
+            "components": [
+                {
+                    "id": "mk8s",
+                    "instance_id": "cluster1",
+                    "enabled": True,
+                    "inputs": {},
+                }
+            ]
+        },
+        "apps": {
+            "charts": [
+                {
+                    "id": "soperator",
+                    "instance_id": "cluster1",
+                    "enabled": True,
+                    "install_mode": "production-cluster",
+                    "profile": "nebius-mixed-v1",
+                    "values": {},
+                }
+            ]
+        },
+    }
+    mk8s_entry = ComponentEntry(
+        id="mk8s",
+        scope="infra",
+        config_path="infra.mk8s",
+        description="mk8s",
+        source="../../platform-infra/modules/mk8s",
+        wizard_fields={
+            "inputs.soperator.worker_cpu_total_nodes": {
+                "default": 1,
+                "write_default_to_config": True,
+                "type_hint": "number",
+            },
+            "inputs.soperator.worker_cpu_nodes_per_group": {
+                "default": 100,
+                "write_default_to_config": True,
+                "type_hint": "number",
+            },
+            "inputs.soperator.worker_gpu_total_nodes": {
+                "default": 1,
+                "write_default_to_config": True,
+                "type_hint": "number",
+            },
+            "inputs.soperator.worker_gpu_nodes_per_group": {
+                "default": 100,
+                "write_default_to_config": True,
+                "type_hint": "number",
+            },
+            "inputs.soperator.worker_ephemeral_nodes.suspend_time_seconds": {
+                "default": 300,
+                "write_default_to_config": True,
+                "type_hint": "number",
+            },
+        },
+    )
+    worker_size_answers = {
+        "infra.components[0].inputs.soperator.worker_cpu_total_nodes": 2,
+        "infra.components[0].inputs.soperator.worker_cpu_nodes_per_group": 1,
+        "infra.components[0].inputs.soperator.worker_gpu_total_nodes": 2,
+        "infra.components[0].inputs.soperator.worker_gpu_nodes_per_group": 1,
+    }
+    bulk_apply_path = (
+        "infra.components[0].inputs.soperator.worker_node_groups."
+        "all_worker_shards_apply_to_all"
+    )
+    bulk_enabled_path = (
+        "infra.components[0].inputs.soperator.worker_node_groups."
+        "all_worker_shards_autoscaling_enabled"
+    )
+
+    def _capture_continue_phase(
+        label: str, *, default: bool = True, allow_back: bool = False
+    ) -> bool:
+        _ = default, allow_back
+        return label.startswith("Configure 'mk8s")
+
+    def _capture_prompt(path_label: str, current, **_kwargs):
+        prompted_paths.append(path_label)
+        prompt_currents.setdefault(path_label, []).append(current)
+        if path_label in worker_size_answers:
+            return worker_size_answers[path_label], False
+        if path_label == bulk_apply_path:
+            return True, False
+        if path_label == bulk_enabled_path:
+            return False, False
+        return current, False
+
+    monkeypatch.setattr("nebius_cxcli.cli.module_variables", lambda _source: ())
+    monkeypatch.setattr("nebius_cxcli.cli.module_required_variables", lambda _source: ())
+    monkeypatch.setattr("nebius_cxcli.cli.helm_chart_default_values", lambda **_kwargs: {})
+    monkeypatch.setattr("nebius_cxcli.cli._wizard_continue_phase", _capture_continue_phase)
+    monkeypatch.setattr("nebius_cxcli.cli._prompt_scalar_override", _capture_prompt)
+
+    updated_yaml, completed = _run_component_field_wizard(
+        config_yaml=yaml.safe_dump(payload, sort_keys=False),
+        selected_infra={"cluster1"},
+        selected_apps=set(),
+        infra_entries=(mk8s_entry,),
+        app_entries=(),
+        provider_lookup=None,
+    )
+
+    assert completed is True
+    assert prompted_paths.count(bulk_apply_path) == 1
+    assert prompted_paths.count(bulk_enabled_path) == 1
+    assert prompt_currents[bulk_apply_path] == [True]
+    assert prompt_currents[bulk_enabled_path] == [False]
+    assert not any(
+        ".inputs.soperator.worker_node_groups.worker-" in path
+        and ".autoscaling." in path
+        for path in prompted_paths
+    )
+    assert not any(path.endswith(".ephemeral_nodes.enabled") for path in prompted_paths)
+    assert (
+        "infra.components[0].inputs.soperator.worker_ephemeral_nodes.suspend_time_seconds"
+        not in prompted_paths
+    )
+
+    updated_payload = yaml.safe_load(updated_yaml)
+    inputs = updated_payload["infra"]["components"][0]["inputs"]
+    worker_groups = inputs["soperator"]["worker_node_groups"]
+    assert set(worker_groups) == {
+        "worker-cpu-0",
+        "worker-cpu-1",
+        "worker-gpu-0",
+        "worker-gpu-1",
+    }
+    for worker_group in worker_groups.values():
+        assert worker_group["autoscaling"] == {"enabled": False}
+        assert worker_group["ephemeral_nodes"]["enabled"] is False
+    for node_group in inputs["node_groups"].values():
+        if node_group.get("workload") == "worker":
+            assert "autoscaling" not in node_group
+            assert node_group["node_count"] == 1
+    assert "worker_ephemeral_nodes" not in inputs["soperator"]
+
+
+def test_run_component_field_wizard_bulk_apply_false_keeps_per_shard_flow(
+    monkeypatch,
+) -> None:
+    prompted_paths: list[str] = []
+    prompt_currents: dict[str, list[object]] = {}
+    payload = {
+        "version": "v1",
+        "infra": {
+            "components": [
+                {
+                    "id": "mk8s",
+                    "instance_id": "cluster1",
+                    "enabled": True,
+                    "inputs": {},
+                }
+            ]
+        },
+        "apps": {
+            "charts": [
+                {
+                    "id": "soperator",
+                    "instance_id": "cluster1",
+                    "enabled": True,
+                    "install_mode": "production-cluster",
+                    "profile": "nebius-mixed-v1",
+                    "values": {},
+                }
+            ]
+        },
+    }
+    mk8s_entry = ComponentEntry(
+        id="mk8s",
+        scope="infra",
+        config_path="infra.mk8s",
+        description="mk8s",
+        source="../../platform-infra/modules/mk8s",
+        wizard_fields={
+            "inputs.soperator.worker_cpu_total_nodes": {
+                "default": 1,
+                "write_default_to_config": True,
+                "type_hint": "number",
+            },
+            "inputs.soperator.worker_cpu_nodes_per_group": {
+                "default": 100,
+                "write_default_to_config": True,
+                "type_hint": "number",
+            },
+            "inputs.soperator.worker_gpu_total_nodes": {
+                "default": 1,
+                "write_default_to_config": True,
+                "type_hint": "number",
+            },
+            "inputs.soperator.worker_gpu_nodes_per_group": {
+                "default": 100,
+                "write_default_to_config": True,
+                "type_hint": "number",
+            },
+            "inputs.soperator.worker_ephemeral_nodes.suspend_time_seconds": {
+                "default": 300,
+                "write_default_to_config": True,
+                "type_hint": "number",
+            },
+        },
+    )
+    worker_size_answers = {
+        "infra.components[0].inputs.soperator.worker_cpu_total_nodes": 2,
+        "infra.components[0].inputs.soperator.worker_cpu_nodes_per_group": 1,
+        "infra.components[0].inputs.soperator.worker_gpu_total_nodes": 2,
+        "infra.components[0].inputs.soperator.worker_gpu_nodes_per_group": 1,
+    }
+    bulk_apply_path = (
+        "infra.components[0].inputs.soperator.worker_node_groups."
+        "all_worker_shards_apply_to_all"
+    )
+    bulk_enabled_path = (
+        "infra.components[0].inputs.soperator.worker_node_groups."
+        "all_worker_shards_autoscaling_enabled"
+    )
+
+    def _capture_continue_phase(
+        label: str, *, default: bool = True, allow_back: bool = False
+    ) -> bool:
+        _ = default, allow_back
+        return label.startswith("Configure 'mk8s")
+
+    def _capture_prompt(path_label: str, current, **_kwargs):
+        prompted_paths.append(path_label)
+        prompt_currents.setdefault(path_label, []).append(current)
+        if path_label in worker_size_answers:
+            return worker_size_answers[path_label], False
+        if path_label == bulk_apply_path:
+            return False, False
+        if path_label.endswith(".autoscaling.enabled"):
+            return False, False
+        return current, False
+
+    monkeypatch.setattr("nebius_cxcli.cli.module_variables", lambda _source: ())
+    monkeypatch.setattr("nebius_cxcli.cli.module_required_variables", lambda _source: ())
+    monkeypatch.setattr("nebius_cxcli.cli.helm_chart_default_values", lambda **_kwargs: {})
+    monkeypatch.setattr("nebius_cxcli.cli._wizard_continue_phase", _capture_continue_phase)
+    monkeypatch.setattr("nebius_cxcli.cli._prompt_scalar_override", _capture_prompt)
+
+    _updated_yaml, completed = _run_component_field_wizard(
+        config_yaml=yaml.safe_dump(payload, sort_keys=False),
+        selected_infra={"cluster1"},
+        selected_apps=set(),
+        infra_entries=(mk8s_entry,),
+        app_entries=(),
+        provider_lookup=None,
+    )
+
+    assert completed is True
+    assert bulk_apply_path in prompted_paths
+    assert prompt_currents[bulk_apply_path] == [True]
+    assert bulk_enabled_path not in prompted_paths
+    assert (
+        "infra.components[0].inputs.soperator.worker_node_groups.worker-cpu-0"
+        ".autoscaling.enabled"
+        in prompted_paths
+    )
+    assert (
+        "infra.components[0].inputs.soperator.worker_node_groups.worker-gpu-1"
+        ".autoscaling.enabled"
+        in prompted_paths
+    )
+
+
+def test_run_component_field_wizard_bulk_backtrack_to_disabled_clears_workers(
+    monkeypatch,
+) -> None:
+    prompted_paths: list[str] = []
+    prompt_currents: dict[str, list[object]] = {}
+    payload = {
+        "version": "v1",
+        "infra": {
+            "components": [
+                {
+                    "id": "mk8s",
+                    "instance_id": "cluster1",
+                    "enabled": True,
+                    "inputs": {},
+                }
+            ]
+        },
+        "apps": {
+            "charts": [
+                {
+                    "id": "soperator",
+                    "instance_id": "cluster1",
+                    "enabled": True,
+                    "install_mode": "production-cluster",
+                    "profile": "nebius-mixed-v1",
+                    "values": {},
+                }
+            ]
+        },
+    }
+    mk8s_entry = ComponentEntry(
+        id="mk8s",
+        scope="infra",
+        config_path="infra.mk8s",
+        description="mk8s",
+        source="../../platform-infra/modules/mk8s",
+        wizard_fields={
+            "inputs.soperator.worker_cpu_total_nodes": {
+                "default": 1,
+                "write_default_to_config": True,
+                "type_hint": "number",
+            },
+            "inputs.soperator.worker_cpu_nodes_per_group": {
+                "default": 100,
+                "write_default_to_config": True,
+                "type_hint": "number",
+            },
+            "inputs.soperator.worker_gpu_total_nodes": {
+                "default": 1,
+                "write_default_to_config": True,
+                "type_hint": "number",
+            },
+            "inputs.soperator.worker_gpu_nodes_per_group": {
+                "default": 100,
+                "write_default_to_config": True,
+                "type_hint": "number",
+            },
+            "inputs.soperator.worker_ephemeral_nodes.suspend_time_seconds": {
+                "default": 300,
+                "write_default_to_config": True,
+                "type_hint": "number",
+            },
+        },
+    )
+    worker_size_answers = {
+        "infra.components[0].inputs.soperator.worker_cpu_total_nodes": 2,
+        "infra.components[0].inputs.soperator.worker_cpu_nodes_per_group": 1,
+        "infra.components[0].inputs.soperator.worker_gpu_total_nodes": 2,
+        "infra.components[0].inputs.soperator.worker_gpu_nodes_per_group": 1,
+    }
+    bulk_apply_path = (
+        "infra.components[0].inputs.soperator.worker_node_groups."
+        "all_worker_shards_apply_to_all"
+    )
+    bulk_enabled_path = (
+        "infra.components[0].inputs.soperator.worker_node_groups."
+        "all_worker_shards_autoscaling_enabled"
+    )
+    suspend_path = (
+        "infra.components[0].inputs.soperator.worker_ephemeral_nodes.suspend_time_seconds"
+    )
+    answers = {
+        bulk_apply_path: [True],
+        bulk_enabled_path: [True, False],
+        suspend_path: [cli_module._WIZARD_BACKTRACK],
+    }
+
+    def _capture_continue_phase(
+        label: str, *, default: bool = True, allow_back: bool = False
+    ) -> bool:
+        _ = default, allow_back
+        return label.startswith("Configure 'mk8s")
+
+    def _capture_prompt(path_label: str, current, **_kwargs):
+        prompted_paths.append(path_label)
+        prompt_currents.setdefault(path_label, []).append(current)
+        if path_label in worker_size_answers:
+            return worker_size_answers[path_label], False
+        pending = answers.get(path_label)
+        if pending:
+            return pending.pop(0), False
+        return current, False
+
+    monkeypatch.setattr("nebius_cxcli.cli.module_variables", lambda _source: ())
+    monkeypatch.setattr("nebius_cxcli.cli.module_required_variables", lambda _source: ())
+    monkeypatch.setattr("nebius_cxcli.cli.helm_chart_default_values", lambda **_kwargs: {})
+    monkeypatch.setattr("nebius_cxcli.cli._wizard_continue_phase", _capture_continue_phase)
+    monkeypatch.setattr("nebius_cxcli.cli._prompt_scalar_override", _capture_prompt)
+
+    updated_yaml, completed = _run_component_field_wizard(
+        config_yaml=yaml.safe_dump(payload, sort_keys=False),
+        selected_infra={"cluster1"},
+        selected_apps=set(),
+        infra_entries=(mk8s_entry,),
+        app_entries=(),
+        provider_lookup=None,
+    )
+
+    assert completed is True
+    assert prompted_paths.count(bulk_apply_path) == 1
+    assert prompted_paths.count(bulk_enabled_path) == 2
+    assert prompt_currents[bulk_apply_path] == [True]
+    assert prompt_currents[bulk_enabled_path] == [False, True]
+    assert prompted_paths.count(suspend_path) == 1
+    assert not any(
+        ".inputs.soperator.worker_node_groups.worker-" in path
+        and ".autoscaling." in path
+        for path in prompted_paths
+    )
+
+    updated_payload = yaml.safe_load(updated_yaml)
+    inputs = updated_payload["infra"]["components"][0]["inputs"]
+    worker_groups = inputs["soperator"]["worker_node_groups"]
+    for worker_group in worker_groups.values():
+        assert worker_group["autoscaling"] == {"enabled": False}
+        assert worker_group["ephemeral_nodes"]["enabled"] is False
+    assert "worker_ephemeral_nodes" not in inputs["soperator"]
+
+
+def test_run_component_field_wizard_bulk_scope_labels_for_cpu_and_gpu_profiles(
+    monkeypatch,
+) -> None:
+    def _run_profile(
+        *,
+        profile: str,
+        wizard_fields: dict[str, dict[str, object]],
+        worker_size_answers: dict[str, int],
+        expected_scope_path: str,
+    ) -> list[str]:
+        prompted_paths: list[str] = []
+        payload = {
+            "version": "v1",
+            "infra": {
+                "components": [
+                    {
+                        "id": "mk8s",
+                        "instance_id": "cluster1",
+                        "enabled": True,
+                        "inputs": {},
+                    }
+                ]
+            },
+            "apps": {
+                "charts": [
+                    {
+                        "id": "soperator",
+                        "instance_id": "cluster1",
+                        "enabled": True,
+                        "install_mode": "production-cluster",
+                        "profile": profile,
+                        "values": {},
+                    }
+                ]
+            },
+        }
+        mk8s_entry = ComponentEntry(
+            id="mk8s",
+            scope="infra",
+            config_path="infra.mk8s",
+            description="mk8s",
+            source="../../platform-infra/modules/mk8s",
+            wizard_fields=wizard_fields,
+        )
+        expected_enabled_path = expected_scope_path.replace(
+            "_apply_to_all",
+            "_autoscaling_enabled",
+        )
+
+        def _capture_continue_phase(
+            label: str, *, default: bool = True, allow_back: bool = False
+        ) -> bool:
+            _ = default, allow_back
+            return label.startswith("Configure 'mk8s")
+
+        def _capture_prompt(path_label: str, current, **_kwargs):
+            prompted_paths.append(path_label)
+            if path_label in worker_size_answers:
+                return worker_size_answers[path_label], False
+            if path_label == expected_scope_path:
+                return True, False
+            if path_label == expected_enabled_path:
+                return False, False
+            return current, False
+
+        monkeypatch.setattr("nebius_cxcli.cli.module_variables", lambda _source: ())
+        monkeypatch.setattr("nebius_cxcli.cli.module_required_variables", lambda _source: ())
+        monkeypatch.setattr("nebius_cxcli.cli.helm_chart_default_values", lambda **_kwargs: {})
+        monkeypatch.setattr(
+            "nebius_cxcli.cli._wizard_continue_phase",
+            _capture_continue_phase,
+        )
+        monkeypatch.setattr("nebius_cxcli.cli._prompt_scalar_override", _capture_prompt)
+
+        _updated_yaml, completed = _run_component_field_wizard(
+            config_yaml=yaml.safe_dump(payload, sort_keys=False),
+            selected_infra={"cluster1"},
+            selected_apps=set(),
+            infra_entries=(mk8s_entry,),
+            app_entries=(),
+            provider_lookup=None,
+        )
+
+        assert completed is True
+        return prompted_paths
+
+    cpu_fields = {
+        "inputs.soperator.worker_cpu_total_nodes": {
+            "default": 1,
+            "write_default_to_config": True,
+            "type_hint": "number",
+        },
+        "inputs.soperator.worker_cpu_nodes_per_group": {
+            "default": 100,
+            "write_default_to_config": True,
+            "type_hint": "number",
+        },
+        "inputs.soperator.worker_ephemeral_nodes.suspend_time_seconds": {
+            "default": 300,
+            "write_default_to_config": True,
+            "type_hint": "number",
+        },
+    }
+    cpu_prompted_paths = _run_profile(
+        profile="nebius-cpu-v1",
+        wizard_fields=cpu_fields,
+        worker_size_answers={
+            "infra.components[0].inputs.soperator.worker_cpu_total_nodes": 2,
+            "infra.components[0].inputs.soperator.worker_cpu_nodes_per_group": 1,
+        },
+        expected_scope_path=(
+            "infra.components[0].inputs.soperator.worker_node_groups."
+            "all_cpu_worker_shards_apply_to_all"
+        ),
+    )
+    assert (
+        "infra.components[0].inputs.soperator.worker_node_groups."
+        "all_cpu_worker_shards_apply_to_all"
+        in cpu_prompted_paths
+    )
+    assert not any("all_gpu_worker_shards" in path for path in cpu_prompted_paths)
+    assert not any("all_worker_shards" in path for path in cpu_prompted_paths)
+
+    gpu_fields = {
+        "inputs.soperator.worker_gpu_total_nodes": {
+            "default": 1,
+            "write_default_to_config": True,
+            "type_hint": "number",
+        },
+        "inputs.soperator.worker_gpu_nodes_per_group": {
+            "default": 100,
+            "write_default_to_config": True,
+            "type_hint": "number",
+        },
+        "inputs.soperator.worker_ephemeral_nodes.suspend_time_seconds": {
+            "default": 300,
+            "write_default_to_config": True,
+            "type_hint": "number",
+        },
+    }
+    gpu_prompted_paths = _run_profile(
+        profile="nebius-gpu-v1",
+        wizard_fields=gpu_fields,
+        worker_size_answers={
+            "infra.components[0].inputs.soperator.worker_gpu_total_nodes": 2,
+            "infra.components[0].inputs.soperator.worker_gpu_nodes_per_group": 1,
+        },
+        expected_scope_path=(
+            "infra.components[0].inputs.soperator.worker_node_groups."
+            "all_gpu_worker_shards_apply_to_all"
+        ),
+    )
+    assert (
+        "infra.components[0].inputs.soperator.worker_node_groups."
+        "all_gpu_worker_shards_apply_to_all"
+        in gpu_prompted_paths
+    )
+    assert not any("all_cpu_worker_shards" in path for path in gpu_prompted_paths)
+    assert not any("all_worker_shards" in path for path in gpu_prompted_paths)
+
+
+def test_run_component_field_wizard_defaults_worker_max_to_shard_capacity(
+    monkeypatch,
+) -> None:
+    prompt_currents: dict[str, list[object]] = {}
+    payload = {
+        "version": "v1",
+        "infra": {
+            "components": [
+                {
+                    "id": "mk8s",
+                    "instance_id": "cluster1",
+                    "enabled": True,
+                    "inputs": {},
+                }
+            ]
+        },
+        "apps": {
+            "charts": [
+                {
+                    "id": "soperator",
+                    "instance_id": "cluster1",
+                    "enabled": True,
+                    "install_mode": "production-cluster",
+                    "profile": "nebius-mixed-v1",
+                    "values": {},
+                }
+            ]
+        },
+    }
+    mk8s_entry = ComponentEntry(
+        id="mk8s",
+        scope="infra",
+        config_path="infra.mk8s",
+        description="mk8s",
+        source="../../platform-infra/modules/mk8s",
+        wizard_fields={
+            "inputs.soperator.worker_cpu_total_nodes": {
+                "default": 1,
+                "write_default_to_config": True,
+                "type_hint": "number",
+            },
+            "inputs.soperator.worker_cpu_nodes_per_group": {
+                "default": 100,
+                "write_default_to_config": True,
+                "type_hint": "number",
+            },
+            "inputs.soperator.worker_gpu_total_nodes": {
+                "default": 1,
+                "write_default_to_config": True,
+                "type_hint": "number",
+            },
+            "inputs.soperator.worker_gpu_nodes_per_group": {
+                "default": 100,
+                "write_default_to_config": True,
+                "type_hint": "number",
+            },
+            "inputs.soperator.worker_ephemeral_nodes.suspend_time_seconds": {
+                "default": 300,
+                "write_default_to_config": True,
+                "type_hint": "number",
+            },
+        },
+    )
+    worker_size_answers = {
+        "infra.components[0].inputs.soperator.worker_cpu_total_nodes": 4,
+        "infra.components[0].inputs.soperator.worker_cpu_nodes_per_group": 100,
+        "infra.components[0].inputs.soperator.worker_gpu_total_nodes": 3,
+        "infra.components[0].inputs.soperator.worker_gpu_nodes_per_group": 100,
+    }
+    bulk_apply_path = (
+        "infra.components[0].inputs.soperator.worker_node_groups."
+        "all_worker_shards_apply_to_all"
+    )
+    autoscaling_enabled_paths = {
+        "infra.components[0].inputs.soperator.worker_node_groups.worker-cpu"
+        ".autoscaling.enabled",
+        "infra.components[0].inputs.soperator.worker_node_groups.worker-gpu"
+        ".autoscaling.enabled",
+    }
+
+    def _capture_continue_phase(
+        label: str, *, default: bool = True, allow_back: bool = False
+    ) -> bool:
+        _ = default, allow_back
+        return label.startswith("Configure 'mk8s")
+
+    def _capture_prompt(path_label: str, current, **_kwargs):
+        prompt_currents.setdefault(path_label, []).append(current)
+        if path_label in worker_size_answers:
+            return worker_size_answers[path_label], False
+        if path_label == bulk_apply_path:
+            return False, False
+        if path_label in autoscaling_enabled_paths:
+            return True, False
+        return current, False
+
+    monkeypatch.setattr("nebius_cxcli.cli.module_variables", lambda _source: ())
+    monkeypatch.setattr("nebius_cxcli.cli.module_required_variables", lambda _source: ())
+    monkeypatch.setattr("nebius_cxcli.cli.helm_chart_default_values", lambda **_kwargs: {})
+    monkeypatch.setattr("nebius_cxcli.cli._wizard_continue_phase", _capture_continue_phase)
+    monkeypatch.setattr("nebius_cxcli.cli._prompt_scalar_override", _capture_prompt)
+
+    updated_yaml, completed = _run_component_field_wizard(
+        config_yaml=yaml.safe_dump(payload, sort_keys=False),
+        selected_infra={"cluster1"},
+        selected_apps=set(),
+        infra_entries=(mk8s_entry,),
+        app_entries=(),
+        provider_lookup=None,
+    )
+
+    assert completed is True
+    assert prompt_currents[bulk_apply_path] == [True]
+    assert (
+        prompt_currents[
+            "infra.components[0].inputs.soperator.worker_node_groups.worker-cpu"
+            ".autoscaling.min_node_count"
+        ]
+        == [0]
+    )
+    assert (
+        prompt_currents[
+            "infra.components[0].inputs.soperator.worker_node_groups.worker-cpu"
+            ".autoscaling.max_node_count"
+        ]
+        == [4]
+    )
+    assert (
+        prompt_currents[
+            "infra.components[0].inputs.soperator.worker_node_groups.worker-gpu"
+            ".autoscaling.min_node_count"
+        ]
+        == [0]
+    )
+    assert (
+        prompt_currents[
+            "infra.components[0].inputs.soperator.worker_node_groups.worker-gpu"
+            ".autoscaling.max_node_count"
+        ]
+        == [3]
+    )
+
+    updated_payload = yaml.safe_load(updated_yaml)
+    node_groups = updated_payload["infra"]["components"][0]["inputs"]["node_groups"]
+    assert node_groups["worker-cpu"]["autoscaling"] == {
+        "min_node_count": 0,
+        "max_node_count": 4,
+    }
+    assert node_groups["worker-gpu"]["autoscaling"] == {
+        "min_node_count": 0,
+        "max_node_count": 3,
+    }
+
+
+def test_run_component_field_wizard_clears_worker_ephemeral_when_autoscaling_disabled(
+    monkeypatch,
+) -> None:
+    prompted_paths: list[str] = []
+    payload = {
+        "version": "v1",
+        "infra": {
+            "components": [
+                {
+                    "id": "mk8s",
+                    "instance_id": "cluster1",
+                    "enabled": True,
+                    "inputs": {
+                        "soperator": {
+                            "worker_gpu_total_nodes": 1,
+                            "worker_gpu_nodes_per_group": 100,
+                            "worker_node_groups": {
+                                "worker": {
+                                    "autoscaling": {
+                                        "enabled": True,
+                                        "min_node_count": 1,
+                                        "max_node_count": 1,
+                                    },
+                                    "ephemeral_nodes": {"enabled": True},
+                                },
+                            },
+                        },
+                    },
+                }
+            ]
+        },
+        "apps": {
+            "charts": [
+                {
+                    "id": "soperator",
+                    "instance_id": "cluster1",
+                    "enabled": True,
+                    "install_mode": "production-cluster",
+                    "profile": "nebius-gpu-v1",
+                    "values": {},
+                }
+            ]
+        },
+    }
+    mk8s_entry = ComponentEntry(
+        id="mk8s",
+        scope="infra",
+        config_path="infra.mk8s",
+        description="mk8s",
+        source="../../platform-infra/modules/mk8s",
+    )
+
+    def _capture_continue_phase(
+        label: str, *, default: bool = True, allow_back: bool = False
+    ) -> bool:
+        _ = default, allow_back
+        return label.startswith("Configure 'mk8s")
+
+    def _capture_prompt(path_label: str, current, **_kwargs):
+        prompted_paths.append(path_label)
+        if (
+            path_label
+            == "infra.components[0].inputs.soperator.worker_node_groups.worker"
+            ".autoscaling.enabled"
+        ):
+            return False, False
+        return current, False
+
+    monkeypatch.setattr("nebius_cxcli.cli.module_variables", lambda _source: ())
+    monkeypatch.setattr("nebius_cxcli.cli.module_required_variables", lambda _source: ())
+    monkeypatch.setattr("nebius_cxcli.cli.helm_chart_default_values", lambda **_kwargs: {})
+    monkeypatch.setattr("nebius_cxcli.cli._wizard_continue_phase", _capture_continue_phase)
+    monkeypatch.setattr("nebius_cxcli.cli._prompt_scalar_override", _capture_prompt)
+
+    updated_yaml, completed = _run_component_field_wizard(
+        config_yaml=yaml.safe_dump(payload, sort_keys=False),
+        selected_infra={"cluster1"},
+        selected_apps=set(),
+        infra_entries=(mk8s_entry,),
+        app_entries=(),
+        provider_lookup=None,
+    )
+
+    assert completed is True
+    assert (
+        "infra.components[0].inputs.soperator.worker_node_groups.worker"
+        ".autoscaling.enabled"
+        in prompted_paths
+    )
+    assert (
+        "infra.components[0].inputs.soperator.worker_node_groups.worker"
+        ".ephemeral_nodes.enabled"
+        not in prompted_paths
+    )
+    assert (
+        "infra.components[0].inputs.soperator.worker_ephemeral_nodes.suspend_time_seconds"
+        not in prompted_paths
+    )
+    updated_payload = yaml.safe_load(updated_yaml)
+    worker_gpu = updated_payload["infra"]["components"][0]["inputs"]["soperator"][
+        "worker_node_groups"
+    ]["worker"]
+    assert worker_gpu["autoscaling"]["enabled"] is False
+    assert "min_node_count" not in worker_gpu["autoscaling"]
+    assert "max_node_count" not in worker_gpu["autoscaling"]
+    assert worker_gpu["ephemeral_nodes"]["enabled"] is False
+
+
+def test_run_component_field_wizard_restores_worker_ephemeral_after_autoscaling_backtrack(
+    monkeypatch,
+) -> None:
+    prompted_paths: list[str] = []
+    payload = {
+        "version": "v1",
+        "infra": {
+            "components": [
+                {
+                    "id": "mk8s",
+                    "instance_id": "cluster1",
+                    "enabled": True,
+                    "inputs": {
+                        "soperator": {
+                            "worker_gpu_total_nodes": 1,
+                            "worker_gpu_nodes_per_group": 100,
+                            "worker_node_groups": {
+                                "worker": {
+                                    "autoscaling": {"enabled": False},
+                                    "ephemeral_nodes": {"enabled": False},
+                                },
+                            },
+                        },
+                    },
+                }
+            ]
+        },
+        "apps": {
+            "charts": [
+                {
+                    "id": "soperator",
+                    "instance_id": "cluster1",
+                    "enabled": True,
+                    "install_mode": "production-cluster",
+                    "profile": "nebius-gpu-v1",
+                    "values": {},
+                }
+            ]
+        },
+    }
+    mk8s_entry = ComponentEntry(
+        id="mk8s",
+        scope="infra",
+        config_path="infra.mk8s",
+        description="mk8s",
+        source="../../platform-infra/modules/mk8s",
+    )
+    answers = {
+        "infra.components[0].inputs.soperator.worker_node_groups.worker"
+        ".autoscaling.enabled": [True, False],
+        "infra.components[0].inputs.soperator.worker_node_groups.worker"
+        ".autoscaling.min_node_count": [cli_module._WIZARD_BACKTRACK],
+    }
+
+    def _capture_continue_phase(
+        label: str, *, default: bool = True, allow_back: bool = False
+    ) -> bool:
+        _ = default, allow_back
+        return label.startswith("Configure 'mk8s")
+
+    def _capture_prompt(path_label: str, current, **_kwargs):
+        prompted_paths.append(path_label)
+        pending = answers.get(path_label)
+        if pending:
+            return pending.pop(0), False
+        return current, False
+
+    monkeypatch.setattr("nebius_cxcli.cli.module_variables", lambda _source: ())
+    monkeypatch.setattr("nebius_cxcli.cli.module_required_variables", lambda _source: ())
+    monkeypatch.setattr("nebius_cxcli.cli.helm_chart_default_values", lambda **_kwargs: {})
+    monkeypatch.setattr("nebius_cxcli.cli._wizard_continue_phase", _capture_continue_phase)
+    monkeypatch.setattr("nebius_cxcli.cli._prompt_scalar_override", _capture_prompt)
+
+    updated_yaml, completed = _run_component_field_wizard(
+        config_yaml=yaml.safe_dump(payload, sort_keys=False),
+        selected_infra={"cluster1"},
+        selected_apps=set(),
+        infra_entries=(mk8s_entry,),
+        app_entries=(),
+        provider_lookup=None,
+    )
+
+    assert completed is True
+    assert (
+        prompted_paths.count(
+            "infra.components[0].inputs.soperator.worker_node_groups.worker"
+            ".autoscaling.enabled"
+        )
+        == 2
+    )
+    assert (
+        "infra.components[0].inputs.soperator.worker_node_groups.worker"
+        ".ephemeral_nodes.enabled"
+        not in prompted_paths
+    )
+    assert (
+        prompted_paths.count(
+            "infra.components[0].inputs.soperator.worker_node_groups.worker"
+            ".autoscaling.min_node_count"
+        )
+        == 1
+    )
+    assert (
+        "infra.components[0].inputs.soperator.worker_node_groups.worker"
+        ".autoscaling.max_node_count"
+        not in prompted_paths
+    )
+    assert (
+        "infra.components[0].inputs.soperator.worker_ephemeral_nodes.suspend_time_seconds"
+        not in prompted_paths
+    )
+    updated_payload = yaml.safe_load(updated_yaml)
+    worker_gpu = updated_payload["infra"]["components"][0]["inputs"]["soperator"][
+        "worker_node_groups"
+    ]["worker"]
+    assert worker_gpu["autoscaling"]["enabled"] is False
+    assert worker_gpu["ephemeral_nodes"]["enabled"] is False
 
 
 def test_prune_mk8s_node_group_defaults_for_non_soperator_target() -> None:

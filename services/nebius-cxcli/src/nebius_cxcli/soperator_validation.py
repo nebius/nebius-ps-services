@@ -17,11 +17,12 @@ from .component_instances import normalize_component_token
 from .runtime_config import to_plain_data
 
 SOPERATOR_CLUSTER_VALIDATION_KIND = "soperator_cluster_smoke"
-SOPERATOR_CLUSTER_VALIDATION_SCHEMA = "nebius-cxcli-soperator-cluster-validation/v1"
+SOPERATOR_CLUSTER_VALIDATION_SCHEMA = "nebius-cxcli-soperator-cluster-validation/v2"
 SOPERATOR_NAMESPACE = "soperator"
 
 _SMOKE_MARKER = "cxcli-soperator-srun-ok"
-_GPU_VISIBILITY_MARKER = "cxcli-soperator-gpu-visibility-ok"
+_PARTITION_HOSTNAME_MARKER = "cxcli-soperator-partition-hostnames-ok"
+_GPU_ALLOCATION_MARKER = "cxcli-soperator-gpu-allocation-ok"
 _NCCL_MARKER = "cxcli-soperator-nccl-ok"
 _NCCL_SKIP_MARKER = "cxcli-soperator-nccl-skipped:"
 _NCCL_RUN_RE = re.compile(
@@ -29,11 +30,20 @@ _NCCL_RUN_RE = re.compile(
     r"nodes=(?P<nodes>[0-9]+)\s+gpus_per_node=(?P<gpus_per_node>[0-9]+)\s+"
     r"ranks=(?P<ranks>[0-9]+)"
 )
+_GPU_ALLOCATION_HOST_RE = re.compile(
+    rf"^{re.escape(_GPU_ALLOCATION_MARKER)}\s+host=(?P<host>\S+)"
+)
+_GPU_GRES_RE = re.compile(r"gpu(?::[A-Za-z0-9_.-]+)?:(?P<count>[0-9]+)")
 _NCCL_LARGE_MESSAGE_BYTES = (2 * 1024**3, 4 * 1024**3, 8 * 1024**3)
+_NCCL_MIN_GPUS_PER_NODE = 8
+_REPORT_OUTPUT_MAX_LINES = 10000
+_REPORT_OUTPUT_MAX_LINE_CHARS = 1200
 _SOPERATOR_CLUSTER_READY_WAIT_SECONDS = 20 * 60
 _SOPERATOR_CLUSTER_READY_POLL_SECONDS = 15.0
 _SRUN_SMOKE_IMMEDIATE_SECONDS = 60
 _SRUN_SMOKE_CLOUD_IMMEDIATE_SECONDS = 600
+_SLURM_PARTITION_HOSTNAME_RETRY_ATTEMPTS = 3
+_SLURM_PARTITION_HOSTNAME_RETRY_DELAY_SECONDS = 30.0
 _SOPERATOR_STORAGE_VOLUME_NAME = "jail"
 _SOPERATOR_STORAGE_PVC_NAME = "jail-pvc"
 _SOPERATOR_STORAGE_PV_NAME = "jail-pv"
@@ -63,16 +73,46 @@ def _smoke_script(
     )
 
 
-def _gpu_visibility_script(*, partition: str) -> str:
+def _partition_hostname_script(
+    *,
+    partition: str,
+    nodes: int,
+    immediate_seconds: int = _SRUN_SMOKE_IMMEDIATE_SECONDS,
+) -> str:
     partition_arg = f" --partition={shlex.quote(partition)}" if partition else ""
+    node_count = max(int(nodes), 1)
     return "\n".join(
         [
             "set -euo pipefail",
-            "srun --job-name=cxcli-soperator-gpu-visibility"
-            f"{partition_arg} --nodes=1 --ntasks=1 --gres=gpu:1 "
-            "--time=00:03:00 --immediate=60 "
-            "bash -lc 'set -euo pipefail; echo cxcli-soperator-gpu-visibility-ok; "
-            "hostname; nvidia-smi -L'",
+            "srun --job-name=cxcli-soperator-partition-hostnames"
+            f"{partition_arg} --nodes={node_count} --ntasks={node_count} "
+            "--ntasks-per-node=1 --time=00:05:00 "
+            f"--immediate={immediate_seconds} hostname | sort",
+            f"echo {_PARTITION_HOSTNAME_MARKER} partition={shlex.quote(partition)} nodes={node_count}",
+        ]
+    )
+
+
+def _gpu_allocation_script(
+    *,
+    partition: str,
+    nodes: int,
+    immediate_seconds: int = _SRUN_SMOKE_IMMEDIATE_SECONDS,
+) -> str:
+    partition_arg = f" --partition={shlex.quote(partition)}" if partition else ""
+    node_count = max(int(nodes), 1)
+    return "\n".join(
+        [
+            "set -euo pipefail",
+            "srun --job-name=cxcli-soperator-gpu-allocation"
+            f"{partition_arg} --nodes={node_count} --ntasks={node_count} "
+            "--ntasks-per-node=1 --gres=gpu:1 --time=00:05:00 "
+            f"--immediate={immediate_seconds} "
+            "bash -lc 'set -euo pipefail; host=\"$(hostname)\"; "
+            "gpu_output=\"$(nvidia-smi -L || true)\"; printf \"%s\\n\" \"$gpu_output\"; "
+            "if ! grep -q \"^GPU \" <<< \"$gpu_output\"; then "
+            "echo cxcli-soperator-gpu-allocation-missing host=$host >&2; exit 1; fi; "
+            f"echo {_GPU_ALLOCATION_MARKER} host=$host'",
         ]
     )
 
@@ -85,17 +125,21 @@ def _nccl_script(*, partition: str) -> str:
             f"partition={partition_value}",
             'sinfo_output="$(sinfo -N -h -p "$partition" -o "%N|%t|%G|%c" || true)"',
             "total_gpu_nodes=()",
-            "idle_gpu_nodes=()",
+            "eligible_gpu_nodes=()",
+            "idle_eligible_gpu_nodes=()",
             'while IFS="|" read -r node state gres cpus; do',
             '  [[ -n "${node:-}" ]] || continue',
-            '  if [[ "${gres:-}" =~ gpu:([0-9]+) ]]; then',
-            '    gpu_count="${BASH_REMATCH[1]}"',
+            '  if [[ "${gres:-}" =~ gpu(:[[:alnum:]_.-]+)?:([0-9]+) ]]; then',
+            '    gpu_count="${BASH_REMATCH[2]}"',
             '    cpu_count="${cpus:-0}"',
             '    [[ "$cpu_count" =~ ^[0-9]+$ ]] || cpu_count=0',
             '    total_gpu_nodes+=("$node|$gpu_count|$cpu_count")',
             '    state_lower="$(printf "%s" "${state:-}" | tr "[:upper:]" "[:lower:]")"',
-            '    if [[ "$state_lower" == idle* ]]; then',
-            '      idle_gpu_nodes+=("$node|$gpu_count|$cpu_count")',
+            f"    if (( gpu_count >= {_NCCL_MIN_GPUS_PER_NODE} )); then",
+            '      eligible_gpu_nodes+=("$node|$gpu_count|$cpu_count")',
+            '      if [[ "$state_lower" == idle* ]]; then',
+            '        idle_eligible_gpu_nodes+=("$node|$gpu_count|$cpu_count")',
+            "      fi",
             "    fi",
             "  fi",
             'done <<< "$sinfo_output"',
@@ -106,29 +150,39 @@ def _nccl_script(*, partition: str) -> str:
             'at least one GPU node on partition $partition; found 0 GPU node(s)."',
             "  exit 0",
             "fi",
-            "if (( ${#total_gpu_nodes[@]} >= 2 )); then",
+            "if (( ${#eligible_gpu_nodes[@]} == 0 )); then",
+            '  echo "cxcli-soperator-nccl-skipped: full Slurm NCCL benchmark requires '
+            f'at least one {_NCCL_MIN_GPUS_PER_NODE}-GPU Slurm node on partition $partition; '
+            'found 0 eligible node(s), ${#total_gpu_nodes[@]} total GPU node(s)."',
+            "  exit 0",
+            "fi",
+            "if (( ${#eligible_gpu_nodes[@]} >= 2 )); then",
             "  target_nodes=2",
             '  benchmark_mode="multi-node"',
-            "  if (( ${#idle_gpu_nodes[@]} < target_nodes )); then",
+            "  if (( ${#idle_eligible_gpu_nodes[@]} < target_nodes )); then",
             '    echo "cxcli-soperator-nccl-skipped: full Slurm NCCL benchmark requires '
-            "2 idle GPU nodes on partition $partition; found ${#idle_gpu_nodes[@]} idle "
-            'GPU node(s), ${#total_gpu_nodes[@]} total GPU node(s)."',
+            f'2 idle {_NCCL_MIN_GPUS_PER_NODE}-GPU Slurm nodes on partition $partition; '
+            'found ${#idle_eligible_gpu_nodes[@]} idle eligible node(s), '
+            '${#eligible_gpu_nodes[@]} total eligible node(s), '
+            '${#total_gpu_nodes[@]} total GPU node(s)."',
             "    exit 0",
             "  fi",
             "else",
             "  target_nodes=1",
             '  benchmark_mode="single-node-multi-gpu"',
-            "  if (( ${#idle_gpu_nodes[@]} < target_nodes )); then",
+            "  if (( ${#idle_eligible_gpu_nodes[@]} < target_nodes )); then",
             '    echo "cxcli-soperator-nccl-skipped: full Slurm NCCL benchmark requires '
-            "the only GPU node on partition $partition to be idle; found "
-            '${#idle_gpu_nodes[@]} idle GPU node(s), ${#total_gpu_nodes[@]} total GPU node(s)."',
+            f'the only {_NCCL_MIN_GPUS_PER_NODE}-GPU Slurm node on partition $partition '
+            'to be idle; found ${#idle_eligible_gpu_nodes[@]} idle eligible node(s), '
+            '${#eligible_gpu_nodes[@]} total eligible node(s), '
+            '${#total_gpu_nodes[@]} total GPU node(s)."',
             "    exit 0",
             "  fi",
             "fi",
             "selected=()",
             "gpus_per_node=999999",
             "cpus_per_node=999999",
-            'for entry in "${idle_gpu_nodes[@]:0:$target_nodes}"; do',
+            'for entry in "${idle_eligible_gpu_nodes[@]:0:$target_nodes}"; do',
             '  IFS="|" read -r node gpu_count cpu_count <<< "$entry"',
             '  selected+=("$node")',
             "  if (( gpu_count < gpus_per_node )); then",
@@ -143,16 +197,16 @@ def _nccl_script(*, partition: str) -> str:
             'resolve GPU count for selected nodes on partition $partition."',
             "  exit 0",
             "fi",
+            f"if (( gpus_per_node < {_NCCL_MIN_GPUS_PER_NODE} )); then",
+            '  echo "cxcli-soperator-nccl-skipped: full Slurm NCCL benchmark runs only '
+            f'on {_NCCL_MIN_GPUS_PER_NODE}-GPU Slurm nodes; selected partition $partition '
+            'reported $gpus_per_node GPU(s) per node."',
+            "  exit 0",
+            "fi",
             "if (( cpus_per_node == 999999 )); then",
             "  cpus_per_node=$((gpus_per_node * 4))",
             "fi",
             'reported_gpus_per_node="$gpus_per_node"',
-            "if (( target_nodes == 1 && gpus_per_node < 2 )); then",
-            '  echo "cxcli-soperator-nccl-skipped: full Slurm NCCL benchmark requires '
-            "at least 2 GPUs on the only GPU node in partition $partition; found "
-            '$gpus_per_node GPU(s)."',
-            "  exit 0",
-            "fi",
             'node_list="$(IFS=,; echo "${selected[*]}")"',
             "allocatable_gpus_per_node=0",
             "allocatable_cpus_per_task=0",
@@ -186,10 +240,11 @@ def _nccl_script(*, partition: str) -> str:
             "fi",
             'gpus_per_node="$allocatable_gpus_per_node"',
             'cpus_per_task="$allocatable_cpus_per_task"',
-            "if (( target_nodes == 1 && gpus_per_node < 2 )); then",
+            f"if (( gpus_per_node < {_NCCL_MIN_GPUS_PER_NODE} )); then",
             '  echo "cxcli-soperator-nccl-skipped: full Slurm NCCL benchmark requires '
-            "at least 2 allocatable GPUs on the only GPU node in partition $partition; "
-            'reported $reported_gpus_per_node GPU(s), allocatable $gpus_per_node."',
+            f'at least {_NCCL_MIN_GPUS_PER_NODE} allocatable GPUs per selected Slurm node '
+            'on partition $partition; reported $reported_gpus_per_node GPU(s), '
+            'allocatable $gpus_per_node."',
             "  exit 0",
             "fi",
             "ranks=$((target_nodes * gpus_per_node))",
@@ -291,11 +346,148 @@ def _command_detail(result: SoperatorValidationCommandResult) -> str:
     return result.stderr.strip() or result.stdout.strip() or f"exit {result.returncode}"
 
 
+def _compact_output_line(value: str, *, limit: int = _REPORT_OUTPUT_MAX_LINE_CHARS) -> str:
+    text = str(value or "").rstrip()
+    if len(text) <= limit:
+        return text
+    return text[: limit - 24].rstrip() + " ... line truncated ..."
+
+
 def _compact_output(value: str, *, limit: int = 2000) -> str:
     text = str(value or "").strip()
     if len(text) <= limit:
         return text
     return text[: limit - 20].rstrip() + "\n... output truncated ..."
+
+
+def _compact_output_lines(
+    value: str,
+    *,
+    max_lines: int = _REPORT_OUTPUT_MAX_LINES,
+) -> list[str]:
+    lines = [
+        _compact_output_line(line)
+        for line in str(value or "").strip().splitlines()
+        if line.strip()
+    ]
+    if len(lines) <= max_lines:
+        return lines
+    omitted = len(lines) - max_lines
+    return lines[:max_lines] + [f"... output truncated: {omitted} additional line(s) ..."]
+
+
+def _partition_hostname_lines(stdout: str) -> list[str]:
+    hostnames: list[str] = []
+    for line in str(stdout or "").splitlines():
+        text = line.strip()
+        if not text or text.startswith(_PARTITION_HOSTNAME_MARKER):
+            continue
+        if text.startswith(("srun:", "slurmstepd:")):
+            continue
+        hostnames.append(text)
+    return hostnames
+
+
+def _gpu_allocation_hosts(stdout: str) -> list[str]:
+    hosts: set[str] = set()
+    for line in str(stdout or "").splitlines():
+        match = _GPU_ALLOCATION_HOST_RE.match(line.strip())
+        if match is None:
+            continue
+        host = match.group("host").strip()
+        if host:
+            hosts.add(host)
+    return sorted(hosts)
+
+
+def _slurm_allocation_unavailable(result: SoperatorValidationCommandResult) -> bool:
+    output = "\n".join(part for part in (result.stdout, result.stderr) if part).lower()
+    markers = (
+        "requested node configuration is not available",
+        "resources are not available",
+        "resource temporarily unavailable",
+        "unable to allocate",
+        "job allocation disabled",
+        "job request does not match any supported policy",
+        "still queued and hence no node list",
+        "job submit/allocate failed",
+        "requested nodes are busy",
+        "nodes required for job are down",
+    )
+    return result.returncode != 0 and _GPU_ALLOCATION_MARKER not in result.stdout and any(
+        marker in output for marker in markers
+    )
+
+
+def _slurm_partition_hostname_transient_failure(
+    result: SoperatorValidationCommandResult,
+) -> bool:
+    if _PARTITION_HOSTNAME_MARKER in result.stdout:
+        return False
+    output = "\n".join(part for part in (result.stdout, result.stderr) if part).lower()
+    markers = (
+        "copying stdout failed",
+        "copying stderr failed",
+        "error reading from error stream",
+        "connection reset by peer",
+        "required node not available",
+        "resources are not available",
+        "resource temporarily unavailable",
+        "unable to allocate",
+        "queued and waiting for resources",
+        "has been allocated resources",
+        "nodes required for job are down",
+    )
+    return any(marker in output for marker in markers)
+
+
+def _parse_positive_int(value: str) -> int:
+    try:
+        parsed = int(str(value or "").strip())
+    except ValueError:
+        return 0
+    return parsed if parsed > 0 else 0
+
+
+def _partition_name(value: str) -> str:
+    return str(value or "").strip().rstrip("*").strip()
+
+
+def _gpu_count_from_gres(value: str) -> int:
+    counts = [
+        _parse_positive_int(match.group("count"))
+        for match in _GPU_GRES_RE.finditer(str(value or ""))
+    ]
+    return max(counts, default=0)
+
+
+def _partition_node_counts(stdout: str) -> tuple[tuple[str, int], ...]:
+    counts: dict[str, int] = {}
+    for line in (stdout or "").splitlines():
+        parts = [item.strip() for item in line.split("|")]
+        if len(parts) < 2:
+            continue
+        partition = _partition_name(parts[0])
+        node_count = _parse_positive_int(parts[1])
+        if not partition or partition == "hidden" or node_count <= 0:
+            continue
+        counts[partition] = counts.get(partition, 0) + node_count
+    return tuple((partition, count) for partition, count in counts.items() if count > 0)
+
+
+def _gpu_partition_node_counts(stdout: str) -> tuple[tuple[str, int], ...]:
+    counts: dict[str, int] = {}
+    for line in (stdout or "").splitlines():
+        parts = [item.strip() for item in line.split("|")]
+        if len(parts) < 3:
+            continue
+        partition = _partition_name(parts[0])
+        node_count = _parse_positive_int(parts[1])
+        gpu_count = _gpu_count_from_gres(parts[2])
+        if not partition or partition == "hidden" or node_count <= 0 or gpu_count <= 0:
+            continue
+        counts[partition] = counts.get(partition, 0) + node_count
+    return tuple((partition, count) for partition, count in counts.items() if count > 0)
 
 
 def _format_gib_label(size_bytes: int) -> str:
@@ -627,9 +819,9 @@ def _append_check(
     if command:
         item["command"] = _command_text(command)
     if stdout:
-        item["stdout"] = _compact_output(stdout)
+        item["stdout"] = _compact_output_lines(stdout)
     if stderr:
-        item["stderr"] = _compact_output(stderr)
+        item["stderr"] = _compact_output_lines(stderr)
     checks.append(item)
 
 
@@ -1223,7 +1415,8 @@ def _partition_has_powered_down_nodes(
 
 
 def _sinfo_gpu_partition_candidates(stdout: str) -> tuple[str, ...]:
-    preferred: list[str] = []
+    preferred: list[tuple[int, int, int, str]] = []
+    order = 0
     for line in stdout.splitlines():
         parts = [item.strip() for item in line.split("|")]
         if len(parts) < 3:
@@ -1236,8 +1429,11 @@ def _sinfo_gpu_partition_candidates(stdout: str) -> tuple[str, ...]:
         if "gpu" not in partition.lower() and "gpu" not in gres:
             continue
         if state in {"idle", "mix", "mixed"}:
-            preferred.append(partition)
-    return tuple(dict.fromkeys(preferred))
+            gpu_count = _gpu_count_from_gres(gres)
+            floor_rank = 0 if gpu_count >= _NCCL_MIN_GPUS_PER_NODE else 1
+            preferred.append((floor_rank, -gpu_count, order, partition))
+            order += 1
+    return tuple(dict.fromkeys(item[3] for item in sorted(preferred)))
 
 
 def _select_srun_smoke_partition(
@@ -1314,45 +1510,241 @@ def _check_srun_smoke(
         )
 
 
-def _check_slurm_gpu_visibility(
+def _check_slurm_partition_hostnames(
     runner: SoperatorValidationCommandRunner,
     spec: Mapping[str, Any],
     checks: list[dict[str, Any]],
 ) -> None:
-    partition = _select_gpu_smoke_partition(runner, spec)
-    if not partition:
-        return
-    result = _exec_login(
+    sinfo = _exec_login(
         runner,
         spec,
-        ("bash", "-lc", _gpu_visibility_script(partition=partition)),
-        timeout_seconds=420,
+        ("sinfo", "-h", "-o", "%P|%D"),
+        timeout_seconds=120,
     )
-    if (
-        result.returncode == 0
-        and _GPU_VISIBILITY_MARKER in result.stdout
-        and "GPU " in result.stdout
-    ):
+    if sinfo.returncode != 0:
         _append_check(
             checks,
-            name="Slurm GPU visibility test",
+            name="Slurm all-partition hostname check",
+            status="failed",
+            summary="sinfo could not list Slurm partitions for all-node hostname checks.",
+            command=sinfo.args,
+            stdout=sinfo.stdout,
+            stderr=sinfo.stderr,
+        )
+        return
+    partitions = _partition_node_counts(sinfo.stdout)
+    if not partitions:
+        return
+    outputs: list[str] = []
+    errors: list[str] = []
+    failed: list[str] = []
+    summary_parts: list[str] = []
+    partition_hostnames: list[dict[str, Any]] = []
+    for partition, node_count in partitions:
+        passed = False
+        result: SoperatorValidationCommandResult | None = None
+        for attempt in range(1, _SLURM_PARTITION_HOSTNAME_RETRY_ATTEMPTS + 1):
+            immediate_seconds = _SRUN_SMOKE_IMMEDIATE_SECONDS
+            timeout_seconds = 420
+            if _partition_has_powered_down_nodes(runner, spec, partition=partition):
+                immediate_seconds = _SRUN_SMOKE_CLOUD_IMMEDIATE_SECONDS
+                timeout_seconds = immediate_seconds + 300
+            result = _exec_login(
+                runner,
+                spec,
+                (
+                    "bash",
+                    "-lc",
+                    _partition_hostname_script(
+                        partition=partition,
+                        nodes=node_count,
+                        immediate_seconds=immediate_seconds,
+                    ),
+                ),
+                timeout_seconds=timeout_seconds,
+            )
+            if result.stdout:
+                outputs.append(result.stdout)
+            if result.stderr:
+                errors.append(result.stderr)
+            if result.returncode == 0 and _PARTITION_HOSTNAME_MARKER in result.stdout:
+                passed = True
+                break
+            if (
+                attempt < _SLURM_PARTITION_HOSTNAME_RETRY_ATTEMPTS
+                and _slurm_partition_hostname_transient_failure(result)
+            ):
+                time.sleep(_SLURM_PARTITION_HOSTNAME_RETRY_DELAY_SECONDS)
+                continue
+            break
+        summary_parts.append(f"{partition}={node_count}")
+        hostnames = _partition_hostname_lines(result.stdout if result is not None else "")
+        partition_hostnames.append(
+            {
+                "partition": partition,
+                "expected_node_count": node_count,
+                "reported_hostname_count": len(hostnames),
+                "status": "passed" if passed else "failed",
+                "hostnames": hostnames,
+            }
+        )
+        if not passed:
+            failed.append(partition)
+    extra = {"partition_hostnames": partition_hostnames}
+    if not failed:
+        _append_check(
+            checks,
+            name="Slurm all-partition hostname check",
             status="passed",
-            summary=f"one-GPU Slurm allocation reported NVIDIA GPUs on partition {partition}.",
-            command=result.args,
-            stdout=result.stdout,
+            summary=(
+                "hostname jobs completed across all reported Slurm partition nodes: "
+                + ", ".join(summary_parts)
+                + "."
+            ),
+            stdout="\n".join(outputs),
+            extra=extra,
         )
     else:
         _append_check(
             checks,
-            name="Slurm GPU visibility test",
+            name="Slurm all-partition hostname check",
             status="failed",
             summary=(
-                "one-GPU Slurm allocation failed or did not report an NVIDIA GPU "
-                f"on partition {partition}."
+                "hostname job failed or did not report the expected marker on partition(s): "
+                + ", ".join(failed)
+                + "."
             ),
-            command=result.args,
-            stdout=result.stdout,
-            stderr=result.stderr,
+            stdout="\n".join(outputs),
+            stderr="\n".join(errors),
+            extra=extra,
+        )
+
+
+def _check_slurm_gpu_allocation(
+    runner: SoperatorValidationCommandRunner,
+    spec: Mapping[str, Any],
+    checks: list[dict[str, Any]],
+) -> None:
+    sinfo = _exec_login(
+        runner,
+        spec,
+        ("sinfo", "-h", "-o", "%P|%D|%G"),
+        timeout_seconds=120,
+    )
+    if sinfo.returncode != 0:
+        _append_check(
+            checks,
+            name="Slurm GPU allocation check",
+            status="failed",
+            summary="sinfo could not list Slurm GPU partitions for allocation checks.",
+            command=sinfo.args,
+            stdout=sinfo.stdout,
+            stderr=sinfo.stderr,
+        )
+        return
+    partitions = _gpu_partition_node_counts(sinfo.stdout)
+    if not partitions:
+        return
+    outputs: list[str] = []
+    errors: list[str] = []
+    failed: list[str] = []
+    skipped: list[str] = []
+    summary_parts: list[str] = []
+    gpu_allocations: list[dict[str, Any]] = []
+    for partition, node_count in partitions:
+        immediate_seconds = _SRUN_SMOKE_IMMEDIATE_SECONDS
+        timeout_seconds = 420
+        if _partition_has_powered_down_nodes(runner, spec, partition=partition):
+            immediate_seconds = _SRUN_SMOKE_CLOUD_IMMEDIATE_SECONDS
+            timeout_seconds = immediate_seconds + 300
+        result = _exec_login(
+            runner,
+            spec,
+            (
+                "bash",
+                "-lc",
+                _gpu_allocation_script(
+                    partition=partition,
+                    nodes=node_count,
+                    immediate_seconds=immediate_seconds,
+                ),
+            ),
+            timeout_seconds=timeout_seconds,
+        )
+        summary_parts.append(f"{partition}={node_count}")
+        if result.stdout:
+            outputs.append(result.stdout)
+        if result.stderr:
+            errors.append(result.stderr)
+        hosts = _gpu_allocation_hosts(result.stdout)
+        allocation_status = "passed"
+        if _slurm_allocation_unavailable(result):
+            skipped.append(partition)
+            allocation_status = "skipped"
+        elif (
+            result.returncode != 0
+            or _GPU_ALLOCATION_MARKER not in result.stdout
+            or "GPU " not in result.stdout
+        ):
+            failed.append(partition)
+            allocation_status = "failed"
+        gpu_allocations.append(
+            {
+                "partition": partition,
+                "expected_node_count": node_count,
+                "reported_host_count": len(hosts),
+                "status": allocation_status,
+                "hosts": hosts,
+            }
+        )
+    extra = {"gpu_allocations": gpu_allocations}
+    if not failed and not skipped:
+        _append_check(
+            checks,
+            name="Slurm GPU allocation check",
+            status="passed",
+            summary=(
+                "one-GPU Slurm allocations reported NVIDIA GPUs across all reported GPU "
+                "partition nodes: "
+                + ", ".join(summary_parts)
+                + "."
+            ),
+            stdout="\n".join(outputs),
+            extra=extra,
+        )
+    elif skipped and not failed:
+        _append_check(
+            checks,
+            name="Slurm GPU allocation check",
+            status="skipped",
+            summary=(
+                "Skipped: one-GPU Slurm allocation was not immediately schedulable on "
+                "partition(s): "
+                + ", ".join(skipped)
+                + "."
+            ),
+            stdout="\n".join(outputs),
+            stderr="\n".join(errors),
+            extra={
+                "skipped": True,
+                "skip_reason": "GPU allocation was not schedulable",
+                **extra,
+            },
+        )
+    else:
+        _append_check(
+            checks,
+            name="Slurm GPU allocation check",
+            status="failed",
+            summary=(
+                "one-GPU Slurm allocation failed or did not report NVIDIA GPUs on "
+                "partition(s): "
+                + ", ".join(failed)
+                + "."
+            ),
+            stdout="\n".join(outputs),
+            stderr="\n".join(errors),
+            extra=extra,
         )
 
 
@@ -1477,7 +1869,8 @@ def run_soperator_cluster_validations(
             _check_slurm_status(runner, spec, checks)
             _check_slurm_queue(runner, spec, checks)
             _check_srun_smoke(runner, spec, checks)
-            _check_slurm_gpu_visibility(runner, spec, checks)
+            _check_slurm_partition_hostnames(runner, spec, checks)
+            _check_slurm_gpu_allocation(runner, spec, checks)
             _check_slurm_nccl_benchmark(runner, spec, checks)
         except Exception as exc:
             _append_check(
