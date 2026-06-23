@@ -1365,6 +1365,32 @@ spec:
                 "\n".join(self.slurm_resource_names) + "\n",
                 "",
             )
+        if command[:8] == (
+            "kubectl",
+            "--context",
+            "external-context",
+            "-n",
+            "soperator",
+            "get",
+            "nodesets",
+            "-o",
+        ):
+            if self.live_nodesets is None:
+                items = [
+                    {
+                        "metadata": {"name": "worker", "namespace": "soperator"},
+                        "spec": {"replicas": 2},
+                        "status": {"phase": "Ready", "replicas": 2},
+                    }
+                ]
+            else:
+                items = list(self.live_nodesets.values())
+            return SoperatorMigrationCommandResult(
+                command,
+                0,
+                json.dumps({"items": items}),
+                "",
+            )
         return SoperatorMigrationCommandResult(command, 0, "{}", "")
 
 
@@ -3277,7 +3303,10 @@ def test_execute_runs_configured_mk8s_gpu_validations_during_validation_hold(
         (reports_dir / "deploy-smoke-report-external-cluster.json").read_text(encoding="utf-8")
     )
     assert soperator_report["status"] == "passed"
-    assert any(check["name"] == "Slurm srun smoke job" for check in soperator_report["checks"])
+    assert soperator_report["scope"] == "soperator-deployment-snapshot"
+    check_names = {check["name"] for check in soperator_report["checks"]}
+    assert {"SlurmCluster visibility", "NodeSet visibility"} <= check_names
+    assert "Slurm srun smoke job" not in check_names
     checkpoint = json.loads(
         soperator_migration_checkpoint_path(tmp_path / "config.yaml", "external-cluster").read_text(
             encoding="utf-8"
