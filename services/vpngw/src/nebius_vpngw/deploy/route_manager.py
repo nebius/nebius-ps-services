@@ -5,6 +5,7 @@ import json
 import re
 import shlex
 import time
+import typing as t
 from pathlib import Path
 
 from rich import print
@@ -18,6 +19,38 @@ class RouteManager:
         if hasattr(value, "value"):
             value = value.value
         return str(value or "").strip().lower()
+
+    @staticmethod
+    def _parse_ipv4_network(
+        prefix: str,
+        *,
+        strict: bool = False,
+    ) -> ipaddress.IPv4Network | None:
+        try:
+            network = ipaddress.ip_network(str(prefix), strict=strict)
+        except Exception:
+            return None
+        if isinstance(network, ipaddress.IPv4Network):
+            return network
+        return None
+
+    @classmethod
+    def _parse_ipv4_networks(
+        cls,
+        prefixes,
+        *,
+        strict: bool = True,
+    ) -> list[ipaddress.IPv4Network]:
+        networks: list[ipaddress.IPv4Network] = []
+        for prefix in prefixes or []:
+            try:
+                network = ipaddress.ip_network(str(prefix), strict=strict)
+            except Exception as e:
+                raise ValueError(f"Invalid IPv4 network prefix: {prefix}") from e
+            if not isinstance(network, ipaddress.IPv4Network):
+                raise ValueError(f"Expected IPv4 network prefix: {prefix}")
+            networks.append(network)
+        return networks
 
     def __init__(self, project_id: str | None, auth_token: str | None = None) -> None:
         self.project_id = project_id
@@ -41,7 +74,7 @@ class RouteManager:
             callback([("authorization", f"Bearer {token}")], None)
 
         # Create channel credentials with auth metadata
-        auth_creds = grpc.metadata_call_credentials(auth_metadata_plugin)
+        auth_creds = grpc.metadata_call_credentials(t.cast(t.Any, auth_metadata_plugin))
         ssl_creds = grpc.ssl_channel_credentials()
         composite_creds = grpc.composite_channel_credentials(ssl_creds, auth_creds)
 
@@ -249,10 +282,9 @@ class RouteManager:
                 cidr = getattr(cidr_obj, "cidr", None)
                 if not cidr:
                     continue
-                try:
-                    networks.append(ipaddress.ip_network(cidr, strict=False))
-                except Exception:
-                    continue
+                network = RouteManager._parse_ipv4_network(str(cidr))
+                if network is not None:
+                    networks.append(network)
         return networks
 
     @staticmethod
@@ -261,10 +293,9 @@ class RouteManager:
         cidrs = getattr(subnet_status, "ipv4_private_cidrs", []) or []
         networks: list[ipaddress.IPv4Network] = []
         for cidr in cidrs:
-            try:
-                networks.append(ipaddress.ip_network(cidr, strict=False))
-            except Exception:
-                continue
+            network = RouteManager._parse_ipv4_network(str(cidr))
+            if network is not None:
+                networks.append(network)
         return networks
 
     def _effective_subnet_cidrs(self, subnet_obj) -> list[ipaddress.IPv4Network]:
@@ -460,10 +491,7 @@ class RouteManager:
 
     @staticmethod
     def _parse_prefix(prefix: str) -> ipaddress.IPv4Network | None:
-        try:
-            return ipaddress.ip_network(prefix, strict=False)
-        except Exception:
-            return None
+        return RouteManager._parse_ipv4_network(prefix)
 
     @staticmethod
     def _path_nexthops(path: dict) -> set[str]:
@@ -503,10 +531,9 @@ class RouteManager:
             cidr = getattr(cidr_obj, "cidr", None)
             if not cidr:
                 continue
-            try:
-                networks.append(ipaddress.ip_network(cidr, strict=False))
-            except Exception:
-                continue
+            network = RouteManager._parse_ipv4_network(str(cidr))
+            if network is not None:
+                networks.append(network)
         return networks
 
     def _get_network_private_pool_cidrs(
@@ -567,9 +594,8 @@ class RouteManager:
         skipped_network_pool_prefixes: list[tuple[str, str]] = []
 
         for prefix, alloc_id in prefix_targets.items():
-            try:
-                prefix_network = ipaddress.ip_network(prefix, strict=False)
-            except Exception:
+            prefix_network = self._parse_ipv4_network(prefix)
+            if prefix_network is None:
                 continue
 
             if any(prefix_network.overlaps(local_network) for local_network in local_networks):
@@ -601,10 +627,10 @@ class RouteManager:
     def _summarize_prefix_targets(self, prefix_targets: dict[str, str]) -> dict[str, str]:
         grouped: dict[str, list[ipaddress.IPv4Network]] = {}
         for prefix, alloc_id in prefix_targets.items():
-            try:
-                grouped.setdefault(alloc_id, []).append(ipaddress.ip_network(prefix, strict=False))
-            except Exception:
+            network = self._parse_ipv4_network(prefix)
+            if network is None:
                 continue
+            grouped.setdefault(alloc_id, []).append(network)
 
         summarized: dict[str, str] = {}
         for alloc_id, networks in grouped.items():
@@ -620,10 +646,7 @@ class RouteManager:
         cidr = getattr(destination, "cidr", None) if destination else None
         if not cidr:
             return None
-        try:
-            return ipaddress.ip_network(cidr, strict=False)
-        except Exception:
-            return None
+        return RouteManager._parse_ipv4_network(str(cidr))
 
     @staticmethod
     def _route_next_hop_allocation_id(route) -> str | None:
@@ -632,6 +655,20 @@ class RouteManager:
         allocation = getattr(next_hop, "allocation", None) if next_hop else None
         allocation_id = getattr(allocation, "id", None) if allocation else None
         return str(allocation_id) if allocation_id else None
+
+    @staticmethod
+    def _route_spec(route):
+        return getattr(route, "spec", None)
+
+    @staticmethod
+    def _subnet_route_table(subnet_obj):
+        status_obj = getattr(subnet_obj, "status", None)
+        return getattr(status_obj, "route_table", None)
+
+    @staticmethod
+    def _subnet_network_id(subnet_obj) -> str:
+        subnet_spec = getattr(subnet_obj, "spec", None)
+        return str(getattr(subnet_spec, "network_id", "") or "")
 
     @staticmethod
     def _metadata_name(resource) -> str:
@@ -701,12 +738,10 @@ class RouteManager:
         desired_prefixes = set(desired_prefix_targets)
 
         for prefix, alloc_id in desired_prefix_targets.items():
-            try:
-                desired_by_alloc.setdefault(alloc_id, []).append(
-                    ipaddress.ip_network(prefix, strict=False)
-                )
-            except Exception:
+            network = self._parse_ipv4_network(prefix)
+            if network is None:
                 continue
+            desired_by_alloc.setdefault(alloc_id, []).append(network)
 
         redundant = []
         for route in existing_routes:
@@ -743,12 +778,10 @@ class RouteManager:
         effective_prefixes = set(effective_prefix_targets)
 
         for prefix, alloc_id in desired_prefix_targets.items():
-            try:
-                desired_by_alloc.setdefault(alloc_id, []).append(
-                    ipaddress.ip_network(prefix, strict=False)
-                )
-            except Exception:
+            network = self._parse_ipv4_network(prefix)
+            if network is None:
                 continue
+            desired_by_alloc.setdefault(alloc_id, []).append(network)
 
         redundant = []
         for route in existing_routes:
@@ -823,12 +856,14 @@ class RouteManager:
         if pool_group is None:
             return None
 
+        pools: list[dict[str, object]] = []
         result: dict[str, object] = {
             "use_network_pools": bool(getattr(pool_group, "use_network_pools", False)),
-            "pools": [],
+            "pools": pools,
         }
         for pool in getattr(pool_group, "pools", []) or []:
-            pool_entry: dict[str, object] = {"cidrs": []}
+            cidrs: list[dict[str, object]] = []
+            pool_entry: dict[str, object] = {"cidrs": cidrs}
             for cidr_obj in getattr(pool, "cidrs", []) or []:
                 cidr = getattr(cidr_obj, "cidr", None)
                 if not cidr:
@@ -842,9 +877,9 @@ class RouteManager:
                     cidr_entry["state"] = str(state.name).lower()
                 elif state not in (None, 0, ""):
                     cidr_entry["state"] = str(state)
-                pool_entry["cidrs"].append(cidr_entry)
-            if pool_entry["cidrs"]:
-                result["pools"].append(pool_entry)
+                cidrs.append(cidr_entry)
+            if cidrs:
+                pools.append(pool_entry)
         return result
 
     def _write_swap_rollback_spec(
@@ -856,22 +891,21 @@ class RouteManager:
     ) -> Path:
         rollback_dir.mkdir(parents=True, exist_ok=True)
 
-        subnet_name = getattr(getattr(subnet_obj, "metadata", None), "name", None) or "subnet"
-        subnet_id = getattr(getattr(subnet_obj, "metadata", None), "id", None) or ""
+        subnet_name = self._metadata_name(subnet_obj) or "subnet"
+        subnet_id = self._metadata_id(subnet_obj)
         subnet_spec = getattr(subnet_obj, "spec", None)
-        network_id = getattr(subnet_spec, "network_id", None) or ""
+        network_id = self._subnet_network_id(subnet_obj)
 
-        payload: dict[str, object] = {
-            "metadata": {
-                "id": subnet_id,
-                "parent_id": self.project_id or "",
-                "name": str(subnet_name),
-            },
-            "spec": {
-                "network_id": network_id,
-                "route_table_id": previous_route_table_id,
-            },
+        metadata_payload: dict[str, object] = {
+            "id": subnet_id,
+            "parent_id": self.project_id or "",
+            "name": str(subnet_name),
         }
+        spec_payload: dict[str, object] = {
+            "network_id": network_id,
+            "route_table_id": previous_route_table_id,
+        }
+        payload: dict[str, object] = {"metadata": metadata_payload, "spec": spec_payload}
 
         private_pools = self._subnet_pool_group_to_dict(
             getattr(subnet_spec, "ipv4_private_pools", None)
@@ -880,9 +914,9 @@ class RouteManager:
             getattr(subnet_spec, "ipv4_public_pools", None)
         )
         if private_pools is not None:
-            payload["spec"]["ipv4_private_pools"] = private_pools
+            spec_payload["ipv4_private_pools"] = private_pools
         if public_pools is not None:
-            payload["spec"]["ipv4_public_pools"] = public_pools
+            spec_payload["ipv4_public_pools"] = public_pools
 
         safe_subnet = self._sanitize_name_fragment(str(subnet_name))
         rollback_path = rollback_dir / (
@@ -897,7 +931,7 @@ class RouteManager:
         existing_ipv4_private_pools = getattr(subnet_spec, "ipv4_private_pools", None)
         existing_ipv4_public_pools = getattr(subnet_spec, "ipv4_public_pools", None)
         return subnet_pb2.SubnetSpec(
-            network_id=getattr(subnet_spec, "network_id", ""),
+            network_id=RouteManager._subnet_network_id(subnet_obj),
             route_table_id=route_table_id,
             ipv4_private_pools=existing_ipv4_private_pools,
             ipv4_public_pools=existing_ipv4_public_pools,
@@ -956,7 +990,7 @@ class RouteManager:
                             parent_id=destination_route_table_id,
                             name=metadata_name,
                         ),
-                        spec=route.spec,
+                        spec=self._route_spec(route),
                     )
                 )
                 copied += 1
@@ -1554,10 +1588,9 @@ class RouteManager:
         from rich.console import Console
         from rich.table import Table
 
-        gateway_prefixes = [
-            ipaddress.ip_network(p)
-            for p in (local_cfg.get("gateway", {}).get("local_prefixes") or [])
-        ]
+        gateway_prefixes = self._parse_ipv4_networks(
+            local_cfg.get("gateway", {}).get("local_prefixes") or []
+        )
         if not gateway_prefixes:
             print("[yellow]No gateway.local_prefixes; nothing to list.[/yellow]")
             return
@@ -1600,8 +1633,9 @@ class RouteManager:
             subnet_name = self._metadata_name(sn)
             subnet_cidrs = [str(net) for net in selected_cidrs]
 
-            rt_id = sn.status.route_table.id
-            rt_default = sn.status.route_table.default
+            rt_info = self._subnet_route_table(sn)
+            rt_id = str(getattr(rt_info, "id", "") or "")
+            rt_default = bool(getattr(rt_info, "default", False))
 
             print(
                 f"\n[bold cyan]Subnet: {subnet_name}[/bold cyan] ({', '.join(subnet_cidrs)})"
@@ -1847,7 +1881,7 @@ class RouteManager:
             def auth_metadata_plugin(context, callback):
                 callback([("authorization", f"Bearer {token}")], None)
 
-            auth_creds = grpc.metadata_call_credentials(auth_metadata_plugin)
+            auth_creds = grpc.metadata_call_credentials(t.cast(t.Any, auth_metadata_plugin))
             ssl_creds = grpc.ssl_channel_credentials()
             composite_creds = grpc.composite_channel_credentials(ssl_creds, auth_creds)
             compute_channel = grpc.secure_channel("compute.api.nebius.cloud:443", composite_creds)
@@ -1867,10 +1901,9 @@ class RouteManager:
             subnet_service_pb2_grpc,
         )
 
-        gateway_prefixes = [
-            ipaddress.ip_network(p)
-            for p in (local_cfg.get("gateway", {}).get("local_prefixes") or [])
-        ]
+        gateway_prefixes = self._parse_ipv4_networks(
+            local_cfg.get("gateway", {}).get("local_prefixes") or []
+        )
         if not gateway_prefixes:
             print("[yellow]No gateway.local_prefixes; cannot determine relevant subnets.[/yellow]")
             return
@@ -1914,10 +1947,9 @@ class RouteManager:
             return
 
         # Filter out local prefixes (don't create routes for our own VPC networks)
-        local_networks = [
-            ipaddress.ip_network(p)
-            for p in (local_cfg.get("gateway", {}).get("local_prefixes") or [])
-        ]
+        local_networks = self._parse_ipv4_networks(
+            local_cfg.get("gateway", {}).get("local_prefixes") or []
+        )
         (
             prefix_targets,
             skipped_local_prefixes,
@@ -1982,9 +2014,11 @@ class RouteManager:
 
         for sn, _selected_cidrs in selected_subnets:
             subnet_name = self._metadata_name(sn)
-            rt_info = sn.status.route_table
-            current_route_table_id = rt_info.id or ""
+            rt_info = self._subnet_route_table(sn)
+            current_route_table_id = str(getattr(rt_info, "id", "") or "")
+            current_route_table_default = bool(getattr(rt_info, "default", False))
             current_route_table_label = current_route_table_id or "default route table"
+            subnet_network_id = self._subnet_network_id(sn) or target_network_id
 
             if swap_route_table:
                 source_route_table_id = current_route_table_id
@@ -2009,7 +2043,7 @@ class RouteManager:
                                 name=swap_rt_name,
                                 parent_id=self.project_id,
                             ),
-                            spec=route_table_pb2.RouteTableSpec(network_id=sn.spec.network_id),
+                            spec=route_table_pb2.RouteTableSpec(network_id=subnet_network_id),
                         )
                     )
                     rt_id = op.resource_id or ""
@@ -2158,12 +2192,12 @@ class RouteManager:
                 )
                 continue
 
-            if not rt_info.default and rt_info.id:
+            if not current_route_table_default and current_route_table_id:
                 print(
-                    f"[cyan]Subnet {subnet_name} already uses custom route table {rt_info.id}; "
+                    f"[cyan]Subnet {subnet_name} already uses custom route table {current_route_table_id}; "
                     "adding VPN routes...[/cyan]"
                 )
-                rt_id = rt_info.id
+                rt_id = current_route_table_id
             else:
                 # Subnet uses default route table - need to create custom RT
                 rt_name = self._route_table_name(subnet_name)
@@ -2183,7 +2217,7 @@ class RouteManager:
                         f"[green]Using existing route table {rt_id} ({rt_name}) for subnet {subnet_name}[/green]"
                     )
                     # Attach to subnet if not already attached
-                    if rt_info.id != rt_id:
+                    if current_route_table_id != rt_id:
                         try:
                             self._attach_route_table_to_subnet(
                                 sstub,
@@ -2209,7 +2243,7 @@ class RouteManager:
                     )
 
                     # Get default route table ID to copy routes from
-                    default_rt_id = rt_info.id if rt_info.id else None
+                    default_rt_id = current_route_table_id or None
 
                     try:
                         op = rtstub.Create(
@@ -2218,7 +2252,7 @@ class RouteManager:
                                     name=rt_name,
                                     parent_id=self.project_id,
                                 ),
-                                spec=route_table_pb2.RouteTableSpec(network_id=sn.spec.network_id),
+                                spec=route_table_pb2.RouteTableSpec(network_id=subnet_network_id),
                             )
                         )
                         new_rt_id = op.resource_id or ""
@@ -2247,13 +2281,17 @@ class RouteManager:
                                                         parent_id=new_rt_id,
                                                         name=f"{self._metadata_name(dr)}-copy"[:63],
                                                     ),
-                                                    spec=dr.spec,
+                                                    spec=self._route_spec(dr),
                                                 )
                                             )
                                         except Exception as copy_err:
                                             # Ignore errors for copying (might be system routes that can't be copied)
+                                            destination = self._route_destination_network(dr)
+                                            destination_label = (
+                                                str(destination) if destination else "unknown"
+                                            )
                                             print(
-                                                f"[dim]  Could not copy route {dr.spec.destination.cidr}: {copy_err}[/dim]"
+                                                f"[dim]  Could not copy route {destination_label}: {copy_err}[/dim]"
                                             )
                                 else:
                                     print("[dim]  No routes in default route table to copy[/dim]")
