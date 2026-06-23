@@ -66,14 +66,17 @@ class RouteManager:
                 net = ipaddress.ip_network(cidr, strict=False)
             except Exception:
                 continue
-            nets.append((net, alloc.metadata.id))
+            alloc_id = self._metadata_id(alloc)
+            if not alloc_id:
+                continue
+            nets.append((net, alloc_id))
             # pick first host address to represent this allocation
             ip_str = str(
                 net.network_address
                 if net.prefixlen == net.max_prefixlen
                 else next(net.hosts(), net.network_address)
             )
-            alloc_to_ip[alloc.metadata.id] = ip_str
+            alloc_to_ip[alloc_id] = ip_str
         return nets, alloc_to_ip
 
     def _find_gateway_private_allocations_by_index(
@@ -98,7 +101,7 @@ class RouteManager:
             instance_service_pb2.ListInstancesRequest(parent_id=self.project_id or "")
         )
         for inst in ilist.items:
-            instance_index = host_to_index.get(inst.metadata.name)
+            instance_index = host_to_index.get(self._metadata_name(inst))
             if instance_index is None:
                 continue
             for ni in inst.status.network_interfaces:
@@ -631,9 +634,18 @@ class RouteManager:
         return str(allocation_id) if allocation_id else None
 
     @staticmethod
-    def _route_name(route) -> str:
-        metadata = getattr(route, "metadata", None)
+    def _metadata_name(resource) -> str:
+        metadata = getattr(resource, "metadata", None)
         return str(getattr(metadata, "name", None) or "")
+
+    @staticmethod
+    def _metadata_id(resource) -> str:
+        metadata = getattr(resource, "metadata", None)
+        return str(getattr(metadata, "id", None) or "")
+
+    @staticmethod
+    def _route_name(route) -> str:
+        return RouteManager._metadata_name(route)
 
     @staticmethod
     def _route_is_managed(route) -> bool:
@@ -903,7 +915,7 @@ class RouteManager:
     ) -> None:
         sstub.Update(
             subnet_service_pb2.UpdateSubnetRequest(
-                metadata=metadata_pb2.ResourceMetadata(id=subnet_obj.metadata.id),
+                metadata=metadata_pb2.ResourceMetadata(id=self._metadata_id(subnet_obj)),
                 spec=self._subnet_update_spec(
                     subnet_pb2,
                     subnet_obj,
@@ -1585,13 +1597,14 @@ class RouteManager:
             )
 
         for sn, selected_cidrs in selected_subnets:
+            subnet_name = self._metadata_name(sn)
             subnet_cidrs = [str(net) for net in selected_cidrs]
 
             rt_id = sn.status.route_table.id
             rt_default = sn.status.route_table.default
 
             print(
-                f"\n[bold cyan]Subnet: {sn.metadata.name}[/bold cyan] ({', '.join(subnet_cidrs)})"
+                f"\n[bold cyan]Subnet: {subnet_name}[/bold cyan] ({', '.join(subnet_cidrs)})"
             )
 
             if not rt_id:
@@ -1968,6 +1981,7 @@ class RouteManager:
             return
 
         for sn, _selected_cidrs in selected_subnets:
+            subnet_name = self._metadata_name(sn)
             rt_info = sn.status.route_table
             current_route_table_id = rt_info.id or ""
             current_route_table_label = current_route_table_id or "default route table"
@@ -1976,18 +1990,18 @@ class RouteManager:
                 source_route_table_id = current_route_table_id
                 if not source_route_table_id:
                     print(
-                        f"[yellow]Cannot swap route table for subnet {sn.metadata.name}: "
+                        f"[yellow]Cannot swap route table for subnet {subnet_name}: "
                         "the currently attached route table ID is unavailable, so a "
                         "safe rollback target cannot be generated.[/yellow]"
                     )
                     continue
 
                 print(
-                    f"[cyan]Subnet {sn.metadata.name} will swap from route table "
+                    f"[cyan]Subnet {subnet_name} will swap from route table "
                     f"{source_route_table_id} to a fresh custom table...[/cyan]"
                 )
 
-                swap_rt_name = self._swap_route_table_name(sn.metadata.name)
+                swap_rt_name = self._swap_route_table_name(subnet_name)
                 try:
                     op = rtstub.Create(
                         route_table_service_pb2.CreateRouteTableRequest(
@@ -2001,13 +2015,13 @@ class RouteManager:
                     rt_id = op.resource_id or ""
                 except Exception as e:
                     print(
-                        f"[yellow]Failed to create swap route table for subnet {sn.metadata.name}: {e}[/yellow]"
+                        f"[yellow]Failed to create swap route table for subnet {subnet_name}: {e}[/yellow]"
                     )
                     continue
 
                 if not rt_id:
                     print(
-                        f"[red]Route table create returned no resource_id for subnet {sn.metadata.name}; skipping.[/red]"
+                        f"[red]Route table create returned no resource_id for subnet {subnet_name}; skipping.[/red]"
                     )
                     continue
 
@@ -2022,7 +2036,7 @@ class RouteManager:
                     except Exception as e:
                         print(
                             f"[yellow]Failed to list routes on source route table "
-                            f"{source_route_table_id} for subnet {sn.metadata.name}: {e}[/yellow]"
+                            f"{source_route_table_id} for subnet {subnet_name}: {e}[/yellow]"
                         )
                         continue
 
@@ -2088,7 +2102,7 @@ class RouteManager:
                 if missing_preserved_routes or missing_prefix_targets:
                     print(
                         f"[yellow]Swap route table {rt_id} failed validation; subnet "
-                        f"{sn.metadata.name} will stay on {current_route_table_label}.[/yellow]"
+                        f"{subnet_name} will stay on {current_route_table_label}.[/yellow]"
                     )
                     for destination, next_hop in missing_preserved_routes:
                         print(
@@ -2125,7 +2139,7 @@ class RouteManager:
                 except Exception as e:
                     print(
                         f"[yellow]Failed to attach swap route table {rt_id} to subnet "
-                        f"{sn.metadata.name}: {e}[/yellow]"
+                        f"{subnet_name}: {e}[/yellow]"
                     )
                     print(
                         f"[yellow]Rollback spec saved to {rollback_path}, but the subnet "
@@ -2134,7 +2148,7 @@ class RouteManager:
                     continue
 
                 print(
-                    f"[green]Swapped subnet {sn.metadata.name} from {current_route_table_label} "
+                    f"[green]Swapped subnet {subnet_name} from {current_route_table_label} "
                     f"to fresh route table {rt_id}[/green]"
                 )
                 print(f"[cyan]Rollback spec saved to {rollback_path}[/cyan]")
@@ -2146,24 +2160,27 @@ class RouteManager:
 
             if not rt_info.default and rt_info.id:
                 print(
-                    f"[cyan]Subnet {sn.metadata.name} already uses custom route table {rt_info.id}; "
+                    f"[cyan]Subnet {subnet_name} already uses custom route table {rt_info.id}; "
                     "adding VPN routes...[/cyan]"
                 )
                 rt_id = rt_info.id
             else:
                 # Subnet uses default route table - need to create custom RT
-                rt_name = self._route_table_name(sn.metadata.name)
+                rt_name = self._route_table_name(subnet_name)
 
                 # Check if route table already exists (idempotency)
                 existing_rts = rtstub.List(
                     route_table_service_pb2.ListRouteTablesRequest(parent_id=self.project_id)
                 ).items
-                existing_rt = next((rt for rt in existing_rts if rt.metadata.name == rt_name), None)
+                existing_rt = next(
+                    (rt for rt in existing_rts if self._metadata_name(rt) == rt_name),
+                    None,
+                )
 
                 if existing_rt:
-                    rt_id = existing_rt.metadata.id
+                    rt_id = self._metadata_id(existing_rt)
                     print(
-                        f"[green]Using existing route table {rt_id} ({rt_name}) for subnet {sn.metadata.name}[/green]"
+                        f"[green]Using existing route table {rt_id} ({rt_name}) for subnet {subnet_name}[/green]"
                     )
                     # Attach to subnet if not already attached
                     if rt_info.id != rt_id:
@@ -2177,16 +2194,16 @@ class RouteManager:
                                 route_table_id=rt_id,
                             )
                             print(
-                                f"[green]Attached route table {rt_id} to subnet {sn.metadata.name}[/green]"
+                                f"[green]Attached route table {rt_id} to subnet {subnet_name}[/green]"
                             )
                         except Exception as e:
                             print(
-                                f"[yellow]Failed to attach route table to subnet {sn.metadata.name}: {e}[/yellow]"
+                                f"[yellow]Failed to attach route table to subnet {subnet_name}: {e}[/yellow]"
                             )
                             continue
                 else:
                     # Create new route table and copy routes from default RT
-                    print(f"[yellow]⚠ Subnet {sn.metadata.name} uses default route table[/yellow]")
+                    print(f"[yellow]⚠ Subnet {subnet_name} uses default route table[/yellow]")
                     print(
                         f"[yellow]  Creating custom route table '{rt_name}' to add VPN routes[/yellow]"
                     )
@@ -2207,7 +2224,7 @@ class RouteManager:
                         new_rt_id = op.resource_id or ""
                         if not new_rt_id:
                             print(
-                                f"[red]Route table create returned no resource_id for subnet {sn.metadata.name}; skipping.[/red]"
+                                f"[red]Route table create returned no resource_id for subnet {subnet_name}; skipping.[/red]"
                             )
                             continue
 
@@ -2228,7 +2245,7 @@ class RouteManager:
                                                 route_service_pb2.CreateRouteRequest(
                                                     metadata=metadata_pb2.ResourceMetadata(
                                                         parent_id=new_rt_id,
-                                                        name=f"{dr.metadata.name}-copy"[:63],
+                                                        name=f"{self._metadata_name(dr)}-copy"[:63],
                                                     ),
                                                     spec=dr.spec,
                                                 )
@@ -2256,7 +2273,7 @@ class RouteManager:
                         )
                         rt_id = new_rt_id
                         print(
-                            f"[green]✓ Created custom route table {rt_id} and attached to subnet {sn.metadata.name}[/green]"
+                            f"[green]✓ Created custom route table {rt_id} and attached to subnet {subnet_name}[/green]"
                         )
                         print(
                             "[yellow]  NOTE: Future changes to the default route table will NOT apply to this subnet.[/yellow]"
@@ -2266,7 +2283,7 @@ class RouteManager:
                         )
                     except Exception as e:
                         print(
-                            f"[yellow]Failed to create/attach route table for subnet {sn.metadata.name}: {e}[/yellow]"
+                            f"[yellow]Failed to create/attach route table for subnet {subnet_name}: {e}[/yellow]"
                         )
                         continue
 
