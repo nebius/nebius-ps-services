@@ -6,7 +6,7 @@ primary job is to execute a release and return a completion report.
 
 ## What It Does
 
-- Collects or derives chart, tag, branch, OCI repository, and workflow inputs.
+- Collects chart, explicit tag, branch, and publish/verify destination inputs.
 - Runs chart release prep on the current feature branch, including the
   `Chart.yaml` version bump that the tag workflow will package.
 - Validates dependencies, strict lint, and template smoke rendering.
@@ -42,12 +42,22 @@ Published OCI chart
 ## Core Concepts
 
 - Doer mode does not depend on a project-local `publish-helm.sh`.
+- Release version/tag is required for release execution. The skill should ask
+  for it when missing instead of inferring it from chart files, Git history, or
+  changelog text.
 - `--oci-repository` is the OCI repository base; it must not include chart name
   or version.
+- Helm CLI publishing and local verification use an OCI repository base, while
+  some project workflows derive the upload target from provider-specific
+  variables such as region and registry ID. The skill should inspect the
+  workflow contract and ask for missing destination inputs.
 - `Chart.yaml` changes happen in prep and must be merged before publish; the
   publish/tag phase fails fast if the chart version does not match the tag.
 - Registry credentials live in GitHub secrets, local environment, or Helm
   registry login state, not in skill sources.
+- Concrete registry URLs, registry IDs, project IDs, endpoints, and secrets do
+  not belong in public reusable skill sources; use placeholders or variable
+  names.
 - Human-required approvals and failing checks are blockers.
 
 ## Files

@@ -1,0 +1,161 @@
+name: soperator-upstream-verifier
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/soperator-upstream-verifier.yml"
+      - "helm-charts/soperator/**"
+      - "helm-charts/soperator-activechecks/**"
+      - "helm-charts/soperator-backup-config/**"
+      - "helm-charts/soperator-checks/**"
+      - "helm-charts/soperator-dcgm-exporter/**"
+      - "helm-charts/soperator-notifier/**"
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/soperator-upstream-verifier.yml"
+      - "helm-charts/soperator/**"
+      - "helm-charts/soperator-activechecks/**"
+      - "helm-charts/soperator-backup-config/**"
+      - "helm-charts/soperator-checks/**"
+      - "helm-charts/soperator-dcgm-exporter/**"
+      - "helm-charts/soperator-notifier/**"
+  schedule:
+    - cron: "17 8 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: soperator-upstream-verifier-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  soperator-upstream-imports-verify:
+    name: soperator upstream imports verify
+    if: github.event_name == 'pull_request' || github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Verify pinned upstream imports
+        run: helm-charts/soperator/scripts/verify-upstream-soperator-sync.sh --scope all --report
+
+  soperator-upstream-release-check:
+    name: soperator upstream release check
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Check latest upstream release
+        id: latest
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          set +e
+          output="$(helm-charts/soperator/scripts/verify-upstream-soperator-sync.sh --check-latest 2>&1)"
+          status=$?
+          set -e
+
+          printf '%s\n' "${output}"
+          {
+            printf '## Soperator upstream release check\n\n'
+            printf '%s\n%s\n%s\n' '```text' "${output}" '```'
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+          if [[ "${status}" -eq 0 ]]; then
+            echo "new_release=false" >> "${GITHUB_OUTPUT}"
+            echo "Pinned Soperator release is current." >> "${GITHUB_STEP_SUMMARY}"
+            exit 0
+          fi
+
+          release_message_re="Highest Soperator release is '([^']*)', but lock is pinned to '([^']*)'\\."
+          if [[ "${output}" =~ ${release_message_re} ]]; then
+            highest="${BASH_REMATCH[1]}"
+            locked="${BASH_REMATCH[2]}"
+            {
+              echo "new_release=true"
+              echo "highest=${highest}"
+              echo "locked=${locked}"
+            } >> "${GITHUB_OUTPUT}"
+            printf '::warning title=New upstream Soperator release::Highest release is %s; chart lock is pinned to %s. Create an operator-owned feature branch and run the sync manually after reviewing this workflow summary.\n' "${highest}" "${locked}"
+            exit 0
+          fi
+
+          printf '::error title=Soperator upstream release check failed::The read-only latest-release check failed. See logs and step summary.\n'
+          exit "${status}"
+
+      - name: Setup Helm
+        if: steps.latest.outputs.new_release == 'true'
+        uses: azure/setup-helm@v5
+
+      - name: Install yq
+        if: steps.latest.outputs.new_release == 'true'
+        run: |
+          set -euo pipefail
+          sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/download/v4.45.4/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
+          yq --version
+
+      - name: Generate ephemeral sync preview
+        if: steps.latest.outputs.new_release == 'true'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          HIGHEST_RELEASE: ${{ steps.latest.outputs.highest }}
+          LOCKED_RELEASE: ${{ steps.latest.outputs.locked }}
+        run: |
+          set -euo pipefail
+
+          set +e
+          preview_output="$(helm-charts/soperator/scripts/verify-upstream-soperator-sync.sh --latest --sync --report --ci-preview-no-branch 2>&1)"
+          preview_status=$?
+          set -e
+
+          printf '%s\n' "${preview_output}"
+          {
+            printf '\n## Ephemeral sync preview\n\n'
+            printf 'Upstream Soperator %s is available; this chart is pinned to %s.\n\n' "${HIGHEST_RELEASE}" "${LOCKED_RELEASE}"
+            printf 'This preview was generated only in the disposable GitHub Actions runner checkout. It did not create a branch, stage, commit, push, open a PR, configure email, or post to Slack.\n\n'
+            printf 'To apply it, create an operator-owned feature branch locally, run:\n\n'
+            printf '%s\n%s\n%s\n\n' '```bash' 'helm-charts/soperator/scripts/verify-upstream-soperator-sync.sh --latest --sync --report' '```'
+            printf 'Then review, test, commit, and open the PR manually.\n\n'
+            printf '### Sync report\n\n'
+            printf '%s\n%s\n%s\n' '```text' "${preview_output}" '```'
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+          if [[ "${preview_status}" -ne 0 ]]; then
+            printf '::error title=Soperator sync preview failed::The disposable sync preview failed. See logs and step summary.\n'
+            exit "${preview_status}"
+          fi
+
+          {
+            printf '\n### Changed files\n\n'
+            if git status --short --untracked-files=all | grep -q .; then
+              printf '%s\n' '```text'
+              git status --short --untracked-files=all
+              printf '%s\n\n' '```'
+              printf '### Diff stat\n\n'
+              printf '%s\n' '```text'
+              git diff --stat
+              printf '%s\n' '```'
+            else
+              printf 'No file changes were produced by the preview.\n'
+            fi
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+          printf '::warning title=Manual Soperator sync needed::Upstream %s is available. Create a feature branch, run --latest --sync --report locally, test, then open a PR manually.\n' "${HIGHEST_RELEASE}"
+          if [[ "${GITHUB_EVENT_NAME}" == "schedule" ]]; then
+            exit 1
+          fi
+
+          echo "Manual dispatch preview completed without failing the run; scheduled runs fail here as the notification marker." >> "${GITHUB_STEP_SUMMARY}"

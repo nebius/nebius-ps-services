@@ -4,6 +4,20 @@ All notable changes to this chart are tracked here.
 
 ## [Unreleased]
 
+- Replaced the scheduled Soperator upstream auto-sync PR automation with a
+  read-only `soperator-upstream-verifier` workflow. The daily/manual check now
+  reports newer upstream releases through GitHub Actions warnings and step
+  summaries, generates an ephemeral runner-only sync preview without creating a
+  branch, intentionally marks scheduled new-release runs failed as the
+  GitHub-native notification marker, and leaves feature branch creation,
+  testing, commits, and PR creation to an operator.
+- Clarified the chart-local `publish-helm.sh` helper so missing mode/version
+  input fails with an explicit message and the helper states that the chart
+  upload target is owned by the tag-triggered workflow or project configuration.
+  The helper now also shows `--help` and argument errors before Helm/Python
+  readiness checks, rejects release prep on the default branch, and pushes
+  release-prep branches explicitly to `origin HEAD:<branch>`.
+
 ## [soperator-chart-v4.0.2-ps.2] - 2026-06-23
 
 - Aligned the mixed CPU+GPU worker examples and design guide with cxcli's

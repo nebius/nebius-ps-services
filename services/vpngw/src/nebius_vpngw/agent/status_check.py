@@ -22,7 +22,7 @@ def check_routing_health() -> dict[str, Any]:
         - bgp_peer_routes: Dict[str, str]  # {peer_ip: iface_name}
         - overall_status: "healthy" | "warning" | "error"
     """
-    health = {
+    health: dict[str, Any] = {
         "table_220_exists": False,
         "broad_apipa_exists": False,
         "orphaned_apipa_routes": [],

@@ -544,7 +544,7 @@ class VMManager:
         import subprocess
         import time
 
-        result = {
+        result: dict[str, t.Any] = {
             "reachable": False,
             "cloud_init_complete": False,
             "strongswan_installed": False,
@@ -1145,7 +1145,7 @@ class VMManager:
             except Exception:
                 routing_code = None
 
-            parents_to_try = []
+            parents_to_try: list[str | None] = []
             if routing_code:
                 parents_to_try.append(f"project-{routing_code}public-images")
             parents_to_try.extend([None, "project-u00public-images"])

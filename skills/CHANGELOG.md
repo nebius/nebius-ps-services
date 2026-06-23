@@ -103,6 +103,15 @@ All notable changes to the reusable Codex skills are tracked here.
 
 ### Changed
 
+- Clarified `publish-helm` required release inputs so callers must provide an
+  explicit tag and publish destination or be asked for them, documented the
+  OCI repository base versus provider registry-ID workflow split, and made
+  verify mode fail fast without requiring local chart files.
+- Realigned the `publish-helm` setup helper template with the maintained
+  chart-local helper behavior for prerelease tags, branch pushes, dependency
+  validation, fallback changelog notes, and explicit missing-input diagnostics.
+  Generated helpers now show help and argument errors before Helm/Python
+  readiness checks.
 - Added an explicit `install-skills.sh --replace-hooks-json` opt-in for hook
   registration cleanup so normal `--register-hooks` preserves hand-written
   entries while the intentional clean-reset mode backs up and replaces

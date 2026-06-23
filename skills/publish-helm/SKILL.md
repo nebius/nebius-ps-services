@@ -23,7 +23,7 @@ Common flags:
 
 - `--mode setup|prep|publish|complete`; use `complete` for an end-to-end
   publish request.
-- `--tag X.Y.Z` or `<tag-prefix>-vX.Y.Z`.
+- `--tag X.Y.Z[-prerelease]` or `<tag-prefix>-vX.Y.Z[-prerelease]`.
 - `--project-dir <path>`; default current working directory.
 - `--main-branch <branch>`; default the repository default branch.
 - `--tag-prefix <prefix>`; derive from chart name only when unambiguous.
@@ -41,11 +41,42 @@ Helm inputs:
 `--oci-repository` is the repository base. It must not include the chart
 basename or chart version tag; Helm infers those from chart metadata.
 
+## Required Release Inputs
+
+Before running `prep`, `publish`, or `complete`, resolve these from explicit
+user input or unambiguous project configuration:
+
+- Release version/tag is required. If the user does not provide it, ask for
+  `X.Y.Z[-prerelease]` or the full `<tag-prefix>-vX.Y.Z[-prerelease]`; do not
+  infer it from `Chart.yaml`, the latest Git tag, branch names, or changelog
+  text.
+- Publish destination is required. If the current project does not already have
+  a chart publish workflow with a configured target and the user did not provide
+  a destination, ask for the target registry or OCI repository details.
+- For generic Helm CLI publishing and local verification, use an OCI repository
+  base such as `oci://registry.example.com/org/charts`. If the user provides a
+  full chart reference ending in the chart name, treat it as the report/pull
+  reference and pass only the repository base to helper scripts.
+- For project workflows that derive the upload target from provider-specific
+  variables such as region and registry ID, inspect the workflow and use those
+  variable names as the contract. Do not hardcode concrete registry IDs,
+  registry URLs, project IDs, endpoints, or secret values in reusable skill
+  sources.
+
+## Destination Forms
+
+- Generic Helm form: `helm push` receives the OCI repository base without chart
+  name or version, and `helm pull` appends `<chart-name> --version <version>`.
+- Workflow form: a project workflow may publish from environment, GitHub
+  variables, or secrets and derive the final OCI reference at runtime.
+  `--oci-repository` does not override such a workflow unless the workflow
+  explicitly supports it; use it for local final verification and reporting.
+
 ## Workflow
 
 1. Inspect the current project folder and Git repository.
-2. Parse the requested mode and tag. Helm supports SemVer prerelease tags such
-   as `1.2.3-rc.1`.
+2. Parse the requested mode and explicit tag. Helm supports SemVer prerelease
+   tags such as `1.2.3-rc.1`; if no tag was provided, ask before continuing.
 3. For `setup`, create or update chart-local release assets from `assets/` and
    validate the chart publish registration/workflow. Stop with a setup report.
 4. For `prep`, run the skill-owned helper script:
@@ -84,6 +115,7 @@ The project-local helper script is optional after this refactor. The skill-owned
   secrets in skill sources or generated examples.
 - Store only GitHub variable and secret names in workflow templates.
 - Do not print, request, or persist secret values.
+- Ask for missing release tag or destination inputs instead of guessing.
 - Do not include chart basename or version in `--oci-repository`.
 - Do not commit release prep directly on the default branch.
 - Treat `Chart.yaml` version changes as release-prep changes that must be

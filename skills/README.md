@@ -377,12 +377,12 @@ Terraform-backed components into `nebius-cxcli`.
 ### `publish-helm`
 
 `publish-helm` publishes an OCI Helm chart end to end from the current project
-folder. It collects chart and OCI repository inputs, can create setup assets
-when missing or explicitly requested, preps chart release changes on a feature
-branch including the `Chart.yaml` version bump, hands off to `create-pr` and
-`merge-pr`, tags from the default branch, waits for the tag-triggered
-workflow, verifies the pushed chart with `helm pull`, and returns a publish
-report.
+folder. It requires an explicit release tag and a publish destination from the
+caller or project workflow configuration, can create setup assets when missing
+or explicitly requested, preps chart release changes on a feature branch
+including the `Chart.yaml` version bump, hands off to `create-pr` and
+`merge-pr`, tags from the default branch, waits for the tag-triggered workflow,
+verifies the pushed chart with `helm pull`, and returns a publish report.
 
 ### `publish-image`
 
