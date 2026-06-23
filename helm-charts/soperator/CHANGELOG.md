@@ -4,6 +4,8 @@ All notable changes to this chart are tracked here.
 
 ## [Unreleased]
 
+## [soperator-chart-v4.0.2-ps.2] - 2026-06-23
+
 - Aligned the mixed CPU+GPU worker examples and design guide with cxcli's
   shape-specific generated NodeSet names. The chart now has a mixed worker
   test fixture covering separate CPU/GPU NodeSets and generated shard
