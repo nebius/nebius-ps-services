@@ -26,7 +26,7 @@ class SSHPush:
     def __init__(self) -> None:
         # Lazy import to avoid hard dependency when running dry-run
         self._paramiko = None
-        self._wheel_path = None
+        self._wheel_path: Path | None = None
         self._temp_wheel_dir: Path | None = None
 
     def _ensure_paramiko(self):
@@ -185,8 +185,8 @@ class SSHPush:
                     print(
                         f"[SSHPush] Removing {len(old_wheels)} old wheel(s) to ensure fresh build..."
                     )
-                    for wheel in old_wheels:
-                        wheel.unlink()
+                    for old_wheel in old_wheels:
+                        old_wheel.unlink()
 
             print("[SSHPush] Building nebius-vpngw wheel package with python -m build...")
             try:
@@ -207,11 +207,11 @@ class SSHPush:
                 print(f"[SSHPush] Wheel build error: {e}")
 
         # Reuse newest existing wheel (works with python -m build)
-        wheel = self._select_wheel_from_dirs([dist_dir]) if dist_dir.exists() else None
-        if wheel:
-            self._wheel_path = wheel
-            print(f"[SSHPush] Using wheel: {self._wheel_path.name}")
-            return self._wheel_path
+        selected_wheel = self._select_wheel_from_dirs([dist_dir]) if dist_dir.exists() else None
+        if selected_wheel:
+            self._wheel_path = selected_wheel
+            print(f"[SSHPush] Using wheel: {selected_wheel.name}")
+            return selected_wheel
 
         install_wheel = self._wheel_from_install_metadata()
         if install_wheel:
@@ -757,7 +757,7 @@ WantedBy=multi-user.target
                     max_wait_time = 60
                     start_time = time.time()
                     all_established = False
-                    last_states = {}
+                    last_states: dict[str, str] = {}
 
                     while (time.time() - start_time) < max_wait_time:
                         cmd = "sudo vtysh -c 'show bgp summary json' 2>/dev/null || echo '{}'"
@@ -769,7 +769,7 @@ WantedBy=multi-user.target
                             ipv4_peers = bgp_summary.get("ipv4Unicast", {}).get("peers", {})
 
                             established_count = 0
-                            current_states = {}
+                            current_states: dict[str, str] = {}
 
                             for peer_ip in bgp_peers:
                                 peer_info = ipv4_peers.get(peer_ip, {})

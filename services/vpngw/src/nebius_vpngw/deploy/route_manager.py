@@ -81,14 +81,16 @@ class RouteManager:
         # Return channel with composite credentials
         return grpc.secure_channel(self.endpoint, composite_creds)
 
-    def _list_allocations(self, channel):
+    def _list_allocations(
+        self, channel: t.Any
+    ) -> tuple[list[tuple[ipaddress.IPv4Network | ipaddress.IPv6Network, str]], dict[str, str]]:
         """Return list of (network, allocation_id) and a lookup map for pretty-printing."""
         from nebius.api.nebius.vpc.v1 import (
             allocation_service_pb2,
             allocation_service_pb2_grpc,
         )
 
-        nets: list[tuple[ipaddress._BaseNetwork, str]] = []
+        nets: list[tuple[ipaddress.IPv4Network | ipaddress.IPv6Network, str]] = []
         alloc_to_ip: dict[str, str] = {}
         stub = allocation_service_pb2_grpc.AllocationServiceStub(channel)
         req = allocation_service_pb2.ListAllocationsRequest(parent_id=self.project_id or "")
@@ -113,7 +115,7 @@ class RouteManager:
         return nets, alloc_to_ip
 
     def _find_gateway_private_allocations_by_index(
-        self, compute_channel, plan: ResolvedDeploymentPlan
+        self, compute_channel: t.Any, plan: ResolvedDeploymentPlan
     ) -> dict[int, str]:
         import ipaddress
 
@@ -749,8 +751,8 @@ class RouteManager:
             if not route_name.startswith("vpngw-"):
                 continue
 
-            alloc_id = self._route_next_hop_allocation_id(route)
-            if not alloc_id:
+            route_alloc_id = self._route_next_hop_allocation_id(route)
+            if not route_alloc_id:
                 continue
 
             route_network = self._route_destination_network(route)
@@ -761,7 +763,7 @@ class RouteManager:
             if route_prefix in desired_prefixes:
                 continue
 
-            desired_networks = desired_by_alloc.get(alloc_id) or []
+            desired_networks = desired_by_alloc.get(route_alloc_id) or []
             if any(route_network.subnet_of(summary_net) for summary_net in desired_networks):
                 redundant.append(route)
 
@@ -789,8 +791,8 @@ class RouteManager:
             if not route_name.startswith("vpngw-"):
                 continue
 
-            alloc_id = self._route_next_hop_allocation_id(route)
-            if not alloc_id:
+            route_alloc_id = self._route_next_hop_allocation_id(route)
+            if not route_alloc_id:
                 continue
 
             route_network = self._route_destination_network(route)
@@ -801,7 +803,7 @@ class RouteManager:
             if route_prefix in desired_prefixes:
                 continue
 
-            desired_networks = desired_by_alloc.get(alloc_id) or []
+            desired_networks = desired_by_alloc.get(route_alloc_id) or []
             desired_prefixes_within_route = [
                 str(desired_network)
                 for desired_network in desired_networks
@@ -870,7 +872,7 @@ class RouteManager:
                     continue
                 cidr_entry: dict[str, object] = {"cidr": str(cidr)}
                 max_mask_length = getattr(cidr_obj, "max_mask_length", None)
-                if max_mask_length not in (None, 0):
+                if max_mask_length is not None and max_mask_length != 0:
                     cidr_entry["max_mask_length"] = int(max_mask_length)
                 state = getattr(cidr_obj, "state", None)
                 if state is not None and hasattr(state, "name"):
@@ -2286,9 +2288,11 @@ class RouteManager:
                                             )
                                         except Exception as copy_err:
                                             # Ignore errors for copying (might be system routes that can't be copied)
-                                            destination = self._route_destination_network(dr)
+                                            route_destination = self._route_destination_network(dr)
                                             destination_label = (
-                                                str(destination) if destination else "unknown"
+                                                str(route_destination)
+                                                if route_destination
+                                                else "unknown"
                                             )
                                             print(
                                                 f"[dim]  Could not copy route {destination_label}: {copy_err}[/dim]"
@@ -2339,7 +2343,6 @@ class RouteManager:
         self, plan: ResolvedDeploymentPlan, conn: dict, local_cfg: dict
     ) -> list[str]:
         """Query FRR on gateway VMs to get BGP-learned routes (filtered by whitelist if configured)."""
-        import ipaddress
         import json
         import subprocess
 
@@ -2349,13 +2352,12 @@ class RouteManager:
         )
 
         # Create whitelist networks for matching
-        whitelist_networks = []
+        whitelist_networks: list[ipaddress.IPv4Network] = []
         if whitelist:
             for pfx in whitelist:
-                try:
-                    whitelist_networks.append(ipaddress.ip_network(pfx))
-                except Exception:
-                    pass
+                network = self._parse_ipv4_network(str(pfx))
+                if network is not None:
+                    whitelist_networks.append(network)
 
         learned_prefixes = []
 
@@ -2414,7 +2416,9 @@ class RouteManager:
                     # Apply whitelist filter if configured
                     if whitelist_networks:
                         try:
-                            prefix_net = ipaddress.ip_network(prefix)
+                            prefix_net = self._parse_ipv4_network(str(prefix))
+                            if prefix_net is None:
+                                continue
                             allowed = any(
                                 prefix_net.subnet_of(wl) or prefix_net == wl
                                 for wl in whitelist_networks
@@ -2530,7 +2534,6 @@ class RouteManager:
         console,
     ) -> None:
         """Query FRR BGP routes and check against whitelist."""
-        import ipaddress
         import json
         import re
         import subprocess
@@ -2591,13 +2594,12 @@ class RouteManager:
                     pass
 
             # Create whitelist networks for matching
-            whitelist_networks = []
+            whitelist_networks: list[ipaddress.IPv4Network] = []
             if whitelist:
                 for pfx in whitelist:
-                    try:
-                        whitelist_networks.append(ipaddress.ip_network(pfx))
-                    except Exception:
-                        pass
+                    network = self._parse_ipv4_network(str(pfx))
+                    if network is not None:
+                        whitelist_networks.append(network)
 
             # Build table
             table = Table(title=f"Remote Routes (BGP-learned) - {conn_name}")
@@ -2644,7 +2646,10 @@ class RouteManager:
                     status = "allowed"
                     if whitelist_networks:
                         try:
-                            prefix_net = ipaddress.ip_network(prefix)
+                            prefix_net = self._parse_ipv4_network(str(prefix))
+                            if prefix_net is None:
+                                status = "unknown"
+                                continue
                             allowed = any(
                                 prefix_net.subnet_of(wl) or prefix_net == wl
                                 for wl in whitelist_networks

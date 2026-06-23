@@ -54,6 +54,8 @@ def _init_client(tenant_id: str | None, project_id: str | None, region_id: str |
                 except TypeError:
                     client = sdk.SDK()
             else:
+                if pysdk is None:
+                    raise RuntimeError("Nebius legacy pysdk is not available")
                 client = pysdk.Client(
                     tenant_id=tenant_id, project_id=project_id, region_id=region_id
                 )  # type: ignore
@@ -70,6 +72,8 @@ def _init_client(tenant_id: str | None, project_id: str | None, region_id: str |
             return client, True
         else:
             # Initialize legacy client without CLI config to avoid profile defaults
+            if pysdk is None:
+                raise RuntimeError("Nebius legacy pysdk is not available")
             client = pysdk.Client()  # type: ignore
             return client, True
     except Exception as e:

@@ -2325,7 +2325,7 @@ def status(
                                 ike_algos.append(algo_line)
 
                 if tunnel_statuses:
-                    carrying_by_connection: dict[str, str | None] = {}
+                    swanctl_carrying_by_connection: dict[str, str | None] = {}
                     role_overrides_by_vm[inst_cfg.hostname] = _detect_connection_role_overrides(
                         inst_cfg.hostname,
                         tunnel_order,
@@ -2362,8 +2362,8 @@ def status(
                             tunnel_name
                         )
                         cache_key = connection_name or "__all__"
-                        if cache_key not in carrying_by_connection:
-                            carrying_by_connection[cache_key] = (
+                        if cache_key not in swanctl_carrying_by_connection:
+                            swanctl_carrying_by_connection[cache_key] = (
                                 _select_carrying_tunnel_for_connection(
                                     inst_cfg.hostname,
                                     connection_name,
@@ -2378,7 +2378,7 @@ def status(
                         traffic_state_display = _format_traffic_state(
                             inst_cfg.hostname,
                             tunnel_name,
-                            carrying_by_connection[cache_key],
+                            swanctl_carrying_by_connection[cache_key],
                             tunnel_statuses,
                             bgp_states,
                             tunnel_bgp_map,
@@ -2508,7 +2508,7 @@ def status(
                 tunnel_statuses = {
                     name: str(info.get("status", "")).upper() for name, info in tunnels.items()
                 }
-                carrying_by_connection: dict[str, str | None] = {}
+                ipsec_carrying_by_connection: dict[str, str | None] = {}
                 role_overrides_by_vm[inst_cfg.hostname] = _detect_connection_role_overrides(
                     inst_cfg.hostname,
                     list(tunnels.keys()),
@@ -2534,21 +2534,23 @@ def status(
                         tunnel_name
                     )
                     cache_key = connection_name or "__all__"
-                    if cache_key not in carrying_by_connection:
-                        carrying_by_connection[cache_key] = _select_carrying_tunnel_for_connection(
-                            inst_cfg.hostname,
-                            connection_name,
-                            list(tunnels.keys()),
-                            tunnel_statuses,
-                            bgp_states,
-                            tunnel_bgp_map,
-                            tunnel_role_map,
-                            tunnel_connection_map,
+                    if cache_key not in ipsec_carrying_by_connection:
+                        ipsec_carrying_by_connection[cache_key] = (
+                            _select_carrying_tunnel_for_connection(
+                                inst_cfg.hostname,
+                                connection_name,
+                                list(tunnels.keys()),
+                                tunnel_statuses,
+                                bgp_states,
+                                tunnel_bgp_map,
+                                tunnel_role_map,
+                                tunnel_connection_map,
+                            )
                         )
                     traffic_state_display = _format_traffic_state(
                         inst_cfg.hostname,
                         tunnel_name,
-                        carrying_by_connection[cache_key],
+                        ipsec_carrying_by_connection[cache_key],
                         tunnel_statuses,
                         bgp_states,
                         tunnel_bgp_map,
@@ -3961,7 +3963,7 @@ def tunnel_failover(
             "bgp",
         )
 
-        enabled_tunnels: list[dict[str, object]] = []
+        enabled_tunnels: list[dict[str, t.Any]] = []
         for conn in local_cfg.get("connections") or []:
             conn_mode = _normalize_config_value(conn.get("routing_mode"), defaults_mode)
             for tun in conn.get("tunnels") or []:
@@ -3986,7 +3988,7 @@ def tunnel_failover(
             print("[red]No enabled tunnels found in config.[/red]")
             raise typer.Exit(code=1)
 
-        target = None
+        target: dict[str, t.Any] | None = None
         if tunnel_name:
             for tun in enabled_tunnels:
                 if tun.get("name") == tunnel_name:
@@ -4108,7 +4110,7 @@ def tunnel_failover(
                 try:
                     data = json.loads(result.stdout)
                     peers = (data.get("ipv4Unicast") or {}).get("peers") or data.get("peers") or {}
-                    states: dict[str, str] = {}
+                    json_states: dict[str, str] = {}
                     for ip, info in peers.items():
                         state = (
                             info.get("state")
@@ -4118,9 +4120,9 @@ def tunnel_failover(
                             or info.get("bgpState")
                         )
                         if state:
-                            states[ip] = str(state)
-                    if states:
-                        return states
+                            json_states[ip] = str(state)
+                    if json_states:
+                        return json_states
                 except json.JSONDecodeError:
                     pass
 
@@ -4131,7 +4133,7 @@ def tunnel_failover(
                 text=True,
                 timeout=10,
             )
-            states: dict[str, str] = {}
+            text_states: dict[str, str] = {}
             if result.returncode == 0 and result.stdout:
                 for line in result.stdout.splitlines():
                     parts = line.split()
@@ -4143,8 +4145,8 @@ def tunnel_failover(
                             state = parts[-1]
                             if state.isdigit():
                                 state = "Established"
-                            states[parts[0]] = state
-            return states
+                            text_states[parts[0]] = state
+            return text_states
 
         start = time.monotonic()
         timeout_seconds = 30
@@ -4234,7 +4236,7 @@ def tunnel_failback(
             "bgp",
         )
 
-        enabled_tunnels: list[dict[str, object]] = []
+        enabled_tunnels: list[dict[str, t.Any]] = []
         for conn in local_cfg.get("connections") or []:
             conn_mode = _normalize_config_value(conn.get("routing_mode"), defaults_mode)
             for tun in conn.get("tunnels") or []:
@@ -4258,7 +4260,7 @@ def tunnel_failback(
             print("[red]No active tunnels found in config.[/red]")
             raise typer.Exit(code=1)
 
-        target = None
+        target: dict[str, t.Any] | None = None
         if tunnel_name:
             for tun in active_tunnels:
                 if tun.get("name") == tunnel_name:
@@ -4350,7 +4352,7 @@ def tunnel_failback(
                 try:
                     data = json.loads(result.stdout)
                     peers = (data.get("ipv4Unicast") or {}).get("peers") or data.get("peers") or {}
-                    states: dict[str, str] = {}
+                    json_states: dict[str, str] = {}
                     for ip, info in peers.items():
                         state = (
                             info.get("state")
@@ -4360,9 +4362,9 @@ def tunnel_failback(
                             or info.get("bgpState")
                         )
                         if state:
-                            states[ip] = str(state)
-                    if states:
-                        return states
+                            json_states[ip] = str(state)
+                    if json_states:
+                        return json_states
                 except json.JSONDecodeError:
                     pass
 
@@ -4373,7 +4375,7 @@ def tunnel_failback(
                 text=True,
                 timeout=10,
             )
-            states: dict[str, str] = {}
+            text_states: dict[str, str] = {}
             if result.returncode == 0 and result.stdout:
                 for line in result.stdout.splitlines():
                     parts = line.split()
@@ -4385,8 +4387,8 @@ def tunnel_failback(
                             state = parts[-1]
                             if state.isdigit():
                                 state = "Established"
-                            states[parts[0]] = state
-            return states
+                            text_states[parts[0]] = state
+            return text_states
 
         start = time.monotonic()
         timeout_seconds = 30

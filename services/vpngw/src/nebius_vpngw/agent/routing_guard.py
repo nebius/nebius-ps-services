@@ -916,7 +916,7 @@ def get_routing_diagnostics() -> dict[str, Any]:
         - apipa_broad_route_exists: bool
         - all_rules: list of policy routing rules
     """
-    diagnostics = {}
+    diagnostics: dict[str, Any] = {}
 
     # Check for table 220 rule
     result = subprocess.run(["ip", "rule", "show"], capture_output=True, text=True)

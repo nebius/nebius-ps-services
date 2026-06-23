@@ -152,9 +152,8 @@ def is_apipa_cidr(value: str) -> bool:
         network = ipaddress.ip_network(value, strict=False)
     except ValueError:
         return False
-    return isinstance(network, ipaddress.IPv4Network) and network.subnet_of(
-        ipaddress.ip_network("169.254.0.0/16")
-    )
+    apipa = ipaddress.IPv4Network("169.254.0.0/16")
+    return isinstance(network, ipaddress.IPv4Network) and network.subnet_of(apipa)
 
 
 def infer_inner_cidr(local_ip: str | None, remote_ip: str | None) -> str | None:

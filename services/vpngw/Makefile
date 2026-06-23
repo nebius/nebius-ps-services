@@ -3,10 +3,10 @@
 VENV ?= .venv
 PYTHON ?= python3
 VENV_PYTHON := $(VENV)/bin/python
-VENV_PIP := $(VENV)/bin/pip
+VENV_PIP := $(VENV_PYTHON) -m pip
 VENV_STAMP := $(VENV)/.installed
 
-.PHONY: all env install fmt lint test test-unit test-integration coverage build check clean
+.PHONY: all env install fmt lint typecheck test test-unit test-integration coverage build check clean
 
 all: check build
 
@@ -28,6 +28,9 @@ fmt: $(VENV_STAMP)
 lint: $(VENV_STAMP)
 	$(VENV_PYTHON) -m ruff check src tests
 
+typecheck: $(VENV_STAMP)
+	$(VENV_PYTHON) -m mypy
+
 test: test-unit
 
 test-unit: $(VENV_STAMP)
@@ -44,7 +47,7 @@ build: $(VENV_STAMP)
 	PYTHONWARNINGS="ignore:No GlobalOverrides context is active:UserWarning" \
 		$(VENV_PYTHON) -m build --wheel --no-isolation
 
-check: lint test-unit
+check: lint typecheck test-unit
 
 clean:
 	rm -rf $(VENV) build dist .pytest_cache .ruff_cache .coverage coverage.xml

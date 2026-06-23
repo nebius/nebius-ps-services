@@ -1795,6 +1795,7 @@ python -m build --wheel --no-isolation
 ```bash
 python -m ruff format src tests
 python -m ruff check src tests --fix
+python -m mypy
 ```
 
 ## Release & Versioning
