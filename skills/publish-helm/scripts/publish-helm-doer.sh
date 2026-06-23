@@ -8,6 +8,7 @@ S_RED=""
 S_YELLOW=""
 S_GREEN=""
 S_CYAN=""
+VERIFY_PULL_DIR=""
 
 init_output_style() {
   if [[ ( -t 1 || -t 2 ) && "${TERM:-}" != "dumb" && -z "${NO_COLOR:-}" ]]; then
@@ -31,6 +32,12 @@ log_note() {
 
 log_success() {
   printf '%b\n' "${S_GREEN}${1}${S_RESET}"
+}
+
+cleanup_verify_pull_dir() {
+  if [[ -n "${VERIFY_PULL_DIR:-}" ]]; then
+    rm -rf "${VERIFY_PULL_DIR}"
+  fi
 }
 
 show_usage() {
@@ -443,21 +450,27 @@ publish_tag() {
   log_success "Tag pushed: ${tag}"
 }
 
-verify_chart() {
+validate_oci_repository_base() {
   local oci_repository="$1"
   local chart_name="$2"
-  local version="$3"
-  require_cmd "helm"
   [[ -n "${oci_repository}" ]] || { log_error "--oci-repository is required for verify mode."; exit 1; }
   [[ "${oci_repository}" == oci://* ]] || { log_error "--oci-repository must start with oci://"; exit 1; }
   if [[ "${oci_repository%/}" == */"${chart_name}" ]]; then
     log_error "--oci-repository must be the repository base and must not include chart name '${chart_name}'."
+    printf '%b\n' "${S_DIM}Pass the base repository, for example oci://registry.example.com/org/charts, then verification will append /${chart_name}.${S_RESET}" >&2
     exit 1
   fi
-  local pull_dir=""
-  pull_dir="$(mktemp -d)"
-  trap 'rm -rf "${pull_dir}"' EXIT
-  helm pull "${oci_repository%/}/${chart_name}" --version "${version}" -d "${pull_dir}"
+}
+
+verify_chart() {
+  local oci_repository="$1"
+  local chart_name="$2"
+  local version="$3"
+  validate_oci_repository_base "${oci_repository}" "${chart_name}"
+  require_cmd "helm"
+  VERIFY_PULL_DIR="$(mktemp -d)"
+  trap cleanup_verify_pull_dir EXIT
+  helm pull "${oci_repository%/}/${chart_name}" --version "${version}" -d "${VERIFY_PULL_DIR}"
   log_success "Verified OCI chart pull: ${oci_repository%/}/${chart_name} --version ${version}"
 }
 
@@ -494,18 +507,47 @@ main() {
     esac
   done
 
-  [[ -n "${mode}" && -n "${raw_tag}" && -n "${chart_dir}" && -n "${chart_name}" ]] || { show_usage >&2; exit 1; }
+  local missing_required=()
+  [[ -n "${mode}" ]] || missing_required+=("--mode")
+  [[ -n "${raw_tag}" ]] || missing_required+=("--tag")
+  [[ -n "${chart_name}" ]] || missing_required+=("--chart-name")
+  if ((${#missing_required[@]} > 0)); then
+    log_error "Missing required option(s): ${missing_required[*]}"
+    if [[ " ${missing_required[*]} " == *" --tag "* ]]; then
+      printf '%b\n' "${S_DIM}Provide an explicit release version/tag; do not infer it from Chart.yaml, latest tags, branch names, or changelog text.${S_RESET}" >&2
+    fi
+    show_usage >&2
+    exit 1
+  fi
+
+  case "${mode}" in
+    prep|publish|verify) ;;
+    *)
+      log_error "--mode must be prep, publish, or verify."
+      show_usage >&2
+      exit 1
+      ;;
+  esac
+
+  tag_prefix="${tag_prefix:-${chart_name}-chart}"
+  local tag version
+  tag="$(normalize_tag "${raw_tag}" "${tag_prefix}")"
+  version="$(tag_version "${tag}")"
+
+  if [[ "${mode}" == "verify" ]]; then
+    verify_chart "${oci_repository}" "${chart_name}" "${version}"
+    return 0
+  fi
+
+  [[ -n "${chart_dir}" ]] || { log_error "Missing required option(s): --chart-dir"; show_usage >&2; exit 1; }
   require_cmd "git"
   require_cmd "python3"
   cd "${project_dir}"
   main_branch="${main_branch:-$(repo_default_branch)}"
-  tag_prefix="${tag_prefix:-${chart_name}-chart}"
   changelog="${changelog:-${chart_dir}/CHANGELOG.md}"
   [[ -f "${chart_dir}/Chart.yaml" ]] || { log_error "Missing chart file: ${chart_dir}/Chart.yaml"; exit 1; }
   [[ -f "${changelog}" ]] || { log_error "Missing changelog: ${changelog}"; exit 1; }
-  local tag version branch
-  tag="$(normalize_tag "${raw_tag}" "${tag_prefix}")"
-  version="$(tag_version "${tag}")"
+  local branch
   branch="$(git rev-parse --abbrev-ref HEAD)"
 
   case "${mode}" in
@@ -521,13 +563,7 @@ main() {
       fi
       publish_tag "${tag}" "${version}" "${chart_dir}/Chart.yaml" "${changelog}"
       ;;
-    verify)
-      verify_chart "${oci_repository}" "${chart_name}" "${version}"
-      ;;
-    *)
-      log_error "--mode must be prep, publish, or verify."
-      exit 1
-      ;;
+    verify) ;;
   esac
 }
 

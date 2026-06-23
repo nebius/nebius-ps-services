@@ -46,17 +46,17 @@ log_success() {
 
 show_usage() {
   printf '%b\n' "${S_BOLD}Usage:${S_RESET}"
-  printf '%b\n' "  ${S_CYAN}./publish-helm.sh${S_RESET} ${S_DIM}--prep X.Y.Z [--no-push]${S_RESET}"
-  printf '%b\n' "  ${S_CYAN}./publish-helm.sh${S_RESET} ${S_DIM}--publish X.Y.Z [--allow-non-main]${S_RESET}"
+  printf '%b\n' "  ${S_CYAN}./publish-helm.sh${S_RESET} ${S_DIM}--prep X.Y.Z[-prerelease] [--no-push]${S_RESET}"
+  printf '%b\n' "  ${S_CYAN}./publish-helm.sh${S_RESET} ${S_DIM}--publish X.Y.Z[-prerelease] [--allow-non-main]${S_RESET}"
   printf '\n'
 
   printf '%b\n' "${S_BOLD}Modes:${S_RESET}"
   printf '%b\n' "  ${S_YELLOW}--prep${S_RESET}     Update ${CHANGELOG_FILE} and ${CHART_FILE}, validate the chart, commit the release prep, and push the current branch."
   printf '%b\n' "                 First push auto-sets origin/<current-branch> as upstream when needed."
   printf '%b\n' "                 Clean-worktree check is strict and includes untracked files."
-  printf '%b\n' "                 Fails if tag ${TAG_PREFIX}-vX.Y.Z already exists locally or on origin."
-  printf '%b\n' "  ${S_YELLOW}--publish${S_RESET}  Create and push tag ${TAG_PREFIX}-vX.Y.Z."
-  printf '%b\n' "                 Fails if ${CHART_FILE} does not already declare version X.Y.Z; run --prep first."
+  printf '%b\n' "                 Fails if tag ${TAG_PREFIX}-vX.Y.Z[-prerelease] already exists locally or on origin."
+  printf '%b\n' "  ${S_YELLOW}--publish${S_RESET}  Create and push tag ${TAG_PREFIX}-vX.Y.Z[-prerelease]."
+  printf '%b\n' "                 Fails if ${CHART_FILE} does not already declare the release version; run --prep first."
   printf '%b\n' "                 Tag push triggers .github/workflows/helm-chart-publish.yml."
   printf '\n'
 
@@ -69,6 +69,8 @@ show_usage() {
   printf '%b\n' "${S_BOLD}Examples:${S_RESET}"
   printf '%b\n' "  ${S_CYAN}./publish-helm.sh --prep 0.1.0${S_RESET}"
   printf '%b\n' "  ${S_CYAN}./publish-helm.sh --publish 0.1.0${S_RESET}"
+  printf '\n'
+  printf '%b\n' "${S_DIM}The chart upload target is owned by the tag-triggered workflow or project configuration, not this helper.${S_RESET}"
 }
 
 require_cmd() {
@@ -93,15 +95,16 @@ ensure_repo_ready() {
 
 normalize_tag() {
   local raw="$1"
-  if [[ "${raw}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  local semver_re='[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?'
+  if [[ "${raw}" =~ ^${semver_re}$ ]]; then
     printf '%s\n' "${TAG_PREFIX}-v${raw}"
     return 0
   fi
-  if [[ "${raw}" =~ ^${TAG_PREFIX}-v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  if [[ "${raw}" =~ ^${TAG_PREFIX}-v${semver_re}$ ]]; then
     printf '%s\n' "${raw}"
     return 0
   fi
-  log_error "Version/tag must be X.Y.Z or ${TAG_PREFIX}-vX.Y.Z"
+  log_error "Version/tag must be X.Y.Z[-prerelease] or ${TAG_PREFIX}-vX.Y.Z[-prerelease]"
   exit 1
 }
 
@@ -216,6 +219,46 @@ for line in lines[release_idx + 1 :]:
 if not "\n".join(content_lines).strip():
     print(f"Release changelog section for {tag} in {changelog_path} is empty", file=sys.stderr)
     sys.exit(1)
+PY
+}
+
+ensure_unreleased_changelog_note() {
+  local tag="$1"
+  local version="${tag##*-v}"
+
+  python3 - "${version}" "${CHART_NAME}" "${CHANGELOG_FILE}" <<'PY'
+import pathlib
+import re
+import sys
+
+version, chart_name, changelog_path = sys.argv[1], sys.argv[2], sys.argv[3]
+path = pathlib.Path(changelog_path)
+text = path.read_text(encoding="utf-8")
+
+header_re = re.compile(r"^## \[.+?\].*$", re.MULTILINE)
+headers = list(header_re.finditer(text))
+if not headers:
+    print("No CHANGELOG headers found", file=sys.stderr)
+    sys.exit(1)
+
+unreleased_idx = None
+for idx, header in enumerate(headers):
+    if header.group(0).strip() == "## [Unreleased]":
+        unreleased_idx = idx
+        break
+
+if unreleased_idx is None:
+    print("Unable to locate Unreleased heading", file=sys.stderr)
+    sys.exit(1)
+
+unreleased_header = headers[unreleased_idx]
+section_end = headers[unreleased_idx + 1].start() if unreleased_idx + 1 < len(headers) else len(text)
+unreleased_content = text[unreleased_header.end() : section_end]
+if unreleased_content.strip():
+    sys.exit(0)
+
+note = f"\n\n- Bumped {chart_name} Helm chart to {version}.\n\n"
+path.write_text(text[: unreleased_header.end()] + note + text[section_end:], encoding="utf-8")
 PY
 }
 
@@ -350,26 +393,16 @@ print(match.group(1).strip().strip("'\""), end="")
 PY
 }
 
-ensure_chart_version_matches_tag() {
-  local tag="$1"
-  local expected_version="${tag##*-v}"
-  local chart_version=""
-  chart_version="$(get_chart_version)"
-
-  if [[ "${chart_version}" != "${expected_version}" ]]; then
-    log_error "${CHART_FILE} version ${chart_version} does not match release ${expected_version}."
-    log_note "Run --prep ${expected_version} and merge that ${CHART_FILE} change before publishing."
-    exit 1
-  fi
-}
-
 chart_dependency_remote_repositories() {
-  helm dependency list "${CHART_DIR}" | awk '
+  local chart_path="$1"
+  helm dependency list "${chart_path}" | awk '
     NR == 1 { next }
     $3 ~ /^https?:\/\// {
       name = $1
       gsub(/[^A-Za-z0-9_.-]/, "-", name)
-      if (name == "") { name = "repo-" NR }
+      if (name == "") {
+        name = "repo-" NR
+      }
       if (!seen_url[$3]++) {
         base = name
         candidate = base
@@ -386,31 +419,54 @@ chart_dependency_remote_repositories() {
 }
 
 seed_chart_dependency_repositories() {
-  local repo_name repo_url
+  local chart_path="$1"
+  local repo_name repo_url seeded
+  seeded=0
+
   while IFS=$'\t' read -r repo_name repo_url; do
     [[ -n "${repo_name}" && -n "${repo_url}" ]] || continue
+    if [[ "${seeded}" -eq 0 ]]; then
+      log_note "Preparing temporary Helm repository config for remote chart dependencies..."
+      seeded=1
+    fi
     helm repo add "${repo_name}" "${repo_url}" >/dev/null
-  done < <(chart_dependency_remote_repositories)
+  done < <(chart_dependency_remote_repositories "${chart_path}")
+}
+
+ensure_chart_version_matches_tag() {
+  local tag="$1"
+  local expected_version="${tag##*-v}"
+  local chart_version=""
+  chart_version="$(get_chart_version)"
+
+  if [[ "${chart_version}" != "${expected_version}" ]]; then
+    log_error "${CHART_FILE} version ${chart_version} does not match release ${expected_version}."
+    log_note "Run --prep ${expected_version} and merge that ${CHART_FILE} change before publishing."
+    exit 1
+  fi
 }
 
 validate_chart() {
-  local state_dir=""
-  state_dir="$(mktemp -d)"
+  local helm_dependency_state=""
+  helm_dependency_state="$(mktemp -d)"
+
   (
-    trap 'rm -rf "${state_dir}"' EXIT
-    mkdir -p "${state_dir}/repository"
-    export HELM_REPOSITORY_CACHE="${state_dir}/repository"
-    export HELM_REPOSITORY_CONFIG="${state_dir}/repositories.yaml"
-    if grep -q '^dependencies:' "${CHART_FILE}"; then
-      seed_chart_dependency_repositories
-      if [[ -f "${CHART_DIR}/Chart.lock" ]]; then
-        helm dependency build "${CHART_DIR}"
-      else
-        helm dependency update "${CHART_DIR}"
-      fi
+    trap 'rm -rf "${helm_dependency_state}"' EXIT
+    mkdir -p "${helm_dependency_state}/repository"
+    export HELM_REPOSITORY_CACHE="${helm_dependency_state}/repository"
+    export HELM_REPOSITORY_CONFIG="${helm_dependency_state}/repositories.yaml"
+    seed_chart_dependency_repositories "${CHART_DIR}"
+
+    if [[ -f "${CHART_DIR}/Chart.lock" ]]; then
+      log_note "Building locked Helm dependencies for ${CHART_DIR}..."
+      helm dependency build "${CHART_DIR}"
+    else
+      log_note "Updating Helm dependencies for ${CHART_DIR}..."
+      helm dependency update "${CHART_DIR}"
     fi
   )
-  log_note "Running helm lint for ${CHART_DIR}..."
+
+  log_note "Running helm lint --strict --with-subcharts for ${CHART_DIR}..."
   helm lint --strict --with-subcharts "${CHART_DIR}"
   log_note "Rendering smoke template for ${CHART_DIR}..."
   helm template smoke "${CHART_DIR}" --namespace "${CHART_NAME}" >/dev/null
@@ -431,6 +487,7 @@ prep_release() {
   ensure_tag_absent "${tag}"
 
   log_note "Updating ${CHANGELOG_FILE} for ${tag}..."
+  ensure_unreleased_changelog_note "${tag}"
   update_changelog "${tag}"
   log_note "Updating ${CHART_FILE} version to ${version}..."
   update_chart_version "${version}"
@@ -476,7 +533,6 @@ create_and_push_tag() {
 
 main() {
   init_output_style
-  ensure_repo_ready
 
   local mode=""
   local raw_version=""
@@ -527,6 +583,10 @@ main() {
   done
 
   if [[ -z "${mode}" || -z "${raw_version}" ]]; then
+    log_error "Missing required mode or version/tag."
+    if [[ -z "${raw_version}" ]]; then
+      log_note "Provide an explicit version/tag; do not infer it from Chart.yaml, latest tags, branch names, or changelog text."
+    fi
     show_usage >&2
     exit 1
   fi
@@ -535,6 +595,8 @@ main() {
     log_error "--no-push is only valid with --prep."
     exit 1
   fi
+
+  ensure_repo_ready
 
   local tag=""
   tag="$(normalize_tag "${raw_version}")"

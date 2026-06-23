@@ -69,6 +69,8 @@ show_usage() {
   printf '%b\n' "${S_BOLD}Examples:${S_RESET}"
   printf '%b\n' "  ${S_CYAN}./publish-helm.sh --prep 3.0.4-ps.1${S_RESET}"
   printf '%b\n' "  ${S_CYAN}./publish-helm.sh --publish 3.0.4-ps.1${S_RESET}"
+  printf '\n'
+  printf '%b\n' "${S_DIM}The chart upload target is owned by the tag-triggered workflow or project configuration, not this helper.${S_RESET}"
 }
 
 require_cmd() {
@@ -124,22 +126,18 @@ ensure_named_branch() {
   fi
 }
 
-branch_has_upstream() {
-  local branch="$1"
-  git rev-parse --abbrev-ref --symbolic-full-name "${branch}@{upstream}" >/dev/null 2>&1
-}
-
 push_current_branch() {
   local branch="$1"
   ensure_named_branch "${branch}"
+  git push --set-upstream origin "HEAD:${branch}"
+}
 
-  if branch_has_upstream "${branch}"; then
-    git push
-    return 0
+ensure_not_default_branch() {
+  local branch="$1"
+  if [[ "${branch}" == "${MAIN_BRANCH}" ]]; then
+    log_error "--prep must run from a feature branch, not ${MAIN_BRANCH}."
+    exit 1
   fi
-
-  log_note "No upstream configured for ${branch}; pushing to origin and setting upstream..."
-  git push --set-upstream origin "${branch}"
 }
 
 ensure_branch_synced() {
@@ -485,6 +483,7 @@ prep_release() {
 
   ensure_clean_worktree
   ensure_named_branch "${branch}"
+  ensure_not_default_branch "${branch}"
   ensure_tag_absent "${tag}"
 
   log_note "Updating ${CHANGELOG_FILE} for ${tag}..."
@@ -534,7 +533,6 @@ create_and_push_tag() {
 
 main() {
   init_output_style
-  ensure_repo_ready
 
   local mode=""
   local raw_version=""
@@ -585,6 +583,10 @@ main() {
   done
 
   if [[ -z "${mode}" || -z "${raw_version}" ]]; then
+    log_error "Missing required mode or version/tag."
+    if [[ -z "${raw_version}" ]]; then
+      log_note "Provide an explicit version/tag; do not infer it from Chart.yaml, latest tags, branch names, or changelog text."
+    fi
     show_usage >&2
     exit 1
   fi
@@ -593,6 +595,8 @@ main() {
     log_error "--no-push is only valid with --prep."
     exit 1
   fi
+
+  ensure_repo_ready
 
   local tag=""
   tag="$(normalize_tag "${raw_version}")"
