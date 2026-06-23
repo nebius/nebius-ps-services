@@ -127,8 +127,10 @@ For existing `$CODEX_HOME/config.toml`:
    direct sync of all reviewed hook-only bundles when that is explicitly
    needed. Use `install-skills.sh --install-hooks config-codex/assets/hooks`
    only for a single-bundle sync. Both paths strip `.template` from installed
-   hook file names, and neither path patches `hooks.json`, trusts hooks, patches
-   `config.toml`, or replaces this full setup workflow.
+   hook file names. Add `--register-hooks` only when the operator explicitly
+   wants the installer to semantically merge the bundle's hook registration into
+   `hooks.json`; neither path trusts hooks, patches `config.toml`, or replaces
+   this full setup workflow.
 9. Confirm `global-context-management` and `config-codex` are installed,
    discoverable, or explicitly enabled as skill folders. Do not add explicit
    skill entries if discovery already works.

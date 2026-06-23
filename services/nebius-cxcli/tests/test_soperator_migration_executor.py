@@ -3183,25 +3183,13 @@ def test_execute_runs_configured_mk8s_gpu_validations_during_validation_hold(
             "kind": "mk8s_gpu_operator_readiness",
             "target_ref": "external-cluster",
             "name": "GPU stack readiness",
-            "report_file": "external-cluster-gpu-stack-readiness-report.json",
+            "report_file": "deploy-gpu-stack-readiness-report-external-cluster.json",
         },
         {
-            "kind": "mk8s_cuda_smoke",
+            "kind": "mk8s_gpu_visibility",
             "target_ref": "external-cluster",
-            "name": "CUDA smoke test",
-            "report_file": "external-cluster-cuda-smoke-report.json",
-        },
-        {
-            "kind": "mk8s_nccl",
-            "target_ref": "external-cluster",
-            "name": "NCCL test",
-            "report_file": "external-cluster-nccl-test-report.json",
-        },
-        {
-            "kind": "mk8s_nccl",
-            "target_ref": "other-cluster",
-            "name": "Other NCCL test",
-            "report_file": "other-nccl-test-report.json",
+            "name": "GPU visibility probe",
+            "report_file": "deploy-gpu-visibility-report-external-cluster.json",
         },
     ]
     calls: list[dict[str, Any]] = []
@@ -3238,7 +3226,7 @@ def test_execute_runs_configured_mk8s_gpu_validations_during_validation_hold(
                 encoding="utf-8",
             )
             written.append(report_path)
-        emit("Starting validation 1/3: GPU stack readiness.")
+        emit("Starting validation 1/2: GPU stack readiness.")
         return written
 
     monkeypatch.setattr(migration, "mk8s_gpu_validation_specs", _fake_specs)
@@ -3258,15 +3246,14 @@ def test_execute_runs_configured_mk8s_gpu_validations_during_validation_hold(
     assert len(calls) == 1
     assert [item["kind"] for item in calls[0]["validations"]] == [
         "mk8s_gpu_operator_readiness",
-        "mk8s_cuda_smoke",
-        "mk8s_nccl",
+        "mk8s_gpu_visibility",
     ]
     assert calls[0]["extra_env"] == {
         "KUBECTL_CONTEXT": "external-context",
         "HELM_KUBECONTEXT": "external-context",
     }
     result_text = "\n".join(result.lines)
-    assert "validation-and-rollback-hold: Starting validation 1/3" in result_text
+    assert "validation-and-rollback-hold: Starting validation 1/2" in result_text
     assert (
         "validation-and-rollback-hold: Migrate report will include the MK8s GPU validation rollup."
     ) in result_text
@@ -3275,21 +3262,19 @@ def test_execute_runs_configured_mk8s_gpu_validations_during_validation_hold(
         in result_text
     )
     reports_dir = tmp_path / "generated" / "reports"
-    assert (reports_dir / "external-cluster-nccl-test-report.json").exists()
+    assert not (reports_dir / "acceptance-benchmark-report-external-cluster.json").exists()
     assert "## Validations" in (reports_dir / "deploy-report.md").read_text(encoding="utf-8")
     migrate_report = (reports_dir / "ext-soperator-migrate-report.md").read_text(encoding="utf-8")
     assert "## Migration Steps" in migrate_report
     assert "- Migration performed: `yes`" in migrate_report
     assert "Soperator and Slurm smoke" in migrate_report
     assert "### MK8s GPU" in migrate_report
-    assert "soperator-cluster-validation-report-external-cluster.json" in migrate_report
-    assert "`external-cluster-gpu-stack-readiness-report.json`: `PASS`" in migrate_report
-    assert "`external-cluster-cuda-smoke-report.json`: `PASS`" in migrate_report
-    assert "`external-cluster-nccl-test-report.json`: `PASS`" in migrate_report
+    assert "deploy-smoke-report-external-cluster.json" in migrate_report
+    assert "`deploy-gpu-stack-readiness-report-external-cluster.json`: `PASS`" in migrate_report
+    assert "`deploy-gpu-visibility-report-external-cluster.json`: `PASS`" in migrate_report
+    assert "acceptance-benchmark-report-external-cluster.json" not in migrate_report
     soperator_report = json.loads(
-        (reports_dir / "soperator-cluster-validation-report-external-cluster.json").read_text(
-            encoding="utf-8"
-        )
+        (reports_dir / "deploy-smoke-report-external-cluster.json").read_text(encoding="utf-8")
     )
     assert soperator_report["status"] == "passed"
     assert any(check["name"] == "Slurm srun smoke job" for check in soperator_report["checks"])
@@ -3300,9 +3285,9 @@ def test_execute_runs_configured_mk8s_gpu_validations_during_validation_hold(
     )
     validation_state = checkpoint["phase_state"]["validation-and-rollback-hold"]
     assert validation_state["validation_contract_revision"] == 2
-    assert validation_state["mk8s_gpu_validation_count"] == 3
+    assert validation_state["mk8s_gpu_validation_count"] == 2
     assert validation_state["soperator_cluster_validation_count"] == 1
-    assert len(validation_state["mk8s_gpu_validation_reports"]) == 3
+    assert len(validation_state["mk8s_gpu_validation_reports"]) == 2
     assert len(validation_state["soperator_cluster_validation_reports"]) == 1
     assert checkpoint["migrate_report"].endswith(
         "generated/reports/ext-soperator-migrate-report.md"

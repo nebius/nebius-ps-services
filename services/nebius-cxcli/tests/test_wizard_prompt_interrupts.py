@@ -474,6 +474,29 @@ def test_prompt_scalar_override_q_backtracks_one_level(monkeypatch) -> None:
     assert should_stop is False
 
 
+def test_prompt_scalar_override_q_backtracks_from_integer_default(monkeypatch) -> None:
+    captured: dict[str, Any] = {}
+
+    def _fake_prompt(text: str, default=None):
+        captured["text"] = text
+        captured["default"] = default
+        return "q"
+
+    monkeypatch.setattr(cli.typer, "prompt", _fake_prompt)
+
+    value, should_stop = cli._prompt_scalar_override(
+        "infra.components[0].inputs.soperator.worker_gpu_nodes_per_group",
+        100,
+        type_hint="number",
+        required=False,
+    )
+
+    assert value is cli._WIZARD_BACKTRACK
+    assert should_stop is False
+    assert captured["default"] == "100"
+    assert "enter q to go back" in str(captured["text"])
+
+
 def test_prompt_scalar_override_qq_stops_wizard(monkeypatch) -> None:
     monkeypatch.setattr(cli.typer, "prompt", lambda *_args, **_kwargs: "qq")
 
@@ -4030,7 +4053,7 @@ def test_upgrade_drain_timeout_prompt_mentions_auto_strategy_default(
         True,
     )
     surge_prompt, surge_default = captured["strategy_max_surge_count"]
-    assert surge_default == 1
+    assert surge_default == "1"
     assert "temporary extra nodes per active node group" in surge_prompt
     drain_prompt, drain_default = captured["drain_timeout"]
     assert drain_default == "auto"

@@ -51,9 +51,6 @@ def _catalog_payload(
                 "source": chart_source,
                 "usage": {
                     "lifecycle": "transient",
-                    "config": {
-                        "ref": "deploy.targets[].validations.mk8s_gpu.nccl",
-                    },
                 },
             }
         }
@@ -112,9 +109,6 @@ def test_render_release_catalog_rewrites_internal_chart_tree_refs(tmp_path: Path
     assert "local" not in payload["components"]["apps"]["nccl-test"]["source"]
     assert payload["components"]["apps"]["nccl-test"]["usage"] == {
         "lifecycle": "transient",
-        "config": {
-            "ref": "deploy.targets[].validations.mk8s_gpu.nccl",
-        },
     }
 
 

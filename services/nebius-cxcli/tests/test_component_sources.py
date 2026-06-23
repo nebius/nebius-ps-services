@@ -321,7 +321,7 @@ def test_bundled_catalog_exposes_soperator_and_nfs_local_sources() -> None:
 
     nccl_chart = next(chart for chart in sources.helm_charts if chart.name == "nccl-test")
     assert nccl_chart.usage.lifecycle == "transient"
-    assert nccl_chart.usage.config_ref == "deploy.targets[].validations.mk8s_gpu.nccl"
+    assert nccl_chart.usage.config_ref == ""
     assert nfs_wizard_fields["inputs.platform"]["options"] == {
         "from": "compute_platforms",
     }
@@ -3070,7 +3070,7 @@ def test_bundled_mk8s_declares_optional_wizard_field_override() -> None:
     )
     mk8s = next(item for item in loaded.tf_modules if item.module == "mk8s")
 
-    assert mk8s.mk8s_gpu.validations.nccl.rdma_mpi_extra_args == (
+    assert mk8s.mk8s_gpu.benchmarks.nccl.rdma_mpi_extra_args == (
         "-x",
         "NCCL_DMABUF_ENABLE=1",
     )
@@ -3277,24 +3277,22 @@ def test_bundled_mk8s_declares_optional_wizard_field_override() -> None:
     assert "inputs.gpu_node_groups" not in mk8s_wizard_fields
     assert "inputs.mk8s_gpu_node_group_overrides" not in mk8s_wizard_fields
     assert mk8s_wizard_fields[
-        "deploy.targets[].validations.mk8s_gpu.operator_readiness.enabled"
+        "deploy.targets[].deployment_testing.mk8s_gpu.operator_readiness.enabled"
     ] == {
         "default": True,
         "write_default_to_config": True,
         "required": True,
         "type_hint": "bool",
     }
-    assert "deploy.targets[].validations.mk8s_gpu.cluster_smoke.enabled" not in mk8s_wizard_fields
-    assert mk8s_wizard_fields["deploy.targets[].validations.mk8s_gpu.cuda_smoke.max_nodes"] == {
+    assert "deploy.targets[].deployment_testing.mk8s_gpu.cluster_smoke.enabled" not in mk8s_wizard_fields
+    assert mk8s_wizard_fields[
+        "deploy.targets[].deployment_testing.mk8s_gpu.gpu_visibility.max_nodes"
+    ] == {
         "default": 3,
         "write_default_to_config": True,
         "type_hint": "number",
     }
-    assert mk8s_wizard_fields["deploy.targets[].validations.mk8s_gpu.nccl.max_nodes"] == {
-        "default": 8,
-        "write_default_to_config": True,
-        "type_hint": "number",
-    }
+    assert "deploy.targets[].deployment_testing.mk8s_gpu.nccl.max_nodes" not in mk8s_wizard_fields
     assert mk8s_wizard_fields["deploy.targets[].observability.kubernetes.logs.enabled"] == {
         "default": True,
     }
@@ -4124,20 +4122,21 @@ def test_load_component_sources_parses_mk8s_gpu_cli_settings(tmp_path: Path) -> 
                                 "preferred_gpu_stack_presets": ["cuda13.0", "cuda12.8"],
                                 "preferred_os": ["ubuntu24.04", "ubuntu22.04"],
                             },
-                            "validations": {
+                            "deployment_testing": {
                                 "operator_readiness": {
                                     "enabled_by_default": True,
                                     "timeout": "20m",
                                 },
-                                "cuda_smoke": {
+                                "gpu_visibility": {
                                     "enabled_by_default": True,
                                     "namespace": "gpu-validation",
                                     "image": "nvcr.io/example/vectoradd:latest",
                                     "timeout": "10m",
                                     "max_nodes": 4,
                                 },
+                            },
+                            "benchmarks": {
                                 "nccl": {
-                                    "enabled_by_default": True,
                                     "chart_component_id": "nccl-test",
                                     "timeout": "45m",
                                     "training_operator_manifest": "github.com/example/training-operator?ref=v1.0.0",
@@ -4346,9 +4345,6 @@ def test_load_component_sources_parses_mk8s_gpu_cli_settings(tmp_path: Path) -> 
                     },
                     "usage": {
                         "lifecycle": "transient",
-                        "config": {
-                            "ref": "deploy.targets[].validations.mk8s_gpu.nccl",
-                        },
                     },
                     "release": {
                         "namespace": "nccl-test",
@@ -4471,13 +4467,13 @@ def test_load_component_sources_parses_mk8s_gpu_cli_settings(tmp_path: Path) -> 
     assert [item.target_path for item in operator_managed_b200_nfd_rule.defaults] == [
         "values.nfd.enabled",
     ]
-    assert mk8s.mk8s_gpu.validations.operator_readiness.timeout == "20m"
-    assert mk8s.mk8s_gpu.validations.cuda_smoke.namespace == "gpu-validation"
-    assert mk8s.mk8s_gpu.validations.cuda_smoke.max_nodes == 4
-    assert mk8s.mk8s_gpu.validations.nccl.chart_component_id == "nccl-test"
-    assert mk8s.mk8s_gpu.validations.nccl.max_nodes == 6
+    assert mk8s.mk8s_gpu.deployment_testing.operator_readiness.timeout == "20m"
+    assert mk8s.mk8s_gpu.deployment_testing.gpu_visibility.namespace == "gpu-validation"
+    assert mk8s.mk8s_gpu.deployment_testing.gpu_visibility.max_nodes == 4
+    assert mk8s.mk8s_gpu.benchmarks.nccl.chart_component_id == "nccl-test"
+    assert mk8s.mk8s_gpu.benchmarks.nccl.max_nodes == 6
     assert nccl_chart.usage.lifecycle == "transient"
-    assert nccl_chart.usage.config_ref == "deploy.targets[].validations.mk8s_gpu.nccl"
+    assert nccl_chart.usage.config_ref == ""
     assert mk8s.observability.mode == "kubernetes_agent"
     assert mk8s.observability.chart_component_id == "nebius-observability-agent"
     assert mk8s.observability.logs.excluded_namespaces == ("kube-system",)
@@ -4508,7 +4504,7 @@ def test_load_component_sources_parses_mk8s_gpu_cli_settings(tmp_path: Path) -> 
     )
 
 
-def test_load_component_sources_rejects_legacy_gpu_visibility_settings(tmp_path: Path) -> None:
+def test_load_component_sources_rejects_legacy_gpu_validations_settings(tmp_path: Path) -> None:
     sources_file = tmp_path / "component_sources.yaml"
     _write_catalog_file(
         sources_file,
@@ -4540,8 +4536,8 @@ def test_load_component_sources_rejects_legacy_gpu_visibility_settings(tmp_path:
     with pytest.raises(
         ValueError,
         match=(
-            r"components\.infra\.mk8s\.cli\.gpu\.validations "
-            r"has unsupported field\(s\): gpu_visibility"
+            r"components\.infra\.mk8s\.cli\.gpu "
+            r"has unsupported field\(s\): validations"
         ),
     ):
         load_component_sources(explicit=sources_file)
@@ -4710,9 +4706,8 @@ def test_load_component_sources_resolves_local_nccl_chart_source(tmp_path: Path)
                     "ui": {"enabled": True},
                     "cli": {
                         "gpu": {
-                            "validations": {
+                            "benchmarks": {
                                 "nccl": {
-                                    "enabled_by_default": True,
                                     "chart_component_id": "nccl-test",
                                     "timeout": "45m",
                                     "training_operator_manifest": (
@@ -4734,9 +4729,6 @@ def test_load_component_sources_resolves_local_nccl_chart_source(tmp_path: Path)
                     },
                     "usage": {
                         "lifecycle": "transient",
-                        "config": {
-                            "ref": "deploy.targets[].validations.mk8s_gpu.nccl",
-                        },
                     },
                     "release": {
                         "namespace": "nccl-test",
@@ -4755,12 +4747,12 @@ def test_load_component_sources_resolves_local_nccl_chart_source(tmp_path: Path)
     mk8s = next(module for module in loaded.tf_modules if module.module == "mk8s")
     nccl_chart = next(chart for chart in loaded.helm_charts if chart.name == "nccl-test")
 
-    assert mk8s.mk8s_gpu.validations.nccl.chart_component_id == "nccl-test"
+    assert mk8s.mk8s_gpu.benchmarks.nccl.chart_component_id == "nccl-test"
     assert nccl_chart.path == str(chart_dir.resolve())
     assert nccl_chart.chart_name == "nccl-test"
     assert nccl_chart.version == "0.1.0"
     assert nccl_chart.usage.lifecycle == "transient"
-    assert nccl_chart.usage.config_ref == "deploy.targets[].validations.mk8s_gpu.nccl"
+    assert nccl_chart.usage.config_ref == ""
 
 
 @pytest.mark.parametrize(
@@ -4808,7 +4800,7 @@ def test_load_component_sources_rejects_transient_chart_enabled_or_selectable(
         load_component_sources(explicit=sources_file)
 
 
-def test_load_component_sources_rejects_transient_chart_without_config_ref(
+def test_load_component_sources_accepts_transient_chart_without_config_ref(
     tmp_path: Path,
 ) -> None:
     sources_file = tmp_path / "component_sources.yaml"
@@ -4834,11 +4826,11 @@ def test_load_component_sources_rejects_transient_chart_without_config_ref(
         ),
     )
 
-    with pytest.raises(
-        ValueError,
-        match=r"components\.apps\.transient-tool\.usage\.config\.ref is required",
-    ):
-        load_component_sources(explicit=sources_file)
+    loaded = load_component_sources(explicit=sources_file)
+
+    transient_tool = next(chart for chart in loaded.helm_charts if chart.name == "transient-tool")
+    assert transient_tool.usage.lifecycle == "transient"
+    assert transient_tool.usage.config_ref == ""
 
 
 def test_load_component_sources_rejects_usage_config_without_lifecycle(
@@ -5466,9 +5458,8 @@ def test_validate_sources_reports_nccl_chart_without_transient_lifecycle(
                     "ui": {"enabled": True},
                     "cli": {
                         "gpu": {
-                            "validations": {
+                            "benchmarks": {
                                 "nccl": {
-                                    "enabled_by_default": True,
                                     "chart_component_id": "nccl-test",
                                     "timeout": "45m",
                                     "training_operator_manifest": "github.com/example/training-operator?ref=v1.0.0",
@@ -5510,7 +5501,7 @@ def test_validate_sources_reports_nccl_chart_without_transient_lifecycle(
     _resolved_path, issues, _warnings = _validate_component_sources_registry()
 
     assert any(
-        "components.infra.mk8s.cli.gpu.validations.nccl.chart_component_id "
+        "components.infra.mk8s.cli.gpu.benchmarks.nccl.chart_component_id "
         "references apps component 'nccl-test', which must declare "
         "usage.lifecycle=transient" in issue
         for issue in issues

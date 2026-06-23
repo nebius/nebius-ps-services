@@ -10,11 +10,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from sdlc_state import (
+from .sdlc_state import (
     ActiveRun,
-    CODEX_HOME,
-    SDLC_RUNS,
-    CODEX_TASK_STATE,
     detect_current_branch,
     detect_default_branch,
     is_inside,
@@ -27,26 +24,6 @@ from sdlc_state import (
 DEFAULT_BRANCHES = {"main", "master", "trunk", "develop", "default"}
 WRITE_TOOL_KEYWORDS = ("write", "create", "update", "delete", "remove", "move", "rename", "patch", "edit")
 READ_TOOL_KEYWORDS = ("read", "get", "list", "search", "status", "view", "inspect")
-READ_ONLY_SHELL_COMMANDS = {
-    "cat",
-    "cmp",
-    "diff",
-    "file",
-    "grep",
-    "head",
-    "less",
-    "ls",
-    "md5sum",
-    "more",
-    "rg",
-    "sed",
-    "shasum",
-    "sha1sum",
-    "sha256sum",
-    "stat",
-    "tail",
-    "wc",
-}
 PRIVATE_STATE_PARTS = {
     ".agent-state",
     "evidence",
@@ -57,16 +34,6 @@ PRIVATE_STATE_PARTS = {
 PRIVATE_STATE_FILES = {
     "continuation-state.json",
     "hook-events.jsonl",
-}
-CREDENTIAL_DIRS = {
-    ".ssh",
-    ".aws",
-    ".config",
-    ".kube",
-    ".gnupg",
-    ".gpg",
-    ".docker",
-    ".azure",
 }
 
 
@@ -175,71 +142,6 @@ def extract_apply_patch_targets(command: str, cwd: Path) -> list[Path]:
     return targets
 
 
-def patch_deletes_codex_global_agents(command: str, cwd: Path) -> bool:
-    for line in command.splitlines():
-        match = re.match(r"\*\*\* Delete File: (.+)$", line.strip())
-        if match and is_codex_global_agents_path(resolve_path(match.group(1).strip(), cwd)):
-            return True
-    return False
-
-
-def patch_moves_codex_global_agents(command: str, cwd: Path) -> bool:
-    source: Path | None = None
-    for line in command.splitlines():
-        stripped = line.strip()
-        update_match = re.match(r"\*\*\* Update File: (.+)$", stripped)
-        if update_match:
-            source = resolve_path(update_match.group(1).strip(), cwd)
-            continue
-        if re.match(r"\*\*\* (?:Add|Delete) File: .+$", stripped):
-            source = None
-            continue
-        move_match = re.match(r"\*\*\* Move to: (.+)$", stripped)
-        if not move_match:
-            continue
-        destination = resolve_path(move_match.group(1).strip(), cwd)
-        if is_codex_global_agents_path(destination):
-            return True
-        if source and is_codex_global_agents_path(source):
-            return True
-    return False
-
-
-def command_references_codex_global_agents(command: str, cwd: Path) -> bool:
-    agents_path = resolve_path(CODEX_HOME / "AGENTS.md")
-    candidates = {
-        str(agents_path),
-        str(CODEX_HOME / "AGENTS.md"),
-        "$CODEX_HOME/AGENTS.md",
-        "${CODEX_HOME}/AGENTS.md",
-        "${CODEX_HOME:-$HOME/.codex}/AGENTS.md",
-        "$HOME/.codex/AGENTS.md",
-        "${HOME}/.codex/AGENTS.md",
-        "~/.codex/AGENTS.md",
-    }
-    if any(candidate and candidate in command for candidate in candidates):
-        return True
-    for token in command_words(command):
-        cleaned = token.strip("\"'(),;:")
-        if is_codex_global_agents_path(resolve_path(cleaned, cwd)):
-            return True
-    return False
-
-
-def is_simple_read_only_shell(command: str) -> bool:
-    words = command_words(command)
-    if not words:
-        return False
-    first = Path(words[0]).name
-    if first not in READ_ONLY_SHELL_COMMANDS:
-        return False
-    if any(marker in command for marker in (">", ">>", "|", ";", "&&", "||", "`", "$(")):
-        return False
-    if first in {"sed", "awk", "perl"} and any(word == "-i" or word.startswith("-i") for word in words[1:]):
-        return False
-    return True
-
-
 def extract_obvious_command_paths(command: str, cwd: Path) -> list[Path]:
     paths: list[Path] = []
     try:
@@ -279,25 +181,6 @@ def extract_mcp_paths(args: Any, cwd: Path) -> list[Path]:
     return paths
 
 
-def is_temp_path(path: Path) -> bool:
-    resolved = resolve_path(path)
-    temp_roots = [Path("/tmp"), Path("/private/tmp"), Path("/var/tmp")]
-    return any(is_inside(resolved, root) for root in temp_roots)
-
-
-def is_credential_path(path: Path) -> bool:
-    resolved = resolve_path(path)
-    home = resolve_path(Path.home())
-    if not is_inside(resolved, home):
-        return False
-    rel_parts = resolved.relative_to(home).parts
-    return bool(rel_parts and rel_parts[0] in CREDENTIAL_DIRS)
-
-
-def is_codex_global_agents_path(path: Path) -> bool:
-    return resolve_path(path) == resolve_path(CODEX_HOME / "AGENTS.md")
-
-
 def is_sdlc_private_path(path: Path, active: ActiveRun | None = None) -> bool:
     resolved = resolve_path(path)
     home_sdlc = resolve_path(Path.home() / ".codex" / "sdlc-runs")
@@ -315,55 +198,14 @@ def is_sdlc_private_path(path: Path, active: ActiveRun | None = None) -> bool:
     return False
 
 
-def is_plan_locked(path: Path, active: ActiveRun | None = None) -> bool:
-    resolved = resolve_path(path)
-    if resolved.name.endswith(".lock"):
-        return True
-    if not re.match(r"FEAT-\d+\.plan\.v\d+\.md$", resolved.name):
-        return False
-    lock = resolved.with_suffix(resolved.suffix + ".lock")
-    if lock.exists():
-        return True
-    if active:
-        active_lock = active.plans_dir / (resolved.name + ".lock")
-        if active_lock.exists():
-            return True
-    return False
-
-
 def validate_write_targets(
-    paths: list[Path],
-    project_root: Path,
-    active: ActiveRun | None,
+    _paths: list[Path],
+    _project_root: Path,
+    _active: ActiveRun | None,
     *,
-    allow_global_agents: bool = False,
+    allow_global_agents: bool = False,  # Kept for backwards-compatible callers.
 ) -> str | None:
-    for path in paths:
-        if is_credential_path(path):
-            return f"Blocked: writing credential path {path}."
-        if is_plan_locked(path, active):
-            return f"Blocked: locked SDLC plan cannot be edited or deleted: {path}."
-        allowed = (
-            is_inside(path, project_root)
-            or is_inside(path, SDLC_RUNS)
-            or is_inside(path, CODEX_TASK_STATE)
-            or is_temp_path(path)
-            or (allow_global_agents and is_codex_global_agents_path(path))
-        )
-        if active:
-            allowed = allowed or is_inside(path, active.run_dir) or is_inside(path, active.project_dir)
-        if not allowed:
-            return f"Blocked: write target is outside the project root, SDLC state, global task state, or temp directory: {path}."
     return None
-
-
-def command_has_private_state_leak(command: str) -> bool:
-    patterns = [
-        r"\bgit\s+add\b.*(\.codex/sdlc-runs|~/.codex/sdlc-runs|\.agent-state|evidence|screenshots|transcripts)",
-        r"\bcp\s+(-[A-Za-z]*R[A-Za-z]*\s+|\s+).*(\.codex/sdlc-runs|~/.codex/sdlc-runs|\.agent-state).*\s+\.",
-        r"\brsync\b.*(\.codex/sdlc-runs|~/.codex/sdlc-runs|\.agent-state).*\s+\.",
-    ]
-    return any(re.search(pattern, command) for pattern in patterns)
 
 
 def staged_private_paths(project_root: Path, active: ActiveRun | None = None) -> list[str]:
@@ -496,7 +338,7 @@ def spec_warning_or_denial(command: str, paths: list[Path], project_root: Path, 
     if not touched:
         return None
     if re.search(r"^-.*\b(REQ|FEAT)-\d+\b", command, re.MULTILINE) and "CHANGELOG" not in command and "Change Log" not in command:
-        return deny("Blocked: spec edit appears to delete REQ/FEAT IDs without a changelog entry.")
+        return warn_context("SDLC warning: spec edit appears to delete REQ/FEAT IDs without a changelog entry.")
     phase = str(current_state.get("current_phase") or "")
     for path in touched:
         expected = spec_paths[resolve_path(path)]

@@ -4,10 +4,10 @@ This folder contains public, reusable Codex skills for common engineering
 workflows. Each skill lives in its own folder and is discovered by the presence
 of `SKILL.md`.
 
-This root README is the concise index and install guide. Each skill folder also
-has a local `README.md` that explains what the skill does, its architecture,
-core concepts, workflow, and important files. `SKILL.md` remains the runtime
-instruction file Codex loads when the skill is used.
+This root README is the concise index and install guide. Most skill folders
+also have a local `README.md` that explains what the skill does, its
+architecture, core concepts, workflow, and important files. `SKILL.md` remains
+the runtime instruction file Codex loads when the skill is used.
 
 Every reusable skill includes a `## Learning Loop` section in `SKILL.md`. When
 durable, public-safe, evidence-backed knowledge is discovered while using a
@@ -21,6 +21,8 @@ For skill-specific release notes, see [CHANGELOG.md](CHANGELOG.md).
 ## Included Skills
 
 - End-to-end project alignment: `align`
+- Codex Agent Nebius service-account auth bootstrap and repair:
+  `agent-nebius-auth`
 - Agentic SDLC workflow verification: `agentic-sdlc-test`
 - Agentic SDLC workflow skills: `sdlc-create-requirements`, `sdlc-start`,
   `sdlc-gather-context`, `sdlc-create-design`, `sdlc-create-plan`,
@@ -159,6 +161,15 @@ behavior, idempotency, failure routing, steering, and disposable golden-path
 execution. It writes the report under `~/.codex/sdlc-verification/` and must
 not change real projects, installed skills, hooks, hook trust, or agent
 configuration.
+
+### `agent-nebius-auth`
+
+`agent-nebius-auth` is a setup-only skill for bootstrapping or repairing local
+Codex Agent Nebius authentication. It uses a service account, tenant group,
+project-level access permit, authorized-key credential file, CLI profile, and a
+Codex `PreToolUse` hook that injects short-lived Nebius token environment
+variables into matching Bash commands without returning token material as model
+context.
 
 ### Agentic SDLC Skills
 
@@ -439,14 +450,15 @@ be removed with `--remove-skill` when they are not same-source managed.
 - `git` for GitHub sources
 - standard POSIX-style utilities for hook installation: `install`, `find`,
   `cmp`, `chmod`, `awk`, `cut`, `sort`, and `mktemp`
+- `python3` when using hook registration
 
 ### Usage
 
 ```bash
 ./install-skills.sh [source] [destination_dir]
 ./install-skills.sh --remove-skill <skill_name> [destination_dir]
-./install-skills.sh --install-hooks <source_hook_dir>
-./install-skills.sh --install-all-hooks
+./install-skills.sh --install-hooks <source_hook_dir> [--register-hooks]
+./install-skills.sh --install-all-hooks [--register-hooks]
 ./install-skills.sh --help
 ```
 
@@ -456,10 +468,14 @@ script as the source and installs every sibling skill folder that contains
 The `--install-hooks` option is deliberately separate from normal skill
 installation. It copies hook files from an explicit source hook directory into
 `${CODEX_HOME:-$HOME/.codex}/hooks`, stripping `.template` suffixes for
-installed files, without modifying `hooks.json` or trusting hooks.
+installed files. Add `--register-hooks` to merge that bundle's
+`hooks.json` or `hooks.json.template` registration manifest into
+`${CODEX_HOME:-$HOME/.codex}/hooks.json`.
 The `--install-all-hooks` option is also explicit, but discovers every reviewed
 hook-only `*/assets/hooks` directory under this source skills folder and syncs
 those payload files in one pass. It does not scan mixed `assets/` directories.
+With `--register-hooks`, it also merges each discovered bundle's registration
+manifest while preserving existing hook entries.
 
 ### Supported Sources
 
@@ -507,14 +523,14 @@ those payload files in one pass. It does not scan mixed `assets/` directories.
 # Copy optional Agentic SDLC hooks into the default local Codex home
 ./install-skills.sh --install-hooks sdlc-start/assets/hooks
 
-# Copy global context-management hook templates into the default local Codex home
-./install-skills.sh --install-hooks config-codex/assets/hooks
+# Copy and register global context-management hooks
+./install-skills.sh --install-hooks config-codex/assets/hooks --register-hooks
 
-# Copy every reviewed hook-only bundle into the default local Codex home
-./install-skills.sh --install-all-hooks
+# Copy and register every reviewed hook-only bundle
+./install-skills.sh --install-all-hooks --register-hooks
 
 # Copy hooks into a non-default Codex home
-CODEX_HOME=~/custom-codex ./install-skills.sh --install-all-hooks
+CODEX_HOME=~/custom-codex ./install-skills.sh --install-all-hooks --register-hooks
 ```
 
 ### Notes
@@ -550,9 +566,17 @@ CODEX_HOME=~/custom-codex ./install-skills.sh --install-all-hooks
   source.
 - `--install-hooks <source_hook_dir>` is opt-in because hooks are local runtime
   guardrails, not skills. Use a hook-only source directory such as
-  `sdlc-start/assets/hooks` or `config-codex/assets/hooks`. After syncing them,
-  restart Codex and review/trust the hook entries in `/hooks`.
+  `sdlc-start/assets/hooks` or `config-codex/assets/hooks`. Without
+  `--register-hooks`, this only syncs files under
+  `${CODEX_HOME:-$HOME/.codex}/hooks`.
 - `--install-all-hooks` discovers only skill-owned hook-only directories named
   `*/assets/hooks` under this source folder, checks for conflicting installed
   file names, and syncs all reviewed hook bundles into
   `${CODEX_HOME:-$HOME/.codex}/hooks`.
+- `--register-hooks` can be combined with either hook-install mode. It looks
+  for `hooks.json` or `hooks.json.template` in the hook directory or its parent,
+  validates the source and destination JSON, backs up an existing
+  `${CODEX_HOME:-$HOME/.codex}/hooks.json` before changing it, preserves
+  existing entries, and appends only missing source entries.
+- Hook registration does not trust hooks. Restart Codex and review/trust new or
+  changed hook entries in `/hooks`.

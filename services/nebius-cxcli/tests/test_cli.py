@@ -260,8 +260,7 @@ def test_deploy_managed_soperator_runs_gpu_validations_before_full_flux(
     }
     validations = [
         {"kind": "mk8s_gpu_operator_readiness", "target_ref": "mk8s"},
-        {"kind": "mk8s_cuda_smoke", "target_ref": "mk8s"},
-        {"kind": "mk8s_nccl", "target_ref": "mk8s"},
+        {"kind": "mk8s_gpu_visibility", "target_ref": "mk8s"},
         {"kind": "soperator_cluster_smoke", "target_ref": "mk8s", "required": True},
     ]
     manifest = {
@@ -351,8 +350,7 @@ def test_deploy_managed_soperator_runs_gpu_validations_before_full_flux(
             "validations",
             (
                 "mk8s_gpu_operator_readiness",
-                "mk8s_cuda_smoke",
-                "mk8s_nccl",
+                "mk8s_gpu_visibility",
             ),
         ),
         ("apply", True),
@@ -2832,7 +2830,7 @@ def test_create_no_validate_config_still_prints_mk8s_gpu_validation_warning(
         cli_module,
         "mk8s_gpu_validation_warnings",
         lambda _payload: (
-            "deploy.targets[].validations.mk8s_gpu.nccl.enabled is set on an Ethernet-only test shape.",
+            "deploy.targets[].deployment_testing.mk8s_gpu.gpu_visibility.max_nodes is high for deploy-time testing.",
         ),
     )
 
@@ -2840,7 +2838,7 @@ def test_create_no_validate_config_still_prints_mk8s_gpu_validation_warning(
 
     assert result.exit_code == 0, result.output
     assert "Deploy validation warning:" in result.output
-    assert "Ethernet-only test shape" in result.output
+    assert "deployment_testing.mk8s_gpu.gpu_visibility.max_nodes" in result.output
 
 
 def test_create_interactive_existing_project_requires_confirmation(
@@ -5470,7 +5468,9 @@ def test_soperator_onboard_deployments_root_creates_project_config(
         ("cert-manager", "training-cluster"),
         ("nvidia-gpu-operator", "training-cluster"),
     ]
-    assert payload["deploy"]["targets"][0]["validations"]["mk8s_gpu"]["nccl"]["enabled"] is True
+    target = payload["deploy"]["targets"][0]
+    assert "validations" not in target
+    assert target["deployment_testing"]["soperator"]["smoke"]["enabled"] is True
 
 
 def test_soperator_onboard_project_directory_updates_existing_config(
@@ -7324,7 +7324,8 @@ def test_soperator_onboard_noninteractive_options_add_external_target(
         ("cert-manager", "training-cluster"),
         ("nvidia-gpu-operator", "training-cluster"),
     ]
-    assert payload["deploy"]["targets"][0]["validations"]["mk8s_gpu"]["nccl"]["enabled"] is True
+    assert "validations" not in target
+    assert target["deployment_testing"]["soperator"]["smoke"]["enabled"] is True
 
 
 def test_soperator_onboard_target_match_hides_stale_source_release_from_summary(
@@ -7619,10 +7620,12 @@ def test_soperator_onboard_gpu_cluster_inventory_adds_network_operator(
         ("nvidia-gpu-operator", "legacy-cluster"),
         ("nvidia-network-operator", "legacy-cluster"),
     }
-    mk8s_gpu_validations = payload["deploy"]["targets"][0]["validations"]["mk8s_gpu"]
-    assert mk8s_gpu_validations["operator_readiness"]["enabled"] is True
-    assert mk8s_gpu_validations["cuda_smoke"]["enabled"] is True
-    assert mk8s_gpu_validations["nccl"]["enabled"] is True
+    mk8s_gpu_deployment_testing = payload["deploy"]["targets"][0]["deployment_testing"][
+        "mk8s_gpu"
+    ]
+    assert mk8s_gpu_deployment_testing["operator_readiness"]["enabled"] is True
+    assert mk8s_gpu_deployment_testing["gpu_visibility"]["enabled"] is True
+    assert "nccl" not in mk8s_gpu_deployment_testing
 
 
 def test_soperator_onboard_rejects_managed_mk8s_target_ref(
@@ -9691,7 +9694,7 @@ def test_create_rejects_internal_nccl_test_app_with_validation_guidance(
     assert result.exit_code == 1, result.output
     assert "transient runtime chart" in result.output
     assert "not a selectable persistent app" in result.output
-    assert "deploy.targets[].validations.mk8s_gpu.nccl" in result.output
+    assert "nebius-cxcli acceptance-test benchmark" in result.output
     assert "--app" in result.output
     assert not _project_config_path(deployments_root).exists()
 

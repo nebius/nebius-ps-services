@@ -136,18 +136,18 @@ components:
             preferred_os:
               - ubuntu24.04
               - ubuntu22.04
-          validations:
+          deployment_testing:
             operator_readiness:
               # Fast control-plane gate only: operator policy objects plus
               # allocatable GPUs on Ready nodes. This should fail before any
               # workload pod/job validation starts.
               enabled_by_default: true
               timeout: 10m
-            cuda_smoke:
-              # Single-node CUDA workload smoke test. This intentionally checks
-              # a real GPU pod instead of only scheduler-visible allocatable
-              # resources, but stays bounded to a small sample so it remains
-              # cheap enough for routine deploys.
+            gpu_visibility:
+              # Bounded GPU data-plane visibility probe. This intentionally
+              # checks a real GPU pod instead of only scheduler-visible
+              # allocatable resources, but stays bounded to a small sample so
+              # it remains cheap enough for routine deploys.
               # Keep the dedicated namespace for isolation and easy reruns, but
               # delete the transient validation pods after each run.
               enabled_by_default: true
@@ -156,21 +156,18 @@ components:
               timeout: 5m
               max_nodes: 3
               cleanup: true
+          benchmarks:
             nccl:
               # Multi-node communication validation. This is intentionally
-              # separate from CUDA smoke because it validates distributed
-              # communication correctness and bandwidth, not just single-node
-              # CUDA execution. cxcli keeps it default-on for GPU-cluster /
-              # InfiniBand-capable shapes and default-off for 1-GPU
-              # Ethernet-only test/dev shapes unless the operator explicitly
-              # enables it. Enabled Ethernet-only runs use Socket/TCPIP, while
-              # GPU-cluster / InfiniBand shapes switch to RDMA transport. The
-              # RDMA bandwidth threshold is enforced only on the RDMA path so
-              # Ethernet-only runs stay informative instead of failing against
-              # an InfiniBand expectation.
+              # outside deployment testing because it validates distributed
+              # communication correctness and bandwidth. It is selected only by
+              # explicit acceptance-test benchmark commands. Ethernet-only runs
+              # use Socket/TCPIP, while GPU-cluster / InfiniBand shapes switch
+              # to RDMA transport. The RDMA bandwidth threshold is enforced only
+              # on the RDMA path so Ethernet-only runs stay informative instead
+              # of failing against an InfiniBand expectation.
               # Keep the dedicated namespace, but delete the transient MPIJob
               # and transient Training Operator install after each run.
-              enabled_by_default: true
               chart_component_id: nccl-test
               timeout: 20m
               max_nodes: 8
@@ -533,7 +530,7 @@ components:
             - nvidia-gpu-operator
           # Soperator worker pods intentionally consume the selected GPU nodes,
           # so workload checks may skip once the Slurm workers reserve every
-          # GPU. Still expose the cxcli-owned MK8s GPU validation toggles during
+          # GPU. Still expose the cxcli-owned MK8s GPU deployment-testing toggles during
           # create/component add; Soperator ActiveChecks stay disabled unless an
           # operator explicitly chooses Slurm-level benchmark/diagnostic jobs.
         # ------------------------------------------------------------------

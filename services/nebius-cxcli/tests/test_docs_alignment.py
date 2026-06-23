@@ -132,10 +132,11 @@ def test_docs_document_managed_tool_checksum_verification() -> None:
 def test_readme_mk8s_gpu_workload_validation_defaults_include_soperator() -> None:
     readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
     design = (REPO_ROOT / "docs" / "design.md").read_text(encoding="utf-8")
+    readme_flat = _squash(readme)
     design_flat = _squash(design)
 
     assert (
-        "CUDA smoke test is enabled by default for GPU-backed MK8s deploys, including Soperator production targets"
+        "GPU visibility is enabled by default for GPU-backed MK8s deploys, including Soperator production targets"
         in readme
     )
     assert (
@@ -146,33 +147,37 @@ def test_readme_mk8s_gpu_workload_validation_defaults_include_soperator() -> Non
     assert "groups node details by node group in the JSON detail report" in readme
     assert "Rendered MK8s node groups carry the canonical `nebius.com/node-group` label" in readme
     assert (
-        "NCCL test is enabled by default for GPU-cluster / InfiniBand-capable MK8s shapes"
+        "NCCL settings are command-only benchmark settings for explicit `nebius-cxcli acceptance-test benchmark` runs"
         in readme
     )
-    assert (
-        "defaults to disabled for 1-GPU Ethernet-only test/dev shapes unless the operator explicitly sets"
-        in readme
-    )
-    assert (
-        "Soperator ActiveChecks stay as the opt-in Slurm-side benchmark/diagnostic path" in readme
-    )
-    assert (
-        "NCCL is a separate deploy-time validation that defaults on for GPU-cluster / InfiniBand-capable MK8s shapes"
-        in design
-    )
+    assert "On Ethernet-only and 1-GPU shapes" in readme
+    assert "Soperator ActiveChecks remain opt-in benchmark/diagnostic workloads" in readme
+    assert "NCCL is a separate acceptance benchmark, not deploy smoke" in design
     assert "Render materializes `nebius.com/node-group` on each MK8s node group" in design
     assert "grouped node details" in design
     assert "minimum expected Ready GPU node counts" in design
-    assert "required read-only all-node Kubernetes inventory gate generated for every MK8s target" in design
     assert (
-        "defaults off for 1-GPU Ethernet-only test/dev shapes unless the operator explicitly sets"
-        in design_flat
+        "required read-only all-node Kubernetes inventory gate generated for every MK8s target"
+        in design
     )
+    assert "NCCL is not configured in `config.yaml`" in design_flat
     assert "CUDA smoke pods use the cxcli-owned `cuda-smoke-validation`" in readme
     assert "`cuda-smoke-validation` ServiceAccount with token automount disabled" in design
     assert "leave that generic NCCL path off" not in readme
     assert "Soperator targets suppress this generic workload prompt" not in readme
     assert "Soperator targets suppress the generic deploy-time NCCL workload" not in readme
+    assert "generic MK8s NCCL validation remains the default deploy-time workload check" not in readme
+    assert "internal to the deploy-time validation runner" not in readme
+    assert "records NCCL as skipped in the JSON report and `deploy-report.md`" not in readme
+    assert "internal to the deploy-time validation runner" not in design
+    assert (
+        "run the benchmark explicitly with `nebius-cxcli acceptance-test benchmark`"
+        in readme_flat
+    )
+    assert (
+        "It is selected explicitly through `nebius-cxcli acceptance-test benchmark`"
+        in design_flat
+    )
 
 
 def test_readme_features_include_concise_grafana_command_summary() -> None:
@@ -790,12 +795,8 @@ def test_soperator_docs_define_worker_autoscaling_boundary() -> None:
     assert "cap worker shards at 100 MK8s nodes per generated group" in readme_flat
     assert "service-role autoscaling helpers" in readme_flat
     assert "Worker autoscaling is controlled per generated shard" in readme_flat
-    assert "uses `autoscaling.enabled` as the per-shard Infra/MK8s worker" in (
-        readme_flat
-    )
-    assert "answering `true` also writes same-shard `ephemeral_nodes.enabled=true`" in (
-        readme_flat
-    )
+    assert "uses `autoscaling.enabled` as the per-shard Infra/MK8s worker" in (readme_flat)
+    assert "answering `true` also writes same-shard `ephemeral_nodes.enabled=true`" in (readme_flat)
     assert "with max defaulting to that shard's generated capacity" in readme_flat
     assert "answering `false` clears same-shard autoscaling bounds" in readme_flat
     assert "synthetic bulk apply-to-all choice for all CPU worker shards" in readme_flat
@@ -824,9 +825,7 @@ def test_soperator_docs_define_worker_autoscaling_boundary() -> None:
     assert "worker_*_nodes_per_group` value must be less than or equal to" in design_flat
     assert "cap worker shards at 100 MK8s nodes per generated group" in design_flat
     assert "Worker autoscaling is controlled per generated worker shard" in design_flat
-    assert "wizard uses `autoscaling.enabled` as the per-shard Infra/MK8s worker" in (
-        design_flat
-    )
+    assert "wizard uses `autoscaling.enabled` as the per-shard Infra/MK8s worker" in (design_flat)
     assert "answering `true` writes same-shard `ephemeral_nodes.enabled=true`" in design_flat
     assert "with max defaulting to that shard's generated capacity" in design_flat
     assert "answering `false` clears same-shard autoscaling bounds" in design_flat
@@ -846,9 +845,7 @@ def test_soperator_docs_define_worker_autoscaling_boundary() -> None:
     assert "all_worker_shards_apply_to_all" in _squash(changelog)
     assert "defaults to `true`" in _squash(changelog)
     assert "saves no bulk key" in _squash(changelog)
-    assert "fail fast when they exceed the selected profile's per-group limit" in _squash(
-        changelog
-    )
+    assert "fail fast when they exceed the selected profile's per-group limit" in _squash(changelog)
     assert "Changed Soperator production worker sizing to shape-specific fixed capacity" in (
         _squash(changelog)
     )
@@ -1225,23 +1222,35 @@ def test_docs_define_component_selector_contract() -> None:
     )
     assert "never attempts to shrink adopted storage" in readme_flat
     assert "runs Kubernetes data-copy Jobs when old and target PVC pairs exist" in readme_flat
-    assert "required Soperator/Slurm smoke validation" in readme_flat
-    assert "one short synchronous `srun` job" in readme_flat
-    assert "Slurm-owned `mpirun /usr/bin/all_reduce_perf_mpi` benchmark" in readme_flat
-    assert "all-partition hostname jobs" in readme_flat
-    assert "drive autoscaled workers up to partition capacity" in readme_flat
-    assert "all-GPU-partition `nvidia-smi -L` allocations" in readme_flat
+    assert "required Soperator deployment snapshot" in readme_flat
+    assert "SlurmCluster, and NodeSet resources" in readme_flat
+    assert "`nebius-cxcli acceptance-test smoke ... --soperator`" in readme_flat
+    assert "`nebius-cxcli acceptance-test benchmark ... --soperator`" in readme_flat
+    assert "`deploy-gpu-stack-readiness-report-<target>.json`" in readme_flat
+    assert "`deploy-gpu-visibility-report-<target>.json`" in readme_flat
+    assert "`acceptance-smoke-report-<target>.json`" in readme_flat
+    assert "`acceptance-benchmark-report-<target>.json`" in readme_flat
+    assert "`test_purpose`, `mode`, `scope`, `kind`, and `target_ref`" in readme_flat
+    assert "deploy-time Soperator testing is deliberately fast" in readme_flat
+    assert "Exhaustive all-node Slurm hostname/GPU smoke moves to" in readme_flat
     assert (
-        "1-GPU Slurm test clusters skip the Slurm NCCL benchmark"
-        in readme_flat
+        "NCCL/performance validation is reserved for explicit `acceptance-test "
+        "benchmark` runs" in readme_flat
+    )
+    assert "Acceptance commands require either `--target <target>` or `--all-targets`" in (
+        readme_flat
     )
     assert "nebius-cxcli-soperator-cluster-validation/v2" in readme_flat
     assert "command `stdout`/`stderr` as arrays of lines" in readme_flat
-    assert "structured per-partition `partition_hostnames` and `gpu_allocations` lists" in readme_flat
-    assert "selected Slurm GPU nodes are 8-GPU nodes" in readme_flat
-    assert "exactly one total 8-GPU Slurm node and it is idle" in readme_flat
-    assert "prefers an idle non-GPU partition when one exists" in readme_flat
-    assert "Slurm nodes reported as `inval` remain an unhealthy validation gate" in readme_flat
+    assert (
+        "acceptance hostname and GPU allocation sub-checks write structured "
+        "`partition_hostnames` and `gpu_allocations` arrays with all-node evidence"
+        in design_flat
+    )
+    assert "including the evidence source for each GPU allocation node" in design_flat
+    assert "through NVIDIA proc-driver plus `/dev/nvidia*` device evidence" in readme_flat
+    assert "Explicit `acceptance-test smoke --soperator` runs the Slurm CLI" in readme_flat
+    assert "Slurm nodes reported as `inval` remain unhealthy there" in readme_flat
     assert "same catalog-owned post-render patches that Flux would apply" in readme_flat
     assert "`generated/reports/ext-soperator-migrate-report.md`" in readme
     assert (
@@ -1415,17 +1424,28 @@ def test_docs_define_component_selector_contract() -> None:
     assert "ignored by cxcli-managed deployments `.gitignore` files" in design_flat
     assert "creates or reuses aligned jail, controller-spool, and accounting SFS" in design_flat
     assert "runs Kubernetes data-copy Jobs when old and target PVC pairs exist" in design_flat
-    assert "required Soperator/Slurm smoke validation" in design_flat
-    assert "one-task `srun` job" in design_flat
-    assert "runs hostname jobs across every reported Slurm partition" in design_flat
-    assert "one-GPU `nvidia-smi -L` allocations across every reported GPU partition" in design_flat
+    assert "required Soperator deployment snapshot" in design_flat
+    assert "does not start Slurm jobs" in design_flat
+    assert "target `SlurmCluster`, and worker `NodeSet` resources" in design_flat
+    assert "`acceptance-test smoke --soperator`" in design_flat
+    assert "Acceptance commands require either `--target <target>` or `--all-targets`" in (
+        design_flat
+    )
+    assert "`acceptance-test benchmark`" in design_flat
+    assert "`deploy-smoke-report-<target>.json`" in design_flat
+    assert "`deploy-gpu-stack-readiness-report-<target>.json`" in design_flat
+    assert "`deploy-gpu-visibility-report-<target>.json`" in design_flat
+    assert "`cluster-inventory-report-<target>.json`" in design_flat
+    assert "`test_purpose`, `mode`, `scope`, `kind`, and `target_ref`" in design_flat
     assert "nebius-cxcli-soperator-cluster-validation/v2" in design_flat
     assert "command `stdout`/`stderr` are arrays of lines" in design_flat
-    assert "structured `partition_hostnames` and `gpu_allocations` arrays" in design_flat
-    assert "selected Slurm GPU nodes are 8-GPU nodes" in design_flat
-    assert "exactly one total 8-GPU Slurm node and it is idle" in design_flat
-    assert "prefers an idle non-GPU partition when one exists" in design_flat
-    assert "Slurm nodes reported as `inval` remain an unhealthy validation gate" in design_flat
+    assert (
+        "structured `partition_hostnames` and `gpu_allocations` arrays with "
+        "all-node evidence" in design_flat
+    )
+    assert "including the evidence source for each GPU allocation node" in design_flat
+    assert "Explicit `acceptance-test smoke --soperator` runs the Slurm CLI" in readme_flat
+    assert "Slurm nodes reported as `inval` remain unhealthy there" in readme_flat
     assert "same catalog-owned post-render patches that Flux would apply" in design_flat
     assert "`generated/reports/ext-soperator-migrate-report.md`" in design
     assert "resume relies on phase checkpoints" in design_flat

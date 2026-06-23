@@ -5,8 +5,8 @@ set -euo pipefail
 #
 # Usage: ./install-skills.sh [source] [destination_dir]
 #        ./install-skills.sh --remove-skill <skill_name> [destination_dir]
-#        ./install-skills.sh --install-hooks <source_hook_dir>
-#        ./install-skills.sh --install-all-hooks
+#        ./install-skills.sh --install-hooks <source_hook_dir> [--register-hooks]
+#        ./install-skills.sh --install-all-hooks [--register-hooks]
 #        ./install-skills.sh --help
 # No-argument install: source is this script's directory and destination is
 # ~/.agents/skills. --remove-skill without a destination removes from the same
@@ -16,7 +16,8 @@ set -euo pipefail
 #   - https://github.com/<owner>/<repo>/tree/<ref>/<subpath>
 #
 # Requirements: bash, rsync, and git (GitHub sources only). Hook installation
-# also uses install, find, cmp, chmod, awk, cut, sort, and mktemp.
+# also uses install, find, cmp, chmod, awk, cut, sort, and mktemp. Hook
+# registration also uses python3.
 # How behavior is enforced:
 #   - Skill detection: only directories containing SKILL.md are treated as skills.
 #   - Idempotency: rsync keeps destination in sync (--delete, --omit-dir-times) and
@@ -84,8 +85,8 @@ show_usage() {
   printf '%b\n' "${S_BOLD}Usage:${S_RESET}"
   printf '%b\n' "  ${S_CYAN}./install-skills.sh${S_RESET} ${S_DIM}[source] [destination_dir]${S_RESET}"
   printf '%b\n' "  ${S_CYAN}./install-skills.sh${S_RESET} ${S_DIM}--remove-skill <skill_name> [destination_dir]${S_RESET}"
-  printf '%b\n' "  ${S_CYAN}./install-skills.sh${S_RESET} ${S_DIM}--install-hooks <source_hook_dir>${S_RESET}"
-  printf '%b\n' "  ${S_CYAN}./install-skills.sh${S_RESET} ${S_DIM}--install-all-hooks${S_RESET}"
+  printf '%b\n' "  ${S_CYAN}./install-skills.sh${S_RESET} ${S_DIM}--install-hooks <source_hook_dir> [--register-hooks]${S_RESET}"
+  printf '%b\n' "  ${S_CYAN}./install-skills.sh${S_RESET} ${S_DIM}--install-all-hooks [--register-hooks]${S_RESET}"
   printf '%b\n' "  ${S_CYAN}./install-skills.sh${S_RESET} ${S_DIM}--help${S_RESET}"
   printf '\n'
 
@@ -110,10 +111,14 @@ show_usage() {
   printf '%b\n' "  ${S_YELLOW}--remove-skill${S_RESET}   Remove one skill by its visible Codex skill name or folder name"
   printf '%b\n' "  ${S_YELLOW}--install-hooks${S_RESET}  Copy hook files from a source hook directory into"
   printf '%b\n' "                    ${S_CYAN}\${CODEX_HOME:-~/.codex}/hooks${S_RESET}, stripping .template suffixes"
-  printf '%b\n' "                    without modifying hooks.json"
+  printf '%b\n' "                    without modifying hooks.json unless --register-hooks is also set"
   printf '%b\n' "  ${S_YELLOW}--install-all-hooks${S_RESET}"
   printf '%b\n' "                    Copy hook files from every ${S_CYAN}*/assets/hooks${S_RESET} directory"
   printf '%b\n' "                    under this source skills folder"
+  printf '%b\n' "  ${S_YELLOW}--register-hooks${S_RESET}"
+  printf '%b\n' "                    With --install-hooks or --install-all-hooks, semantically merge"
+  printf '%b\n' "                    the source hook registration manifest into"
+  printf '%b\n' "                    ${S_CYAN}\${CODEX_HOME:-~/.codex}/hooks.json${S_RESET}"
   printf '\n'
 
   printf '%b\n' "${S_BOLD}Examples:${S_RESET}"
@@ -124,8 +129,8 @@ show_usage() {
   printf '%b\n' "  ${S_CYAN}./install-skills.sh --remove-skill nebius${S_RESET}"
   printf '%b\n' "  ${S_CYAN}./install-skills.sh --remove-skill nebius \"~/custom-skills\"${S_RESET}"
   printf '%b\n' "  ${S_CYAN}./install-skills.sh --install-hooks sdlc-start/assets/hooks${S_RESET}"
-  printf '%b\n' "  ${S_CYAN}./install-skills.sh --install-hooks config-codex/assets/hooks${S_RESET}"
-  printf '%b\n' "  ${S_CYAN}./install-skills.sh --install-all-hooks${S_RESET}"
+  printf '%b\n' "  ${S_CYAN}./install-skills.sh --install-hooks config-codex/assets/hooks --register-hooks${S_RESET}"
+  printf '%b\n' "  ${S_CYAN}./install-skills.sh --install-all-hooks --register-hooks${S_RESET}"
   printf '\n'
 
   printf '%b\n' "${S_BOLD}Notes:${S_RESET}"
@@ -138,6 +143,7 @@ show_usage() {
   printf '%b\n' "  - Reinstalling from a source that still contains the skill will add it back."
   printf '%b\n' "  - ${S_CYAN}--install-hooks${S_RESET} is opt-in because hooks are runtime guardrails, not skills."
   printf '%b\n' "  - ${S_CYAN}--install-all-hooks${S_RESET} discovers only hook-only ${S_CYAN}*/assets/hooks${S_RESET} directories under this source."
+  printf '%b\n' "  - ${S_CYAN}--register-hooks${S_RESET} preserves existing ${S_CYAN}hooks.json${S_RESET} entries and appends missing source entries."
   printf '%b\n' "  - After installing hooks, restart Codex and review/trust the hook entries in ${S_CYAN}/hooks${S_RESET}."
   printf '%b\n' "  - If newly installed skills are not visible, restart the VS Code extension host ${S_DIM}(Developer: Restart Extension Host)${S_RESET}."
 }
@@ -532,9 +538,156 @@ is_installable_hook_rel() {
   esac
 }
 
+find_hook_registration_manifest() {
+  local hook_src="$1"
+  local parent_dir=""
+  local candidate=""
+  local candidates=()
+
+  parent_dir="$(dirname "${hook_src}")"
+  candidates=(
+    "${hook_src}/hooks.json"
+    "${hook_src}/hooks.json.template"
+    "${parent_dir}/hooks.json"
+    "${parent_dir}/hooks.json.template"
+  )
+
+  for candidate in "${candidates[@]}"; do
+    if [[ -f "${candidate}" ]]; then
+      printf '%s\n' "${candidate}"
+      return 0
+    fi
+  done
+
+  return 1
+}
+
+register_hooks_manifest() {
+  local hook_src="$1"
+  local codex_home="$2"
+  local manifest_src=""
+
+  require_command "python3" "for hooks.json registration"
+
+  if ! manifest_src="$(find_hook_registration_manifest "${hook_src}")"; then
+    log_error "--register-hooks could not find hooks.json or hooks.json.template for: ${hook_src}"
+    log_note "Place the registration manifest in the hook directory or its parent directory."
+    exit 1
+  fi
+
+  python3 - "${manifest_src}" "${codex_home}" <<'PY'
+import json
+import os
+import shutil
+import stat
+import sys
+import tempfile
+from datetime import datetime, timezone
+from pathlib import Path
+
+
+def fail(message: str) -> None:
+    print(f"ERROR: {message}", file=sys.stderr)
+    raise SystemExit(1)
+
+
+manifest_path = Path(sys.argv[1])
+codex_home = Path(sys.argv[2]).expanduser()
+hooks_json = codex_home / "hooks.json"
+hooks_dir = codex_home / "hooks"
+
+manifest_text = manifest_path.read_text(encoding="utf-8")
+for needle, replacement in {
+    "{{CODEX_HOME}}": str(codex_home),
+    "__CODEX_HOME__": str(codex_home),
+    "{{HOOKS_DIR}}": str(hooks_dir),
+    "__HOOKS_DIR__": str(hooks_dir),
+}.items():
+    manifest_text = manifest_text.replace(needle, replacement)
+
+try:
+    source = json.loads(manifest_text)
+except json.JSONDecodeError as exc:
+    fail(f"{manifest_path} is not valid JSON: {exc}")
+
+if not isinstance(source, dict) or not isinstance(source.get("hooks"), dict):
+    fail(f"{manifest_path} must contain a top-level hooks object")
+
+if hooks_json.exists():
+    try:
+        target = json.loads(hooks_json.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        fail(f"{hooks_json} is not valid JSON: {exc}")
+    if not isinstance(target, dict):
+        fail(f"{hooks_json} must contain a JSON object")
+else:
+    target = {"hooks": {}}
+
+target_hooks = target.setdefault("hooks", {})
+if not isinstance(target_hooks, dict):
+    fail(f"{hooks_json} must contain a top-level hooks object")
+
+added = 0
+unchanged = 0
+for event_name, source_entries in sorted(source["hooks"].items()):
+    if not isinstance(source_entries, list):
+        fail(f"{manifest_path} hooks.{event_name} must be an array")
+    target_entries = target_hooks.setdefault(event_name, [])
+    if not isinstance(target_entries, list):
+        fail(f"{hooks_json} hooks.{event_name} must be an array")
+    for entry in source_entries:
+        if not isinstance(entry, dict) or not isinstance(entry.get("hooks"), list):
+            fail(f"{manifest_path} hooks.{event_name} entries must contain a hooks array")
+        if entry in target_entries:
+            unchanged += 1
+            continue
+        target_entries.append(entry)
+        added += 1
+
+codex_home.mkdir(parents=True, exist_ok=True)
+if added:
+    backup_path = ""
+    if hooks_json.exists():
+        backup_path = str(
+            hooks_json.with_name(
+                f"hooks.json.bak.{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S%f')}"
+            )
+        )
+        shutil.copy2(hooks_json, backup_path)
+
+    mode = 0o644
+    if hooks_json.exists():
+        mode = stat.S_IMODE(hooks_json.stat().st_mode)
+
+    fd, tmp_name = tempfile.mkstemp(prefix=".hooks.json.", dir=str(codex_home))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(target, handle, indent=2, sort_keys=True)
+            handle.write("\n")
+        os.chmod(tmp_name, mode)
+        os.replace(tmp_name, hooks_json)
+    finally:
+        if os.path.exists(tmp_name):
+            os.unlink(tmp_name)
+
+    print(
+        f"Registered hook entries added: {added}, unchanged: {unchanged} "
+        f"from {manifest_path} -> {hooks_json}"
+    )
+    if backup_path:
+        print(f"Backed up previous hooks.json: {backup_path}")
+else:
+    print(
+        f"Registered hook entries added: 0, unchanged: {unchanged} "
+        f"from {manifest_path} -> {hooks_json}"
+    )
+PY
+}
+
 install_hooks() {
   local hook_source_arg="$1"
   local codex_home="$2"
+  local register_hooks="${3:-0}"
   local hook_src=""
   local hook_dest="${codex_home}/hooks"
   local src=""
@@ -553,6 +706,15 @@ install_hooks() {
     log_error "hook source directory not found: ${hook_source_arg}"
     log_note "Pass a hook-only source directory, for example sdlc-start/assets/hooks or config-codex/assets/hooks."
     exit 1
+  fi
+
+  if [[ "${register_hooks}" -eq 1 ]]; then
+    require_command "python3" "for hooks.json registration"
+    if ! find_hook_registration_manifest "${hook_src}" >/dev/null; then
+      log_error "--register-hooks could not find hooks.json or hooks.json.template for: ${hook_src}"
+      log_note "Place the registration manifest in the hook directory or its parent directory."
+      exit 1
+    fi
   fi
 
   mkdir -p "${hook_dest}"
@@ -582,7 +744,12 @@ install_hooks() {
 
   log_success "Done. Hook files installed/updated: ${installed}, unchanged: ${unchanged} from ${hook_src} -> ${hook_dest}"
   log_note "Template suffixes were stripped for installed hook files."
-  log_note "This did not modify hooks.json or trust hooks."
+  if [[ "${register_hooks}" -eq 1 ]]; then
+    register_hooks_manifest "${hook_src}" "${codex_home}"
+  else
+    log_note "This did not modify hooks.json. Pass --register-hooks to merge a source registration manifest."
+  fi
+  log_note "This did not trust hooks."
   log_note "Restart Codex, open /hooks, and review the hook entries before relying on them."
 }
 
@@ -663,6 +830,7 @@ validate_hook_dest_collisions() {
 install_all_hooks() {
   local source_root_arg="$1"
   local codex_home="$2"
+  local register_hooks="${3:-0}"
   local source_root=""
   local hook_src=""
   local hook_dirs=()
@@ -687,6 +855,17 @@ install_all_hooks() {
 
   validate_hook_dest_collisions "${hook_dirs[@]}"
 
+  if [[ "${register_hooks}" -eq 1 ]]; then
+    require_command "python3" "for hooks.json registration"
+    for hook_src in "${hook_dirs[@]}"; do
+      if ! find_hook_registration_manifest "${hook_src}" >/dev/null; then
+        log_error "--register-hooks could not find hooks.json or hooks.json.template for: ${hook_src}"
+        log_note "Place the registration manifest in the hook directory or its parent directory."
+        exit 1
+      fi
+    done
+  fi
+
   log_note "Discovered hook source directories:"
   for hook_src in "${hook_dirs[@]}"; do
     displayed="${hook_src#"${source_root}/"}"
@@ -694,7 +873,7 @@ install_all_hooks() {
   done
 
   for hook_src in "${hook_dirs[@]}"; do
-    install_hooks "${hook_src}" "${codex_home}"
+    install_hooks "${hook_src}" "${codex_home}" "${register_hooks}"
   done
 
   log_success "Done. Processed all hooks from ${#hook_dirs[@]} source directorie(s)."
@@ -705,6 +884,7 @@ init_output_style
 REMOVE_SKILL=""
 HOOK_INSTALL_SOURCE=""
 INSTALL_ALL_HOOKS=0
+REGISTER_HOOKS=0
 POSITIONAL=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -749,6 +929,15 @@ while [[ $# -gt 0 ]]; do
       INSTALL_ALL_HOOKS=1
       shift
       ;;
+    --register-hooks)
+      if [[ "${REGISTER_HOOKS}" -eq 1 ]]; then
+        log_error "--register-hooks may only be specified once."
+        show_usage >&2
+        exit 1
+      fi
+      REGISTER_HOOKS=1
+      shift
+      ;;
     --)
       shift
       while [[ $# -gt 0 ]]; do
@@ -780,6 +969,12 @@ if [[ ( -n "${HOOK_INSTALL_SOURCE}" || "${INSTALL_ALL_HOOKS}" -eq 1 ) && -n "${R
   exit 1
 fi
 
+if [[ "${REGISTER_HOOKS}" -eq 1 && -z "${HOOK_INSTALL_SOURCE}" && "${INSTALL_ALL_HOOKS}" -eq 0 ]]; then
+  log_error "--register-hooks must be combined with --install-hooks or --install-all-hooks."
+  show_usage >&2
+  exit 1
+fi
+
 if [[ "${INSTALL_ALL_HOOKS}" -eq 1 ]]; then
   if [[ "${#POSITIONAL[@]}" -gt 0 ]]; then
     log_error "--install-all-hooks does not accept positional arguments."
@@ -789,7 +984,7 @@ if [[ "${INSTALL_ALL_HOOKS}" -eq 1 ]]; then
     exit 1
   fi
   CODEX_HOME_DIR="$(expand_home_path "${CODEX_HOME:-${HOME}/.codex}")"
-  install_all_hooks "${DEFAULT_SRC_DIR}" "${CODEX_HOME_DIR}"
+  install_all_hooks "${DEFAULT_SRC_DIR}" "${CODEX_HOME_DIR}" "${REGISTER_HOOKS}"
   exit 0
 fi
 
@@ -801,7 +996,7 @@ if [[ -n "${HOOK_INSTALL_SOURCE}" ]]; then
     exit 1
   fi
   CODEX_HOME_DIR="$(expand_home_path "${CODEX_HOME:-${HOME}/.codex}")"
-  install_hooks "${HOOK_INSTALL_SOURCE}" "${CODEX_HOME_DIR}"
+  install_hooks "${HOOK_INSTALL_SOURCE}" "${CODEX_HOME_DIR}" "${REGISTER_HOOKS}"
   exit 0
 fi
 

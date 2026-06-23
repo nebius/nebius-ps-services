@@ -120,6 +120,11 @@ are present, but preserve additional reviewed workflow entries such as Agentic
 SDLC `PreToolUse` and `Stop` hooks. Do not replace `hooks.json` just to match
 the template byte-for-byte.
 
+The root `install-skills.sh --register-hooks` path follows the same semantic
+merge model for hook bundles: it validates `hooks.json`, preserves existing
+entries, and appends only missing source entries. It still does not trust hooks
+or patch `config.toml`.
+
 If `$CODEX_HOME/AGENTS.md` is missing, create it from
 `assets/AGENTS.md.template`. If it exists, do not replace it. Append or update a
 small managed section for `config-codex`/`global-context-management` guidance

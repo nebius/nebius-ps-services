@@ -9964,7 +9964,7 @@ def _execute_final_cutover_phase(
             timeout="10m",
         )
         return False, [
-            "Final cutover skipped: no Slurm custom resources were detected; Soperator manager rollout is healthy."
+            "Final cutover skipped: no Slurm custom resources were detected; Soperator manager deployment is healthy."
         ]
     _kubectl_rollout_status(
         command_runner=command_runner,
@@ -10050,6 +10050,7 @@ def _target_soperator_cluster_validation_specs(
         item["kube_context"] = kube_context
         if not str(item.get("cluster_name", "") or "").strip():
             item["cluster_name"] = target_ref
+        item["check_old_source_flux"] = True
         specs.append(item)
     return specs
 
@@ -10120,10 +10121,7 @@ def _run_migration_soperator_cluster_validation(
             for spec in validations
         ]
         phase["soperator_cluster_validation_reports"] = [
-            str(
-                reports_dir
-                / str(spec.get("report_file") or "soperator-cluster-validation-report.json")
-            )
+            str(reports_dir / str(spec.get("report_file") or "deploy-smoke-report.json"))
             for spec in validations
         ]
         raise SoperatorMigrationPhasePending(
@@ -10304,7 +10302,7 @@ def _execute_validation_hold_phase(
     phase["validation_contract_revision"] = _VALIDATION_HOLD_REVISION
     phase["validated_at"] = _utc_now()
     return bool(phase.get("mk8s_gpu_validations") or phase.get("soperator_cluster_validations")), [
-        "Validation hold passed: nodes are present and Soperator manager rollout is healthy.",
+        "Validation hold passed: nodes are present and Soperator manager deployment is healthy.",
         *helm_state_lines,
         *validation_lines,
         *soperator_validation_lines,

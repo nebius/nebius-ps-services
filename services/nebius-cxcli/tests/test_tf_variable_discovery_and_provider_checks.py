@@ -5266,18 +5266,22 @@ def test_wizard_skips_irrelevant_mk8s_gpu_validation_prompts_until_gpu_cluster_i
         description="Managed Kubernetes",
         source="../../platform-infra/modules/mk8s",
         wizard_fields={
-            "deploy.targets[].validations.mk8s_gpu.operator_readiness.enabled": {"default": True},
-            "deploy.targets[].validations.mk8s_gpu.cuda_smoke.enabled": {"default": True},
-            "deploy.targets[].validations.mk8s_gpu.cuda_smoke.max_nodes": {"default": 3},
-            "deploy.targets[].validations.mk8s_gpu.nccl.enabled": {
+            "deploy.targets[].deployment_testing.mk8s_gpu.operator_readiness.enabled": {
                 "default": True,
                 "write_default_to_config": True,
             },
-            "deploy.targets[].validations.mk8s_gpu.nccl.max_nodes": {"default": 8},
-            "deploy.targets[].validations.mk8s_gpu.nccl.average_bus_bandwidth_threshold_gbps": {
-                "default": 300
+            "deploy.targets[].deployment_testing.mk8s_gpu.gpu_visibility.enabled": {
+                "default": True,
+                "write_default_to_config": True,
             },
-            "deploy.targets[].validations.mk8s_gpu.health_checker.enabled": {"default": False},
+            "deploy.targets[].deployment_testing.mk8s_gpu.gpu_visibility.max_nodes": {
+                "default": 3,
+                "write_default_to_config": True,
+            },
+            "deploy.targets[].deployment_testing.mk8s_gpu.health_checker.enabled": {
+                "default": False,
+                "write_default_to_config": True,
+            },
         },
     )
 
@@ -5324,20 +5328,22 @@ def test_wizard_skips_irrelevant_mk8s_gpu_validation_prompts_until_gpu_cluster_i
     )
 
     assert completed is True
-    assert "deploy.targets[0].validations.mk8s_gpu.operator_readiness.enabled" in prompted_paths
-    assert "deploy.targets[0].validations.mk8s_gpu.cuda_smoke.enabled" in prompted_paths
-    assert "deploy.targets[0].validations.mk8s_gpu.cuda_smoke.max_nodes" in prompted_paths
-    assert "deploy.targets[0].validations.mk8s_gpu.nccl.enabled" in prompted_paths
-    assert prompt_currents["deploy.targets[0].validations.mk8s_gpu.nccl.enabled"] == [True]
-    assert "deploy.targets[0].validations.mk8s_gpu.nccl.max_nodes" in prompted_paths
     assert (
-        "deploy.targets[0].validations.mk8s_gpu.nccl.average_bus_bandwidth_threshold_gbps"
+        "deploy.targets[0].deployment_testing.mk8s_gpu.operator_readiness.enabled"
+        in prompted_paths
+    )
+    assert "deploy.targets[0].deployment_testing.mk8s_gpu.gpu_visibility.enabled" in prompted_paths
+    assert "deploy.targets[0].deployment_testing.mk8s_gpu.gpu_visibility.max_nodes" in prompted_paths
+    assert all(".nccl." not in path for path in prompted_paths)
+    assert (
+        "deploy.targets[0].deployment_testing.mk8s_gpu.health_checker.enabled"
         not in prompted_paths
     )
-    assert "deploy.targets[0].validations.mk8s_gpu.health_checker.enabled" not in prompted_paths
 
 
-def test_wizard_defaults_mk8s_nccl_off_for_single_gpu_shape(monkeypatch) -> None:
+def test_wizard_does_not_persist_mk8s_nccl_for_single_gpu_shape(
+    monkeypatch,
+) -> None:
     config_yaml = yaml.safe_dump(
         {
             "version": "v1",
@@ -5381,18 +5387,22 @@ def test_wizard_defaults_mk8s_nccl_off_for_single_gpu_shape(monkeypatch) -> None
         description="Managed Kubernetes",
         source="../../platform-infra/modules/mk8s",
         wizard_fields={
-            "deploy.targets[].validations.mk8s_gpu.operator_readiness.enabled": {"default": True},
-            "deploy.targets[].validations.mk8s_gpu.cuda_smoke.enabled": {"default": True},
-            "deploy.targets[].validations.mk8s_gpu.cuda_smoke.max_nodes": {"default": 3},
-            "deploy.targets[].validations.mk8s_gpu.nccl.enabled": {
+            "deploy.targets[].deployment_testing.mk8s_gpu.operator_readiness.enabled": {
                 "default": True,
                 "write_default_to_config": True,
             },
-            "deploy.targets[].validations.mk8s_gpu.nccl.max_nodes": {"default": 8},
-            "deploy.targets[].validations.mk8s_gpu.nccl.average_bus_bandwidth_threshold_gbps": {
-                "default": 300
+            "deploy.targets[].deployment_testing.mk8s_gpu.gpu_visibility.enabled": {
+                "default": True,
+                "write_default_to_config": True,
             },
-            "deploy.targets[].validations.mk8s_gpu.health_checker.enabled": {"default": False},
+            "deploy.targets[].deployment_testing.mk8s_gpu.gpu_visibility.max_nodes": {
+                "default": 3,
+                "write_default_to_config": True,
+            },
+            "deploy.targets[].deployment_testing.mk8s_gpu.health_checker.enabled": {
+                "default": False,
+                "write_default_to_config": True,
+            },
         },
     )
 
@@ -5439,12 +5449,13 @@ def test_wizard_defaults_mk8s_nccl_off_for_single_gpu_shape(monkeypatch) -> None
     )
 
     assert completed is True
-    assert "deploy.targets[0].validations.mk8s_gpu.nccl.enabled" in prompted_paths
-    assert prompt_currents["deploy.targets[0].validations.mk8s_gpu.nccl.enabled"] == [False]
-    assert "deploy.targets[0].validations.mk8s_gpu.nccl.max_nodes" not in prompted_paths
+    assert all(".nccl." not in path for path in prompted_paths)
     payload = yaml.safe_load(updated_yaml)
-    mk8s_gpu_validations = payload["deploy"]["targets"][0]["validations"]["mk8s_gpu"]
-    assert mk8s_gpu_validations["nccl"]["enabled"] is False
+    mk8s_gpu_deployment_testing = payload["deploy"]["targets"][0]["deployment_testing"][
+        "mk8s_gpu"
+    ]
+    assert mk8s_gpu_deployment_testing["gpu_visibility"]["enabled"] is True
+    assert "nccl" not in mk8s_gpu_deployment_testing
 
 
 def test_wizard_auto_enabled_mk8s_gpu_apps_are_prompted_in_same_pass(monkeypatch) -> None:

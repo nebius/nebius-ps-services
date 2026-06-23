@@ -3849,7 +3849,7 @@ def test_soperator_upgrade_validation_specs_select_target_and_require_manifest()
                     "target_ref": "other",
                     "name": "Other Soperator smoke",
                 },
-                {"kind": "mk8s_cuda_smoke", "target_ref": "mk8s"},
+                {"kind": "mk8s_gpu_visibility", "target_ref": "mk8s"},
             ]
         }
     }
@@ -4645,7 +4645,7 @@ def test_validate_command_prints_mk8s_gpu_validation_warning(
         cli,
         "mk8s_gpu_validation_warnings",
         lambda _config: (
-            "deploy.targets[].validations.mk8s_gpu.nccl.enabled is set on an Ethernet-only test shape.",
+            "deploy.targets[].deployment_testing.mk8s_gpu.gpu_visibility.max_nodes is high for deploy-time testing.",
         ),
     )
 
@@ -4654,7 +4654,7 @@ def test_validate_command_prints_mk8s_gpu_validation_warning(
     assert result.exit_code == 0, result.output
     output = _plain_output(result.output)
     assert "Deploy validation warning:" in output
-    assert "Ethernet-only test shape" in output
+    assert "deployment_testing.mk8s_gpu.gpu_visibility.max_nodes" in output
 
 
 def test_validate_command_accepts_local_source_profile(
@@ -7344,10 +7344,10 @@ def test_render_command_force_allows_noninteractive_overwrite(
     (fake_paths.generated_dir / "existing.txt").write_text("existing", encoding="utf-8")
     fake_paths.reports_dir.mkdir(parents=True, exist_ok=True)
     deploy_report = fake_paths.reports_dir / "deploy-report.md"
-    deploy_detail_report = fake_paths.reports_dir / "cuda-smoke-report-mk8s.json"
+    deploy_detail_report = fake_paths.reports_dir / "deploy-gpu-visibility-report-mk8s.json"
     onboard_report = fake_paths.reports_dir / "ext-soperator-onboard-source-discovery-report.json"
     migrate_report = fake_paths.reports_dir / "ext-soperator-migrate-report.md"
-    migrate_detail_report = fake_paths.reports_dir / "external-nccl-test-report.json"
+    migrate_detail_report = fake_paths.reports_dir / "deploy-smoke-report-external.json"
     node_template_report = fake_paths.reports_dir / "upgrade-node-template-report.md"
     node_template_report_json = fake_paths.reports_dir / "upgrade-node-template-report.json"
     node_group_report = fake_paths.reports_dir / "upgrade-node-group-report.md"
@@ -7356,13 +7356,13 @@ def test_render_command_force_allows_noninteractive_overwrite(
     upgrade_report_json = fake_paths.reports_dir / "soperator-upgrade-report.json"
     stale_report = fake_paths.reports_dir / "old.json"
     deploy_report.write_text(
-        "# Deploy Report\n\n- Detail report: `cuda-smoke-report-mk8s.json`\n",
+        "# Deploy Report\n\n- Detail report: `deploy-gpu-visibility-report-mk8s.json`\n",
         encoding="utf-8",
     )
     deploy_detail_report.write_text('{"status": "passed"}\n', encoding="utf-8")
     onboard_report.write_text('{"schema": "onboard"}\n', encoding="utf-8")
     migrate_report.write_text(
-        "# Soperator Migration Report\n\n- `external-nccl-test-report.json`: `PASS` - ok\n",
+        "# Soperator Migration Report\n\n- `deploy-smoke-report-external.json`: `PASS` - ok\n",
         encoding="utf-8",
     )
     migrate_detail_report.write_text('{"passed": true}\n', encoding="utf-8")
@@ -7576,6 +7576,404 @@ def test_deploy_command_passes_auto_auth_flag(
     }
 
 
+def test_acceptance_test_smoke_command_passes_options(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_paths = _fake_paths(tmp_path)
+    captured: dict[str, Any] = {}
+
+    def _fake_run_acceptance_smoke_command(**kwargs: Any) -> list[Path]:
+        captured.update(kwargs)
+        return [fake_paths.reports_dir / "acceptance-smoke-report-mk8s.json"]
+
+    monkeypatch.setattr(
+        cli,
+        "_run_acceptance_smoke_command",
+        _fake_run_acceptance_smoke_command,
+    )
+
+    result = runner.invoke(
+        cli.app,
+        [
+            "acceptance-test",
+            "smoke",
+            str(fake_paths.config_path),
+            "--target",
+            "mk8s",
+            "--soperator",
+            "--suite",
+            "soperator-slurm",
+            "--batch-size",
+            "64",
+            "--concurrency",
+            "4",
+            "--fail-fast",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Acceptance smoke report:" in _plain_output(result.output)
+    assert captured == {
+        "config_path": fake_paths.config_path,
+        "requested_target_ref": "mk8s",
+        "all_targets": False,
+        "include_k8s": False,
+        "include_soperator": True,
+        "suites": ["soperator-slurm"],
+        "batch_size": 64,
+        "concurrency": 4,
+        "continue_on_failure": False,
+    }
+
+
+def test_acceptance_test_smoke_runner_uses_readonly_context_and_kube_handoff(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_paths = _fake_paths(tmp_path)
+    config = _config_with_enabled_mk8s(
+        charts=[
+            {
+                "id": "soperator",
+                "instance_id": "mk8s",
+                "target_ref": "mk8s",
+                "enabled": True,
+            }
+        ]
+    )
+    manifest = {
+        "deploy": {
+            "targets": [_mk8s_target(fake_paths)],
+            "validations": [],
+        }
+    }
+    soperator_spec = {
+        "kind": cli.SOPERATOR_CLUSTER_VALIDATION_KIND,
+        "target_ref": "mk8s",
+        "name": "Soperator acceptance smoke test (mk8s)",
+        "report_file": "acceptance-smoke-report-mk8s.json",
+        "mode": "acceptance",
+    }
+    calls: list[tuple[str, Any]] = []
+
+    monkeypatch.setattr(
+        cli,
+        "_load_deploy_context_readonly",
+        lambda _path: (config, fake_paths, manifest),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_prepare_cluster_handoff_kube_env",
+        lambda *_args, **_kwargs: {"KUBECONFIG": "/tmp/kubeconfig"},
+    )
+    monkeypatch.setattr(
+        cli,
+        "soperator_acceptance_smoke_specs",
+        lambda *_args, **_kwargs: [soperator_spec],
+    )
+    monkeypatch.setattr(cli, "mk8s_acceptance_smoke_validation_specs", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(cli.console, "print", lambda *_args, **_kwargs: None)
+
+    @contextmanager
+    def _fake_status(_message: str, **_kwargs: object):
+        yield SimpleNamespace(update=lambda *_args, **_kwargs: None)
+
+    monkeypatch.setattr(cli.console, "status", _fake_status)
+
+    def _fake_run_soperator_cluster_validations(
+        validations: list[dict[str, Any]],
+        *,
+        reports_dir: Path,
+        extra_env: dict[str, str] | None,
+        emit=None,
+    ) -> list[Path]:
+        calls.append(("soperator", validations, reports_dir, extra_env))
+        return [reports_dir / "acceptance-smoke-report-mk8s.json"]
+
+    monkeypatch.setattr(
+        cli,
+        "run_soperator_cluster_validations",
+        _fake_run_soperator_cluster_validations,
+    )
+
+    written = cli._run_acceptance_smoke_command(
+        config_path=fake_paths.config_path,
+        requested_target_ref="mk8s",
+        all_targets=False,
+        include_k8s=False,
+        include_soperator=True,
+        suites=None,
+        batch_size=128,
+        concurrency=8,
+        continue_on_failure=True,
+    )
+
+    assert written == [fake_paths.reports_dir / "acceptance-smoke-report-mk8s.json"]
+    assert calls == [
+        (
+            "soperator",
+            [soperator_spec],
+            fake_paths.reports_dir,
+            {"KUBECONFIG": "/tmp/kubeconfig"},
+        )
+    ]
+
+
+def test_acceptance_test_rejects_same_target_duplicate_canonical_reports() -> None:
+    with pytest.raises(RuntimeError, match="same canonical report file"):
+        cli._raise_on_duplicate_acceptance_reports(
+            [
+                {
+                    "name": "Soperator acceptance smoke test (mk8s)",
+                    "report_file": "acceptance-smoke-report-mk8s.json",
+                },
+                {
+                    "name": "K8s CUDA acceptance smoke (mk8s)",
+                    "report_file": "acceptance-smoke-report-mk8s.json",
+                },
+            ]
+        )
+
+
+def test_acceptance_test_requires_explicit_target_selection(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_paths = _fake_paths(tmp_path)
+    config = _config_with_enabled_mk8s()
+    manifest = {
+        "deploy": {
+            "targets": [_mk8s_target(fake_paths)],
+            "validations": [],
+        }
+    }
+    monkeypatch.setattr(
+        cli,
+        "_load_deploy_context_readonly",
+        lambda _path: (config, fake_paths, manifest),
+    )
+
+    with pytest.raises(ValueError, match="Select one target with --target"):
+        cli._run_acceptance_smoke_command(
+            config_path=fake_paths.config_path,
+            requested_target_ref=None,
+            all_targets=False,
+            include_k8s=True,
+            include_soperator=False,
+            suites=None,
+            batch_size=128,
+            concurrency=8,
+            continue_on_failure=True,
+        )
+
+    with pytest.raises(ValueError, match="Select one target with --target"):
+        cli._run_acceptance_benchmark_command(
+            config_path=fake_paths.config_path,
+            requested_target_ref=None,
+            all_targets=False,
+            include_k8s=True,
+            include_soperator=False,
+            suites=None,
+            continue_on_failure=True,
+            max_nodes=None,
+            timeout=None,
+            average_bus_bandwidth_threshold_gbps=None,
+        )
+
+
+def test_acceptance_test_help_shows_safe_examples() -> None:
+    group_result = runner.invoke(cli.app, ["acceptance-test", "--help"])
+    smoke_result = runner.invoke(cli.app, ["acceptance-test", "smoke", "--help"])
+    benchmark_result = runner.invoke(cli.app, ["acceptance-test", "benchmark", "--help"])
+    deploy_result = runner.invoke(cli.app, ["deploy", "--help"])
+
+    assert group_result.exit_code == 0, group_result.output
+    assert smoke_result.exit_code == 0, smoke_result.output
+    assert benchmark_result.exit_code == 0, benchmark_result.output
+    assert deploy_result.exit_code == 0, deploy_result.output
+
+    group_help = " ".join(_plain_output(group_result.output).split())
+    smoke_help = " ".join(_plain_output(smoke_result.output).split())
+    benchmark_help = " ".join(_plain_output(benchmark_result.output).split())
+    deploy_help = " ".join(_plain_output(deploy_result.output).split())
+
+    assert "same-target K8s and Soperator suites cannot be combined" in group_help
+    assert "Commands write JSON reports only and do not change config" in group_help
+    assert "nebius-cxcli acceptance-test smoke <config.yaml> --target sop-cluster1 --soperator" in group_help
+    assert "Soperator all-node smoke JSON report:" in group_help
+    assert "plain MK8s all-node CUDA JSON report:" in group_help
+    assert "force K8s NCCL on a Soperator-owned GPU target during maintenance" in group_help
+    assert "JSON reports only under generated/reports/" in smoke_help
+    assert "does not change config.yaml" in smoke_help
+    assert "Soperator all-node Slurm smoke JSON report:" in smoke_help
+    assert "plain MK8s all-node CUDA JSON report:" in smoke_help
+    assert "--batch-size 128 --concurrency 8 --fail-fast" in smoke_help
+    assert "Required unless --all-targets is set." in smoke_help
+    assert "Required unless --target is set." in smoke_help
+    assert "JSON reports only under generated/reports/" in benchmark_help
+    assert "does not change config.yaml" in benchmark_help
+    assert "K8s NCCL uses the pinned transient nccl-test chart" in benchmark_help
+    assert "Soperator Slurm NCCL benchmark:" in benchmark_help
+    assert "plain MK8s NCCL benchmark with run-only overrides:" in benchmark_help
+    assert "plain MK8s K8s NCCL benchmark:" not in benchmark_help
+    assert (
+        "nebius-cxcli acceptance-test benchmark <config.yaml> --target mk8s-prod "
+        "--k8s --max-nodes 4 --timeout 20m --average-bus-bandwidth-threshold-gbps 300"
+    ) in benchmark_help
+    assert (
+        "nebius-cxcli acceptance-test benchmark <config.yaml> --target sop-cluster1 "
+        "--suite k8s-nccl --max-nodes 2"
+    ) in benchmark_help
+    stale_help_terms = (
+        "deploy.targets[].validations",
+        "validations.mk8s_gpu",
+        "cuda_smoke",
+        "nccl.enabled",
+        "nccl.max_nodes",
+        "deploy-time NCCL",
+        "generic deploy-time NCCL",
+        "upgrade-report.md",
+    )
+    for help_text in (group_help, smoke_help, benchmark_help, deploy_help):
+        for stale_term in stale_help_terms:
+            assert stale_term.lower() not in help_text.lower()
+
+
+def test_acceptance_test_benchmark_command_passes_options(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_paths = _fake_paths(tmp_path)
+    captured: dict[str, Any] = {}
+
+    def _fake_run_acceptance_benchmark_command(**kwargs: Any) -> list[Path]:
+        captured.update(kwargs)
+        return [fake_paths.reports_dir / "acceptance-benchmark-report-mk8s.json"]
+
+    monkeypatch.setattr(
+        cli,
+        "_run_acceptance_benchmark_command",
+        _fake_run_acceptance_benchmark_command,
+    )
+
+    result = runner.invoke(
+        cli.app,
+        [
+            "acceptance-test",
+            "benchmark",
+            str(fake_paths.config_path),
+            "--target",
+            "mk8s",
+            "--k8s",
+            "--suite",
+            "k8s-nccl",
+            "--max-nodes",
+            "16",
+            "--timeout",
+            "30m",
+            "--average-bus-bandwidth-threshold-gbps",
+            "450.5",
+            "--fail-fast",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Acceptance benchmark report:" in _plain_output(result.output)
+    assert captured == {
+        "config_path": fake_paths.config_path,
+        "requested_target_ref": "mk8s",
+        "all_targets": False,
+        "include_k8s": True,
+        "include_soperator": False,
+        "suites": ["k8s-nccl"],
+        "continue_on_failure": False,
+        "max_nodes": 16,
+        "timeout": "30m",
+        "average_bus_bandwidth_threshold_gbps": 450.5,
+    }
+
+
+def test_acceptance_test_benchmark_runner_uses_readonly_context_and_kube_handoff(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_paths = _fake_paths(tmp_path)
+    config = _config_with_enabled_mk8s()
+    manifest = {
+        "deploy": {
+            "targets": [_mk8s_target(fake_paths)],
+            "validations": [],
+        }
+    }
+    benchmark_spec = {
+        "kind": "mk8s_nccl",
+        "target_ref": "mk8s",
+        "name": "K8s NCCL benchmark (mk8s)",
+        "report_file": "acceptance-benchmark-report-mk8s.json",
+    }
+    calls: list[tuple[str, Any]] = []
+
+    monkeypatch.setattr(
+        cli,
+        "_load_deploy_context_readonly",
+        lambda _path: (config, fake_paths, manifest),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_prepare_cluster_handoff_kube_env",
+        lambda *_args, **_kwargs: {"KUBECONFIG": "/tmp/kubeconfig"},
+    )
+    monkeypatch.setattr(cli, "soperator_acceptance_benchmark_specs", lambda *_args: [])
+    monkeypatch.setattr(
+        cli,
+        "mk8s_acceptance_benchmark_validation_specs",
+        lambda *_args, **_kwargs: [benchmark_spec],
+    )
+    monkeypatch.setattr(cli.console, "print", lambda *_args, **_kwargs: None)
+
+    @contextmanager
+    def _fake_status(_message: str, **_kwargs: object):
+        yield SimpleNamespace(update=lambda *_args, **_kwargs: None)
+
+    monkeypatch.setattr(cli.console, "status", _fake_status)
+
+    def _fake_run_mk8s_gpu_validations(
+        validations: list[dict[str, Any]],
+        *,
+        reports_dir: Path,
+        extra_env: dict[str, str] | None,
+        emit=None,
+    ) -> list[Path]:
+        calls.append(("mk8s_gpu", validations, reports_dir, extra_env))
+        return [reports_dir / "acceptance-benchmark-report-mk8s.json"]
+
+    monkeypatch.setattr(cli, "run_mk8s_gpu_validations", _fake_run_mk8s_gpu_validations)
+
+    written = cli._run_acceptance_benchmark_command(
+        config_path=fake_paths.config_path,
+        requested_target_ref="mk8s",
+        all_targets=False,
+        include_k8s=True,
+        include_soperator=False,
+        suites=None,
+        continue_on_failure=True,
+        max_nodes=None,
+        timeout=None,
+        average_bus_bandwidth_threshold_gbps=None,
+    )
+
+    assert written == [fake_paths.reports_dir / "acceptance-benchmark-report-mk8s.json"]
+    assert calls == [
+        (
+            "mk8s_gpu",
+            [benchmark_spec],
+            fake_paths.reports_dir,
+            {"KUBECONFIG": "/tmp/kubeconfig"},
+        )
+    ]
+
+
 def test_deploy_footer_groups_target_validations_and_keeps_paths_concise(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -7585,23 +7983,23 @@ def test_deploy_footer_groups_target_validations_and_keeps_paths_concise(
         {
             "kind": "mk8s_gpu_operator_readiness",
             "name": "GPU stack readiness (cluster1)",
-            "report_file": "gpu-stack-readiness-report-cluster1.json",
+            "report_file": "deploy-gpu-stack-readiness-report-cluster1.json",
             "target_ref": "cluster1",
         },
         {
-            "kind": "mk8s_nccl",
-            "name": "NCCL test (cluster1)",
-            "report_file": "nccl-test-report-cluster1.json",
+            "kind": "mk8s_gpu_visibility",
+            "name": "GPU visibility probe (cluster1)",
+            "report_file": "deploy-gpu-visibility-report-cluster1.json",
             "target_ref": "cluster1",
         },
         {
-            "kind": "mk8s_nccl",
-            "name": "NCCL test (cluster2)",
-            "report_file": "nccl-test-report-cluster2.json",
+            "kind": "mk8s_gpu_visibility",
+            "name": "GPU visibility probe (cluster2)",
+            "report_file": "deploy-gpu-visibility-report-cluster2.json",
             "target_ref": "cluster2",
         },
     ]
-    (fake_paths.reports_dir / "gpu-stack-readiness-report-cluster1.json").write_text(
+    (fake_paths.reports_dir / "deploy-gpu-stack-readiness-report-cluster1.json").write_text(
         json.dumps(
             {
                 "passed": True,
@@ -7613,36 +8011,27 @@ def test_deploy_footer_groups_target_validations_and_keeps_paths_concise(
         + "\n",
         encoding="utf-8",
     )
-    (fake_paths.reports_dir / "nccl-test-report-cluster1.json").write_text(
+    (fake_paths.reports_dir / "deploy-gpu-visibility-report-cluster1.json").write_text(
         json.dumps(
             {
                 "passed": True,
                 "target_ref": "cluster1",
-                "launcher_phase": "Succeeded",
-                "transport_label": "Socket/TCPIP",
-                "avg_bus_bandwidth_gbps": 1.2,
-                "threshold_enforced": False,
-                "selected_worker_node_count": 2,
+                "selected_node_count": 2,
+                "total_gpu_node_count": 4,
+                "passed_node_count": 2,
             }
         )
         + "\n",
         encoding="utf-8",
     )
-    (fake_paths.reports_dir / "nccl-test-report-cluster2.json").write_text(
+    (fake_paths.reports_dir / "deploy-gpu-visibility-report-cluster2.json").write_text(
         json.dumps(
             {
                 "passed": True,
                 "target_ref": "cluster2",
-                "launcher_phase": "Succeeded",
-                "transport_label": "RDMA verbs (IB/RoCE)",
-                "avg_bus_bandwidth_gbps": 467.7,
-                "threshold_gbps": 300.0,
-                "threshold_enforced": True,
-                "selected_worker_node_count": 1,
-                "gpudirect_mode": "dma-buf",
-                "nccl_dmabuf_env_name": "NCCL_DMABUF_ENABLE",
-                "nccl_dmabuf_enable": "1",
-                "nccl_dmabuf_enable_source": "explicit MPI environment",
+                "selected_node_count": 1,
+                "total_gpu_node_count": 1,
+                "passed_node_count": 1,
             }
         )
         + "\n",
@@ -7677,13 +8066,13 @@ def test_deploy_footer_groups_target_validations_and_keeps_paths_concise(
         "  cluster1:",
         "    [green]PASS[/green] GPU stack readiness: GPU Operator ready on 2 GPU nodes.",
         (
-            "    [green]PASS[/green] NCCL test: Succeeded; Socket/TCPIP 1.2 Gbps "
-            "across 2 workers; RDMA threshold not enforced."
+            "    [green]PASS[/green] GPU visibility probe: 2/2 selected node(s) "
+            "passed; total Ready GPU nodes 4."
         ),
         "  cluster2:",
         (
-            "    [green]PASS[/green] NCCL test: Succeeded; RDMA verbs (IB/RoCE) "
-            "467.7 Gbps (threshold 300.0) across 1 worker; DMA-BUF enabled."
+            "    [green]PASS[/green] GPU visibility probe: 1/1 selected node(s) "
+            "passed; total Ready GPU nodes 1."
         ),
         "[bright_magenta]Copy/paste commands:[/bright_magenta]",
         "No immediate access or follow-up commands were derived.",
@@ -7865,9 +8254,7 @@ def test_deploy_command_passes_one_run_validation_skip_flags(
             "deploy",
             str(fake_paths.config_path),
             "--skip-validation",
-            "nccl",
-            "--skip-validation",
-            "cuda-smoke",
+            "gpu-visibility",
             "--skip-validation",
             "observability-ingestion",
         ],
@@ -7876,8 +8263,7 @@ def test_deploy_command_passes_one_run_validation_skip_flags(
     assert result.exit_code == 0, result.output
     assert captured["skip_validations"] is False
     assert captured["skip_validation_kinds"] == {
-        "mk8s_nccl",
-        "mk8s_cuda_smoke",
+        "mk8s_gpu_visibility",
         "mk8s_observability_ingestion",
     }
 
@@ -7907,7 +8293,7 @@ def test_deploy_command_rejects_unknown_one_run_validation_skip_value(
     assert "Unsupported --skip-validation value(s): health-checker" in result.output
 
 
-def test_deploy_command_rejects_legacy_gpu_visibility_skip_value(
+def test_deploy_command_rejects_legacy_cuda_smoke_skip_value(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fake_paths = _fake_paths(tmp_path)
@@ -7924,12 +8310,99 @@ def test_deploy_command_rejects_legacy_gpu_visibility_skip_value(
             "deploy",
             str(fake_paths.config_path),
             "--skip-validation",
-            "gpu-visibility",
+            "cuda-smoke",
         ],
     )
 
     assert result.exit_code != 0
-    assert "Unsupported --skip-validation value(s): gpu-visibility" in result.output
+    assert "Unsupported --skip-validation value(s): cuda-smoke" in result.output
+
+
+def test_deploy_command_rejects_benchmark_nccl_skip_value(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_paths = _fake_paths(tmp_path)
+    manifest = {"schema": "nebius-cxcli-generated/v1"}
+
+    monkeypatch.setattr(cli, "_load_deploy_context", lambda _path: ("cfg", fake_paths, manifest))
+    monkeypatch.setattr(
+        cli, "_deploy_generated_artifacts", lambda *args, **kwargs: cli.DeployRunSummary()
+    )
+
+    result = runner.invoke(
+        cli.app,
+        [
+            "deploy",
+            str(fake_paths.config_path),
+            "--skip-validation",
+            "nccl",
+        ],
+    )
+
+    assert result.exit_code != 0
+    output = _plain_output(result.output)
+    assert "Unsupported --skip-validation value(s): nccl" in output
+    assert "operator-readiness, gpu-visibility, observability-ingestion" in output
+
+
+def test_deploy_validation_filter_preserves_stale_nccl_for_fail_fast_guard() -> None:
+    validations = [
+        {"kind": "mk8s_gpu_operator_readiness"},
+        {"kind": "mk8s_nccl"},
+        {"kind": "custom_future_validation"},
+    ]
+
+    filtered = cli._filter_deploy_validations(
+        validations,
+        skip_validations=False,
+        skip_kinds=set(),
+    )
+
+    assert [item["kind"] for item in filtered] == [
+        "mk8s_gpu_operator_readiness",
+        "mk8s_nccl",
+        "custom_future_validation",
+    ]
+
+
+@pytest.mark.parametrize("skip_validations", [False, True])
+def test_deploy_generated_artifacts_rejects_unknown_validation_kind_before_work(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    skip_validations: bool,
+) -> None:
+    fake_paths = _fake_paths(tmp_path)
+    manifest = {
+        "deploy": {
+            "targets": [
+                {
+                    "component_id": "mk8s",
+                    "instance_id": "mk8s",
+                    "target_ref": "mk8s",
+                    "access": "external",
+                    "cluster_id_output_name": "mk8s_cluster_id",
+                }
+            ],
+            "validations": [{"kind": "custom_future_validation", "target_ref": "mk8s"}],
+        }
+    }
+    calls: list[str] = []
+
+    monkeypatch.setattr(cli, "_run_deploy_preflight", lambda *_args, **_kwargs: calls.append("preflight"))
+
+    with pytest.raises(RuntimeError) as exc_info:
+        cli._deploy_generated_artifacts(
+            {},
+            fake_paths,
+            manifest,
+            auto_auth_bootstrap=False,
+            skip_validations=skip_validations,
+            skip_validation_kinds=set(),
+            requested_target_ref="mk8s",
+        )
+
+    assert "custom_future_validation" in str(exc_info.value)
+    assert calls == []
 
 
 def test_deploy_command_rejects_required_cluster_smoke_skip_value(
@@ -9830,8 +10303,8 @@ def test_deploy_generated_artifacts_runs_manifest_gpu_validations(
             "targets": [_mk8s_target(fake_paths)],
             "validations": [
                 {
-                    "kind": "mk8s_cuda_smoke",
-                    "name": "CUDA smoke test",
+                    "kind": "mk8s_gpu_visibility",
+                    "name": "GPU visibility probe",
                     "namespace": "gpu-validation",
                     "target_ref": "mk8s",
                 }
@@ -9877,7 +10350,7 @@ def test_deploy_generated_artifacts_runs_manifest_gpu_validations(
         "run_mk8s_gpu_validations",
         lambda validations, *, reports_dir, extra_env, emit=None: (
             calls.append(("gpu_validations", validations, reports_dir, extra_env))
-            or [reports_dir / "cuda-smoke-report.json"]
+            or [reports_dir / "deploy-gpu-visibility-report.json"]
         ),
     )
 
@@ -9916,8 +10389,8 @@ def test_deploy_generated_artifacts_runs_manifest_gpu_validations(
             "gpu_validations",
             [
                 {
-                    "kind": "mk8s_cuda_smoke",
-                    "name": "CUDA smoke test",
+                    "kind": "mk8s_gpu_visibility",
+                    "name": "GPU visibility probe",
                     "namespace": "gpu-validation",
                     "target_ref": "mk8s",
                 }
@@ -9961,21 +10434,21 @@ def test_deploy_generated_artifacts_runs_gpu_validations_before_soperator_flux(
     cluster_smoke_validation = {
         "kind": "mk8s_cluster_smoke",
         "name": "MK8s node inventory smoke",
-        "report_file": "mk8s-node-inventory-smoke-report.json",
+        "report_file": "cluster-inventory-report.json",
         "target_ref": "mk8s",
         "required": True,
         "expect_gpu_nodes": True,
     }
-    cuda_smoke_validation = {
-        "kind": "mk8s_cuda_smoke",
-        "name": "CUDA smoke test",
-        "report_file": "cuda-smoke-report.json",
+    gpu_visibility_validation = {
+        "kind": "mk8s_gpu_visibility",
+        "name": "GPU visibility probe",
+        "report_file": "deploy-gpu-visibility-report.json",
         "target_ref": "mk8s",
     }
     soperator_validation = {
         "kind": cli.SOPERATOR_CLUSTER_VALIDATION_KIND,
         "name": "Soperator cluster smoke test (mk8s)",
-        "report_file": "soperator-cluster-smoke-report-mk8s.json",
+        "report_file": "deploy-smoke-report-mk8s.json",
         "target_ref": "mk8s",
         "required": True,
     }
@@ -9984,13 +10457,15 @@ def test_deploy_generated_artifacts_runs_gpu_validations_before_soperator_flux(
             "targets": [_mk8s_target(fake_paths)],
             "validations": [
                 cluster_smoke_validation,
-                cuda_smoke_validation,
+                gpu_visibility_validation,
                 soperator_validation,
             ],
         }
     }
     calls: list[tuple[str, Any]] = []
-    staged_paths = replace(_target_paths(fake_paths), flux_dir=fake_paths.flux_dir / "pre-soperator")
+    staged_paths = replace(
+        _target_paths(fake_paths), flux_dir=fake_paths.flux_dir / "pre-soperator"
+    )
 
     monkeypatch.setattr(cli, "_run_deploy_preflight", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(cli, "_run_terraform_apply_with_status", lambda *_args, **_kwargs: None)
@@ -10007,18 +10482,30 @@ def test_deploy_generated_artifacts_runs_gpu_validations_before_soperator_flux(
         lambda *_args, **_kwargs: {"KUBECONFIG": "/tmp/kubeconfig"},
     )
     monkeypatch.setattr(cli, "_report_cluster_nodes_status", lambda *, extra_env, emit: None)
-    monkeypatch.setattr(cli, "_reconcile_observability_gpu_node_labels", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(cli, "_ensure_mysterybox_eso_runtime_before_flux", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        cli, "_reconcile_observability_gpu_node_labels", lambda *_args, **_kwargs: None
+    )
+    monkeypatch.setattr(
+        cli, "_ensure_mysterybox_eso_runtime_before_flux", lambda *_args, **_kwargs: None
+    )
     monkeypatch.setattr(cli, "_ensure_grafana_runtime_before_flux", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(cli, "_ensure_soperator_notifier_runtime_before_flux", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(cli, "_ensure_soperator_backup_runtime_before_flux", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(cli, "_retire_deploy_owned_soperator_source_state", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        cli, "_ensure_soperator_notifier_runtime_before_flux", lambda *_args, **_kwargs: None
+    )
+    monkeypatch.setattr(
+        cli, "_ensure_soperator_backup_runtime_before_flux", lambda *_args, **_kwargs: None
+    )
+    monkeypatch.setattr(
+        cli, "_retire_deploy_owned_soperator_source_state", lambda *_args, **_kwargs: None
+    )
     monkeypatch.setattr(
         cli,
         "_apply_rendered_flux",
         lambda paths, *, extra_env=None: calls.append(("flux", paths)),
     )
-    monkeypatch.setattr(cli, "_ensure_soperator_gpu_ephemeral_bootstrap_power_state", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        cli, "_ensure_soperator_gpu_ephemeral_bootstrap_power_state", lambda *_args, **_kwargs: None
+    )
     monkeypatch.setattr(cli, "_collect_grafana_status_after_flux", lambda *_args, **_kwargs: [])
     monkeypatch.setattr(cli, "_warn_if_flux_gitops_not_bootstrapped", lambda *_args, **_kwargs: "")
     monkeypatch.setattr(cli.console, "print", lambda *_args, **_kwargs: None)
@@ -10042,10 +10529,10 @@ def test_deploy_generated_artifacts_runs_gpu_validations_before_soperator_flux(
         extra_env: dict[str, str] | None,
         emit=None,
     ) -> list[Path]:
-        assert validations == [cluster_smoke_validation, cuda_smoke_validation]
+        assert validations == [cluster_smoke_validation, gpu_visibility_validation]
         assert extra_env == {"KUBECONFIG": "/tmp/kubeconfig"}
         calls.append(("gpu", validations))
-        return [reports_dir / "mk8s-node-inventory-smoke-report.json"]
+        return [reports_dir / "cluster-inventory-report.json"]
 
     def _fake_run_soperator_cluster_validations(
         validations: list[dict[str, Any]],
@@ -10057,7 +10544,7 @@ def test_deploy_generated_artifacts_runs_gpu_validations_before_soperator_flux(
         assert validations == [soperator_validation]
         assert extra_env == {"KUBECONFIG": "/tmp/kubeconfig"}
         calls.append(("soperator", validations))
-        return [reports_dir / "soperator-cluster-smoke-report-mk8s.json"]
+        return [reports_dir / "deploy-smoke-report-mk8s.json"]
 
     monkeypatch.setattr(cli, "run_mk8s_gpu_validations", _fake_run_mk8s_gpu_validations)
     monkeypatch.setattr(
@@ -10076,7 +10563,7 @@ def test_deploy_generated_artifacts_runs_gpu_validations_before_soperator_flux(
     assert calls == [
         ("stage-without-soperator", "mk8s"),
         ("flux", staged_paths),
-        ("gpu", [cluster_smoke_validation, cuda_smoke_validation]),
+        ("gpu", [cluster_smoke_validation, gpu_visibility_validation]),
         ("flux", _target_paths(fake_paths)),
         ("soperator", [soperator_validation]),
     ]
@@ -10099,7 +10586,7 @@ def test_deploy_generated_artifacts_runs_cpu_cluster_smoke_before_app_flux(
     cluster_smoke_validation = {
         "kind": "mk8s_cluster_smoke",
         "name": "MK8s node inventory smoke",
-        "report_file": "mk8s-node-inventory-smoke-report.json",
+        "report_file": "cluster-inventory-report.json",
         "target_ref": "mk8s",
         "required": True,
         "expect_gpu_nodes": False,
@@ -10127,18 +10614,30 @@ def test_deploy_generated_artifacts_runs_cpu_cluster_smoke_before_app_flux(
         lambda *_args, **_kwargs: {"KUBECONFIG": "/tmp/kubeconfig"},
     )
     monkeypatch.setattr(cli, "_report_cluster_nodes_status", lambda *, extra_env, emit: None)
-    monkeypatch.setattr(cli, "_reconcile_observability_gpu_node_labels", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(cli, "_ensure_mysterybox_eso_runtime_before_flux", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        cli, "_reconcile_observability_gpu_node_labels", lambda *_args, **_kwargs: None
+    )
+    monkeypatch.setattr(
+        cli, "_ensure_mysterybox_eso_runtime_before_flux", lambda *_args, **_kwargs: None
+    )
     monkeypatch.setattr(cli, "_ensure_grafana_runtime_before_flux", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(cli, "_ensure_soperator_notifier_runtime_before_flux", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(cli, "_ensure_soperator_backup_runtime_before_flux", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(cli, "_retire_deploy_owned_soperator_source_state", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        cli, "_ensure_soperator_notifier_runtime_before_flux", lambda *_args, **_kwargs: None
+    )
+    monkeypatch.setattr(
+        cli, "_ensure_soperator_backup_runtime_before_flux", lambda *_args, **_kwargs: None
+    )
+    monkeypatch.setattr(
+        cli, "_retire_deploy_owned_soperator_source_state", lambda *_args, **_kwargs: None
+    )
     monkeypatch.setattr(
         cli,
         "_apply_rendered_flux",
         lambda paths, *, extra_env=None: calls.append(("flux", paths)),
     )
-    monkeypatch.setattr(cli, "_ensure_soperator_gpu_ephemeral_bootstrap_power_state", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        cli, "_ensure_soperator_gpu_ephemeral_bootstrap_power_state", lambda *_args, **_kwargs: None
+    )
     monkeypatch.setattr(cli, "_collect_grafana_status_after_flux", lambda *_args, **_kwargs: [])
     monkeypatch.setattr(cli, "_warn_if_flux_gitops_not_bootstrapped", lambda *_args, **_kwargs: "")
     monkeypatch.setattr(cli.console, "print", lambda *_args, **_kwargs: None)
@@ -10159,7 +10658,7 @@ def test_deploy_generated_artifacts_runs_cpu_cluster_smoke_before_app_flux(
         assert validations == [cluster_smoke_validation]
         assert extra_env == {"KUBECONFIG": "/tmp/kubeconfig"}
         calls.append(("validation", validations))
-        return [reports_dir / "mk8s-node-inventory-smoke-report.json"]
+        return [reports_dir / "cluster-inventory-report.json"]
 
     monkeypatch.setattr(cli, "run_mk8s_gpu_validations", _fake_run_mk8s_gpu_validations)
 
@@ -10270,7 +10769,7 @@ def test_staged_flux_without_soperator_removes_only_soperator_resources(
 def test_pre_soperator_gpu_validations_wait_for_scale_from_zero_gpu_workers() -> None:
     gpu_validations = [
         {"kind": "mk8s_gpu_operator_readiness", "target_ref": "mk8s"},
-        {"kind": "mk8s_cuda_smoke", "target_ref": "mk8s"},
+        {"kind": "mk8s_gpu_visibility", "target_ref": "mk8s"},
         {"kind": "soperator_smoke", "target_ref": "mk8s"},
     ]
 
@@ -10347,19 +10846,19 @@ def test_deploy_generated_artifacts_runs_soperator_smoke_before_post_gpu_validat
     gpu_stack_validation = {
         "kind": "mk8s_gpu_operator_readiness",
         "name": "GPU stack readiness",
-        "report_file": "gpu-stack-readiness-report.json",
+        "report_file": "deploy-gpu-stack-readiness-report.json",
         "target_ref": "mk8s",
     }
-    cuda_smoke_validation = {
-        "kind": "mk8s_cuda_smoke",
-        "name": "CUDA smoke test",
-        "report_file": "cuda-smoke-report.json",
+    gpu_visibility_validation = {
+        "kind": "mk8s_gpu_visibility",
+        "name": "GPU visibility probe",
+        "report_file": "deploy-gpu-visibility-report.json",
         "target_ref": "mk8s",
     }
     soperator_validation = {
         "kind": cli.SOPERATOR_CLUSTER_VALIDATION_KIND,
         "name": "Soperator cluster smoke test (mk8s)",
-        "report_file": "soperator-cluster-smoke-report-mk8s.json",
+        "report_file": "deploy-smoke-report-mk8s.json",
         "target_ref": "mk8s",
         "required": True,
     }
@@ -10368,7 +10867,7 @@ def test_deploy_generated_artifacts_runs_soperator_smoke_before_post_gpu_validat
             "targets": [_mk8s_target(fake_paths)],
             "validations": [
                 gpu_stack_validation,
-                cuda_smoke_validation,
+                gpu_visibility_validation,
                 soperator_validation,
             ],
         }
@@ -10390,12 +10889,22 @@ def test_deploy_generated_artifacts_runs_soperator_smoke_before_post_gpu_validat
         lambda *_args, **_kwargs: {"KUBECONFIG": "/tmp/kubeconfig"},
     )
     monkeypatch.setattr(cli, "_report_cluster_nodes_status", lambda *, extra_env, emit: None)
-    monkeypatch.setattr(cli, "_reconcile_observability_gpu_node_labels", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(cli, "_ensure_mysterybox_eso_runtime_before_flux", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        cli, "_reconcile_observability_gpu_node_labels", lambda *_args, **_kwargs: None
+    )
+    monkeypatch.setattr(
+        cli, "_ensure_mysterybox_eso_runtime_before_flux", lambda *_args, **_kwargs: None
+    )
     monkeypatch.setattr(cli, "_ensure_grafana_runtime_before_flux", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(cli, "_ensure_soperator_notifier_runtime_before_flux", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(cli, "_ensure_soperator_backup_runtime_before_flux", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(cli, "_retire_deploy_owned_soperator_source_state", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        cli, "_ensure_soperator_notifier_runtime_before_flux", lambda *_args, **_kwargs: None
+    )
+    monkeypatch.setattr(
+        cli, "_ensure_soperator_backup_runtime_before_flux", lambda *_args, **_kwargs: None
+    )
+    monkeypatch.setattr(
+        cli, "_retire_deploy_owned_soperator_source_state", lambda *_args, **_kwargs: None
+    )
     monkeypatch.setattr(
         cli,
         "_apply_rendered_flux",
@@ -10422,7 +10931,7 @@ def test_deploy_generated_artifacts_runs_soperator_smoke_before_post_gpu_validat
         assert extra_env == {"KUBECONFIG": "/tmp/kubeconfig"}
         calls.append(("soperator", validations))
         reports_dir.mkdir(parents=True, exist_ok=True)
-        report_path = reports_dir / "soperator-cluster-smoke-report-mk8s.json"
+        report_path = reports_dir / "deploy-smoke-report-mk8s.json"
         report_path.write_text(
             json.dumps(
                 {
@@ -10444,11 +10953,11 @@ def test_deploy_generated_artifacts_runs_soperator_smoke_before_post_gpu_validat
         extra_env: dict[str, str] | None,
         emit=None,
     ) -> list[Path]:
-        assert validations == [gpu_stack_validation, cuda_smoke_validation]
+        assert validations == [gpu_stack_validation, gpu_visibility_validation]
         assert extra_env == {"KUBECONFIG": "/tmp/kubeconfig"}
         calls.append(("gpu", validations))
         reports_dir.mkdir(parents=True, exist_ok=True)
-        stack_report = reports_dir / "gpu-stack-readiness-report.json"
+        stack_report = reports_dir / "deploy-gpu-stack-readiness-report.json"
         stack_report.write_text(
             json.dumps(
                 {
@@ -10460,8 +10969,8 @@ def test_deploy_generated_artifacts_runs_soperator_smoke_before_post_gpu_validat
             + "\n",
             encoding="utf-8",
         )
-        cuda_smoke_report = reports_dir / "cuda-smoke-report.json"
-        cuda_smoke_report.write_text(
+        gpu_visibility_report = reports_dir / "deploy-gpu-visibility-report.json"
+        gpu_visibility_report.write_text(
             json.dumps(
                 {
                     "passed": True,
@@ -10474,7 +10983,7 @@ def test_deploy_generated_artifacts_runs_soperator_smoke_before_post_gpu_validat
             + "\n",
             encoding="utf-8",
         )
-        return [stack_report, cuda_smoke_report]
+        return [stack_report, gpu_visibility_report]
 
     monkeypatch.setattr(
         cli, "run_soperator_cluster_validations", _fake_run_soperator_cluster_validations
@@ -10493,7 +11002,7 @@ def test_deploy_generated_artifacts_runs_soperator_smoke_before_post_gpu_validat
     assert calls == [
         ("flux", _target_paths(fake_paths)),
         ("soperator", [soperator_validation]),
-        ("gpu", [gpu_stack_validation, cuda_smoke_validation]),
+        ("gpu", [gpu_stack_validation, gpu_visibility_validation]),
     ]
 
 
@@ -10549,7 +11058,9 @@ def test_ensure_soperator_gpu_ephemeral_bootstrap_power_state_patches_empty_powe
             return SimpleNamespace(returncode=0, stdout="patched", stderr="")
         raise AssertionError(f"unexpected command: {cmd}")
 
-    monkeypatch.setattr(cli, "_target_has_scale_from_zero_gpu_worker", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(
+        cli, "_target_has_scale_from_zero_gpu_worker", lambda *_args, **_kwargs: True
+    )
     monkeypatch.setattr(
         cli,
         "_enabled_soperator_release_refs_for_target",
@@ -10613,7 +11124,9 @@ def test_ensure_soperator_gpu_ephemeral_bootstrap_power_state_skips_missing_powe
             )
         raise AssertionError(f"unexpected command: {cmd}")
 
-    monkeypatch.setattr(cli, "_target_has_scale_from_zero_gpu_worker", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(
+        cli, "_target_has_scale_from_zero_gpu_worker", lambda *_args, **_kwargs: True
+    )
     monkeypatch.setattr(
         cli,
         "_enabled_soperator_release_refs_for_target",
@@ -10630,7 +11143,9 @@ def test_ensure_soperator_gpu_ephemeral_bootstrap_power_state_skips_missing_powe
     )
 
     power_state_gets = [
-        cmd for cmd in commands if cmd[1:6] == ["-n", "soperator", "get", "nodesetpowerstate", "worker-gpu"]
+        cmd
+        for cmd in commands
+        if cmd[1:6] == ["-n", "soperator", "get", "nodesetpowerstate", "worker-gpu"]
     ]
     assert len(power_state_gets) == 12
     assert not any("patch" in cmd for cmd in commands)
@@ -10651,7 +11166,9 @@ def test_ensure_soperator_gpu_ephemeral_bootstrap_power_state_skips_available_cl
             )
         raise AssertionError(f"unexpected command: {cmd}")
 
-    monkeypatch.setattr(cli, "_target_has_scale_from_zero_gpu_worker", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(
+        cli, "_target_has_scale_from_zero_gpu_worker", lambda *_args, **_kwargs: True
+    )
     monkeypatch.setattr(
         cli,
         "_enabled_soperator_release_refs_for_target",
@@ -10726,14 +11243,14 @@ def test_deploy_generated_artifacts_updates_validation_spinner_when_terminal(
                     "kind": "mk8s_gpu_operator_readiness",
                     "name": "GPU stack readiness",
                     "namespace": "gpu-operator",
-                    "report_file": "gpu-stack-readiness-report.json",
+                    "report_file": "deploy-gpu-stack-readiness-report.json",
                     "target_ref": "mk8s",
                 },
                 {
-                    "kind": "mk8s_cuda_smoke",
-                    "name": "CUDA smoke test",
+                    "kind": "mk8s_gpu_visibility",
+                    "name": "GPU visibility probe",
                     "namespace": "gpu-validation",
-                    "report_file": "cuda-smoke-report.json",
+                    "report_file": "deploy-gpu-visibility-report.json",
                     "target_ref": "mk8s",
                 },
             ],
@@ -10768,7 +11285,7 @@ def test_deploy_generated_artifacts_updates_validation_spinner_when_terminal(
         reports_dir.mkdir(parents=True, exist_ok=True)
         emit("Starting validation 1/2: GPU stack readiness.")
         emit("[bold white]GPU Operator[/bold white] [dim][5s][/dim] clusterpolicy state=ready")
-        (reports_dir / "gpu-stack-readiness-report.json").write_text(
+        (reports_dir / "deploy-gpu-stack-readiness-report.json").write_text(
             json.dumps(
                 {
                     "passed": True,
@@ -10779,9 +11296,9 @@ def test_deploy_generated_artifacts_updates_validation_spinner_when_terminal(
             + "\n",
             encoding="utf-8",
         )
-        emit("Starting validation 2/2: CUDA smoke test.")
-        emit("[bold white]CUDA smoke[/bold white] [dim][9s][/dim] pods 3/3 Succeeded")
-        (reports_dir / "cuda-smoke-report.json").write_text(
+        emit("Starting validation 2/2: GPU visibility probe.")
+        emit("[bold white]GPU visibility[/bold white] [dim][9s][/dim] pods 3/3 Succeeded")
+        (reports_dir / "deploy-gpu-visibility-report.json").write_text(
             json.dumps(
                 {
                     "passed": True,
@@ -10795,8 +11312,8 @@ def test_deploy_generated_artifacts_updates_validation_spinner_when_terminal(
             encoding="utf-8",
         )
         return [
-            reports_dir / "gpu-stack-readiness-report.json",
-            reports_dir / "cuda-smoke-report.json",
+            reports_dir / "deploy-gpu-stack-readiness-report.json",
+            reports_dir / "deploy-gpu-visibility-report.json",
         ]
 
     monkeypatch.setattr(cli, "run_mk8s_gpu_validations", _fake_run_mk8s_gpu_validations)
@@ -10828,8 +11345,8 @@ def test_deploy_generated_artifacts_updates_validation_spinner_when_terminal(
     assert status_updates == [
         "Starting validation 1/2: GPU stack readiness.",
         "[bold white]GPU Operator[/bold white] [dim][5s][/dim] clusterpolicy state=ready",
-        "Starting validation 2/2: CUDA smoke test.",
-        "[bold white]CUDA smoke[/bold white] [dim][9s][/dim] pods 3/3 Succeeded",
+        "Starting validation 2/2: GPU visibility probe.",
+        "[bold white]GPU visibility[/bold white] [dim][9s][/dim] pods 3/3 Succeeded",
     ]
     assert printed == []
 
@@ -10840,17 +11357,17 @@ def test_deploy_generated_artifacts_default_all_targets_reports_all_validations(
     fake_paths = _fake_paths(tmp_path)
     config = _config_with_enabled_mk8s()
     cluster1_validation = {
-        "kind": "mk8s_cuda_smoke",
-        "name": "CUDA smoke test (cluster1)",
+        "kind": "mk8s_gpu_visibility",
+        "name": "GPU visibility probe (cluster1)",
         "namespace": "gpu-validation",
-        "report_file": "cuda-smoke-report-cluster1.json",
+        "report_file": "deploy-gpu-visibility-report-cluster1.json",
         "target_ref": "cluster1",
     }
     cluster2_validation = {
-        "kind": "mk8s_cuda_smoke",
-        "name": "CUDA smoke test (cluster2)",
+        "kind": "mk8s_gpu_visibility",
+        "name": "GPU visibility probe (cluster2)",
         "namespace": "gpu-validation",
-        "report_file": "cuda-smoke-report-cluster2.json",
+        "report_file": "deploy-gpu-visibility-report-cluster2.json",
         "target_ref": "cluster2",
     }
     manifest = {
@@ -10919,8 +11436,8 @@ def test_deploy_generated_artifacts_default_all_targets_reports_all_validations(
         ([cluster2_validation], {"KUBECONFIG": "/tmp/cluster2.kubeconfig"}),
     ]
     markdown = (fake_paths.reports_dir / "deploy-report.md").read_text(encoding="utf-8")
-    assert "CUDA smoke test (cluster1)" in markdown
-    assert "CUDA smoke test (cluster2)" in markdown
+    assert "GPU visibility probe (cluster1)" in markdown
+    assert "GPU visibility probe (cluster2)" in markdown
 
 
 def test_deploy_generated_artifacts_target_report_excludes_unselected_validations(
@@ -10929,17 +11446,17 @@ def test_deploy_generated_artifacts_target_report_excludes_unselected_validation
     fake_paths = _fake_paths(tmp_path)
     config = _config_with_enabled_mk8s()
     cluster1_validation = {
-        "kind": "mk8s_cuda_smoke",
-        "name": "CUDA smoke test (cluster1)",
+        "kind": "mk8s_gpu_visibility",
+        "name": "GPU visibility probe (cluster1)",
         "namespace": "gpu-validation",
-        "report_file": "cuda-smoke-report-cluster1.json",
+        "report_file": "deploy-gpu-visibility-report-cluster1.json",
         "target_ref": "cluster1",
     }
     cluster2_validation = {
-        "kind": "mk8s_cuda_smoke",
-        "name": "CUDA smoke test (cluster2)",
+        "kind": "mk8s_gpu_visibility",
+        "name": "GPU visibility probe (cluster2)",
         "namespace": "gpu-validation",
-        "report_file": "cuda-smoke-report-cluster2.json",
+        "report_file": "deploy-gpu-visibility-report-cluster2.json",
         "target_ref": "cluster2",
     }
     manifest = {
@@ -10974,7 +11491,7 @@ def test_deploy_generated_artifacts_target_report_excludes_unselected_validation
         assert validations == [cluster2_validation]
         assert extra_env == {"KUBECONFIG": "/tmp/cluster2.kubeconfig"}
         reports_dir.mkdir(parents=True, exist_ok=True)
-        report_path = reports_dir / "cuda-smoke-report-cluster2.json"
+        report_path = reports_dir / "deploy-gpu-visibility-report-cluster2.json"
         report_path.write_text(
             json.dumps(
                 {
@@ -11005,7 +11522,7 @@ def test_deploy_generated_artifacts_target_report_excludes_unselected_validation
         cli.console, "print", lambda message, *args, **kwargs: printed.append(str(message))
     )
     fake_paths.reports_dir.mkdir(parents=True, exist_ok=True)
-    stale_cluster1_report = fake_paths.reports_dir / "cuda-smoke-report-cluster1.json"
+    stale_cluster1_report = fake_paths.reports_dir / "deploy-gpu-visibility-report-cluster1.json"
     stale_cluster1_report.write_text("{}\n", encoding="utf-8")
 
     cli._deploy_generated_artifacts(
@@ -11019,8 +11536,8 @@ def test_deploy_generated_artifacts_target_report_excludes_unselected_validation
     )
 
     markdown = (fake_paths.reports_dir / "deploy-report.md").read_text(encoding="utf-8")
-    assert "CUDA smoke test (cluster2)" in markdown
-    assert "CUDA smoke test (cluster1)" not in markdown
+    assert "GPU visibility probe (cluster2)" in markdown
+    assert "GPU visibility probe (cluster1)" not in markdown
     assert not stale_cluster1_report.exists()
     assert printed == []
 
@@ -11031,9 +11548,9 @@ def test_deploy_generated_artifacts_keeps_required_mysterybox_validation_when_sk
     fake_paths = _fake_paths(tmp_path)
     config = _config_with_enabled_mk8s()
     optional_validation = {
-        "kind": "mk8s_cuda_smoke",
-        "name": "CUDA smoke test",
-        "report_file": "cuda-smoke-report.json",
+        "kind": "mk8s_gpu_visibility",
+        "name": "GPU visibility probe",
+        "report_file": "deploy-gpu-visibility-report.json",
         "target_ref": "mk8s",
     }
     required_validation = {
@@ -11127,7 +11644,7 @@ def test_deploy_generated_artifacts_keeps_required_mysterybox_validation_when_sk
         skip_validation_kinds=set(),
     )
 
-    assert not (fake_paths.reports_dir / "cuda-smoke-report.json").exists()
+    assert not (fake_paths.reports_dir / "deploy-gpu-visibility-report.json").exists()
     assert (fake_paths.reports_dir / "mysterybox-eso-connectivity-report-mk8s.json").exists()
     assert printed == [
         (
@@ -11147,10 +11664,10 @@ def test_deploy_generated_artifacts_prints_validation_phase_lines_when_console_i
             "targets": [_mk8s_target(fake_paths)],
             "validations": [
                 {
-                    "kind": "mk8s_cuda_smoke",
-                    "name": "CUDA smoke test",
+                    "kind": "mk8s_gpu_visibility",
+                    "name": "GPU visibility probe",
                     "namespace": "gpu-validation",
-                    "report_file": "cuda-smoke-report.json",
+                    "report_file": "deploy-gpu-visibility-report.json",
                     "target_ref": "mk8s",
                 }
             ],
@@ -11181,10 +11698,10 @@ def test_deploy_generated_artifacts_prints_validation_phase_lines_when_console_i
         assert extra_env == {"KUBECONFIG": "/tmp/kubeconfig"}
         assert emit is not None
         reports_dir.mkdir(parents=True, exist_ok=True)
-        emit("Starting validation 1/1: CUDA smoke test.")
-        emit("Starting validation 1/1: CUDA smoke test.")
-        emit("[bold white]CUDA smoke[/bold white] [dim][7s][/dim] pods 3/3 Succeeded")
-        (reports_dir / "cuda-smoke-report.json").write_text(
+        emit("Starting validation 1/1: GPU visibility probe.")
+        emit("Starting validation 1/1: GPU visibility probe.")
+        emit("[bold white]GPU visibility[/bold white] [dim][7s][/dim] pods 3/3 Succeeded")
+        (reports_dir / "deploy-gpu-visibility-report.json").write_text(
             json.dumps(
                 {
                     "passed": True,
@@ -11197,7 +11714,7 @@ def test_deploy_generated_artifacts_prints_validation_phase_lines_when_console_i
             + "\n",
             encoding="utf-8",
         )
-        return [reports_dir / "cuda-smoke-report.json"]
+        return [reports_dir / "deploy-gpu-visibility-report.json"]
 
     monkeypatch.setattr(cli, "run_mk8s_gpu_validations", _fake_run_mk8s_gpu_validations)
 
@@ -11224,13 +11741,13 @@ def test_deploy_generated_artifacts_prints_validation_phase_lines_when_console_i
     )
 
     assert status_updates == [
-        "Starting validation 1/1: CUDA smoke test.",
-        "Starting validation 1/1: CUDA smoke test.",
-        "[bold white]CUDA smoke[/bold white] [dim][7s][/dim] pods 3/3 Succeeded",
+        "Starting validation 1/1: GPU visibility probe.",
+        "Starting validation 1/1: GPU visibility probe.",
+        "[bold white]GPU visibility[/bold white] [dim][7s][/dim] pods 3/3 Succeeded",
     ]
     assert printed == [
-        "Starting validation 1/1: CUDA smoke test.",
-        "[bold white]CUDA smoke[/bold white] [dim][7s][/dim] pods 3/3 Succeeded",
+        "Starting validation 1/1: GPU visibility probe.",
+        "[bold white]GPU visibility[/bold white] [dim][7s][/dim] pods 3/3 Succeeded",
     ]
 
 
@@ -11246,13 +11763,13 @@ def test_deploy_generated_artifacts_writes_summary_even_when_validation_fails(
                 {
                     "kind": "mk8s_gpu_operator_readiness",
                     "name": "GPU stack readiness",
-                    "report_file": "gpu-stack-readiness-report.json",
+                    "report_file": "deploy-gpu-stack-readiness-report.json",
                     "target_ref": "mk8s",
                 },
                 {
-                    "kind": "mk8s_cuda_smoke",
-                    "name": "CUDA smoke test",
-                    "report_file": "cuda-smoke-report.json",
+                    "kind": "mk8s_gpu_visibility",
+                    "name": "GPU visibility probe",
+                    "report_file": "deploy-gpu-visibility-report.json",
                     "target_ref": "mk8s",
                 },
             ],
@@ -11282,7 +11799,7 @@ def test_deploy_generated_artifacts_writes_summary_even_when_validation_fails(
         assert emit is not None
         reports_dir.mkdir(parents=True, exist_ok=True)
         emit("Starting validation 1/2: GPU stack readiness.")
-        (reports_dir / "gpu-stack-readiness-report.json").write_text(
+        (reports_dir / "deploy-gpu-stack-readiness-report.json").write_text(
             json.dumps(
                 {
                     "passed": False,
@@ -11294,7 +11811,7 @@ def test_deploy_generated_artifacts_writes_summary_even_when_validation_fails(
             encoding="utf-8",
         )
         raise RuntimeError(
-            "GPU stack readiness check failed. Report: gpu-stack-readiness-report.json"
+            "GPU stack readiness check failed. Report: deploy-gpu-stack-readiness-report.json"
         )
 
     monkeypatch.setattr(cli, "run_mk8s_gpu_validations", _fake_run_mk8s_gpu_validations)
@@ -11321,7 +11838,7 @@ def test_deploy_generated_artifacts_writes_summary_even_when_validation_fails(
     markdown = (fake_paths.reports_dir / "deploy-report.md").read_text(encoding="utf-8")
     assert "- Overall status: `FAIL`" in markdown
     assert "### GPU stack readiness" in markdown
-    assert "### CUDA smoke test" in markdown
+    assert "### GPU visibility probe" in markdown
     assert "No deploy validation results recorded yet." in markdown
     assert printed == [
         "",
@@ -11330,7 +11847,7 @@ def test_deploy_generated_artifacts_writes_summary_even_when_validation_fails(
         "  Overall: [red]FAIL[/red] (1/2 completed, 1 not run)",
         "  mk8s:",
         "    [red]FAIL[/red] GPU stack readiness: GPU Operator ready on 0 GPU nodes.",
-        "    NOT RUN CUDA smoke test: No deploy validation results recorded yet.",
+        "    NOT RUN GPU visibility probe: No deploy validation results recorded yet.",
         "[bright_magenta]Copy/paste commands:[/bright_magenta]",
         "No immediate access or follow-up commands were derived.",
         "[bright_magenta]Important paths:[/bright_magenta]",
@@ -16931,7 +17448,7 @@ def test_help_text_aligns_render_and_apply_surfaces() -> None:
 
     assert (
         "validate, validate-dashboards, quota-check, quota-request, render, deploy, "
-        "soperator, upgrade, and bootstrap-ci use config.yaml"
+        "acceptance-test, soperator, upgrade, and bootstrap-ci use config.yaml"
     ) in top_help
     assert (
         f"upgrade example: nebius-cxcli upgrade node-template {upgrade_example_config} "
@@ -17148,7 +17665,7 @@ def test_help_text_maps_commands_to_target_types() -> None:
     ) in output
     assert (
         "validate, validate-dashboards, quota-check, quota-request, render, "
-        "deploy, soperator, upgrade, and bootstrap-ci use config.yaml"
+        "deploy, acceptance-test, soperator, upgrade, and bootstrap-ci use config.yaml"
     ) in output
     assert (
         "destroy uses config.yaml to tear down all rendered project resources from sibling generated/"
@@ -17659,13 +18176,9 @@ def test_command_help_usage_labels_positional_target_types() -> None:
     )
     assert "applies target GPU stack app rows" in normalized_soperator_migrate_help
     assert "creates or reuses aligned SFS filesystems" in normalized_soperator_migrate_help
-    assert "Soperator/Slurm smoke validation" in normalized_soperator_migrate_help
-    assert "one-task srun job" in normalized_soperator_migrate_help
-    assert "all-partition hostname jobs" in normalized_soperator_migrate_help
-    assert "Slurm GPU allocation check across reported GPU partitions" in (
-        normalized_soperator_migrate_help
-    )
-    assert "Slurm NCCL benchmark only on selected 8-GPU Slurm nodes" in (
+    assert "Soperator deployment snapshot" in normalized_soperator_migrate_help
+    assert "SlurmCluster, and NodeSet visibility checks" in normalized_soperator_migrate_help
+    assert "leaves Slurm jobs and NCCL/performance work for explicit acceptance-test benchmark runs" in (
         normalized_soperator_migrate_help
     )
     assert "ext-soperator-migrate-report.md" in normalized_soperator_migrate_help
@@ -20749,7 +21262,8 @@ def test_soperator_production_worker_autoscaling_shards_mk8s_groups_and_nodesets
     assert worker_group_keys == list(worker_node_groups)
     assert mk8s_inputs["soperator"]["worker_node_groups"] == worker_node_groups
     assert all(
-        node_groups[group_key]["autoscaling"] == {
+        node_groups[group_key]["autoscaling"]
+        == {
             "min_node_count": 5,
             "max_node_count": 100,
         }
@@ -20977,9 +21491,7 @@ def test_soperator_production_worker_ephemeral_nodes_clear_when_disabled() -> No
     assert cli._materialize_soperator_component_defaults(payload) is True
     mk8s_inputs = payload["infra"]["components"][0]["inputs"]
 
-    mk8s_inputs["soperator"]["worker_node_groups"]["worker"]["ephemeral_nodes"] = {
-        "enabled": False
-    }
+    mk8s_inputs["soperator"]["worker_node_groups"]["worker"]["ephemeral_nodes"] = {"enabled": False}
     assert cli._materialize_soperator_component_defaults(payload) is True
 
     values = payload["apps"]["charts"][0]["values"]

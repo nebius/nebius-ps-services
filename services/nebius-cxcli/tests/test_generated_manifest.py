@@ -89,8 +89,8 @@ def test_build_generated_manifest_uses_repo_relative_paths(tmp_path: Path) -> No
     flux_version, terraform_version = _bundled_tool_versions()
     validations = [
         {
-            "kind": "mk8s_cuda_smoke",
-            "name": "CUDA smoke test",
+            "kind": "mk8s_gpu_visibility",
+            "name": "GPU visibility probe",
             "namespace": "gpu-validation",
         }
     ]

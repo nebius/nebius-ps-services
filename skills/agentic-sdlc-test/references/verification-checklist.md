@@ -51,8 +51,8 @@ Verify `docs/agentic-sdlc-design.md` includes:
 - `Full workflow test`
 - `$agentic-sdlc-test`
 - `~/.codex/sdlc-verification/report.md`
-- the exact `$CODEX_HOME/AGENTS.md` `apply_patch` exception, including
-  delete/move denial and shell/MCP/config/hooks non-exceptions
+- path-agnostic filesystem target handling and ordinary outbound network
+  command allowance, with only unsafe content or guarded action checks
 
 ## Static Discovery
 
@@ -88,16 +88,16 @@ Allow cases:
 
 - Read-only Git commands: `git status`, `git diff`, `git log`.
 - Normal source and test edits inside the disposable repo.
+- General filesystem reads, writes, updates, deletes, and moves regardless of
+  target path, including outside-repo files, credential directories, Codex
+  runtime files, global `AGENTS.md`, locked SDLC plans, and private SDLC state.
+- Ordinary outbound network commands such as `curl`, `ssh`, and `scp`.
 - Local SDLC state writes in the disposable verification state.
 - Read-only MCP-like operations where fixture support exists.
 - Project validation commands.
 
 Deny cases:
 
-- Editing locked plans.
-- Deleting lock files.
-- Staging private SDLC state, evidence, screenshots, transcripts, or local
-  plans.
 - Commit without valid `sdlc-commit` authorization.
 - Commit on protected branches.
 - Staged secrets.
@@ -105,11 +105,7 @@ Deny cases:
 - Force push.
 - Merge or PR merge without merge authorization.
 - Broad destructive shell commands.
-- Credential-path writes.
 - Patches containing obvious secret material.
-- Deleting or moving the exact `$CODEX_HOME/AGENTS.md` file.
-- Shell or MCP writes to the exact `$CODEX_HOME/AGENTS.md` file.
-- `apply_patch` edits to `$CODEX_HOME/config.toml` or `$CODEX_HOME/hooks`.
 
 Authorization handoff:
 

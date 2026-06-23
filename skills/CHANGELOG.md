@@ -6,6 +6,12 @@ All notable changes to the reusable Codex skills are tracked here.
 
 ### Added
 
+- Added the `agent-nebius-auth` setup-only skill for bootstrapping and
+  repairing Codex Agent Nebius service-account authentication, including an
+  idempotent setup script and a `PreToolUse` hook that injects short-lived
+  Nebius token environment variables into matching Bash commands without
+  returning token material as model context, fail-closed token disclosure
+  guardrails, and local hook regression tests.
 - Added `docs/agentic-sdlc-design.md` to document the Agentic SDLC
   architecture, requirements/design templates, local run state, hook
   boundaries, MCP role, and skill-by-skill lifecycle.
@@ -97,6 +103,15 @@ All notable changes to the reusable Codex skills are tracked here.
 
 ### Changed
 
+- Relaxed the Agentic SDLC PreToolUse write-target policy so file targets are
+  no longer blocked by path, including outside-repo files, credential
+  directories, Codex runtime files, global `AGENTS.md`, locked SDLC plans, and
+  private SDLC state. Ordinary outbound network commands are allowed while
+  secret-bearing payloads, dangerous shell patterns, and guarded Git/GitHub
+  actions remain blocked.
+- Packaged the Agentic SDLC hook helper library with `lib/__init__.py` and
+  explicit `lib.*` imports so direct script execution and Pyright/Pylance
+  import resolution stay aligned.
 - Refactored `publish-helm`, `publish-image`, and `publish-release` from
   generator-first guidance into doer-first release skills that can run setup,
   prep, publish, or complete end-to-end flows from the current project folder.
@@ -189,6 +204,10 @@ All notable changes to the reusable Codex skills are tracked here.
   skill-owned hook bundle from `*/assets/hooks` under the source skills folder,
   with destination collision checks and idempotent unchanged reporting for hook
   files.
+- Extended `install-skills.sh` hook installation with an explicit
+  `--register-hooks` option that semantically merges source `hooks.json` or
+  `hooks.json.template` registrations into `$CODEX_HOME/hooks.json`, preserving
+  existing hook entries and backing up the file before changes.
 - Aligned `config-codex` idempotency checks with the current local setup model:
   exact global `AGENTS.md` parity when requested, required global hook
   registrations as a `hooks.json` subset, and required public-safe MCP servers

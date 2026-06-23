@@ -234,13 +234,14 @@ from .mk8s_gpu import (
     ensure_mk8s_gpu_app_rows,
     has_mk8s_gpu_health_checker_app,
     materialize_mk8s_gpu_app_values,
+    mk8s_acceptance_benchmark_validation_specs,
+    mk8s_acceptance_smoke_validation_specs,
     mk8s_cluster_smoke_validation_specs,
     mk8s_gpu_dependency_issues,
     mk8s_gpu_disabled_target_validations,
-    mk8s_gpu_nccl_enabled_default,
     mk8s_gpu_validation_specs,
     mk8s_gpu_validation_warnings,
-    normalize_mk8s_gpu_project_validation_settings,
+    normalize_mk8s_gpu_project_deployment_testing_settings,
     prune_inactive_mk8s_gpu_app_rows,
     resolve_mk8s_gpu_app_selection,
     run_mk8s_gpu_validations,
@@ -438,7 +439,10 @@ from .soperator_onboarding import (
 )
 from .soperator_validation import (
     SOPERATOR_CLUSTER_VALIDATION_KIND,
+    normalize_soperator_project_deployment_testing_settings,
     run_soperator_cluster_validations,
+    soperator_acceptance_benchmark_specs,
+    soperator_acceptance_smoke_specs,
     soperator_cluster_validation_specs,
 )
 from .ssh_jumphost import (
@@ -1707,7 +1711,7 @@ app = typer.Typer(
         "discover uses a deployment-scope directory; grafana exports dashboard JSON from a "
         "Grafana API or local JSON file and only edits component_sources.yaml with --attach; "
         "validate, validate-dashboards, quota-check, quota-request, render, deploy, "
-        "soperator, upgrade, and bootstrap-ci use config.yaml; "
+        "acceptance-test, soperator, upgrade, and bootstrap-ci use config.yaml; "
         "ext-soperator onboard registers existing Nebius MK8s targets in config.yaml; "
         "destroy uses config.yaml to tear down all rendered project resources from sibling generated/; "
         "email also uses config.yaml and resolves sibling generated/ automatically; "
@@ -1798,6 +1802,27 @@ soperator_app = typer.Typer(
         "ext-soperator onboard/migrate for adoption or migration-owned work."
     ),
 )
+acceptance_test_app = typer.Typer(
+    help=(
+        "Run explicit heavy/on-demand post-deploy acceptance checks and future benchmark suites. "
+        "Deploy keeps only fast required smoke checks; use this group for exhaustive "
+        "all-node validation. Commands write JSON reports only and do not change config. "
+        "Each target writes one canonical report per acceptance "
+        "command, so same-target K8s and Soperator suites cannot be combined under "
+        "the current report contract."
+    ),
+    epilog=(
+        "Examples: Soperator all-node smoke JSON report: nebius-cxcli "
+        "acceptance-test smoke <config.yaml> --target sop-cluster1 --soperator; "
+        "plain MK8s all-node CUDA JSON report: nebius-cxcli acceptance-test smoke "
+        "<config.yaml> --target mk8s-prod --k8s; Soperator Slurm NCCL benchmark "
+        "JSON report with run-only overrides: nebius-cxcli acceptance-test benchmark "
+        "<config.yaml> --target sop-cluster1 --soperator --max-nodes 2 --timeout 20m; "
+        "force K8s NCCL on a Soperator-owned GPU target during maintenance: "
+        "nebius-cxcli acceptance-test benchmark <config.yaml> --target sop-cluster1 "
+        "--suite k8s-nccl --max-nodes 2 --average-bus-bandwidth-threshold-gbps 300."
+    ),
+)
 upgrade_app = typer.Typer(
     help=(
         "Run day-2 lifecycle upgrades from config.yaml. Supports MK8s node-template "
@@ -1812,6 +1837,7 @@ app.add_typer(terraform_app, name="terraform")
 app.add_typer(flux_app, name="flux")
 app.add_typer(ext_soperator_app, name="ext-soperator")
 app.add_typer(soperator_app, name="soperator")
+app.add_typer(acceptance_test_app, name="acceptance-test")
 app.add_typer(upgrade_app, name="upgrade")
 
 
@@ -4819,7 +4845,7 @@ def _verify_soperator_static_upgrade_ready(
         if rollout.returncode != 0:
             detail = (rollout.stderr or rollout.stdout or "").strip()
             raise RuntimeError(
-                "Soperator manager rollout did not become ready after static "
+                "Soperator manager deployment did not become ready after static "
                 f"chart apply: {detail or rollout.returncode}"
             )
 
@@ -9216,6 +9242,8 @@ def _internal_component_selector_message(*, scope: ComponentScope, component_id:
             config_guidance = (
                 f" Configure it through {config_ref} in config.yaml"
                 if config_ref
+                else " Configure it through `nebius-cxcli acceptance-test benchmark`"
+                if normalized == "nccl-test"
                 else " Configure it through its catalog-declared runtime flow"
             )
             return (
@@ -11987,8 +12015,9 @@ def _apply_soperator_onboarding_to_payload(
         selected_apps=selected_apps,
         app_entries=app_entries,
     )
+    normalize_soperator_project_deployment_testing_settings(payload)
     before_gpu_labels = set(_enabled_app_instance_labels(payload))
-    normalize_mk8s_gpu_project_validation_settings(payload)
+    normalize_mk8s_gpu_project_deployment_testing_settings(payload)
     gpu_app_selection = resolve_mk8s_gpu_app_selection(
         payload,
         selected_app_ids=_enabled_ids_from_runtime_payload(payload=payload, entries=app_entries),
@@ -12000,7 +12029,8 @@ def _apply_soperator_onboarding_to_payload(
             + "\n  - ".join(gpu_app_selection.issues)
         )
     if ensure_mk8s_gpu_app_rows(payload, app_entries=app_entries):
-        normalize_mk8s_gpu_project_validation_settings(payload)
+        normalize_mk8s_gpu_project_deployment_testing_settings(payload)
+        normalize_soperator_project_deployment_testing_settings(payload)
     gpu_dependency_labels = _new_enabled_app_instance_labels(
         payload,
         before_labels=before_gpu_labels,
@@ -19585,13 +19615,10 @@ def _prompt_path_sort_key(
         "deploy.targets[].observability.kubernetes.metrics.enabled": 202,
         "deploy.targets[].observability.kubernetes.metrics.collect_k8s_cluster_metrics": 203,
         "deploy.targets[].observability.kubernetes.traces.enabled": 204,
-        "deploy.targets[].validations.mk8s_gpu.operator_readiness.enabled": 220,
-        "deploy.targets[].validations.mk8s_gpu.cuda_smoke.enabled": 221,
-        "deploy.targets[].validations.mk8s_gpu.cuda_smoke.max_nodes": 222,
-        "deploy.targets[].validations.mk8s_gpu.nccl.enabled": 223,
-        "deploy.targets[].validations.mk8s_gpu.nccl.max_nodes": 224,
-        "deploy.targets[].validations.mk8s_gpu.nccl.average_bus_bandwidth_threshold_gbps": 225,
-        "deploy.targets[].validations.mk8s_gpu.health_checker.enabled": 226,
+        "deploy.targets[].deployment_testing.mk8s_gpu.operator_readiness.enabled": 220,
+        "deploy.targets[].deployment_testing.mk8s_gpu.gpu_visibility.enabled": 221,
+        "deploy.targets[].deployment_testing.mk8s_gpu.gpu_visibility.max_nodes": 222,
+        "deploy.targets[].deployment_testing.mk8s_gpu.health_checker.enabled": 223,
         "deploy.targets[].secrets.mysterybox.enabled": 240,
         "deploy.targets[].secrets.mysterybox.allow_all_namespaces": 241,
         "deploy.targets[].secrets.mysterybox.sync_namespaces": 242,
@@ -19918,13 +19945,13 @@ def _is_compute_boot_disk_type_field(full_path_label: str) -> bool:
     )
 
 
-def _is_mk8s_gpu_validation_field(full_path_label: str) -> bool:
+def _is_mk8s_gpu_deployment_testing_field(full_path_label: str) -> bool:
     return bool(
         re.match(
-            r"^deploy\.targets\[[0-9]+\]\.validations\.mk8s_gpu\.",
+            r"^deploy\.targets\[[0-9]+\]\.deployment_testing\.mk8s_gpu\.",
             full_path_label,
         )
-        or full_path_label.startswith("deploy.targets[].validations.mk8s_gpu.")
+        or full_path_label.startswith("deploy.targets[].deployment_testing.mk8s_gpu.")
     )
 
 
@@ -20281,24 +20308,24 @@ def _maybe_print_compute_boot_disk_prompt_guidance(
     emitted_guidance.add("compute_boot_disk")
 
 
-def _maybe_print_mk8s_gpu_validation_prompt_guidance(
+def _maybe_print_mk8s_gpu_deployment_testing_prompt_guidance(
     *,
     full_path_label: str,
     emitted_guidance: set[str],
 ) -> None:
-    if not _is_mk8s_gpu_validation_field(full_path_label):
+    if not _is_mk8s_gpu_deployment_testing_field(full_path_label):
         return
-    if "mk8s_gpu_validation" in emitted_guidance:
+    if "mk8s_gpu_deployment_testing" in emitted_guidance:
         return
     console.print(
-        "[dim]MK8s GPU validation guidance: operator readiness checks the operator "
-        "control-plane state plus allocatable GPUs on Ready nodes. CUDA smoke "
-        "runs a CUDA sample pod on selected GPU nodes. NCCL auto-selects "
-        "Socket/TCPIP or RDMA transport from the configured GPU shape; the "
-        "bandwidth threshold is only enforced on RDMA runs. Health checker "
-        "only auto-enables a compatible app when the catalog exposes one.[/dim]"
+        "[dim]MK8s GPU deployment-testing guidance: operator readiness checks "
+        "the operator control-plane state plus allocatable GPUs on Ready nodes. "
+        "GPU visibility runs a bounded CUDA sample pod on selected GPU nodes. "
+        "NCCL and exhaustive all-node workloads belong to acceptance-test "
+        "commands, not deploy-time config. Health checker only auto-enables a "
+        "compatible app when the catalog exposes one.[/dim]"
     )
-    emitted_guidance.add("mk8s_gpu_validation")
+    emitted_guidance.add("mk8s_gpu_deployment_testing")
 
 
 def _maybe_print_observability_prompt_guidance(
@@ -21617,15 +21644,15 @@ def _skip_sfs_multi_filesystem_prompt(
     return not (isinstance(filesystems, Mapping) and bool(filesystems))
 
 
-def _mk8s_gpu_validation_prompt_section(full_path_label: str) -> str:
+def _mk8s_gpu_deployment_testing_prompt_section(full_path_label: str) -> str:
     match = re.match(
-        r"^deploy\.targets\[[0-9]+\]\.validations\.mk8s_gpu\.([^.]+)\.",
+        r"^deploy\.targets\[[0-9]+\]\.deployment_testing\.mk8s_gpu\.([^.]+)\.",
         full_path_label,
     )
     return match.group(1) if match else ""
 
 
-def _mk8s_gpu_validation_prompt_target_ref(
+def _mk8s_gpu_deployment_testing_prompt_target_ref(
     payload: Mapping[str, Any],
     full_path_label: str,
 ) -> str:
@@ -21645,7 +21672,7 @@ def _mk8s_gpu_validation_prompt_target_ref(
     return normalize_component_token(row.get(INSTANCE_ID_FIELD))
 
 
-def _mk8s_gpu_validation_section_enabled(
+def _mk8s_gpu_deployment_testing_section_enabled(
     payload: dict[str, Any],
     *,
     full_path_label: str,
@@ -21674,12 +21701,12 @@ def _dynamic_required_prompt(
     if (
         entry.scope == "infra"
         and entry.id == "mk8s"
-        and full_path_label.endswith((".cuda_smoke.max_nodes", ".nccl.max_nodes"))
+        and full_path_label.endswith(".gpu_visibility.max_nodes")
     ):
-        section = _mk8s_gpu_validation_prompt_section(full_path_label)
+        section = _mk8s_gpu_deployment_testing_prompt_section(full_path_label)
         return bool(
             section
-            and _mk8s_gpu_validation_section_enabled_for_prompt(
+            and _mk8s_gpu_deployment_testing_section_enabled_for_prompt(
                 payload,
                 entry=entry,
                 full_path_label=full_path_label,
@@ -21721,7 +21748,7 @@ def _maybe_materialize_vm_preemptible_recovery_policy(
     _print_wizard_selected_field(recovery_policy_label, "FAIL")
 
 
-def _skip_mk8s_gpu_validation_prompt(
+def _skip_mk8s_gpu_deployment_testing_prompt(
     *,
     payload: dict[str, Any],
     entry: ComponentEntry,
@@ -21730,20 +21757,20 @@ def _skip_mk8s_gpu_validation_prompt(
     if (
         entry.scope != "infra"
         or entry.id != "mk8s"
-        or not _is_mk8s_gpu_validation_field(full_path_label)
+        or not _is_mk8s_gpu_deployment_testing_field(full_path_label)
     ):
         return False
     if not _payload_has_enabled_mk8s_gpu(payload):
         return True
-    section = _mk8s_gpu_validation_prompt_section(full_path_label)
-    target_ref = _mk8s_gpu_validation_prompt_target_ref(payload, full_path_label)
+    section = _mk8s_gpu_deployment_testing_prompt_section(full_path_label)
+    target_ref = _mk8s_gpu_deployment_testing_prompt_target_ref(payload, full_path_label)
     disabled_sections = set(mk8s_gpu_disabled_target_validations(payload).get(target_ref, ()))
     if section and section in disabled_sections:
         return True
     if (
-        section in {"cuda_smoke", "nccl"}
+        section == "gpu_visibility"
         and not full_path_label.endswith(f".{section}.enabled")
-        and not _mk8s_gpu_validation_section_enabled_for_prompt(
+        and not _mk8s_gpu_deployment_testing_section_enabled_for_prompt(
             payload,
             entry=entry,
             full_path_label=full_path_label,
@@ -21751,35 +21778,12 @@ def _skip_mk8s_gpu_validation_prompt(
         )
     ):
         return True
-    if (
-        full_path_label.endswith(".validations.mk8s_gpu.health_checker.enabled")
-        and not has_mk8s_gpu_health_checker_app()
-    ):
-        return True
     return full_path_label.endswith(
-        ".validations.mk8s_gpu.nccl.average_bus_bandwidth_threshold_gbps"
-    ) and not _payload_has_enabled_mk8s_gpu_cluster(payload)
+        ".deployment_testing.mk8s_gpu.health_checker.enabled"
+    ) and not has_mk8s_gpu_health_checker_app()
 
 
-def _mk8s_gpu_validation_contextual_prompt_default(
-    *,
-    payload: dict[str, Any],
-    entry: ComponentEntry,
-    full_path_label: str,
-) -> object:
-    if (
-        entry.scope != "infra"
-        or entry.id != "mk8s"
-        or not full_path_label.endswith(".validations.mk8s_gpu.nccl.enabled")
-    ):
-        return _WIZARD_DEFAULT_MISSING
-    target_ref = _mk8s_gpu_validation_prompt_target_ref(payload, full_path_label)
-    if not target_ref:
-        return _WIZARD_DEFAULT_MISSING
-    return mk8s_gpu_nccl_enabled_default(payload, target_ref=target_ref)
-
-
-def _mk8s_gpu_validation_section_enabled_for_prompt(
+def _mk8s_gpu_deployment_testing_section_enabled_for_prompt(
     payload: dict[str, Any],
     *,
     entry: ComponentEntry,
@@ -21791,13 +21795,7 @@ def _mk8s_gpu_validation_section_enabled_for_prompt(
     enabled = _read_payload_field(payload, enabled_path)
     if enabled is not None:
         return enabled is not False
-    contextual_default = _mk8s_gpu_validation_contextual_prompt_default(
-        payload=payload,
-        entry=entry,
-        full_path_label=enabled_path,
-    )
-    if contextual_default is not _WIZARD_DEFAULT_MISSING:
-        return bool(contextual_default)
+    _ = entry
     return True
 
 
@@ -23181,7 +23179,7 @@ def _prompt_scalar_override(
                 raw = str(
                     typer.prompt(
                         prompt_text,
-                        default="" if skip_unsets else current,
+                        default="" if skip_unsets else str(current),
                     )
                 ).strip()
             except (KeyboardInterrupt, EOFError, typer.Abort):
@@ -23591,8 +23589,8 @@ def _run_component_field_wizard(
             return "deploy target", f"{target_ref} / MysteryBox ESO sync"
         if remainder.startswith("observability."):
             return "deploy target", f"{target_ref} / observability"
-        if remainder.startswith("validations.mk8s_gpu."):
-            return "deploy target", f"{target_ref} / MK8s GPU validation"
+        if remainder.startswith("deployment_testing.mk8s_gpu."):
+            return "deploy target", f"{target_ref} / MK8s GPU deployment testing"
         return "deploy target", target_ref
 
     def _wizard_prompt_context(
@@ -26200,7 +26198,7 @@ def _run_component_field_wizard(
                     and not module_field_is_enabled(_normalize_leaf_name(str(full_path[-1])))
                 ):
                     continue
-                if _skip_mk8s_gpu_validation_prompt(
+                if _skip_mk8s_gpu_deployment_testing_prompt(
                     payload=payload,
                     entry=entry,
                     full_path_label=full_path_label,
@@ -26355,15 +26353,6 @@ def _run_component_field_wizard(
                                 full_path,
                                 copy.deepcopy(provider_default),
                             )
-                if not _payload_path_exists(payload, full_path):
-                    contextual_default = _mk8s_gpu_validation_contextual_prompt_default(
-                        payload=payload,
-                        entry=entry,
-                        full_path_label=full_path_label,
-                    )
-                    if contextual_default is not _WIZARD_DEFAULT_MISSING:
-                        current = copy.deepcopy(contextual_default)
-                        virtual_prompt_defaults[full_path] = copy.deepcopy(contextual_default)
                 current = _soperator_worker_bulk_prompt_current(full_path_label, current)
                 previous_component_inputs: dict[str, Any] | None = None
                 if (
@@ -26488,7 +26477,7 @@ def _run_component_field_wizard(
                     provider_lookup=provider_lookup,
                     emitted_guidance=emitted_prompt_guidance,
                 )
-                _maybe_print_mk8s_gpu_validation_prompt_guidance(
+                _maybe_print_mk8s_gpu_deployment_testing_prompt_guidance(
                     full_path_label=full_path_label,
                     emitted_guidance=emitted_prompt_guidance,
                 )
@@ -28025,36 +28014,36 @@ def _validate_component_sources_registry(
                 f"mk8s gpu app role '{role_name}' is declared more than once: {', '.join(sorted(app_ids))}"
             )
     if mk8s_gpu_settings is not None and "mk8s" in active_entry_ids:
-        cuda_smoke_settings = mk8s_gpu_settings.validations.cuda_smoke
-        if cuda_smoke_settings.enabled_by_default and (
-            not cuda_smoke_settings.namespace
-            or not cuda_smoke_settings.image
-            or not cuda_smoke_settings.timeout
+        gpu_visibility_settings = mk8s_gpu_settings.deployment_testing.gpu_visibility
+        if gpu_visibility_settings.enabled_by_default and (
+            not gpu_visibility_settings.namespace
+            or not gpu_visibility_settings.image
+            or not gpu_visibility_settings.timeout
         ):
             issues.append(
-                "components.infra.mk8s.cli.gpu.validations.cuda_smoke must set namespace, image, and timeout when enabled_by_default=true"
+                "components.infra.mk8s.cli.gpu.deployment_testing.gpu_visibility must set namespace, image, and timeout when enabled_by_default=true"
             )
-        nccl_settings = mk8s_gpu_settings.validations.nccl
-        if nccl_settings.enabled_by_default and (
+        nccl_settings = mk8s_gpu_settings.benchmarks.nccl
+        if (
             not nccl_settings.chart_component_id
             or not nccl_settings.timeout
             or not nccl_settings.training_operator_manifest
             or not nccl_settings.training_operator_namespace
         ):
             issues.append(
-                "components.infra.mk8s.cli.gpu.validations.nccl must set chart_component_id, timeout, and training operator settings when enabled_by_default=true"
+                "components.infra.mk8s.cli.gpu.benchmarks.nccl must set chart_component_id, timeout, and training operator settings"
             )
         nccl_chart_id = _non_empty_text(nccl_settings.chart_component_id).lower()
         if nccl_chart_id:
             nccl_chart = declared_app_sources.get(nccl_chart_id)
             if nccl_chart is None:
                 issues.append(
-                    "components.infra.mk8s.cli.gpu.validations.nccl.chart_component_id "
+                    "components.infra.mk8s.cli.gpu.benchmarks.nccl.chart_component_id "
                     f"references unknown apps component '{nccl_chart_id}'"
                 )
             elif getattr(getattr(nccl_chart, "usage", None), "lifecycle", "") != "transient":
                 issues.append(
-                    "components.infra.mk8s.cli.gpu.validations.nccl.chart_component_id "
+                    "components.infra.mk8s.cli.gpu.benchmarks.nccl.chart_component_id "
                     f"references apps component '{nccl_chart_id}', which must declare "
                     "usage.lifecycle=transient"
                 )
@@ -32217,8 +32206,7 @@ def _filter_validations_for_target_refs(
 _MK8S_CLUSTER_SMOKE_VALIDATION_KINDS = {"mk8s_cluster_smoke"}
 _MK8S_GPU_VALIDATION_KINDS = {
     "mk8s_gpu_operator_readiness",
-    "mk8s_cuda_smoke",
-    "mk8s_nccl",
+    "mk8s_gpu_visibility",
 }
 _OBSERVABILITY_VALIDATION_KINDS = {OBSERVABILITY_INGESTION_VALIDATION_KIND}
 _MYSTERYBOX_ESO_VALIDATION_KINDS = {MYSTERYBOX_ESO_CONNECTIVITY_VALIDATION_KIND}
@@ -32229,6 +32217,7 @@ _DEPLOY_VALIDATION_KINDS = (
     | _MYSTERYBOX_ESO_VALIDATION_KINDS
     | {SOPERATOR_CLUSTER_VALIDATION_KIND}
 )
+_NON_DEPLOY_VALIDATION_KINDS: set[str] = set()
 _PRE_SOPERATOR_MK8S_VALIDATION_KINDS = (
     _MK8S_CLUSTER_SMOKE_VALIDATION_KINDS | _MK8S_GPU_VALIDATION_KINDS
 )
@@ -32246,6 +32235,34 @@ def _deploy_validation_specs(config: Any) -> list[dict[str, Any]]:
 
 def _deploy_validation_kind(item: Mapping[str, Any]) -> str:
     return str(item.get("kind", "") or "").strip()
+
+
+def _unsupported_manifest_deploy_validation_kinds(
+    validations: Sequence[Mapping[str, Any]],
+) -> tuple[str, ...]:
+    unsupported = {
+        _deploy_validation_kind(item)
+        for item in validations
+        if _deploy_validation_kind(item)
+        and _deploy_validation_kind(item) not in _DEPLOY_VALIDATION_KINDS
+        and _deploy_validation_kind(item) not in _NON_DEPLOY_VALIDATION_KINDS
+    }
+    return tuple(sorted(unsupported))
+
+
+def _raise_if_manifest_has_unsupported_deploy_validation_kinds(
+    validations: Sequence[Mapping[str, Any]],
+    *,
+    config_path: Path,
+) -> None:
+    unsupported = _unsupported_manifest_deploy_validation_kinds(validations)
+    if not unsupported:
+        return
+    raise RuntimeError(
+        "Generated manifest contains unsupported deploy validation kind(s): "
+        + ", ".join(unsupported)
+        + f". Rerender with `nebius-cxcli render {config_path}`."
+    )
 
 
 def _deploy_validation_runner_group(kind: str) -> str:
@@ -32414,12 +32431,424 @@ def _run_target_deploy_validations(
         )
 
 
+_ACCEPTANCE_SOPERATOR_SUITES = {"soperator", "soperator-slurm", "slurm"}
+_ACCEPTANCE_K8S_SUITES = {"k8s", "k8s-cuda", "cuda"}
+_ACCEPTANCE_ALL_SUITES = _ACCEPTANCE_SOPERATOR_SUITES | _ACCEPTANCE_K8S_SUITES
+
+
+def _normalized_acceptance_suites(raw_suites: Sequence[str] | None) -> set[str]:
+    suites: set[str] = set()
+    invalid: list[str] = []
+    for raw in raw_suites or ():
+        for item in str(raw or "").split(","):
+            suite = normalize_component_token(item)
+            if not suite:
+                continue
+            if suite not in _ACCEPTANCE_ALL_SUITES:
+                invalid.append(item)
+                continue
+            suites.add(suite)
+    if invalid:
+        supported = ", ".join(sorted(_ACCEPTANCE_ALL_SUITES))
+        raise ValueError(
+            "Unsupported --suite value(s): "
+            + ", ".join(invalid)
+            + f". Supported values: {supported}"
+        )
+    return suites
+
+
+def _acceptance_target_refs(targets: Sequence[Mapping[str, Any]]) -> set[str]:
+    return {
+        str(target.get("target_ref") or "").strip()
+        for target in targets
+        if str(target.get("target_ref") or "").strip()
+    }
+
+
+def _filter_acceptance_specs_for_targets(
+    specs: Sequence[Mapping[str, Any]],
+    *,
+    target_refs: set[str],
+) -> list[dict[str, Any]]:
+    selected: list[dict[str, Any]] = []
+    for spec in specs:
+        target_ref = str(spec.get("target_ref") or "").strip()
+        if target_ref and target_ref not in target_refs:
+            continue
+        selected.append(dict(spec))
+    return selected
+
+
+def _require_acceptance_target_selection(
+    *,
+    requested_target_ref: str | None,
+    all_targets: bool,
+) -> None:
+    if requested_target_ref or all_targets:
+        return
+    raise ValueError("Select one target with --target or use --all-targets.")
+
+
+def _raise_on_duplicate_acceptance_reports(specs: Sequence[Mapping[str, Any]]) -> None:
+    by_report: dict[str, list[str]] = {}
+    for spec in specs:
+        report_file = str(spec.get("report_file") or "").strip()
+        if not report_file:
+            continue
+        by_report.setdefault(report_file, []).append(str(spec.get("name") or "acceptance test"))
+    duplicates = {path: names for path, names in by_report.items() if len(names) > 1}
+    if duplicates:
+        details = "; ".join(f"{path}: {', '.join(names)}" for path, names in duplicates.items())
+        raise RuntimeError(
+            "Acceptance suites would write the same canonical report file. Select one "
+            "suite family per target for each command. Conflicts: "
+            f"{details}"
+        )
+
+
+def _run_acceptance_smoke_command(
+    *,
+    config_path: Path,
+    requested_target_ref: str | None,
+    all_targets: bool,
+    include_k8s: bool,
+    include_soperator: bool,
+    suites: Sequence[str] | None,
+    batch_size: int,
+    concurrency: int,
+    continue_on_failure: bool,
+) -> list[Path]:
+    config, paths, manifest = _load_deploy_context_readonly(config_path)
+    if _manifest_missing_deploy_validations(manifest):
+        raise RuntimeError(
+            "Generated manifest is missing deploy.validations metadata. "
+            f"Rerender with `nebius-cxcli render {paths.config_path}` before acceptance-test."
+        )
+    _require_acceptance_target_selection(
+        requested_target_ref=requested_target_ref,
+        all_targets=all_targets,
+    )
+    selected_targets = _resolve_deploy_run_targets(
+        manifest,
+        requested_target_ref=requested_target_ref,
+        all_targets=all_targets,
+    )
+    if not selected_targets:
+        raise RuntimeError("No built-in cluster targets are available for acceptance-test.")
+
+    target_refs = _acceptance_target_refs(selected_targets)
+    suite_tokens = _normalized_acceptance_suites(suites)
+    explicit_k8s_suite = bool(suite_tokens & _ACCEPTANCE_K8S_SUITES)
+    explicit_soperator_suite = bool(suite_tokens & _ACCEPTANCE_SOPERATOR_SUITES)
+    suite_filter_active = bool(include_k8s or include_soperator or suite_tokens)
+    run_k8s = include_k8s or explicit_k8s_suite or not suite_filter_active
+    run_soperator = include_soperator or explicit_soperator_suite or not suite_filter_active
+
+    specs: list[dict[str, Any]] = []
+    if run_soperator:
+        specs.extend(
+            _filter_acceptance_specs_for_targets(
+                soperator_acceptance_smoke_specs(
+                    config,
+                    batch_size=batch_size,
+                    concurrency=concurrency,
+                    continue_on_failure=continue_on_failure,
+                ),
+                target_refs=target_refs,
+            )
+        )
+    if run_k8s:
+        specs.extend(
+            _filter_acceptance_specs_for_targets(
+                mk8s_acceptance_smoke_validation_specs(
+                    config,
+                    include_soperator_targets=explicit_k8s_suite,
+                ),
+                target_refs=target_refs,
+            )
+        )
+    if not specs:
+        raise RuntimeError(
+            "No acceptance smoke suites matched the selected target(s). Use --k8s, "
+            "--soperator, or --suite to select an available suite."
+        )
+    _raise_on_duplicate_acceptance_reports(specs)
+
+    paths.reports_dir.mkdir(parents=True, exist_ok=True)
+    written: list[Path] = []
+    validation_error: Exception | None = None
+    set_current_context = len(selected_targets) == 1 and not all_targets
+    for target in selected_targets:
+        target_ref = str(target.get("target_ref") or "").strip()
+        target_specs = _filter_acceptance_specs_for_targets(specs, target_refs={target_ref})
+        if not target_specs:
+            continue
+        if len(selected_targets) > 1:
+            console.print(f"[bold]Target {target_ref}[/bold]")
+        with ExitStack() as stack:
+            kube_env = _prepare_cluster_handoff_kube_env(
+                config,
+                paths,
+                stack=stack,
+                target=target,
+                persist_local_kubeconfig=True,
+                set_current_context=set_current_context,
+            )
+            with console.status(
+                f"[cyan]Running acceptance smoke tests for {target_ref}...[/cyan]",
+                spinner="dots",
+            ) as status:
+                last_validation_phase = ""
+
+                def _emit_validation_phase(message: str) -> None:
+                    nonlocal last_validation_phase
+                    status.update(message)
+                    if not _console_is_terminal() and message != last_validation_phase:
+                        console.print(message)
+                    last_validation_phase = message
+
+                for group, group_specs in (
+                    (
+                        "soperator",
+                        [
+                            item
+                            for item in target_specs
+                            if str(item.get("kind") or "") == SOPERATOR_CLUSTER_VALIDATION_KIND
+                        ],
+                    ),
+                    (
+                        "mk8s_gpu",
+                        [
+                            item
+                            for item in target_specs
+                            if str(item.get("kind") or "") == "mk8s_cuda_smoke"
+                        ],
+                    ),
+                ):
+                    if not group_specs:
+                        continue
+                    try:
+                        if group == "soperator":
+                            written.extend(
+                                run_soperator_cluster_validations(
+                                    group_specs,
+                                    reports_dir=paths.reports_dir,
+                                    extra_env=kube_env,
+                                    emit=_emit_validation_phase,
+                                )
+                            )
+                        else:
+                            written.extend(
+                                run_mk8s_gpu_validations(
+                                    group_specs,
+                                    reports_dir=paths.reports_dir,
+                                    extra_env=kube_env,
+                                    emit=_emit_validation_phase,
+                                )
+                            )
+                    except Exception as exc:
+                        validation_error = exc
+                        if not continue_on_failure:
+                            break
+                if validation_error is not None and not continue_on_failure:
+                    break
+        if validation_error is not None and not continue_on_failure:
+            break
+    if validation_error is not None:
+        raise validation_error
+    return written
+
+
+_ACCEPTANCE_BENCHMARK_SOPERATOR_SUITES = {
+    "soperator-nccl",
+    "slurm-nccl",
+}
+_ACCEPTANCE_BENCHMARK_K8S_SUITES = {"k8s-nccl"}
+_ACCEPTANCE_BENCHMARK_ALL_SUITES = (
+    _ACCEPTANCE_BENCHMARK_SOPERATOR_SUITES | _ACCEPTANCE_BENCHMARK_K8S_SUITES
+)
+
+
+def _normalized_acceptance_benchmark_suites(raw_suites: Sequence[str] | None) -> set[str]:
+    suites: set[str] = set()
+    invalid: list[str] = []
+    for raw in raw_suites or ():
+        for item in str(raw or "").split(","):
+            suite = normalize_component_token(item)
+            if not suite:
+                continue
+            if suite not in _ACCEPTANCE_BENCHMARK_ALL_SUITES:
+                invalid.append(item)
+                continue
+            suites.add(suite)
+    if invalid:
+        supported = ", ".join(sorted(_ACCEPTANCE_BENCHMARK_ALL_SUITES))
+        raise ValueError(
+            "Unsupported --suite value(s): "
+            + ", ".join(invalid)
+            + f". Supported values: {supported}"
+        )
+    return suites
+
+
+def _run_acceptance_benchmark_command(
+    *,
+    config_path: Path,
+    requested_target_ref: str | None,
+    all_targets: bool,
+    include_k8s: bool,
+    include_soperator: bool,
+    suites: Sequence[str] | None,
+    continue_on_failure: bool,
+    max_nodes: int | None,
+    timeout: str | None,
+    average_bus_bandwidth_threshold_gbps: float | None,
+) -> list[Path]:
+    config, paths, manifest = _load_deploy_context_readonly(config_path)
+    if _manifest_missing_deploy_validations(manifest):
+        raise RuntimeError(
+            "Generated manifest is missing deploy.validations metadata. "
+            f"Rerender with `nebius-cxcli render {paths.config_path}` before acceptance-test."
+        )
+    _require_acceptance_target_selection(
+        requested_target_ref=requested_target_ref,
+        all_targets=all_targets,
+    )
+    selected_targets = _resolve_deploy_run_targets(
+        manifest,
+        requested_target_ref=requested_target_ref,
+        all_targets=all_targets,
+    )
+    if not selected_targets:
+        raise RuntimeError("No built-in cluster targets are available for acceptance-test.")
+
+    target_refs = _acceptance_target_refs(selected_targets)
+    suite_tokens = _normalized_acceptance_benchmark_suites(suites)
+    explicit_k8s_suite = bool(suite_tokens & _ACCEPTANCE_BENCHMARK_K8S_SUITES)
+    explicit_soperator_suite = bool(suite_tokens & _ACCEPTANCE_BENCHMARK_SOPERATOR_SUITES)
+    suite_filter_active = bool(include_k8s or include_soperator or suite_tokens)
+    run_k8s = include_k8s or explicit_k8s_suite or not suite_filter_active
+    run_soperator = include_soperator or explicit_soperator_suite or not suite_filter_active
+
+    specs: list[dict[str, Any]] = []
+    if run_soperator:
+        specs.extend(
+            _filter_acceptance_specs_for_targets(
+                soperator_acceptance_benchmark_specs(config),
+                target_refs=target_refs,
+            )
+        )
+    if run_k8s:
+        specs.extend(
+            _filter_acceptance_specs_for_targets(
+                mk8s_acceptance_benchmark_validation_specs(
+                    config,
+                    include_soperator_targets=explicit_k8s_suite,
+                    max_nodes=max_nodes,
+                    timeout=timeout,
+                    average_bus_bandwidth_threshold_gbps=average_bus_bandwidth_threshold_gbps,
+                ),
+                target_refs=target_refs,
+            )
+        )
+    if not specs:
+        raise RuntimeError(
+            "No acceptance benchmark suites matched the selected target(s). Use --k8s, "
+            "--soperator, or --suite to select an available suite."
+        )
+    _raise_on_duplicate_acceptance_reports(specs)
+
+    paths.reports_dir.mkdir(parents=True, exist_ok=True)
+    written: list[Path] = []
+    validation_error: Exception | None = None
+    set_current_context = len(selected_targets) == 1 and not all_targets
+    for target in selected_targets:
+        target_ref = str(target.get("target_ref") or "").strip()
+        target_specs = _filter_acceptance_specs_for_targets(specs, target_refs={target_ref})
+        if not target_specs:
+            continue
+        if len(selected_targets) > 1:
+            console.print(f"[bold]Target {target_ref}[/bold]")
+        with ExitStack() as stack:
+            kube_env = _prepare_cluster_handoff_kube_env(
+                config,
+                paths,
+                stack=stack,
+                target=target,
+                persist_local_kubeconfig=True,
+                set_current_context=set_current_context,
+            )
+            with console.status(
+                f"[cyan]Running acceptance benchmarks for {target_ref}...[/cyan]",
+                spinner="dots",
+            ) as status:
+                last_validation_phase = ""
+
+                def _emit_validation_phase(message: str) -> None:
+                    nonlocal last_validation_phase
+                    status.update(message)
+                    if not _console_is_terminal() and message != last_validation_phase:
+                        console.print(message)
+                    last_validation_phase = message
+
+                for group, group_specs in (
+                    (
+                        "soperator",
+                        [
+                            item
+                            for item in target_specs
+                            if str(item.get("kind") or "") == SOPERATOR_CLUSTER_VALIDATION_KIND
+                        ],
+                    ),
+                    (
+                        "mk8s_gpu",
+                        [
+                            item
+                            for item in target_specs
+                            if str(item.get("kind") or "") == "mk8s_nccl"
+                        ],
+                    ),
+                ):
+                    if not group_specs:
+                        continue
+                    try:
+                        if group == "soperator":
+                            written.extend(
+                                run_soperator_cluster_validations(
+                                    group_specs,
+                                    reports_dir=paths.reports_dir,
+                                    extra_env=kube_env,
+                                    emit=_emit_validation_phase,
+                                )
+                            )
+                        else:
+                            written.extend(
+                                run_mk8s_gpu_validations(
+                                    group_specs,
+                                    reports_dir=paths.reports_dir,
+                                    extra_env=kube_env,
+                                    emit=_emit_validation_phase,
+                                )
+                            )
+                    except Exception as exc:
+                        validation_error = exc
+                        if not continue_on_failure:
+                            break
+                if validation_error is not None and not continue_on_failure:
+                    break
+        if validation_error is not None and not continue_on_failure:
+            break
+    if validation_error is not None:
+        raise validation_error
+    return written
+
+
 _DEPLOY_VALIDATION_SKIP_KIND_MAP = {
     "operator-readiness": "mk8s_gpu_operator_readiness",
     "operator_readiness": "mk8s_gpu_operator_readiness",
-    "cuda-smoke": "mk8s_cuda_smoke",
-    "cuda_smoke": "mk8s_cuda_smoke",
-    "nccl": "mk8s_nccl",
+    "gpu-visibility": "mk8s_gpu_visibility",
+    "gpu_visibility": "mk8s_gpu_visibility",
     "observability-ingestion": OBSERVABILITY_INGESTION_VALIDATION_KIND,
     "observability_ingestion": OBSERVABILITY_INGESTION_VALIDATION_KIND,
 }
@@ -32448,7 +32877,7 @@ def _resolve_deploy_validation_skip_kinds(skip_validation: tuple[str, ...]) -> s
         resolved.add(kind)
     if invalid:
         supported = ", ".join(
-            sorted({key for key in _DEPLOY_VALIDATION_SKIP_KIND_MAP if "-" in key})
+            key for key in _DEPLOY_VALIDATION_SKIP_KIND_MAP if "-" in key
         )
         raise ValueError(
             "Unsupported --skip-validation value(s): "
@@ -32464,14 +32893,19 @@ def _filter_deploy_validations(
     skip_validations: bool,
     skip_kinds: set[str],
 ) -> list[dict[str, Any]]:
-    if skip_validations:
-        return [item for item in validations if bool(item.get("required"))]
-    if not skip_kinds:
-        return validations
-    return [
+    deploy_candidate_validations = [
         item
         for item in validations
-        if bool(item.get("required")) or str(item.get("kind", "")).strip() not in skip_kinds
+        if _deploy_validation_kind(item) not in _NON_DEPLOY_VALIDATION_KINDS
+    ]
+    if skip_validations:
+        return [item for item in deploy_candidate_validations if bool(item.get("required"))]
+    if not skip_kinds:
+        return deploy_candidate_validations
+    return [
+        item
+        for item in deploy_candidate_validations
+        if bool(item.get("required")) or _deploy_validation_kind(item) not in skip_kinds
     ]
 
 
@@ -35353,8 +35787,17 @@ def _deploy_generated_artifacts(
             f"Rerender with `nebius-cxcli render {paths.config_path}` before deploy."
         )
     declared_validations = _manifest_deploy_validations(manifest)
-    deploy_validations = _filter_deploy_validations(
+    _raise_if_manifest_has_unsupported_deploy_validation_kinds(
         declared_validations,
+        config_path=paths.config_path,
+    )
+    deploy_declared_validations = _filter_deploy_validations(
+        declared_validations,
+        skip_validations=False,
+        skip_kinds=set(),
+    )
+    deploy_validations = _filter_deploy_validations(
+        deploy_declared_validations,
         skip_validations=skip_validations,
         skip_kinds=skip_validation_kinds,
     )
@@ -35377,10 +35820,10 @@ def _deploy_generated_artifacts(
     status_watchers = _manifest_status_watchers(manifest) or _enabled_status_watcher_specs(config)
     has_enabled_app_charts = _active_chart_count(config) > 0
     manifest_targets = _manifest_deploy_targets(manifest)
-    report_validations = [dict(item) for item in declared_validations]
+    report_validations = [dict(item) for item in deploy_declared_validations]
     if manifest_targets and selected_targets and len(selected_targets) < len(manifest_targets):
         report_validations = _filter_validations_for_target_refs(
-            declared_validations,
+            deploy_declared_validations,
             target_refs={str(target["target_ref"]) for target in selected_targets},
         )
     clear_deploy_validation_artifacts(
@@ -35425,7 +35868,7 @@ def _deploy_generated_artifacts(
     else:
         console.print("No cxcli-managed Terraform infra is enabled; skipping Terraform apply.")
     write_inventory(config, paths, validations=report_validations)
-    if skip_validations and declared_validations:
+    if skip_validations and deploy_declared_validations:
         if deploy_validations:
             console.print(
                 "Skipping optional deploy-time validations for this run "
@@ -38334,7 +38777,7 @@ def create_command(
             console.print(
                 "[dim]Soperator worker profile controls whether the fresh "
                 "production bundle uses CPU-only, GPU-only, or mixed worker "
-                "NodeSets before MK8s fields and validations are prompted.[/dim]"
+                "NodeSets before MK8s fields and deployment-testing prompts.[/dim]"
             )
             try:
                 soperator_profile = _prompt_soperator_profile()
@@ -39267,7 +39710,7 @@ def component_add_command(
                 console.print(
                     "[dim]Soperator worker profile controls whether the production "
                     "bundle uses CPU-only, GPU-only, or mixed worker NodeSets before "
-                    "MK8s fields and validations are prompted.[/dim]"
+                    "MK8s fields and deployment-testing prompts.[/dim]"
                 )
                 try:
                     soperator_profile = _prompt_soperator_profile()
@@ -40477,14 +40920,13 @@ _SOPERATOR_MIGRATION_EXECUTOR_CONTRACT_LINES = (
     "phases report SFS/PVC progress and continuity, while compute and cutover "
     "phases report MK8s, Slurm, and Soperator health.",
     "Validation contract: validation-and-rollback-hold runs the required MK8s "
-    "node inventory smoke plus target-scoped deploy.targets[].validations.mk8s_gpu.* "
-    "checks from config.yaml, including operator readiness, CUDA smoke, "
-    "and NCCL when those checks are enabled; it also runs the required "
-    "Soperator/Slurm smoke validation, including SlurmCluster "
-    "availability, Slurm CLI access, a one-task srun job, all-partition "
-    "hostname jobs, a Slurm GPU allocation check across reported GPU "
-    "partitions, and a Slurm NCCL benchmark only on selected 8-GPU Slurm "
-    "nodes. Validation JSON "
+    "node inventory smoke plus target-scoped deploy.targets[].deployment_testing.* "
+    "deploy-time checks from config.yaml, including operator readiness and "
+    "GPU visibility when those checks are enabled; NCCL/performance checks are "
+    "reserved for acceptance-test benchmark. It also runs the required "
+    "Soperator deployment snapshot, including soperator-manager Deployment, "
+    "jail storage object, Pending Soperator pod/event, SlurmCluster, and "
+    "NodeSet visibility checks. Validation JSON "
     "details are written under generated/reports/, ext-soperator-migrate-report.md includes "
     "the Soperator/Slurm and MK8s GPU validation rollups, and deploy-report.md "
     "is refreshed as a secondary deploy-compatible MK8s GPU summary.",
@@ -41240,11 +41682,11 @@ def _refresh_soperator_onboarding_after_completed_migration(
         "Soperator migration status with phase ids, labels, overall health, "
         "and component summaries while approved phases run, validates Soperator "
         "reconciliation, runs configured "
-        "deploy.targets[].validations.mk8s_gpu.* checks, runs the required "
-        "Soperator/Slurm smoke validation with a one-task srun job, "
-        "all-partition hostname jobs, and a Slurm GPU allocation check across "
-        "reported GPU partitions, runs the Slurm NCCL benchmark only on "
-        "selected 8-GPU Slurm nodes, writes "
+        "deploy-time deploy.targets[].deployment_testing.* checks, runs the required "
+        "Soperator deployment snapshot with soperator-manager Deployment, "
+        "jail storage object, Pending Soperator pod/event, SlurmCluster, and NodeSet "
+        "visibility checks, leaves Slurm jobs and NCCL/performance work for explicit "
+        "acceptance-test benchmark runs, writes "
         "ext-soperator-migrate-report.md with the MK8s GPU and Soperator/Slurm validation "
         "rollups, refreshes deploy-report.md as a secondary deploy-compatible "
         "MK8s GPU summary, and "
@@ -44247,6 +44689,254 @@ def mk8s_token_command(
         _exit_with_error(exc)
 
 
+@acceptance_test_app.command(
+    "smoke",
+    short_help="Run explicit heavy/on-demand all-node acceptance smoke tests.",
+    help=(
+        "Run explicit heavy/on-demand all-node acceptance smoke tests. "
+        "Writes JSON reports only under generated/reports/ and does not change "
+        "config.yaml, Terraform state, generated deploy reports, or persisted "
+        "suite selections."
+    ),
+    epilog=(
+        "Examples: Soperator all-node Slurm smoke JSON report: nebius-cxcli "
+        "acceptance-test smoke <config.yaml> --target sop-cluster1 --soperator; "
+        "plain MK8s all-node CUDA JSON report: nebius-cxcli acceptance-test smoke "
+        "<config.yaml> --target mk8s-prod --k8s; Soperator fail-fast batches: "
+        "nebius-cxcli acceptance-test smoke <config.yaml> --target sop-cluster1 "
+        "--suite soperator-slurm --batch-size 128 --concurrency 8 --fail-fast; "
+        "every target, suite defaults: nebius-cxcli acceptance-test smoke "
+        "<config.yaml> --all-targets."
+    ),
+)
+def acceptance_test_smoke_command(
+    config_path: Annotated[
+        Path,
+        typer.Argument(metavar="CONFIG_YAML", help=_CONFIG_YAML_ARGUMENT_HELP),
+    ],
+    target_ref: Annotated[
+        str | None,
+        typer.Option(
+            "--target",
+            help=(
+                f"Run acceptance smoke tests for one {_MK8S_TARGET_ID_HELP}. "
+                "Required unless --all-targets is set."
+            ),
+        ),
+    ] = None,
+    all_targets: Annotated[
+        bool,
+        typer.Option(
+            "--all-targets",
+            help=(
+                "Run acceptance smoke tests for every built-in cluster target. "
+                "Required unless --target is set."
+            ),
+        ),
+    ] = False,
+    k8s: Annotated[
+        bool,
+        typer.Option(
+            "--k8s",
+            help=(
+                "Run Kubernetes acceptance smoke suites for plain MK8s GPU targets. "
+                "Soperator-owned GPU targets are skipped unless --suite k8s-cuda is used."
+            ),
+        ),
+    ] = False,
+    soperator: Annotated[
+        bool,
+        typer.Option("--soperator", help="Run Soperator/Slurm acceptance smoke suites."),
+    ] = False,
+    suite: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--suite",
+            help=(
+                "Acceptance suite to run; repeatable or comma-separated. Supported values: "
+                "soperator-slurm, k8s-cuda. Same-target K8s and Soperator suite families "
+                "cannot be combined in one command because they share the canonical "
+                "acceptance smoke report."
+            ),
+        ),
+    ] = None,
+    batch_size: Annotated[
+        int,
+        typer.Option(
+            "--batch-size",
+            min=1,
+            help="Maximum Slurm nodes per acceptance smoke batch.",
+        ),
+    ] = 128,
+    concurrency: Annotated[
+        int,
+        typer.Option(
+            "--concurrency",
+            min=1,
+            help="Maximum concurrent Slurm acceptance smoke batches.",
+        ),
+    ] = 8,
+    continue_on_failure: Annotated[
+        bool,
+        typer.Option(
+            "--continue-on-failure/--fail-fast",
+            help="Continue collecting per-node acceptance evidence after a batch fails.",
+        ),
+    ] = True,
+) -> None:
+    try:
+        written = _run_acceptance_smoke_command(
+            config_path=config_path,
+            requested_target_ref=target_ref,
+            all_targets=all_targets,
+            include_k8s=k8s,
+            include_soperator=soperator,
+            suites=suite,
+            batch_size=batch_size,
+            concurrency=concurrency,
+            continue_on_failure=continue_on_failure,
+        )
+        for path in written:
+            console.print(f"Acceptance smoke report: {path}")
+    except typer.Exit:
+        raise
+    except Exception as exc:  # pragma: no cover - CLI surface
+        _exit_with_error(exc)
+
+
+@acceptance_test_app.command(
+    "benchmark",
+    short_help="Run explicit heavy/on-demand NCCL benchmark suites.",
+    help=(
+        "Run explicit heavy/on-demand NCCL benchmark suites. Writes JSON reports "
+        "only under generated/reports/ and does not change config.yaml, Terraform "
+        "state, generated deploy reports, or persisted suite selections. "
+        "K8s NCCL uses the pinned transient nccl-test chart for the run."
+    ),
+    epilog=(
+        "Examples: Soperator Slurm NCCL benchmark: nebius-cxcli acceptance-test "
+        "benchmark <config.yaml> --target sop-cluster1 --soperator; plain MK8s "
+        "NCCL benchmark with run-only overrides: nebius-cxcli acceptance-test "
+        "benchmark <config.yaml> --target mk8s-prod --k8s --max-nodes 4 "
+        "--timeout 20m --average-bus-bandwidth-threshold-gbps 300; force the "
+        "K8s NCCL suite on a Soperator-owned GPU target during maintenance: "
+        "nebius-cxcli acceptance-test benchmark <config.yaml> --target sop-cluster1 "
+        "--suite k8s-nccl --max-nodes 2; every target, suite defaults: "
+        "nebius-cxcli acceptance-test benchmark <config.yaml> --all-targets."
+    ),
+)
+def acceptance_test_benchmark_command(
+    config_path: Annotated[
+        Path,
+        typer.Argument(metavar="CONFIG_YAML", help=_CONFIG_YAML_ARGUMENT_HELP),
+    ],
+    target_ref: Annotated[
+        str | None,
+        typer.Option(
+            "--target",
+            help=(
+                f"Run acceptance benchmarks for one {_MK8S_TARGET_ID_HELP}. "
+                "Required unless --all-targets is set."
+            ),
+        ),
+    ] = None,
+    all_targets: Annotated[
+        bool,
+        typer.Option(
+            "--all-targets",
+            help=(
+                "Run acceptance benchmarks for every built-in cluster target. "
+                "Required unless --target is set."
+            ),
+        ),
+    ] = False,
+    k8s: Annotated[
+        bool,
+        typer.Option(
+            "--k8s",
+            help=(
+                "Run Kubernetes NCCL benchmark suites for plain MK8s GPU targets. "
+                "Soperator-owned GPU targets are skipped unless --suite k8s-nccl is used."
+            ),
+        ),
+    ] = False,
+    soperator: Annotated[
+        bool,
+        typer.Option("--soperator", help="Run Soperator/Slurm NCCL benchmark suites."),
+    ] = False,
+    suite: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--suite",
+            help=(
+                "Benchmark suite to run; repeatable or comma-separated. Supported values: "
+                "k8s-nccl, soperator-nccl, slurm-nccl. Same-target K8s and Soperator "
+                "suite families cannot be combined in one command because they share "
+                "the canonical acceptance benchmark report."
+            ),
+        ),
+    ] = None,
+    continue_on_failure: Annotated[
+        bool,
+        typer.Option(
+            "--continue-on-failure/--fail-fast",
+            help="Continue collecting benchmark reports after a selected benchmark fails.",
+        ),
+    ] = True,
+    max_nodes: Annotated[
+        int | None,
+        typer.Option(
+            "--max-nodes",
+            min=1,
+            help=(
+                "Maximum GPU nodes to include for benchmark suites that support node caps. "
+                "Overrides the catalog default for this run only."
+            ),
+        ),
+    ] = None,
+    timeout: Annotated[
+        str | None,
+        typer.Option(
+            "--timeout",
+            help=(
+                "Benchmark timeout as a duration such as 20m. Overrides the catalog default "
+                "for this run only."
+            ),
+        ),
+    ] = None,
+    average_bus_bandwidth_threshold_gbps: Annotated[
+        float | None,
+        typer.Option(
+            "--average-bus-bandwidth-threshold-gbps",
+            min=0.0,
+            help=(
+                "Required average NCCL bus bandwidth in Gbps for RDMA benchmark runs. "
+                "Overrides the catalog default for this run only."
+            ),
+        ),
+    ] = None,
+) -> None:
+    try:
+        written = _run_acceptance_benchmark_command(
+            config_path=config_path,
+            requested_target_ref=target_ref,
+            all_targets=all_targets,
+            include_k8s=k8s,
+            include_soperator=soperator,
+            suites=suite,
+            continue_on_failure=continue_on_failure,
+            max_nodes=max_nodes,
+            timeout=timeout,
+            average_bus_bandwidth_threshold_gbps=average_bus_bandwidth_threshold_gbps,
+        )
+        for path in written:
+            console.print(f"Acceptance benchmark report: {path}")
+    except typer.Exit:
+        raise
+    except Exception as exc:  # pragma: no cover - CLI surface
+        _exit_with_error(exc)
+
+
 @app.command(
     "deploy",
     short_help="Use CONFIG_YAML to deploy locally from the sibling rendered bundle.",
@@ -44257,8 +44947,8 @@ def mk8s_token_command(
         "nebius-cxcli deploy ./deployments/tenant/project/config.yaml --target mk8s-prod "
         "(restricts the run to a single deploy.targets[] row by id); "
         "nebius-cxcli deploy ./deployments/tenant/project/config.yaml --skip-validation operator-readiness "
-        "(skips a single optional MK8s GPU validation kind; repeatable; "
-        "--skip-validations skips optional validations only); "
+        "(skips a single optional MK8s GPU deployment-testing check; repeatable; "
+        "--skip-validations skips optional deployment-testing checks only); "
         "nebius-cxcli deploy ./deployments/tenant/project/config.yaml --no-auto-auth-bootstrap "
         "(fails on missing service-account credentials instead of refreshing them). "
         "For external Soperator onboarding targets with migration-owned actions, deploy "
@@ -44289,8 +44979,8 @@ def deploy_command(
         typer.Option(
             "--skip-validations",
             help=(
-                "Skip optional deploy-time validations from config.yaml/generated manifest "
-                "for this run only. Required platform validations still run."
+                "Skip optional deployment-testing checks from config.yaml/generated manifest "
+                "for this run only. Required platform checks still run."
             ),
         ),
     ] = False,
@@ -44299,9 +44989,9 @@ def deploy_command(
         typer.Option(
             "--skip-validation",
             help=(
-                "Skip one optional deploy-time validation for this run only. "
-                "Repeatable. Supported values: operator-readiness, cuda-smoke, "
-                "nccl, observability-ingestion."
+                "Skip one optional deployment-testing check for this run only. "
+                "Repeatable. Supported values: operator-readiness, gpu-visibility, "
+                "observability-ingestion."
             ),
         ),
     ] = None,
@@ -44375,7 +45065,7 @@ def deploy_command(
     you want a one-run override for optional checks without changing the
     persisted project config. Required platform validations, including native
     ESO MysteryBox connectivity when that sync path is configured, still run.
-    Deploy-time validations include configured MK8s GPU checks, required
+    Deploy-time validations include configured MK8s GPU deployment-testing checks, required
     Soperator/Slurm smoke checks for enabled Soperator targets, the generated
     Observability Agent ingestion guardrail for observability-enabled MK8s
     targets, and required ESO MysteryBox connectivity checks for native

@@ -470,14 +470,16 @@ Low-level hook file sync can use the root installer:
 
 ```bash
 ./install-skills.sh --install-all-hooks
-./install-skills.sh --install-hooks config-codex/assets/hooks
+./install-skills.sh --install-hooks config-codex/assets/hooks --register-hooks
 ```
 
 The first command syncs every reviewed hook-only bundle under the source skills
 folder. The second command syncs only this skill's hook payload templates. Both
 copy into `$CODEX_HOME/hooks` with `.template` stripped from installed file
-names. Neither updates `$CODEX_HOME/hooks.json`, trusts hooks, patches
-`config.toml`, or replaces the full `config-codex` setup workflow.
+names. Add `--register-hooks` when the installer should semantically merge the
+bundle's hook registration into `$CODEX_HOME/hooks.json`; registration still
+does not trust hooks, patch `config.toml`, or replace the full `config-codex`
+setup workflow.
 
 - `agents/openai.yaml`: UI metadata and implicit invocation policy.
 

@@ -177,12 +177,11 @@ def check_design(ctx: Context) -> None:
         "Full workflow test",
         "$agentic-sdlc-test",
         "~/.codex/sdlc-verification/report.md",
-        "$CODEX_HOME/AGENTS.md",
-        "apply_patch",
-        "Deleting or moving that file remains blocked",
-        "shell writes, MCP writes",
-        "$CODEX_HOME/config.toml",
-        "$CODEX_HOME/hooks",
+        "does not deny filesystem targets by path",
+        "Ordinary outbound network commands",
+        "secret-bearing",
+        "MCP payloads",
+        "guarded Git or GitHub actions",
     ]
     missing = [term for term in required_terms if term not in text]
     status = "PASS" if not missing else "FAIL"
@@ -519,9 +518,8 @@ def check_hooks_with_fixtures(ctx: Context) -> None:
     ctx.add("PreToolUse safety test results", "Deny destructive recursive delete", "PASS" if reason and "recursive removal" in reason else "FAIL", reason or json.dumps(deny_delete, sort_keys=True))
     plan = ctx.fixture_codex_home / "sdlc-runs" / DEFAULT_PROJECT_ID / DEFAULT_RUN_ID / "plans" / "FEAT-001.plan.v1.md"
     patch = f"*** Begin Patch\n*** Update File: {plan}\n@@\n-# Plan\n+# Changed\n*** End Patch\n"
-    deny_plan = run_hook(pre_tool, pre_payload(ctx, "apply_patch", patch), ctx)
-    reason = denied(deny_plan)
-    ctx.add("PreToolUse safety test results", "Deny locked plan edit", "PASS" if reason and "locked SDLC plan" in reason else "FAIL", reason or json.dumps(deny_plan, sort_keys=True))
+    allow_plan = run_hook(pre_tool, pre_payload(ctx, "apply_patch", patch), ctx)
+    ctx.add("PreToolUse safety test results", "Allow locked plan edit", "PASS" if allow_plan == {} else "FAIL", json.dumps(allow_plan, sort_keys=True))
 
     empty_codex_home = ctx.verification_root / "empty-fixture-codex-home"
     empty_codex_home.mkdir(parents=True, exist_ok=True)

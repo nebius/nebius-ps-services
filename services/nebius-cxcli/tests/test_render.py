@@ -570,10 +570,7 @@ def test_render_passes_typed_mk8s_node_group_scale_and_preemptible_inputs(
     assert tfvars["mk8s_node_groups"]["cpu"]["preemptible"] is True
     assert tfvars["mk8s_node_groups"]["worker"]["preemptible"] is True
     assert tfvars["mk8s_node_groups"]["cpu"]["node_labels"]["nebius.com/node-group"] == "cpu"
-    assert (
-        tfvars["mk8s_node_groups"]["worker"]["node_labels"]["nebius.com/node-group"]
-        == "worker"
-    )
+    assert tfvars["mk8s_node_groups"]["worker"]["node_labels"]["nebius.com/node-group"] == "worker"
     assert tfvars["mk8s_node_groups"]["worker"]["node_labels"]["nebius.com/gpu"] == "true"
 
 
@@ -1719,6 +1716,7 @@ def test_render_soperator_uses_cluster_target_name_not_client_name(tmp_path: Pat
         if isinstance(row, dict) and row.get("id") == "mk8s":
             row["instance_id"] = "soperator-cluster1"
             row["inputs"] = _mk8s_inputs(cluster_name="soperator-cluster1", cpu=True, gpu=False)
+            row["inputs"].pop("node_groups", None)
     for row in payload["apps"]["charts"]:
         if isinstance(row, dict) and row.get("enabled") is True:
             row["instance_id"] = "soperator-cluster1"
@@ -3006,6 +3004,7 @@ def test_render_soperator_mk8s_node_groups_attach_sibling_sfs(tmp_path: Path) ->
                 "jail": True,
                 "sfs_filesystem_keys": ["jail"],
             },
+            "accounting": {"workload": "accounting", "node_count": 1},
             "system": {"workload": "system", "node_count": 1},
             "compact-cpu": {
                 "nodeset_name": "worker-cpu",
@@ -3853,15 +3852,11 @@ def test_render_instance_resets_generated_bundle_and_removes_stale_files(
     stale_flux_file = paths.flux_dir / "stale.yaml"
     stale_report = paths.reports_dir / "old.json"
     deploy_report = paths.reports_dir / "deploy-report.md"
-    deploy_detail_report = paths.reports_dir / "cuda-smoke-report-mk8s.json"
+    deploy_detail_report = paths.reports_dir / "deploy-gpu-visibility-report-mk8s.json"
     onboard_report = paths.reports_dir / "ext-soperator-onboard-source-discovery-report.json"
     migrate_report = paths.reports_dir / "ext-soperator-migrate-report.md"
-    migration_detail_report = (
-        paths.reports_dir / "soperator-cluster-validation-report-external.json"
-    )
-    unreferenced_migration_like_report = (
-        paths.reports_dir / "soperator-cluster-validation-report-old.json"
-    )
+    migration_detail_report = paths.reports_dir / "deploy-smoke-report-external.json"
+    unreferenced_migration_like_report = paths.reports_dir / "deploy-smoke-report-old.json"
     node_template_report = paths.reports_dir / "upgrade-node-template-report.md"
     node_template_report_json = paths.reports_dir / "upgrade-node-template-report.json"
     node_group_report = paths.reports_dir / "upgrade-node-group-report.md"
@@ -3882,14 +3877,13 @@ def test_render_instance_resets_generated_bundle_and_removes_stale_files(
     stale_flux_file.write_text("apiVersion: v1\nkind: Secret\n", encoding="utf-8")
     stale_report.write_text("{}\n", encoding="utf-8")
     deploy_report.write_text(
-        "# Deploy Report\n\n### CUDA smoke\n\n- Detail report: `cuda-smoke-report-mk8s.json`\n",
+        "# Deploy Report\n\n### GPU visibility\n\n- Detail report: `deploy-gpu-visibility-report-mk8s.json`\n",
         encoding="utf-8",
     )
     deploy_detail_report.write_text('{"status": "passed"}\n', encoding="utf-8")
     onboard_report.write_text('{"schema": "onboard"}\n', encoding="utf-8")
     migrate_report.write_text(
-        "# Soperator Migration Report\n\n"
-        "- `soperator-cluster-validation-report-external.json`: `PASS` - ok\n",
+        "# Soperator Migration Report\n\n- `deploy-smoke-report-external.json`: `PASS` - ok\n",
         encoding="utf-8",
     )
     migration_detail_report.write_text('{"passed": true}\n', encoding="utf-8")
@@ -4945,10 +4939,10 @@ def test_render_ignores_declared_mk8s_gpu_validation_helper_inputs(
         "targets": [
             {
                 "instance_id": "demo-cluster",
-                "validations": {
+                "deployment_testing": {
                     "mk8s_gpu": {
                         "operator_readiness": {"enabled": False},
-                        "cuda_smoke": {"enabled": True, "max_nodes": 2},
+                        "gpu_visibility": {"enabled": True, "max_nodes": 2},
                     }
                 },
             }

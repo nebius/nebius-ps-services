@@ -11,7 +11,7 @@ from nebius_cxcli.cli import (
     _prune_redundant_app_chart_default_values,
     _required_leaf_names_for_entry,
     _run_component_field_wizard,
-    _skip_mk8s_gpu_validation_prompt,
+    _skip_mk8s_gpu_deployment_testing_prompt,
     _skip_sfs_multi_filesystem_prompt,
     _skip_sfs_single_filesystem_prompt,
     _skip_soperator_child_chart_prompt,
@@ -380,56 +380,58 @@ def test_soperator_target_prompts_cxcli_workload_gpu_validations() -> None:
                 }
             ]
         },
-        "deploy": {"targets": [{"instance_id": "cluster1", "validations": {"mk8s_gpu": {}}}]},
+        "deploy": {
+            "targets": [{"instance_id": "cluster1", "deployment_testing": {"mk8s_gpu": {}}}]
+        },
     }
 
-    assert not _skip_mk8s_gpu_validation_prompt(
+    assert not _skip_mk8s_gpu_deployment_testing_prompt(
         payload=payload,
         entry=entry,
-        full_path_label="deploy.targets[0].validations.mk8s_gpu.operator_readiness.enabled",
+        full_path_label="deploy.targets[0].deployment_testing.mk8s_gpu.operator_readiness.enabled",
     )
-    assert not _skip_mk8s_gpu_validation_prompt(
+    assert not _skip_mk8s_gpu_deployment_testing_prompt(
         payload=payload,
         entry=entry,
-        full_path_label="deploy.targets[0].validations.mk8s_gpu.cuda_smoke.enabled",
+        full_path_label="deploy.targets[0].deployment_testing.mk8s_gpu.gpu_visibility.enabled",
     )
-    assert not _skip_mk8s_gpu_validation_prompt(
+    payload["deploy"]["targets"][0]["deployment_testing"]["mk8s_gpu"]["gpu_visibility"] = {
+        "enabled": True
+    }
+    assert not _skip_mk8s_gpu_deployment_testing_prompt(
         payload=payload,
         entry=entry,
-        full_path_label="deploy.targets[0].validations.mk8s_gpu.nccl.enabled",
-    )
-    payload["deploy"]["targets"][0]["validations"]["mk8s_gpu"]["cuda_smoke"] = {"enabled": True}
-    payload["deploy"]["targets"][0]["validations"]["mk8s_gpu"]["nccl"] = {"enabled": True}
-    assert not _skip_mk8s_gpu_validation_prompt(
-        payload=payload,
-        entry=entry,
-        full_path_label="deploy.targets[0].validations.mk8s_gpu.nccl.max_nodes",
+        full_path_label="deploy.targets[0].deployment_testing.mk8s_gpu.gpu_visibility.max_nodes",
     )
 
 
-def test_mk8s_gpu_validation_max_nodes_required_only_when_section_enabled() -> None:
+def test_mk8s_gpu_deployment_testing_max_nodes_required_only_when_section_enabled() -> None:
     entry = ComponentEntry(
         id="mk8s",
         scope="infra",
         config_path="infra.mk8s",
         description="mk8s",
     )
-    label = "deploy.targets[0].validations.mk8s_gpu.cuda_smoke.max_nodes"
+    label = "deploy.targets[0].deployment_testing.mk8s_gpu.gpu_visibility.max_nodes"
     payload = {
         "deploy": {
             "targets": [
                 {
                     "instance_id": "cluster1",
-                    "validations": {"mk8s_gpu": {"cuda_smoke": {"enabled": True}}},
+                    "deployment_testing": {
+                        "mk8s_gpu": {"gpu_visibility": {"enabled": True}}
+                    },
                 }
             ]
         }
     }
 
     assert _dynamic_required_prompt(payload=payload, entry=entry, full_path_label=label)
-    payload["deploy"]["targets"][0]["validations"]["mk8s_gpu"]["cuda_smoke"]["enabled"] = False
+    payload["deploy"]["targets"][0]["deployment_testing"]["mk8s_gpu"]["gpu_visibility"][
+        "enabled"
+    ] = False
     assert not _dynamic_required_prompt(payload=payload, entry=entry, full_path_label=label)
-    assert _skip_mk8s_gpu_validation_prompt(
+    assert _skip_mk8s_gpu_deployment_testing_prompt(
         payload={
             "infra": {
                 "components": [
@@ -452,7 +454,7 @@ def test_mk8s_gpu_validation_max_nodes_required_only_when_section_enabled() -> N
 def test_mk8s_component_prompts_sort_before_target_observability_prompts() -> None:
     required = {"cluster_name", "network_id", "subnet_id", "k8s_version"}
     required_prompts = {
-        "deploy.targets[0].validations.mk8s_gpu.operator_readiness.enabled",
+        "deploy.targets[0].deployment_testing.mk8s_gpu.operator_readiness.enabled",
     }
 
     assert _prompt_path_sort_key(
@@ -486,7 +488,7 @@ def test_mk8s_component_prompts_sort_before_target_observability_prompts() -> No
             "deploy",
             "targets",
             0,
-            "validations",
+            "deployment_testing",
             "mk8s_gpu",
             "operator_readiness",
             "enabled",
@@ -503,7 +505,7 @@ def test_mk8s_component_prompts_sort_before_target_observability_prompts() -> No
             "deploy",
             "targets",
             0,
-            "validations",
+            "deployment_testing",
             "mk8s_gpu",
             "operator_readiness",
             "enabled",

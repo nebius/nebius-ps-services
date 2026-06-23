@@ -16,7 +16,7 @@ from .deploy_targets import (
 from .mk8s_gpu import (
     ensure_mk8s_gpu_app_rows,
     materialize_mk8s_gpu_app_values,
-    normalize_mk8s_gpu_project_validation_settings,
+    normalize_mk8s_gpu_project_deployment_testing_settings,
     prune_inactive_mk8s_gpu_app_rows,
 )
 from .mk8s_node_group_defaults import prune_inactive_mk8s_node_group_defaults
@@ -35,6 +35,7 @@ from .observability import (
 from .runtime_config import AttrDict, to_plain_data, wrap_runtime_config
 from .runtime_validation import validate_dynamic_payload_structure, validate_runtime_payload
 from .soperator_child_charts import materialize_soperator_child_chart_values
+from .soperator_validation import normalize_soperator_project_deployment_testing_settings
 from .ssh_public_keys import normalize_runtime_ssh_public_key_inputs
 
 
@@ -59,7 +60,9 @@ def normalize_runtime_config_payload(
 
         if _materialize_soperator_component_defaults(payload):
             changed = True
-    if normalize_mk8s_gpu_project_validation_settings(payload):
+    if normalize_mk8s_gpu_project_deployment_testing_settings(payload):
+        changed = True
+    if normalize_soperator_project_deployment_testing_settings(payload):
         changed = True
     if prune_inactive_mk8s_gpu_app_rows(
         payload,

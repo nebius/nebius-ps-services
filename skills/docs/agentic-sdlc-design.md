@@ -147,6 +147,7 @@ The bundle contains:
 
 - `pre_tool_use_sdlc_policy.py`
 - `stop_sdlc_continue.py`
+- `lib/__init__.py`
 - `lib/sdlc_policy.py`
 - `lib/sdlc_state.py`
 - `tests/test_sdlc_hooks.py`
@@ -163,17 +164,16 @@ persisted, all features are committed and UAT still needs to run, or UAT failed
 with an addressable classification. It never auto-continues into
 `sdlc-merge-pr`; merge requires an explicit user request.
 
-The PreToolUse hook can deny unsafe actions such as out-of-scope writes,
-credential writes, secret-bearing shell or patch content, locked-plan edits,
-private SDLC state leaks into the repository, destructive Git commands,
-protected-branch commit or push attempts, force pushes, branch deletion, and
-guarded Git or GitHub actions without valid short-lived authorization. It also
-allows writes under `$CODEX_HOME/task-state` so global task-state checkpoints
-remain separate from private SDLC run state. The only reviewed global Codex
-configuration write exception is an `apply_patch` edit to the exact resolved
-`$CODEX_HOME/AGENTS.md` file. Deleting or moving that file remains blocked, and
-shell writes, MCP writes, `$CODEX_HOME/config.toml`, and `$CODEX_HOME/hooks`
-remain outside that exception.
+The PreToolUse hook does not deny filesystem targets by path. File reads,
+writes, updates, deletes, and moves may target repository files, outside-repo
+files, credential directories, Codex runtime files, global `AGENTS.md`, locked
+SDLC plans, and private SDLC state when the operator needs that flexibility.
+The hook can still deny unsafe content or action shapes such as secret-bearing
+shell, patch, or MCP payloads, destructive shell commands, destructive Git
+commands, protected-branch commit or push attempts, force pushes, branch
+deletion, and guarded Git or GitHub actions without valid short-lived
+authorization. Ordinary outbound network commands are not restricted by the
+hook unless they match those unsafe content or action checks.
 
 The hook bundle is source code in the skills repository. Installed copies under
 `$CODEX_HOME/hooks` are runtime artifacts and can drift. Hook fixes should be

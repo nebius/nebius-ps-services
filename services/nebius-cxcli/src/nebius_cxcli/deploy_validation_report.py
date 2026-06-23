@@ -3,17 +3,21 @@
 from __future__ import annotations
 
 import json
-import re
-from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass, replace
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 DEPLOY_REPORT_FILENAME = "deploy-report.md"
 _LEGACY_VALIDATION_MARKDOWN_FILENAME = "deploy-validation-report.md"
-_NCCL_AVG_BUS_BANDWIDTH_MARKDOWN_RE = re.compile(
-    r"(average bus bandwidth )([0-9]+(?:\.[0-9]+)?)( Gbps)"
-)
+_DEPLOY_VALIDATION_REPORT_KINDS = {
+    "mk8s_cluster_smoke",
+    "mk8s_gpu_operator_readiness",
+    "mk8s_gpu_visibility",
+    "mk8s_observability_ingestion",
+    "mysterybox_eso_connectivity",
+    "soperator_cluster_smoke",
+}
 
 
 @dataclass(frozen=True)
@@ -73,9 +77,8 @@ def build_deploy_validation_report(
     markdown_path: Path | None = None,
 ) -> DeployValidationReport:
     """Aggregate validation JSON detail files into one summary structure."""
-    results = _apply_soperator_owned_gpu_summaries(
-        _build_validation_result(spec, reports_dir=reports_dir) for spec in validations
-    )
+    _raise_if_non_deploy_validation_report_kinds(validations)
+    results = tuple(_build_validation_result(spec, reports_dir=reports_dir) for spec in validations)
     completed_count = sum(1 for item in results if item.status != "not_run")
     passed_count = sum(1 for item in results if item.status == "passed")
     failed_count = sum(1 for item in results if item.status == "failed")
@@ -100,72 +103,25 @@ def build_deploy_validation_report(
     )
 
 
-def _apply_soperator_owned_gpu_summaries(
-    results_iterable: Iterable[DeployValidationResult],
-) -> tuple[DeployValidationResult, ...]:
-    results = tuple(results_iterable)
-    soperator_by_target: dict[str, DeployValidationResult] = {
-        item.target_ref: item
-        for item in results
-        if item.kind == "soperator_cluster_smoke" and item.target_ref
-    }
-    unique_soperator = tuple(item for item in results if item.kind == "soperator_cluster_smoke")
-    updated: list[DeployValidationResult] = []
-    for item in results:
-        if item.kind not in {"mk8s_cuda_smoke", "mk8s_nccl"}:
-            updated.append(item)
-            continue
-        if not _is_soperator_gpu_ownership_skip(item.summary):
-            updated.append(item)
-            continue
-        soperator = soperator_by_target.get(item.target_ref)
-        if soperator is None and not item.target_ref and len(unique_soperator) == 1:
-            soperator = unique_soperator[0]
-        replacement_summary = _soperator_owned_gpu_summary(item, soperator)
-        if replacement_summary:
-            updated.append(
-                replace(
-                    item,
-                    summary=replacement_summary,
-                    footer_summary=replacement_summary,
-                )
-            )
-        else:
-            updated.append(item)
-    return tuple(updated)
-
-
-def _is_soperator_gpu_ownership_skip(summary: str) -> bool:
-    return (
-        summary.startswith("Skipped: ")
-        and "all Ready GPU nodes already have their GPUs allocated" in summary
+def _raise_if_non_deploy_validation_report_kinds(
+    validations: Sequence[Mapping[str, Any]],
+) -> None:
+    unsupported = sorted(
+        {
+            str(item.get("kind", "") or "").strip() or "<missing>"
+            for item in validations
+            if (str(item.get("kind", "") or "").strip() or "<missing>")
+            not in _DEPLOY_VALIDATION_REPORT_KINDS
+        }
     )
-
-
-def _soperator_owned_gpu_summary(
-    item: DeployValidationResult,
-    soperator: DeployValidationResult | None,
-) -> str:
-    if soperator is None or soperator.status != "passed":
-        return ""
-    if item.kind == "mk8s_cuda_smoke":
-        check_name = "Slurm GPU allocation check"
-        lead = "Soperator-owned Slurm GPU allocation passed"
-    elif item.kind == "mk8s_nccl":
-        check_name = "Slurm NCCL benchmark"
-        lead = "Soperator-owned Slurm NCCL benchmark passed"
-    else:
-        return ""
-    for check in soperator.checks:
-        if check.name != check_name or check.status != "passed":
-            continue
-        suffix = f": {check.summary}" if check.summary else "."
-        return (
-            f"{lead}{suffix.rstrip('.')}. "
-            "The Kubernetes workload check was not scheduled because Soperator "
-            "worker pods reserve all Ready GPU nodes."
-        )
-    return ""
+    if not unsupported:
+        return
+    raise ValueError(
+        "Deploy validation reports only accept deploy-time validation kinds; "
+        "unsupported kind(s): "
+        + ", ".join(unsupported)
+        + ". Run acceptance-test smoke or acceptance-test benchmark for acceptance-only suites."
+    )
 
 
 def format_deploy_validation_summary_lines(
@@ -203,14 +159,13 @@ def validation_section_lines(report: DeployValidationReport) -> list[str]:
     ]
     for item in report.results:
         detail_name = item.report_path.name if item.report_exists else "n/a"
-        summary = _validation_markdown_summary(item)
         lines.extend(
             [
                 f"### {item.name}",
                 "",
                 f"- Status: `{status_label(item.status)}`",
                 f"- Detail report: `{detail_name}`",
-                f"- Summary: {summary}",
+                f"- Summary: {item.summary}",
             ]
         )
         if item.checks:
@@ -230,16 +185,6 @@ def status_label(status: str) -> str:
         "not_run": "NOT RUN",
         "incomplete": "INCOMPLETE",
     }.get(status, status.upper() if status else "UNKNOWN")
-
-
-def _validation_markdown_summary(item: DeployValidationResult) -> str:
-    if item.kind != "mk8s_nccl":
-        return item.summary
-    return _NCCL_AVG_BUS_BANDWIDTH_MARKDOWN_RE.sub(
-        r"\1**\2**\3",
-        item.summary,
-        count=1,
-    )
 
 
 def _validation_report_path(spec: Mapping[str, Any], *, reports_dir: Path) -> Path:
@@ -358,10 +303,8 @@ def _validation_summary(kind: str, payload: Mapping[str, Any]) -> str:
         return _operator_readiness_summary(payload)
     if kind == "mk8s_cluster_smoke":
         return _cluster_smoke_summary(payload)
-    if kind == "mk8s_cuda_smoke":
-        return _cuda_smoke_summary(payload)
-    if kind == "mk8s_nccl":
-        return _nccl_summary(payload)
+    if kind == "mk8s_gpu_visibility":
+        return _gpu_visibility_summary(payload)
     if kind == "mk8s_observability_ingestion":
         return _observability_ingestion_summary(payload)
     if kind == "mysterybox_eso_connectivity":
@@ -385,8 +328,6 @@ def _validation_footer_summary(
         return _operator_readiness_footer_summary(payload)
     if kind == "mk8s_cluster_smoke":
         return _cluster_smoke_summary(payload)
-    if kind == "mk8s_nccl":
-        return _nccl_footer_summary(payload)
     return fallback
 
 
@@ -419,37 +360,6 @@ def _operator_readiness_footer_summary(payload: Mapping[str, Any]) -> str:
     return "; ".join(parts) + "."
 
 
-def _nccl_footer_summary(payload: Mapping[str, Any]) -> str:
-    phase = str(payload.get("launcher_phase", "") or "").strip() or "unknown"
-    avg = float(payload.get("avg_bus_bandwidth_gbps", 0.0) or 0.0)
-    threshold = float(payload.get("threshold_gbps", 0.0) or 0.0)
-    worker_count = int(payload.get("selected_worker_node_count", 0) or 0)
-    worker_label = f"{worker_count} {_plural_word(worker_count, 'worker')}"
-    transport = str(payload.get("transport_label", "") or "").strip() or "auto"
-    parts = [phase]
-    if bool(payload.get("single_rank_smoke")) and not bool(payload.get("bandwidth_observed")):
-        parts.append(f"{transport} single-rank smoke across {worker_label}")
-        parts.append("no collective bandwidth observed")
-        if not bool(payload.get("threshold_enforced", True)):
-            parts.append("RDMA threshold not enforced")
-        return "; ".join(parts) + "."
-    if bool(payload.get("threshold_enforced", True)):
-        parts.append(
-            f"{transport} {avg:.1f} Gbps (threshold {threshold:.1f}) across {worker_label}"
-        )
-    else:
-        parts.append(f"{transport} {avg:.1f} Gbps across {worker_label}")
-        parts.append("RDMA threshold not enforced")
-    env_name = str(payload.get("nccl_dmabuf_env_name", "") or "").strip()
-    env_value = str(payload.get("nccl_dmabuf_enable", "") or "").strip()
-    gpudirect_mode = str(payload.get("gpudirect_mode", "") or "").strip()
-    if env_name == "NCCL_DMABUF_ENABLE" and env_value == "1":
-        parts.append("DMA-BUF enabled")
-    elif gpudirect_mode:
-        parts.append(f"GPUDirect {gpudirect_mode}")
-    return "; ".join(parts) + "."
-
-
 def _validation_display_name(
     kind: str,
     *,
@@ -464,6 +374,8 @@ def _validation_display_name(
     )
     if kind == "mk8s_gpu_operator_readiness":
         return validation_name or spec_name or "GPU stack readiness"
+    if kind == "mk8s_gpu_visibility":
+        return validation_name or spec_name or "GPU visibility probe"
     return spec_name or validation_name or kind or "Validation"
 
 
@@ -514,7 +426,7 @@ def _cluster_smoke_summary(payload: Mapping[str, Any]) -> str:
     return "; ".join(parts) + "."
 
 
-def _cuda_smoke_summary(payload: Mapping[str, Any]) -> str:
+def _gpu_visibility_summary(payload: Mapping[str, Any]) -> str:
     if bool(payload.get("skipped")):
         reason = str(payload.get("skip_reason", "") or "").strip()
         total = int(payload.get("total_gpu_node_count", 0) or 0)
@@ -532,63 +444,6 @@ def _cuda_smoke_summary(payload: Mapping[str, Any]) -> str:
     if skipped:
         summary += f"; skipped {skipped}"
     return summary + "."
-
-
-def _nccl_summary(payload: Mapping[str, Any]) -> str:
-    if bool(payload.get("skipped")):
-        reason = str(payload.get("skip_reason", "") or "").strip()
-        total = int(payload.get("total_gpu_node_count", 0) or 0)
-        summary = f"Skipped: {reason or 'no schedulable NCCL GPU slot was available'}"
-        if total:
-            summary += f"; total Ready GPU nodes {total}"
-        return summary + "."
-    phase = str(payload.get("launcher_phase", "") or "").strip() or "unknown"
-    avg = float(payload.get("avg_bus_bandwidth_gbps", 0.0) or 0.0)
-    threshold = float(payload.get("threshold_gbps", 0.0) or 0.0)
-    worker_count = int(payload.get("selected_worker_node_count", 0) or 0)
-    transport = str(payload.get("transport_label", "") or "").strip() or "auto"
-    dmabuf = _nccl_dmabuf_summary(payload)
-    if bool(payload.get("single_rank_smoke")) and not bool(payload.get("bandwidth_observed")):
-        dmabuf_text = f"; {dmabuf}" if dmabuf else ""
-        threshold_text = (
-            "; RDMA threshold not enforced for this run"
-            if not bool(payload.get("threshold_enforced", True))
-            else ""
-        )
-        return (
-            f"Launcher phase {phase}; {transport} single-rank smoke run across "
-            f"{worker_count} worker node(s); no collective bus bandwidth observed"
-            f"{dmabuf_text}{threshold_text}."
-        )
-    if not bool(payload.get("threshold_enforced", True)):
-        dmabuf_text = f"; {dmabuf}" if dmabuf else ""
-        return (
-            f"Launcher phase {phase}; {transport} average bus bandwidth {avg:.1f} Gbps "
-            f"across {worker_count} worker node(s){dmabuf_text}; "
-            "RDMA threshold not enforced for this run."
-        )
-    dmabuf_text = f"; {dmabuf}" if dmabuf else ""
-    return (
-        f"Launcher phase {phase}; {transport} average bus bandwidth {avg:.1f} Gbps "
-        f"vs threshold {threshold:.1f} Gbps across {worker_count} worker node(s)"
-        f"{dmabuf_text}."
-    )
-
-
-def _nccl_dmabuf_summary(payload: Mapping[str, Any]) -> str:
-    env_name = str(payload.get("nccl_dmabuf_env_name", "") or "").strip()
-    env_value = str(payload.get("nccl_dmabuf_enable", "") or "").strip()
-    if not env_name or not env_value:
-        return ""
-    source = str(payload.get("nccl_dmabuf_enable_source", "") or "").strip()
-    gpudirect_mode = str(payload.get("gpudirect_mode", "") or "").strip()
-    notes = []
-    if source and source != "unset":
-        notes.append(source)
-    if gpudirect_mode:
-        notes.append(f"GPUDirect mode {gpudirect_mode}")
-    suffix = f" ({'; '.join(notes)})" if notes else ""
-    return f"{env_name}={env_value}{suffix}"
 
 
 def _observability_ingestion_summary(payload: Mapping[str, Any]) -> str:

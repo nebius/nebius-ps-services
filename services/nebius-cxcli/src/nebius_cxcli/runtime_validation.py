@@ -72,6 +72,19 @@ def _as_text(value: Any) -> str:
     return str(value).strip()
 
 
+def _coerce_int(value: Any, *, default: int = 0) -> int:
+    if isinstance(value, bool) or value is None:
+        return default
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    try:
+        return int(str(value).strip())
+    except (TypeError, ValueError):
+        return default
+
+
 def _positive_int_for_validation(value: Any, field_label: str) -> None:
     if value is None or value == "":
         return
@@ -547,6 +560,7 @@ def _validate_deploy(payload: Mapping[str, Any]) -> None:
             kind = _as_text(raw_target.get("kind")).lower()
             base_target_keys = {
                 INSTANCE_ID_FIELD,
+                "deployment_testing",
                 "observability",
                 "project_id",
                 "region_id",
@@ -631,22 +645,16 @@ def _validate_deploy(payload: Mapping[str, Any]) -> None:
                 raw_target.get("secrets"),
                 field_label=f"deploy.targets[{index}].secrets",
             )
-            target_validations = raw_target.get("validations")
-            if target_validations is None:
-                continue
-            if not isinstance(target_validations, Mapping):
-                raise ValueError(f"deploy.targets[{index}].validations must be a mapping")
-            unknown_target_validation_keys = sorted(
-                str(key) for key in target_validations if str(key) not in {"mk8s_gpu"}
-            )
-            if unknown_target_validation_keys:
+            if "validations" in raw_target:
                 raise ValueError(
-                    f"deploy.targets[{index}].validations has unsupported field(s): "
-                    + ", ".join(unknown_target_validation_keys)
+                    f"deploy.targets[{index}].validations is no longer supported; "
+                    "use deploy.targets[].deployment_testing for deploy-time checks and "
+                    "acceptance-test commands for heavy validation/benchmarking"
                 )
-            mk8s_gpu = target_validations.get("mk8s_gpu")
-            if mk8s_gpu is not None and not isinstance(mk8s_gpu, Mapping):
-                raise ValueError(f"deploy.targets[{index}].validations.mk8s_gpu must be a mapping")
+            _validate_deployment_testing(
+                raw_target.get("deployment_testing"),
+                field_label=f"deploy.targets[{index}].deployment_testing",
+            )
 
 
 def _validate_deploy_target_secrets(secrets: Any, *, field_label: str) -> None:
@@ -716,6 +724,89 @@ def _validate_deploy_target_secrets(secrets: Any, *, field_label: str) -> None:
             raise ValueError(
                 f"{field_label}.mysterybox.sync_namespaces[{index}] must be a Kubernetes namespace name"
             )
+
+
+def _validate_deployment_testing(raw: Any, *, field_label: str) -> None:
+    if raw is None:
+        return
+    if not isinstance(raw, Mapping):
+        raise ValueError(f"{field_label} must be a mapping")
+    unknown_keys = sorted(str(key) for key in raw if str(key) not in {"mk8s_gpu", "soperator"})
+    if unknown_keys:
+        raise ValueError(f"{field_label} has unsupported field(s): " + ", ".join(unknown_keys))
+
+    mk8s_gpu = raw.get("mk8s_gpu")
+    if mk8s_gpu is not None:
+        if not isinstance(mk8s_gpu, Mapping):
+            raise ValueError(f"{field_label}.mk8s_gpu must be a mapping")
+        supported_mk8s_gpu = {"operator_readiness", "gpu_visibility", "health_checker"}
+        unknown_mk8s_gpu = sorted(
+            str(key) for key in mk8s_gpu if str(key) not in supported_mk8s_gpu
+        )
+        if unknown_mk8s_gpu:
+            hint = ""
+            if "cuda_smoke" in unknown_mk8s_gpu:
+                hint = "; use gpu_visibility for the bounded deploy probe"
+            if "nccl" in unknown_mk8s_gpu:
+                hint = "; use acceptance-test benchmark for NCCL"
+            raise ValueError(
+                f"{field_label}.mk8s_gpu has unsupported field(s): "
+                + ", ".join(unknown_mk8s_gpu)
+                + hint
+            )
+        for section_name in ("operator_readiness", "gpu_visibility", "health_checker"):
+            section = mk8s_gpu.get(section_name)
+            if section is None:
+                continue
+            if not isinstance(section, Mapping):
+                raise ValueError(f"{field_label}.mk8s_gpu.{section_name} must be a mapping")
+            supported_section_keys = {"enabled"}
+            if section_name == "gpu_visibility":
+                supported_section_keys.add("max_nodes")
+            unknown_section = sorted(
+                str(key) for key in section if str(key) not in supported_section_keys
+            )
+            if unknown_section:
+                raise ValueError(
+                    f"{field_label}.mk8s_gpu.{section_name} has unsupported field(s): "
+                    + ", ".join(unknown_section)
+                )
+            enabled = section.get("enabled")
+            if enabled is not None and not isinstance(enabled, bool):
+                raise ValueError(
+                    f"{field_label}.mk8s_gpu.{section_name}.enabled must be true or false when set"
+                )
+            max_nodes = section.get("max_nodes")
+            if max_nodes is not None and _coerce_int(max_nodes, default=0) <= 0:
+                raise ValueError(
+                    f"{field_label}.mk8s_gpu.{section_name}.max_nodes must be > 0"
+                )
+
+    soperator = raw.get("soperator")
+    if soperator is not None:
+        if not isinstance(soperator, Mapping):
+            raise ValueError(f"{field_label}.soperator must be a mapping")
+        unknown_soperator = sorted(str(key) for key in soperator if str(key) not in {"smoke"})
+        if unknown_soperator:
+            raise ValueError(
+                f"{field_label}.soperator has unsupported field(s): "
+                + ", ".join(unknown_soperator)
+            )
+        smoke = soperator.get("smoke")
+        if smoke is not None:
+            if not isinstance(smoke, Mapping):
+                raise ValueError(f"{field_label}.soperator.smoke must be a mapping")
+            unknown_smoke = sorted(str(key) for key in smoke if str(key) not in {"enabled"})
+            if unknown_smoke:
+                raise ValueError(
+                    f"{field_label}.soperator.smoke has unsupported field(s): "
+                    + ", ".join(unknown_smoke)
+                )
+            enabled = smoke.get("enabled")
+            if enabled is not None and not isinstance(enabled, bool):
+                raise ValueError(
+                    f"{field_label}.soperator.smoke.enabled must be true or false when set"
+                )
 
 
 def _validate_mysterybox_credentials_secret(value: Any, *, field_label: str) -> None:
@@ -1073,7 +1164,7 @@ def validate_dynamic_payload_structure(payload: Mapping[str, Any]) -> None:
         if component_id == "mk8s" and "gpu_validation_overrides" in inputs:
             raise ValueError(
                 "infra.components[].inputs.gpu_validation_overrides is no longer supported; "
-                "use deploy.targets[].validations.mk8s_gpu.*"
+                "use deploy.targets[].deployment_testing.mk8s_gpu.*"
             )
         if component_id == "vpc" and bool(raw_component.get("enabled", False)):
             cidr_entries = _validate_planned_vpc_private_cidr_contract(

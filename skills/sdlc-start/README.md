@@ -37,6 +37,7 @@ runtime hooks:
 
 - `pre_tool_use_sdlc_policy.py`
 - `stop_sdlc_continue.py`
+- `lib/__init__.py`
 - `lib/sdlc_policy.py`
 - `lib/sdlc_state.py`
 - `tests/test_sdlc_hooks.py`
@@ -44,8 +45,11 @@ runtime hooks:
 Patch these source files before touching installed runtime copies under
 `$CODEX_HOME/hooks`. The Stop hook must emit `sdlc-start` and canonical
 `sdlc-*` skill names, while still accepting short phase aliases as input. The
-PreToolUse hook should continue blocking out-of-scope edits, including
-unscoped edits to runtime hook files from unrelated project workspaces.
+PreToolUse hook does not block file targets by path; repo files, outside-repo
+files, credential directories, Codex runtime files, global `AGENTS.md`, locked
+SDLC plans, and private SDLC state are all path-allowed for operator
+flexibility. It still blocks secret-bearing payloads, dangerous shell patterns,
+and guarded Git/GitHub actions.
 
 Validate the source bundle from the `skills/` directory:
 
@@ -57,11 +61,12 @@ To intentionally sync the source bundle into a local Codex runtime:
 
 ```bash
 ./install-skills.sh --install-all-hooks
-./install-skills.sh --install-hooks sdlc-start/assets/hooks
+./install-skills.sh --install-hooks sdlc-start/assets/hooks --register-hooks
 ```
 
 The all-hooks form syncs every reviewed hook-only bundle under the source skills
 folder. The single-source form copies only SDLC hook files into
-`${CODEX_HOME:-$HOME/.codex}/hooks`. Neither form updates `hooks.json` or
-trusts hooks. Restart Codex and review the PreToolUse and Stop entries in
-`/hooks` after syncing.
+`${CODEX_HOME:-$HOME/.codex}/hooks`. Add `--register-hooks` when the installer
+should merge the SDLC `PreToolUse` and `Stop` entries into `hooks.json`.
+Registration does not trust hooks. Restart Codex and review the PreToolUse and
+Stop entries in `/hooks` after syncing.

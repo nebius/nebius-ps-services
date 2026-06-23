@@ -187,7 +187,7 @@ class Mk8sGpuOperatorReadinessSettings:
 
 
 @dataclass(frozen=True)
-class Mk8sCudaSmokeSettings:
+class Mk8sGpuVisibilitySettings:
     enabled_by_default: bool = False
     namespace: str = ""
     image: str = ""
@@ -198,7 +198,6 @@ class Mk8sCudaSmokeSettings:
 
 @dataclass(frozen=True)
 class Mk8sNcclSettings:
-    enabled_by_default: bool = False
     chart_component_id: str = ""
     timeout: str = ""
     training_operator_manifest: str = ""
@@ -214,18 +213,23 @@ class Mk8sGpuHealthCheckerSettings:
 
 
 @dataclass(frozen=True)
-class Mk8sGpuValidationSettings:
+class Mk8sGpuDeploymentTestingSettings:
     operator_readiness: Mk8sGpuOperatorReadinessSettings = Mk8sGpuOperatorReadinessSettings()
-    cuda_smoke: Mk8sCudaSmokeSettings = Mk8sCudaSmokeSettings()
-    nccl: Mk8sNcclSettings = Mk8sNcclSettings()
+    gpu_visibility: Mk8sGpuVisibilitySettings = Mk8sGpuVisibilitySettings()
     health_checker: Mk8sGpuHealthCheckerSettings = Mk8sGpuHealthCheckerSettings()
+
+
+@dataclass(frozen=True)
+class Mk8sGpuBenchmarkSettings:
+    nccl: Mk8sNcclSettings = Mk8sNcclSettings()
 
 
 @dataclass(frozen=True)
 class Mk8sGpuSettings:
     default_stack_source: str = ""
     image_preferences: Mk8sGpuImagePreferenceSettings = Mk8sGpuImagePreferenceSettings()
-    validations: Mk8sGpuValidationSettings = Mk8sGpuValidationSettings()
+    deployment_testing: Mk8sGpuDeploymentTestingSettings = Mk8sGpuDeploymentTestingSettings()
+    benchmarks: Mk8sGpuBenchmarkSettings = Mk8sGpuBenchmarkSettings()
 
 
 @dataclass(frozen=True)
@@ -1558,13 +1562,13 @@ def _parse_mk8s_gpu_operator_readiness_settings(
     )
 
 
-def _parse_mk8s_cuda_smoke_settings(
+def _parse_mk8s_gpu_visibility_settings(
     raw: Any,
     *,
     field_label: str,
-) -> Mk8sCudaSmokeSettings:
+) -> Mk8sGpuVisibilitySettings:
     if raw is None:
-        return Mk8sCudaSmokeSettings()
+        return Mk8sGpuVisibilitySettings()
     if not isinstance(raw, dict):
         raise ValueError(f"{field_label} must be a mapping")
     supported_keys = {"enabled_by_default", "namespace", "image", "timeout", "cleanup", "max_nodes"}
@@ -1574,14 +1578,14 @@ def _parse_mk8s_cuda_smoke_settings(
     timeout = _as_text(raw.get("timeout"))
     if timeout and not GO_DURATION_RE.fullmatch(timeout):
         raise ValueError(f"{field_label}.timeout must be a Go-style duration like '10m' or '45s'")
-    max_nodes_raw = raw.get("max_nodes", Mk8sCudaSmokeSettings().max_nodes)
+    max_nodes_raw = raw.get("max_nodes", Mk8sGpuVisibilitySettings().max_nodes)
     try:
         max_nodes = int(max_nodes_raw)
     except (TypeError, ValueError) as exc:
         raise ValueError(f"{field_label}.max_nodes must be an integer >= 1") from exc
     if max_nodes < 1:
         raise ValueError(f"{field_label}.max_nodes must be >= 1")
-    return Mk8sCudaSmokeSettings(
+    return Mk8sGpuVisibilitySettings(
         enabled_by_default=bool(raw.get("enabled_by_default", True)),
         namespace=_as_text(raw.get("namespace")),
         image=_as_text(raw.get("image")),
@@ -1601,7 +1605,6 @@ def _parse_mk8s_nccl_settings(
     if not isinstance(raw, dict):
         raise ValueError(f"{field_label} must be a mapping")
     supported_keys = {
-        "enabled_by_default",
         "chart_component_id",
         "timeout",
         "training_operator_manifest",
@@ -1646,7 +1649,6 @@ def _parse_mk8s_nccl_settings(
     elif rdma_mpi_extra_args_raw is not None:
         raise ValueError(f"{field_label}.rdma_mpi_extra_args must be a list")
     return Mk8sNcclSettings(
-        enabled_by_default=bool(raw.get("enabled_by_default", True)),
         chart_component_id=_as_text(raw.get("chart_component_id")),
         timeout=timeout,
         training_operator_manifest=_as_text(raw.get("training_operator_manifest")),
@@ -1675,43 +1677,61 @@ def _parse_mk8s_gpu_health_checker_settings(
     )
 
 
-def _parse_mk8s_gpu_validation_settings(
+def _parse_mk8s_gpu_deployment_testing_settings(
     raw: Any,
     *,
     field_label: str,
     source_profile: SourceProfile,
     source_root: Path | None = None,
-) -> Mk8sGpuValidationSettings:
+) -> Mk8sGpuDeploymentTestingSettings:
     if raw is None:
-        return Mk8sGpuValidationSettings()
+        return Mk8sGpuDeploymentTestingSettings()
     if not isinstance(raw, dict):
         raise ValueError(f"{field_label} must be a mapping")
     supported_keys = {
         "operator_readiness",
-        "cuda_smoke",
-        "nccl",
+        "gpu_visibility",
         "health_checker",
     }
     unknown = sorted(str(key) for key in raw if str(key) not in supported_keys)
     if unknown:
         raise ValueError(f"{field_label} has unsupported field(s): " + ", ".join(unknown))
-    return Mk8sGpuValidationSettings(
+    return Mk8sGpuDeploymentTestingSettings(
         operator_readiness=_parse_mk8s_gpu_operator_readiness_settings(
             raw.get("operator_readiness"),
             field_label=f"{field_label}.operator_readiness",
         ),
-        cuda_smoke=_parse_mk8s_cuda_smoke_settings(
-            raw.get("cuda_smoke"),
-            field_label=f"{field_label}.cuda_smoke",
-        ),
-        nccl=_parse_mk8s_nccl_settings(
-            raw.get("nccl"),
-            field_label=f"{field_label}.nccl",
+        gpu_visibility=_parse_mk8s_gpu_visibility_settings(
+            raw.get("gpu_visibility"),
+            field_label=f"{field_label}.gpu_visibility",
         ),
         health_checker=_parse_mk8s_gpu_health_checker_settings(
             raw.get("health_checker"),
             field_label=f"{field_label}.health_checker",
         ),
+    )
+
+
+def _parse_mk8s_gpu_benchmark_settings(
+    raw: Any,
+    *,
+    field_label: str,
+    source_profile: SourceProfile,
+    source_root: Path | None = None,
+) -> Mk8sGpuBenchmarkSettings:
+    if raw is None:
+        return Mk8sGpuBenchmarkSettings()
+    if not isinstance(raw, dict):
+        raise ValueError(f"{field_label} must be a mapping")
+    supported_keys = {"nccl"}
+    unknown = sorted(str(key) for key in raw if str(key) not in supported_keys)
+    if unknown:
+        raise ValueError(f"{field_label} has unsupported field(s): " + ", ".join(unknown))
+    return Mk8sGpuBenchmarkSettings(
+        nccl=_parse_mk8s_nccl_settings(
+            raw.get("nccl"),
+            field_label=f"{field_label}.nccl",
+        )
     )
 
 
@@ -1726,7 +1746,7 @@ def _parse_mk8s_gpu_settings(
         return Mk8sGpuSettings()
     if not isinstance(raw, dict):
         raise ValueError(f"{field_label} must be a mapping")
-    supported_keys = {"default_stack_source", "image_preferences", "validations"}
+    supported_keys = {"default_stack_source", "image_preferences", "deployment_testing", "benchmarks"}
     unknown = sorted(str(key) for key in raw if str(key) not in supported_keys)
     if unknown:
         raise ValueError(f"{field_label} has unsupported field(s): " + ", ".join(unknown))
@@ -1739,9 +1759,15 @@ def _parse_mk8s_gpu_settings(
             raw.get("image_preferences"),
             field_label=f"{field_label}.image_preferences",
         ),
-        validations=_parse_mk8s_gpu_validation_settings(
-            raw.get("validations"),
-            field_label=f"{field_label}.validations",
+        deployment_testing=_parse_mk8s_gpu_deployment_testing_settings(
+            raw.get("deployment_testing"),
+            field_label=f"{field_label}.deployment_testing",
+            source_profile=source_profile,
+            source_root=source_root,
+        ),
+        benchmarks=_parse_mk8s_gpu_benchmark_settings(
+            raw.get("benchmarks"),
+            field_label=f"{field_label}.benchmarks",
             source_profile=source_profile,
             source_root=source_root,
         ),
@@ -1788,8 +1814,7 @@ def _parse_mk8s_gpu_app_policy(
     )
     supported_target_validations = {
         "operator_readiness",
-        "cuda_smoke",
-        "nccl",
+        "gpu_visibility",
         "health_checker",
     }
     unknown_target_validations = sorted(
@@ -3440,46 +3465,30 @@ def _parse_component_wizard_fields(
     return _parse_wizard_fields(merged_raw or None, field_label=field_label)
 
 
-def _derived_mk8s_gpu_validation_wizard_fields(
+def _derived_mk8s_gpu_deployment_testing_wizard_fields(
     mk8s_gpu: Mk8sGpuSettings,
 ) -> dict[str, dict[str, Any]]:
-    validations = mk8s_gpu.validations
+    deployment_testing = mk8s_gpu.deployment_testing
     return {
-        "deploy.targets[].validations.mk8s_gpu.operator_readiness.enabled": {
-            "default": validations.operator_readiness.enabled_by_default,
+        "deploy.targets[].deployment_testing.mk8s_gpu.operator_readiness.enabled": {
+            "default": deployment_testing.operator_readiness.enabled_by_default,
             "write_default_to_config": True,
             "required": True,
             "type_hint": "bool",
         },
-        "deploy.targets[].validations.mk8s_gpu.cuda_smoke.enabled": {
-            "default": validations.cuda_smoke.enabled_by_default,
+        "deploy.targets[].deployment_testing.mk8s_gpu.gpu_visibility.enabled": {
+            "default": deployment_testing.gpu_visibility.enabled_by_default,
             "write_default_to_config": True,
             "required": True,
             "type_hint": "bool",
         },
-        "deploy.targets[].validations.mk8s_gpu.cuda_smoke.max_nodes": {
-            "default": validations.cuda_smoke.max_nodes,
+        "deploy.targets[].deployment_testing.mk8s_gpu.gpu_visibility.max_nodes": {
+            "default": deployment_testing.gpu_visibility.max_nodes,
             "write_default_to_config": True,
             "type_hint": "number",
         },
-        "deploy.targets[].validations.mk8s_gpu.nccl.enabled": {
-            "default": validations.nccl.enabled_by_default,
-            "write_default_to_config": True,
-            "required": True,
-            "type_hint": "bool",
-        },
-        "deploy.targets[].validations.mk8s_gpu.nccl.max_nodes": {
-            "default": validations.nccl.max_nodes,
-            "write_default_to_config": True,
-            "type_hint": "number",
-        },
-        "deploy.targets[].validations.mk8s_gpu.nccl.average_bus_bandwidth_threshold_gbps": {
-            "default": validations.nccl.average_bus_bandwidth_threshold_gbps,
-            "write_default_to_config": True,
-            "type_hint": "number",
-        },
-        "deploy.targets[].validations.mk8s_gpu.health_checker.enabled": {
-            "default": validations.health_checker.enabled_by_default,
+        "deploy.targets[].deployment_testing.mk8s_gpu.health_checker.enabled": {
+            "default": deployment_testing.health_checker.enabled_by_default,
             "write_default_to_config": True,
             "required": True,
             "type_hint": "bool",
@@ -3551,9 +3560,9 @@ def _derived_infra_component_wizard_fields(
         module_name == "mk8s"
         and isinstance(raw_cli, dict)
         and isinstance(raw_cli.get("gpu"), dict)
-        and isinstance(raw_cli.get("gpu", {}).get("validations"), dict)
+        and isinstance(raw_cli.get("gpu", {}).get("deployment_testing"), dict)
     ):
-        derived.update(_derived_mk8s_gpu_validation_wizard_fields(mk8s_gpu))
+        derived.update(_derived_mk8s_gpu_deployment_testing_wizard_fields(mk8s_gpu))
     if (
         module_name in {"mk8s", "vm"}
         and isinstance(raw_cli, dict)
@@ -3805,11 +3814,6 @@ def _parse_helm_chart_usage(raw: Any, *, field_label: str) -> HelmChartUsage:
             raise ValueError(
                 f"{field_label}.usage.lifecycle is required when usage.config is set"
             )
-
-    if lifecycle == "transient" and not config_ref:
-        raise ValueError(
-            f"{field_label}.usage.config.ref is required when usage.lifecycle=transient"
-        )
 
     return HelmChartUsage(lifecycle=lifecycle, config_ref=config_ref)
 
