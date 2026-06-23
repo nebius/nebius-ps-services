@@ -1681,6 +1681,32 @@ spec:
             "external-context",
             "-n",
             "soperator",
+            "get",
+            "nodesets",
+            "-o",
+        ):
+            return SoperatorMigrationCommandResult(
+                command,
+                0,
+                json.dumps(
+                    {
+                        "items": [
+                            {
+                                "metadata": {"name": "worker", "namespace": "soperator"},
+                                "spec": {"replicas": 1},
+                                "status": {"phase": "Ready", "replicas": 1},
+                            }
+                        ]
+                    }
+                ),
+                "",
+            )
+        if command[:8] == (
+            "kubectl",
+            "--context",
+            "external-context",
+            "-n",
+            "soperator",
             "exec",
             "login-0",
             "--",
