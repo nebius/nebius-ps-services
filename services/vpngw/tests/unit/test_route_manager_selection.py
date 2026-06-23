@@ -15,18 +15,7 @@ from nebius_vpngw.config_loader import (
 )
 from nebius_vpngw.deploy.route_manager import RouteManager
 
-
-class _ResourceMetadata(t.Protocol):
-    id: str
-    name: str
-
-
-class _FakeSubnet(t.Protocol):
-    metadata: _ResourceMetadata
-
-
-class _FakeRoute(t.Protocol):
-    metadata: _ResourceMetadata
+_LocalConfig = dict[str, t.Any]
 
 
 def _fake_subnet(
@@ -36,7 +25,7 @@ def _fake_subnet(
     explicit_cidrs: list[str] | None = None,
     status_cidrs: list[str] | None = None,
     use_network_pools: bool = False,
-) -> _FakeSubnet:
+) -> SimpleNamespace:
     pools = []
     if explicit_cidrs:
         pools.append(
@@ -45,36 +34,38 @@ def _fake_subnet(
             )
         )
 
-    return t.cast(
-        _FakeSubnet,
-        SimpleNamespace(
-            metadata=SimpleNamespace(name=name, id=f"id-{name}"),
-            spec=SimpleNamespace(
-                network_id=network_id,
-                ipv4_private_pools=SimpleNamespace(
-                    use_network_pools=use_network_pools,
-                    pools=pools,
-                ),
+    return SimpleNamespace(
+        metadata=SimpleNamespace(name=name, id=f"id-{name}"),
+        spec=SimpleNamespace(
+            network_id=network_id,
+            ipv4_private_pools=SimpleNamespace(
+                use_network_pools=use_network_pools,
+                pools=pools,
             ),
-            status=SimpleNamespace(
-                ipv4_private_cidrs=status_cidrs or explicit_cidrs or [],
-                route_table=SimpleNamespace(id="", default=True),
-            ),
+        ),
+        status=SimpleNamespace(
+            ipv4_private_cidrs=status_cidrs or explicit_cidrs or [],
+            route_table=SimpleNamespace(id="", default=True),
         ),
     )
 
 
-def _fake_route(*, route_id: str, name: str, cidr: str, allocation_id: str) -> _FakeRoute:
-    return t.cast(
-        _FakeRoute,
-        SimpleNamespace(
-            metadata=SimpleNamespace(id=route_id, name=name),
-            spec=SimpleNamespace(
-                destination=SimpleNamespace(cidr=cidr),
-                next_hop=SimpleNamespace(allocation=SimpleNamespace(id=allocation_id)),
-            ),
+def _fake_route(*, route_id: str, name: str, cidr: str, allocation_id: str) -> SimpleNamespace:
+    return SimpleNamespace(
+        metadata=SimpleNamespace(id=route_id, name=name),
+        spec=SimpleNamespace(
+            destination=SimpleNamespace(cidr=cidr),
+            next_hop=SimpleNamespace(allocation=SimpleNamespace(id=allocation_id)),
         ),
     )
+
+
+def _metadata_name(resource: object) -> str:
+    return str(vars(vars(resource)["metadata"])["name"])
+
+
+def _metadata_id(resource: object) -> str:
+    return str(vars(vars(resource)["metadata"])["id"])
 
 
 def _three_vm_plan() -> ResolvedDeploymentPlan:
@@ -152,8 +143,7 @@ def test_select_local_prefix_subnets_excludes_inherited_status_cidrs_owned_by_ot
         gateway_subnet_name="custom-gateway-subnet",
     )
 
-    selected_subnets = t.cast(list[tuple[_FakeSubnet, list[ipaddress.IPv4Network]]], selected)
-    assert [subnet.metadata.name for subnet, _cidrs in selected_subnets] == [
+    assert [_metadata_name(subnet) for subnet, _cidrs in selected] == [
         "workload-subnet-1",
         "workload-subnet-2",
     ]
@@ -185,9 +175,8 @@ def test_select_local_prefix_subnets_keeps_inherited_status_cidrs_after_sanitizi
         gateway_subnet_name="custom-gateway-subnet",
     )
 
-    selected_subnets = t.cast(list[tuple[_FakeSubnet, list[ipaddress.IPv4Network]]], selected)
-    assert [subnet.metadata.name for subnet, _cidrs in selected_subnets] == ["default-subnet"]
-    assert [str(cidr) for cidr in selected_subnets[0][1]] == ["10.48.0.0/13"]
+    assert [_metadata_name(subnet) for subnet, _cidrs in selected] == ["default-subnet"]
+    assert [str(cidr) for cidr in selected[0][1]] == ["10.48.0.0/13"]
     assert inherited_selected == [
         "[dim]Subnet default-subnet inherits parent network pools (use_network_pools=true); sanitized status CIDRs to exclude explicit CIDRs owned by other subnets before matching: 10.48.0.0/13[/dim]"
     ]
@@ -195,7 +184,7 @@ def test_select_local_prefix_subnets_keeps_inherited_status_cidrs_after_sanitizi
 
 def test_collect_remote_prefix_targets_uses_connection_vm_allocations() -> None:
     route_manager = RouteManager(project_id="project-test")
-    local_cfg = {
+    local_cfg: _LocalConfig = {
         "defaults": {"routing": {"mode": "bgp"}},
         "connections": [
             {
@@ -248,7 +237,7 @@ def test_collect_remote_prefix_targets_uses_connection_vm_allocations() -> None:
 
 def test_collect_remote_prefix_targets_rejects_same_prefix_on_different_vms() -> None:
     route_manager = RouteManager(project_id="project-test")
-    local_cfg = {
+    local_cfg: _LocalConfig = {
         "defaults": {"routing": {"mode": "static"}},
         "connections": [
             {
@@ -357,8 +346,7 @@ def test_find_redundant_managed_routes_only_returns_covered_vpngw_routes() -> No
         {"10.10.0.0/23": "alloc-a"},
     )
 
-    redundant_routes = t.cast(list[_FakeRoute], redundant)
-    assert [route.metadata.id for route in redundant_routes] == ["route-1", "route-2"]
+    assert [_metadata_id(route) for route in redundant] == ["route-1", "route-2"]
 
 
 def test_installed_prefix_targets_require_matching_next_hop() -> None:
@@ -426,8 +414,7 @@ def test_find_redundant_managed_covering_routes_returns_broader_summaries_once_e
         },
     )
 
-    redundant_routes = t.cast(list[_FakeRoute], redundant)
-    assert [route.metadata.id for route in redundant_routes] == ["route-1"]
+    assert [_metadata_id(route) for route in redundant] == ["route-1"]
 
 
 def test_find_redundant_managed_covering_routes_keeps_summary_until_all_exact_routes_exist() -> None:
@@ -494,7 +481,7 @@ def test_get_bgp_learned_routes_queries_only_connection_owner_vm(
     route_manager = RouteManager(project_id="project-test")
     monkeypatch.delenv("VPNGW_SSH_USER", raising=False)
     monkeypatch.delenv("VPNGW_SSH_KEY", raising=False)
-    local_cfg = {
+    local_cfg: _LocalConfig = {
         "gateway_group": {"vm_spec": {}},
     }
     conn = {
@@ -548,7 +535,7 @@ def test_get_bgp_learned_routes_honors_custom_ssh_config(
     ssh_key = tmp_path / "vpngw-key"
     monkeypatch.setenv("VPNGW_SSH_USER", "env-user")
     monkeypatch.setenv("VPNGW_SSH_KEY", "/tmp/env-key")
-    local_cfg = {
+    local_cfg: _LocalConfig = {
         "gateway_group": {
             "vm_spec": {
                 "ssh_username": "operator",
@@ -611,7 +598,7 @@ def test_get_bgp_learned_routes_honors_env_ssh_fallback(
     route_manager = RouteManager(project_id="project-test")
     monkeypatch.setenv("VPNGW_SSH_USER", "env-user")
     monkeypatch.setenv("VPNGW_SSH_KEY", "/tmp/env-key")
-    local_cfg = {
+    local_cfg: _LocalConfig = {
         "gateway_group": {"vm_spec": {}},
     }
     conn = {
@@ -667,7 +654,7 @@ def test_get_bgp_learned_routes_filters_to_connection_peer_ips(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     route_manager = RouteManager(project_id="project-test")
-    local_cfg = {
+    local_cfg: _LocalConfig = {
         "gateway_group": {"vm_spec": {}},
     }
     conn = {
@@ -723,7 +710,7 @@ def test_get_bgp_learned_routes_reports_connection_scoped_count(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     route_manager = RouteManager(project_id="project-test")
-    local_cfg = {
+    local_cfg: _LocalConfig = {
         "gateway_group": {"vm_spec": {}},
     }
     conn = {
@@ -778,7 +765,7 @@ def test_list_remote_routes_processes_only_connections_owned_by_current_vm(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     route_manager = RouteManager(project_id="project-test")
-    local_cfg = {
+    local_cfg: _LocalConfig = {
         "defaults": {"routing": {"mode": "bgp"}},
         "connections": [
             {
@@ -833,7 +820,7 @@ def test_list_remote_routes_connection_filter_targets_selected_connection_only(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     route_manager = RouteManager(project_id="project-test")
-    local_cfg = {
+    local_cfg: _LocalConfig = {
         "defaults": {"routing": {"mode": "bgp"}},
         "connections": [
             {
@@ -894,7 +881,7 @@ def test_list_bgp_routes_honors_custom_ssh_config(
 ) -> None:
     route_manager = RouteManager(project_id="project-test")
     ssh_key = tmp_path / "vpngw-key"
-    local_cfg = {
+    local_cfg: _LocalConfig = {
         "gateway_group": {
             "vm_spec": {
                 "ssh_username": "operator",
@@ -988,7 +975,7 @@ def test_list_static_routes_honors_custom_ssh_config(
 ) -> None:
     route_manager = RouteManager(project_id="project-test")
     ssh_key = tmp_path / "vpngw-key"
-    local_cfg = {
+    local_cfg: _LocalConfig = {
         "gateway_group": {
             "vm_spec": {
                 "ssh_username": "operator",
