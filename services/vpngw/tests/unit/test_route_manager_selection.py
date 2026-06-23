@@ -16,6 +16,19 @@ from nebius_vpngw.config_loader import (
 from nebius_vpngw.deploy.route_manager import RouteManager
 
 
+class _ResourceMetadata(t.Protocol):
+    id: str
+    name: str
+
+
+class _FakeSubnet(t.Protocol):
+    metadata: _ResourceMetadata
+
+
+class _FakeRoute(t.Protocol):
+    metadata: _ResourceMetadata
+
+
 def _fake_subnet(
     *,
     name: str,
@@ -23,7 +36,7 @@ def _fake_subnet(
     explicit_cidrs: list[str] | None = None,
     status_cidrs: list[str] | None = None,
     use_network_pools: bool = False,
-):
+) -> _FakeSubnet:
     pools = []
     if explicit_cidrs:
         pools.append(
@@ -32,28 +45,34 @@ def _fake_subnet(
             )
         )
 
-    return SimpleNamespace(
-        metadata=SimpleNamespace(name=name, id=f"id-{name}"),
-        spec=SimpleNamespace(
-            network_id=network_id,
-            ipv4_private_pools=SimpleNamespace(
-                use_network_pools=use_network_pools,
-                pools=pools,
+    return t.cast(
+        _FakeSubnet,
+        SimpleNamespace(
+            metadata=SimpleNamespace(name=name, id=f"id-{name}"),
+            spec=SimpleNamespace(
+                network_id=network_id,
+                ipv4_private_pools=SimpleNamespace(
+                    use_network_pools=use_network_pools,
+                    pools=pools,
+                ),
             ),
-        ),
-        status=SimpleNamespace(
-            ipv4_private_cidrs=status_cidrs or explicit_cidrs or [],
-            route_table=SimpleNamespace(id="", default=True),
+            status=SimpleNamespace(
+                ipv4_private_cidrs=status_cidrs or explicit_cidrs or [],
+                route_table=SimpleNamespace(id="", default=True),
+            ),
         ),
     )
 
 
-def _fake_route(*, route_id: str, name: str, cidr: str, allocation_id: str):
-    return SimpleNamespace(
-        metadata=SimpleNamespace(id=route_id, name=name),
-        spec=SimpleNamespace(
-            destination=SimpleNamespace(cidr=cidr),
-            next_hop=SimpleNamespace(allocation=SimpleNamespace(id=allocation_id)),
+def _fake_route(*, route_id: str, name: str, cidr: str, allocation_id: str) -> _FakeRoute:
+    return t.cast(
+        _FakeRoute,
+        SimpleNamespace(
+            metadata=SimpleNamespace(id=route_id, name=name),
+            spec=SimpleNamespace(
+                destination=SimpleNamespace(cidr=cidr),
+                next_hop=SimpleNamespace(allocation=SimpleNamespace(id=allocation_id)),
+            ),
         ),
     )
 
@@ -133,7 +152,7 @@ def test_select_local_prefix_subnets_excludes_inherited_status_cidrs_owned_by_ot
         gateway_subnet_name="custom-gateway-subnet",
     )
 
-    selected_subnets = t.cast(list[tuple[SimpleNamespace, list[ipaddress.IPv4Network]]], selected)
+    selected_subnets = t.cast(list[tuple[_FakeSubnet, list[ipaddress.IPv4Network]]], selected)
     assert [subnet.metadata.name for subnet, _cidrs in selected_subnets] == [
         "workload-subnet-1",
         "workload-subnet-2",
@@ -166,7 +185,7 @@ def test_select_local_prefix_subnets_keeps_inherited_status_cidrs_after_sanitizi
         gateway_subnet_name="custom-gateway-subnet",
     )
 
-    selected_subnets = t.cast(list[tuple[SimpleNamespace, list[ipaddress.IPv4Network]]], selected)
+    selected_subnets = t.cast(list[tuple[_FakeSubnet, list[ipaddress.IPv4Network]]], selected)
     assert [subnet.metadata.name for subnet, _cidrs in selected_subnets] == ["default-subnet"]
     assert [str(cidr) for cidr in selected_subnets[0][1]] == ["10.48.0.0/13"]
     assert inherited_selected == [
@@ -338,7 +357,8 @@ def test_find_redundant_managed_routes_only_returns_covered_vpngw_routes() -> No
         {"10.10.0.0/23": "alloc-a"},
     )
 
-    assert [route.metadata.id for route in redundant] == ["route-1", "route-2"]
+    redundant_routes = t.cast(list[_FakeRoute], redundant)
+    assert [route.metadata.id for route in redundant_routes] == ["route-1", "route-2"]
 
 
 def test_installed_prefix_targets_require_matching_next_hop() -> None:
@@ -406,7 +426,8 @@ def test_find_redundant_managed_covering_routes_returns_broader_summaries_once_e
         },
     )
 
-    assert [route.metadata.id for route in redundant] == ["route-1"]
+    redundant_routes = t.cast(list[_FakeRoute], redundant)
+    assert [route.metadata.id for route in redundant_routes] == ["route-1"]
 
 
 def test_find_redundant_managed_covering_routes_keeps_summary_until_all_exact_routes_exist() -> None:
